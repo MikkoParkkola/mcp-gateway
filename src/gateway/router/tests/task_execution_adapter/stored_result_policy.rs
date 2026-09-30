@@ -270,11 +270,10 @@ async fn a_legacy_row_on_a_backend_named_execute_takes_the_backend_fallback() {
     assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
 }
 
-/// A step that is dispatched and then fails is still a target: its tool is
-/// withheld at dispatch here, so the plan fails, and the finished Failed task
-/// is refused while the tool stays withheld.
+/// A step refused before dispatch by a non-authorization gate (a withheld
+/// tool) is recorded too, so the failed plan is refused while it stays withheld.
 #[tokio::test]
-async fn a_failed_plan_step_is_still_recorded_and_reauthorized() {
+async fn a_plan_step_refused_before_dispatch_is_recorded_and_reauthorized() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     install_playbook(&state, TOOL);
@@ -296,6 +295,34 @@ async fn a_failed_plan_step_is_still_recorded_and_reauthorized() {
     std::assert_eq!(recorded, vec![step], "the dispatched step is stored");
     assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
     std::assert_eq!(mock.calls(), 0, "the step never reached the backend");
+}
+
+/// A step that reaches the backend and fails there is a target: the failed
+/// plan is refused once the tool is withheld.
+#[tokio::test]
+async fn a_plan_step_that_fails_at_the_backend_is_recorded_and_reauthorized() {
+    let mock = MockBackend::answering(Answer::Failure);
+    let (state, _store) = state_with(&mock).await;
+    install_playbook(&state, TOOL);
+    let id = task_id(&post(&state, "key-a", playbook_call(12, "b-backend-fail")).await);
+    let store = &state.task_executor.service.store;
+    let mut recorded = Vec::new();
+    for _ in 0..2_000 {
+        recorded = store.targets_for_test(&id);
+        if !recorded.is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    let step = crate::gateway::task_service::Target {
+        server: BACKEND.to_owned(),
+        tool: TOOL.to_owned(),
+    };
+    std::assert_eq!(recorded, vec![step]);
+    std::assert_eq!(mock.calls(), 1, "the step reached the backend");
+    poll_until_terminal(&state, "key-a", &id).await;
+    withhold(&state, TOOL);
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
 }
 
 /// The fixture's task runtime, reopened with a small per-record byte budget.

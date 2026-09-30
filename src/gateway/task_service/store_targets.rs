@@ -155,28 +155,21 @@ impl Shared {
             message: "the task's result exceeds the record size limit".to_owned(),
             data: None,
         });
-        // Last resort: the bounded failure carries no output, so it needs no
-        // targets; a plan row is still marked as written by a recording gateway.
-        let none = targets.as_ref().map(|_| Vec::new());
-        let attempts = [
-            (event, targets.clone()),
-            (bounded.clone(), targets),
-            (bounded, none),
-        ];
-        for (event, targets) in attempts {
-            match self.settle_attempt(&task, &record, (event, targets), at) {
-                Err(StoreError::Capacity) => {}
-                settled => return settled,
-            }
+        // Last resort: an output-free record. It discards the targets and the
+        // recovery descriptor, so it fits whenever any record can, and it is
+        // marked so delivery knows its only content is the gateway's own error.
+        match self.settle_attempt(&task, &record, (event, targets, false), at) {
+            Err(StoreError::Capacity) => {}
+            settled => return settled,
         }
-        Err(StoreError::Capacity)
+        self.settle_attempt(&task, &record, (bounded, None, true), at)
     }
 
     fn settle_attempt(
         &self,
         task: &Task,
         record: &Record,
-        (event, targets): (TaskTransition, Option<Vec<Target>>),
+        (event, targets, discard): (TaskTransition, Option<Vec<Target>>, bool),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let (mut task, mut record) = (task.clone(), record.clone());
@@ -188,6 +181,12 @@ impl Shared {
         }
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
         record.set_model(&task);
+        if discard {
+            record.targets.clear();
+            record.upstream = None;
+            record.output_free = true;
+            record.version = record.version.max(TARGET_VERSION);
+        }
         if let Some(targets) = targets {
             for target in targets {
                 if !record.targets.contains(&target) {

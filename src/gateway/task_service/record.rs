@@ -174,6 +174,11 @@ pub(super) struct Record {
     /// [`TARGET_VERSION`] and on rows that dispatched nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) targets: Vec<Target>,
+    /// Set when the row settled as the gateway's own bounded failure because
+    /// the real outcome did not fit the record budget: it holds no backend
+    /// output, so delivering it needs no target check.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) output_free: bool,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
@@ -227,6 +232,7 @@ impl PreparedTask {
                 upstream: None,
                 input_round: None,
                 targets,
+                output_free: false,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -263,6 +269,7 @@ impl PreparedTask {
                 upstream: None,
                 input_round: None,
                 targets: Vec::new(),
+                output_free: false,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),
@@ -314,6 +321,8 @@ pub(crate) struct CommittedTask {
     /// list on such a row means nothing was dispatched; on an older row it
     /// means the provenance is unavailable.
     pub(crate) targets_recorded: bool,
+    /// The row holds only the gateway's own bounded failure, no backend output.
+    pub(crate) output_free: bool,
 }
 
 impl CommittedTask {
@@ -326,6 +335,7 @@ impl CommittedTask {
             backend: record.backend.clone(),
             targets: record.targets.clone(),
             targets_recorded: record.version >= TARGET_VERSION,
+            output_free: record.output_free,
         }
     }
 }
