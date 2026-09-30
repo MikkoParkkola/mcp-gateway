@@ -70,40 +70,16 @@ pub struct JsonRpcResponse {
     /// or serialized; it excludes both client strikes and success resets.
     #[serde(skip)]
     pub(crate) delivery_refusal: bool,
+    /// Server-owned: a discovery handler inspected this result's canonical
+    /// value before it was serialised (MIK-7407.RESPONSE.3), so no later pass
+    /// scans the served copy. Never read from or written to the wire, so a
+    /// backend or a retried call under a discovery name cannot set it.
+    #[serde(skip)]
+    pub(crate) discovery_inspected: bool,
 }
 
-impl<'de> Deserialize<'de> for JsonRpcResponse {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        /// Mirrors [`JsonRpcResponse`] and additionally observes `method`, the
-        /// field that marks a frame as a request or a notification.
-        #[derive(Deserialize)]
-        struct Shadow {
-            jsonrpc: String,
-            id: Option<RequestId>,
-            result: Option<Value>,
-            error: Option<JsonRpcError>,
-            method: Option<serde::de::IgnoredAny>,
-        }
-
-        let shadow = Shadow::deserialize(deserializer)?;
-        if shadow.method.is_some() {
-            return Err(serde::de::Error::custom(
-                "frame carries `method`: a request or notification, not a response",
-            ));
-        }
-        Ok(Self {
-            jsonrpc: shadow.jsonrpc,
-            id: shadow.id,
-            result: shadow.result,
-            error: shadow.error,
-            confirmation_refusal: false,
-            delivery_refusal: false,
-        })
-    }
-}
+#[path = "messages_response_de.rs"]
+mod response_de;
 
 impl JsonRpcResponse {
     /// Create a success response
@@ -116,6 +92,7 @@ impl JsonRpcResponse {
             error: None,
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
         }
     }
 
@@ -150,6 +127,7 @@ impl JsonRpcResponse {
             }),
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
         }
     }
 
@@ -188,6 +166,7 @@ impl JsonRpcResponse {
             }),
             confirmation_refusal: false,
             delivery_refusal: false,
+            discovery_inspected: false,
         }
     }
 }

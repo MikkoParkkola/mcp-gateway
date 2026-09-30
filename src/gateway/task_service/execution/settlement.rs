@@ -11,6 +11,9 @@ use crate::protocol::{JsonRpcError, JsonRpcResponse};
 pub(super) enum DispatchSettlement {
     Complete(Value),
     Fail(JsonRpcError),
+    /// The backend stopped to ask, in a shape `from_result` accepts. Its
+    /// `requestState` is the gateway-sealed continuation, never the backend's.
+    Input(InputRequired),
 }
 
 pub(super) fn classify_dispatch(response: JsonRpcResponse) -> DispatchSettlement {
@@ -19,7 +22,11 @@ pub(super) fn classify_dispatch(response: JsonRpcResponse) -> DispatchSettlement
     }
     let result = response.result.unwrap_or(Value::Null);
     if InputRequired::claims_input_required(&result) {
-        return DispatchSettlement::Complete(abandoned_input_round());
+        // A claimed round whose shape is rejected keeps the abandoned result.
+        return InputRequired::from_result(&result).map_or_else(
+            || DispatchSettlement::Complete(abandoned_input_round()),
+            DispatchSettlement::Input,
+        );
     }
     DispatchSettlement::Complete(as_result_object(result))
 }

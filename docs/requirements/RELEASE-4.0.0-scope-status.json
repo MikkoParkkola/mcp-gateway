@@ -112,14 +112,17 @@
     {
       "id": "MIK-7311.LIFECYCLE.1",
       "status": "pending",
-      "stage": "graded",
+      "stage": "proven",
       "blocked_on": "none",
       "evidence": [
         "tests/mik_7272_task_1_acs.rs",
         "tests/task_expiry_http_lifecycle.rs",
-        "docs/internal/requirements/scope-grading-2026-09-12.md"
+        "docs/internal/requirements/scope-grading-2026-09-12.md",
+        "src/gateway/router/tests/task_execution_adapter/input_round.rs",
+        "src/gateway/router/tests/task_execution_adapter/input_round_races.rs",
+        "src/gateway/task_service/store_tests/input_round.rs"
       ],
-      "note": "PENDING 2026-09-29, re-derived from the test row as amended by operator ruling #2268 (MIK-7596.OWNER.1 governs): the lifecycle runs through POST /mcp only, and POST /mcp/{backend} must refuse task access with -32601. The per-backend half is covered by lifecycle_1_the_per_backend_route_refuses_a_task_served_on_mcp (tests/mik_7272_task_1_acs.rs, added with the #2268 fix; CI evidence pending): the task owner, holding a running task created on /mcp, gets -32601 \"use /mcp\" for tasks/get, tasks/result, tasks/update, tasks/cancel and subscriptions/listen with taskIds on /mcp/mock, the backend sees no further dispatch, and /mcp still serves the uncancelled task. Per-backend task serving is 4.1 work (#2303). Remaining blocker: supplying requested input is still refused (tasks_update in src/gateway/router/handlers/tasks.rs rejects any non-empty inputResponses with -32602). Superseded 2026-09-26 note: POST /mcp/{name} had no task handling although the test spec then required both routes. Graded 2026-09-12. cargo test --test mik_7272_task_1_acs: test result: ok. 20 passed; 0 failed; 0 ignored; and cargo test --test task_expiry_http_lifecycle: test result: ok. 1 passed; 0 failed; 0 ignored. Clause coverage: public-route dispatch by dispatch::ac_task_1_1_a_created_task_id_resolves_immediately; polling payloads by ac_task_1_2_each_status_carries_its_own_payload_and_no_other; input by dispatch::ac_task_1_3_an_accepted_update_acknowledges_with_an_empty_result and dispatch::ac_task_1_3_an_input_response_with_no_outstanding_request_is_refused; cooperative cancellation gated to the pinned revision by ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method; terminal outcomes by ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string and ac_task_1_6_an_is_error_tool_result_is_completed_and_not_failed; extension negotiation by capabilities::ac_task_1_10_initialize_advertises_the_tasks_extension_to_a_2026_peer; expiry by a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_the_store."
+      "note": "PENDING on #2429 (4.0-gating): the input round on POST /mcp is built and proven by #2414, but its stored continuation expires after 300 s while the round stays open, so an answer given after five minutes fails the task instead of resuming it. The row flips to met when #2429 merges. #2430 (the resumed call's audit record lacks the agent label, 4.0-gating) is tracked beside it. What #2414 proves: (input round on POST /mcp; per-backend task serving is 4.1 by ruling #2268, and its refusal is pinned by lifecycle_1_the_per_backend_route_refuses_a_task_served_on_mcp). A backend input round parks the task as input_required with inputRequests; tasks/update accepts answers to outstanding keys (partial answers durable, a foreign key refuses the whole update); a complete set resumes the same call through the sealed continuation with exactly one resume; cancel and TTL expiry settle an open round cancelled; restart keeps the interrupted settlement; a malformed round (including a non-string requestState, #2416) keeps the abandoned result. Red proof: CI run 36637054363 on 63491f815 (23 input-round tests and the from_result check failed at their assertions). Green: CI on 00052af79. Mutation batch throwaway/mutants-2414 (produce, foreign key, partial resume, non-string state, expiry). Two independent reviews: round 1 DO-NOT-SHIP and SHIP-WITH-FIXES (three HIGH findings fixed), round 2 SHIP and SHIP-WITH-FIXES (fix applied). MEDIUM findings filed as 4.0.1 (#2417, #2418). Earlier grading: PENDING 2026-09-29, re-derived from the test row as amended by operator ruling #2268 (MIK-7596.OWNER.1 governs): the lifecycle runs through POST /mcp only, and POST /mcp/{backend} must refuse task access with -32601. The per-backend half is covered by lifecycle_1_the_per_backend_route_refuses_a_task_served_on_mcp (tests/mik_7272_task_1_acs.rs, added with the #2268 fix; CI evidence pending): the task owner, holding a running task created on /mcp, gets -32601 \"use /mcp\" for tasks/get, tasks/result, tasks/update, tasks/cancel and subscriptions/listen with taskIds on /mcp/mock, the backend sees no further dispatch, and /mcp still serves the uncancelled task. Per-backend task serving is 4.1 work (#2303). Remaining blocker: supplying requested input is still refused (tasks_update in src/gateway/router/handlers/tasks.rs rejects any non-empty inputResponses with -32602). Superseded 2026-09-26 note: POST /mcp/{name} had no task handling although the test spec then required both routes. Graded 2026-09-12. cargo test --test mik_7272_task_1_acs: test result: ok. 20 passed; 0 failed; 0 ignored; and cargo test --test task_expiry_http_lifecycle: test result: ok. 1 passed; 0 failed; 0 ignored. Clause coverage: public-route dispatch by dispatch::ac_task_1_1_a_created_task_id_resolves_immediately; polling payloads by ac_task_1_2_each_status_carries_its_own_payload_and_no_other; input by dispatch::ac_task_1_3_an_accepted_update_acknowledges_with_an_empty_result and dispatch::ac_task_1_3_an_input_response_with_no_outstanding_request_is_refused; cooperative cancellation gated to the pinned revision by ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method; terminal outcomes by ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string and ac_task_1_6_an_is_error_tool_result_is_completed_and_not_failed; extension negotiation by capabilities::ac_task_1_10_initialize_advertises_the_tasks_extension_to_a_2026_peer; expiry by a_configured_expiry_interval_reaps_a_real_task_and_shutdown_releases_the_store."
     },
     {
       "id": "MIK-7311.LIFECYCLE.2",
@@ -896,11 +899,18 @@
     },
     {
       "id": "MIK-7570.CHART.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "scripts/dev/helm-chart-auth-modes.sh",
+        "scripts/dev/helm-chart-smoke.sh",
+        "scripts/dev/helm-kind-real-image.sh",
+        "tests/fixtures/helm-golden/credential.yaml",
+        "tests/fixtures/helm-golden/mesh.yaml",
+        "tests/team_deployment_guide_claims.rs"
+      ],
+      "note": "Graded 2026-09-30 (B4). Merged in #2392 as 8acdc69e3. Post-merge Docker run 36631422954 (job 109635405534, Build amd64) installs the chart on the release image in kind under Pod Security restricted twice: credential mode, then auth.mode api_keys with persistence.enabled; it prints 'helm kind real image passed: ... api_keys key 200, none/wrong 401, state kept across a replaced pod'. Render contract pinned by scripts/dev/helm-chart-auth-modes.sh (api_keys, oidc, per-mode secret injection, extraEnv/envFrom guards, persistence PVC/Recreate/OnRootMismatch/store_dir, credential and mesh golden renders). Red first: run 36616532350 job 109617965066 on b40aecc96 (41 FAIL). Operator approved the new values keys in chat 2026-09-29."
     },
     {
       "id": "MIK-7570.AUDIT.2",
@@ -916,11 +926,20 @@
     },
     {
       "id": "MIK-7570.AUDIT.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/meta_mcp/grant_decision_audit_tests.rs",
+        "src/gateway/meta_mcp/grant_decision_slot_tests.rs",
+        "src/gateway/router/tests/task_execution_adapter/grant_decisions.rs",
+        "src/gateway/router/tests/task_execution_adapter/grant_decision_tasks.rs",
+        "src/gateway/server/tests/grant_decision_stdio.rs",
+        "src/gateway/meta_mcp/grant_audit.rs",
+        "docs/identity_grants.md",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-29 (D3-a, D3-amendment rev 11, test plan rev 4; PR #2399). Each identity-grant decision on a personal capability during a call writes one identity_grant_decision record (allow ok with grant_id, deny denied with reason), naming the subject by authority and subject only. Slots open at invoke_tool, the dispatch tail (request and task worker), HTTP /mcp and stdio tools/call; the outermost writes before the answer; FailClosed answers -32005; a cancelled call's notes are written by a spawned bounded write; an unslotted check refuses -32005 and still records. Listing, search, public and shared capabilities write none. Cells T1-T3, T7-T22, T24-T27 plus T14b, T15b across the evidence files. Red: run 36615078448 (the 25 cells fail, 6854 pass). Green: Tests, Windows and macOS on 07b1fc01a. Mutants: run 36630538908 (10 rows: note gate, Silent, public, fail-closed, selection x3, invoke opener, fallback, stamp). Two independent final reviews: SHIP, SHIP. Follow-ups: #2409 (4.0.1). UPGRADING-4.0 item 103."
     },
     {
       "id": "MIK-7570.AUDIT.4",
@@ -1060,11 +1079,18 @@
     },
     {
       "id": "GH1943.PROV.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Provenance is enforced only when require_for_remote_backends is set (src/security/remote_provenance.rs:21-23) and nothing reports that it is off. Tracked in #1943. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        "src/config/remote_provenance_posture.rs",
+        "src/config/remote_provenance_posture_tests.rs",
+        "src/gateway/server/remote_provenance_start_tests.rs",
+        "src/commands/doctor/provenance.rs",
+        "tests/remote_provenance_warning.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Met by #2195. With remote HTTP/A2A/WebSocket backends enabled and require_for_remote_backends off, one startup WARN names every backend without signed metadata (Config::remote_provenance_warning, logged by the Gateway constructor that HTTP and stdio starts share: building_a_gateway_warns_about_an_unverified_remote_backend, a_stdio_start_warns_about_an_unverified_remote_backend), and doctor reports the same text as a remote_provenance warning (an_unverified_remote_backend_is_a_warning_with_the_startup_text, doctor_reports_an_unverified_remote_backend). No default changes (provenance_is_not_required_by_default); whether it should become the default is #2186. Red-first CI run 36469192873 (#2189): the 9 new tests failed at their assertions. Mutation batch throwaway/mutants-2195, run 36471967733: 6/6 RED. UPGRADING-4.0 item 89. Two independent design reviews (SHIP, SHIP) and two implementation reviews (SHIP-WITH-FIXES with fixes applied, SHIP)."
     },
     {
       "id": "GH1944.CHAIN.1",
@@ -1119,13 +1145,18 @@
     },
     {
       "id": "MIK-7407.RESPONSE.3",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "src/gateway/server/mod.rs:2972"
+        "src/gateway/server/tests/stdio_response_firewall.rs:153",
+        "src/gateway/server/tests/stdio_response_firewall.rs:190",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:179",
+        "src/gateway/meta_mcp/response_security.rs:91",
+        "src/gateway/task_service/execution/worker.rs:462",
+        "src/gateway/router/handlers.rs:1744"
       ],
-      "note": "Built, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
+      "note": "Closed by #2390 (da78488b1, fixes #2358). stdio: counted fixtures drive the real stdio serving path; a blocked tool call, a surfaced tools/list, the discovery lists and gateway_invoke are refused with exactly one inspection (stdio_refuses_blocked_responses_with_one_inspection), and allowed ones are served with exactly one (stdio_serves_allowed_responses_with_one_inspection). Discovery responses are inspected once, on their raw value: a server-owned marker (discovery_inspected, never serialised) set only after the meta-tool match makes the router pass, the delivery finalizer and task settlement skip them; HTTP pinned by allowed_discovery_listings_are_inspected_once. Mutants NOFLAG, ROUTERSKIP, FINALSKIP, ANYTOOL caught (runs 36620547421 and 36627286348). Coverage follow-up (retry under a discovery name, task-mode discovery): #2431, 4.0.1.\n\n--- prior note follows ---\nBuilt, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
     },
     {
       "id": "MIK-7407.RESPONSE.4",
@@ -1146,15 +1177,17 @@
     },
     {
       "id": "MIK-7407.RESPONSE.5",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
         "src/gateway/meta_mcp/response_security.rs:175",
         "src/gateway/router/tests/meta_firewall_verdict.rs:564",
-        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149"
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149",
+        "src/gateway/server/tests/stdio_response_firewall.rs:153",
+        "src/gateway/server/tests/stdio_response_firewall.rs:190"
       ],
-      "note": "Built on HTTP: counted per-instance inspection fixtures for meta tools/call, tools/list and the discovery tools, with policy-target rules; the delivery-attempt event (record_response_delivery_attempt) hashes the final response after filtering and signing. Open: no counted stdio fixture (see RESPONSE.3), so 'every route' is not yet proven."
+      "note": "Met with #2390 (da78488b1): the stdio route now has counted negative and positive fixtures with scan-count falsifiers (stdio_refuses_blocked_responses_with_one_inspection, stdio_serves_allowed_responses_with_one_inspection, including a Warn-rule redaction), beside the HTTP counted fixtures below, so every route is proven. Mutants FINALSKIP and ANYTOOL caught on the stdio rows (runs 36620547421 and 36627286348).\n\n--- prior note follows ---\nBuilt on HTTP: counted per-instance inspection fixtures for meta tools/call, tools/list and the discovery tools, with policy-target rules; the delivery-attempt event (record_response_delivery_attempt) hashes the final response after filtering and signing. Open: no counted stdio fixture (see RESPONSE.3), so 'every route' is not yet proven."
     },
     {
       "id": "MIK-7406.VERIFY.1",
@@ -1217,6 +1250,170 @@
       "blocked_on": "none",
       "evidence": [],
       "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.4). Audited at release tip e83b5fd5a. PARTIAL. The guard ships disabled (tenant_guard.rs:67-73) and a firewall rule can set Warn instead of Block (FirewallAction::Warn, mod.rs:180). No fixture corpus and no false-positive measurement exist. Observe versus block is settled by decision mik_7116_min_kill_gate (operator ruling 2026-09-30): 4.0.0 ships observe-first and default blocking waits for the post-release MIN.KILL week (MIK-7627). What stays open for 4.0.0 is the fixture corpus and the false-positive measurement."
+    },
+    {
+      "id": "MIK-7211.PARENT.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only."
+    },
+    {
+      "id": "MIK-7211.PARENT.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. RFC-0060 is DRAFT and its U1 window has not started, so no measured data exists yet."
+    },
+    {
+      "id": "MIK-7211.PARENT.6",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL for the gateway: src/protocol/cacheable.rs:23-73 defines CacheScope with a SCOPE_TABLE whose list entries are all Private and a Private default. That is a table, not a type or lint that makes a public scope from session state unrepresentable; the mechanism is not yet named."
+    },
+    {
+      "id": "MIK-7211.PARENT.7",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. MIK-7215.STATELESS.* rows are MET, and docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:433 counts 32 files, but no standalone inventory names each session-keyed behaviour and its replacement."
+    },
+    {
+      "id": "MIK-7217.SEARCH.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. The breaker half is tested (src/backend/tests.rs:1179, :1202, :1458, :1482); no test asserts gateway_search visibility of a modern-era backend. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
+    },
+    {
+      "id": "MIK-7217.CLAIMS.1",
+      "status": "met",
+      "stage": "met",
+      "blocked_on": "none",
+      "evidence": [
+        "tests/public_claims_validation.rs",
+        "benchmarks/public_claims.json",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Met 2026-09-30 on existing evidence, found in review of #2428. canonical_meta_tool_counts_match_live_runtime (tests/public_claims_validation.rs:336-347) loads benchmarks/public_claims.json and asserts the live Meta-MCP tool count matrix equals it; the CI Public claims job runs that target (.github/workflows/ci.yml:934-935), green in CI run 36643861248. tests/nfr_perf_4_meta_tool_band.rs:33 separately pins the count to 9..=17.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. tests/nfr_perf_4_meta_tool_band.rs:33 pins the count to 9..=17 but does not read public_claims.json. To reconcile: the ticket's 2026-09-26 comment cites canonical_meta_tool_counts_match_live_runtime and the Public claims job as passing evidence; if that test reads the claims file, this row is met on it."
+    },
+    {
+      "id": "MIK-7217.STDIO.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). CAVEAT on MET baseline rows DISCOVER.1a/1b: the stdio arm calls discover_document(false) unconditionally (src/gateway/server/mod.rs:2946). README states stdio discover lists only the handshake revisions; documentation alone does not close this row."
+    },
+    {
+      "id": "MIK-7272.OWNER.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). Amended by operator ruling C4 (2026-09-30): keyless data-changing stdio calls keep running, per the sub-4-idempotency-wiring Axis 3 design. The stdio path validates idempotency keys (stdio_refuses_a_malformed_idempotency_key, src/gateway/server/mod.rs:4302; sub4_boot_populates_the_idempotency_cache, :4721); no test asserts keyed replay without a second effect on real modern stdio, and the six management branches have no tests, so the row stays pending."
+    },
+    {
+      "id": "MIK-7272.OWNER.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
+    },
+    {
+      "id": "MIK-7272.OWNER.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. No typed StdioLocalOperator exists; stdio identity is the string constant STDIO_CREDENTIAL_PRINCIPAL (defined src/gateway/server/mod.rs:3621, used src/gateway/meta_mcp/admission_tests.rs:504)."
+    },
+    {
+      "id": "MIK-7272.OWNER.4",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
+    },
+    {
+      "id": "MIK-7272.OWNER.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Closest: src/gateway/meta_mcp/account_catalogue_sole_operator_tests.rs:291-304 asserts a string principal only."
+    },
+    {
+      "id": "MIK-7272.LIFE.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
+    },
+    {
+      "id": "MIK-7324.COV.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Known misses: startup 68.78% and bridge 69.44% against the ticket's floors (Critical >=95, Standard >=80); no waiver exists. Graded with NFR.BUILD.1 C5 and C6 on the final revision."
+    },
+    {
+      "id": "MIK-7216.IDEM.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. Declared readOnlyHint/idempotentHint are captured before name inference (src/backend/annotations.rs:163; resend_decision, src/backend/ops.rs:168); capability YAML entries are not classified, and unannotated tools default to side-effecting rather than being classified."
+    },
+    {
+      "id": "MIK-7216.IDEM.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. Closest tests: tests/mik_7272_sub4_adr012_acs.rs:561 (post-dispatch transport failure keeps its key) and :399 (keyed re-issue with a new id); tests/mik_7272_sub4_three_routes.rs:290. None breaks the stream, re-issues and asserts a backend count of 1."
+    },
+    {
+      "id": "MIK-7216.IDEM.6",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. tests/mik_7272_sub4_adr012_acs.rs:674 shows a read-only call is still re-sent, but not inside the stream-kill test IDEM.5 requires."
+    },
+    {
+      "id": "MIK-7217.ERA.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
+    },
+    {
+      "id": "MIK-7217.ERA.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. era_probe_discarded appears nowhere in src/ or tests/."
+    },
+    {
+      "id": "MIK-7217.ERA.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; closes with ERA.1 as its regression guard."
     }
   ],
   "decisions": [
@@ -1343,6 +1540,20 @@
       "consequence": "Follow-up Linear MIK-7627 (related to MIK-7116, no 4.0 tag or milestone) carries MIN.3/5/6 and the kill-gate measurement. Tension recorded, not resolved by this decision: scope-update.md:148-150 also names response attribution, which MIN.1 keeps in 4.0.0.",
       "evidence": [
         "docs/requirements/RELEASE-4.0.0-scope-update.md",
+        "docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md",
+        "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
+      ]
+    },
+    {
+      "id": "portfolio_halves_outside_4_0",
+      "status": "resolved",
+      "resolved": "2026-09-30",
+      "authority": "operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator): the other-repository work goes to separate follow-ups and mcp-gateway 4.0 does not wait for it",
+      "selection": "The other-repository halves of MIK-7211 AC.2-4, the other-repository discover AC of MIK-7217 (Linear MCP728.DISCOVER.2: hebb, nab, trvl, metacognition, throttla) and the U2 hebb de-fork spike MIK-7219 are not mcp-gateway 4.0.0 criteria; they move to MIK-7628 (MIK-7211 halves with MIK-7219) and MIK-7629 (MIK-7217). MIK-7211.PARENT.1 keeps U1 and U5 only. The gateway rows MIK-7211.PARENT.1, 5, 6, 7 and MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1, ERA.1-3 stay 4.0.0 criteria.",
+      "rationale": "The operator ruling above. docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:21 already scopes this release to the gateway alone, with other portfolio surfaces owned by RFC-0060; docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md:92 splits MIK-7217's broader obligations explicitly. This ledger gates an mcp-gateway tag and cannot grade other repositories.",
+      "consequence": "MIK-7628 and MIK-7629 are related to their parent tickets and carry no 4.0 tag or milestone.",
+      "evidence": [
+        "docs/design/RFC-0061-protocol-2026-07-28-release-scope.md",
         "docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
       ]

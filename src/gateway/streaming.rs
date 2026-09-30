@@ -764,7 +764,7 @@ const UNFRAMEABLE_FRAME: &str = concat!(
 
 /// Frame a finished dispatch as the stream's last event.
 ///
-/// Framing requires JSON *and* 200. On today's call graph anything else is
+/// Framing requires JSON and 200, or 503 (a -32005 audit refusal decided after dispatch). Else is
 /// unreachable -- every non-200 is decided in validation and routing, which
 /// precede the only block that can publish -- but those are properties of the
 /// call graph, not invariants the compiler holds, so a future publisher gets
@@ -777,7 +777,7 @@ async fn terminal_frame(response: axum::response::Response) -> String {
         .get(CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("application/json"));
-    if !is_json || response.status() != axum::http::StatusCode::OK {
+    if !is_json || !matches!(response.status().as_u16(), 200 | 503) {
         return UNFRAMEABLE_FRAME.to_string();
     }
     match axum::body::to_bytes(response.into_body(), usize::MAX).await {

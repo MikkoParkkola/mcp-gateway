@@ -110,6 +110,13 @@ impl MetaMcp {
         let refusal = self
             .may_invoke(server, tool_name, caller.scope(), session_id)
             .err()?;
+        // A direct-name call is a dispatch, not a listing: its grant decision
+        // is recorded (D3-a); a failed note answers -32005, not -32601.
+        if let Err(error @ Error::AuditUnavailable) =
+            self.identity_grant_rule(server, tool_name, caller.scope(), Emit::Audit)
+        {
+            return Some(error);
+        }
         crate::gateway::authz::audit_refusal(
             caller.authorizer.transport(),
             caller.authorizer.caller_name(),
@@ -280,6 +287,12 @@ impl MetaMcp {
             return Err(Error::ToolNotFound(tool.to_string()));
         };
         let evaluation = self.identity_grants.read().evaluate(&request);
+        // D3-a: a dispatch decision is noted for its record; an unslotted
+        // check fails closed here, whatever the grant said.
+        if emit == Emit::Audit {
+            let logger = self.transparency_logger.as_ref();
+            super::grant_audit::note_grant_decision(logger, server, tool, &evaluation.audit)?;
+        }
         if evaluation.allowed {
             return Ok(());
         }

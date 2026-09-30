@@ -7,10 +7,8 @@ use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
 
-use super::settlement::{
-    DispatchSettlement, classify_dispatch, interrupted_before_dispatch, interrupted_result,
-    strip_http_status,
-};
+use super::input_round::Settling;
+use super::settlement::{interrupted_before_dispatch, interrupted_result, strip_http_status};
 use super::upstream::QueryLease;
 use super::{
     BeginOutcome, Handoff, TaskCall, TaskExecutor, TaskIntent, TaskWrite, UpstreamAnswer,
@@ -80,7 +78,9 @@ fn split_create(outcome: CreateOutcome) -> (BeginOutcome, Option<OwnedSemaphoreP
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+// The input-round hand-off (`Settling`) added the last lines; the steps
+// read in order here and splitting them would scatter the drop-order rule.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_dispatched(
     executor: Arc<TaskExecutor>,
     handoff: Handoff,
@@ -231,7 +231,17 @@ async fn run_dispatched(
         .await;
     } else {
         let response = inspect_settled(&state, &call, &id, response);
-        settle_response(&executor, &principal, &id, revision, response).await;
+        Settling::new(
+            &executor,
+            &state,
+            &intent.owned,
+            &call,
+            &principal,
+            &id,
+            revision,
+        )
+        .settle_or_ask(response, &mut cancel_rx)
+        .await;
     }
 }
 
@@ -425,7 +435,12 @@ pub(super) enum Marker {
     Failed,
 }
 
-async fn settle_interrupted(executor: &TaskExecutor, principal: &str, id: &str, revision: u64) {
+pub(super) async fn settle_interrupted(
+    executor: &TaskExecutor,
+    principal: &str,
+    id: &str,
+    revision: u64,
+) {
     let event = TaskTransition::Complete(interrupted_before_dispatch());
     executor.settle_cas(principal, id, revision, event).await;
 }
@@ -453,13 +468,13 @@ async fn settle_descriptor_refused(
 
 /// The response firewall on a native task result, under the targets the
 /// synchronous call would use (#2351): a refusal is what the task settles on.
-fn inspect_settled(
+pub(super) fn inspect_settled(
     state: &crate::gateway::router::AppState,
     call: &TaskCall,
     id: &str,
     mut response: crate::protocol::JsonRpcResponse,
 ) -> crate::protocol::JsonRpcResponse {
-    if response.error.is_some() {
+    if response.error.is_some() || response.discovery_inspected {
         return response;
     }
     let Some(result) = response.result.as_mut() else {
@@ -484,20 +499,6 @@ fn inspect_settled(
         );
     }
     response
-}
-
-async fn settle_response(
-    executor: &TaskExecutor,
-    principal: &str,
-    id: &str,
-    revision: u64,
-    response: crate::protocol::JsonRpcResponse,
-) {
-    let event = match classify_dispatch(response) {
-        DispatchSettlement::Complete(result) => TaskTransition::Complete(result),
-        DispatchSettlement::Fail(error) => TaskTransition::Fail(error),
-    };
-    executor.settle_cas(principal, id, revision, event).await;
 }
 
 impl TaskExecutor {

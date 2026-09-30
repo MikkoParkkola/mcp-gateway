@@ -47,6 +47,8 @@ pub mod tenant_guard;
 #[cfg(test)]
 mod anomaly_learning_tests;
 #[cfg(test)]
+mod anomaly_posture_tests;
+#[cfg(test)]
 mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
@@ -317,6 +319,21 @@ impl Firewall {
     #[must_use]
     pub fn with_env(mut self, env: Arc<crate::config::LiveEnv>) -> Self {
         self.input_scanner = input_scanner::InputScanner::with_env(env);
+        self
+    }
+
+    /// Apply the security posture: under `hardened`, a call whose transition
+    /// the anomaly detector cannot learn (pair map full) is refused.
+    #[must_use]
+    pub(crate) fn with_posture(
+        mut self,
+        posture: crate::security::posture::SecurityPosture,
+    ) -> Self {
+        if posture == crate::security::posture::SecurityPosture::Hardened {
+            self.anomaly = self
+                .anomaly
+                .map(anomaly::AnomalyDetector::refusing_unlearnable);
+        }
         self
     }
 

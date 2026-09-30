@@ -29,6 +29,8 @@ mod stdout_death_admission;
 
 mod r2_stdio_keys;
 mod stdio_listing_scope;
+#[cfg(feature = "firewall")]
+mod stdio_response_firewall;
 
 mod stdio_initialize_order;
 
@@ -41,3 +43,5 @@ mod stdio_cost_persistence;
 
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
+
+mod grant_decision_stdio;

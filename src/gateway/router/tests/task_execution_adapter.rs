@@ -56,6 +56,10 @@
 
 mod support;
 
+/// D3-a: grant decision records at the route.
+mod grant_decision_tasks;
+mod grant_decisions;
+
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
 mod attestation_tasks;
 mod capacity;
@@ -63,6 +67,9 @@ mod client_extensions;
 mod confirmation;
 mod dedupe;
 mod drain;
+/// MIK-7311.LIFECYCLE.1 increment 1b: the input round on `/mcp`.
+mod input_round;
+mod input_round_races;
 mod interlock;
 mod lifecycle;
 /// I5's during-the-wire half: one query per record at a time, worker and
