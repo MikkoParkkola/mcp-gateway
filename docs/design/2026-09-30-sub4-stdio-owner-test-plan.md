@@ -162,13 +162,13 @@ feature gate.
 |---|---|---|---|---|
 | T1.1 | `keyless_modern_write_executes` | Unkeyed modern `gateway_invoke` to the mutating target, twice. | 2 dispatches, no refusal. | green |
 | T1.2 | `legacy_unkeyed_repeat_executes_twice` | Legacy-shaped (no `_meta`) `gateway_invoke`, same arguments, twice. | 2 dispatches. | green |
-| T1.3 | `kill_server_is_refused_before_admission_on_stdio` | Keyed modern `gateway_kill_server`, twice. | Both refused by the confirmation gate; the backend stays alive; the key is not retained (a third call gets the same refusal, not a replay). | green |
-| T1.4 | `revive_server_replays_its_first_result` | Keyed modern `gateway_revive_server` for the fixture backend, twice. | Second response `result` equals the first; one revive effect (backend state transitions once). | green |
-| T1.5 | `set_state_replays_without_a_second_transition` | Legacy `gateway_set_state` keyed `triage`, twice. | Second response replays the first (`previous: default`), not a second transition. | green |
-| T1.6 | `set_profile_unknown_is_refused_and_the_key_stays_reusable` | Keyed `gateway_set_profile` for an unknown profile, then the same key for a known one. | First refused "Unknown routing profile"; second executes, because the abandoned lease freed the key. | green |
-| T1.7 | `reload_config_without_a_reload_context_is_refused` | Dispatcher-level keyed `gateway_reload_config`. | Refused -32603 "Config reload is not enabled". | green |
+| T1.3 | `kill_server_is_refused_on_stdio` | Keyed modern `gateway_kill_server`, twice. | Both refused by the confirmation gate (the destructive-confirmation refusal text); the fixture backend is still reachable afterwards (a `gateway_invoke` to it succeeds). No claim about key retention: a replayed refusal and a fresh refusal are indistinguishable from outside. | green |
+| T1.4 | `revive_server_replays_its_first_result` | Keyed modern `gateway_revive_server` for the fixture backend, twice. | Second response `result` equals the first, and its text reports the same prior state. The distinguishing observable is the backend's revive count or state field, whichever the result reports; fixed at test-writing time and named in the test. | green |
+| T1.5 | `set_state_replays_without_a_second_transition` | **Legacy shape** (idempotency key in `_meta`, no protocol fields): `gateway_set_state` to `triage`, twice with one key, then an unkeyed `gateway_set_state` to `complete`. | Second response has `previous: default` (a replay; a re-execution would say `previous: triage`). The third says `previous: triage`, so exactly one transition happened. | green |
+| T1.6 | `set_profile_refusal_frees_the_key_and_success_replays` | **Legacy shape**, as T1.5 (a modern call is refused `NO_SESSION_FOR_PROFILE` before the arm runs, `admission.rs:368-378`). Keyed `gateway_set_profile` for an unknown profile; the same key for a known profile; that call again. | First refused, containing "Unknown routing profile". Second executes, because the abandoned lease freed the key. Third replays the second: equal `result`, and the session's profile was set once. | green |
+| T1.7 | `reload_config_without_a_reload_context_is_refused` | Dispatcher-level keyed `gateway_reload_config`. | Refused -32603; message contains the full literal "Config reload is not enabled on this gateway" (substring match on the message). | green |
 | T1.8 | `reload_config_over_the_serve_loop_replays` | `run_stdio_on` with a config file; keyed `gateway_reload_config`, twice. | Second response replays the first; the reload ran once (reload generation or log counter advances by 1). | green |
-| T1.9 | `reload_capabilities_without_a_backend_is_refused` | Dispatcher-level keyed `gateway_reload_capabilities`. | Refused -32603 "Capability backend is not enabled". | green |
+| T1.9 | `reload_capabilities_without_a_backend_is_refused` | Dispatcher-level keyed `gateway_reload_capabilities`. | Refused -32603; message contains the full literal "Capability backend is not enabled on this gateway" (substring match). | green |
 | T1.10 | `reload_capabilities_over_the_serve_loop_replays` | `run_stdio_on`, capabilities enabled with an empty directory; keyed call, twice. | Second response replays the first; one reload. | green |
 
 ### OWNER.4 (new file `src/gateway/server/tests/owner4_stdio_policy.rs`)
@@ -182,7 +182,7 @@ passed in per request. P1 is the default policy; P2 is `ToolPolicy::from_config`
 | T4.1 | `a_denied_target_is_refused_before_its_retained_result` | Keyed T under P1 → executes (count 1). Same key and arguments under P2. | Refused with the policy error; the response carries no retained `result`; T count still 1. | green (D3: policy precedes admission replay on stdio) |
 | T4.2 | `a_permitted_neighbour_still_works_under_the_denial` | Under P2, keyed call to U. | Executes; U count 1. | green |
 | T4.3 | `a_denied_target_never_dispatches` | P2 from the start, keyed T. | Refused; T count 0. | green |
-| T4.4 | `signing_does_not_skip_the_current_policy` | As T4.1, with message signing on (the `Fixture` already signs). Replay under P2. | Refused; T count 1. This pins that `prepared_for` reuses a check made in the same request (design D3). | green |
+| T4.4 | `signing_does_not_skip_the_current_policy` | As T4.1, with message signing on (the `Fixture` already signs). Replay under P2. Precondition: each stdio request builds a fresh signing context and prepares it under that request's policy (`server/mod.rs:2887-2891,3024-3026`), so for the replay either signing preparation or `check_invocation_policy` runs under P2. The test goes through `dispatch_single_with_sink`, which includes signing preparation. | Refused; T count 1. | green |
 
 ## Red proof
 
@@ -201,3 +201,13 @@ mutant batch:
 
 If any I2 row is red on arrival, the design reopens (D2/D3 say "a red test reopens design"), and
 the lead hears about it before a fix is written.
+
+### I2 review log
+
+- Test-plan review, one seat (`kimi-review`, content inline, SHIP-WITH-FIXES). All taken:
+  - HIGH: T1.6 now uses the legacy shape, so it reaches the profile arm and kills N4.
+  - T1.3 drops its unobservable key-retention claim.
+  - T1.6 gains the replay call, so set_profile's replay clause is asserted.
+  - T1.7 and T1.9 quote the full literals, matched as substrings.
+  - T1.4 and T1.5 name their distinguishing observable.
+  - T4.4 states its precondition.
