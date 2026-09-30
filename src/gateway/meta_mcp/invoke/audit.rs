@@ -6,6 +6,7 @@
 use serde_json::Value;
 
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
+use crate::protocol::JsonRpcResponse;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
 };
@@ -151,6 +152,46 @@ impl MetaMcp {
                 tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
                 result
             }
+        }
+    }
+
+    /// #2472: record a replay of a completed execution, which is a delivered
+    /// call like any other (D1-d). Only an invocation is recorded, over the
+    /// envelope its first execution hashed; a meta tool that wrote no
+    /// invocation record the first time writes none on replay. The response
+    /// hash covers the value delivered again. Under `FailClosed` a failed
+    /// write withholds the replay (D1-f).
+    pub(crate) async fn audit_replay(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+        replay: JsonRpcResponse,
+    ) -> JsonRpcResponse {
+        let envelope = if tool_name == "gateway_invoke" {
+            arguments.clone()
+        } else if let Some(server) = self.surfaced_tool_server(tool_name) {
+            super::super::admission::named_tool_envelope(server, tool_name, arguments, caller)
+        } else {
+            return replay;
+        };
+        let result = match (&replay.result, &replay.error) {
+            (Some(value), _) => Ok(value.clone()),
+            (None, Some(error)) => Err(Error::json_rpc(error.code, error.message.clone())),
+            (None, None) => return replay,
+        };
+        let trace_id =
+            crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
+        match self
+            .audit_invocation(&envelope, session_id, caller, &trace_id, result, None)
+            .await
+        {
+            Err(error @ Error::AuditUnavailable) => replay.id.clone().map_or_else(
+                || JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),
+                |id| super::super::error_response_preserving_status(id, &error),
+            ),
+            _ => replay,
         }
     }
 

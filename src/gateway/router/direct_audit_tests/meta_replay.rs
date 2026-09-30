@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #2472: a meta-route call answered from a completed execution (an idempotent
 //! replay) writes an invocation record like any other delivered call (D1-d).
+//! D1-f needs no cell of its own: a replay was already withheld on a failed
+//! write through its `response_delivery_attempt` record, so a fault cell
+//! passes on the base and proves nothing about this record.
 
 use super::*;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
@@ -78,25 +81,4 @@ async fn meta_replay_writes_an_invocation_record() {
     assert_eq!(replay["request_hash"], original["request_hash"], "{replay}");
     assert!(replay.get("response_hash").is_some(), "{replay}");
     assert_eq!(replay["who"]["credential_kind"], "api_key", "{replay}");
-}
-
-/// D1-f: under `FailClosed`, a replay whose record cannot be written is
-/// withheld with the audit-unavailable code, as a first execution would be.
-#[tokio::test]
-async fn meta_replay_is_withheld_when_its_record_fails() {
-    let fx = fixture(Setup {
-        auth: Some(key_for_alpha(None)),
-        fail_closed: true,
-        ..Setup::default()
-    })
-    .await;
-    let (status, first) = post_modern(&fx, &keyed_invoke(1).0).await;
-    assert_eq!(status, StatusCode::OK, "{first}");
-    fx.log.fail_next_append_for_test();
-    let (_, second) = post_modern(&fx, &keyed_invoke(2).0).await;
-    assert!(
-        second.contains("-32005"),
-        "the replay was delivered: {second}"
-    );
-    assert!(!second.contains("\"isError\":false"), "{second}");
 }

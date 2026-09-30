@@ -1697,7 +1697,11 @@ async fn meta_mcp_dispatch(
             // `call_response` is mutated only by the firewall response scan below.
             #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
             let mut call_response = if let Some(response) = replay {
-                response
+                // #2472: a replay is a delivered call, recorded as one.
+                let session = Some(session_id.as_str());
+                (state.meta_mcp)
+                    .audit_replay(tool_name, &arguments, session, &caller, response)
+                    .await
             } else {
                 Box::pin(state.meta_mcp.handle_tools_call(
                     id,
