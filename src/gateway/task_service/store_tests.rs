@@ -417,6 +417,7 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
     store.close().await.unwrap();
 }
 
+// POSIX mode bits and symlinks: asserts 0700/0600 and refuses symlinked sources; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn store_06_private_modes_and_unsafe_sources_are_enforced() {

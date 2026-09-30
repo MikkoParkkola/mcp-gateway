@@ -11,8 +11,8 @@ use tracing::warn;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 
 use super::{
-    AuthState, Now, Redemption, bearer_unauthorized_response, cookie_secure, session_cookie,
-    session_limits,
+    AuthState, DashboardBootstrap, Now, Redemption, SessionLimits, bearer_unauthorized_response,
+    cookie_secure, session_cookie,
 };
 
 /// Exchange a dashboard bootstrap link for a session, if this is one.
@@ -121,6 +121,20 @@ pub(super) fn try_dashboard_bootstrap(
         let secure = cookie_secure(state);
         let holds_value = state.dashboard_bootstrap.peek().as_deref() == Some(candidate.as_str());
         if secure && !state.tls_enabled && holds_value {
+            // A cookie set here would be scoped to this loopback host, and a
+            // browser drops a `Secure` one over plain HTTP anyway. Hand off to
+            // the public origin instead (#2130): this page shows a one-time
+            // code the operator enters there, in a same-origin form, so the
+            // code never travels in a URL and no proxy header is trusted.
+            if let Some(origin) = super::handoff::public_origin(state)
+                && let Some(Redemption { not_after }) =
+                    state.dashboard_bootstrap.consume_capped(&candidate)
+            {
+                let code = state
+                    .dashboard_bootstrap
+                    .mint_handoff(Now::read(), not_after);
+                return Some(super::handoff::code_page(&origin, &code));
+            }
             warn!("Dashboard bootstrap refused: HTTPS public_url on a plain-HTTP listener");
             return Some(axum::response::IntoResponse::into_response((
                 axum::http::StatusCode::CONFLICT,
@@ -141,29 +155,44 @@ pub(super) fn try_dashboard_bootstrap(
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
-        let limits = session_limits(state);
-        let now = Now::read();
-        let handle = state
-            .dashboard_bootstrap
-            .issue_session_until(now, &limits, not_after);
-        // The cookie lives exactly as long as the server will honour it, so a
-        // browser never keeps presenting a handle the server already dropped:
-        // the absolute limit, or less when the minting credential expires first.
-        let max_age = not_after
-            .map(|cap| cap.duration_since(now.wall).unwrap_or_default())
-            .map_or(limits.absolute, |left| left.min(limits.absolute))
-            .as_secs();
-        Some(axum::response::IntoResponse::into_response((
-            axum::http::StatusCode::SEE_OTHER,
-            [
-                (axum::http::header::LOCATION, "/dashboard".to_string()),
-                (
-                    axum::http::header::SET_COOKIE,
-                    session_cookie(&handle, max_age, secure),
-                ),
-            ],
-        )))
+        Some(signed_in(
+            &state.dashboard_bootstrap,
+            &state.live_config,
+            not_after,
+            secure,
+        ))
     }
+}
+
+/// A fresh session for a redeemed link or handoff code: an opaque handle in a
+/// cookie and a 303 to `/dashboard`. The session ends at `not_after`, the
+/// minting credential's expiry, when that comes before the absolute limit.
+pub(super) fn signed_in(
+    bootstrap: &DashboardBootstrap,
+    live: &crate::config_reload::LiveConfig,
+    not_after: Option<std::time::SystemTime>,
+    secure: bool,
+) -> Response {
+    let limits = SessionLimits::from(&live.get().auth.dashboard_session);
+    let now = Now::read();
+    let handle = bootstrap.issue_session_until(now, &limits, not_after);
+    // The cookie lives exactly as long as the server will honour it, so a
+    // browser never keeps presenting a handle the server already dropped:
+    // the absolute limit, or less when the minting credential expires first.
+    let max_age = not_after
+        .map(|cap| cap.duration_since(now.wall).unwrap_or_default())
+        .map_or(limits.absolute, |left| left.min(limits.absolute))
+        .as_secs();
+    axum::response::IntoResponse::into_response((
+        axum::http::StatusCode::SEE_OTHER,
+        [
+            (axum::http::header::LOCATION, "/dashboard".to_string()),
+            (
+                axum::http::header::SET_COOKIE,
+                session_cookie(&handle, max_age, secure),
+            ),
+        ],
+    ))
 }
 
 /// The `bootstrap` query parameter, if present.

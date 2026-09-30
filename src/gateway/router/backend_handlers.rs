@@ -628,7 +628,7 @@ async fn backend_handler_inner(
     let attestation = take_attestation_token(json_request.get_mut("params"));
 
     // Parse request
-    let (id, method, params) = match parse_request(&json_request) {
+    let (id, method, mut params) = match parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
             return build_http_response(&response, StatusCode::BAD_REQUEST);
@@ -753,12 +753,9 @@ async fn backend_handler_inner(
         );
     }
 
-    // MIK-7272.SUB.4 §P3: an unusable retry field is refused with -32602 here,
-    // the same answer route 1 gives at `router/handlers.rs:1223`. Refused after
-    // the notification branch above, which has no id to answer with. Silently
-    // ignoring it would leave the caller believing it has replay protection it
-    // does not have — a fail-open on the exact guarantee, and for a destructive
-    // tool that fail-open IS the duplicate side effect it asked to be spared.
+    // MIK-7272.SUB.4 §P3: an unusable retry field is refused with -32602, as on
+    // route 1, after the notification branch (no id to answer). Ignoring it
+    // would fake the replay protection a destructive call asked for.
     let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
     if retry.is_malformed() {
         return build_http_error_response(
@@ -768,6 +765,10 @@ async fn backend_handler_inner(
             StatusCode::BAD_REQUEST,
         );
     }
+    // Valid (checked above), and off the params before sanitization (ASI07).
+    let chain_nonce = crate::protocol::mrtr::take_chain_nonce_params(params.as_mut())
+        .ok()
+        .flatten();
 
     // End-user identity propagation for the direct backend route (MIK-6704 /
     // ADR-007). Parity with the meta dispatch path: for a propagation-configured
@@ -1101,6 +1102,8 @@ async fn backend_handler_inner(
                 response.id = Some(id.clone());
                 stamp_direct_provenance(&state, &name, params, client, &mut response);
                 settle_direct_idempotency(idem_reservation.as_mut(), &response);
+                let nonce = chain_nonce.as_deref();
+                state.meta_mcp.finish_direct(&mut response, &method, nonce);
                 build_http_response(&response, StatusCode::OK)
             }
             // Settled as terminal unless raised before dispatch
@@ -1170,6 +1173,8 @@ async fn backend_handler_inner(
                 );
             }
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
+            let nonce = chain_nonce.as_deref();
+            state.meta_mcp.finish_direct(&mut response, &method, nonce);
             build_http_response(&response, StatusCode::OK)
         }
         // Settled, never dropped: an unsettled reservation releases the key and
@@ -1189,15 +1194,10 @@ async fn dispatch_armed<T>(
 }
 
 /// Store the direct route's result under the client's idempotency key so a
-/// re-issue after a broken stream replays it instead of invoking the backend a
-/// second time. Called after the response scan and provenance stamp so the
-/// replay is byte-identical to what the first caller received.
-///
-/// Both terminal outcomes settle. A JSON-RPC error from a call that was
-/// dispatched is an outcome, not an absence of one: the backend answered, so
-/// the side effect may have landed, and releasing the key would hand the
-/// caller's retry a clean slate for a mutation that may already have committed
-/// (ADR-012 consequence 1). The retry is served the same error instead.
+/// re-issue replays it instead of invoking the backend again. Runs after the
+/// scan and provenance stamp, before any chain link. Both terminal outcomes
+/// settle: a dispatched JSON-RPC error may follow a committed side effect, so
+/// the retry is served the same error (ADR-012 consequence 1).
 fn settle_direct_idempotency(
     reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     response: &JsonRpcResponse,

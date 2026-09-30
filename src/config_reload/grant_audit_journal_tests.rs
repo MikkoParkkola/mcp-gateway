@@ -246,6 +246,7 @@ async fn unreadable_cause_survives_a_failed_plan_write() {
 
 /// A restart that spells the same grant file differently (here a symlink)
 /// keeps the consumed journal ids, so no entry is recorded a second time.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn a_path_alias_keeps_the_consumed_ids() {
@@ -267,6 +268,7 @@ fn a_path_alias_keeps_the_consumed_ids() {
 
 /// After a switch to another spelling, the state records the new one: the
 /// old spelling (here a symlink) may be deleted without resetting the ids.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn a_switched_path_survives_removing_the_old_spelling() {
@@ -320,6 +322,7 @@ fn a_later_state_version_is_refused() {
 
 /// The state file decides which journal entries are already recorded: one
 /// another account can write to is refused, not trusted.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[test]
 fn a_group_writable_state_file_is_refused() {

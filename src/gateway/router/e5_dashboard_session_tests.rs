@@ -633,6 +633,9 @@ async fn reload_changes_limits() {
 #[path = "e5_dashboard_session_tests/link.rs"]
 mod link;
 
+#[path = "e5_dashboard_session_tests/handoff.rs"]
+mod handoff;
+
 /// D4 (MIK-7570.METRICS.2): an expired session answered with its own 401 is
 /// counted as `session_expired`; a bearer beside the dead cookie is not.
 #[cfg(feature = "metrics")]
