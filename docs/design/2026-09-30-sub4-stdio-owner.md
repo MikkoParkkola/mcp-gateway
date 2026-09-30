@@ -165,6 +165,27 @@ and each test fails when the property it guards is removed:
 
 ### D1 — `StdioLocalOperator`, the typed tag (OWNER.3, OWNER.5; enables OWNER.1/4 tests)
 
+**Rev 3.1 amendment: reuse, don't add.** The typed tag already exists: `StdioNonce`
+(`server/stdio_nonce.rs`, MIK-7570.STDIO.1). Its field and its constructor are private,
+`StdioNonce::process` is `pub(super)` to the stdio transport module, and its own doc states the
+control this row asks for: "only its two caller-context builders can bind a caller as stdio. An
+HTTP caller has no path to the value, whatever text it presents." `MetaMcpCallerContext` already
+carries it as `stdio_nonce: Option<&StdioNonce>` (`meta_mcp/mod.rs:186`). The only production
+sites that set it are `build_stdio_caller_context` (`server/mod.rs:3177`) and `with_retry`, which
+copies it (`meta_mcp/mod.rs:283`). The `cfg(test)` fixture `stdio_caller_context` (`:3693`) also
+sets it; every other constructor (HTTP, task recovery, task worker, all test fixtures) sets
+`None`.
+
+So `StdioLocalOperator` in this design IS `StdioNonce` presence. No new type and no new
+context field are added. That avoids 69 struct-literal edits and a second value that could drift
+from the first. Everything below that reads "the tag" means `caller.stdio_nonce.is_some()`,
+passed as `Option<&StdioNonce>` wherever a function needs it (never a `bool`: a behaviour-selecting
+parameter stays typed). The admission and cache namespaces use a constant domain string, not the
+nonce bytes: both stores are per-process and in memory (F2), so the nonce would add nothing. It
+also must not appear in any hashed or logged output (its own doc: never logged, never serialised).
+The catalogue path passes `Option<&StdioNonce>` to the `pub(crate)` siblings. The text below keeps
+the rev 2 wording, with this substitution.
+
 Framing (rev 2): preventive boundary hardening. F1-F3 mean no HTTP-to-stdio replay is reachable
 today; OWNER.3 removes the string as the thing that decides, so the next path that lets a string
 reach `credential_principal` does not become the operator. Its tests share one `MetaMcp` (one
@@ -509,3 +530,5 @@ failing tests are written.
   advertises none (D6 item 2).
   Improvements taken: the D7 out-of-scope note, and pre-running D2 on the current tree (it runs
   in I2's first CI). Improvement deferred: the `classify` input-enum shape, decided during I1.
+- Rev 3.1: D1 reuses `StdioNonce` as the typed tag rather than adding `StdioLocalOperator`
+  (found while writing the I1 test plan; the ladder rule "already in this codebase").
