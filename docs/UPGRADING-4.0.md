@@ -129,7 +129,7 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
-| 105 | `tasks/get` and a repeated task call re-check a finished task against current policy before returning its result; a task record now names the backend calls that produced it (record version 5), and a finished plan task from a beta store is refused | Nothing to do on upgrade; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
+| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record. Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2963,9 +2963,20 @@ migration, and a repeated call then runs again. Restoring an older backup can lo
 idempotency knowledge and replay external effects that already completed. 3.5.x has no task store
 and is not affected.
 
+Three client-visible changes follow from that check:
+
+- Under attestation `enforce`, reading a finished task (`tasks/get`, or a repeat of a task-augmented
+  call) needs a currently valid token in `_meta["io.mcp-gateway/recovery"].attestation`. Without
+  one the read returns -32002 and no result. Under `observe` the read is delivered.
+- A task whose dispatch an identity grant refused now reads back as the current grant denial
+  (-32004), not as the failure it stored, for as long as the grant stays denied.
+- Every read of a finished task writes one `identity_grant_decision` record to the audit log when
+  the target is a personal capability, beside the record the worker wrote at dispatch.
+
 **Action:** none on upgrade. A client that attests calls must send a fresh recovery token in
-`_meta["io.mcp-gateway/recovery"].attestation` to read a finished task, as it already does for a
-working one.
+`_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task, as it already
+does for a working one. Where a SIEM rule counts decision records per call, expect one more per
+read.
 
 ## Upgrading from 3.5.x: a walkthrough
 

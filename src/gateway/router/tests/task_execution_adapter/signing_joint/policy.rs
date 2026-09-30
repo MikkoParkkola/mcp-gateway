@@ -171,7 +171,7 @@ async fn joint_d_rotated_predecessor_refused_after_dispatched_mark_successor_dis
     let settled = bounded(
         "predecessor terminal after rotation",
         poll_until_terminal_attested(&state, "key-a", &pred_id, || {
-            successor.encoded().to_string()
+            issue(&signer, "alice").encoded().to_string()
         }),
     )
     .await;
@@ -246,7 +246,7 @@ async fn joint_d_rotated_predecessor_refused_after_dispatched_mark_successor_dis
     let succ_settled = bounded(
         "successor settle",
         poll_until_terminal_attested(&state, "key-a", &succ_id, || {
-            successor.encoded().to_string()
+            issue(&signer, "alice").encoded().to_string()
         }),
     )
     .await;
