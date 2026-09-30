@@ -1393,8 +1393,8 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [
-        "src/gateway/router/stream_kill_tests.rs::idem5_meta_killed_side_effecting_call_executes_once",
-        "src/gateway/router/stream_kill_tests.rs::idem5_direct_killed_side_effecting_call_executes_once"
+        "src/gateway/router/stream_kill_tests.rs:225",
+        "src/gateway/router/stream_kill_tests.rs:243"
       ],
       "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. Closest tests: tests/mik_7272_sub4_adr012_acs.rs:561 (post-dispatch transport failure keeps its key) and :399 (keyed re-issue with a new id); tests/mik_7272_sub4_three_routes.rs:290. None breaks the stream, re-issues and asserts a backend count of 1. Tests added in the test/idem-5-6-stream-kill PR: idem5_meta_killed_side_effecting_call_executes_once, idem5_direct_killed_side_effecting_call_executes_once; status is graded after CI."
     },
@@ -1404,7 +1404,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [
-        "src/gateway/router/stream_kill_tests.rs::idem6_read_only_call_is_unaffected_by_the_kill"
+        "src/gateway/router/stream_kill_tests.rs:268"
       ],
       "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. tests/mik_7272_sub4_adr012_acs.rs:674 shows a read-only call is still re-sent, but not inside the stream-kill test IDEM.5 requires. Tests added in the test/idem-5-6-stream-kill PR: idem6_read_only_call_is_unaffected_by_the_kill; status is graded after CI."
     },
