@@ -1024,7 +1024,15 @@ async fn backend_handler_inner(
         .await
         {
             Err(rejection) => return rejection,
-            Ok(sanitized) => sanitized, // `None`: pass-through, forwarded as sent
+            Ok(None) => {
+                // #2445: pass-through skips the gate, never the AX-010 block.
+                let blocked = backend.blocked_tool_refusal(None, call.tool);
+                if let Some(e) = blocked.map(crate::Error::Protocol) {
+                    return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+                }
+                None
+            }
+            Ok(sanitized) => sanitized,
         }
     } else {
         None
