@@ -5,6 +5,7 @@
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
 mod commands;
+mod home_dir;
 
 use std::path::Path;
 use std::process::ExitCode;
