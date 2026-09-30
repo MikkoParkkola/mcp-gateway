@@ -5,6 +5,7 @@
 //! These engine assertions are distinct from the still-required public routes.
 
 pub(crate) mod audit;
+mod excerpt;
 mod minted_value;
 
 use super::*;

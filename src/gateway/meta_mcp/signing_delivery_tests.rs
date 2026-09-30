@@ -68,6 +68,8 @@ async fn finalize(
             },
             mutation: ResponseMutationPolicy::Redact,
             signing,
+            chain_source: super::super::response_security::ChainSource::NotEligible,
+            chain_nonce: None,
         },
     )
     .await

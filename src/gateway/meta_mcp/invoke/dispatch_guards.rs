@@ -180,9 +180,13 @@ impl MetaMcp {
     }
 
     /// S4 payload: response gates (contract, inspection, context integrity)
-    /// on a successful result.
-    pub(crate) fn gate_payload(&self, call: &BackendCall<'_>, value: Value) -> Result<Value> {
-        self.apply_response_gates(
+    /// on a successful result, and whether a gate replaced it (A3 R2').
+    pub(crate) fn gate_payload(
+        &self,
+        call: &BackendCall<'_>,
+        value: Value,
+    ) -> Result<(Value, super::super::response_security::GateEffect)> {
+        self.apply_response_gates_effect(
             call.server,
             call.tool,
             call.api_key_name,
