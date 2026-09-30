@@ -17,8 +17,10 @@ use crate::{Error, Result};
 impl MetaMcp {
     /// The refusal for delivering `stored`, or `None` when it may go out.
     ///
-    /// Only a terminal task with output is checked; a working task delivers
-    /// nothing. `attestation` is the token this request presents.
+    /// A terminal task's output and a parked task's pending input requests
+    /// (#2466) are both backend output, so both are checked. A working or
+    /// cancelled task delivers none. `attestation` is the token this request
+    /// presents.
     pub(crate) fn refuse_stored_delivery(
         &self,
         id: &RequestId,
@@ -29,7 +31,7 @@ impl MetaMcp {
     ) -> Option<JsonRpcResponse> {
         if !matches!(
             stored.task.status(),
-            TaskStatus::Completed | TaskStatus::Failed
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::InputRequired
         ) {
             return None;
         }
