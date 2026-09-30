@@ -435,6 +435,27 @@ only raise it.
 - The dashboard: sessions end after 30 minutes idle or 8 hours total
   (`auth.dashboard_session`), and live in each replica's memory. Serve the dashboard
   from one replica or behind sticky sessions (UPGRADING-4.0 section 71).
+- Alerts on the security counters, scraped with `server.metrics_token`. Their
+  labels are fixed words, never a key name, subject, backend, tool or path:
+  - `mcp_auth_failures_total{kind}`: `missing_credential`, `invalid_credential`,
+    `expired_api_key`, `session_expired`, `bootstrap_refused`,
+    `token_exchange_denied`, `token_exchange_invalid`.
+  - `mcp_authz_denials_total{route, reason}`: route `meta`, `direct`, `admin`,
+    `ui` or `control_plane`; reason `backend_scope`, `account_not_usable`,
+    `identity_grant`, `gateway_refusal`, `response_firewall`, `request_policy`,
+    `admin_required`, `rbac` or `other`.
+  - `mcp_audit_degraded` and `mcp_audit_append_failures_total{cause}` for the log.
+
+  ```yaml
+  - alert: GatewayCredentialGuessing
+    expr: sum(rate(mcp_auth_failures_total{kind="invalid_credential"}[10m])) > 1
+    for: 10m
+  - alert: GatewayAuditLogDegraded
+    expr: max(mcp_audit_degraded) == 1
+  - alert: GatewayIdentityGrantDenialSpike
+    expr: sum(rate(mcp_authz_denials_total{reason="identity_grant"}[5m])) > 0.5
+    for: 5m
+  ```
 
 ## Related
 
