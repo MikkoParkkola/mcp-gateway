@@ -53,13 +53,12 @@ helpers, so the fix commit does not edit them.
 
 | # | Test | Setup and action | Assertion | Today | After fix |
 |---|---|---|---|---|---|
-| T3.1 | `untagged_stdio_spelling_cannot_replay_the_operators_admission` | One `MetaMcp`. Tagged context admits a keyed mutating `gateway_invoke` (key K) → `Owned`; completed with a secured response carrying a marker. Then the untagged "stdio" context admits the same K and arguments. | Second admission is `Owned`, not `Replay`, and does not carry the marker. | Replay → RED | Owned |
-| T3.2 | `operator_cannot_replay_an_untagged_stdio_spellings_admission` | Reverse order: untagged first (completed with marker B), tagged second. | Tagged admission is `Owned`, not a replay of marker B. | RED | GREEN |
-| T3.3 | `api_key_caller_spelled_stdio_cannot_replay_the_operator` | As T3.1 with the API-key-shaped spelling. | `Owned`. | RED | GREEN |
-| T3.4 | `untagged_stdio_spelling_cannot_hit_the_operators_idempotency_entry` | `Fixture::start_mutating`. A real stdio dispatch of a keyed call (key K in `_meta`) → count 1; the invoke path stores the result in `IdempotencyCache` under the operator's cache principal (`invoke.rs:1805-1845`). Then the same `gateway_invoke` arguments go through `MetaMcp::handle_tools_call` (the `pub` entry HTTP calls after its admission) with the untagged context, whose `retry` carries K. | Backend `tools_call_count() == 2`, and the second response does not equal the first byte-for-byte: the untagged caller reaches the backend, not the operator's entry. | 1 → RED | 2 |
-| T3.5 | `batched_stdio_call_is_the_tagged_operator` | Real stdio **batch** of one keyed mutating call (K) through `dispatch_batch_with_sink`, then the untagged context admits K. | `Owned`: the batch item was stored under the operator namespace, not the string's. | RED | GREEN (fails again if batch items ever lose the tag) |
-| T3.6 | `the_real_stdio_owner_still_replays_its_own_keyed_write` | Real stdio dispatch, keyed mutating call K, sent twice. | `tools_call_count() == 1`; the second response equals the first. | GREEN (positive control) | GREEN |
-| T3.7 | `chain_step_keeps_the_operator_tag` | `stdio_caller_context(..).with_retry(&retry)`. | `stdio_nonce.is_some()`. | GREEN (pin) | GREEN |
+| T3.1 | `stdio_results_are_keyed_by_transport_not_by_name` | One `MetaMcp`. The tagged context admits a keyed mutating `gateway_invoke` (key K) → `Owned`, completed with a secured response carrying a marker. Then, for each non-transport context in a table (the struct-update copy without the nonce; the same imitating an API-key credential kind), a fresh admission of the same K and arguments. | Every table row is `Owned`, not `Replay`, and none carries the marker. | Replay → RED | Owned |
+| T3.2 | `a_named_context_does_not_seed_the_stdio_operators_results` | Reverse order: the untagged context first (completed with marker B), the tagged context second. | The tagged admission is `Owned`, not a replay of marker B. | RED | GREEN |
+| T3.4 | `stdio_idempotency_entries_are_keyed_by_transport` | `Fixture::start_mutating`. A real stdio dispatch of a keyed call (key K in `_meta`) → count 1; the invoke path stores the result in `IdempotencyCache` under the operator's cache principal (`invoke.rs:1805-1845`). Then the same `gateway_invoke` arguments go through `MetaMcp::handle_tools_call` (the `pub` entry HTTP calls after its admission) with the untagged context, whose `retry` carries K. | Backend `tools_call_count() == 2`: the untagged caller reaches the backend, not the operator's entry. (No response-body comparison: the fixture backend may answer two calls identically.) | 1 → RED | 2 |
+| T3.5 | `batched_stdio_calls_are_keyed_by_transport` | Real stdio **batch** of one keyed mutating call (K) through `dispatch_batch_with_sink`, then the untagged context admits K. | `Owned`: the batch item was stored under the operator namespace, not the string's. | RED | GREEN (fails again if batch items ever lose the tag) |
+| T3.6 | `the_stdio_operator_replays_its_own_keyed_write` | Real stdio dispatch, keyed mutating call K, sent twice with the same JSON-RPC id. | `tools_call_count() == 1`; the second response's `result` member equals the first's (the id is rewritten on replay, so the comparison is on `result`, not the whole frame). | GREEN (positive control) | GREEN |
+| T3.7 | `a_chain_step_keeps_the_stdio_tag` | `stdio_caller_context(..).with_retry(&retry)`. | `stdio_nonce.is_some()`. | GREEN (pin) | GREEN |
 
 Pins added in the **fix** commit (they need the new `classify` signature and cannot exist before
 it; they are extra, not the red proof):
@@ -86,9 +85,9 @@ Each mutant must turn at least one named test red; a surviving mutant fails the 
 
 | M | Mutation (applied to the fix) | Must kill |
 |---|---|---|
-| M1 | admission namespace ignores the nonce (back to the principal string) | T3.1, T3.2, T3.3, T3.5 |
+| M1 | admission namespace ignores the nonce (back to the principal string) | T3.1, T3.2, T3.5 |
 | M2 | cache principal ignores the nonce | T3.4 |
-| M3 | `build_stdio_caller_context` sets `stdio_nonce: None` | T3.5, T3.6 (namespace mismatch with fixture), T5.1 |
+| M3 | `build_stdio_caller_context` sets `stdio_nonce: None` | T3.5, T5.1 (not T3.6: both of its calls lose the tag alike and still replay) |
 | M4 | batch path passes a non-stdio client (untagged) | T3.5 |
 | M5 | `with_retry` drops `stdio_nonce` | T3.7 |
 | M6 | stdio context sets `verified_identity`/`grant_subject` to a fixture value | T5.1 |
@@ -97,3 +96,12 @@ Each mutant must turn at least one named test red; a surviving mutant fails the 
 ## Out of this increment
 
 OWNER.1/OWNER.4 (I2), LIFE.1 (I3), OWNER.2 (I4), STDIO.1 (I5).
+
+## Review log
+
+- Test-plan review, one seat (`kimi-review`, content inline, SHIP-WITH-FIXES). Taken:
+  - M3's killers corrected to T3.5 and T5.1;
+  - T3.4 asserts the dispatch count only, and T3.6 compares `result` members;
+  - T3.1 and T3.3 merged into one table-driven test.
+
+  Test names are made neutral, per the lead's handling rule.
