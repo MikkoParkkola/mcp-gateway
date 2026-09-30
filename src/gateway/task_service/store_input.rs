@@ -67,9 +67,28 @@ impl RoundClosed {
 #[cfg(test)]
 #[derive(Default)]
 pub(super) struct TestSeams {
-    pub(super) hook: std::sync::Mutex<Option<super::CommitHook>>,
+    hook: std::sync::Mutex<Option<super::CommitHook>>,
     clock: std::sync::Mutex<Option<DateTime<Utc>>>,
     clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,
+    /// Answer writes that have entered the store, before its ordering lock.
+    arrived: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl TestSeams {
+    pub(super) fn set_hook(&self, hook: Option<super::CommitHook>) {
+        *self
+            .hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+    }
+
+    pub(super) fn hook(&self) -> Option<super::CommitHook> {
+        self.hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl Shared {
@@ -118,6 +137,15 @@ impl TaskStore {
             .clock_after_resume
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
+    }
+
+    /// How many answer writes have reached the store's ordering lock.
+    #[cfg(test)]
+    pub(crate) fn arrivals_for_test(&self) -> usize {
+        self.0
+            .seams
+            .arrived
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Hold the ordering lock, as a writer would.
@@ -201,9 +229,9 @@ impl TaskStore {
         .map_err(|_| StoreError::Storage)?
     }
 
-    /// Every open round past the TTL its record was created with, as
-    /// `(id, revision, owner digest)`. A compact snapshot: each settlement
-    /// re-checks the revision under the ordering lock.
+    /// Every open round closed at `now`, by its continuation deadline or its
+    /// task's TTL, as `(id, revision, owner digest, why)`. A compact snapshot:
+    /// each settlement re-checks the revision under the ordering lock.
     pub(crate) fn expired_input_rounds(
         &self,
         now: DateTime<Utc>,
@@ -341,6 +369,10 @@ impl Shared {
         reserve: impl FnOnce() -> Option<OwnedSemaphorePermit>,
         at: DateTime<Utc>,
     ) -> Result<ProvideOutcome, StoreError> {
+        #[cfg(test)]
+        self.seams
+            .arrived
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let _order = self.order();
         let (mut task, mut record) = self.read_owned(owner, id)?;
         // Read after the lock, never before: an update queued while the round

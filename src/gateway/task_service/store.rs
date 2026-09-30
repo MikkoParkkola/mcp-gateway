@@ -357,12 +357,7 @@ impl TaskStore {
 
     #[cfg(test)]
     pub(super) async fn set_hook(&self, hook: Option<CommitHook>) {
-        *self
-            .0
-            .seams
-            .hook
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = hook;
+        self.0.seams.set_hook(hook);
     }
 
     /// Stop serving and release custody — after any mutation already in flight
@@ -575,11 +570,7 @@ impl Shared {
     /// The test-only commit hook. Production installs none and pays nothing.
     #[cfg(test)]
     fn hook(&self) -> Option<CommitHook> {
-        self.seams
-            .hook
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.seams.hook()
     }
 
     // `&self` is load-bearing: one shape with the cfg(test) twin above.

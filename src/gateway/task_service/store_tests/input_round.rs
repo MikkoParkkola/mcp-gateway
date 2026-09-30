@@ -336,7 +336,16 @@ async fn an_update_queued_across_the_deadline_is_refused_under_the_lock() {
                 .await
         })
     };
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    // The write has entered the store and is waiting on the held lock, with
+    // the clock still before the deadline.
+    let bound = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while store.arrivals_for_test() == 0 {
+        assert!(
+            tokio::time::Instant::now() < bound,
+            "the update never reached the store"
+        );
+        tokio::task::yield_now().await;
+    }
     store.set_clock_for_test(Some(at(30)));
     drop(held);
     let refused = queued.await.unwrap();

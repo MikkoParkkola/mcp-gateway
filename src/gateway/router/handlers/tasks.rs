@@ -412,7 +412,11 @@ pub(super) async fn tasks_update(
         .await;
     match outcome {
         InputOutcome::Accepted => JsonRpcResponse::success(id, ack_complete()),
-        InputOutcome::NotOutstanding => no_round(id),
+        // A cancel may have landed between the look-up above and the write.
+        InputOutcome::NotOutstanding => match state.tasks.get(owner, task_id) {
+            Ok(current) => settled_or_no_round(id, &current.task),
+            Err(_) => no_round(id),
+        },
         InputOutcome::TooLarge => JsonRpcResponse::error(
             Some(id),
             -32602,
