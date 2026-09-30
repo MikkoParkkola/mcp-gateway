@@ -520,9 +520,13 @@ pub(super) async fn backend_handler(
 async fn backend_handler_inner(
     state: Arc<AppState>,
     name: String,
-    request: axum::http::Request<axum::body::Body>,
+    mut request: axum::http::Request<axum::body::Body>,
     call: &mut Option<direct_audit::DirectCall>,
 ) -> (StatusCode, Json<Value>) {
+    // Held until this request is counted (U1 seal ordering); `read_body` would drop it.
+    let pending = request
+        .extensions_mut()
+        .remove::<crate::protocol_revision_telemetry::window::PendingObservation>();
     // Extract authenticated client from extensions (injected by auth middleware)
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
     let cert_identity = request.extensions().get::<CertIdentity>().cloned();
@@ -676,6 +680,7 @@ async fn backend_handler_inner(
             .get(axum::http::header::USER_AGENT)
             .and_then(|value| value.to_str().ok()),
     );
+    drop(pending);
 
     debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
 

@@ -511,6 +511,40 @@ impl super::Registry {
     }
 }
 
+/// HTTP requests accepted but not yet counted. A segment seals only once
+/// this reaches zero, so no admitted request is counted after its seal.
+static PENDING_OBSERVATIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// One accepted HTTP request that has not been counted yet. The outermost
+/// middleware creates it; the handler drops it right after counting, and any
+/// early refusal drops it with the request.
+#[derive(Clone)]
+pub(crate) struct PendingObservation {
+    _guard: std::sync::Arc<PendingGuard>,
+}
+
+struct PendingGuard;
+
+impl PendingObservation {
+    pub(crate) fn begin() -> Self {
+        PENDING_OBSERVATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            _guard: std::sync::Arc::new(PendingGuard),
+        }
+    }
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        PENDING_OBSERVATIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn pending_observations() -> usize {
+    PENDING_OBSERVATIONS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Named clients that identify a caller on their own.
 pub(crate) const NAMED_CLIENTS: &[&str] = &["claude", "codex", "cursor", "vscode", "chatgpt"];
 /// Fixed User-Agent families. Raw agents are never stored (MIK-6704).

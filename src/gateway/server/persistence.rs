@@ -331,7 +331,7 @@ mod tests {
             shutdown_tx.subscribe(),
         );
         shutdown_tx.send(()).expect("a subscriber exists");
-        tokio::time::timeout(std::time::Duration::from_secs(5), saver)
+        tokio::time::timeout(std::time::Duration::from_secs(12), saver)
             .await
             .expect("the saver closes without waiting for a drain")
             .expect("the saver task does not panic");
@@ -341,20 +341,54 @@ mod tests {
         assert_eq!(window.http_segments.len(), 1);
         assert!(window.http_segments[0].closed_cleanly);
     }
+
+    #[tokio::test]
+    async fn protocol_window_saver_seals_only_after_accepted_requests_are_counted() {
+        // Final review: a request accepted before shutdown but counted after
+        // the seal was lost. The seal now waits for it.
+        use crate::protocol_revision_telemetry::window::{PendingObservation, load};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let uncounted = PendingObservation::begin();
+        let saver = spawn_protocol_window_saver(
+            dir.path().to_path_buf(),
+            crate::protocol_revision_telemetry::window::WriterIdentity {
+                listen: "127.0.0.1:39401".to_string(),
+                exe: "/opt/mcp-gateway/mcp-gateway".to_string(),
+                process_started_at: 1,
+            },
+            std::time::Duration::from_secs(3600),
+            shutdown_tx.subscribe(),
+        );
+        shutdown_tx.send(()).expect("a subscriber exists");
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        assert!(
+            !saver.is_finished(),
+            "the seal must wait for the uncounted request"
+        );
+        drop(uncounted);
+        tokio::time::timeout(std::time::Duration::from_secs(12), saver)
+            .await
+            .expect("the saver seals once the request is counted")
+            .expect("the saver task does not panic");
+        let window = load(dir.path()).expect("a v2 window");
+        assert!(window.http_segments[0].closed_cleanly);
+    }
 }
 
 /// How often an HTTP process rewrites its U1 window segment.
 const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long a shutting-down process waits for accepted requests to be counted.
+const SEAL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Keep this HTTP process's U1 segment current, and seal it on shutdown.
 ///
-/// The close is written on the shutdown broadcast, not after the drain:
+/// The seal is written after the listener stops and every request it already
+/// accepted has been counted (`pending_observations`), not after the drain:
 /// open connections get `server.shutdown_timeout` (30 s by default) and
-/// launchd SIGKILLs after 20 s, so a post-drain close would never land while
-/// an SSE stream is open. The seal is a time boundary: the segment holds what
-/// was counted before `last_checkpoint_at`. A request still uploading its body
-/// is counted after the seal and belongs to no segment, the same as the
-/// restart gap the decision's coverage check bounds (300 s).
+/// launchd sends SIGKILL after 20 s, so a post-drain close would never land
+/// while an SSE stream is open. If requests are still uncounted at
+/// `SEAL_DEADLINE`, the segment stays unclean and the decision blocks.
 /// A sink that fails to open is retried every tick; counts are cumulative
 /// from process start, so a late open still records everything.
 pub(super) fn spawn_window_saver(
@@ -387,11 +421,27 @@ fn spawn_protocol_window_saver(
                 _ = interval.tick() => false,
                 _ = shutdown.recv() => true,
             };
+            let mut seal = false;
             if close {
-                // ponytail: the listener stops accepting right after the same
-                // broadcast; a short yield orders the close after it. Hook the
-                // listener's accept-stop directly if this ever proves racy.
+                // The listener stops accepting right after the same broadcast;
+                // a short yield orders the wait after it. Then every request
+                // it already accepted must be counted before the seal. Past
+                // the deadline (under launchd's 20 s kill) the segment stays
+                // unclean, which blocks the decision instead of undercounting.
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                let deadline = tokio::time::Instant::now() + SEAL_DEADLINE;
+                seal = loop {
+                    if crate::protocol_revision_telemetry::window::pending_observations() == 0 {
+                        break true;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        warn!(
+                            "HTTP requests still uncounted at the seal deadline; U1 segment left unclean"
+                        );
+                        break false;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                };
             }
             let now = crate::protocol_revision_telemetry::window::unix_seconds_now();
             if sink.is_none() {
@@ -405,7 +455,7 @@ fn spawn_protocol_window_saver(
                 }
             }
             if let Some(sink) = sink.as_mut()
-                && let Err(error) = sink.checkpoint(&global_segment_counts(), now, close)
+                && let Err(error) = sink.checkpoint(&global_segment_counts(), now, seal)
             {
                 warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
             }
