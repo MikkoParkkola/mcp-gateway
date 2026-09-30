@@ -13,15 +13,19 @@ pub(super) const fn default_anomaly_min_observations() -> u64 {
 }
 
 impl FirewallConfig {
-    /// Refuse anomaly thresholds that cannot mean what they say.
+    /// Refuse anomaly thresholds and relay settings that cannot mean what
+    /// they say.
     ///
-    /// Checked only when `anomaly_detection` is on, so a config that never
-    /// enables the detector loads exactly as before.
+    /// Anomaly thresholds are checked only when `anomaly_detection` is on,
+    /// relay settings only when `collusion.action` is not `off`, so a config
+    /// that enables neither loads exactly as before.
     ///
     /// # Errors
     ///
     /// A message naming the first out-of-range field.
     pub fn validate(&self) -> Result<(), String> {
+        // Relay detection is independent of anomaly detection: checked first.
+        self.collusion.validate(self.enabled)?;
         if !self.anomaly_detection {
             return Ok(());
         }

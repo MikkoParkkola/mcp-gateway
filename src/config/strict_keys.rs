@@ -322,12 +322,36 @@ fn is_backend_key(key: &str) -> bool {
 
 /// The feature a key needs when this build lacks it. Refusing such a key as a
 /// misspelling would send the operator hunting for a typo that is not there.
+/// RED-FIRST STUB: false leaves the firewall entry out.
+const RELAY_WIRED: bool = false;
+
 fn missing_feature(key: &str, leaf: &str) -> Option<&'static str> {
-    if !cfg!(feature = "cost-governance") && key == "cost_governance" {
+    missing_feature_for(key, leaf, |feature| match feature {
+        "cost-governance" => cfg!(feature = "cost-governance"),
+        "a2a" => cfg!(feature = "a2a"),
+        "firewall" => cfg!(feature = "firewall"),
+        _ => true,
+    })
+}
+
+/// [`missing_feature`] with the build's features as a predicate, so the
+/// default build can test the entries a feature-less build would take.
+fn missing_feature_for(
+    key: &str,
+    leaf: &str,
+    enabled: impl Fn(&str) -> bool,
+) -> Option<&'static str> {
+    if !enabled("cost-governance") && key == "cost_governance" {
         return Some("cost-governance");
     }
-    if !cfg!(feature = "a2a") && key.starts_with("backends.") && A2A_BACKEND_KEYS.contains(&leaf) {
+    if !enabled("a2a") && key.starts_with("backends.") && A2A_BACKEND_KEYS.contains(&leaf) {
         return Some("a2a");
+    }
+    if RELAY_WIRED
+        && !enabled("firewall")
+        && (key == "security.firewall" || key.starts_with("security.firewall."))
+    {
+        return Some("firewall");
     }
     None
 }
@@ -375,8 +399,29 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        A2A_BACKEND_KEYS, KNOWN_BACKEND_KEYS, RETIRED_KEYS, is_annotation, retired_warning,
+        A2A_BACKEND_KEYS, KNOWN_BACKEND_KEYS, RETIRED_KEYS, is_annotation, missing_feature_for,
+        retired_warning,
     };
+
+    /// COLLUDE.1 §13.1 B4: a build without `firewall` names the feature for
+    /// the firewall block and anything under it; a build with it names none.
+    #[test]
+    fn a_firewall_key_names_the_missing_feature() {
+        let without = |f: &str| f != "firewall";
+        for key in ["security.firewall", "security.firewall.collusion"] {
+            let leaf = key.rsplit('.').next().unwrap_or(key);
+            assert_eq!(
+                missing_feature_for(key, leaf, without),
+                Some("firewall"),
+                "{key}"
+            );
+            assert_eq!(missing_feature_for(key, leaf, |_| true), None, "{key}");
+        }
+        assert_eq!(
+            missing_feature_for("security.firewalls", "firewalls", without),
+            None
+        );
+    }
 
     use crate::config::{BackendConfig, OAuthConfig, TransportConfig};
     use crate::identity_propagation::IdentityPropagationConfig;

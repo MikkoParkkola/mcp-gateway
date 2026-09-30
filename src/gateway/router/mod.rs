@@ -67,6 +67,8 @@ mod audit_degraded_tests;
 mod body_limit_tests;
 #[cfg(test)]
 mod callback_admin_denial_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod collusion_direct_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]

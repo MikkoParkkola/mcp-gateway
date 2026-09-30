@@ -60,15 +60,46 @@ fn direct_control_identity(
     auth: BackendAuthContext<'_>,
     per_backend: &str,
 ) -> String {
-    let key = super::identity::caller_key(auth.grant_subject, auth.cert_identity, auth.client);
-    if key.is_empty() {
-        return per_backend.to_string();
+    let (key, keyed) = direct_caller(auth, per_backend);
+    if !keyed {
+        return key;
     }
     if let Some(ref lifecycle) = state.session_lifecycle {
         use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
         lifecycle.track(key.clone(), now_unix() + IDLE_TTL.as_secs());
     }
     key
+}
+
+/// The direct caller's key and whether it is a real identity (`true`) or the
+/// shared `per_backend` fallback. The one rule for every per-caller control
+/// on this route, relay detection included.
+#[cfg(feature = "firewall")]
+fn direct_caller(auth: BackendAuthContext<'_>, per_backend: &str) -> (String, bool) {
+    let key = super::identity::caller_key(auth.grant_subject, auth.cert_identity, auth.client);
+    if key.is_empty() {
+        (per_backend.to_string(), false)
+    } else {
+        (key, true)
+    }
+}
+
+/// COLLUDE.1: record what the direct caller was actually delivered, after
+/// every gate, redaction and the provenance stamp (design §13.1).
+#[cfg(feature = "firewall")]
+fn record_direct_delivery(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    server: &str,
+    tool: &str,
+    result: Option<&Value>,
+) {
+    let (Some(fw), Some(result)) = (state.firewall.as_ref(), result) else {
+        return;
+    };
+    let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
+    let caller = crate::security::firewall::RelayCaller::new(&key, keyed);
+    fw.record_delivery(caller, server, tool, result);
 }
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
@@ -172,6 +203,31 @@ async fn apply_backend_tool_call_security(
                 id,
                 &format!("Firewall blocked: {desc}"),
             ));
+        }
+        // COLLUDE.1 (§13.1): every string the backend will receive, `_meta`
+        // included, before idempotency admission so a refusal reserves nothing.
+        let (key, keyed) = direct_caller(auth, &session_id);
+        let relay = fw.check_relay(
+            crate::security::firewall::RelayCaller::new(&key, keyed),
+            backend_name,
+            tool_name,
+            params,
+            (&session_id, caller_name),
+        );
+        if !relay.allowed {
+            let desc = relay
+                .findings
+                .first()
+                .map_or("", |f| f.description.as_str());
+            return Err(backend_security_error_with_status(
+                id,
+                -32002,
+                &format!("Relay detection blocked: {desc}"),
+                StatusCode::FORBIDDEN,
+            ));
+        }
+        if relay.action == FirewallAction::Warn {
+            warn!(backend = %backend_name, tool = %tool_name, "Firewall: relay observed");
         }
     }
 
@@ -1005,17 +1061,18 @@ async fn backend_handler_inner(
     // mode (passthrough: true in config — only for fully-trusted internals).
     // #2445: before the idempotency cache below, so a call the gate now
     // refuses is refused on the re-issue too, never answered from the cache.
+    let auth = BackendAuthContext {
+        client: client.as_ref(),
+        oauth_agent_identity: oauth_agent_identity.as_ref(),
+        cert_identity: cert_identity.as_ref(),
+        #[cfg(feature = "firewall")]
+        grant_subject: grant_subject.as_ref(),
+    };
     let sanitized = if method == "tools/call" {
         match apply_backend_tool_call_security(
             &state,
             &name,
-            BackendAuthContext {
-                client: client.as_ref(),
-                oauth_agent_identity: oauth_agent_identity.as_ref(),
-                cert_identity: cert_identity.as_ref(),
-                #[cfg(feature = "firewall")]
-                grant_subject: grant_subject.as_ref(),
-            },
+            auth,
             params.as_ref(),
             &id,
             &backend,
@@ -1042,6 +1099,9 @@ async fn backend_handler_inner(
             params.as_ref(),
         ) {
             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
+                // A replay is a delivery too: it renews this caller's own copy.
+                #[cfg(feature = "firewall")]
+                record_direct_delivery(&state, auth, &name, call.tool, Some(&cached));
                 let response = JsonRpcResponse::success(id.clone(), cached);
                 return build_http_response(&response, StatusCode::OK);
             }
@@ -1092,6 +1152,8 @@ async fn backend_handler_inner(
                 // Restore the caller's ID over the transport's own.
                 response.id = Some(id.clone());
                 stamp_direct_provenance(&state, &name, params, client, &mut response);
+                #[cfg(feature = "firewall")]
+                record_direct_delivery(&state, auth, &name, call.tool, response.result.as_ref());
                 settle_direct_idempotency(idem_reservation.as_mut(), &response);
                 build_http_response(&response, StatusCode::OK)
             }
@@ -1160,6 +1222,8 @@ async fn backend_handler_inner(
                     client.as_ref(),
                     &mut response,
                 );
+                #[cfg(feature = "firewall")]
+                record_direct_delivery(&state, auth, &name, call.tool, response.result.as_ref());
             }
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
             build_http_response(&response, StatusCode::OK)

@@ -11,6 +11,8 @@ mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
 mod cleartext;
+#[cfg(all(test, feature = "firewall"))]
+mod collusion_share_tests;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
@@ -495,7 +497,9 @@ fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json:
 impl Gateway {
     /// A firewall with its own transition tracker. Both transports build theirs
     /// here, so each leaves the continuations `meta_mcp` minted unredacted
-    /// (#2210).
+    /// (#2210). The relay detector is shared: the second firewall built takes
+    /// the one `meta_mcp`'s firewall already holds, so what one route records
+    /// the other checks against (COLLUDE.1 §13.1).
     #[cfg(feature = "firewall")]
     fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
         let fw_cfg = self.config.security.firewall.clone();
@@ -505,11 +509,16 @@ impl Gateway {
         } else {
             None
         };
+        let relay = meta_mcp.firewall.as_ref().map_or_else(
+            || crate::security::firewall::detector_for(&fw_cfg.collusion),
+            |fw| fw.collusion_detector().cloned(),
+        );
         let fw = Arc::new(
             Firewall::from_config(fw_cfg, tt)
                 .with_env(Arc::clone(&self.env))
                 .with_continuations(meta_mcp.continuation())
-                .with_posture(self.config.security.posture),
+                .with_posture(self.config.security.posture)
+                .with_collusion(relay),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");
