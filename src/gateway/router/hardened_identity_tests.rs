@@ -34,7 +34,6 @@ fn api_key(secret: &str, kind: ApiKeyKind) -> ApiKeyConfig {
         denied_tools: None,
         admin: false,
         kind,
-        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 
