@@ -21,8 +21,11 @@ use serde_json::Value;
 /// does not depend on who asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheScope {
-    /// Reusable across authorization contexts. Requires proof of invariance.
-    Public,
+    /// Uninhabited until a method is proven invariant across authorization
+    /// contexts: no expression builds this value, so the gateway cannot claim
+    /// `public`. Allowing it one day means replacing the payload with a proof
+    /// type, a design change that review will see (MIK-7211.PARENT.6).
+    Public(std::convert::Infallible),
     /// Reusable only within the authorization context that fetched it.
     Private,
 }
@@ -32,22 +35,8 @@ impl CacheScope {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Public => "public",
+            Self::Public(never) => match never {},
             Self::Private => "private",
-        }
-    }
-
-    /// The scope for a list whose content did or did not depend on the caller.
-    ///
-    /// One argument, and it is the whole decision: if the assembly consulted
-    /// anything about who asked, the answer is private. Which methods this
-    /// gateway has answered that question for is [`scope_for_method`].
-    #[must_use]
-    pub const fn for_list(caller_dependent: bool) -> Self {
-        if caller_dependent {
-            Self::Private
-        } else {
-            Self::Public
         }
     }
 }
@@ -60,15 +49,14 @@ impl CacheScope {
 /// caller-dependent are the same silence, and a later `public` is a default
 /// nobody had to argue for rather than an edit someone has to make.
 const SCOPE_TABLE: &[(&str, CacheScope)] = &[
-    // Filtered by the presented credential's scope — an API key decides which
-    // backends, prompts and resources a caller is shown.
-    ("tools/list", CacheScope::for_list(true)),
-    ("prompts/list", CacheScope::for_list(true)),
-    ("resources/list", CacheScope::for_list(true)),
-    ("resources/templates/list", CacheScope::for_list(true)),
-    // Not a list, so not `for_list`: reachability of a URI is decided per
-    // caller, so the body is too. The bare value is the honest form here — a
-    // row that named the list rule would be citing a rule it was not decided by.
+    // Lists: filtered by the presented credential's scope — an API key decides
+    // which backends, prompts and resources a caller is shown.
+    ("tools/list", CacheScope::Private),
+    ("prompts/list", CacheScope::Private),
+    ("resources/list", CacheScope::Private),
+    ("resources/templates/list", CacheScope::Private),
+    // Not a list: reachability of a URI is decided per caller, so the body is
+    // too.
     ("resources/read", CacheScope::Private),
 ];
 
@@ -106,9 +94,16 @@ fn scope_needs_clamp(result: &Value) -> bool {
 
 /// Make a result about to leave the gateway claim no scope but `private`.
 ///
-/// STUB (PARENT.6 red commit): does nothing yet.
+/// A `cacheScope` that is not `"private"` becomes `"private"`. For `"public"`
+/// that is a downgrade the specification permits; for `null`, a number or an
+/// unknown string it normalizes a malformed field. A result with no such key
+/// is left alone (legacy results have none), and nested data is never touched.
 pub(crate) fn clamp_delivered_scope(result: &mut Value) {
-    let _ = result;
+    if scope_needs_clamp(result)
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("cacheScope".to_owned(), Value::String("private".to_owned()));
+    }
 }
 
 /// `serialize_with` for a wire slot that carries a result: serializes the
@@ -132,10 +127,18 @@ pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
 /// The SSE `data` of a `message` event: the payload as text, with a JSON-RPC
 /// response's `result` clamped by [`clamp_delivered_scope`]. Requests and
 /// notifications pass unchanged.
-///
-/// STUB (PARENT.6 red commit): passes everything unchanged.
 pub(crate) fn message_event_data(payload: &Value) -> String {
-    payload.to_string()
+    let is_response = payload.get("id").is_some();
+    match payload.get("result") {
+        Some(result) if is_response && scope_needs_clamp(result) => {
+            let mut clamped = payload.clone();
+            if let Some(result) = clamped.get_mut("result") {
+                clamp_delivered_scope(result);
+            }
+            clamped.to_string()
+        }
+        _ => payload.to_string(),
+    }
 }
 
 /// The `resultType` of a result, defaulting as the specification requires.

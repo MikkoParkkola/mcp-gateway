@@ -129,6 +129,7 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
+| 108 | A `cacheScope` the gateway delivers is always `private`: a backend's `public` (or a malformed value) is rewritten on every route, and `CacheScope::Public` can no longer be built | A cache in front of the gateway that relied on a backend's `public` no longer shares across callers; that sharing was never safe. Rust users of the library: `CacheScope::Public` now holds `std::convert::Infallible` and `CacheScope::for_list` is removed; use `CacheScope::Private` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2966,6 +2967,22 @@ no subject keep the 3.x behaviour.
 
 **Action:** a client that proves a subject and renews its bearer token mid-session must
 re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
+
+## 108. A delivered `cacheScope` is never `public`
+
+**Startup:** no notice
+
+In 3.x, the direct backend route (`/mcp/{name}`) forwarded a backend's own result unchanged, so a
+backend that answered `"cacheScope": "public"` to a call computed from the caller's session reached
+the client as `public`, and a shared cache could serve it to other callers. In 4.0 every result the
+gateway delivers (HTTP, batch, SSE, stdio, task envelopes and webhook `message` events) is clamped: a
+`cacheScope` that is not `"private"` is delivered as `"private"`. A result with no `cacheScope` is
+unchanged, and nested tool data is never rewritten. For library users, `CacheScope::Public` now
+carries `std::convert::Infallible`, so no value can be built, and `CacheScope::for_list` is removed.
+
+**Action:** none for clients. A shared cache that relied on a backend's `public` must stop; the
+gateway will not vouch for a response it computed from one caller's state. Rust code that named
+`CacheScope::for_list` or built `CacheScope::Public` should use `CacheScope::Private`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
