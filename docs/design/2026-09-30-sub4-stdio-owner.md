@@ -1,6 +1,6 @@
 # MIK-7272.SUB4.STDIO.OWNER.1–5 and SUB4.BRIDGE.LIFE.1 — the stdio owner and the held legacy RPC
 
-Status: rev 3 (2026-09-30), refreshed against `41ef8781c` (#2414 merged). Rev 3 changes:
+Status: rev 4 (2026-09-30; rev 3 below), refreshed against `41ef8781c` (#2414 merged). Rev 3 changes:
 the criteria are quoted from the release ledger rather than Linear; D1's catalogue path is
 corrected (the rev 2 signature change was a public-API change); D5 is rewritten to the ledger's
 LIFE.1 text; §P1b.OWNER.2 is filled; D7 adds MIK-7217.STDIO.1, which rev 2 did not cover.
@@ -122,8 +122,8 @@ and each test fails when the property it guards is removed:
   identity, personal account and delegated grant; an account-dependent tool is refused while an
   ordinary local mutation succeeds.
 - BRIDGE.LIFE.1: for a held legacy RPC on the stdio bridge, `notifications/cancelled` naming it
-  cancels it and the bridge joins it (no orphaned task, no late response written for the
-  cancelled id); stdin EOF with an RPC in flight joins or cancels it before the loop returns.
+  cancels it and the bridge joins it (no orphaned task; no frame for the cancelled id is
+  queued once the cancel is processed; `pending` empty); stdin EOF with an RPC in flight joins or cancels it before the loop returns.
   Precise semantics are a §P1b decision, but "observable end state with no orphan" is the signal.
 
 ### Exclusions
@@ -163,94 +163,72 @@ and each test fails when the property it guards is removed:
   outcome-unknown and abandons an undispatched one (`idempotency/admission.rs:406-416`);
   `IdempotencyReservation::drop` releases or settles (`idempotency.rs:767-790`).
 
-### D1 — `StdioLocalOperator`, the typed tag (OWNER.3, OWNER.5; enables OWNER.1/4 tests)
+### D1 — the transport's mark decides, not the principal text (OWNER.3, OWNER.5; rev 4, as built in #2494)
 
-**Rev 3.1 amendment: reuse, don't add.** The typed tag already exists: `StdioNonce`
-(`server/stdio_nonce.rs`, MIK-7570.STDIO.1). Its field and its constructor are private,
-`StdioNonce::process` is `pub(super)` to the stdio transport module, and its own doc states the
-control this row asks for: "only its two caller-context builders can bind a caller as stdio. An
-HTTP caller has no path to the value, whatever text it presents." `MetaMcpCallerContext` already
-carries it as `stdio_nonce: Option<&StdioNonce>` (`meta_mcp/mod.rs:186`). The only production
-sites that set it are `build_stdio_caller_context` (`server/mod.rs:3177`) and `with_retry`, which
-copies it (`meta_mcp/mod.rs:283`). The `cfg(test)` fixture `stdio_caller_context` (`:3693`) also
-sets it; every other constructor (HTTP, task recovery, task worker, all test fixtures) sets
-`None`.
+Framing: preventive boundary hardening. F1-F3 mean no HTTP-to-stdio replay is reachable today
+(`.git/security-private-4.0.md` records the reachability check). OWNER.3 removes principal text as
+the thing that decides, so the next path that lets text reach `credential_principal` does not
+become the operator. The I1 tests share one `MetaMcp` (one private service realm), so process
+isolation cannot make them pass vacuously.
 
-So `StdioLocalOperator` in this design IS `StdioNonce` presence. No new type and no new
-context field are added. That avoids 69 struct-literal edits and a second value that could drift
-from the first. Everything below that reads "the tag" means `caller.stdio_nonce.is_some()`,
-passed as `Option<&StdioNonce>` wherever a function needs it (never a `bool`: a behaviour-selecting
-parameter stays typed). The admission and cache namespaces use a constant domain string, not the
-nonce bytes: both stores are per-process and in memory (F2), so the nonce would add nothing. It
-also must not appear in any hashed or logged output (its own doc: never logged, never serialised).
-The catalogue path passes `Option<&StdioNonce>` to the `pub(crate)` siblings. The text below keeps
-the rev 2 wording, with this substitution.
+**The typed tag is `StdioNonce`, which already exists** (`server/stdio_nonce.rs`,
+MIK-7570.STDIO.1). Its field and constructor are private, `StdioNonce::process` is `pub(super)` to
+the stdio transport module, and its doc states the control this row needs: "only its two
+caller-context builders can bind a caller as stdio. An HTTP caller has no path to the value,
+whatever text it presents." `MetaMcpCallerContext` already carries it as
+`stdio_nonce: Option<&StdioNonce>` (`meta_mcp/mod.rs:186`). The only production sites that set it
+are `build_stdio_caller_context` (`server/mod.rs:3177`) and `with_retry`, which copies it
+(`meta_mcp/mod.rs:283`); the `cfg(test)` fixture `stdio_caller_context` also sets it. Every other
+constructor (HTTP, task recovery, task worker, all test fixtures) sets `None`. Batch items reach
+the same builder (`dispatch_batch_with_sink` → `dispatch_single_with_sink` with a `StdioClient`,
+`server/mod.rs:3391-3403`). No new type and no new context field are added: that avoids 69
+struct-literal edits and a second value that could drift from the first. The ledger's "stdio local
+operator" is this mark's presence.
 
-Framing (rev 2): preventive boundary hardening. F1-F3 mean no HTTP-to-stdio replay is reachable
-today; OWNER.3 removes the string as the thing that decides, so the next path that lets a string
-reach `credential_principal` does not become the operator. Its tests share one `MetaMcp` (one
-private service realm) so process isolation cannot make them pass vacuously.
+Decisions that switch from the text to the mark. All new items are `pub(crate)` (C7); no `pub`
+signature changes. `StdioNonce` gains a `pub(crate)` re-export at `gateway/mod.rs`, the same
+pattern `STDIO_CREDENTIAL_PRINCIPAL` uses, so `identity_propagation` can name it.
 
-A zero-sized `pub(crate) struct StdioLocalOperator(());` (`Clone, Copy`) in `src/gateway/server/`,
-with the private field so only that module can construct it.
+1. **Owner text for retained results**: `MetaMcpCallerContext::owner_principal()`. A marked
+   context returns the reserved constant `LOCAL_OPERATOR_PRINCIPAL = "\0local-operator.v1"`.
+   Anything else returns its `credential_principal`, except text starting with the reserved
+   prefix NUL, which is dropped. No presented credential can start with NUL: HTTP header values
+   cannot carry it, and every principal the auth layer derives is a hex digest or a fixed word.
+   Both stores read owner text only through this method:
+   - admission ledger: `admit_meta_sync` (`meta_mcp/admission.rs:377`);
+   - idempotency cache: `caller_cache_principal` (`meta_mcp/invoke.rs:1805`), which renders it
+     under its existing length-prefixed `cred:{len}:…` arm.
 
-Where the tag travels (every stdio caller shape, not only `tools/call`):
+   Dropped reserved text gets **no key, never an empty or shared one**. A keyed call has no
+   principal and is refused -32003 (`admission.rs:294-301`), and the cache classifies the caller
+   `Unresolved`: no cache key, no retry key (`support.rs:188-191`). An anonymous caller pools as
+   it does today whatever its text (unchanged).
+2. **Provenance**: `CallerProvenance::classify(text)` never returns `LocalTransport`; text,
+   including the stdio spelling, is `Credential`. `CallerProvenance::local_transport(&StdioNonce)`
+   is the only constructor of `LocalTransport`. `MetaMcpCallerContext::provenance()` picks between
+   them, and the two context-bearing call sites use it (`meta_mcp/invoke.rs:1648`,
+   `meta_mcp/discovery_fetch.rs:79`). The HTTP backend route keeps `classify` (no mark exists
+   there).
+3. **Catalogue requests** (`prompts/*`, `resources/*`) carry no caller context: stdio builds an
+   `AuthenticatedClient`, which is public API and gets no tag (C7). They now classify
+   `Credential`. That gives the same decision today, because `establishes_the_operator` admits
+   both (`caller_proof.rs:92`), and fails closed (a visible refusal) if that rule ever tightens.
+   Rev 3's plan to thread the tag through five `pub(crate)` handler siblings is dropped: it bought
+   a label and no decision, at the cost of five wrappers.
 
-1. `MetaMcpCallerContext` (crate-private: its module is private, `src/gateway/mod.rs:13`) gains
-   `local_operator: Option<StdioLocalOperator>`. FRESH constructors for non-stdio transports set
-   `None`: HTTP (`router/handlers.rs:1599-1630`), task recovery (`router/handlers/tasks.rs:290-315`),
-   task worker (`task_service/execution/context.rs:121-170`). DERIVING constructors COPY it from
-   the caller they derive from: `with_retry` (`meta_mcp/mod.rs:261-300`, used by chain steps,
-   `meta_mcp/search.rs:526-534`) and any other `Self { .. }` rebuild. Stdio sets `Some` in
-   `build_stdio_caller_context` and in the `stdio_caller_context` test fixture.
-2. Catalogue requests (`prompts/*`, `resources/*`) have no caller context: stdio builds an
-   `AuthenticatedClient` (`server/stdio_catalogue.rs:36-70`). `AuthenticatedClient` is public API
-   (`pub mod auth`, all fields `pub`), so the tag does NOT go on it (C7).
-   Rev 3 correction: rev 2 added a parameter to the five `MetaMcp` catalogue handlers. They are
-   `pub async fn` (`meta_mcp/protocol.rs:150,217`; `meta_mcp/resources.rs:294,361,400`) on a type
-   the crate re-exports through `gateway::test_helpers::MetaMcp` (`gateway/mod.rs:88-92`,
-   `#[doc(hidden)]` but reachable). Changing their signatures is a public-API change (C7), and a
-   `pub fn` taking a `pub(crate)` type trips `private_interfaces` under `-D warnings`. Instead each
-   handler's body moves into a `pub(crate)` sibling (`*_as(.., local_operator)`); the `pub` handler
-   becomes a one-line delegate passing `None`, so its signature and behaviour for HTTP and
-   integration tests are unchanged. `stdio_catalogue::dispatch` calls the `pub(crate)` sibling with
-   `Some`. `handler_proof` (`pub(super)`, `meta_mcp/caller_forward.rs:34`) takes the argument
-   directly. The resource-owner lookups that classify (`meta_mcp/protocol.rs:163,273`;
-   `meta_mcp/resources.rs:307,408,458`) read it from there.
+`STDIO_CREDENTIAL_PRINCIPAL` stays as the audit and display principal (no audit schema change, C6).
 
-Decisions that switch from the string to the tag:
-
-1. `CallerProvenance::classify(principal, local_operator)`: `LocalTransport` iff the tag is
-   present. An untagged `"stdio"` string classifies as `Credential`. Four production callers
-   (`router/backend_handlers.rs:546`, `meta_mcp/discovery_fetch.rs:79`, `meta_mcp/invoke.rs:1658`,
-   `meta_mcp/caller_forward.rs:39`) plus the twelve test calls (`caller_proof_tests.rs`,
-   `vault_tests.rs`, `server/tests/stdio_sole_operator.rs`) are migrated.
-2. Admission namespace: a tagged caller's admission identity is derived under its own domain
-   string (`mcp-gateway.execution-admission.local-operator.v1`), so an untagged `"stdio"` principal
-   and the real operator hash into disjoint key spaces.
-3. Retained-output cache namespace: `caller_cache_principal` emits `local:` for the tag in the
-   branch that today yields `cred:{len}:{digest}` (`meta_mcp/support.rs:170-190`); higher-priority
-   bindings are unchanged.
-
-`STDIO_CREDENTIAL_PRINCIPAL` stays as the audit/display principal (no audit schema change, C6).
-
-Alternatives rejected: (a) keying off `CredentialKind::LocalTransport` — an audit enum the task
+Alternatives rejected: (a) keying off `CredentialKind::LocalTransport`, an audit enum the task
 execution context carries as data (`task_service/execution/context.rs:42`), so a rebuilt context
-could carry it; the ticket asks for a tag only the transport creates. (b) A field on
-`AuthenticatedClient` — public API widening. (c) Leaving it because F3 makes it unreachable today.
+could carry it; (b) a field on `AuthenticatedClient`, which widens public API; (c) a new
+`StdioLocalOperator` type, which duplicates `StdioNonce`; (d) a principal-kind field on the
+admission `Request`, which touches about 30 construction sites for what a reserved prefix does in
+one place.
 
-Batch items (rev 3, round-2 check): a JSON-RPC batch on stdio goes through
-`dispatch_batch_with_sink` (`server/mod.rs:3367`), which calls the same `dispatch_single_with_sink`
-with a `StdioClient` for each item (`:3391-3403`). Batch items therefore get their context from
-`build_stdio_caller_context` and carry the tag with no extra site. I1 still asserts the tag for a
-batched `tools/call`, so a later divergence of the batch path turns a test red.
-
-Risk (corrected in rev 2; rev 1 claimed a lost tag fails closed, which is false): a stdio path
-that loses the tag classifies as `Credential`, which still establishes the operator on a
-sole-operator deployment (`caller_proof.rs:87-94`, `vault.rs:210-226`). Accounts keep working and
-only the namespace separation silently disappears. So a lost tag is not self-revealing, and the
-guard is test coverage: I1 asserts the tag on each stdio shape (`tools/call`, a chain step through
-`with_retry`, each of the five catalogue methods).
+Risk: a stdio path that loses the mark keys by its text. It still establishes the operator
+(`Credential`), so nothing visibly fails and only the separation disappears. The guard is test
+coverage: I1 asserts the mark on single calls, batched calls and chain steps (T3.1-T3.7), and the
+mutant batch removes it at each site.
 
 ### D2 — OWNER.1: tests over the real stdio loop, no product change expected
 
@@ -299,7 +277,7 @@ P2. No product change is planned for D3; a red test reopens design.
 ### D4 — OWNER.5: what the stdio context carries
 
 Test on the context the real stdio path builds (captured through the dispatcher, not the
-`stdio_caller_context` fixture): `local_operator` is `Some`; `verified_identity`, `grant_subject`
+`stdio_caller_context` fixture): `stdio_nonce` is `Some`; `verified_identity`, `grant_subject`
 and `api_key_name` are `None`.
 
 Interpretation, stated as acceptance wording (rev 2): "no personal-account identity" means no
@@ -329,7 +307,11 @@ Mechanism. The read loop handles `notifications/cancelled` before the notificati
 `server/mod.rs:3100` (it is routed in the loop, never dispatched): when `params.requestId` names an
 in-flight spawned dispatch, that task is aborted. The abort drops the dispatch future, so:
 
-1. the waiter ends at once with a terminal outcome instead of waiting out the bridge's timeout;
+1. the waiter (the `send_request` future) is dropped at once, never resumed, instead of waiting
+   out the bridge's timeout. Its terminal answer is the joined task's `Cancelled` outcome, which
+   the completion arm observes; no value is delivered into the dropped future (the lead
+   confirmed this reading 2026-09-30; a literal delivered value would need a new
+   `DeliveryError` variant, a public-API change);
 2. `PendingRequestGuard` (`stdio_channel.rs:106`) removes the held exchange from `pending`, so a
    late client reply to the prompt matches nothing (`resolve` → `false`, the existing path);
 3. the slot and permit it held drop with it;
@@ -382,10 +364,13 @@ Bookkeeping:
   `join_next_with_id(), if !dispatches.is_empty()` arm, replacing the per-line `try_join_next`
   (`:2503`). An aborted task is joined as soon as it ends.
 
-Response race, stated rather than promised away. `abort()` does not stop a task that is already
-being polled, and producing a response and queueing it are separate steps (`:2610-2631`). The
-guarantee is: once the aborted task is joined, no further frame for that id is queued. A frame
-queued before the join may still be delivered, which the spec permits.
+Response race, closed (rev 4). `abort()` does not stop a task that is already being polled, and
+producing a response and queueing it are separate steps (`:2610-2631`). So the cancel handler first
+records the id in a cancelled set, then aborts. The dispatch task checks that set immediately
+before `send_frame` and drops its frame when the id is there. Guarantee: no frame for the id is
+queued after the cancel is processed. A frame queued before the cancel arrived may still be
+delivered, which the spec permits (the sender SHOULD ignore it). An entry leaves the set when the
+task is joined.
 
 Settlement matrix (unchanged from rev 2). Each row is asserted separately:
 
@@ -425,11 +410,14 @@ so this is a build item, not a test. The lead ruled it in scope for 4.0 (2026-09
 minimal version, with the existing config key and no new config. Escalate only if it forces a
 public API or config change.
 
-1. Owner. `ExecutionAdmission::local_operator_owner(StdioLocalOperator) -> TaskOwner`, a digest
-   of `[LOCAL_OPERATOR_TAG]` under a separate domain tag, with no string input. Every string
-   principal hashes under `PRINCIPAL_TAG` with a second element, so no HTTP caller (including one
-   spelling `"stdio"` or `local:…`) can produce it. The digest has no store path and no instance
-   id, so it survives reopen and relocation (C3: no global lookup, no new UUID).
+1. Owner (rev 4). The stdio task owner is `ExecutionAdmission::owner(LOCAL_OPERATOR_PRINCIPAL)`:
+   the existing digest `canonical_json_sha256([PRINCIPAL_TAG, "\0local-operator.v1"])`, whose
+   JSON-array framing already separates tag and principal. It is obtained only through the marked
+   context's `owner_principal()` (D1). HTTP task owners come from `route_task_owner`: `oidc:…`,
+   `credential:…` or `local:auth-disabled:tasks:v1`, never NUL-prefixed. I4 adds one guard so that
+   is enforced rather than assumed: `ExecutionAdmission::owner` refuses NUL-prefixed text unless
+   it is called through the marked path (`pub(crate)`, C7). The digest has no store path and no
+   instance id, so it survives reopen and relocation (C3: no global lookup, no new UUID).
 2. Store. Stdio opens the same store `Gateway::run` opens, from `config.tasks.store_dir` (existing
    key; no new config). The open sequence moves into one `pub(crate)` helper shared by both
    transports, so they cannot drift.
@@ -444,9 +432,8 @@ public API or config change.
    they can share the task store directory on disk, one after the other: whichever opens
    `tasks.store_dir` first holds the lease, and stdio falls back only while HTTP holds it. From
    then on, the only thing that keeps a stdio-owned task unreadable to an HTTP principal is the
-   owner digest's domain separation: `[LOCAL_OPERATOR_TAG]` against `[PRINCIPAL_TAG, principal]`.
-   No text an HTTP caller presents can produce the stdio owner, and the store keeps no other owner
-   field that a lookup could match on instead.
+   reserved owner: the stdio owner's principal is NUL-prefixed, and no HTTP owner text can be
+   (item 1's guard). The store keeps no other owner field that a lookup could match on instead.
 3. Route. The three `tasks/*` arms and task-augmented `tools/call` take a crate-private
    `TaskRoute { service, executor, owner }` instead of `&AppState`, extracted from the arms as
    they stand. HTTP builds it from `route_task_owner`; stdio builds it from (1).
@@ -503,9 +490,9 @@ Change. `run_stdio_on` already holds the config; its `modern_protocol` value goe
 Red proof with CI as the only compiler. A failing-tests commit must fail on assertions, not fail
 to compile. So the tests drive seams that exist before and after the fix: `run_stdio_on` over
 `tokio::io::duplex`, `dispatch_single_with_sink`, and cache and admission separation observed
-through replay behaviour. They never name `StdioLocalOperator` or new fields. Helpers live in the
-test files, so the fix commit does not touch them. I2 may be green on arrival (D2 and D3 expect
-no product change). Its "fails when the property is removed" proof is then the mutant batch, not
+through replay behaviour. They never name new items. Helpers live in the
+test files, so the fix commit does not touch them. I1's OWNER.5 half (T5.1, T5.2) and I2 may be
+green on arrival: they pin properties the code already has. Its "fails when the property is removed" proof is then the mutant batch, not
 a manufactured red, and the PR says so.
 
 ### Test plan pointer
@@ -540,3 +527,15 @@ failing tests are written.
   in I2's first CI). Improvement deferred: the `classify` input-enum shape, decided during I1.
 - Rev 3.1: D1 reuses `StdioNonce` as the typed tag rather than adding `StdioLocalOperator`
   (found while writing the I1 test plan; the ladder rule "already in this codebase").
+- Rev 3.1, round 2, seat 1 (`synthetic-review`/GLM; attempt 1 failed on output length, attempt 2
+  succeeded on the design alone; SHIP-WITH-FIXES, five findings, none HIGH). All taken in rev 4:
+  (1) D1 body rewritten to the as-built design, with no `StdioLocalOperator` type or field left;
+  D4 and D6 retyped. (2) D5 states what the waiter receives: dropped, with the joined `Cancelled`
+  outcome as its terminal answer. (3) C7 visibility stated for every new item. (4) The §P1a
+  LIFE.1 signal is restated to the guaranteed end state, and a cancelled-id set closes the
+  late-frame race (the review's improvement). (5) I1's OWNER.5 half is marked green on arrival.
+  Improvement taken: D6 reuses `ExecutionAdmission::owner`'s framing. Improvement left to the
+  lead: a tracked id for forwarding the cancel upstream (external issue creation needs
+  authorization).
+- Rev 4 also records D1 as built in #2494: a reserved NUL-prefixed owner principal replaces rev
+  3's "own domain string", and catalogue tag plumbing is dropped (no decision depends on it).
