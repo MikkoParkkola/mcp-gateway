@@ -347,7 +347,13 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
         .create(PreparedTask::for_test(&task, OWNER, 1))
         .await
         .unwrap();
+    // Windows strips a trailing dot from a path component (W-L10), so `task-..` cannot exist there.
+    #[cfg(unix)]
     fs::create_dir(path.join("task-..")).unwrap();
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut prefixed = vec![dir.path().join("outside-prefixed")];
+    #[cfg(unix)]
+    prefixed.push(path.join("task-..").join("outside-prefixed"));
     let absolute = dir.path().join("outside-absolute");
     let cases = [
         (
@@ -355,13 +361,7 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
             vec![dir.path().join("outside-traversal")],
         ),
         (absolute.to_str().unwrap().to_owned(), vec![absolute]),
-        (
-            "task-../outside-prefixed".to_owned(),
-            vec![
-                path.join("task-..").join("outside-prefixed"),
-                dir.path().join("outside-prefixed"),
-            ],
-        ),
+        ("task-../outside-prefixed".to_owned(), prefixed),
         (
             "%2e%2e%2foutside-encoded".to_owned(),
             vec![

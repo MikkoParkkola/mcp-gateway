@@ -91,6 +91,9 @@ not provide. The test gates for it state the same reason in a comment.
 - **W-L9 Platform-specific facilities.** Linux `inotify` watcher rows, the `SSL_CERT_FILE`
   trust path on Unix outside Apple platforms, the per-platform runtime substrate and
   resident-set measurement, and the macOS keychain. Windows takes the fallback path.
+- **W-L10 Trailing dots in path components.** Windows strips a trailing dot from a path
+  component, so a directory named `task-..` cannot be created (one case of the malformed-id
+  store test is Unix-only).
 
 Fix a Windows failure in the test or the product before reaching for a gate. Add a gate only
 for a genuine Unix-only behavior, with a comment naming which limitation above it is.
