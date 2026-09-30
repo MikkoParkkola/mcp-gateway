@@ -143,7 +143,7 @@ The decision reads only finished evidence; it never has to prove a process is al
 - **Gates:** `retire_revisions`, unchanged, over the summed prefix snapshots and the span's
   elapsed time, plus the population check (Decision A).
 - **Operator command:** an ignored in-crate test (see "Public API"):
-  `cargo test --lib protocol_revision_telemetry::tests::u1_production_decision -- --ignored --exact --nocapture`
+  `cargo test --lib protocol_revision_telemetry::window::tests::u1_production_decision -- --ignored --exact --nocapture`
   with `U1_DATA_DIR`, `U1_POPULATION=http`, `U1_LISTEN` and `U1_EXE_PREFIX`. A missing or
   unparsable variable fails it. It prints the distribution
   table, the span and the decision, and writes `decision.json` beside the window. The runbook

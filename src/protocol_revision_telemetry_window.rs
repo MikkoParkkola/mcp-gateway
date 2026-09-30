@@ -16,9 +16,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DURABLE_TELEMETRY_DIR, DURABLE_WINDOW_FILE, MEASURED_CLIENTS, MEASURED_REVISIONS, NAMED_CLIENTS,
-    OTHER_REVISION, Snapshot, Transport, USER_AGENT_FAMILIES, checked_counter_sum,
-    empty_shadow_counts, invalid_window, validate_bounded_keys,
+    DURABLE_TELEMETRY_DIR, DURABLE_WINDOW_FILE, MEASURED_CLIENTS, MEASURED_REVISIONS,
+    OTHER_REVISION, Snapshot, Transport, checked_counter_sum, empty_shadow_counts, invalid_window,
+    validate_bounded_keys,
 };
 use crate::fs_lock::ExclusiveFileLock;
 
@@ -81,6 +81,11 @@ pub(crate) fn window_paths(data_dir: &Path) -> (PathBuf, PathBuf) {
 
 /// Read and validate a v2 window. A v1 file is refused with the archive
 /// instruction: converting it would claim HTTP coverage it never had.
+pub(crate) fn load(data_dir: &Path) -> io::Result<WindowV2> {
+    read_window_v2(&window_paths(data_dir).0)
+}
+
+/// [`load`] by file path.
 pub(crate) fn read_window_v2(path: &Path) -> io::Result<WindowV2> {
     let bytes = std::fs::read(path)?;
     let schema = serde_json::from_slice::<serde_json::Value>(&bytes)
@@ -130,7 +135,11 @@ fn validate_snapshot(snapshot: &Snapshot, transport: Transport) -> io::Result<()
             .chain(std::iter::once(OTHER_REVISION)),
         "revision",
     )?;
-    validate_bounded_keys(&snapshot.by_client, MEASURED_CLIENTS.iter().copied(), "client")?;
+    validate_bounded_keys(
+        &snapshot.by_client,
+        MEASURED_CLIENTS.iter().copied(),
+        "client",
+    )?;
     validate_bounded_keys(
         &snapshot.by_transport,
         std::iter::once(transport.as_str()),
@@ -146,7 +155,10 @@ fn validate_snapshot(snapshot: &Snapshot, transport: Transport) -> io::Result<()
     if Some(checked_counter_sum(snapshot.by_client.values().copied())?) != total {
         return Err(invalid_window("client counters do not equal total"));
     }
-    if Some(checked_counter_sum(snapshot.by_transport.values().copied())?) != total {
+    if Some(checked_counter_sum(
+        snapshot.by_transport.values().copied(),
+    )?) != total
+    {
         return Err(invalid_window("transport counters do not equal total"));
     }
     Ok(())
@@ -258,7 +270,12 @@ impl HttpSegmentSink {
 
     /// Rewrite this segment's cumulative counts. `close` seals it. A failed
     /// write loses nothing: the next one carries the same cumulative counts.
-    pub(crate) fn checkpoint(&mut self, counts: &SegmentCounts, now: u64, close: bool) -> io::Result<()> {
+    pub(crate) fn checkpoint(
+        &mut self,
+        counts: &SegmentCounts,
+        now: u64,
+        close: bool,
+    ) -> io::Result<()> {
         let _lock = lock(&self.lock_path)?;
         let mut window = read_window_v2(&self.window_path)?;
         let segment = window
@@ -356,7 +373,10 @@ fn gate(
     }) {
         return Err(WindowBlocked::ForeignWriter);
     }
-    if segments.iter().any(|segment| segment.opened_while_another_was_open) {
+    if segments
+        .iter()
+        .any(|segment| segment.opened_while_another_was_open)
+    {
         return Err(WindowBlocked::ConcurrentHttpWriters);
     }
     // Only the newest segment may be unclosed: it is outside the span.
@@ -407,7 +427,9 @@ pub(crate) fn parse_declaration(
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .map(str::to_string)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{name} is required")))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, format!("{name} is required"))
+            })
     };
     let population = match required(population, "U1_POPULATION")?.as_str() {
         "http" => vec![Transport::Http],
@@ -419,9 +441,9 @@ pub(crate) fn parse_declaration(
         }
     };
     let listen = required(listen, "U1_LISTEN")?;
-    listen
-        .parse::<std::net::SocketAddr>()
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, format!("U1_LISTEN: {error}")))?;
+    listen.parse::<std::net::SocketAddr>().map_err(|error| {
+        io::Error::new(io::ErrorKind::InvalidInput, format!("U1_LISTEN: {error}"))
+    })?;
     let exe_prefix = required(exe_prefix, "U1_EXE_PREFIX")?;
     if !Path::new(&exe_prefix).is_absolute() {
         return Err(io::Error::new(
@@ -434,6 +456,111 @@ pub(crate) fn parse_declaration(
         listen,
         exe_prefix,
     })
+}
+
+/// Add one already-labelled observation to a per-transport slice.
+pub(crate) fn count_snapshot(
+    slice: &mut Snapshot,
+    revision: Option<&'static str>,
+    client: &'static str,
+    transport: Transport,
+) {
+    slice.total += 1;
+    *slice.by_client.entry(client.to_string()).or_insert(0) += 1;
+    *slice
+        .by_transport
+        .entry(transport.as_str().to_string())
+        .or_insert(0) += 1;
+    match revision {
+        Some(rev) => *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1,
+        None => slice.unattributed += 1,
+    }
+}
+
+impl super::Registry {
+    /// This process's observations on one transport only.
+    pub(crate) fn transport_snapshot(&self, transport: Transport) -> Snapshot {
+        self.per_transport
+            .get(transport.as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Requests with no revision, by bounded caller key.
+    pub(crate) fn missing_revision_agents(&self) -> BTreeMap<String, u64> {
+        self.missing_revision_agents.clone()
+    }
+}
+
+/// Named clients that identify a caller on their own.
+pub(crate) const NAMED_CLIENTS: &[&str] = &["claude", "codex", "cursor", "vscode", "chatgpt"];
+/// Fixed User-Agent families. Raw agents are never stored (MIK-6704).
+pub(crate) const USER_AGENT_FAMILIES: &[&str] = &[
+    "python-urllib",
+    "python-requests",
+    "python-httpx",
+    "curl",
+    "xh",
+    "httpie",
+    "node",
+    "go",
+    "reqwest",
+    "absent",
+    "other",
+];
+
+/// Bounded key for a request that named no revision. A named client wins;
+/// an unknown or missing `clientInfo` falls through to the agent family, so
+/// it cannot hide a more specific caller.
+pub(crate) fn missing_revision_agent(
+    client: &'static str,
+    user_agent: Option<&str>,
+) -> &'static str {
+    if NAMED_CLIENTS.contains(&client) {
+        return client;
+    }
+    user_agent_family(user_agent)
+}
+
+fn user_agent_family(user_agent: Option<&str>) -> &'static str {
+    let Some(agent) = user_agent.map(str::trim).filter(|a| !a.is_empty()) else {
+        return "absent";
+    };
+    let agent = agent.to_ascii_lowercase();
+    // Order matters: "python-requests" also contains "python", and HTTPie's
+    // agent is "HTTPie/x", so the specific names are tried first.
+    [
+        ("python-urllib", "python-urllib"),
+        ("python-requests", "python-requests"),
+        ("python-httpx", "python-httpx"),
+        ("curl/", "curl"),
+        ("xh/", "xh"),
+        ("httpie", "httpie"),
+        ("node", "node"),
+        ("undici", "node"),
+        ("go-http-client", "go"),
+        ("reqwest", "reqwest"),
+    ]
+    .into_iter()
+    .find_map(|(needle, family)| agent.contains(needle).then_some(family))
+    .unwrap_or("other")
+}
+
+/// This process's HTTP counts since start, as its U1 segment records them.
+pub(crate) fn global_segment_counts() -> SegmentCounts {
+    let registry = super::global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    SegmentCounts {
+        snapshot: registry.transport_snapshot(Transport::Http),
+        missing_revision_agents: registry.missing_revision_agents(),
+        tools_list_shadow: registry.shadow_snapshot(),
+    }
+}
+
+/// Wall-clock Unix seconds; 0 only on a clock set before 1970.
+pub(crate) fn unix_seconds_now() -> u64 {
+    super::unix_seconds().unwrap_or(0)
 }
 
 #[cfg(test)]

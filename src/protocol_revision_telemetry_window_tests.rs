@@ -63,7 +63,12 @@ fn identity(listen: &str, started: u64) -> WriterIdentity {
 
 #[test]
 fn t1_stdio_observation_or_other_declaration_blocks() {
-    let mut window = window_of(vec![segment(0, 8 * DAY, true, http_snapshot("2026-07-28", 10_000))]);
+    let mut window = window_of(vec![segment(
+        0,
+        8 * DAY,
+        true,
+        http_snapshot("2026-07-28", 10_000),
+    )]);
     let mut registry = Registry::new();
     registry.observe_request(Some("2025-06-18"), "claude", Transport::Stdio);
     window.stdio = registry.transport_snapshot(Transport::Stdio);
@@ -74,31 +79,55 @@ fn t1_stdio_observation_or_other_declaration_blocks() {
         population: vec![Transport::Http, Transport::Stdio],
         ..declaration()
     };
-    assert_eq!(decide(&window, &both).1, Err(WindowBlocked::PopulationMismatch));
-    assert!(outcome(&window).is_ok(), "the same window certifies under [http]");
+    assert_eq!(
+        decide(&window, &both).1,
+        Err(WindowBlocked::PopulationMismatch)
+    );
+    assert!(
+        outcome(&window).is_ok(),
+        "the same window certifies under [http]"
+    );
 }
 
 #[test]
 fn t2_sealed_span_excludes_the_open_segment_and_ignores_the_wall_clock() {
     let clean = window_of(vec![
         segment(0, 3 * DAY, true, http_snapshot("2026-07-28", 5_000)),
-        segment(3 * DAY + 5, 6 * DAY, true, http_snapshot("2026-07-28", 5_000)),
-        segment(6 * DAY + 5, 8 * DAY, true, http_snapshot("2026-07-28", 5_000)),
+        segment(
+            3 * DAY + 5,
+            6 * DAY,
+            true,
+            http_snapshot("2026-07-28", 5_000),
+        ),
+        segment(
+            6 * DAY + 5,
+            8 * DAY,
+            true,
+            http_snapshot("2026-07-28", 5_000),
+        ),
     ]);
     let candidates = outcome(&clean).expect("three clean segments over eight days certify");
     assert!(candidates.contains(&"2025-06-18".to_string()));
 
     // 500 old-revision requests in the open newest segment are outside the span.
     let mut with_open = clean.clone();
-    with_open
-        .http_segments
-        .push(segment(8 * DAY + 5, 8 * DAY + 60, false, http_snapshot("2025-06-18", 500)));
+    with_open.http_segments.push(segment(
+        8 * DAY + 5,
+        8 * DAY + 60,
+        false,
+        http_snapshot("2025-06-18", 500),
+    ));
     let (span, result) = decide(&with_open, &declaration());
     assert_eq!(result, outcome(&clean));
     assert_eq!(span.expect("sealed span").ended_at, 8 * DAY);
 
     // A six-day span read a month later is still too short.
-    let short = window_of(vec![segment(0, 6 * DAY, true, http_snapshot("2026-07-28", 5_000))]);
+    let short = window_of(vec![segment(
+        0,
+        6 * DAY,
+        true,
+        http_snapshot("2026-07-28", 5_000),
+    )]);
     assert_eq!(
         outcome(&short),
         Err(WindowBlocked::Retirement(RetirementBlocked::WindowTooShort))
@@ -122,7 +151,9 @@ fn t3_unclean_and_concurrent_writers_block_but_a_same_second_restart_passes() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut first = HttpSegmentSink::open(dir.path(), identity(PROD, 10), 10).expect("open");
-    first.checkpoint(&SegmentCounts::default(), 10, true).expect("close");
+    first
+        .checkpoint(&SegmentCounts::default(), 10, true)
+        .expect("close");
     HttpSegmentSink::open(dir.path(), identity(PROD, 10), 10).expect("same-second restart");
     let window = read_window_v2(&path_of(dir.path())).expect("read");
     assert!(!window.http_segments[1].opened_while_another_was_open);
@@ -140,20 +171,34 @@ fn t4_foreign_writers_and_coverage_gaps_block() {
     compat_after.opened_at = 8 * DAY + 5;
     compat_after.process_started_at = 8 * DAY + 5;
     compat_after.last_checkpoint_at = 9 * DAY;
-    assert_eq!(outcome(&window_of(vec![good(), compat_after])), Err(WindowBlocked::ForeignWriter));
+    assert_eq!(
+        outcome(&window_of(vec![good(), compat_after])),
+        Err(WindowBlocked::ForeignWriter)
+    );
 
     let mut compat_only = good();
     compat_only.listen = "127.0.0.1:39411".to_string();
-    assert_eq!(outcome(&window_of(vec![compat_only])), Err(WindowBlocked::ForeignWriter));
+    assert_eq!(
+        outcome(&window_of(vec![compat_only])),
+        Err(WindowBlocked::ForeignWriter)
+    );
 
     let mut dev_build = good();
     dev_build.exe = "/home/dev/mcp-gateway/target/release/mcp-gateway".to_string();
-    assert_eq!(outcome(&window_of(vec![dev_build])), Err(WindowBlocked::ForeignWriter));
+    assert_eq!(
+        outcome(&window_of(vec![dev_build])),
+        Err(WindowBlocked::ForeignWriter)
+    );
 
     let gap = |seconds: u64| {
         window_of(vec![
             segment(0, 4 * DAY, true, http_snapshot("2026-07-28", 100)),
-            segment(4 * DAY + seconds, 8 * DAY, true, http_snapshot("2026-07-28", 100)),
+            segment(
+                4 * DAY + seconds,
+                8 * DAY,
+                true,
+                http_snapshot("2026-07-28", 100),
+            ),
         ])
     };
     assert_eq!(outcome(&gap(3_600)), Err(WindowBlocked::CoverageGap));
@@ -175,25 +220,35 @@ fn t5_checkpoints_are_cumulative_and_survive_a_failed_write() {
     let mut sink = HttpSegmentSink::open(dir.path(), identity(PROD, 100), 100).expect("open");
 
     // An idle interval still advances the checkpoint.
-    sink.checkpoint(&SegmentCounts::default(), 105, false).expect("idle");
-    assert_eq!(read_window_v2(&path).unwrap().http_segments[0].last_checkpoint_at, 105);
+    sink.checkpoint(&SegmentCounts::default(), 105, false)
+        .expect("idle");
+    assert_eq!(
+        read_window_v2(&path).unwrap().http_segments[0].last_checkpoint_at,
+        105
+    );
 
     // A failed write (the file replaced by a directory) loses nothing: the
     // next write carries the same cumulative counts.
-    sink.checkpoint(&counts("2026-07-28", 3), 110, false).expect("first");
+    sink.checkpoint(&counts("2026-07-28", 3), 110, false)
+        .expect("first");
     let saved = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
-    assert!(sink.checkpoint(&counts("2026-07-28", 7), 115, false).is_err());
+    assert!(
+        sink.checkpoint(&counts("2026-07-28", 7), 115, false)
+            .is_err()
+    );
     std::fs::remove_dir(&path).unwrap();
     std::fs::write(&path, saved).unwrap();
-    sink.checkpoint(&counts("2026-07-28", 7), 120, false).expect("recovered");
+    sink.checkpoint(&counts("2026-07-28", 7), 120, false)
+        .expect("recovered");
     let window = read_window_v2(&path).unwrap();
     assert_eq!(window.http_segments[0].snapshot.total, 7);
     assert!(!window.http_segments[0].closed_cleanly);
 
     // A shutdown with no new requests still writes the close.
-    sink.checkpoint(&counts("2026-07-28", 7), 125, true).expect("close");
+    sink.checkpoint(&counts("2026-07-28", 7), 125, true)
+        .expect("close");
     let window = read_window_v2(&path).unwrap();
     assert!(window.http_segments[0].closed_cleanly);
     assert_eq!(window.http_segments[0].snapshot.total, 7);
@@ -213,10 +268,14 @@ fn t5_internal_observations_never_reach_a_segment() {
 fn t6_two_process_lifetimes_keep_separate_counts_that_sum_exactly() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut first = HttpSegmentSink::open(dir.path(), identity(PROD, 0), 0).expect("open 1");
-    first.checkpoint(&counts("2026-07-28", 40), 4 * DAY, true).expect("close 1");
+    first
+        .checkpoint(&counts("2026-07-28", 40), 4 * DAY, true)
+        .expect("close 1");
     let mut second = HttpSegmentSink::open(dir.path(), identity(PROD, 4 * DAY + 5), 4 * DAY + 5)
         .expect("open 2");
-    second.checkpoint(&counts("2026-07-28", 60), 8 * DAY, true).expect("close 2");
+    second
+        .checkpoint(&counts("2026-07-28", 60), 8 * DAY, true)
+        .expect("close 2");
     let window = read_window_v2(&path_of(dir.path())).unwrap();
     let (span, result) = decide(&window, &declaration());
     assert_eq!(span.expect("span").snapshot.total, 100);
@@ -234,7 +293,9 @@ fn t6_stdio_deltas_survive_a_process_restart() {
         registry.observe_request(Some("2025-11-25"), "claude", Transport::Stdio);
     }
     first.persist_registry(&registry).expect("first persist");
-    first.persist_registry(&registry).expect("a repeat adds nothing");
+    first
+        .persist_registry(&registry)
+        .expect("a repeat adds nothing");
     let mut second = DurableTelemetrySink::open(dir.path()).expect("second process");
     let mut registry = Registry::new();
     for _ in 0..40 {
@@ -263,7 +324,9 @@ fn t7_agent_keys_are_bounded_and_client_info_does_not_hide_the_family() {
     assert!(agents.keys().all(|key| !key.starts_with("agent-")));
 
     let mut window = WindowV2::empty(0);
-    window.missing_revision_agents.insert("agent-7/1.0".to_string(), 1);
+    window
+        .missing_revision_agents
+        .insert("agent-7/1.0".to_string(), 1);
     assert!(validate_window_v2(&window).is_err());
 }
 
@@ -308,4 +371,116 @@ fn t9_missing_revisions_stay_in_the_two_percent_gate() {
             RetirementBlocked::UnattributedAtOrAboveRetirementThreshold
         ))
     );
+}
+
+#[test]
+fn committed_window_is_not_counted_twice_after_parent_sync_failure() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut sink = crate::protocol_revision_telemetry::DurableTelemetrySink::open(directory.path())
+        .expect("durable sink");
+    let mut registry = Registry::new();
+    registry.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
+
+    let error = sink
+        .persist_with_parent_sync(
+            registry.transport_snapshot(Transport::Stdio),
+            registry.shadow_snapshot(),
+            registry.missing_revision_agents(),
+            1,
+            |_| Err(std::io::Error::other("injected parent sync failure")),
+        )
+        .expect_err("parent sync must fail after the rename");
+    assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    assert!(sink.parent_sync_pending);
+    assert_eq!(load(directory.path()).unwrap().stdio.total, 1);
+
+    sink.persist_with_parent_sync(
+        registry.transport_snapshot(Transport::Stdio),
+        registry.shadow_snapshot(),
+        registry.missing_revision_agents(),
+        2,
+        |_| Ok(()),
+    )
+    .expect("retry pending parent sync");
+    assert!(!sink.parent_sync_pending);
+    assert_eq!(load(directory.path()).unwrap().stdio.total, 1);
+}
+
+#[cfg(windows)]
+#[test]
+fn window_file_is_owner_only_in_an_open_directory_and_over_a_stale_temp() {
+    // WT-ASSERT 1718-W5: the window is created private, and a stale temp
+    // planted with an open DACL does not carry it into the window file.
+    use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
+
+    let dir = everyone_full_dir("1718-W5");
+    let path = dir.path().join("window.json");
+    std::fs::write(path.with_extension("json.tmp"), "stale").unwrap();
+
+    super::super::write_json_atomic(&path, &WindowV2::empty(1)).unwrap();
+
+    // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
+    assert_owner_only("1718-W5", &path, false);
+}
+
+/// The operator's U1 decision (RFC-0060 runbook). Run exactly as:
+/// `cargo test --lib protocol_revision_telemetry::window::tests::u1_production_decision
+/// -- --ignored --exact --nocapture` with `U1_DATA_DIR`, `U1_POPULATION`,
+/// `U1_LISTEN` and `U1_EXE_PREFIX`. Writes `decision.json` beside the window.
+#[test]
+#[ignore = "operator-run against a production data directory"]
+fn u1_production_decision() {
+    let env = |name: &str| std::env::var(name).ok();
+    let data_dir = std::path::PathBuf::from(env("U1_DATA_DIR").expect("U1_DATA_DIR is required"));
+    let declaration = parse_declaration(
+        env("U1_POPULATION").as_deref(),
+        env("U1_LISTEN").as_deref(),
+        env("U1_EXE_PREFIX").as_deref(),
+    )
+    .expect("a complete declaration");
+    let (window_path, _) = window_paths(&data_dir);
+    let file = read_window_v2(&window_path).expect("a readable v2 window");
+    let (span, outcome) = decide(&file, &declaration);
+    for (index, segment) in file.http_segments.iter().enumerate() {
+        println!(
+            "segment {index}: listen={} exe={} opened={} last={} clean={} concurrent={}",
+            segment.listen,
+            segment.exe,
+            segment.opened_at,
+            segment.last_checkpoint_at,
+            segment.closed_cleanly,
+            segment.opened_while_another_was_open
+        );
+    }
+    if let Some(span) = &span {
+        println!(
+            "sealed span: {} .. {} ({} segments)\n{}",
+            span.started_at,
+            span.ended_at,
+            span.segments,
+            crate::protocol_revision_telemetry::distribution_table(&span.snapshot)
+        );
+    }
+    println!("decision: {outcome:?}");
+    let record = serde_json::json!({
+        "declaration": {
+            "population": ["http"],
+            "listen": declaration.listen,
+            "exe_prefix": declaration.exe_prefix,
+        },
+        "span": span.as_ref().map(|s| serde_json::json!({
+            "started_at": s.started_at,
+            "ended_at": s.ended_at,
+            "segments": s.segments,
+            "snapshot": s.snapshot,
+        })),
+        "missing_revision_agents": file
+            .http_segments
+            .iter()
+            .map(|s| s.missing_revision_agents.clone())
+            .collect::<Vec<_>>(),
+        "decision": format!("{outcome:?}"),
+    });
+    super::super::write_json_atomic(&window_path.with_file_name("decision.json"), &record)
+        .expect("write decision.json");
 }

@@ -124,7 +124,7 @@ whose clients are all HTTP. Design and review:
    U1_POPULATION=http \
    U1_LISTEN=127.0.0.1:39401 \
    U1_EXE_PREFIX=/Users/<operator>/.local/libexec/mcp-gateway/ \
-   cargo test --lib protocol_revision_telemetry::tests::u1_production_decision \
+   cargo test --lib protocol_revision_telemetry::window::tests::u1_production_decision \
      -- --ignored --exact --nocapture
    ```
 

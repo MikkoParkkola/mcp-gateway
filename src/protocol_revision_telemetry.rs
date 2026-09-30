@@ -421,11 +421,11 @@ impl Registry {
             None => self.unattributed += 1,
         }
         let slice = self.per_transport.entry(transport.as_str()).or_default();
-        count_snapshot(slice, revision, client, transport);
+        window::count_snapshot(slice, revision, client, transport);
         if revision.is_none() {
             *self
                 .missing_revision_agents
-                .entry(missing_revision_agent(client, user_agent).to_string())
+                .entry(window::missing_revision_agent(client, user_agent).to_string())
                 .or_insert(0) += 1;
         }
     }
@@ -497,19 +497,6 @@ impl Registry {
     /// Count for one of the finite `tools/list` filter combinations.
     pub fn shadow_count(&self, filters: ListFilters) -> u64 {
         self.shadow_counts[shadow_index(filters)]
-    }
-
-    /// This process's observations on one transport only.
-    pub(crate) fn transport_snapshot(&self, transport: Transport) -> Snapshot {
-        self.per_transport
-            .get(transport.as_str())
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    /// Requests with no revision, by bounded caller key.
-    pub(crate) fn missing_revision_agents(&self) -> BTreeMap<String, u64> {
-        self.missing_revision_agents.clone()
     }
 
     fn shadow_snapshot(&self) -> BTreeMap<String, u64> {
@@ -656,76 +643,6 @@ fn revision_label(revision: Option<&str>) -> Option<&'static str> {
         .copied()
         .find(|candidate| *candidate == revision)
         .or(Some(OTHER_REVISION))
-}
-
-/// Add one already-labelled observation to a per-transport slice.
-fn count_snapshot(
-    slice: &mut Snapshot,
-    revision: Option<&'static str>,
-    client: &'static str,
-    transport: Transport,
-) {
-    slice.total += 1;
-    *slice.by_client.entry(client.to_string()).or_insert(0) += 1;
-    *slice
-        .by_transport
-        .entry(transport.as_str().to_string())
-        .or_insert(0) += 1;
-    match revision {
-        Some(rev) => *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1,
-        None => slice.unattributed += 1,
-    }
-}
-
-/// Named clients that identify a caller on their own.
-const NAMED_CLIENTS: &[&str] = &["claude", "codex", "cursor", "vscode", "chatgpt"];
-/// Fixed User-Agent families. Raw agents are never stored (MIK-6704).
-pub(crate) const USER_AGENT_FAMILIES: &[&str] = &[
-    "python-urllib",
-    "python-requests",
-    "python-httpx",
-    "curl",
-    "xh",
-    "httpie",
-    "node",
-    "go",
-    "reqwest",
-    "absent",
-    "other",
-];
-
-/// Bounded key for a request that named no revision. A named client wins;
-/// an unknown or missing `clientInfo` falls through to the agent family, so
-/// it cannot hide a more specific caller.
-fn missing_revision_agent(client: &'static str, user_agent: Option<&str>) -> &'static str {
-    if NAMED_CLIENTS.contains(&client) {
-        return client;
-    }
-    user_agent_family(user_agent)
-}
-
-fn user_agent_family(user_agent: Option<&str>) -> &'static str {
-    let Some(agent) = user_agent.map(str::trim).filter(|a| !a.is_empty()) else {
-        return "absent";
-    };
-    let agent = agent.to_ascii_lowercase();
-    // Order matters: "python-requests" also contains "python", and HTTPie's
-    // agent is "HTTPie/x", so the specific names are tried first.
-    [
-        ("python-urllib", "python-urllib"),
-        ("python-requests", "python-requests"),
-        ("python-httpx", "python-httpx"),
-        ("curl/", "curl"),
-        ("xh/", "xh"),
-        ("httpie", "httpie"),
-        ("node", "node"),
-        ("undici", "node"),
-        ("go-http-client", "go"),
-        ("reqwest", "reqwest"),
-    ]
-    .into_iter()
-    .find_map(|(needle, family)| agent.contains(needle).then_some(family))
-    .unwrap_or("other")
 }
 
 fn client_label(client: &str) -> &'static str {
@@ -1346,23 +1263,6 @@ pub fn global_shadow_count(filters: ListFilters) -> u64 {
         .shadow_count(filters)
 }
 
-/// This process's HTTP counts since start, as its U1 segment records them.
-pub(crate) fn global_segment_counts() -> window::SegmentCounts {
-    let registry = global()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    window::SegmentCounts {
-        snapshot: registry.transport_snapshot(Transport::Http),
-        missing_revision_agents: registry.missing_revision_agents(),
-        tools_list_shadow: registry.shadow_snapshot(),
-    }
-}
-
-/// Wall-clock Unix seconds; 0 only on a clock set before 1970.
-pub(crate) fn unix_seconds_now() -> u64 {
-    unix_seconds().unwrap_or(0)
-}
-
 fn emit_request_metrics(requested_revision: Option<&str>, client: &str, transport: Transport) {
     let _ = (requested_revision, client, transport);
     #[cfg(feature = "metrics")]
@@ -1405,68 +1305,6 @@ mod lock_tests;
 mod tests {
     use super::*;
     use serde_json::json;
-
-    /// The operator's U1 decision (RFC-0060 runbook). Run exactly as:
-    /// `cargo test --lib protocol_revision_telemetry::tests::u1_production_decision
-    /// -- --ignored --exact --nocapture` with `U1_DATA_DIR`, `U1_POPULATION`,
-    /// `U1_LISTEN` and `U1_EXE_PREFIX`. Writes `decision.json` beside the window.
-    #[test]
-    #[ignore = "operator-run against a production data directory"]
-    fn u1_production_decision() {
-        let env = |name: &str| std::env::var(name).ok();
-        let data_dir = PathBuf::from(env("U1_DATA_DIR").expect("U1_DATA_DIR is required"));
-        let declaration = window::parse_declaration(
-            env("U1_POPULATION").as_deref(),
-            env("U1_LISTEN").as_deref(),
-            env("U1_EXE_PREFIX").as_deref(),
-        )
-        .expect("a complete declaration");
-        let (window_path, _) = window::window_paths(&data_dir);
-        let file = window::read_window_v2(&window_path).expect("a readable v2 window");
-        let (span, outcome) = window::decide(&file, &declaration);
-        for (index, segment) in file.http_segments.iter().enumerate() {
-            println!(
-                "segment {index}: listen={} exe={} opened={} last={} clean={} concurrent={}",
-                segment.listen,
-                segment.exe,
-                segment.opened_at,
-                segment.last_checkpoint_at,
-                segment.closed_cleanly,
-                segment.opened_while_another_was_open
-            );
-        }
-        if let Some(span) = &span {
-            println!(
-                "sealed span: {} .. {} ({} segments)\n{}",
-                span.started_at,
-                span.ended_at,
-                span.segments,
-                distribution_table(&span.snapshot)
-            );
-        }
-        println!("decision: {outcome:?}");
-        let record = json!({
-            "declaration": {
-                "population": ["http"],
-                "listen": declaration.listen,
-                "exe_prefix": declaration.exe_prefix,
-            },
-            "span": span.as_ref().map(|s| json!({
-                "started_at": s.started_at,
-                "ended_at": s.ended_at,
-                "segments": s.segments,
-                "snapshot": s.snapshot,
-            })),
-            "missing_revision_agents": file
-                .http_segments
-                .iter()
-                .map(|s| s.missing_revision_agents.clone())
-                .collect::<Vec<_>>(),
-            "decision": format!("{outcome:?}"),
-        });
-        write_json_atomic(&window_path.with_file_name("decision.json"), &record)
-            .expect("write decision.json");
-    }
 
     #[test]
     fn initialize_protocol_version_is_attributed() {
@@ -1760,68 +1598,5 @@ mod tests {
             }),
             1
         );
-    }
-
-    #[test]
-    fn committed_window_is_not_counted_twice_after_parent_sync_failure() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let mut sink = DurableTelemetrySink::open(directory.path()).expect("durable sink");
-        let mut registry = Registry::new();
-        registry.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
-
-        let error = sink
-            .persist_with_parent_sync(
-                registry.transport_snapshot(Transport::Stdio),
-                registry.shadow_snapshot(),
-                registry.missing_revision_agents(),
-                1,
-                |_| {
-                    Err(io::Error::other("injected parent sync failure"))
-                },
-            )
-            .expect_err("parent sync must fail after the rename");
-        assert_eq!(error.kind(), io::ErrorKind::Other);
-        assert!(sink.parent_sync_pending);
-        assert_eq!(
-            window::read_window_v2(&window::window_paths(directory.path()).0)
-                .unwrap()
-                .stdio
-                .total,
-            1
-        );
-
-        sink.persist_with_parent_sync(
-            registry.transport_snapshot(Transport::Stdio),
-            registry.shadow_snapshot(),
-            registry.missing_revision_agents(),
-            2,
-            |_| Ok(()),
-        )
-        .expect("retry pending parent sync");
-        assert!(!sink.parent_sync_pending);
-        assert_eq!(
-            window::read_window_v2(&window::window_paths(directory.path()).0)
-                .unwrap()
-                .stdio
-                .total,
-            1
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn window_file_is_owner_only_in_an_open_directory_and_over_a_stale_temp() {
-        // WT-ASSERT 1718-W5: the window is created private, and a stale temp
-        // planted with an open DACL does not carry it into the window file.
-        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
-
-        let dir = everyone_full_dir("1718-W5");
-        let path = dir.path().join("window.json");
-        std::fs::write(path.with_extension("json.tmp"), "stale").unwrap();
-
-        write_json_atomic(&path, &window::WindowV2::empty(1)).unwrap();
-
-        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
-        assert_owner_only("1718-W5", &path, false);
     }
 }

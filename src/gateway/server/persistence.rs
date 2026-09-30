@@ -336,16 +336,15 @@ mod tests {
             .expect("the saver closes without waiting for a drain")
             .expect("the saver task does not panic");
         let (path, _) = crate::protocol_revision_telemetry::window::window_paths(dir.path());
-        let window = crate::protocol_revision_telemetry::window::read_window_v2(&path)
-            .expect("a v2 window");
+        let window =
+            crate::protocol_revision_telemetry::window::read_window_v2(&path).expect("a v2 window");
         assert_eq!(window.http_segments.len(), 1);
         assert!(window.http_segments[0].closed_cleanly);
     }
 }
 
 /// How often an HTTP process rewrites its U1 window segment.
-pub(super) const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(5);
+const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Keep this HTTP process's U1 segment current, and seal it on shutdown.
 ///
@@ -356,13 +355,28 @@ pub(super) const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration =
 /// listener admits none, so nothing counted later belongs to this segment.
 /// A sink that fails to open is retried every tick; counts are cumulative
 /// from process start, so a late open still records everything.
-pub(super) fn spawn_protocol_window_saver(
+pub(super) fn spawn_window_saver(
+    data_dir: PathBuf,
+    listen: std::net::SocketAddr,
+    shutdown: tokio::sync::broadcast::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    use crate::protocol_revision_telemetry::window::{WriterIdentity, unix_seconds_now};
+    let identity = WriterIdentity {
+        listen: listen.to_string(),
+        exe: std::env::current_exe()
+            .map_or_else(|_| "unknown".to_string(), |path| path.display().to_string()),
+        process_started_at: unix_seconds_now(),
+    };
+    spawn_protocol_window_saver(data_dir, identity, PROTOCOL_WINDOW_SAVE_INTERVAL, shutdown)
+}
+
+fn spawn_protocol_window_saver(
     data_dir: PathBuf,
     identity: crate::protocol_revision_telemetry::window::WriterIdentity,
     every: std::time::Duration,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
-    use crate::protocol_revision_telemetry::{global_segment_counts, window::HttpSegmentSink};
+    use crate::protocol_revision_telemetry::window::{HttpSegmentSink, global_segment_counts};
     tokio::spawn(async move {
         let mut sink: Option<HttpSegmentSink> = None;
         let mut interval = tokio::time::interval(every);
@@ -377,7 +391,7 @@ pub(super) fn spawn_protocol_window_saver(
                 // listener's accept-stop directly if this ever proves racy.
                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
-            let now = crate::protocol_revision_telemetry::unix_seconds_now();
+            let now = crate::protocol_revision_telemetry::window::unix_seconds_now();
             if sink.is_none() {
                 match HttpSegmentSink::open(&data_dir, identity.clone(), now) {
                     Ok(opened) => sink = Some(opened),
