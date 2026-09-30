@@ -39,7 +39,9 @@ async fn a_repeat_after_the_tool_is_withheld_is_refused_not_answered_from_the_ta
     let repeat = post(&state, "key-a", call(2451)).await;
     let text = repeat.to_string();
     assert!(
-        text.contains("withheld") && repeat.pointer("/result/taskId").is_none(),
+        text.contains("withheld")
+            && repeat.get("error").is_some()
+            && repeat.get("result").is_none(),
         "a repeat after the tool was withheld must be refused, not answered \
          with the stored task: {repeat}"
     );
