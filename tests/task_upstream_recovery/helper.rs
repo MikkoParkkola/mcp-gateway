@@ -461,7 +461,17 @@ impl Gateway {
                         self.logs()
                     );
                 }
-                if client.get(&url).send().await.is_ok() {
+                // Any HTTP answer is not enough: `free_port` releases the port
+                // before the child binds it, so another test's listener can
+                // take it and answer instead (#2510). A gateway /health body
+                // carries this build's version, healthy (200) or degraded (503);
+                // it names the build, not this child, so a sibling test's
+                // gateway on the same port would still pass (binding port 0 in
+                // the child is what removes that).
+                if let Ok(response) = client.get(&url).send().await
+                    && let Ok(body) = response.json::<Value>().await
+                    && body["version"] == env!("CARGO_PKG_VERSION")
+                {
                     return;
                 }
                 tokio::time::sleep(POLL_GAP).await;
@@ -472,6 +482,12 @@ impl Gateway {
             "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
             self.logs()
         );
+        if let Some(status) = self.child.try_wait().expect("owned child status") {
+            panic!(
+                "a /health on {url} answered but the gateway had exited ({status})\n{}",
+                self.logs()
+            );
+        }
     }
 
     pub async fn post(&self, client: &reqwest::Client, body: &Value) -> Value {

@@ -332,7 +332,10 @@ async fn a_create_killed_between_commit_and_ack_is_recovered_by_its_owner_only()
         id = tokio::time::timeout(OBSERVE_BOUND, paused) => {
             id.expect("the child pauses at Published within the bound")
         }
-        answer = create => panic!("the create was answered while paused at Published: {answer}"),
+        answer = create => panic!(
+            "the create was answered while paused at Published: {answer}\n{}",
+            gateway.logs()
+        ),
     };
     gateway.kill().await;
     recovered_by_its_owner_only(
