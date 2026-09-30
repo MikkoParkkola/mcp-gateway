@@ -25,6 +25,21 @@ pub struct DashboardBootstrap {
     /// when each was issued and last used. `ponytail:` one mutex over the map;
     /// a dashboard has a handful of sessions, not thousands.
     sessions: Mutex<HashMap<String, SessionTimes>>,
+    /// The code a loopback redemption hands to the public origin (#2130), while
+    /// unused: at most one, since the bootstrap value it comes from is single use.
+    handoff: Mutex<Option<Handoff>>,
+}
+
+/// How long a handoff code may wait to be entered on the public origin.
+pub(crate) const HANDOFF_TTL: Duration = Duration::from_secs(60);
+
+/// A one-time code minted by a loopback redemption, carrying that redemption's
+/// credential cap to the session it opens.
+#[derive(Debug)]
+struct Handoff {
+    value: String,
+    minted: Now,
+    cap: Option<SystemTime>,
 }
 
 /// A redeemed bootstrap value: when the session it opens must end by, if the
@@ -124,6 +139,7 @@ impl DashboardBootstrap {
             value: Mutex::new(Some((random_value(), None))),
             bound_port: AtomicU16::new(0),
             sessions: Mutex::new(HashMap::new()),
+            handoff: Mutex::new(None),
         }
     }
 
@@ -210,6 +226,64 @@ impl DashboardBootstrap {
             *value = Some((fresh.clone(), not_after));
         }
         fresh
+    }
+
+    /// Mint the code a loopback redemption shows, replacing any unused one. It
+    /// carries `cap`, the redeemed link's credential cap, to the session.
+    pub(crate) fn mint_handoff(&self, now: Now, cap: Option<SystemTime>) -> String {
+        let value = random_value();
+        if let Ok(mut slot) = self.handoff.lock() {
+            *slot = Some(Handoff {
+                value: value.clone(),
+                minted: now,
+                cap,
+            });
+        }
+        value
+    }
+
+    /// Spend the handoff code if `candidate` is it, it is under
+    /// [`HANDOFF_TTL`] old on both clocks, and its cap has not passed. A wrong
+    /// value spends nothing: anyone could otherwise cancel an operator's
+    /// sign-in. Compared in constant time; every code has the same length.
+    pub(crate) fn take_handoff(&self, candidate: &str, now: Now) -> Option<Redemption> {
+        use subtle::ConstantTimeEq as _;
+        let mut slot = self.handoff.lock().ok()?;
+        let (expired, matches) = {
+            let live = slot.as_ref()?;
+            (
+                exceeds(live.minted, now, HANDOFF_TTL)
+                    || live.cap.is_some_and(|cap| now.wall >= cap),
+                bool::from(live.value.as_bytes().ct_eq(candidate.as_bytes())),
+            )
+        };
+        if expired {
+            *slot = None;
+            return None;
+        }
+        if !matches {
+            return None;
+        }
+        slot.take().map(|live| Redemption {
+            not_after: live.cap,
+        })
+    }
+
+    /// Test seam: move both clocks of the handoff code back by `by`.
+    #[cfg(test)]
+    pub(crate) fn backdate_handoff(&self, by: Duration) {
+        if let Ok(mut slot) = self.handoff.lock()
+            && let Some(live) = slot.as_mut()
+        {
+            live.minted = Now {
+                mono: live
+                    .minted
+                    .mono
+                    .checked_sub(by)
+                    .expect("backdate within the monotonic range"),
+                wall: live.minted.wall - by,
+            };
+        }
     }
 
     /// Record the port the listener actually bound.
