@@ -6,6 +6,7 @@
 //!
 //! Every run uses the real binary in an isolated home with a cleared
 //! environment. The sentinel stands for a credential.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs). The child's home also comes from HOME.
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;

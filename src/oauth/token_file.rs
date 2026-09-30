@@ -55,6 +55,7 @@ pub(super) fn forget(path: &Path) {
         .remove(path);
 }
 
+// Unix-only (W-L1): asserts the 0600 mode and its repair; Windows has no mode bits.
 #[cfg(all(test, unix))]
 #[path = "token_file_tests.rs"]
 mod tests;

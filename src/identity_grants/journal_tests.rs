@@ -322,7 +322,7 @@ async fn a_refused_change_on_a_missing_file_leaves_no_lock() {
 
 /// A journal path planted as a symlink is refused: the append must not land
 /// on, or chmod, the file it points at.
-// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
+// Unix-only: asserts POSIX mode bits on the planted target; the Windows symlink refusal runs in journal_windows_tests.rs:75.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_symlinked_journal_is_refused() {

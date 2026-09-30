@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! F18 R1, I1, I2: the TLS key may not be readable by others; the server cert,
 //! client CA and CRL may be read by others but not changed by them.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt as _;

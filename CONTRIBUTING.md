@@ -48,22 +48,53 @@ filters. It also runs the privileged owner-only rows (`win_privileged::`, `--ign
 Nothing else is counted as Windows coverage, and no met release criterion cites Windows
 execution evidence (`scripts/release/test_windows_job_scope.py`).
 
-Every test that does not run on Windows carries a `#[cfg(unix)]` or `#[cfg(not(windows))]`
-gate. Each gate is class (c), unix-only by design, and is one of:
+Every test that does not run on Windows is in one of three classes, and Windows
+failures are fixed in that order of preference:
 
-- POSIX mode bits and umask (`0600`, group/world-readable refusal, `chmod` failure
-  injection). Windows enforces owner-only through DACLs, tested in `win_acl` and the
-  privileged rows instead.
-- File ownership by uid, and a symlink's own permissions. Windows has neither.
-- Process reaping, pid liveness and zombie states (`/proc`, `kill(0)`, `waitpid`).
-- Read-only directories as a way to force a write error; Windows directory attributes
-  do not deny file creation.
-- Unix-only child environment and signal scenarios.
+1. A test assumption: the fixture is fixed so the test runs on Windows.
+2. A product defect: fixed in 4.0, with the failing test first on the `Windows check` job.
+3. Unix-only by design: the behavior has no Windows equivalent. The test carries a
+   `#[cfg(unix)]`, `#[cfg(not(windows))]` or `#[cfg(target_os = ...)]` gate with a comment
+   stating the reason, and the limitation is listed below.
 
-Fix a Windows failure in the test (a wrong assumption) or the product (a defect, red
-first) before reaching for a gate. Add a gate only for a genuine unix-only behavior, with
-a comment naming why. User-facing limits: see `docs/UPGRADING-4.0.md`
-(items 68 and 99) and the README.
+Give a child process a home directory with `MCP_GATEWAY_TEST_HOME_DIR` (debug builds
+only, `src/home_dir.rs`; the release job fails if the release binary carries the name).
+On Windows `dirs::home_dir()` ignores `HOME` and `USERPROFILE`, so `HOME` alone cannot do it.
+Create a test symlink with `crate::test_symlink::symlink`: the `Windows check` job enables
+Developer Mode (`ci.yml`, "Allow symlink creation"), so symlink creation needs no gate.
+
+### Windows limitations
+
+Each entry is a Unix behavior the gateway or its test fixtures rely on that Windows does
+not provide. The test gates for it state the same reason in a comment.
+
+- **W-L1 POSIX mode bits, umask and `chmod`.** Windows has no mode bits. Owner-only files
+  and directories are enforced through DACLs (ADR-016, `docs/UPGRADING-4.0.md` items 68
+  and 99) and tested in `win_acl`, `windows_tests.rs` and the privileged rows. Tests that
+  assert `0600`/`0700`, build a group-readable fixture, or inject a failure with
+  `chmod 0` (or a read-only directory) stay Unix-only.
+- **W-L2 File ownership by uid.** Windows ownership is an ACL owner, not a uid.
+- **W-L3 File identity and allocation.** `(dev, ino)` from `MetadataExt` and `st_blocks`
+  are not exposed by stable Windows std metadata.
+- **W-L4 Process table, pid liveness and zombie reaping.** Windows has no zombie state,
+  `kill(0)` or `ps` state column. Tests that prove a child was reaped by reading the
+  process table stay Unix-only.
+- **W-L5 POSIX shell fixtures.** Fake MCP servers and launchers written as `sh` scripts,
+  `rlimit`, and `umask` inside `sh -c`. Windows provides none of them.
+- **W-L6 Signals and inherited descriptors.** Windows has no `SIGTERM` or `SIGKILL`
+  death-by-signal, and no `fd` duplication across `fork`.
+- **W-L7 Non-UTF-8 environment values.** Windows environment strings are UTF-16, so a
+  raw-bytes value cannot be built; a test that moves `HOME` and restores it is also
+  Unix-only, because Windows resolves the home from the Known Folder API.
+- **W-L8 FIFOs.** `mkfifo` named pipes have no Windows counterpart; the refusal of a FIFO
+  where a file is expected is asserted on Unix.
+- **W-L9 Platform-specific facilities.** Linux `inotify` watcher rows, the `SSL_CERT_FILE`
+  trust path on Unix outside Apple platforms, the per-platform runtime substrate and
+  resident-set measurement, and the macOS keychain. Windows takes the fallback path.
+
+Fix a Windows failure in the test or the product before reaching for a gate. Add a gate only
+for a genuine Unix-only behavior, with a comment naming which limitation above it is.
+User-facing limits: see `docs/UPGRADING-4.0.md` (items 68 and 99) and the README.
 
 ## Code Organization
 

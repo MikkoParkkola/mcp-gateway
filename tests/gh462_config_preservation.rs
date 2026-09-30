@@ -509,6 +509,8 @@ mod cli {
         command
             .env_clear()
             .env("HOME", home)
+            .env("MCP_GATEWAY_TEST_HOME_DIR", home)
+            .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root))) // a cleared Windows environment cannot start
             .env("USERPROFILE", home)
             .env("XDG_CONFIG_HOME", home.join(".config"))
             .env("APPDATA", home.join("AppData/Roaming"))
@@ -636,7 +638,6 @@ mod cli {
     async fn gh462_setup_empty_discovery_without_client() {
         invalid_empty_discovery(false).await;
     }
-    #[cfg(unix)] // Windows `dirs::home_dir()` ignores HOME/USERPROFILE
     #[tokio::test]
     async fn gh462_valid_config_control_reaches_empty_discovery() {
         let home = tempfile::tempdir().unwrap();
@@ -773,9 +774,9 @@ mod cli {
 
     valid_cli_case!(gh462_add_missing, false, false);
     valid_cli_case!(gh462_add_valid, false, true);
-    #[cfg(all(unix, feature = "config-export"))] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
+    #[cfg(feature = "config-export")]
     valid_cli_case!(gh462_setup_missing, true, false);
-    #[cfg(all(unix, feature = "config-export"))] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
+    #[cfg(feature = "config-export")]
     valid_cli_case!(gh462_setup_valid, true, true);
 
     // GH462.CONFIG.6: binary isolation enables non-vacuous secret/override checks.
@@ -812,6 +813,5 @@ mod cli {
         };
     }
     reference_cli_case!(gh462_add_references, false);
-    #[cfg(unix)] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     reference_cli_case!(gh462_setup_references, true);
 }

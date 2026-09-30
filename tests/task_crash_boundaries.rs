@@ -22,6 +22,7 @@
 //! which the gateway's TLS verifier honours on that branch alone (see
 //! `task_upstream_recovery_sdk/pins.rs`). macOS CI builds tests without
 //! running them.
+// Unix-non-Apple only: SIGKILL and SSL_CERT_FILE; see the module header.
 #![cfg(all(unix, not(target_vendor = "apple")))]
 
 #[path = "task_upstream_recovery/helper.rs"]

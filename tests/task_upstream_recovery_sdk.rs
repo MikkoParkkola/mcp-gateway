@@ -13,6 +13,7 @@
 //! (`pins`), because a test that skipped itself would pass while proving
 //! nothing.
 
+// Unix-only: the crash is a SIGKILL (helper.rs:235) and the child trusts the issuer CA through SSL_CERT_FILE.
 #![cfg(unix)]
 
 #[path = "task_upstream_recovery_sdk/authority.rs"]

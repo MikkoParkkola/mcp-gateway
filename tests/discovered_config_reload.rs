@@ -9,7 +9,6 @@
 //! `RUST_LOG=info` (the waits read INFO lines) and no inherited
 //! `MCP_GATEWAY_*` variable. Waits are on completion lines, never trigger
 //! lines, and edits are sequential, so one reload never absorbs the next edit.
-#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -78,6 +77,8 @@ fn gateway_command(cwd: &Path, home: &Path) -> Command {
     command
         .current_dir(cwd)
         .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("MCP_GATEWAY_TEST_HOME_DIR", home)
         .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
         .env("RUST_LOG", "info")
         .kill_on_drop(true);

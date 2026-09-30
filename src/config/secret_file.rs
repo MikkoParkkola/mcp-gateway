@@ -541,6 +541,7 @@ fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     }
 }
 
+// Unix-only (W-L1): asserts POSIX mode bits; Windows checks secret files by DACL (`secret_file_windows_tests.rs`).
 #[cfg(all(test, unix))]
 #[path = "secret_file_tests.rs"]
 mod tests;
@@ -549,6 +550,7 @@ mod tests;
 #[path = "secret_file_population_tests.rs"]
 mod population_tests;
 
+// Unix-only (W-L8): FIFO and device-file fixtures (`mkfifo`, `/dev/null`).
 #[cfg(all(test, unix))]
 #[path = "secret_file_type_tests.rs"]
 mod type_tests;

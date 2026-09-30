@@ -7,10 +7,10 @@
 //! there could come from a directory the design never asked to watch.
 
 use std::collections::BTreeSet;
-use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use super::chain_dirs;
+use crate::test_symlink::symlink;
 
 fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).expect("canonical")
