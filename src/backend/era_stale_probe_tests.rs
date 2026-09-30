@@ -1,0 +1,234 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-7217.ERA.1 / ERA.2 / ERA.3: a re-probe's answer from a replaced transport is refused.
+//!
+//! Design: `docs/design/2026-09-30-era-1-2-stale-probe-refusal.md`. The probe holds the era
+//! lock while it waits, so reading the era observation after the peer has answered blocks until
+//! the detached task has decided: that is the completion barrier, never a sleep.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use serde_json::{Value, json};
+use tokio::sync::oneshot;
+
+use super::*;
+use crate::config::TransportConfig;
+use crate::protocol::era::{Era, EraSource, METHOD_NOT_FOUND_CODE};
+use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::transport::Transport;
+use crate::Result;
+
+const DISCOVER: &str = "server/discover";
+
+/// What a peer answers `server/discover` with.
+#[derive(Clone, Copy)]
+enum Answer {
+    Modern,
+    MethodNotFound,
+}
+
+/// A peer whose `server/discover` can be held mid-flight once armed.
+struct Peer {
+    answer: Answer,
+    /// While false, `server/discover` answers at once (the priming probe).
+    hold: AtomicBool,
+    started: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    release: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
+}
+
+struct Handles {
+    started: oneshot::Receiver<()>,
+    release: oneshot::Sender<()>,
+}
+
+impl Peer {
+    fn new(answer: Answer) -> (Arc<Self>, Handles) {
+        let (started_tx, started) = oneshot::channel();
+        let (release, release_rx) = oneshot::channel();
+        let peer = Arc::new(Self {
+            answer,
+            hold: AtomicBool::new(false),
+            started: std::sync::Mutex::new(Some(started_tx)),
+            release: std::sync::Mutex::new(Some(release_rx)),
+        });
+        (peer, Handles { started, release })
+    }
+}
+
+#[async_trait]
+impl Transport for Peer {
+    async fn request(&self, method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
+        if method == DISCOVER && self.hold.load(Ordering::SeqCst) {
+            if let Some(tx) = self.started.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+            let rx = self.release.lock().unwrap().take();
+            if let Some(rx) = rx {
+                let _ = rx.await;
+            }
+        }
+        let id = RequestId::Number(1);
+        Ok(match (method, self.answer) {
+            (DISCOVER, Answer::Modern) => JsonRpcResponse::success_serialized(
+                id,
+                json!({
+                    "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
+                    "capabilities": {},
+                }),
+            ),
+            (DISCOVER, Answer::MethodNotFound) => {
+                JsonRpcResponse::error(Some(id), METHOD_NOT_FOUND_CODE, "method not found")
+            }
+            _ => JsonRpcResponse::success_serialized(id, json!({})),
+        })
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A gateway-owned backend whose command cannot spawn, so a restart takes the old transport out
+/// and its replacement start fails at once; what happens to the era is settled before that.
+fn backend() -> Arc<Backend> {
+    let config = BackendConfig {
+        transport: TransportConfig::Stdio {
+            command: "/nonexistent-mcp-binary".to_string(),
+            cwd: None,
+            protocol_version: None,
+        },
+        ..BackendConfig::default()
+    };
+    Arc::new(Backend::new(
+        "era-stale-probe",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+fn discarded(records: &[Value]) -> Vec<&Value> {
+    records
+        .iter()
+        .filter(|record| record["fields"]["reason"] == "transport_replaced")
+        .collect()
+}
+
+/// Modern is cached from `peer`, then a `-32601` to `server/discover` contradicts it and a
+/// re-probe of `peer` starts and is held mid-flight. Returns once the probe is on the wire.
+async fn contradicted_and_probing(
+    backend: &Arc<Backend>,
+    peer: &Arc<Peer>,
+    handles: &mut Handles,
+) -> Arc<dyn Transport> {
+    let transport: Arc<dyn Transport> = peer.clone();
+    backend.set_transport_for_test(Arc::clone(&transport));
+    backend.resolve_era_for_test(&transport).await;
+    assert_eq!(backend.cached_era().await, Some(Era::Modern), "primed");
+
+    peer.hold.store(true, Ordering::SeqCst);
+    backend
+        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND_CODE, &transport)
+        .await;
+    (&mut handles.started)
+        .await
+        .expect("the re-probe reaches the peer");
+    transport
+}
+
+fn run(body: impl std::future::Future<Output = ()>) -> Vec<Value> {
+    crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(body);
+    })
+}
+
+/// ERA.1 + ERA.2: `force_restart` takes the transport out while the re-probe waits; the late
+/// answer from the old peer is refused and the refusal is reported with its reason.
+#[test]
+fn a_restart_mid_reprobe_refuses_the_old_peers_answer() {
+    let records = run(async {
+        let backend = backend();
+        let (peer, mut handles) = Peer::new(Answer::Modern);
+        contradicted_and_probing(&backend, &peer, &mut handles).await;
+
+        let _ = backend.force_restart().await;
+        assert!(
+            backend.shared_transport().is_none(),
+            "the restart took the old transport out of its slot"
+        );
+
+        let _ = handles.release.send(());
+        let observed = backend.era_observation().await;
+        assert_ne!(
+            observed.source,
+            EraSource::Probed,
+            "the old peer's answer must not be recorded once its transport was replaced: {observed:?}"
+        );
+        assert_eq!(backend.cached_era().await, None);
+    });
+    assert_eq!(
+        discarded(&records).len(),
+        1,
+        "one era_probe_discarded record naming the reason: {records:?}"
+    );
+}
+
+/// ERA.1 with a successful replacement: the old peer's answer is refused, and the era is then
+/// whatever the new peer's own probe answers.
+#[test]
+fn the_era_after_a_replacement_is_the_new_peers_own_answer() {
+    let records = run(async {
+        let backend = backend();
+        let (old, mut handles) = Peer::new(Answer::Modern);
+        contradicted_and_probing(&backend, &old, &mut handles).await;
+
+        let (new, _unused) = Peer::new(Answer::MethodNotFound);
+        let new: Arc<dyn Transport> = new;
+        backend.set_transport_for_test(Arc::clone(&new));
+
+        let _ = handles.release.send(());
+        assert_eq!(
+            backend.cached_era().await,
+            None,
+            "the old peer's modern answer must not survive the replacement"
+        );
+
+        backend.resolve_era_for_test(&new).await;
+        assert_eq!(backend.cached_era().await, Some(Era::Legacy));
+    });
+    assert_eq!(discarded(&records).len(), 1, "{records:?}");
+}
+
+/// ERA.3: with no replacement the re-probe's answer is committed and nothing is reported.
+#[test]
+fn without_a_restart_the_reprobe_answer_is_committed() {
+    let records = run(async {
+        let backend = backend();
+        let (peer, mut handles) = Peer::new(Answer::Modern);
+        contradicted_and_probing(&backend, &peer, &mut handles).await;
+
+        let _ = handles.release.send(());
+        let observed = backend.era_observation().await;
+        assert_eq!(observed.source, EraSource::Probed, "{observed:?}");
+        assert_eq!(observed.era, Era::Modern);
+    });
+    assert!(
+        discarded(&records).is_empty(),
+        "nothing was refused: {records:?}"
+    );
+}
