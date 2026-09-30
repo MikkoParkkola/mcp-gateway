@@ -236,7 +236,7 @@ async fn reload_config_over_the_serve_loop_replays() {
         "{}backends:\n  late:\n    http_url: \"http://127.0.0.1:9/\"\n    streamable_http: true\n",
         base_yaml(&serve.capabilities_dir())
     );
-    crate::gateway::test_helpers::write_owner_only(&serve.config_path(), edited)
+    crate::gateway::test_helpers::write_owner_only(serve.config_path(), edited)
         .expect("rewrite config");
 
     let replay = serve

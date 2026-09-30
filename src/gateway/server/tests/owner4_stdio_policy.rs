@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7272.OWNER.4: a ToolPolicy denial refuses a stdio mutation before its
+//! MIK-7272.OWNER.4: a `ToolPolicy` denial refuses a stdio mutation before its
 //! retained result is delivered, with zero dispatch to the denied target,
 //! while a permitted neighbouring target works.
 //!
