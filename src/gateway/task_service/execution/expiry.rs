@@ -22,7 +22,6 @@ use tokio::time::MissedTickBehavior;
 use super::TaskExecutor;
 use crate::gateway::task_service::service::ServiceError;
 use crate::gateway::task_service::store::StoreError;
-use crate::gateway::task_service::store::input::RoundClosed;
 
 impl TaskExecutor {
     /// Start the periodic sweep and hand back the guard that stops it.
@@ -142,22 +141,10 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     for (id, revision, owner_digest, closed) in
         service.store.expired_input_rounds(service.store.now())
     {
-        let cancelled = match closed {
-            // #2429: one write that names the deadline and drops the round.
-            RoundClosed::Continuation(_) => executor
-                .close_round(&owner_digest, &id, revision, closed.reason())
-                .await
-                .map(drop),
-            RoundClosed::Ttl => executor
-                .commit(super::TaskWrite::Recover {
-                    owner_digest: &owner_digest,
-                    id: &id,
-                    revision,
-                    event: crate::protocol::tasks::TaskTransition::Cancel,
-                })
-                .await
-                .map(drop),
-        };
+        // #2429: one write that names why the round closed and drops it.
+        let cancelled = executor
+            .close_round(&owner_digest, &id, revision, closed.reason())
+            .await;
         let Err(failure) = cancelled else {
             continue;
         };

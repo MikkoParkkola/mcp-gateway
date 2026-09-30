@@ -431,7 +431,7 @@ pub(super) async fn tasks_update(
             Some(id),
             -32602,
             format!(
-                "inputResponses refused: {}; the task is being cancelled",
+                "inputResponses refused: {}; the task is cancelled",
                 closed.reason()
             ),
         ),

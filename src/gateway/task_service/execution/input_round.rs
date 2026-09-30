@@ -303,7 +303,16 @@ impl TaskExecutor {
                     InputOutcome::Accepted
                 }
                 Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
-                Ok(ProvideOutcome::Closed(closed)) => InputOutcome::Closed(closed),
+                Ok(ProvideOutcome::Closed(closed)) => {
+                    // Settle it now rather than at the next sweep, so a closed
+                    // round never looks live. A lost race leaves it to the sweep.
+                    if let Ok(current) = executor.service.store.get(&digest, &id) {
+                        let _ = executor
+                            .close_round(&digest, &id, current.revision, closed.reason())
+                            .await;
+                    }
+                    InputOutcome::Closed(closed)
+                }
                 Ok(ProvideOutcome::Resumed { task, round, slot }) => {
                     let revision = task.revision;
                     executor.published(&WriteOutcome::Transitioned(task), &id);

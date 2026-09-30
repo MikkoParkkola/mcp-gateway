@@ -88,7 +88,7 @@ async fn a_round_without_backend_state_still_has_a_deadline() {
 
 /// Mutant: the refusal removed (the #2429 symptom: `working`, then `failed`).
 #[tokio::test]
-async fn a_complete_answer_after_the_deadline_is_refused_and_never_resumes() {
+async fn a_complete_answer_after_the_deadline_is_refused_and_closes_the_round() {
     let (mock, state, _dir, id) = parked_round("deadline-complete").await;
     let before = revision(&state, &id);
     clock(&state, deadline(&state, &id) + 1);
@@ -100,18 +100,14 @@ async fn a_complete_answer_after_the_deadline_is_refused_and_never_resumes() {
     .await;
     std::assert_eq!(error_code(&late), Some(-32602), "{late}");
     std::assert!(message(&late).contains("continuation deadline"), "{late}");
-    std::assert_eq!(revision(&state, &id), before, "nothing was written");
+    assert_closed_at_once(&state, &id, before, "continuation deadline").await;
     settle_quiet().await;
-    std::assert_eq!(
-        status_of(&get_task(&state, "key-a", &id).await),
-        "input_required"
-    );
     std::assert_eq!(mock.calls(), 1, "a closed round never resumes");
 }
 
 /// Mutant: the deadline checked only on the completing branch.
 #[tokio::test]
-async fn a_partial_answer_after_the_deadline_is_refused_and_writes_nothing() {
+async fn a_partial_answer_after_the_deadline_is_refused_and_closes_the_round() {
     let mock = MockBackend::answering(Answer::Sequence(vec![
         ask_many(&["a", "b"], STATE_1),
         done(),
@@ -123,7 +119,16 @@ async fn a_partial_answer_after_the_deadline_is_refused_and_writes_nothing() {
     let late = post(&state, "key-a", update(2, &id, json!({ "a": answer() }))).await;
     std::assert_eq!(error_code(&late), Some(-32602), "{late}");
     std::assert!(message(&late).contains("continuation deadline"), "{late}");
-    std::assert_eq!(revision(&state, &id), before, "nothing was written");
+    assert_closed_at_once(&state, &id, before, "continuation deadline").await;
+}
+
+/// The refused update closed the round in one write, never accepting the
+/// answers or moving it to `working`, and the task says why.
+async fn assert_closed_at_once(state: &Arc<AppState>, id: &str, before: u64, why: &str) {
+    let seen = get_task(state, "key-a", id).await;
+    std::assert_eq!(status_of(&seen), "cancelled", "{seen}");
+    std::assert!(status_message(&seen).contains(why), "{seen}");
+    std::assert_eq!(revision(state, id), before + 1, "one write: the close");
 }
 
 /// Control: one second before the deadline the answer is taken and resumes.
@@ -244,6 +249,7 @@ async fn an_answer_after_the_task_ttl_is_refused_naming_the_ttl() {
     config.tasks.default_ttl_ms = 60_000;
     let (state, _dir) = state_with_config(&mock, config).await;
     let id = parked(&state, "ttl-refused").await;
+    let before = revision(&state, &id);
     let past_ttl = crate::protocol::continuation::now_unix_secs() + 61;
     std::assert!(
         past_ttl < deadline(&state, &id),
@@ -258,6 +264,7 @@ async fn an_answer_after_the_task_ttl_is_refused_naming_the_ttl() {
     .await;
     std::assert_eq!(error_code(&late), Some(-32602), "{late}");
     std::assert!(message(&late).contains("TTL"), "{late}");
+    assert_closed_at_once(&state, &id, before, "TTL").await;
     std::assert_eq!(mock.calls(), 1);
 }
 

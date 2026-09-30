@@ -279,6 +279,11 @@ async fn an_input_round_past_its_ttl_is_cancelled_by_the_expiry_pass() {
     loop {
         let seen = get_task(&state, "key-a", &id).await;
         if status_of(&seen) == "cancelled" {
+            // #2429: the sweep says why it closed the round.
+            let why = seen
+                .pointer("/result/statusMessage")
+                .and_then(Value::as_str);
+            std::assert!(why.is_some_and(|why| why.contains("TTL")), "{seen}");
             break;
         }
         std::assert_eq!(
