@@ -2126,6 +2126,14 @@ impl Gateway {
                     Some(shutdown_tx.subscribe()),
                 )
             });
+        let window_saver = persistence::spawn_window_saver(
+            self.config.server.protocol_revision_window
+                == crate::config::ProtocolRevisionWindow::Record,
+            data_dir.clone(),
+            addr,
+            Arc::clone(&meta_mcp_for_shutdown.window_seal),
+            shutdown_tx.subscribe(),
+        );
 
         // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
         let std_listener = listener.into_std()?;
@@ -2137,16 +2145,16 @@ impl Gateway {
             shutdown_signal(shutdown_tx),
         )
         .await?;
+        if let Some(saver) = window_saver {
+            drop(saver.await); // U1: the segment is sealed before exit
+        }
 
-        // Save search ranker usage data
         persistence::save_with_logging(
             &ranker_path,
             |path| ranker_for_shutdown.save(path),
             "Failed to save search ranker usage data",
             "Saved search ranking usage data",
         );
-
-        // Save transition tracking data
         persistence::save_with_logging(
             &transition_path,
             |path| tracker_for_shutdown.save(path),
@@ -4217,21 +4225,13 @@ mod tests {
         .await
         .expect("initialize returns a response");
 
-        let window = crate::protocol_revision_telemetry::load_durable_window(data_dir.path())
+        let window = crate::protocol_revision_telemetry::window::load(data_dir.path())
             .expect("load durable stdio aggregate");
-        assert!(window.snapshot.total >= 1);
+        assert!(window.stdio.total >= 1);
+        assert!(window.stdio.by_transport.get("stdio").copied().unwrap_or(0) >= 1);
         assert!(
             window
-                .snapshot
-                .by_transport
-                .get("stdio")
-                .copied()
-                .unwrap_or(0)
-                >= 1
-        );
-        assert!(
-            window
-                .snapshot
+                .stdio
                 .by_revision
                 .get("2025-11-25")
                 .copied()

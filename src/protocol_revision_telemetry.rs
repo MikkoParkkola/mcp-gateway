@@ -57,13 +57,13 @@ const MEASURED_CLIENTS: &[&str] = &[
     "chatgpt",
     "other",
 ];
+// Only the metrics registration enumerates transports now the v1 window is gone.
+#[cfg(feature = "metrics")]
 const MEASURED_TRANSPORTS: &[Transport] = &[Transport::Http, Transport::Stdio, Transport::Internal];
 /// Directory below the gateway data directory that holds the restart-safe window.
 pub const DURABLE_TELEMETRY_DIR: &str = "protocol-revision-telemetry";
 /// Durable aggregate filename read by operators after the measurement window.
 pub const DURABLE_WINDOW_FILE: &str = "window.json";
-/// Schema identifier for the operator-readable aggregate.
-pub const DURABLE_WINDOW_SCHEMA: &str = "mcp_protocol_revision_window.v1";
 
 /// Inbound transport for a negotiated session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +180,13 @@ pub struct Registry {
     shadow_counts: [u64; 16],
     session_attributions: BTreeMap<u64, SessionAttribution>,
     session_order: VecDeque<u64>,
+    /// The same observations, split by transport. The merged fields above are
+    /// the public view; a retirement decision reads one transport only, so a
+    /// stdio request can never stand in for HTTP traffic (U1 v2 window).
+    per_transport: BTreeMap<&'static str, Snapshot>,
+    /// Requests with no revision, by bounded caller key (named client, else
+    /// User-Agent family). Diagnoses the unattributed share; gates nothing.
+    missing_revision_agents: BTreeMap<String, u64>,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -214,47 +221,6 @@ pub enum RetirementBlocked {
     WindowMisaligned,
 }
 
-/// Restart-safe aggregate for a production measurement window.
-///
-/// The file contains bounded labels only. It never stores raw client names,
-/// session identifiers, request bodies, or tool arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DurableWindow {
-    /// Stable on-disk schema identifier.
-    pub schema_version: String,
-    /// Unix timestamp when this window started.
-    pub started_at_unix_seconds: u64,
-    /// Most recent successful aggregate update, recorded as Unix seconds for operator inspection
-    /// after the seven-day window.
-    pub updated_at_unix_seconds: u64,
-    /// Cross-process request counters accumulated since `started_at_unix_seconds`.
-    pub snapshot: Snapshot,
-    /// All 16 bounded `tools/list` filter combinations, including zeroes.
-    pub tools_list_shadow: BTreeMap<String, u64>,
-}
-
-impl DurableWindow {
-    fn empty(now: u64) -> Self {
-        Self {
-            schema_version: DURABLE_WINDOW_SCHEMA.to_string(),
-            started_at_unix_seconds: now,
-            updated_at_unix_seconds: now,
-            snapshot: Snapshot::default(),
-            tools_list_shadow: empty_shadow_counts(),
-        }
-    }
-
-    /// Evaluate the persisted counters using the durable start timestamp.
-    pub fn retirement_decision_at(
-        &self,
-        now_unix_seconds: u64,
-    ) -> Result<Vec<String>, RetirementBlocked> {
-        let elapsed =
-            Duration::from_secs(now_unix_seconds.saturating_sub(self.started_at_unix_seconds));
-        retire_revisions(&self.snapshot, elapsed)
-    }
-}
-
 /// Cross-process sink used by stdio servers.
 ///
 /// Each process contributes only the delta since its preceding write. A shared
@@ -265,31 +231,29 @@ pub struct DurableTelemetrySink {
     lock_path: PathBuf,
     previous_snapshot: Snapshot,
     previous_shadow: BTreeMap<String, u64>,
+    previous_agents: BTreeMap<String, u64>,
     parent_sync_pending: bool,
 }
 
 impl DurableTelemetrySink {
     /// Open or create the durable measurement window below `data_dir`.
+    ///
+    /// A v1 window is refused with the archive instruction, never converted.
     pub fn open(data_dir: &Path) -> io::Result<Self> {
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
         std::fs::create_dir_all(&directory)?;
         force_directory_owner_only(&directory)?;
-        let window_path = directory.join(DURABLE_WINDOW_FILE);
-        let lock_path = directory.join(".window.lock");
+        let (window_path, lock_path) = window::window_paths(data_dir);
         {
             let _lock = ExclusiveFileLock::acquire(&lock_path)?;
-            if window_path.exists() {
-                read_window_file(&window_path)?;
-            } else {
-                write_window_atomic(&window_path, &DurableWindow::empty(unix_seconds()?))?;
-                sync_parent_directory(&window_path)?;
-            }
+            window::read_or_create(&window_path, unix_seconds()?)?;
         }
         Ok(Self {
             window_path,
             lock_path,
             previous_snapshot: Snapshot::default(),
             previous_shadow: empty_shadow_counts(),
+            previous_agents: BTreeMap::new(),
             parent_sync_pending: false,
         })
     }
@@ -297,41 +261,57 @@ impl DurableTelemetrySink {
     /// Add counters observed since this sink's preceding successful write.
     pub fn persist_registry(&mut self, registry: &Registry) -> io::Result<()> {
         self.persist(
-            registry.snapshot(),
+            registry.transport_snapshot(Transport::Stdio),
             registry.shadow_snapshot(),
+            registry.missing_revision_agents(),
             unix_seconds()?,
         )
     }
 
     /// Persist the current process-global counters.
     pub fn persist_global(&mut self) -> io::Result<()> {
-        let (snapshot, shadow) = {
+        let (snapshot, shadow, agents) = {
             let registry = global()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            (registry.snapshot(), registry.shadow_snapshot())
+            (
+                registry.transport_snapshot(Transport::Stdio),
+                registry.shadow_snapshot(),
+                registry.missing_revision_agents(),
+            )
         };
-        self.persist(snapshot, shadow, unix_seconds()?)
+        self.persist(snapshot, shadow, agents, unix_seconds()?)
     }
 
     fn persist(
         &mut self,
         current: Snapshot,
         current_shadow: BTreeMap<String, u64>,
+        current_agents: BTreeMap<String, u64>,
         now: u64,
     ) -> io::Result<()> {
-        self.persist_with_parent_sync(current, current_shadow, now, sync_parent_directory)
+        self.persist_with_parent_sync(
+            current,
+            current_shadow,
+            current_agents,
+            now,
+            sync_parent_directory,
+        )
     }
 
+    /// Stdio writes deltas: many children share `stdio`, each adding only
+    /// what it observed since its own last successful write.
     fn persist_with_parent_sync(
         &mut self,
         current: Snapshot,
         current_shadow: BTreeMap<String, u64>,
+        current_agents: BTreeMap<String, u64>,
         now: u64,
         sync_parent: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<()> {
         let snapshot_delta = snapshot_delta(&current, &self.previous_snapshot);
         let shadow_delta = map_delta(&current_shadow, &self.previous_shadow);
+        let agents_delta = map_delta(&current_agents, &self.previous_agents);
         if snapshot_delta.total == 0 && shadow_delta.values().all(|count| *count == 0) {
             if self.parent_sync_pending {
                 sync_parent(&self.window_path)?;
@@ -341,14 +321,16 @@ impl DurableTelemetrySink {
         }
 
         let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
-        let mut window = read_window_file(&self.window_path)?;
-        add_snapshot(&mut window.snapshot, &snapshot_delta)?;
+        let mut window = window::read_window_v2(&self.window_path)?;
+        add_snapshot(&mut window.stdio, &snapshot_delta)?;
         add_map(&mut window.tools_list_shadow, &shadow_delta)?;
+        add_map(&mut window.missing_revision_agents, &agents_delta)?;
         window.updated_at_unix_seconds = window.updated_at_unix_seconds.max(now);
-        validate_window(&window)?;
-        write_window_atomic(&self.window_path, &window)?;
+        window::validate_window_v2(&window)?;
+        write_json_atomic(&self.window_path, &window)?;
         self.previous_snapshot = current;
         self.previous_shadow = current_shadow;
+        self.previous_agents = current_agents;
         self.parent_sync_pending = true;
         sync_parent(&self.window_path)?;
         self.parent_sync_pending = false;
@@ -383,18 +365,37 @@ impl Registry {
         client: &str,
         transport: Transport,
     ) {
-        self.total += 1;
+        self.observe_request_from(requested_revision, client, transport, None);
+    }
+
+    /// [`Self::observe_request`] with the caller's raw User-Agent, reduced to a
+    /// bounded family before anything is stored.
+    pub(crate) fn observe_request_from(
+        &mut self,
+        requested_revision: Option<&str>,
+        client: &str,
+        transport: Transport,
+        user_agent: Option<&str>,
+    ) {
         let client = client_label(client);
+        let revision = revision_label(requested_revision);
+        self.total += 1;
         *self.by_client.entry(client.to_string()).or_insert(0) += 1;
         *self
             .by_transport
             .entry(transport.as_str().to_string())
             .or_insert(0) += 1;
-        match revision_label(requested_revision) {
-            Some(rev) => {
-                *self.by_revision.entry(rev.to_string()).or_insert(0) += 1;
-            }
+        match revision {
+            Some(rev) => *self.by_revision.entry(rev.to_string()).or_insert(0) += 1,
             None => self.unattributed += 1,
+        }
+        let slice = self.per_transport.entry(transport.as_str()).or_default();
+        window::count_snapshot(slice, revision, client, transport);
+        if revision.is_none() {
+            *self
+                .missing_revision_agents
+                .entry(window::missing_revision_agent(client, user_agent).to_string())
+                .or_insert(0) += 1;
         }
     }
 
@@ -765,56 +766,6 @@ pub fn durable_window_path(data_dir: &Path) -> PathBuf {
         .join(DURABLE_WINDOW_FILE)
 }
 
-/// Load and validate the operator-readable production window.
-pub fn load_durable_window(data_dir: &Path) -> io::Result<DurableWindow> {
-    read_window_file(&durable_window_path(data_dir))
-}
-
-/// Evaluate the production decision from exact-window HTTP and stdio evidence.
-///
-/// HTTP observations live in Prometheus while stdio observations live in the
-/// durable window. A revision is eligible only when both independent sources
-/// mark it below the threshold for the same window.
-pub fn production_retirement_decision(
-    data_dir: &Path,
-    http_snapshot: &Snapshot,
-    http_started_at_unix_seconds: u64,
-) -> io::Result<Result<Vec<String>, RetirementBlocked>> {
-    production_retirement_decision_at(
-        data_dir,
-        http_snapshot,
-        http_started_at_unix_seconds,
-        unix_seconds()?,
-    )
-}
-
-/// Time-injected production decision used by deterministic tests and offline exports.
-pub fn production_retirement_decision_at(
-    data_dir: &Path,
-    http_snapshot: &Snapshot,
-    http_started_at_unix_seconds: u64,
-    ended_at_unix_seconds: u64,
-) -> io::Result<Result<Vec<String>, RetirementBlocked>> {
-    let window = load_durable_window(data_dir)?;
-    if http_started_at_unix_seconds != window.started_at_unix_seconds {
-        return Ok(Err(RetirementBlocked::WindowMisaligned));
-    }
-    let elapsed =
-        Duration::from_secs(ended_at_unix_seconds.saturating_sub(http_started_at_unix_seconds));
-    let stdio_candidates = match window.retirement_decision_at(ended_at_unix_seconds) {
-        Ok(candidates) => candidates,
-        Err(blocked) => return Ok(Err(blocked)),
-    };
-    let http_candidates = match retire_revisions(http_snapshot, elapsed) {
-        Ok(candidates) => candidates,
-        Err(blocked) => return Ok(Err(blocked)),
-    };
-    Ok(Ok(stdio_candidates
-        .into_iter()
-        .filter(|candidate| http_candidates.contains(candidate))
-        .collect()))
-}
-
 fn snapshot_delta(current: &Snapshot, previous: &Snapshot) -> Snapshot {
     Snapshot {
         by_revision: map_delta(&current.by_revision, &previous.by_revision),
@@ -865,61 +816,6 @@ fn checked_counter_add(current: u64, increment: u64) -> io::Result<u64> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "telemetry counter overflow"))
 }
 
-fn read_window_file(path: &Path) -> io::Result<DurableWindow> {
-    let bytes = std::fs::read(path)?;
-    let window: DurableWindow = serde_json::from_slice(&bytes)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    validate_window(&window)?;
-    Ok(window)
-}
-
-fn validate_window(window: &DurableWindow) -> io::Result<()> {
-    if window.schema_version != DURABLE_WINDOW_SCHEMA {
-        return Err(invalid_window("unsupported durable telemetry schema"));
-    }
-    if window.updated_at_unix_seconds < window.started_at_unix_seconds {
-        return Err(invalid_window("window update precedes its start"));
-    }
-    validate_bounded_keys(
-        &window.snapshot.by_revision,
-        MEASURED_REVISIONS
-            .iter()
-            .copied()
-            .chain(std::iter::once(OTHER_REVISION)),
-        "revision",
-    )?;
-    validate_bounded_keys(
-        &window.snapshot.by_client,
-        MEASURED_CLIENTS.iter().copied(),
-        "client",
-    )?;
-    validate_bounded_keys(
-        &window.snapshot.by_transport,
-        MEASURED_TRANSPORTS
-            .iter()
-            .map(|transport| transport.as_str()),
-        "transport",
-    )?;
-    if checked_counter_sum(window.snapshot.by_revision.values().copied())?
-        .checked_add(window.snapshot.unattributed)
-        != Some(window.snapshot.total)
-    {
-        return Err(invalid_window("revision counters do not equal total"));
-    }
-    if checked_counter_sum(window.snapshot.by_client.values().copied())? != window.snapshot.total {
-        return Err(invalid_window("client counters do not equal total"));
-    }
-    if checked_counter_sum(window.snapshot.by_transport.values().copied())? != window.snapshot.total
-    {
-        return Err(invalid_window("transport counters do not equal total"));
-    }
-    let expected_shadow = empty_shadow_counts();
-    if window.tools_list_shadow.keys().ne(expected_shadow.keys()) {
-        return Err(invalid_window("tools/list shadow labels are incomplete"));
-    }
-    Ok(())
-}
-
 fn validate_bounded_keys<'a>(
     values: &BTreeMap<String, u64>,
     allowed: impl Iterator<Item = &'a str>,
@@ -949,8 +845,8 @@ fn unix_seconds() -> io::Result<u64> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
-    let bytes = serde_json::to_vec_pretty(window)
+fn write_json_atomic(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temporary = path.with_extension("json.tmp");
     {
@@ -1004,8 +900,41 @@ pub fn observe_inbound_request(
     session_id: Option<&str>,
     transport: Transport,
 ) {
+    let _ = observe_inbound_request_from(
+        request,
+        params,
+        method,
+        protocol_header,
+        session_id,
+        transport,
+        None,
+    );
+}
+
+/// An HTTP request's caller facts for [`observe_inbound_request_from`].
+pub(crate) struct HttpCaller<'a> {
+    /// Raw `User-Agent`; only ever becomes a bounded family key.
+    pub user_agent: Option<&'a str>,
+    /// The serving gateway's U1 seal (`MetaMcp::window_seal`).
+    pub sealed: &'a std::sync::atomic::AtomicBool,
+}
+
+/// [`observe_inbound_request`] for an HTTP caller. `false` means the serving
+/// gateway's U1 segment has sealed: the caller must refuse the request, which
+/// is then neither counted nor served. The check runs under the registry lock
+/// the seal is taken under, so a counted request is always in the seal.
+#[must_use]
+pub(crate) fn observe_inbound_request_from(
+    request: &Value,
+    params: Option<&Value>,
+    method: &str,
+    protocol_header: Option<&str>,
+    session_id: Option<&str>,
+    transport: Transport,
+    http: Option<HttpCaller<'_>>,
+) -> bool {
     if method.starts_with("notifications/") {
-        return;
+        return true;
     }
     let initialize_params = (method == "initialize").then_some(params).flatten();
     let explicit_requested = request_meta_value(request, params, META_PROTOCOL_VERSION)
@@ -1024,6 +953,13 @@ pub fn observe_inbound_request(
     let mut reg = global()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if http
+        .as_ref()
+        .is_some_and(|caller| caller.sealed.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        return false;
+    }
+    let user_agent = http.and_then(|caller| caller.user_agent);
     let previous = (transport == Transport::Stdio)
         .then(|| reg.session_attribution(session_id))
         .flatten();
@@ -1049,7 +985,7 @@ pub fn observe_inbound_request(
             },
         );
     }
-    reg.observe_request(requested_label, client, transport);
+    reg.observe_request_from(requested_label, client, transport, user_agent);
     drop(reg);
     emit_request_metrics(requested_label, client, transport);
     tracing::debug!(
@@ -1058,6 +994,7 @@ pub fn observe_inbound_request(
         transport = transport.as_str(),
         "mcp728.u1 inbound request observation"
     );
+    true
 }
 
 /// Record the extensions a client negotiated for one `tools/call`.
@@ -1240,6 +1177,9 @@ pub(crate) fn reset_global_for_tests() {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .reset();
 }
+
+#[path = "protocol_revision_telemetry_window.rs"]
+pub(crate) mod window;
 
 #[cfg(test)]
 #[path = "protocol_revision_telemetry_lock_tests.rs"]
@@ -1541,58 +1481,5 @@ mod tests {
             }),
             1
         );
-    }
-
-    #[test]
-    fn committed_window_is_not_counted_twice_after_parent_sync_failure() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let mut sink = DurableTelemetrySink::open(directory.path()).expect("durable sink");
-        let mut registry = Registry::new();
-        registry.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
-
-        let error = sink
-            .persist_with_parent_sync(registry.snapshot(), registry.shadow_snapshot(), 1, |_| {
-                Err(io::Error::other("injected parent sync failure"))
-            })
-            .expect_err("parent sync must fail after the rename");
-        assert_eq!(error.kind(), io::ErrorKind::Other);
-        assert!(sink.parent_sync_pending);
-        assert_eq!(
-            load_durable_window(directory.path())
-                .unwrap()
-                .snapshot
-                .total,
-            1
-        );
-
-        sink.persist_with_parent_sync(registry.snapshot(), registry.shadow_snapshot(), 2, |_| {
-            Ok(())
-        })
-        .expect("retry pending parent sync");
-        assert!(!sink.parent_sync_pending);
-        assert_eq!(
-            load_durable_window(directory.path())
-                .unwrap()
-                .snapshot
-                .total,
-            1
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn window_file_is_owner_only_in_an_open_directory_and_over_a_stale_temp() {
-        // WT-ASSERT 1718-W5: the window is created private, and a stale temp
-        // planted with an open DACL does not carry it into the window file.
-        use crate::private_fs::test_support::{assert_owner_only, everyone_full_dir};
-
-        let dir = everyone_full_dir("1718-W5");
-        let path = dir.path().join("window.json");
-        std::fs::write(path.with_extension("json.tmp"), "stale").unwrap();
-
-        write_window_atomic(&path, &DurableWindow::empty(1)).unwrap();
-
-        // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
-        assert_owner_only("1718-W5", &path, false);
     }
 }

@@ -1289,6 +1289,11 @@ pub struct ServerConfig {
     /// in-flight drain may wait (#2147).
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
+    /// RFC-0060 U1: whether HTTP `serve` records the durable per-transport
+    /// protocol-revision window (`protocol-revision-telemetry/window.json`).
+    /// See [`ProtocolRevisionWindow`]. RFC-0060 sets no default; it is `off`.
+    #[serde(default)]
+    pub protocol_revision_window: ProtocolRevisionWindow,
     /// Maximum request body size (bytes) on every route. Read once at startup:
     /// an oversize body gets HTTP 413.
     pub max_body_size: usize,
@@ -1343,6 +1348,19 @@ pub struct ServerConfig {
     pub cluster_domain: Option<String>,
 }
 
+/// `server.protocol_revision_window`: the RFC-0060 U1 measurement mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtocolRevisionWindow {
+    /// Record nothing for HTTP; shutdown behaves as in 3.5.x.
+    #[default]
+    Off,
+    /// Record the window. A shutting-down gateway seals its segment on the
+    /// shutdown signal and refuses (HTTP 503) any request that reaches counting
+    /// after the seal, so every served request is in the window.
+    Record,
+}
+
 /// `server.cleartext_http`: who protects credentials sent over plain HTTP on a
 /// network bind. Every value but `refuse` is logged at WARN on each start.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1392,6 +1410,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 39400,
             shutdown_timeout: Duration::from_secs(30),
+            protocol_revision_window: ProtocolRevisionWindow::Off,
             max_body_size: 10 * 1024 * 1024,
             public_url: None,
             allow_unauthenticated_network_bind: false,
@@ -1411,6 +1430,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("host", &self.host)
             .field("port", &self.port)
             .field("shutdown_timeout", &self.shutdown_timeout)
+            .field("protocol_revision_window", &self.protocol_revision_window)
             .field("max_body_size", &self.max_body_size)
             .field("public_url", &self.public_url)
             .field(

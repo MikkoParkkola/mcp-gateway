@@ -36,7 +36,10 @@ fn concurrent_sinks_count_every_request() {
             .expect("a locked persist never fails");
     }
     assert_eq!(
-        load_durable_window(&root).unwrap().snapshot.total,
+        window::read_window_v2(&window::window_paths(&root).0)
+            .unwrap()
+            .stdio
+            .total,
         u64::try_from(SINKS).unwrap(),
         "a concurrent persist dropped another sink's count"
     );

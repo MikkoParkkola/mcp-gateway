@@ -665,14 +665,22 @@ async fn backend_handler_inner(
     let session_id = inbound_headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok());
-    crate::protocol_revision_telemetry::observe_inbound_request(
+    if !crate::protocol_revision_telemetry::observe_inbound_request_from(
         &json_request,
         params.as_ref(),
         &method,
         protocol_header,
         session_id,
         crate::protocol_revision_telemetry::Transport::Http,
-    );
+        Some(crate::protocol_revision_telemetry::HttpCaller {
+            user_agent: inbound_headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            sealed: &state.meta_mcp.window_seal,
+        }),
+    ) {
+        return super::helpers::window_sealed_response(&json_request);
+    }
 
     debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
 

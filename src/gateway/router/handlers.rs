@@ -699,14 +699,22 @@ async fn meta_mcp_dispatch(
     let protocol_header = headers
         .get("mcp-protocol-version")
         .and_then(|value| value.to_str().ok());
-    crate::protocol_revision_telemetry::observe_inbound_request(
+    if !crate::protocol_revision_telemetry::observe_inbound_request_from(
         &request,
         params.as_ref(),
         &method,
         protocol_header,
         Some(session_id.as_str()),
         crate::protocol_revision_telemetry::Transport::Http,
-    );
+        Some(crate::protocol_revision_telemetry::HttpCaller {
+            user_agent: headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+            sealed: &state.meta_mcp.window_seal,
+        }),
+    ) {
+        return super::helpers::window_sealed_response(&request).into_response();
+    }
 
     // Which protocol generation is this request written against? Decided per
     // request, not per connection: 2026-07-28 removed the handshake precisely so
