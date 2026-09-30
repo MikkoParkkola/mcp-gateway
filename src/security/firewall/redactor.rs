@@ -250,19 +250,33 @@ impl Default for Redactor {
     }
 }
 
+/// How far behind the furthest end already matched a restart may begin. The
+/// longest fixed-length pattern is 66 bytes, and a match of an unbounded
+/// pattern can only overlap the end of another by starting in its short
+/// prefix, since the earlier greedy body stopped where its class ends.
+const OVERLAP_WINDOW: usize = 256;
+
 /// Every match of `re` in `text`, including matches that overlap one another:
 /// `find_iter` resumes after a match's end, so a second credential starting
 /// inside the first would be missed. Each search restarts one char after the
-/// previous match's start.
-// ponytail: a search per match start; every pattern opens with a literal
-// prefix, so restarts only land on the next prefix occurrence.
+/// previous match's start, but never more than [`OVERLAP_WINDOW`] behind the
+/// covered end: a restart deep inside a long match would rescan it to its end,
+/// quadratic on text like a repeated token prefix.
 fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
-    let mut at = 0;
+    let (mut at, mut covered) = (0, 0);
     while let Some(m) = re.find_at(text, at) {
         spans.push((m.start(), m.end()));
-        // No pattern matches empty text, so `m.start()` is inside `text`.
-        at = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
+        covered = covered.max(m.end());
+        if m.start() == text.len() {
+            break; // an empty match at the end; no pattern matches empty today
+        }
+        let next = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
+        let mut floor = covered.saturating_sub(OVERLAP_WINDOW);
+        while !text.is_char_boundary(floor) {
+            floor -= 1;
+        }
+        at = next.max(floor);
     }
     spans
 }
@@ -671,9 +685,7 @@ mod tests {
         assert_eq!(v, json!({ "cfg [REDACTED:credential] end": 1 }));
         assert_eq!(findings.len(), 2, "{findings:?}");
         for finding in &findings {
-            for fragment in ["abcd", "wxyz", "EXAMPLEKEY"] {
-                assert!(!finding.matched.contains(fragment), "{finding:?}");
-            }
+            assert_eq!(finding.matched, "cfg [REDACTED:credential] end");
         }
     }
 
@@ -712,7 +724,8 @@ mod tests {
         let mut v = json!({ overlapping_aws_keys(): 1 });
         let findings = redactor().scan_and_redact(&mut v);
         assert_eq!(v, json!({ "[REDACTED:credential] end": 1 }));
-        assert!(!findings[0].matched.contains("BBBB"), "{findings:?}");
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].matched, "[REDACTED:credential] end");
     }
 
     /// Touching tokens share one marker; multibyte text around them is kept.
@@ -733,5 +746,24 @@ mod tests {
         for re in &redactor().regexes {
             assert!(!re.is_match(""), "{re}");
         }
+    }
+
+    /// A repeated prefix makes every position start a match that runs to the
+    /// end of the text. Restarting deep inside it would rescan the text from
+    /// every start: about 10^10 steps here, where the bounded restart takes a
+    /// few milliseconds.
+    #[test]
+    fn a_repeated_token_prefix_is_redacted_in_linear_time() {
+        let text = concat!("xo", "xb-").repeat(100_000);
+        let started = std::time::Instant::now();
+        let mut v = json!({ "t": text });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(10),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(v["t"], "[REDACTED:credential]");
     }
 }

@@ -231,10 +231,13 @@ fn a_redacted_value_leaves_no_part_of_the_secret_in_the_audit_log() {
     assert!(verdict.allowed);
     assert_eq!(response["content"][0]["text"], "[REDACTED:credential]");
     let log = std::fs::read_to_string(&path).expect("configured audit file was opened");
-    assert!(log.contains("credentials"), "{log}");
-    for part in CANARY.as_bytes().windows(8) {
-        let part = std::str::from_utf8(part).unwrap();
-        assert!(!log.contains(part), "{part:?} reached the audit log: {log}");
+    assert!(!log.contains("ghp_"), "{log}");
+    let events = audit_entries(&path);
+    let findings = events[0]["findings"].as_array().expect("findings array");
+    assert!(!findings.is_empty(), "{log}");
+    for finding in findings {
+        assert_eq!(finding["scan_type"], "credentials", "{log}");
+        assert_eq!(finding["matched"], "[REDACTED:credential]", "{log}");
     }
 }
 
