@@ -43,6 +43,8 @@ pub use dashboard::DashboardBootstrap;
 pub(crate) use dashboard::{Now, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
+#[path = "auth_handoff.rs"]
+mod handoff;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 use bootstrap::{bootstrap_param, try_dashboard_bootstrap};
 
@@ -723,6 +725,16 @@ pub async fn auth_middleware(
         return next.run(request).await;
     }
 
+    // The handoff code exchange (#2130), before any cookie is judged: a
+    // browser holding a live or a dead session cookie must still sign in.
+    let mut request = match handoff::try_handoff(&state, request).await {
+        Ok(response) => return response,
+        Err(request) => request,
+    };
+    // A dead cookie beside a fresh link is decided by the link.
+    let is_bootstrap = request.uri().path() == "/dashboard"
+        && request.uri().query().and_then(bootstrap_param).is_some();
+
     // An opaque dashboard session, validated against this process's store
     // rather than treated as a credential.
     //
@@ -762,8 +774,6 @@ pub async fn auth_middleware(
         // operator is re-entering, exactly when a stale cookie is present), or
         // a public path, which needs no credential at all.
         let has_bearer = presented_credential(request.headers()).is_some();
-        let is_bootstrap = request.uri().path() == "/dashboard"
-            && request.uri().query().and_then(bootstrap_param).is_some();
         if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
             auth_failure(kind);
             return session_ended_response(cookie_secure(&state));

@@ -114,17 +114,6 @@ pub(super) async fn dashboard_link(
     } else {
         None
     };
-    if cookies_are_secure(&state.live_config) && !state.live_config.running().mtls.enabled {
-        // The session cookie would be `Secure` over a plain-HTTP loopback
-        // listener, and a browser discards it: the link would be spent for
-        // nothing. Same refusal as the startup banner's.
-        return flat_error(
-            StatusCode::CONFLICT,
-            "server.public_url is HTTPS but this listener is plain HTTP, so the \
-             session cookie would be discarded. Enable mtls or remove public_url.",
-        )
-        .into_response();
-    }
     // Host, port and TLS are restart-only: the running listener's values, not
     // a reloaded file's, say where a browser can reach this process.
     let running = state.live_config.running();

@@ -88,8 +88,10 @@ async fn code_from_link(state: &Arc<AppState>) -> (Reply, String) {
         .body
         .split_once(r#"<code id="handoff">"#)
         .and_then(|(_, rest)| rest.split_once("</code>"))
-        .map(|(code, _)| code.to_string())
-        .unwrap_or_else(|| panic!("a code on the page: {}", out.body));
+        .map_or_else(
+            || panic!("a code on the page: {}", out.body),
+            |(code, _)| code.to_string(),
+        );
     (out, code)
 }
 
@@ -233,4 +235,33 @@ async fn a_link_is_minted_behind_an_https_front() {
         "{}",
         out.body
     );
+}
+
+/// A code older than a minute is refused.
+#[tokio::test]
+async fn a_code_expires_after_a_minute() {
+    let (state, _dir) = behind_https_front().await;
+    let (_, code) = code_from_link(&state).await;
+    state
+        .dashboard_bootstrap
+        .backdate_handoff(Duration::from_secs(61));
+
+    let out = send(&state, submit(&code, None)).await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
+}
+
+/// A code whose minting credential expired between the two steps is refused
+/// rather than turned into a session that is already dead.
+#[tokio::test]
+async fn a_code_past_its_credential_cap_is_refused() {
+    let (state, _dir) = behind_https_front().await;
+    let past = std::time::SystemTime::now() - Duration::from_secs(1);
+    let code = state
+        .dashboard_bootstrap
+        .mint_handoff(crate::gateway::auth::Now::read(), Some(past));
+
+    let out = send(&state, submit(&code, None)).await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
 }
