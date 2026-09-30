@@ -387,7 +387,7 @@ EOF join (unchanged from rev 2). `channel.close()` fails held prompts; dispatche
 client stops reading stdout (`server/stdio_writer.rs`). The fix joins the writer under the same
 bound and aborts it on timeout. The test uses a duplex whose read side is never drained.
 
-Not done: forwarding the cancel upstream as the backend's own `notifications/cancelled`. The
+Not done (tracked as #2495, 4.0.1): forwarding the cancel upstream as the backend's own `notifications/cancelled`. The
 backend call may keep running after the abort, as it does today when an HTTP client disconnects.
 That is a separate feature, recorded here rather than dropped.
 
@@ -434,6 +434,15 @@ public API or config change.
    then on, the only thing that keeps a stdio-owned task unreadable to an HTTP principal is the
    reserved owner: the stdio owner's principal is NUL-prefixed, and no HTTP owner text can be
    (item 1's guard). The store keeps no other owner field that a lookup could match on instead.
+   **I4 requirement from the I1 final review (GLM, F1).** A stdio-owned task is executed and
+   recovered by contexts the task worker and recovery path rebuild
+   (`task_service/execution/context.rs`, `router/handlers/tasks.rs:292`). Those set
+   `stdio_nonce: None`, so, as built in I1, they would key retained results by the text
+   `"stdio"`, not by the reserved owner. A recovered stdio task would then miss the entry its
+   original dispatch wrote and could re-execute. I4 must carry the owner through: the rebuilt
+   context keys under the task's persisted owner (the reserved value), never under text. An I4
+   test recovers a completed stdio task after a restart and asserts no second backend dispatch.
+   Not reachable in I1: stdio creates no tasks before I4 (`task: None`).
 3. Route. The three `tasks/*` arms and task-augmented `tools/call` take a crate-private
    `TaskRoute { service, executor, owner }` instead of `&AppState`, extracted from the arms as
    they stand. HTTP builds it from `route_task_owner`; stdio builds it from (1).
@@ -537,5 +546,9 @@ failing tests are written.
   Improvement taken: D6 reuses `ExecutionAdmission::owner`'s framing. Improvement left to the
   lead: a tracked id for forwarding the cancel upstream (external issue creation needs
   authorization).
+- I1 final review, two seats, on #2494: `kimi-review` SHIP and `synthetic-review` SHIP. All three
+  kimi improvements taken, plus GLM's rename; GLM's MEDIUM (rebuilt task contexts carry no mark)
+  is recorded in D6 as an I4 requirement, since it is not reachable before I4. The out-of-scope
+  upstream cancel is tracked as #2495 (4.0.1).
 - Rev 4 also records D1 as built in #2494: a reserved NUL-prefixed owner principal replaces rev
   3's "own domain string", and catalogue tag plumbing is dropped (no decision depends on it).
