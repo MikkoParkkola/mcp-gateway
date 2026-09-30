@@ -68,6 +68,17 @@ impl TaskStore {
         .map_err(|_| StoreError::Storage)?
     }
 
+    /// Test-only: the targets stored for `id`, whatever owner holds it.
+    #[cfg(test)]
+    pub(crate) fn targets_for_test(&self, id: &str) -> Vec<Target> {
+        let state = self.0.state();
+        state
+            .entries
+            .get(id)
+            .map(|entry| entry.record.targets.clone())
+            .unwrap_or_default()
+    }
+
     /// Test-only: turn `id` into a row written before targets existed.
     #[cfg(test)]
     pub(crate) fn strip_targets_for_test(&self, id: &str) {

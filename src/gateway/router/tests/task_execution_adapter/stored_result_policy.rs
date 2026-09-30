@@ -280,28 +280,70 @@ async fn a_failed_plan_step_is_still_recorded_and_reauthorized() {
     install_playbook(&state, TOOL);
     withhold(&state, TOOL);
     let id = task_id(&post(&state, "key-a", playbook_call(10, "b-failed-step")).await);
-    let mut body = get_task(&state, "key-a", &id).await;
+    let store = &state.task_executor.service.store;
+    let mut recorded = Vec::new();
     for _ in 0..2_000 {
-        if body.get("error").is_some() || is_terminal(&status_of(&body)) {
+        recorded = store.targets_for_test(&id);
+        if !recorded.is_empty() {
             break;
         }
         tokio::task::yield_now().await;
-        body = get_task(&state, "key-a", &id).await;
     }
-    assert_refused(&body, "withheld");
+    let step = crate::gateway::task_service::Target {
+        server: BACKEND.to_owned(),
+        tool: TOOL.to_owned(),
+    };
+    std::assert_eq!(recorded, vec![step], "the dispatched step is stored");
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
     std::assert_eq!(mock.calls(), 0, "the step never reached the backend");
 }
 
-/// A result too large for the record settles the task Failed with no output.
+/// The fixture's task runtime, reopened with a small per-record byte budget.
+async fn state_with_record_budget(
+    mock: &Arc<MockBackend>,
+    record_bytes: usize,
+) -> (Arc<AppState>, tempfile::TempDir, tempfile::TempDir) {
+    let (state, first) = state_with(mock).await;
+    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    let dir = tempfile::tempdir().expect("a private task-store directory");
+    let limits = crate::gateway::task_service::StoreLimits {
+        record_bytes,
+        ..crate::gateway::task_service::StoreLimits::default()
+    };
+    let (service, executor) = crate::gateway::task_service::open_runtime_with_admission(
+        &dir.path().join("tasks"),
+        crate::config::TasksConfig::default().max_workers,
+        limits,
+        Arc::clone(&app.subscriptions),
+        Arc::clone(app.meta_mcp.execution_admission()),
+    )
+    .await
+    .expect("the small-budget task store opens");
+    (app.tasks, app.task_executor) = (service, executor);
+    (Arc::new(app), first, dir)
+}
+
+/// A result over the record budget settles Failed with the budget's own error,
+/// not a firewall refusal, and keeps no output.
 #[tokio::test]
 async fn a_result_over_the_record_budget_settles_failed_without_output() {
-    let huge = "q".repeat(600_000);
+    let filler = "q".repeat(20_000);
     let mock = MockBackend::answering(Answer::Result(
-        json!({ "content": [{ "type": "text", "text": huge }] }),
+        json!({ "content": [{ "type": "text", "text": filler }] }),
     ));
-    let (state, _store) = state_with(&mock).await;
+    let (state, _first, _second) = state_with_record_budget(&mock, 8 * 1024).await;
     let created = post(&state, "key-a", task_invoke(11, "b-huge", json!({}))).await;
     let done = poll_until_terminal(&state, "key-a", &task_id(&created)).await;
-    std::assert_eq!(status_of(&done), "failed", "{}", &done.to_string()[..200]);
-    assert!(!done.to_string().contains("qqqqqqqq"), "no output is kept");
+    std::assert_eq!(status_of(&done), "failed", "{done}");
+    std::assert_eq!(
+        done.pointer("/result/error/message"),
+        Some(&json!("the task's result exceeds the record size limit")),
+        "{done}"
+    );
+    std::assert_eq!(done.pointer("/result/error/code"), Some(&json!(-32603)));
+    assert!(!done.to_string().contains("Response blocked"), "{done}");
+    assert!(
+        !done.to_string().contains(&"q".repeat(8)),
+        "no output is kept"
+    );
 }
