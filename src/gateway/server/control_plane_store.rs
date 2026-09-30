@@ -297,6 +297,7 @@ mod tests {
     /// A `.write-probe` symlink planted in the store dir must not become a
     /// write through the gateway's privileges. Chosen outcome: the probe
     /// unlinks the link and succeeds, and the link's target keeps its bytes.
+    // Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
     #[cfg(unix)]
     #[test]
     fn write_probe_does_not_follow_a_planted_symlink() {

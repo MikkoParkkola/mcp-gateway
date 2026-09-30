@@ -432,6 +432,7 @@ fn file_alias_across_slots_refused() {
 
 /// A Kubernetes Secret volume reaches each key through a `..data` symlink, so
 /// two spellings of one mounted file must still alias.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn file_alias_through_a_symlink_refused() {

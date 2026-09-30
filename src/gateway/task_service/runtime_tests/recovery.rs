@@ -369,6 +369,7 @@ fn rewrite_as_v1(dir: &std::path::Path, id: &str) {
     object.insert("version".to_owned(), json!(1));
     object.remove("dispatched");
     std::fs::write(&path, serde_json::to_vec(&after).unwrap()).unwrap();
+    // Unix-only: the fixture restores the 0600 mode the loader requires; Windows has no mode bits.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

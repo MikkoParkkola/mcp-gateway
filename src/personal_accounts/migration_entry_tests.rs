@@ -109,6 +109,7 @@ impl Fixture {
         if let Some(body) = body {
             let path = legacy.token_path(BACKEND, RESOURCE);
             std::fs::write(&path, body).expect("seed 3.x record");
+            // POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt as _;

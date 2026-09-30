@@ -27,14 +27,17 @@ pub struct DashboardBootstrap {
     sessions: Mutex<HashMap<String, SessionTimes>>,
     /// The code a loopback redemption hands to the public origin (#2130), while
     /// unused: at most one, since the bootstrap value it comes from is single use.
+    #[cfg(feature = "webui")]
     handoff: Mutex<Option<Handoff>>,
 }
 
 /// How long a handoff code may wait to be entered on the public origin.
+#[cfg(feature = "webui")]
 pub(crate) const HANDOFF_TTL: Duration = Duration::from_secs(60);
 
 /// A one-time code minted by a loopback redemption, carrying that redemption's
 /// credential cap to the session it opens.
+#[cfg(feature = "webui")]
 #[derive(Debug)]
 struct Handoff {
     value: String,
@@ -139,6 +142,7 @@ impl DashboardBootstrap {
             value: Mutex::new(Some((random_value(), None))),
             bound_port: AtomicU16::new(0),
             sessions: Mutex::new(HashMap::new()),
+            #[cfg(feature = "webui")]
             handoff: Mutex::new(None),
         }
     }
@@ -230,6 +234,7 @@ impl DashboardBootstrap {
 
     /// Mint the code a loopback redemption shows, replacing any unused one. It
     /// carries `cap`, the redeemed link's credential cap, to the session.
+    #[cfg(feature = "webui")]
     pub(crate) fn mint_handoff(&self, now: Now, cap: Option<SystemTime>) -> String {
         let value = random_value();
         if let Ok(mut slot) = self.handoff.lock() {
@@ -246,6 +251,7 @@ impl DashboardBootstrap {
     /// [`HANDOFF_TTL`] old on both clocks, and its cap has not passed. A wrong
     /// value spends nothing: anyone could otherwise cancel an operator's
     /// sign-in. Compared in constant time; every code has the same length.
+    #[cfg(feature = "webui")]
     pub(crate) fn take_handoff(&self, candidate: &str, now: Now) -> Option<Redemption> {
         use subtle::ConstantTimeEq as _;
         let mut slot = self.handoff.lock().ok()?;
@@ -270,7 +276,7 @@ impl DashboardBootstrap {
     }
 
     /// Test seam: move both clocks of the handoff code back by `by`.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "webui"))]
     pub(crate) fn backdate_handoff(&self, by: Duration) {
         if let Ok(mut slot) = self.handoff.lock()
             && let Some(live) = slot.as_mut()
