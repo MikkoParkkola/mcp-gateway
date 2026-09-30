@@ -96,7 +96,7 @@ row 12). Test-only: `meta_mcp/test_callers.rs`, `meta_mcp/direct_route.rs:163`,
 
 These are recorded here, not fixed here. Each is routed through the 4.0 lane rules.
 
-- **G1** (a red test is in #2464; the CI result decides it). A modern `tools/call` without a `_meta` traceparent may be
+- **G1** (confirmed: red in CI on #2464; the fix is in #2464). A modern `tools/call` without a `_meta` traceparent may be
   logged under `session_id: ""` with `correlation_source: session_id`
   (`handlers.rs:1724`, `invoke.rs:1345-1352`, `audit.rs:106`).
   - This contradicts MIK-7215.CONTROL.3a, whose evidence covers only the task path.
