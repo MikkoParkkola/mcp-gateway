@@ -126,14 +126,14 @@ pub(super) fn try_dashboard_bootstrap(
             // the public origin instead (#2130): this page shows a one-time
             // code the operator enters there, in a same-origin form, so the
             // code never travels in a URL and no proxy header is trusted.
-            if let Some(origin) = super::handoff::public_origin(state)
-                && let Some(Redemption { not_after }) =
-                    state.dashboard_bootstrap.consume_capped(&candidate)
-            {
-                let code = state
-                    .dashboard_bootstrap
-                    .mint_handoff(Now::read(), not_after);
-                return Some(super::handoff::code_page(&origin, &code));
+            // Only a build with the dashboard serves the page the code is
+            // entered on; without it this listener has no `/dashboard` route.
+            #[cfg(feature = "webui")]
+            let handed_off = super::handoff::hand_off(state, &candidate);
+            #[cfg(not(feature = "webui"))]
+            let handed_off: Option<Response> = None;
+            if let Some(page) = handed_off {
+                return Some(page);
             }
             warn!("Dashboard bootstrap refused: HTTPS public_url on a plain-HTTP listener");
             return Some(axum::response::IntoResponse::into_response((
