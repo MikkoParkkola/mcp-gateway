@@ -302,7 +302,10 @@ async fn set_profile_refusal_frees_the_key_and_success_replays() {
             "profile-key",
         ))
         .await;
-    assert_eq!(set["result"], replayed["result"], "the success must replay");
+    assert_eq!(
+        set["result"], replayed["result"],
+        "the success must replay: {replayed}"
+    );
 }
 
 /// T1.7. Without a reload context the branch is refused before dispatch.
