@@ -205,24 +205,21 @@ impl MetaMcp {
         } else {
             return replay;
         };
-        let facts = match audit {
-            Some(facts) => facts,
-            // A result stored before #2472 carries no facts: derive them from
-            // the replayed response, where a wrapped tool error reads as `ok`.
-            None => {
-                let result = match (&replay.result, &replay.error) {
-                    (Some(value), _) => Ok(value.clone()),
-                    (None, Some(error)) => Err(Error::json_rpc(error.code, error.message.clone())),
-                    (None, None) => return replay,
-                };
-                let Some(outcome) = AuditOutcome::from_result(&result) else {
-                    return replay;
-                };
-                super::super::admission::ReplayAudit::new(
-                    outcome,
-                    result.as_ref().ok().map(sha256_of),
-                )
-            }
+        // The store is process memory, so this build wrote every entry; facts
+        // are absent only when the first run wrote no record. Derive them from
+        // the replayed response then, where a wrapped tool error reads as `ok`.
+        let facts = if let Some(facts) = audit {
+            facts
+        } else {
+            let result = match (&replay.result, &replay.error) {
+                (Some(value), _) => Ok(value.clone()),
+                (None, Some(error)) => Err(Error::json_rpc(error.code, error.message.clone())),
+                (None, None) => return replay,
+            };
+            let Some(outcome) = AuditOutcome::from_result(&result) else {
+                return replay;
+            };
+            super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
         };
         let trace_id =
             crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
