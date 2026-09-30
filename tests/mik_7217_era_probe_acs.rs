@@ -65,8 +65,11 @@ const PROBE_CAP_ENV: &str = "MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS";
 fn widen_probe_cap() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        // SAFETY: runs before any backend in this process starts a probe, and
-        // nothing here reads the environment through a foreign `getenv`.
+        // SAFETY: tests run in parallel threads, so other backends may already
+        // be probing. std serialises `set_var` against its own env reads
+        // (`std::env::var`) and against `Command::spawn`, which holds the env
+        // read lock. The peers are stdio children with no DNS, so no foreign
+        // `getenv` runs in this test binary.
         unsafe { std::env::set_var(PROBE_CAP_ENV, "20000") };
     });
 }
