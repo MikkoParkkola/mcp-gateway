@@ -72,6 +72,18 @@ async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
             record.pointer("/model/task/status")
         ));
     }
+    // MIK-7311: a recovered input round keeps no continuation on disk.
+    for row in seeded
+        .iter()
+        .filter(|row| matches!(row.seed, Seed::InputRequired))
+    {
+        let record: Value =
+            serde_json::from_slice(&std::fs::read(dir.join(format!("{}.json", row.id))).unwrap())
+                .expect("the recovered record parses");
+        if record.get("inputRound").is_some() {
+            problems.push(format!("{}: the continuation survived recovery", row.key));
+        }
+    }
     assert!(problems.is_empty(), "{problems:#?}");
 }
 

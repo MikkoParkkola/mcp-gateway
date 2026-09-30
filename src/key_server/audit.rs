@@ -152,6 +152,14 @@ impl AuditEvent {
 /// INFO key_server::audit audit={"event":"token.issued","identity":...}
 /// ```
 pub fn emit(event: &AuditEvent) {
+    // D4: the two refusals of the exchange. Raised only by `/auth/token`,
+    // never on the request path, so they cannot double-count a 401 there.
+    use crate::security::security_metrics::{AuthFailureKind, auth_failure};
+    match event.event {
+        "token.denied" => auth_failure(AuthFailureKind::TokenExchangeDenied),
+        "token.invalid" => auth_failure(AuthFailureKind::TokenExchangeInvalid),
+        _ => {}
+    }
     match serde_json::to_string(event) {
         Ok(ref json) => tracing::info!(audit = %json, "key_server audit"),
         Err(ref e) => tracing::warn!(error = %e, "Failed to serialize audit event"),

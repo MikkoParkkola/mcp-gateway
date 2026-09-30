@@ -782,3 +782,6 @@ fn write_atomic_replaces_a_stale_open_temp_instead_of_inheriting_its_dacl() {
     assert_owner_only("1718-W4b", &target, false);
     assert_eq!(std::fs::read(&target).unwrap(), b"[]");
 }
+
+#[path = "store_version_tests.rs"]
+mod version;
