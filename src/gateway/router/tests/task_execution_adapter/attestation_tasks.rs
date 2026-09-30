@@ -79,7 +79,8 @@ async fn get_attested(state: &Arc<AppState>, id: &str, token: Option<String>) ->
 /// `poll_until_terminal` for an enforcing gateway: a finished task is only
 /// delivered to a read that presents a fresh recovery token.
 async fn poll_attested(state: &Arc<AppState>, id: &str) -> Value {
-    for _ in 0..2_000 {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
         let body = get_attested(state, id, Some(token(chrono::TimeDelta::minutes(5)))).await;
         if is_terminal(&status_of(&body)) {
             return body;

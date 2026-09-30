@@ -44,6 +44,23 @@ fn playbook_call(id: i64, key: &str) -> Value {
 }
 
 /// A JSON-RPC error whose message names the refusal, and no `result`.
+/// The targets stored for `id`, once the settlement that writes them has
+/// landed. Bounded by a wall clock, not a turn count: the settlement crosses a
+/// `spawn_blocking` fsync, which is slow on some platforms.
+async fn wait_for_targets(
+    state: &Arc<AppState>,
+    id: &str,
+) -> Vec<crate::gateway::task_service::Target> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let recorded = state.task_executor.service.store.targets_for_test(id);
+        if !recorded.is_empty() || tokio::time::Instant::now() >= deadline {
+            return recorded;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 fn assert_refused(body: &Value, expect: &str) {
     let message = body
         .pointer("/error/message")
@@ -279,15 +296,7 @@ async fn a_plan_step_refused_before_dispatch_is_recorded_and_reauthorized() {
     install_playbook(&state, TOOL);
     withhold(&state, TOOL);
     let id = task_id(&post(&state, "key-a", playbook_call(10, "b-failed-step")).await);
-    let store = &state.task_executor.service.store;
-    let mut recorded = Vec::new();
-    for _ in 0..2_000 {
-        recorded = store.targets_for_test(&id);
-        if !recorded.is_empty() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    let recorded = wait_for_targets(&state, &id).await;
     let step = crate::gateway::task_service::Target {
         server: BACKEND.to_owned(),
         tool: TOOL.to_owned(),
@@ -305,15 +314,7 @@ async fn a_plan_step_that_fails_at_the_backend_is_recorded_and_reauthorized() {
     let (state, _store) = state_with(&mock).await;
     install_playbook(&state, TOOL);
     let id = task_id(&post(&state, "key-a", playbook_call(12, "b-backend-fail")).await);
-    let store = &state.task_executor.service.store;
-    let mut recorded = Vec::new();
-    for _ in 0..2_000 {
-        recorded = store.targets_for_test(&id);
-        if !recorded.is_empty() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    let recorded = wait_for_targets(&state, &id).await;
     let step = crate::gateway::task_service::Target {
         server: BACKEND.to_owned(),
         tool: TOOL.to_owned(),

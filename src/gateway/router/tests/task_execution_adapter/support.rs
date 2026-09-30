@@ -409,8 +409,9 @@ pub(super) async fn poll_until_terminal_attested(
     id: &str,
     fresh_token: impl Fn() -> String,
 ) -> Value {
-    const ATTEMPTS: usize = 2_000;
-    for _ in 0..ATTEMPTS {
+    const BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + BOUND;
+    while tokio::time::Instant::now() < deadline {
         let mut body = task_method(9_001, "tasks/get", json!({ "taskId": id }));
         body["params"]["_meta"][crate::gateway::meta_mcp::upstream::RECOVERY_META] =
             json!({ "attestation": fresh_token() });
@@ -420,7 +421,7 @@ pub(super) async fn poll_until_terminal_attested(
         }
         tokio::task::yield_now().await;
     }
-    panic!("task {id} never reached a terminal status in {ATTEMPTS} attested reads");
+    panic!("task {id} never reached a terminal status in {BOUND:?} of attested reads");
 }
 
 /// Assert a task is `completed` carrying exactly the mock's successful result.
