@@ -313,8 +313,7 @@ fn gh462_shared_loader_distinguishes_missing_valid_and_invalid_files() {
 #[derive(Debug, PartialEq, Eq)]
 struct EntrySnapshot {
     contents: Vec<u8>,
-    // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
     identity: (u64, u64),
 }
 
@@ -333,8 +332,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
             } else {
                 std::fs::read(&path).unwrap()
             };
-            // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
-            #[cfg(unix)]
+            #[cfg(unix)] // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
             let identity = {
                 use std::os::unix::fs::MetadataExt;
                 let metadata = std::fs::symlink_metadata(&path).unwrap();
@@ -344,8 +342,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
                 path.strip_prefix(root).unwrap().to_owned(),
                 EntrySnapshot {
                     contents: value,
-                    // Unix-only: `identity` is the (dev, ino) file identity above; it is not collected on Windows.
-                    #[cfg(unix)]
+                    #[cfg(unix)] // Unix-only: `identity` is the (dev, ino) file identity above; it is not collected on Windows.
                     identity,
                 },
             );
@@ -356,8 +353,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
     entries
 }
 
-// Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
 mod unix_io {
     use super::*;
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -680,42 +676,33 @@ mod cli {
         };
     }
 
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_add_unreadable, Unreadable, false, false);
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_add_denied_parent, DeniedParent, false, false);
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_add_dangling, Dangling, false, false);
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(all(unix, feature = "config-export"))]
+    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_setup_unreadable, Unreadable, true, true);
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(all(unix, feature = "config-export"))]
+    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_setup_denied_parent, DeniedParent, true, true);
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(all(unix, feature = "config-export"))]
+    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_setup_dangling, Dangling, true, true);
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(
         gh462_setup_unreadable_without_client,
         Unreadable,
         true,
         false
     );
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(
         gh462_setup_denied_parent_without_client,
         DeniedParent,
         true,
         false
     );
-    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_setup_dangling_without_client, Dangling, true, false);
 
     // GH462.CONFIG.4 / .5: positive control proves client-writing fixture is live.
@@ -786,11 +773,9 @@ mod cli {
 
     valid_cli_case!(gh462_add_missing, false, false);
     valid_cli_case!(gh462_add_valid, false, true);
-    // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
-    #[cfg(all(unix, feature = "config-export"))] // same HOME reason
+    #[cfg(all(unix, feature = "config-export"))] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     valid_cli_case!(gh462_setup_missing, true, false);
-    // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
-    #[cfg(all(unix, feature = "config-export"))]
+    #[cfg(all(unix, feature = "config-export"))] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     valid_cli_case!(gh462_setup_valid, true, true);
 
     // GH462.CONFIG.6: binary isolation enables non-vacuous secret/override checks.
@@ -827,7 +812,6 @@ mod cli {
         };
     }
     reference_cli_case!(gh462_add_references, false);
-    // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
-    #[cfg(unix)]
+    #[cfg(unix)] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     reference_cli_case!(gh462_setup_references, true);
 }
