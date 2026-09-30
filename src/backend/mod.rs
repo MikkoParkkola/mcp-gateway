@@ -38,6 +38,19 @@ mod pool;
 mod registry;
 mod status;
 
+impl Backend {
+    /// This backend's signature chain policy (ASI07 inc3, design D1): the
+    /// mode, the accepted origin key ids and the required last signer.
+    pub(crate) fn chain_policy(&self) -> (crate::config::ChainMode, &[String], Option<&str>) {
+        let config = &self.config;
+        (
+            config.signature_chain,
+            &config.chain_origins,
+            config.chain_signer.as_deref(),
+        )
+    }
+}
+
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]

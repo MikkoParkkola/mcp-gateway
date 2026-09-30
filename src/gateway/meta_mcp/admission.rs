@@ -67,7 +67,10 @@ impl SyncLease {
         if let Some(result) = secured.get_mut("result") {
             crate::security::signature_chain::strip_chain(result);
         }
+        // A chained backend's upstream links answered this request's nonce, so
+        // its replay is never linked (inc3 R8).
         let chain = match response.chain_source {
+            _ if response.chain_upstream.is_some() => StoredChain::ChainedBackend,
             crate::protocol::ChainSource::Backend => StoredChain::Backend,
             _ => StoredChain::NotEligible,
         };

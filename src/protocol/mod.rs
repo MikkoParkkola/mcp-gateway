@@ -51,10 +51,6 @@ pub(crate) struct UpstreamChain {
 
 /// Whether the upstream chain verified (design D5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired by the inc3 implementation")
-)]
 pub(crate) enum UpstreamState {
     /// Every rule passed; the links are the delivered prefix.
     Verified,

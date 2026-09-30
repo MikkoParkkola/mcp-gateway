@@ -169,12 +169,56 @@ impl SignatureChainConfig {
 /// Startup rules for per-backend chain policy (design D1): `verify`/`require`
 /// need origins, a signer, every key in `remote_server_signing.trusted_keys`,
 /// and this gateway's own `security.signature_chain`. Errors name the field.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "red-first stub; the rules return errors"
-)]
 pub(crate) fn validate_backend_chains(config: &crate::config::Config) -> crate::Result<()> {
-    let _ = config;
+    let keys = &config.security.remote_server_signing.trusted_keys;
+    let mut names: Vec<&String> = config.backends.keys().collect();
+    names.sort();
+    for name in names {
+        let backend = &config.backends[name];
+        if backend.signature_chain == ChainMode::Off {
+            continue;
+        }
+        let invalid = |field: &str, rule: &str| {
+            crate::Error::ConfigValidation(format!("backends.{name}.{field} {rule}"))
+        };
+        if backend.chain_origins.is_empty() {
+            return Err(invalid(
+                "chain_origins",
+                "must name at least one origin key id",
+            ));
+        }
+        if backend
+            .chain_origins
+            .iter()
+            .any(|id| !keys.contains_key(id))
+        {
+            return Err(invalid(
+                "chain_origins",
+                "names a key id missing from security.remote_server_signing.trusted_keys",
+            ));
+        }
+        match &backend.chain_signer {
+            None => {
+                return Err(invalid(
+                    "chain_signer",
+                    "is required for verify and require",
+                ));
+            }
+            Some(signer) if !keys.contains_key(signer) => {
+                return Err(invalid(
+                    "chain_signer",
+                    "is missing from security.remote_server_signing.trusted_keys",
+                ));
+            }
+            Some(_) => {}
+        }
+        if config.security.signature_chain.is_none() {
+            return Err(crate::Error::ConfigValidation(format!(
+                "security.signature_chain is required: backends.{name} verifies chains and \
+                 this gateway must append its own link"
+            )));
+        }
+    }
     Ok(())
 }
 

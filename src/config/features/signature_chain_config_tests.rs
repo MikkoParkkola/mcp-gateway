@@ -103,6 +103,11 @@ fn chained_gateway(
         },
     );
     let backend = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: "http://127.0.0.1:9/mcp".to_owned(),
+            streamable_http: true,
+            protocol_version: None,
+        },
         signature_chain: mode,
         chain_origins: origins.iter().map(|o| (*o).to_owned()).collect(),
         chain_signer: signer.map(str::to_owned),

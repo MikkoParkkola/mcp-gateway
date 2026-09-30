@@ -163,7 +163,14 @@ async fn interim_replies_from_chained_backends() {
     let upstream = FakeUpstream::start(Mode::InputRequired).await;
     let d = HttpGateway::start(d_config(&upstream.url, "verify", "on_request")).await;
     let response = call(&d, Route::Invoke, Some("n-i1b")).await;
-    assert_eq!(chain_len(&response), 0, "{response}");
+    assert_ne!(
+        response["error"]["code"], -32001,
+        "verify never refuses an interim: {response}"
+    );
+    assert!(
+        !response.to_string().contains(oracle::CHAIN_KEY),
+        "{response}"
+    );
 }
 
 /// K3: an unsolicited task handle to a synchronous `require` call is refused
