@@ -430,9 +430,14 @@ pub(super) fn round_deadline(
 
 /// Whether `response` is the funnel refusing the continuation after the
 /// envelope itself expired (the stored deadline plus the margin).
+///
+/// The funnel answers every refusal with one message, but past the expiry
+/// the refusal of this gateway's own stored envelope IS the expiry:
+/// `redeem_retry` opens the envelope before any other check, and `open`
+/// tests the deadline straight after authentication. `>` as `open` uses it.
 fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) -> bool {
     let expired = crate::protocol::continuation::ContinuationError::Expired;
-    now >= deadline.saturating_add(CONTINUATION_DEADLINE_MARGIN_SECS)
+    now > deadline.saturating_add(CONTINUATION_DEADLINE_MARGIN_SECS)
         && response
             .error
             .as_ref()
@@ -445,8 +450,9 @@ fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
 
 impl TaskExecutor {
     /// Close a resumed round that met its deadline. A write that fails for any
-    /// reason but a moved row falls back to a plain cancel, so the resume never
-    /// leaves a `working` row with no owner.
+    /// reason but a moved row is tried once more, reason and all.
+    // ponytail: two attempts, then the row waits for restart recovery (which
+    // settles it interrupted), as every other settlement write does.
     async fn close_late_round(&self, principal: &str, id: &str, revision: u64, deadline: u64) {
         let Ok(owner) = self.service.owner(principal) else {
             return;
@@ -458,8 +464,14 @@ impl TaskExecutor {
         {
             Ok(()) | Err(super::CommitFailure::RevisionConflict) => {}
             Err(_) => {
-                self.settle_cas(principal, id, revision, TaskTransition::Cancel)
-                    .await;
+                let reason = RoundClosed::Continuation(deadline).reason();
+                if self
+                    .close_round(owner.as_digest(), id, revision, reason)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(task_id = %id, "a late input round was not closed");
+                }
             }
         }
     }
@@ -511,10 +523,10 @@ mod deadline_tests {
             -32602,
             ContinuationError::Expired.client_message(),
         );
-        assert!(rejected_after_expiry(&refused, 100, 100 + MARGIN));
-        assert!(!rejected_after_expiry(&refused, 100, 100 + MARGIN - 1));
+        assert!(rejected_after_expiry(&refused, 100, 100 + MARGIN + 1));
+        assert!(!rejected_after_expiry(&refused, 100, 100 + MARGIN));
         let other = JsonRpcResponse::error(Some(RequestId::Number(0)), -32602, "bad params");
-        assert!(!rejected_after_expiry(&other, 100, 100 + MARGIN));
+        assert!(!rejected_after_expiry(&other, 100, 100 + MARGIN + 1));
     }
 
     /// Mutant: an envelope that does not open is parked with no deadline.

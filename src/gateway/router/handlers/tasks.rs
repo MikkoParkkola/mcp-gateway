@@ -415,7 +415,8 @@ pub(super) async fn tasks_update(
         // A cancel may have landed between the look-up above and the write.
         InputOutcome::NotOutstanding => match state.tasks.get(owner, task_id) {
             Ok(current) => settled_or_no_round(id, &current.task),
-            Err(_) => no_round(id),
+            Err(ServiceError::NotFound) => missing_task_error(id),
+            Err(_) => store_unavailable(id),
         },
         InputOutcome::TooLarge => JsonRpcResponse::error(
             Some(id),
