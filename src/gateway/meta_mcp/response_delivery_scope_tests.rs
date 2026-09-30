@@ -45,6 +45,8 @@ fn an_already_inspected_public_response_is_clamped_without_a_second_scan() {
         correlation: correlation(),
         mutation: ResponseMutationPolicy::Redact,
         signing: None,
+        chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
+        chain_nonce: None,
     };
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
