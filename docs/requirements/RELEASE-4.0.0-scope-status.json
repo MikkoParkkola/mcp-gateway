@@ -1095,7 +1095,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews). Increment 2 (#2381): origin-link emission and backend-chain strip only; CHAIN.1 itself (append and verify across hops) is increment 3. Known limits of increment 2, against the reviewed design, not against a literal AC: (1) direct-route idempotent replays are not linked (the direct store can hold gateway-authored side-effect notices and records no origin); (2) the gateway_invoke nonce is the fallback link nonce only while message_signing is enabled."
+      "note": "Pending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews). Increment 2 (#2381): origin-link emission and backend-chain strip only; CHAIN.1 itself (append and verify across hops) is increment 3. Known limits of increment 2, accepted into the reviewed design by amendment A3 r5 (delta review, both seats, 2026-09-30); neither is required by a literal AC and neither makes CHAIN.1 met: (1) direct-route idempotent replays are not linked (the direct store can hold gateway-authored side-effect notices and records no origin); (2) the gateway_invoke nonce is the fallback link nonce only while message_signing is enabled."
     },
     {
       "id": "GH1945.COLLUDE.1",
