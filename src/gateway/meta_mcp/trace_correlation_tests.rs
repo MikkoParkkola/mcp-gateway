@@ -205,3 +205,29 @@ async fn ac_control_3a_minted_trace_id_is_the_key_when_nothing_else_is() {
         "the log must name which rung supplied the key: {raw}"
     );
 }
+
+#[tokio::test]
+async fn ac_control_3a_empty_modern_session_is_not_a_correlation_key() {
+    // The modern HTTP route mints no session and hands the meta layer
+    // `Some("")`, not `None` (`router/handlers.rs`, `declares_modern_by_header`).
+    // Keyed on that, every stateless call without `_meta` correlates as the one
+    // fingerprint of "", which is the shared placeholder CONTROL.3a removed.
+    let (meta, log_path) = meta_with_transparency_log();
+    let args = json!({ "server": "srv", "tool": "read", "arguments": {} });
+
+    let result = meta
+        .invoke_tool(&args, Some(""), &ctx())
+        .await
+        .expect("invoke ok");
+
+    let minted = result
+        .get("trace_id")
+        .and_then(|v| v.as_str())
+        .expect("the invoke path stamps its minted trace id into the response")
+        .to_string();
+    let raw = std::fs::read_to_string(&log_path).expect("read log");
+    assert!(
+        raw.contains(&minted) && raw.contains("\"correlation_source\":\"trace_id\""),
+        "an empty session id must fall through to the minted trace id: minted={minted} log={raw}"
+    );
+}
