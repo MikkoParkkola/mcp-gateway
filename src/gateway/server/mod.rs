@@ -2124,6 +2124,7 @@ impl Gateway {
                 )
             });
         let window_saver = persistence::spawn_window_saver(
+            self.config.server.protocol_revision_window,
             data_dir.clone(),
             addr,
             Arc::clone(&meta_mcp_for_shutdown.window_seal),
@@ -2140,7 +2141,9 @@ impl Gateway {
             shutdown_signal(shutdown_tx),
         )
         .await?;
-        drop(window_saver.await); // U1: the segment is sealed before exit
+        if let Some(saver) = window_saver {
+            drop(saver.await); // U1: the segment is sealed before exit
+        }
 
         persistence::save_with_logging(
             &ranker_path,

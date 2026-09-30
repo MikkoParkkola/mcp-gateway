@@ -1297,6 +1297,14 @@ pub struct ServerConfig {
     /// in-flight drain may wait (#2147).
     #[serde(with = "humantime_serde")]
     pub shutdown_timeout: Duration,
+    /// RFC-0060 U1: keep the durable per-transport protocol-revision window
+    /// (`protocol-revision-telemetry/window.json`) for HTTP `serve`. While on,
+    /// a shutting-down gateway seals its segment on the shutdown signal and
+    /// refuses (HTTP 503) any request that reaches counting after the seal, so
+    /// every served request is in the window. Off by default: shutdown then
+    /// behaves as in 3.5.x. RFC-0060 sets no default for this switch.
+    #[serde(default)]
+    pub protocol_revision_window: bool,
     /// Maximum request body size (bytes) on every route. Read once at startup:
     /// an oversize body gets HTTP 413.
     pub max_body_size: usize,
@@ -1400,6 +1408,7 @@ impl Default for ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 39400,
             shutdown_timeout: Duration::from_secs(30),
+            protocol_revision_window: false,
             max_body_size: 10 * 1024 * 1024,
             public_url: None,
             allow_unauthenticated_network_bind: false,
@@ -1419,6 +1428,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("host", &self.host)
             .field("port", &self.port)
             .field("shutdown_timeout", &self.shutdown_timeout)
+            .field("protocol_revision_window", &self.protocol_revision_window)
             .field("max_body_size", &self.max_body_size)
             .field("public_url", &self.public_url)
             .field(

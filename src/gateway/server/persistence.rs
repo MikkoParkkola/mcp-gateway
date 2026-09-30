@@ -327,6 +327,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn with_the_window_off_a_request_after_sigterm_is_served() {
+        // Coordinator ruling: the U1 seal (and its 503) applies only when
+        // `server.protocol_revision_window` is on. Off, shutdown is 3.5.x's.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let seal = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let saver = spawn_window_saver(
+            crate::config::ServerConfig::default().protocol_revision_window,
+            dir.path().to_path_buf(),
+            "127.0.0.1:39401".parse().expect("address"),
+            std::sync::Arc::clone(&seal),
+            shutdown_tx.subscribe(),
+        );
+        assert!(saver.is_none(), "the window is off by default");
+        drop(shutdown_tx.send(()));
+        tokio::task::yield_now().await;
+        let served = crate::protocol_revision_telemetry::observe_inbound_request_from(
+            &serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+            None,
+            "tools/list",
+            Some("2025-11-25"),
+            None,
+            crate::protocol_revision_telemetry::Transport::Http,
+            Some(crate::protocol_revision_telemetry::HttpCaller {
+                user_agent: None,
+                sealed: &seal,
+            }),
+        );
+        assert!(
+            served,
+            "a request after SIGTERM is served when the window is off"
+        );
+        assert!(!dir.path().join("protocol-revision-telemetry").exists());
+    }
+
+    #[tokio::test]
     async fn protocol_window_saver_seals_its_segment_on_the_shutdown_broadcast() {
         // Nothing drains here: the saver seals on the broadcast itself,
         // because a post-drain seal is SIGKILLed while an SSE stream is open,
@@ -371,20 +407,27 @@ const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 /// counted before the seal finishes normally, however long it runs.
 /// A sink that fails to open is retried every tick; counts are cumulative
 /// from process start, so a late open still records everything.
+///
+/// `None` when `server.protocol_revision_window` is off: nothing is recorded,
+/// nothing is sealed, and shutdown serves requests as in 3.5.x.
 pub(super) fn spawn_window_saver(
+    enabled: bool,
     data_dir: PathBuf,
     listen: std::net::SocketAddr,
     seal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     shutdown: tokio::sync::broadcast::Receiver<()>,
-) -> tokio::task::JoinHandle<()> {
+) -> Option<tokio::task::JoinHandle<()>> {
     use crate::protocol_revision_telemetry::window::{WriterIdentity, unix_seconds_now};
+    if !enabled {
+        return None;
+    }
     let identity = WriterIdentity {
         listen: listen.to_string(),
         exe: std::env::current_exe()
             .map_or_else(|_| "unknown".to_string(), |path| path.display().to_string()),
         process_started_at: unix_seconds_now(),
     };
-    spawn_protocol_window_saver(
+    Some(spawn_protocol_window_saver(
         data_dir,
         identity,
         PROTOCOL_WINDOW_SAVE_INTERVAL,
@@ -394,7 +437,7 @@ pub(super) fn spawn_window_saver(
             )
         }),
         shutdown,
-    )
+    ))
 }
 
 fn spawn_protocol_window_saver(
