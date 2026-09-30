@@ -896,11 +896,18 @@
     },
     {
       "id": "MIK-7570.CHART.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "scripts/dev/helm-chart-auth-modes.sh",
+        "scripts/dev/helm-chart-smoke.sh",
+        "scripts/dev/helm-kind-real-image.sh",
+        "tests/fixtures/helm-golden/credential.yaml",
+        "tests/fixtures/helm-golden/mesh.yaml",
+        "tests/team_deployment_guide_claims.rs"
+      ],
+      "note": "Graded 2026-09-30 (B4). Merged in #2392 as 8acdc69e3. Post-merge Docker run 36631422954 (job 109635405534, Build amd64) installs the chart on the release image in kind under Pod Security restricted twice: credential mode, then auth.mode api_keys with persistence.enabled; it prints 'helm kind real image passed: ... api_keys key 200, none/wrong 401, state kept across a replaced pod'. Render contract pinned by scripts/dev/helm-chart-auth-modes.sh (api_keys, oidc, per-mode secret injection, extraEnv/envFrom guards, persistence PVC/Recreate/OnRootMismatch/store_dir, credential and mesh golden renders). Red first: run 36616532350 job 109617965066 on b40aecc96 (41 FAIL). Operator approved the new values keys in chat 2026-09-29."
     },
     {
       "id": "MIK-7570.AUDIT.2",
@@ -916,11 +923,20 @@
     },
     {
       "id": "MIK-7570.AUDIT.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-25 by MIK-7570; not yet built. Design and landing order: MIK-7570."
+      "evidence": [
+        "src/gateway/meta_mcp/grant_decision_audit_tests.rs",
+        "src/gateway/meta_mcp/grant_decision_slot_tests.rs",
+        "src/gateway/router/tests/task_execution_adapter/grant_decisions.rs",
+        "src/gateway/router/tests/task_execution_adapter/grant_decision_tasks.rs",
+        "src/gateway/server/tests/grant_decision_stdio.rs",
+        "src/gateway/meta_mcp/grant_audit.rs",
+        "docs/identity_grants.md",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Graded 2026-09-29 (D3-a, D3-amendment rev 11, test plan rev 4; PR #2399). Each identity-grant decision on a personal capability during a call writes one identity_grant_decision record (allow ok with grant_id, deny denied with reason), naming the subject by authority and subject only. Slots open at invoke_tool, the dispatch tail (request and task worker), HTTP /mcp and stdio tools/call; the outermost writes before the answer; FailClosed answers -32005; a cancelled call's notes are written by a spawned bounded write; an unslotted check refuses -32005 and still records. Listing, search, public and shared capabilities write none. Cells T1-T3, T7-T22, T24-T27 plus T14b, T15b across the evidence files. Red: run 36615078448 (the 25 cells fail, 6854 pass). Green: Tests, Windows and macOS on 07b1fc01a. Mutants: run 36630538908 (10 rows: note gate, Silent, public, fail-closed, selection x3, invoke opener, fallback, stamp). Two independent final reviews: SHIP, SHIP. Follow-ups: #2409 (4.0.1). UPGRADING-4.0 item 103."
     },
     {
       "id": "MIK-7570.AUDIT.4",
@@ -1065,11 +1081,18 @@
     },
     {
       "id": "GH1943.PROV.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Provenance is enforced only when require_for_remote_backends is set (src/security/remote_provenance.rs:21-23) and nothing reports that it is off. Tracked in #1943. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        "src/config/remote_provenance_posture.rs",
+        "src/config/remote_provenance_posture_tests.rs",
+        "src/gateway/server/remote_provenance_start_tests.rs",
+        "src/commands/doctor/provenance.rs",
+        "tests/remote_provenance_warning.rs",
+        "docs/UPGRADING-4.0.md"
+      ],
+      "note": "Met by #2195. With remote HTTP/A2A/WebSocket backends enabled and require_for_remote_backends off, one startup WARN names every backend without signed metadata (Config::remote_provenance_warning, logged by the Gateway constructor that HTTP and stdio starts share: building_a_gateway_warns_about_an_unverified_remote_backend, a_stdio_start_warns_about_an_unverified_remote_backend), and doctor reports the same text as a remote_provenance warning (an_unverified_remote_backend_is_a_warning_with_the_startup_text, doctor_reports_an_unverified_remote_backend). No default changes (provenance_is_not_required_by_default); whether it should become the default is #2186. Red-first CI run 36469192873 (#2189): the 9 new tests failed at their assertions. Mutation batch throwaway/mutants-2195, run 36471967733: 6/6 RED. UPGRADING-4.0 item 89. Two independent design reviews (SHIP, SHIP) and two implementation reviews (SHIP-WITH-FIXES with fixes applied, SHIP)."
     },
     {
       "id": "GH1944.CHAIN.1",

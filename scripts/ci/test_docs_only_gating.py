@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_throwaway_routing import REPO, RELEASE_LINE, ROOT, evaluate  # noqa: E402
 
 SKIPPED = {
-    "check", "feature-combos", "kani", "fmt", "audit",
+    "check", "kani", "fmt", "audit",
     "helm-chart-smoke", "helm-oci-roundtrip", "helm-supply-chain", "helm-airgap",
     "k8s-kind-rollback", "upgrade-rehearsal", "service-template-smoke",
     "usability-smoke",
