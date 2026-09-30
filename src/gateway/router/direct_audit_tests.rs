@@ -24,6 +24,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
 mod meta_refusal;
+mod meta_replay;
 #[cfg(feature = "firewall")]
 mod tenants;
 
@@ -221,6 +222,7 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
             allowed_tools: None,
             denied_tools,
             admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,

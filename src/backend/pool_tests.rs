@@ -1543,8 +1543,7 @@ async fn shutdown_waits_for_a_restart_already_in_flight() {
 // is a real MCP responder, because the undo only matters when the start
 // SUCCEEDS; a failed start has nothing to undo.
 //
-// Unix-only: the witness is the process table, read via kill(1).
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: the witness is the process table, read via kill(1).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_restart_that_outlives_shutdown_closes_what_it_started() {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -1637,8 +1636,7 @@ done
 // the only thing that matters - after shutdown returns, is anything still
 // alive? The witness is the process table.
 //
-// Unix-only: the witness is read via kill(1).
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: the witness is read via kill(1).
 #[tokio::test(flavor = "multi_thread")]
 async fn an_ordinary_start_racing_shutdown_leaves_no_child_behind() {
     let dir = tempfile::tempdir().expect("create temp dir");
@@ -1724,8 +1722,7 @@ done
 // happens after the latch was set and the start refuses. There is no ordering
 // in which a start both escapes the counter and misses the latch.
 //
-// Unix-only: the witness is the process table, read via kill(1).
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: the witness is the process table, read via kill(1).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_start_after_shutdown_never_spawns_a_child() {
     use crate::backend::RestartOutcome::SkippedStopping;
@@ -1962,7 +1959,7 @@ pub(super) struct RealChildWedgedClose {
     pub(super) child: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 
-#[cfg(unix)]
+#[cfg(unix)] // Process reaping and pid liveness (ps state, zombie detection); unix-only.
 #[async_trait]
 impl Transport for RealChildWedgedClose {
     async fn request(&self, _method: &str, _params: Option<Value>) -> Result<JsonRpcResponse> {
@@ -2006,12 +2003,12 @@ pub(super) fn process_state(pid: u32) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-#[cfg(unix)]
+#[cfg(unix)] // Process reaping and pid liveness (ps state, zombie detection); unix-only.
 pub(super) fn is_alive(pid: u32) -> bool {
     process_state(pid).is_some_and(|s| !s.starts_with('Z'))
 }
 
-#[cfg(unix)]
+#[cfg(unix)] // Process reaping and pid liveness (ps state, zombie detection); unix-only.
 pub(super) async fn spawn_probe_child() -> (tokio::process::Child, u32) {
     let child = tokio::process::Command::new("sleep")
         .arg("300")

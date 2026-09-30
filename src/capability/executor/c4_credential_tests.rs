@@ -111,6 +111,7 @@ async fn capability_file_ref_stays_literal() {
 
 /// F18 R3: a capability `file:` credential other users can read is refused on
 /// the call that uses it; an owner-only one resolves.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[tokio::test]
 async fn capability_file_credential_world_readable_refused() {

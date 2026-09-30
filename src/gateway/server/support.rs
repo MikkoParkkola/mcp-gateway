@@ -61,16 +61,15 @@ pub(super) fn log_startup_banner(
         if crate::gateway::router::is_loopback_bind(&config.server.host)
             && let Some(value) = bootstrap.and_then(DashboardBootstrap::peek)
         {
-            if let Some(reason) = dashboard_link_refusal(config) {
-                warn!("DASHBOARD link not printed: {reason}");
-            } else {
-                info!(
-                    "DASHBOARD (opens once, then remembered in this browser): \
-                     {}://{}/dashboard?bootstrap={}",
-                    if config.mtls.enabled { "https" } else { "http" },
-                    url_authority(&config.server.host, port),
-                    value
-                );
+            info!(
+                "DASHBOARD (opens once, then remembered in this browser): \
+                 {}://{}/dashboard?bootstrap={}",
+                if config.mtls.enabled { "https" } else { "http" },
+                url_authority(&config.server.host, port),
+                value
+            );
+            if let Some(note) = dashboard_link_handoff(config) {
+                info!("DASHBOARD {note}");
             }
         }
 
@@ -373,25 +372,19 @@ fn url_authority(host: &str, port: u16) -> String {
     }
 }
 
-/// Why the printed dashboard link would not work, when it would not.
-///
-/// Redemption sets a `Secure` session cookie whenever a `public_url` declares
-/// HTTPS, because a proxy may terminate TLS in front of this listener. The link
-/// is plain HTTP on a loopback bind, and a browser discards a `Secure` cookie
-/// that arrives over HTTP — so following the link would spend the single-use
-/// value and land on a dashboard that still reads as logged out. Printing the
-/// reason instead of the dead link is what tells the operator which knob moved.
-fn dashboard_link_refusal(config: &Config) -> Option<String> {
+/// Where the link's code is entered, when this listener is plain HTTP behind an
+/// HTTPS `public_url` (#2130). The session cookie must be `Secure` there, so a
+/// cookie set at the loopback URL would be useless: the link shows a one-time
+/// code instead, entered on the public origin.
+fn dashboard_link_handoff(config: &Config) -> Option<String> {
     let public = config.server.public_url.as_deref()?;
     if config.mtls.enabled || !crate::gateway::auth::is_https_url(public) {
         return None;
     }
     Some(format!(
-        "server.public_url is {public}, so the dashboard session cookie is marked Secure and \
-         a browser discards it over this plain-HTTP listener. Set mtls.enabled to serve this \
-         listener over HTTPS, or remove server.public_url and restart, which prints a \
-         usable link — redemption is loopback-only, so the HTTPS front end cannot \
-         perform it."
+        "server.public_url is HTTPS: open the link on this machine; it shows a one-time \
+         code to enter at {}/dashboard/handoff within 60 seconds.",
+        public.trim_end_matches('/')
     ))
 }
 

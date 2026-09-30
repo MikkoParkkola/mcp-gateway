@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::idempotency::admission::{Admission, Lease, Mode, Refusal, Request};
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::audit::AuditOutcome;
 use crate::{Error, Result};
 
 use super::MetaMcp;
@@ -19,12 +20,20 @@ mod plan;
 pub(crate) struct SyncLease {
     state: Mutex<(Lease, bool)>,
     playbook: Option<crate::playbook::PlaybookDefinition>,
+    /// The invocation record's facts about this execution, kept for a replay.
+    audit: Mutex<Option<ReplayAudit>>,
 }
 
 impl SyncLease {
     /// The same immutable definition supplied both preflight and fingerprinting.
     pub(super) fn playbook_definition(&self) -> Option<&crate::playbook::PlaybookDefinition> {
         self.playbook.as_ref()
+    }
+
+    /// #2472: what this execution's invocation record said, so a replay of
+    /// it is recorded the same way. The last invocation under the lease wins.
+    pub(crate) fn note_audit(&self, audit: ReplayAudit) {
+        *self.audit.lock() = Some(audit);
     }
 
     pub(crate) fn mark_dispatched(&self) {
@@ -46,6 +55,7 @@ impl SyncLease {
         signing: Option<&super::signing::SigningInvocationContext>,
     ) {
         let (lease, dispatched) = self.state.into_inner();
+        let audit = self.audit.into_inner();
         if !dispatched
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
@@ -67,13 +77,17 @@ impl SyncLease {
         if let Some(result) = secured.get_mut("result") {
             crate::security::signature_chain::strip_chain(result);
         }
+        // A chained backend's upstream links answered this request's nonce, so
+        // its replay is never linked (inc3 R8).
         let chain = match response.chain_source {
+            _ if response.chain_upstream.is_some() => StoredChain::ChainedBackend,
             crate::protocol::ChainSource::Backend => StoredChain::Backend,
             _ => StoredChain::NotEligible,
         };
         let stored = StoredDelivery {
             response: secured,
             chain,
+            audit,
         };
         lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
@@ -87,33 +101,94 @@ struct StoredDelivery {
     /// Absent in records written before the chain existed: never eligible.
     #[serde(default)]
     chain: StoredChain,
+    /// Absent in records written before #2472, and for calls that wrote no
+    /// invocation record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audit: Option<ReplayAudit>,
+}
+
+/// #2472: the first execution's invocation-record outcome and response hash,
+/// stored server-side beside its secured response. The response a replay
+/// delivers is the wrapped, post-delivery form, so neither can be derived
+/// from it: a wrapped tool error reads as a success.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ReplayAudit {
+    outcome: StoredOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredOutcome {
+    Ok,
+    ToolError,
+    Denied(i32),
+    Invalid(i32),
+    Error(i32),
+}
+
+impl ReplayAudit {
+    pub(crate) fn new(outcome: AuditOutcome, response_hash: Option<String>) -> Self {
+        let outcome = match outcome {
+            AuditOutcome::Ok => StoredOutcome::Ok,
+            AuditOutcome::ToolError => StoredOutcome::ToolError,
+            AuditOutcome::Denied(code) => StoredOutcome::Denied(code),
+            AuditOutcome::Invalid(code) => StoredOutcome::Invalid(code),
+            AuditOutcome::Error(code) => StoredOutcome::Error(code),
+        };
+        Self {
+            outcome,
+            response_hash,
+        }
+    }
+
+    pub(crate) fn outcome(&self) -> AuditOutcome {
+        match self.outcome {
+            StoredOutcome::Ok => AuditOutcome::Ok,
+            StoredOutcome::ToolError => AuditOutcome::ToolError,
+            StoredOutcome::Denied(code) => AuditOutcome::Denied(code),
+            StoredOutcome::Invalid(code) => AuditOutcome::Invalid(code),
+            StoredOutcome::Error(code) => AuditOutcome::Error(code),
+        }
+    }
+
+    pub(crate) fn response_hash(&self) -> Option<&str> {
+        self.response_hash.as_deref()
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum StoredChain {
     Backend,
+    /// A chained backend's result (inc3 R8): its upstream links answered
+    /// another request's nonce, so a replay is never linked.
+    ChainedBackend,
     #[default]
     NotEligible,
 }
 
 /// Decode a stored delivery; a bare response is a record from before the
 /// envelope and replays without a link.
-fn stored_response(bytes: &[u8]) -> Option<JsonRpcResponse> {
+fn stored_response(bytes: &[u8]) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
     if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
         let mut response: JsonRpcResponse = serde_json::from_value(stored.response).ok()?;
         if stored.chain == StoredChain::Backend {
             response.chain_source = crate::protocol::ChainSource::Replay;
         }
-        return Some(response);
+        return Some((response, stored.audit));
     }
-    serde_json::from_slice(bytes).ok()
+    serde_json::from_slice(bytes)
+        .ok()
+        .map(|response| (response, None))
 }
 
 pub(crate) enum SyncAdmission {
     Unprotected,
     Owned(SyncLease),
-    Replay(JsonRpcResponse),
+    /// A completed execution's secured response, and its record facts.
+    Replay(JsonRpcResponse, Option<ReplayAudit>),
 }
 
 /// Gateway controls have the same meaning at both external execution routes.
@@ -249,13 +324,14 @@ impl MetaMcp {
             Ok(Admission::Owned(lease)) => Ok(SyncAdmission::Owned(SyncLease {
                 state: Mutex::new((lease, false)),
                 playbook: None,
+                audit: Mutex::new(None),
             })),
             Ok(Admission::Replay(bytes)) => {
-                let mut response = stored_response(&bytes).ok_or_else(|| {
+                let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 response.id = Some(request_id.clone());
-                Ok(SyncAdmission::Replay(response))
+                Ok(SyncAdmission::Replay(response, audit))
             }
             Ok(Admission::InFlight) => {
                 Err(Error::json_rpc(409, "Execution is already in progress"))

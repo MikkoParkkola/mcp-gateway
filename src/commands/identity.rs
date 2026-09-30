@@ -732,6 +732,7 @@ mod tests {
 
     /// F18 I3: the CLI refuses a grants file other users can change, and
     /// `upsert` does not overwrite it, because the file exists.
+    // Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
     #[cfg(unix)]
     #[tokio::test]
     async fn identity_cli_refuses_group_writable_grants() {

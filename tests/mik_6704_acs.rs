@@ -254,6 +254,7 @@ mod principal_derives_from_the_credential {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            kind: mcp_gateway::config::ApiKeyKind::Shared,
         }
     }
 

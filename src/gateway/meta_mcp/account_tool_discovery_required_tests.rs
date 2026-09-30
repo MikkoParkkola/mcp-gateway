@@ -34,6 +34,7 @@ fn single_user() -> AuthConfig {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         single_user: true,
         ..AuthConfig::default()

@@ -642,6 +642,7 @@ fn wait_for_docker_restart_count(container_name: &str) -> u32 {
 /// Env files no longer write the process environment, so a runner that reads
 /// `std::env` alone launches a backend without the credential its env file
 /// supplies. The overlay is the only place that value exists.
+// Unix-only: the child launcher is `sh -c`, which Windows does not provide.
 #[cfg(unix)]
 #[test]
 fn std_runner_passes_an_env_file_only_key_to_the_child() {

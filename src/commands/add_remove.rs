@@ -455,6 +455,7 @@ mod tests {
         } else {
             assert!(matches!(error, mcp_gateway::Error::Config(_)));
         }
+        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
         #[cfg(unix)]
         let identity = {
             use std::os::unix::fs::MetadataExt;
@@ -464,6 +465,7 @@ mod tests {
 
         assert_eq!(run_remove_command("original", &path), ExitCode::FAILURE);
         assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -481,6 +483,7 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;

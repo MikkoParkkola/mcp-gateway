@@ -88,6 +88,7 @@ fn api_key(key: &str, backends: &[&str]) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 

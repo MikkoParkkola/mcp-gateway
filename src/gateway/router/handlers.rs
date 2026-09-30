@@ -45,6 +45,7 @@ use crate::security::{
 mod owner;
 mod tasks;
 
+pub(super) use owner::owner_of;
 use owner::request_session_owner;
 #[cfg(test)]
 use owner::session_owner;
@@ -1669,8 +1670,8 @@ async fn meta_mcp_dispatch(
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => {
                     (Some(lease), None)
                 }
-                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response)) => {
-                    (None, Some(response))
+                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
+                    (None, Some((response, audit)))
                 }
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
                 Err(error) => {
@@ -1694,8 +1695,12 @@ async fn meta_mcp_dispatch(
             caller.execution = execution.as_ref();
             // `call_response` is mutated only by the firewall response scan below.
             #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-            let mut call_response = if let Some(response) = replay {
-                response
+            let mut call_response = if let Some((response, audit)) = replay {
+                // #2472: a replay is a delivered call, recorded as its first run was.
+                let session = Some(session_id.as_str());
+                (state.meta_mcp)
+                    .audit_replay(tool_name, &arguments, session, &caller, response, audit)
+                    .await
             } else {
                 Box::pin(state.meta_mcp.handle_tools_call(
                     id,
@@ -1848,6 +1853,7 @@ async fn meta_mcp_dispatch(
                 // An AUTHORIZATION context, not an attribution record: the
                 // proven principal, never the declared label.
                 agent_id: agent_identity.proven_agent_id(),
+                agent_declared: agent_identity.declared_agent_label(),
                 grant_subject: grant_subject.clone(),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|client| client.admin),

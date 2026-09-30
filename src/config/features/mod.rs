@@ -22,7 +22,7 @@ mod streaming;
 mod tasks;
 mod webhooks;
 
-pub use api_key::{ApiKeyConfig, api_key_digest_spec};
+pub use api_key::{ApiKeyConfig, ApiKeyKind, api_key_digest_spec};
 pub(crate) use api_key::{api_key_expired, parse_api_key_digest};
 pub use auth::{AgentAuthConfig, AgentDefinitionConfig, AuthConfig, DashboardSessionConfig};
 pub use cache::CacheConfig;
@@ -44,7 +44,8 @@ pub use security::{
     IdentityGrantsConfig, RemoteServerSigningConfig, ResponseContractConfig, SecurityConfig,
     ToolContractConfig,
 };
-pub use signature_chain::{ChainEmit, SignatureChainConfig};
+pub(crate) use signature_chain::validate_backend_chains;
+pub use signature_chain::{ChainEmit, ChainMode, SignatureChainConfig};
 pub use streaming::StreamingConfig;
 pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};
 pub use webhooks::WebhookConfig;

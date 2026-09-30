@@ -3,6 +3,8 @@
 //! D2 (MIK-7570.AUDIT.2): one invocation record per direct-route `tools/call`,
 //! written by the outer handler around whatever the inner one answered.
 
+use std::sync::Arc;
+
 use axum::{Json, http::StatusCode};
 use serde_json::Value;
 
@@ -90,6 +92,26 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
             AuditOutcome::ToolError
         }
         None => AuditOutcome::Ok,
+    }
+}
+
+/// D2: one write per tools/call, with the notes of its dispatch scope.
+pub(super) async fn audited_call(
+    state: Arc<AppState>,
+    name: String,
+    request: axum::http::Request<axum::body::Body>,
+) -> Answer {
+    let mut call = None;
+    let inner = Box::pin(super::backend_handler_inner(
+        Arc::clone(&state),
+        name.clone(),
+        request,
+        &mut call,
+    ));
+    let (answer, notes) = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
+    match call {
+        Some(call) => record(&state, &name, call, answer, notes).await,
+        None => answer,
     }
 }
 

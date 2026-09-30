@@ -129,6 +129,9 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
+| 105 | Reserved: lands with #2461 | None yet |
+| 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
+| 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2104,8 +2107,11 @@ reached the log.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
 first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
 With an HTTPS `server.public_url` on a plain-HTTP listener (the `tls_terminated_upstream` shape),
-the link is refused with 409 whichever way it is opened, until #2130 lands: enable `mtls` so the
-listener serves HTTPS, or remove `public_url`, to sign in by link.
+the loopback URL shows a one-time code instead of signing in there, since the session cookie must
+be `Secure` and belongs to the public origin (#2130). Type `<public_url>/dashboard/handoff` into the
+browser and enter the code within 60 seconds; the session cookie is then set on the public origin.
+The code works once and never appears in a URL, so the proxy's access log does not record it; do
+not configure the proxy to log request bodies for that path.
 
 ## 71. Dashboard sessions expire, and logout ends them
 
@@ -2967,6 +2973,69 @@ no subject keep the 3.x behaviour.
 **Action:** a client that proves a subject and renews its bearer token mid-session must
 re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
 
+## 106. Hardened requires a per-caller identity
+
+**Startup:** no notice, applies only to `security.posture: hardened`
+
+`security.posture: hardened` is new in 4.0. Under it, every HTTP MCP request, on `/mcp` (POST,
+GET and DELETE) and on `/mcp/{name}`, must identify one caller before its body is read. Any of
+these identifies one: a subject proven by an IdP (OIDC or Cloudflare Access), a trusted proxy
+header, an mTLS client certificate, an agent JWT, or an API key configured `kind: personal`.
+A request that has none is refused with HTTP 403 and JSON-RPC `-32600 "per-caller identity required
+(security.posture=hardened)"`.
+
+A shared API key (`kind: shared`, the default), the static bearer token and a dashboard session
+are shared credentials, so on their own they are refused. That includes MCP calls from the
+dashboard: under hardened, the dashboard needs an IdP or Access subject. stdio is exempt.
+`security.posture: standard`, the default, is unchanged.
+
+**Action:** before adopting `hardened`, give every HTTP caller an identity, or set
+`kind: personal` on an API key that exactly one person holds:
+
+```yaml
+auth:
+  api_keys:
+    - name: alice
+      key_sha256: "sha256:..."
+      kind: personal
+```
+
+## 107. Gateways can verify and extend each other's signature chains
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with a backend set to `verify` or `require` and an incomplete chain setting
+
+A backend that is itself a chain-signing gateway can now be verified hop by hop:
+
+```yaml
+security:
+  signature_chain: {signing_key: "env:CHAIN_SEED", key_id: "gw-edge"}
+  remote_server_signing:
+    trusted_keys:
+      gw-core: {algorithm: ed25519, public_key: "<base64>"}
+backends:
+  core:
+    http_url: "https://core.example/mcp/tools"
+    signature_chain: require   # off (default) | verify | require
+    chain_origins: [gw-core]
+    chain_signer: gw-core
+```
+
+For such a backend this gateway sends each call its own random challenge and checks the reply's
+chain before anything else reads it: trusted signers, signatures, origin, linkage, content, the
+challenge, and freshness within `message_signing.replay_window`. A verified chain is delivered
+unchanged, with this gateway's link appended, so the client verifies the whole chain. Under
+`require`, a chain that is absent or fails a rule is refused with `-32001`, naming the rule, and so
+are an interim reply and a task-augmented call. Under `verify`, the result is delivered with this
+gateway's link marked `up: unverified`, which a client verifier refuses. A chain that would exceed
+`max_links` or 16 KiB when this gateway appends its link is refused in either mode.
+
+Chained results are not served from the response cache, and an idempotent replay of one carries
+no chain. Chaining covers `gateway_invoke` and direct-route `tools/call`, for requests that carry a
+chain nonce. Tasks, Code Mode, playbooks and capability backends are not chained.
+
+**Action:** none unless you chain gateways. The three backend settings are refused at startup,
+naming the field, when `chain_origins` or `chain_signer` is missing or names a key absent from
+`trusted_keys`, or when this gateway has no `security.signature_chain`.
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
