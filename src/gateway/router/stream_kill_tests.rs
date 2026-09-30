@@ -269,7 +269,8 @@ async fn idem6_read_only_call_is_unaffected_by_the_kill() {
     let fx = fixture(IdempotencyKeyMode::Required).await;
     // Bounded: a refusal answers at once, while a call that is wrongly admitted
     // parks at the closed gate, so a missing refusal fails here, never hangs.
-    let control = send(&fx, "/mcp", &invoke(9, "w", None));
+    let refused_call = invoke(9, "w", None);
+    let control = send(&fx, "/mcp", &refused_call);
     let (status, refused) = tokio::time::timeout(Duration::from_secs(5), control)
         .await
         .expect("a keyless side-effecting call must be refused at once, not dispatched");
