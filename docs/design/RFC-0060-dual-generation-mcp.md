@@ -98,24 +98,46 @@ This prevents uncertainty from making a revision look safe to remove. Revisions
 with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: not started.** Stop all gateway processes, archive any
-earlier `protocol-revision-telemetry` directory, deploy, and then start the
-gateways. The new durable file's `started_at_unix_seconds` is the stdio baseline;
-take the HTTP baseline scrape after all bounded metric series have been
-registered at zero. Record these fields after deployment:
+**Production window: not started.** The procedure below supersedes the earlier
+HTTP-snapshot-plus-stdio-file evaluation, which could not run on a deployment
+whose clients are all HTTP. Design and review:
+`docs/design/2026-09-30-u1-durable-per-transport-window.md`.
 
-- the durable start timestamp and the timestamp seven full days later;
-- Prometheus counter increases over that exact interval; and
-- process restarts copied from deployment events;
-- the final durable JSON aggregate and its rendered distribution table.
+1. Stop the gateway gracefully. Archive (move, never edit) any earlier
+   `protocol-revision-telemetry` directory under the data directory. A v1
+   window is refused on open and never converted.
+2. Deploy the release build and start it. Every HTTP `serve` process appends
+   its own segment to `window.json`, rewrites its cumulative counts every 5 s,
+   and seals the segment on the shutdown signal.
+3. Keep other gateways (the compat lane, dev runs) off the production data
+   directory with `MCP_GATEWAY_CONFIG_DIR`. A foreign writer blocks the
+   decision; it does not silently merge.
+4. After at least seven days, restart the gateway once, gracefully. The
+   restart seals the day-7 segment. The decision reads only the sealed prefix
+   of clean segments, and its elapsed time is that span, never the wall clock.
+5. Search the gateway log over the window for "not durable". Any hit means
+   the window is not certified.
+6. Run the decision with absolute paths (`~` is not expanded):
 
-Use the durable file's start time for the stdio retirement decision, not an
-operator-supplied duration or an in-memory process snapshot. No distribution can
-be claimed until the result comment contains that live evidence. Evaluate the
-final gate with `production_retirement_decision`: it requires the HTTP baseline
-to match the durable stdio start time and retires only the intersection of the
-HTTP and stdio candidates. A standalone stdio result is not a production
-retirement decision.
+   ```text
+   U1_DATA_DIR=/Users/<operator>/.mcp-gateway \
+   U1_POPULATION=http \
+   U1_LISTEN=127.0.0.1:39401 \
+   U1_EXE_PREFIX=/Users/<operator>/.local/libexec/mcp-gateway/ \
+   cargo test --lib protocol_revision_telemetry::tests::u1_production_decision \
+     -- --ignored --exact --nocapture
+   ```
+
+   The output must say `1 passed`. It lists each segment's writer for
+   attestation, prints the distribution table and the decision, and writes
+   `decision.json` beside the window. Record that file and the table in the
+   result comment.
+
+The decision certifies HTTP only. Stdio children record no segments, so a
+stdio observation in the window, or a declaration other than `http`, blocks
+with `PopulationMismatch`. Missing-revision requests stay in the 2% gate; the
+per-caller breakdown (named client, else User-Agent family) only identifies
+which callers to fix.
 
 **Pre-registered 2% rule: not applied.** The stop criterion forbids narrowing
 on partial data. Decision 2 stays unfrozen. No revision is retired.

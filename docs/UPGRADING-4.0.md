@@ -129,6 +129,9 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
+| 105 | Reserved: lands with a pending change | None yet |
+| 106 | Reserved: lands with a pending change | None yet |
+| 107 | The protocol-revision measurement window is per transport; a v1 window is refused | Archive the old `protocol-revision-telemetry` directory before starting a measurement window |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2934,6 +2937,19 @@ no subject keep the 3.x behaviour.
 
 **Action:** a client that proves a subject and renews its bearer token mid-session must
 re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
+
+## 107. The protocol-revision window is per transport
+
+**Startup:** no notice
+
+The RFC-0060 U1 measurement window (`protocol-revision-telemetry/window.json` in the data
+directory) is now schema v2. HTTP `serve` records its own counts in one segment per process, and
+stdio keeps its counts apart, so a stdio request can no longer stand in for HTTP traffic. A v1
+window is not converted: the gateway keeps serving, logs that telemetry is not durable, and leaves
+the file untouched. The decision is run as described in RFC-0060.
+
+**Action:** move the old `protocol-revision-telemetry` directory aside before starting a
+measurement window.
 
 ## Upgrading from 3.5.x: a walkthrough
 
