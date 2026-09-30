@@ -1934,7 +1934,7 @@ class VariantStage(unittest.TestCase):
                 f"{pin!r} is not name@version:sha512-<integrity>",
             )
         names = {pin.split("@")[0] for pin in pins}
-        for name in ("npm", "brace-expansion", "ip-address", "tar"):
+        for name in ("npm", "brace-expansion", "ip-address", "tar", "undici"):
             self.assertIn(name, names, f"{name} is fetched without a pinned hash")
         # A pin that is never compared is text: the tarball must be hashed and
         # the result checked against it, as an exact string.
