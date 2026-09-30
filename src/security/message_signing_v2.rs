@@ -77,7 +77,7 @@ impl MessageSigner {
             return Err(signing_error("Signing result contains an unsafe integer"));
         }
         let input = MacInput {
-            domain: "mcp-gateway-response-v2",
+            domain: "mcp-gateway-response-v9",
             body,
             request_id: response.id.as_ref().map(TypedRequestId::from),
             alg: "hmac-sha256",
