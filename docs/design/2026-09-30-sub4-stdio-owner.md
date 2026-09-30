@@ -1,8 +1,10 @@
 # MIK-7272.SUB4.STDIO.OWNER.1–5 and SUB4.BRIDGE.LIFE.1 — the stdio owner and the held legacy RPC
 
-Status: §P1a and §P1b for OWNER.1, OWNER.3, OWNER.4, OWNER.5 and LIFE.1, submitted together for
-one two-seat design review 2026-09-30. §P1b.OWNER.2 is a marked stub, filled and reviewed after
-#2414 lands, because that PR rewrites the task-store files it depends on.
+Status: rev 3 (2026-09-30), refreshed against `41ef8781c` (#2414 merged). Rev 3 changes:
+the criteria are quoted from the release ledger rather than Linear; D1's catalogue path is
+corrected (the rev 2 signature change was a public-API change); D5 is rewritten to the ledger's
+LIFE.1 text; §P1b.OWNER.2 is filled; D7 adds MIK-7217.STDIO.1, which rev 2 did not cover.
+Round 2 for both seats (seat 1 reviewed rev 1; seat 2 has reviewed nothing yet).
 
 Amends `docs/design/2026-08-31-sub-4-idempotency-wiring.md`. That document (lines 36–43) records
 the `MIK-7272.SUB4.STDIO.OWNER.*` criteria as invented by a reviewer, because they exist only in
@@ -14,7 +16,22 @@ and `MIK-7272.LIFE.1`. Tests and PR bodies use these IDs.
 
 ## §P1a — Problem definition
 
-### The criteria, verbatim from Linear MIK-7272 (read 2026-09-30)
+### The criteria, verbatim from the release ledger (authoritative)
+
+`docs/requirements/RELEASE-4.0.0-scope-update.md:140-146`. These are what the rows are graded
+against; the Linear text below is provenance only.
+
+| Row | Criterion |
+|---|---|
+| MIK-7217.STDIO.1 | The stdio server/discover answer advertises 2026-07-28 when the modern protocol is on, asserted by an exact-version test (MIK-7217 AC DISCOVER.1 caveat). |
+| MIK-7272.OWNER.1 | On modern stdio, keyed writes execute once and replay without another effect; a keyless write executes (no refusal); legacy unkeyed repeats execute twice; all six management branches are tested (MIK-7272 SUB4.STDIO.OWNER.1, amended by operator ruling 2026-09-30). |
+| MIK-7272.OWNER.2 | The same protected task store reopens or relocates and its typed local operator retrieves the task; another store and a same-store HTTP owner cannot retrieve or alias it; exercised through store integration and the independent functional gate, with no global lookup and no new instance UUID (MIK-7272 SUB4.STDIO.OWNER.2). |
+| MIK-7272.OWNER.3 | An injected principal tag or HTTP credential string equal to the stdio serialized spelling cannot select or alias the stdio local operator; only the transport creates the typed tag; same-key owner-specific outputs stay separate and the real stdio owner works (MIK-7272 SUB4.STDIO.OWNER.3). |
+| MIK-7272.OWNER.4 | A ToolPolicy denial refuses a local-operator mutation before retained-output delivery with zero dispatch to the denied target, while a permitted neighbouring target works (MIK-7272 SUB4.STDIO.OWNER.4). |
+| MIK-7272.OWNER.5 | The real stdio-created context carries its execution principal but no verified identity, personal account or delegated grant; account-dependent calls are refused and an ordinary local mutation works (MIK-7272 SUB4.STDIO.OWNER.5). |
+| MIK-7272.LIFE.1 | A held legacy RPC can be cancelled and joined: cancelling it releases the held exchange and its waiter gets a terminal answer, with nothing left pending (MIK-7272 SUB4.BRIDGE.LIFE.1). |
+
+### Provenance: the Linear MIK-7272 text (read 2026-09-30)
 
 - **OWNER.1** — Real modern stdio keyed writes execute once and replay without another effect;
   missing key refuses; legacy unkeyed repeats execute twice. Preserve all six management
@@ -119,7 +136,7 @@ and each test fails when the property it guards is removed:
 
 ## §P1b — Solution design
 
-### Facts the design rests on (read at `dc44ebc7b`)
+### Facts the design rests on (read at `dc44ebc7b`; rev 3 re-checked at `41ef8781c`)
 
 - F1. One serve mode per process: `src/main.rs:295-296` runs `run_stdio_server` or `run_server`,
   never both. A stdio gateway and an HTTP gateway share nothing in memory.
@@ -167,12 +184,18 @@ Where the tag travels (every stdio caller shape, not only `tools/call`):
    `build_stdio_caller_context` and in the `stdio_caller_context` test fixture.
 2. Catalogue requests (`prompts/*`, `resources/*`) have no caller context: stdio builds an
    `AuthenticatedClient` (`server/stdio_catalogue.rs:36-70`). `AuthenticatedClient` is public API
-   (`pub mod auth`, all fields `pub`), so the tag does NOT go on it (C7). Instead the five
-   `MetaMcp` catalogue handlers (`handle_prompts_list/get`, `handle_resources_list/read/
-   templates_list`) and `handler_proof` (`meta_mcp/caller_forward.rs:34-39`) take an extra
-   crate-private `local_operator: Option<StdioLocalOperator>` argument; the HTTP router passes
-   `None`, `stdio_catalogue::dispatch` passes `Some`. The resource-owner lookups that classify
-   (`meta_mcp/protocol.rs:163,273`; `meta_mcp/resources.rs:307,408,458`) read it from there.
+   (`pub mod auth`, all fields `pub`), so the tag does NOT go on it (C7).
+   Rev 3 correction: rev 2 added a parameter to the five `MetaMcp` catalogue handlers. They are
+   `pub async fn` (`meta_mcp/protocol.rs:150,217`; `meta_mcp/resources.rs:294,361,400`) on a type
+   the crate re-exports through `gateway::test_helpers::MetaMcp` (`gateway/mod.rs:88-92`,
+   `#[doc(hidden)]` but reachable). Changing their signatures is a public-API change (C7), and a
+   `pub fn` taking a `pub(crate)` type trips `private_interfaces` under `-D warnings`. Instead each
+   handler's body moves into a `pub(crate)` sibling (`*_as(.., local_operator)`); the `pub` handler
+   becomes a one-line delegate passing `None`, so its signature and behaviour for HTTP and
+   integration tests are unchanged. `stdio_catalogue::dispatch` calls the `pub(crate)` sibling with
+   `Some`. `handler_proof` (`pub(super)`, `meta_mcp/caller_forward.rs:34`) takes the argument
+   directly. The resource-owner lookups that classify (`meta_mcp/protocol.rs:163,273`;
+   `meta_mcp/resources.rs:307,408,458`) read it from there.
 
 Decisions that switch from the string to the tag:
 
@@ -264,79 +287,158 @@ asserts three things in one session:
    verified end-user identity" (`meta_mcp/invoke.rs:3153-3154`);
 3. an ordinary local mutation succeeds (positive control).
 
-### D5 — LIFE.1: cancel and join held stdio calls
+### D5 — LIFE.1: cancel and join a held legacy RPC (rev 3, rewritten to the ledger text)
 
-Cancel. The read loop, before the spawn path, handles `notifications/cancelled`: when
-`params.requestId` names an in-flight spawned dispatch, that task is aborted. Unknown or finished
-ids are ignored (the MCP spec lets the receiver ignore them). `initialize` runs inline, is never
-tracked, and cannot be cancelled (spec: MUST NOT).
+Vocabulary, fixed against the code. The only production `ClientChannel` caller on stdio is the
+input bridge (`meta_mcp/invoke.rs:1058`, `InputBridge::run` → `ask` → `send_request`,
+`gateway/input_bridge.rs:526,690`). A **held legacy RPC** is a legacy-shaped stdio `tools/call`
+whose dispatch is parked in `StdioClientChannel::send_request` waiting for the client's reply to
+an outbound `elicitation/create`. The **held exchange** is that outbound prompt: its entry in
+`StdioClientChannel.pending` (`server/stdio_channel.rs:27`). Its **waiter** is the
+`send_request` future inside the spawned dispatch task. **Nothing left pending** means: no entry
+in `pending`, no task in the `JoinSet`, the inflight slot and the admission permit released.
 
-Bookkeeping (rev 2):
-- `HashMap<RequestId, (task::Id, AbortHandle)>`, keyed by the protocol `RequestId`, which keeps a
-  numeric id and a string id distinct (`protocol/messages.rs:200-207`).
-- Duplicate in-flight id (a client violating the spec's no-reuse rule): the first mapping is kept
-  and the second dispatch still runs, but it is not cancellable by id; a warning is logged. The
-  duplicate is not refused, because refusing it could break a lenient client in the operator's
-  live config (lane rule "Real-config compatibility").
+Mechanism. The read loop handles `notifications/cancelled` before the notification drop at
+`server/mod.rs:3100` (it is routed in the loop, never dispatched): when `params.requestId` names an
+in-flight spawned dispatch, that task is aborted. The abort drops the dispatch future, so:
+
+1. the waiter ends at once with a terminal outcome instead of waiting out the bridge's timeout;
+2. `PendingRequestGuard` (`stdio_channel.rs:106`) removes the held exchange from `pending`, so a
+   late client reply to the prompt matches nothing (`resolve` → `false`, the existing path);
+3. the slot and permit it held drop with it;
+4. the completion arm (below) joins it, so no task is left.
+
+No response frame is written for the cancelled id: MCP says the receiver SHOULD NOT answer a
+cancelled request. Unknown or finished ids are ignored (spec: MAY ignore). `initialize` runs
+inline, is never tracked, and cannot be cancelled (spec: MUST NOT).
+
+Reading the ledger's "its waiter gets a terminal answer": the waiter is the gateway-side future
+that awaits the held exchange, not the client, which by the spec has stopped waiting. The
+alternative reading, an error frame to the client, contradicts the spec's SHOULD NOT and is
+rejected. Reviewers and the lead are asked to confirm this reading; a different ruling changes
+the test, not the mechanism.
+
+Why abort rather than a cooperative signal to the waiter. A targeted "resolve this dispatch's
+prompts with an error" needs (a) a map from the inbound request id to the outbound prompt ids the
+bridge mints, and (b) a `DeliveryError` variant for "cancelled". `DeliveryError` is a `pub` enum
+without `#[non_exhaustive]` (`input_bridge.rs:159-160`), so (b) is a public-API change (C7).
+Abort reaches the same end state, with no new variant and no second map.
+
+Bookkeeping:
+- `HashMap<RequestId, (task::Id, AbortHandle)>`, keyed by the protocol `RequestId`, which keeps
+  numeric and string ids distinct (`protocol/messages.rs:200-207`).
+- Duplicate in-flight id (a client breaking the no-reuse rule): the first mapping is kept, the
+  second dispatch still runs but cannot be cancelled by id, and a warning is logged. It is not
+  refused, because that could break a lenient client in a live config.
 - An entry is removed on completion only when the completing `task::Id` still owns it, so a stale
   completion cannot unmap a live dispatch.
-- Reaping is completion-driven: the read `select!` gains a
-  `join_next_with_id(), if !dispatches.is_empty()` arm. An aborted task is therefore joined as
-  soon as it ends, not when the next line or EOF arrives.
+- Reaping is driven by completion: the read `select!` (`server/mod.rs:2482`) gains a
+  `join_next_with_id(), if !dispatches.is_empty()` arm, replacing the per-line `try_join_next`
+  (`:2503`). An aborted task is joined as soon as it ends.
 
-Response race, stated rather than promised away: `abort()` does not stop a task that is already
-being polled, and producing a response and queueing it are separate steps
-(`server/mod.rs:2608-2631`). The guarantee is that once the aborted task has been joined, no
-further frame for that id is queued. A frame queued before the join may still be delivered, which
-the spec permits.
+Response race, stated rather than promised away. `abort()` does not stop a task that is already
+being polled, and producing a response and queueing it are separate steps (`:2610-2631`). The
+guarantee is: once the aborted task is joined, no further frame for that id is queued. A frame
+queued before the join may still be delivered, which the spec permits.
 
-Settlement matrix. Each row is asserted separately; one "cancel means unknown" test would encode
-the wrong contract.
+Settlement matrix (unchanged from rev 2). Each row is asserted separately:
 
 | Cancelled while | Admission state after | Re-issue with same key |
 |---|---|---|
 | queued before dispatch (waiting for its admission permit) | lease abandoned (`idempotency/admission.rs:406-416`) | executes once |
-| held at the input bridge (`input_required` prompt) | outer lease settled unknown; inner reservation released, having been disarmed (`meta_mcp/invoke.rs:2266-2271`) | refused as outcome-unknown, no second dispatch |
+| held at the input bridge (the LIFE.1 case) | outer lease settled unknown; inner reservation released, having been disarmed (`meta_mcp/invoke.rs:2266-2271`) | refused as outcome-unknown, no second dispatch |
 | backend call in flight | lease settled unknown | refused, no second dispatch |
-| result secured, waiting to be queued | retained completed result (`server/mod.rs:3008-3011`) | replays the stored result |
+| result secured, waiting to be queued | retained completed result | replays the stored result |
 
-EOF. Existing mechanism (F7): held prompts fail, dispatches drain for `STDIO_DRAIN_TIMEOUT`, then
-are aborted and joined. Rev 2 adds the part that is missing: `writer_task.await` runs outside
-that timeout (`server/mod.rs:2688-2721`), and the writer can block indefinitely in
-`write_all`/`flush` when the client stops reading stdout (`server/stdio_writer.rs:45-55`). A client
-that closes stdin while leaving stdout open and unread would then keep `run_stdio_on` from ever
-returning. Fix: join the writer under the same bound and abort it on timeout. The LIFE.1 test
-exercises that backpressure case (a duplex whose read side is never drained), not only a
-continuously drained stream.
+EOF join (unchanged from rev 2). `channel.close()` fails held prompts; dispatches drain for
+`STDIO_DRAIN_TIMEOUT`, then are aborted and joined (`:2687-2703`). `writer_task.await`
+(`:2718`) runs outside that bound, and the writer can block forever in `write_all`/`flush` when the
+client stops reading stdout (`server/stdio_writer.rs`). The fix joins the writer under the same
+bound and aborts it on timeout. The test uses a duplex whose read side is never drained.
 
-Not done: forwarding the cancel upstream to the backend as its own `notifications/cancelled`. The
-backend call may keep running after the abort, which matches today's behaviour when an HTTP client
-disconnects. That is a separate feature (4.1 by the lane scope rule); it is recorded here, not
-dropped silently.
+Not done: forwarding the cancel upstream as the backend's own `notifications/cancelled`. The
+backend call may keep running after the abort, as it does today when an HTTP client disconnects.
+That is a separate feature, recorded here rather than dropped.
 
-### §P1b.OWNER.2 — STUB (after #2414)
+### D6 — OWNER.2: a typed local operator in the task store (rev 3; scope ruling requested)
 
-Facts so far: stdio never opens the task store (`task: None`, `server/mod.rs:3115-3119`; store
-opened only in `Gateway::run`, `:1812-1850`); the store lease allows one owning process per
-directory (`task_service/store.rs:705-722`); owners are `route_task_owner` strings
-(`router/handlers/tasks.rs:45-65`). Open design question for this stub: does OWNER.2 require
-stdio to gain a task route (a 4.0 build item) or only a typed local-operator owner in the store
-(so a same-store HTTP owner cannot alias it)? Filled against the post-#2414 tree and reviewed
-separately.
+Facts at `41ef8781c` (#2414 merged, which did not change them):
+- Stdio never opens the task store: `task: None` (`server/mod.rs:3137,3656`). The store is opened
+  only in `Gateway::run` (`:1824-1880`) through `open_runtime_with_recovery`.
+- `tasks/*` is served only by the HTTP router arms (`router/handlers.rs:1843-1865`,
+  `router/handlers/tasks.rs:227,374,510`), which take `&AppState`.
+- A task owner is `ExecutionAdmission::owner(principal: &str)`, a digest of
+  `[PRINCIPAL_TAG, principal]` (`idempotency/admission.rs:875-890`). HTTP owners come from
+  `route_task_owner` (`router/handlers/tasks.rs:52-66`): `oidc:…`, `credential:…`, or
+  `local:auth-disabled:tasks:v1`.
+- The store lease allows one owning process per directory (`task_service/store.rs`), so stdio
+  and HTTP never hold the same store at once. "Same-store HTTP owner" means sequential opens.
+
+The row needs the stdio operator to retrieve a task. Today it has neither a store nor a route,
+so this is a build item, not a test. Whether 4.0 builds it or the row moves is the operator's
+call (asked 2026-09-30). The design below is the minimal build if 4.0 keeps it.
+
+1. Owner. `ExecutionAdmission::local_operator_owner(StdioLocalOperator) -> TaskOwner`, a digest
+   of `[LOCAL_OPERATOR_TAG]` under a separate domain tag, with no string input. Every string
+   principal hashes under `PRINCIPAL_TAG` with a second element, so no HTTP caller (including one
+   spelling `"stdio"` or `local:…`) can produce it. The digest has no store path and no instance
+   id, so it survives reopen and relocation (C3: no global lookup, no new UUID).
+2. Store. Stdio opens the same store `Gateway::run` opens, from `config.tasks.store_dir` (existing
+   key; no new config). The open sequence moves into one `pub(crate)` helper shared by both
+   transports, so they cannot drift. A second open of a leased directory fails as it does today.
+3. Route. The three `tasks/*` arms and task-augmented `tools/call` take a crate-private
+   `TaskRoute { service, executor, owner }` instead of `&AppState`, extracted from the arms as
+   they stand. HTTP builds it from `route_task_owner`; stdio builds it from (1).
+4. Tests (store integration): the stdio operator creates a task; the store is closed and reopened
+   at the same path and at a moved path, and the operator retrieves it. From a different store
+   the id is absent. On the same store, HTTP-shaped owners (`"stdio"`, `local:auth-disabled:…`,
+   a credential digest) get the not-found answer and cannot cancel or update it. The
+   independent functional gate runs the binary over real pipes.
+
+Size and risk: about 500+ lines across `task_service`, `router/handlers/tasks.rs` and the stdio
+loop, FULL tier. No public API item, if `TaskRoute` and the helper stay crate-private.
+
+### D7 — MIK-7217.STDIO.1: stdio discover advertises 2026-07-28 when modern is on
+
+Facts. The stdio arm hardcodes `discover_document(false)` (`server/mod.rs:2957`); HTTP passes
+`running().server.modern_protocol` (`router/handlers.rs:1192`). Stdio never reads
+`server.modern_protocol`: its request classification serves modern shapes whatever the flag says
+(`classify_and_observe`, `:3073`). The document's capabilities always carry the Tasks extension
+(`ExtensionSet::gateway_declares`, `protocol/extensions.rs:71-75`), whatever the flag.
+
+Dependency (the lead's rule: advertise only what stdio can serve). Advertising 2026-07-28 on stdio
+while also declaring Tasks claims a modern tasks surface that stdio lacks until D6 lands. So D7
+lands after D6. If the operator moves OWNER.2 out of 4.0, D7 instead drops Tasks from the stdio
+discover answer, and that change of today's stdio advertisement is reported to the lead first.
+
+Change. `run_stdio_on` already holds the config; its `modern_protocol` value goes to the dispatcher
+(a field alongside `handshake_capabilities`) and into `discover_document(modern)`. Test: exact
+`supportedVersions` equality over `run_stdio_on` with modern on (contains `2026-07-28`) and off
+(equals `SUPPORTED_VERSIONS`), not a `contains`-only check.
 
 ### Increments (one PR each, in order)
 
 | # | Rows | Tier | Content |
 |---|---|---|---|
-| I1 | OWNER.3, OWNER.5 | FULL (identity) | D1 + D4; failing tests first commit |
-| I2 | OWNER.1, OWNER.4 | FULL (firewall/policy) | D2 + D3 tests; fix only if red |
-| I3 | LIFE.1 | STANDARD | D5 |
-| I4 | OWNER.2 | FULL | after #2414, own design section |
+| I1 | OWNER.3, OWNER.5 | FULL (identity) | D1 + D4 |
+| I2 | OWNER.1, OWNER.4 | FULL (policy) | D2 + D3 tests; a fix only if red |
+| I3 | LIFE.1 | FULL (it touches admission settlement) | D5 |
+| I4 | OWNER.2 | FULL | D6, if the operator keeps it in 4.0 |
+| I5 | STDIO.1 | STANDARD | D7, after I4 |
+
+Red proof with CI as the only compiler. A failing-tests commit must fail on assertions, not fail
+to compile. So the tests drive seams that exist before and after the fix: `run_stdio_on` over
+`tokio::io::duplex`, `dispatch_single_with_sink`, and cache and admission separation observed
+through replay behaviour. They never name `StdioLocalOperator` or new fields. Helpers live in the
+test files, so the fix commit does not touch them. I2 may be green on arrival (D2 and D3 expect
+no product change). Its "fails when the property is removed" proof is then the mutant batch, not
+a manufactured red, and the PR says so.
 
 ### Test plan pointer
 
-Each increment's test plan is written into `docs/design/test-plan.md` under a
-`MIK-7272.OWNER.*` / `MIK-7272.LIFE.1` heading and reviewed before its failing tests are written.
+Each increment's test plan is written into `docs/design/2026-09-30-sub4-stdio-owner-test-plan.md` under
+its row IDs and reviewed before its
+failing tests are written.
 
 ## Review log
 
@@ -348,3 +450,8 @@ Each increment's test plan is written into `docs/design/test-plan.md` under a
   reframed as preventive hardening (D1).
 - Rev 1, seat 2: pending at the time of writing.
 - Coordinator note (#1951): D3 re-verified; stdio order recorded, fix left to the controls lane.
+- Rev 3 (this revision): refreshed at `41ef8781c` after 25 merges, of which only #2381 (sync
+  admission now stores a `StoredDelivery` envelope) touches a cited file, with no effect on any
+  decision. Criteria switched to the ledger text. D1 catalogue path corrected (public-API
+  reachability via `gateway::test_helpers`). D5 rewritten to the ledger's LIFE.1 text. D6 (OWNER.2)
+  and D7 (STDIO.1) added. Sent to both seats as round 2.
