@@ -96,8 +96,18 @@ struct Setup {
     /// (0 = guard off, attribution only).
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     tenant_limit: Option<usize>,
-    inspection_action_mode: bool,
-    idempotency: bool,
+    meta_mode: MetaMode,
+}
+
+/// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
+#[derive(Default, PartialEq)]
+enum MetaMode {
+    #[default]
+    Plain,
+    /// Response inspection refuses a HIGH finding instead of annotating it.
+    InspectionBlocks,
+    /// The idempotency cache is on, so a re-issued key replays.
+    Idempotent,
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
@@ -174,10 +184,10 @@ async fn fixture(setup: Setup) -> Fixture {
         state_mut.firewall = Some(firewall(config.clone()));
         meta.set_firewall(Some(firewall(config)));
     }
-    if setup.inspection_action_mode {
+    if setup.meta_mode == MetaMode::InspectionBlocks {
         meta.enable_response_inspection_action_mode();
     }
-    if setup.idempotency {
+    if setup.meta_mode == MetaMode::Idempotent {
         meta.enable_idempotency(
             Arc::new(crate::idempotency::IdempotencyCache::new()),
             crate::idempotency::CLEANUP_INTERVAL,

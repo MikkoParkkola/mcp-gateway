@@ -61,6 +61,10 @@ module = "src/security/transparency_log_append.rs"
 reason = "the write half of the transparency-log control (rotation trigger, reserve, high-water mark); the control row names transparency_log.rs"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_attributed.rs"
+reason = "the invocation-record writer of the transparency-log control, with MIK-7116.MIN.1 tenant attribution fields; it adds fields to a record and refuses no call; the control row names transparency_log.rs"
+
+[[coverage.not_a_control]]
 module = "src/security/signature_chain.rs"
 reason = "ASI07 chain signing and verification with no caller yet; it becomes a control row when the invoke paths enforce it (design increment 2)"
 

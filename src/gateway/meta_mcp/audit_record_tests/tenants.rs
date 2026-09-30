@@ -81,10 +81,9 @@ async fn allowed_call_record_carries_tenants_and_data_classes() {
         "{record}"
     );
     let text = log_text(&dir);
-    assert!(
-        !text.contains("cust-1") && !text.contains("cust-9"),
-        "{text}"
-    );
+    for raw in ["cust-1", "cust-9"] {
+        assert!(!text.contains(raw), "{raw} written raw: {text}");
+    }
 }
 
 /// T8. A response the inspection gate refuses still records the response's

@@ -79,10 +79,9 @@ async fn direct_record_carries_tenants_and_data_classes() {
         "{entry}"
     );
     let text = std::fs::read_to_string(&fx.path).unwrap();
-    assert!(
-        !text.contains("cust-1") && !text.contains("cust-9"),
-        "{text}"
-    );
+    for raw in ["cust-1", "cust-9"] {
+        assert!(!text.contains(raw), "{raw} written raw: {text}");
+    }
 }
 
 /// T26. A response the inspection gate refuses on the direct route keeps
@@ -93,7 +92,7 @@ async fn direct_gate_refusal_keeps_response_tenants() {
     let fx = fixture(Setup {
         reply: Some(reply_naming("cust-9", &format!("AWS_ACCESS_KEY_ID={key}"))),
         tenant_limit: Some(0),
-        inspection_action_mode: true,
+        meta_mode: MetaMode::InspectionBlocks,
         ..Setup::default()
     })
     .await;
@@ -118,7 +117,7 @@ async fn direct_idempotent_replay_record_carries_delivered_tenants() {
     let fx = fixture(Setup {
         reply: Some(reply_naming("cust-9", "")),
         tenant_limit: Some(0),
-        idempotency: true,
+        meta_mode: MetaMode::Idempotent,
         ..Setup::default()
     })
     .await;

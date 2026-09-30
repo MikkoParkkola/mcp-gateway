@@ -125,11 +125,9 @@ impl DispatchNotes {
         delivered: Option<&Value>,
     ) -> Map<String, Value> {
         if self.cached {
-            tenants.extend(
-                delivered
-                    .map(|value| meta.response_tenants(value))
-                    .unwrap_or_default(),
-            );
+            if let Some(value) = delivered {
+                tenants.extend(meta.response_tenants(value));
+            }
         } else {
             tenants.extend(self.response_tenants.iter().cloned());
         }
