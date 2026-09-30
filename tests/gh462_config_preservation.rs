@@ -313,7 +313,7 @@ fn gh462_shared_loader_distinguishes_missing_valid_and_invalid_files() {
 #[derive(Debug, PartialEq, Eq)]
 struct EntrySnapshot {
     contents: Vec<u8>,
-    #[cfg(unix)] // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
+    #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
     identity: (u64, u64),
 }
 
@@ -332,7 +332,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
             } else {
                 std::fs::read(&path).unwrap()
             };
-            #[cfg(unix)] // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
+            #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
             let identity = {
                 use std::os::unix::fs::MetadataExt;
                 let metadata = std::fs::symlink_metadata(&path).unwrap();

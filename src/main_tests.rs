@@ -253,7 +253,7 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
         if original.contains("bad/name") {
             assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));
         }
-        #[cfg(unix)] // Unix-only: compares (dev, ino) file identity via MetadataExt, which Windows std metadata does not expose.
+        #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
         let identity = {
             use std::os::unix::fs::MetadataExt;
             let metadata = std::fs::metadata(&output).unwrap();
@@ -261,7 +261,7 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
         };
         assert!(write_discovered_to_config(std::slice::from_ref(&server), Some(&output)).is_err());
         assert_eq!(std::fs::read(&output).unwrap(), original.as_bytes());
-        #[cfg(unix)] // Unix-only: compares (dev, ino) file identity via MetadataExt, which Windows std metadata does not expose.
+        #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
         {
             use std::os::unix::fs::MetadataExt;
             let metadata = std::fs::metadata(&output).unwrap();
