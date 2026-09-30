@@ -679,7 +679,7 @@ async fn backend_handler_inner(
             sealed: &state.meta_mcp.window_seal,
         }),
     ) {
-        return super::helpers::window_sealed_response();
+        return super::helpers::window_sealed_response(&json_request);
     }
 
     debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");

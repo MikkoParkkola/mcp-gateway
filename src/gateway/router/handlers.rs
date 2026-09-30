@@ -708,7 +708,7 @@ async fn meta_mcp_dispatch(
             sealed: &state.meta_mcp.window_seal,
         }),
     ) {
-        return super::helpers::window_sealed_response().into_response();
+        return super::helpers::window_sealed_response(&request).into_response();
     }
 
     // Which protocol generation is this request written against? Decided per

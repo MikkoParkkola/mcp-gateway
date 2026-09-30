@@ -118,10 +118,13 @@ pub(super) fn build_http_response(
 
 /// The refusal for a request that arrives after this process's U1 window
 /// segment sealed: it is neither counted nor served, so the client retries
-/// against the next process.
-pub(super) fn window_sealed_response() -> (StatusCode, Json<Value>) {
+/// against the next process. It answers with the request's own id, so a
+/// client waiting on that id sees the refusal instead of a timeout.
+pub(super) fn window_sealed_response(request: &Value) -> (StatusCode, Json<Value>) {
     build_http_error_response(
-        None,
+        request
+            .get("id")
+            .and_then(|id| serde_json::from_value(id.clone()).ok()),
         -32000,
         "U1 window sealed: this gateway is shutting down; retry",
         StatusCode::SERVICE_UNAVAILABLE,
