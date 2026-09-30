@@ -4,6 +4,7 @@
 //! so a `notifications/cancelled` can abort one (MIK-7272.LIFE.1, design D5 in
 //! `docs/design/2026-09-30-sub4-stdio-owner.md`).
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -52,12 +53,15 @@ impl StdioDispatches {
     ) {
         let handle = self.tasks.spawn(task);
         let Some(id) = id else { return };
-        if self.by_request.contains_key(&id) {
-            warn!(%id, "stdio: request id reused while in flight; it cannot be cancelled");
-            return;
+        match self.by_request.entry(id) {
+            Entry::Occupied(entry) => {
+                warn!(id = %entry.key(), "stdio: request id reused while in flight; it cannot be cancelled");
+            }
+            Entry::Vacant(entry) => {
+                self.by_task.insert(handle.id(), entry.key().clone());
+                entry.insert((handle.id(), handle));
+            }
         }
-        self.by_task.insert(handle.id(), id.clone());
-        self.by_request.insert(id, (handle.id(), handle));
     }
 
     /// Record `id` as cancelled, then abort its dispatch. An id that is not in

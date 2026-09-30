@@ -308,16 +308,21 @@ async fn cancelling_a_finished_call_changes_nothing() {
     assert_eq!(first["id"], json!(5), "{first}");
     send(&mut served.stdin, &cancel(&json!(5))).await;
     send(&mut served.stdin, &list(6)).await;
+    let second = next_frame(&mut served.stdout).await;
+    assert_eq!(second["id"], json!(6), "{second}");
+    // The first call has long finished; give the loop a beat to reap it, so
+    // the reuse below is a new mapping and not an in-flight duplicate.
+    tokio::time::sleep(Duration::from_millis(200)).await;
     // The finished id, reused for a call that is still running when cancelled.
     send(&mut served.stdin, &call(&json!(5), SLOW, None).to_string()).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
     send(&mut served.stdin, &cancel(&json!(5))).await;
     let frames = frames_within(&mut served.stdout, SLOW_CALL + ARRIVAL).await;
-    assert_eq!(answers(&frames, &json!(6)).len(), 1, "{frames:?}");
     assert!(
         answers(&frames, &json!(5)).is_empty(),
         "the reused id's call was cancelled, and the finished one was not answered twice: {frames:?}"
     );
+    assert!(answers(&frames, &json!(6)).is_empty(), "{frames:?}");
     served.task.abort();
 }
 
