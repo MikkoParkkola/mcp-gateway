@@ -154,3 +154,46 @@ async fn public_refuses_a_name_that_resolves_private() {
     assert!(error.contains("sni.test"), "names the host: {error}");
     assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing connected");
 }
+
+/// Answers every name with a public address first and loopback second.
+struct PublicThenLoopback;
+
+impl HostResolver for PublicThenLoopback {
+    fn lookup(
+        &self,
+        _host: &str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<IpAddr>>> + Send + '_>> {
+        Box::pin(async {
+            Ok(vec![
+                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                IpAddr::V4(Ipv4Addr::LOCALHOST),
+            ])
+        })
+    }
+}
+
+#[tokio::test]
+async fn public_checks_every_resolved_address() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&accepted);
+    tokio::spawn(async move {
+        while listener.accept().await.is_ok() {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    let request = format!("ws://mixed.test:{port}/")
+        .into_client_request()
+        .unwrap();
+    let error = tokio::time::timeout(
+        WAIT,
+        connect_pinned(request, DestinationPolicy::Public, &PublicThenLoopback),
+    )
+    .await
+    .expect("refusal must not hang")
+    .expect_err("one private answer refuses the name")
+    .to_string();
+    assert!(error.contains("SSRF blocked"), "{error}");
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing connected");
+}

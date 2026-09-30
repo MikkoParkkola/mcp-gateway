@@ -67,7 +67,10 @@ async fn initialize(advertised: &Advertised) -> crate::Result<()> {
     let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
     let mut client = OAuthClient::with_destination(
         DestinationPolicy::Public,
-        reqwest::Client::new(),
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap(),
         "hardened-backend".to_string(),
         format!("http://localhost:{port}/mcp"),
         vec![],
@@ -78,8 +81,12 @@ async fn initialize(advertised: &Advertised) -> crate::Result<()> {
 }
 
 async fn assert_refused(advertised: Advertised, which: &str) {
-    let error = initialize(&advertised).await.expect_err(which).to_string();
-    assert!(error.contains("SSRF blocked"), "{which}: {error}");
+    let error = initialize(&advertised).await.expect_err(which);
+    assert!(
+        error.to_string().contains("SSRF blocked"),
+        "{which}: {error}"
+    );
+    assert_eq!(error.to_rpc_code(), -32600, "{which}: {error}");
 }
 
 #[tokio::test]
@@ -145,6 +152,7 @@ fn oauth_redirect_hop_policy() {
         Hop::Refuse(reason) if reason.contains("SSRF blocked")
     ));
     assert_eq!(hop(DestinationPolicy::Public, 0, &public), Hop::Follow);
+    assert_eq!(hop(DestinationPolicy::Public, 9, &public), Hop::Follow);
     assert_eq!(hop(DestinationPolicy::Public, 10, &public), Hop::Stop);
     assert_eq!(hop(DestinationPolicy::Configured, 9, &public), Hop::Follow);
     assert_eq!(hop(DestinationPolicy::Configured, 10, &public), Hop::Stop);
@@ -194,5 +202,49 @@ async fn hardened_oauth_client_is_pinned() {
             .expect_err("nothing serves discovery here");
         let seen = accepted.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(seen > 0, reaches, "{destination:?}: {seen} connections");
+    }
+}
+
+/// Answer every connection with a redirect to `location`.
+async fn redirecting_listener(location: String) -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf).await;
+            let reply = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            let _ = stream.write_all(reply.as_bytes()).await;
+        }
+    });
+    port
+}
+
+/// The redirect policy is wired into the production OAuth client: a hop to a
+/// private literal is never followed under `Public`. The first request uses a
+/// literal too, which never reaches the resolver, so the pinned client can
+/// reach a loopback mock at all.
+#[tokio::test]
+async fn hardened_oauth_client_refuses_a_literal_redirect() {
+    for (destination, followed) in [
+        (DestinationPolicy::Public, false),
+        (DestinationPolicy::Configured, true),
+    ] {
+        let (target, accepted) = counting_listener().await;
+        let origin = redirecting_listener(format!("http://127.0.0.1:{target}/next")).await;
+        let result = super::http_client(destination)
+            .unwrap()
+            .get(format!("http://127.0.0.1:{origin}/start"))
+            .send()
+            .await;
+        let seen = accepted.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(seen > 0, followed, "{destination:?}: {seen} connections");
+        if !followed {
+            let error = result.expect_err("the hop is refused");
+            assert!(error.is_redirect(), "{error:?}");
+        }
     }
 }

@@ -148,7 +148,9 @@ fn local(port: u16) -> Value {
 }
 
 fn with_backends(posture: &str, backends: Value) -> Value {
-    json!({"backends": backends, "security": {"posture": posture}})
+    let mut document = json!({"security": {"posture": posture}});
+    document["backends"] = backends;
+    document
 }
 
 async fn assert_refused(fixture: &Fixture, name: &str, accepted: &AtomicUsize) {

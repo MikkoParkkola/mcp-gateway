@@ -147,3 +147,26 @@ async fn hardened_backend_oauth_discovery_is_pinned() {
         assert_eq!(seen > 0, reaches, "{policy:?}: {seen} connections");
     }
 }
+
+/// The registry's policy is set once: a later `Configured` call cannot
+/// downgrade a `Public` registry or the backends it holds or will hold.
+#[test]
+fn enforced_public_is_never_downgraded() {
+    let backend = |name: &str| {
+        Arc::new(Backend::new(
+            name,
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ))
+    };
+    let registry = BackendRegistry::new();
+    let before = backend("before");
+    assert!(registry.register(Arc::clone(&before)));
+    registry.enforce_destination(DestinationPolicy::Public);
+    registry.enforce_destination(DestinationPolicy::Configured);
+    let after = backend("after");
+    assert!(registry.register(Arc::clone(&after)));
+    assert_eq!(before.destination(), DestinationPolicy::Public);
+    assert_eq!(after.destination(), DestinationPolicy::Public);
+}

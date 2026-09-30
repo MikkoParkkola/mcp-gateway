@@ -19,6 +19,14 @@ fn public_refuses_private_literals_in_every_spelling() {
         "http://[::ffff:169.254.169.254]/",
         "http://[2002:7f00:1::]:9/mcp",
         "http://[fe80::1]/",
+        "http://192.168.1.1/",
+        "http://172.16.5.5/",
+        "http://0.0.0.0/",
+        // Parser-normalised spellings of 127.0.0.1: the host is checked after parsing.
+        "http://2130706433/",
+        "http://0x7f000001/",
+        "http://127.1/",
+        "http://0177.0.0.1/",
     ] {
         let error = DestinationPolicy::Public
             .check_literal(&url(literal))
