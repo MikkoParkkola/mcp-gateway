@@ -390,6 +390,14 @@ The source is `server:tool`.
   limit (about 8.7K characters, kept in text order); the 64 KiB first proposed would have
   dropped every tail fingerprint. Each cut is counted; the middle of a larger result is the
   known, observable residual.
+- **Evasion bound (stated for operators and the final review).** Per delivered result, only its
+  first and last 3 KiB of text are compared, at most 1,024 fingerprints. Content taken only from
+  the rest of a larger result is never detected, so a source that pads a result can move content
+  out of view. The egress side has no cap: every string of the forwarded params is checked, so
+  padding the relayed payload hides nothing. Below the fingerprint size nothing matches: a shared
+  run under 48 characters never counts, a run of 63 or more is guaranteed one fingerprint, and
+  `min_matches` (default 2) are needed. Acceptable for `observe`; whether `block` needs sampling
+  across the whole result is put to the final review.
 - Sensitive: `server:tool` matches `sources`, OR the result's gateway-attached
   `_context_integrity.classification.data_classes` holds `personal_data`, `financial_data` or
   `guarded_material`. The gateway's own attach overwrites any backend-supplied

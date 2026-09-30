@@ -101,3 +101,33 @@ jobs:
             printf '::error::failed combinations:%s\n' "$(printf ' [%s]' "${failed[@]}")"
             exit 1
           fi
+      # Behavioural, not just compiled: a build without `firewall` must refuse
+      # a firewall key and name the feature (COLLUDE.1 2a-i). The unit test in
+      # strict_keys.rs covers the table in the default build; this runs the
+      # real binary. One shard only: it is a link, not a clippy pass.
+      - name: A firewall key names the missing feature
+        if: matrix.shard == 'no defaults 1/3'
+        run: |
+          set -uo pipefail
+          cargo build --no-default-features --bin mcp-gateway
+          fixture="$RUNNER_TEMP/collusion.yaml"
+          printf 'security:\n  firewall:\n    collusion:\n      action: observe\n' > "$fixture"
+          chmod 600 "$fixture"
+          # A build that accepted the key would start serving: the timeout
+          # ends it, and the message check below then fails. The step shell
+          # runs with -e, so the expected failure is caught, not propagated.
+          if out=$(timeout 60 target/debug/mcp-gateway -c "$fixture" 2>&1); then
+            status=0
+          else
+            status=$?
+          fi
+          echo "$out"
+          if [ "$status" -eq 0 ] || [ "$status" -eq 124 ]; then
+            echo "::error::the no-firewall build did not refuse security.firewall (exit $status)"
+            exit 1
+          fi
+          if ! grep -qF 'built without feature "firewall"' <<< "$out" \
+            || ! grep -qF 'security.firewall' <<< "$out"; then
+            echo "::error::the refusal does not name the firewall feature and key"
+            exit 1
+          fi

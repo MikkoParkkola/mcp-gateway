@@ -322,9 +322,6 @@ fn is_backend_key(key: &str) -> bool {
 
 /// The feature a key needs when this build lacks it. Refusing such a key as a
 /// misspelling would send the operator hunting for a typo that is not there.
-/// RED-FIRST STUB: false leaves the firewall entry out.
-const RELAY_WIRED: bool = false;
-
 fn missing_feature(key: &str, leaf: &str) -> Option<&'static str> {
     missing_feature_for(key, leaf, |feature| match feature {
         "cost-governance" => cfg!(feature = "cost-governance"),
@@ -347,9 +344,7 @@ fn missing_feature_for(
     if !enabled("a2a") && key.starts_with("backends.") && A2A_BACKEND_KEYS.contains(&leaf) {
         return Some("a2a");
     }
-    if RELAY_WIRED
-        && !enabled("firewall")
-        && (key == "security.firewall" || key.starts_with("security.firewall."))
+    if !enabled("firewall") && (key == "security.firewall" || key.starts_with("security.firewall."))
     {
         return Some("firewall");
     }

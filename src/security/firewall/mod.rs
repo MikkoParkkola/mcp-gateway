@@ -39,8 +39,8 @@ pub mod budget_guard;
 #[cfg_attr(not(test), expect(dead_code))]
 mod collusion;
 mod collusion_gate;
+pub(crate) use collusion_gate::RelayCaller;
 pub use collusion_gate::{CollusionAction, CollusionConfig};
-pub(crate) use collusion_gate::{RelayCaller, detector_for};
 pub mod input_scanner;
 pub mod memory_scanner;
 pub mod principal_window;
@@ -709,7 +709,7 @@ impl FirewallVerdict {
             && !self.findings.is_empty()
             && self.findings.iter().all(|f| {
                 (f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
-                    || (collusion_gate::RELAY_WIRED && f.scan_type == ScanType::CollusionRelay)
+                    || f.scan_type == ScanType::CollusionRelay
             })
     }
 

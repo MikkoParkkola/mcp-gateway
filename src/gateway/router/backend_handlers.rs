@@ -50,57 +50,10 @@ struct BackendAuthContext<'a> {
     grant_subject: Option<&'a crate::identity_grants::GrantSubject>,
 }
 
-/// The key the direct route's per-caller firewall controls score on: the
-/// caller's `CallerKey`, as on the meta route, so one caller has one budget on
-/// both. With no key (authentication off) it is the shared per-backend bucket,
-/// never tracked; a keyed caller's reclaim deadline is renewed (CONTROL.4).
 #[cfg(feature = "firewall")]
-fn direct_control_identity(
-    state: &AppState,
-    auth: BackendAuthContext<'_>,
-    per_backend: &str,
-) -> String {
-    let (key, keyed) = direct_caller(auth, per_backend);
-    if !keyed {
-        return key;
-    }
-    if let Some(ref lifecycle) = state.session_lifecycle {
-        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
-        lifecycle.track(key.clone(), now_unix() + IDLE_TTL.as_secs());
-    }
-    key
-}
-
-/// The direct caller's key and whether it is a real identity (`true`) or the
-/// shared `per_backend` fallback. The one rule for every per-caller control
-/// on this route, relay detection included.
+mod relay;
 #[cfg(feature = "firewall")]
-fn direct_caller(auth: BackendAuthContext<'_>, per_backend: &str) -> (String, bool) {
-    let key = super::identity::caller_key(auth.grant_subject, auth.cert_identity, auth.client);
-    if key.is_empty() {
-        (per_backend.to_string(), false)
-    } else {
-        (key, true)
-    }
-}
-
-/// COLLUDE.1: record what the direct caller was actually delivered, after
-/// every gate, redaction and the provenance stamp (design §13.1).
-#[cfg(feature = "firewall")]
-fn record_direct_delivery(
-    state: &AppState,
-    auth: BackendAuthContext<'_>,
-    server: &str,
-    tool: &str,
-    result: Option<&Value>,
-) {
-    let (Some(fw), Some(result)) = (state.firewall.as_ref(), result) else {
-        return;
-    };
-    let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
-    let caller = crate::security::firewall::RelayCaller::new(&key, keyed);
-    fw.record_delivery(caller, server, tool, result);
-}
+use relay::{direct_control_identity, record_direct_delivery, relay_refusal};
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
 /// request arriving at the direct backend endpoint.
@@ -204,30 +157,10 @@ async fn apply_backend_tool_call_security(
                 &format!("Firewall blocked: {desc}"),
             ));
         }
-        // COLLUDE.1 (§13.1): every string the backend will receive, `_meta`
-        // included, before idempotency admission so a refusal reserves nothing.
-        let (key, keyed) = direct_caller(auth, &session_id);
-        let relay = fw.check_relay(
-            crate::security::firewall::RelayCaller::new(&key, keyed),
-            backend_name,
-            tool_name,
-            params,
-            (&session_id, caller_name),
-        );
-        if !relay.allowed {
-            let desc = relay
-                .findings
-                .first()
-                .map_or("", |f| f.description.as_str());
-            return Err(backend_security_error_with_status(
-                id,
-                -32002,
-                &format!("Relay detection blocked: {desc}"),
-                StatusCode::FORBIDDEN,
-            ));
-        }
-        if relay.action == FirewallAction::Warn {
-            warn!(backend = %backend_name, tool = %tool_name, "Firewall: relay observed");
+        let target = (backend_name, tool_name);
+        let audit = (session_id.as_str(), caller_name);
+        if let Some(refusal) = relay_refusal(fw, auth, id, target, params, audit) {
+            return Err(refusal);
         }
     }
 

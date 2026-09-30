@@ -65,7 +65,7 @@ impl CollusionConfig {
     /// Refuse settings that cannot mean what they say. `off` loads whatever
     /// the other fields hold.
     pub(super) fn validate(&self, firewall_enabled: bool) -> Result<(), String> {
-        if !RELAY_WIRED || self.action == CollusionAction::Off {
+        if self.action == CollusionAction::Off {
             return Ok(());
         }
         let field =
@@ -146,7 +146,7 @@ impl RelayGate {
 }
 
 /// The detector `config` asks for; `None` when relay detection is off.
-pub(crate) fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
+fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
     let action = match config.action {
         CollusionAction::Off => return None,
         CollusionAction::Observe => RelayAction::Observe,
@@ -167,19 +167,17 @@ pub(crate) fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDete
 /// text order): a larger cap would silently drop the tail's fingerprints.
 const RECORD_CAP: usize = 6 * 1024;
 
-/// RED-FIRST STUB: false makes every relay behaviour inert.
-pub(super) const RELAY_WIRED: bool = false;
-
 /// A context-integrity data class that makes a delivery sensitive.
 const SENSITIVE_CLASSES: [&str; 3] = ["personal_data", "financial_data", "guarded_material"];
 
 impl Firewall {
-    /// Share `detector` with every other firewall of this gateway, so what one
-    /// route records the other checks against (§13.1 "One detector").
+    /// Record into and check against `other`'s relay detector, when there is
+    /// an `other`: every firewall of one gateway shares one detector, so what
+    /// one route records the other checks against (§13.1 "One detector").
     #[must_use]
-    pub(crate) fn with_collusion(mut self, detector: Option<Arc<CollusionDetector>>) -> Self {
-        if RELAY_WIRED {
-            self.relay.detector = detector;
+    pub(crate) fn sharing_relay_with(mut self, other: Option<&Firewall>) -> Self {
+        if let Some(other) = other {
+            self.relay.detector.clone_from(&other.relay.detector);
         }
         self
     }
@@ -212,9 +210,6 @@ impl Firewall {
         params: &Value,
         audit: (&str, &str),
     ) -> FirewallVerdict {
-        if !RELAY_WIRED {
-            return FirewallVerdict::allow();
-        }
         let Some(detector) = self.relay_detector() else {
             return FirewallVerdict::allow();
         };
@@ -276,9 +271,6 @@ impl Firewall {
         tool: &str,
         result: &Value,
     ) {
-        if !RELAY_WIRED {
-            return;
-        }
         let Some(detector) = self.relay_detector() else {
             return;
         };
@@ -324,9 +316,6 @@ pub(super) fn text_of(value: &Value, skip_integrity: bool) -> String {
         }
     }
     let mut out = String::new();
-    if !RELAY_WIRED {
-        return out;
-    }
     walk(value, skip_integrity, &mut out);
     out
 }
@@ -336,7 +325,7 @@ pub(super) fn text_of(value: &Value, skip_integrity: bool) -> String {
 // ponytail: the full text is built before the cut; bound the walk itself if
 // huge results show up in memory profiles.
 pub(super) fn capped(text: String) -> (String, bool) {
-    if !RELAY_WIRED || text.len() <= RECORD_CAP {
+    if text.len() <= RECORD_CAP {
         return (text, false);
     }
     let half = RECORD_CAP / 2;
