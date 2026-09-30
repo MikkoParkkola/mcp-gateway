@@ -6,8 +6,8 @@ use mcp_gateway::protocol_revision_telemetry::{
     ATTRIBUTION_FLOOR, CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION,
     MIN_MEASUREMENT_WINDOW, OTHER_REVISION, RETIRE_BELOW_SHARE, Registry, RetirementBlocked,
     Transport, attribution_rate, cache_scope_decision, client_identity, distribution_table,
-    durable_window_path, global_snapshot, load_durable_window, observe_inbound_request,
-    production_retirement_decision_at, public_over_filtered, requested_revision, retire_revisions,
+    global_snapshot, observe_inbound_request, public_over_filtered, requested_revision,
+    retire_revisions,
 };
 use serde_json::json;
 
@@ -276,107 +276,4 @@ fn mcp728_u1_6_unknown_revisions_are_conservative() {
     let retired = retire_revisions(&snapshot, MIN_MEASUREMENT_WINDOW)
         .expect("one percent other is bounded into each revision's upper share");
     assert!(!retired.iter().any(|revision| revision == "2024-11-05"));
-}
-
-#[test]
-fn mcp728_u1_2_stdio_window_survives_process_restart() {
-    let data_dir = tempfile::tempdir().expect("temporary data directory");
-    let mut first_sink =
-        mcp_gateway::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
-            .expect("create durable telemetry window");
-    let mut first_process = Registry::new();
-    for _ in 0..60 {
-        first_process.observe_request(Some("2025-11-25"), "claude", Transport::Stdio);
-    }
-    first_process.shadow_tools_list(ListFilters::default());
-    first_sink
-        .persist_registry(&first_process)
-        .expect("persist first process counters");
-    let first_window = load_durable_window(data_dir.path()).expect("load first process window");
-    assert_eq!(first_window.snapshot.total, 60);
-    assert_eq!(first_window.tools_list_shadow.values().sum::<u64>(), 1);
-
-    drop(first_sink);
-    let mut restarted_sink =
-        mcp_gateway::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
-            .expect("reopen durable telemetry window");
-    let mut restarted_process = Registry::new();
-    for _ in 0..40 {
-        restarted_process.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
-    }
-    restarted_sink
-        .persist_registry(&restarted_process)
-        .expect("persist restarted process counters");
-
-    let window = load_durable_window(data_dir.path()).expect("load aggregate after restart");
-    assert_eq!(
-        window.started_at_unix_seconds,
-        first_window.started_at_unix_seconds
-    );
-    assert_eq!(window.snapshot.total, 100);
-    assert_eq!(window.snapshot.by_transport.get("stdio"), Some(&100));
-    assert_eq!(window.tools_list_shadow.len(), 16);
-    assert_eq!(
-        durable_window_path(data_dir.path()).file_name().unwrap(),
-        "window.json"
-    );
-    assert_eq!(
-        window.retirement_decision_at(
-            window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs() - 1
-        ),
-        Err(RetirementBlocked::WindowTooShort)
-    );
-    assert!(
-        window
-            .retirement_decision_at(
-                window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs()
-            )
-            .is_ok()
-    );
-}
-
-#[test]
-fn mcp728_u1_4_production_decision_intersects_http_and_stdio_windows() {
-    let data_dir = tempfile::tempdir().expect("temporary data directory");
-    let mut sink =
-        mcp_gateway::protocol_revision_telemetry::DurableTelemetrySink::open(data_dir.path())
-            .expect("create durable telemetry window");
-    let mut stdio = Registry::new();
-    for _ in 0..99 {
-        stdio.observe_request(Some("2025-11-25"), "stdio", Transport::Stdio);
-    }
-    stdio.observe_request(Some("2024-11-05"), "stdio", Transport::Stdio);
-    sink.persist_registry(&stdio)
-        .expect("persist stdio production counters");
-
-    let window = load_durable_window(data_dir.path()).expect("load durable start time");
-    let mut http = Registry::new();
-    for _ in 0..98 {
-        http.observe_request(Some("2025-11-25"), "http", Transport::Http);
-    }
-    for _ in 0..2 {
-        http.observe_request(Some("2024-11-05"), "http", Transport::Http);
-    }
-
-    let candidates = production_retirement_decision_at(
-        data_dir.path(),
-        &http.snapshot(),
-        window.started_at_unix_seconds,
-        window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs(),
-    )
-    .expect("evaluate production window")
-    .expect("aligned windows are actionable");
-    assert!(!candidates.iter().any(|revision| revision == "2024-11-05"));
-    assert!(candidates.iter().any(|revision| revision == "2025-03-26"));
-
-    assert_eq!(
-        production_retirement_decision_at(
-            data_dir.path(),
-            &http.snapshot(),
-            window.started_at_unix_seconds + 1,
-            window.started_at_unix_seconds + MIN_MEASUREMENT_WINDOW.as_secs(),
-        )
-        .expect("evaluate misaligned window"),
-        Err(RetirementBlocked::WindowMisaligned)
-    );
 }

@@ -694,13 +694,16 @@ async fn meta_mcp_dispatch(
     let protocol_header = headers
         .get("mcp-protocol-version")
         .and_then(|value| value.to_str().ok());
-    crate::protocol_revision_telemetry::observe_inbound_request(
+    crate::protocol_revision_telemetry::observe_inbound_request_from(
         &request,
         params.as_ref(),
         &method,
         protocol_header,
         Some(session_id.as_str()),
         crate::protocol_revision_telemetry::Transport::Http,
+        headers
+            .get(axum::http::header::USER_AGENT)
+            .and_then(|value| value.to_str().ok()),
     );
 
     // Which protocol generation is this request written against? Decided per

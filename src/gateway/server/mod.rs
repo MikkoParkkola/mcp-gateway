@@ -2124,6 +2124,19 @@ impl Gateway {
                 )
             });
 
+        // U1: this process's segment in the durable measurement window.
+        let protocol_window_saver = persistence::spawn_protocol_window_saver(
+            data_dir.clone(),
+            crate::protocol_revision_telemetry::window::WriterIdentity {
+                listen: addr.to_string(),
+                exe: std::env::current_exe()
+                    .map_or_else(|_| "unknown".to_string(), |path| path.display().to_string()),
+                process_started_at: crate::protocol_revision_telemetry::unix_seconds_now(),
+            },
+            persistence::PROTOCOL_WINDOW_SAVE_INTERVAL,
+            shutdown_tx.subscribe(),
+        );
+
         // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
         let std_listener = listener.into_std()?;
         listener::serve(
@@ -2134,6 +2147,7 @@ impl Gateway {
             shutdown_signal(shutdown_tx),
         )
         .await?;
+        drop(protocol_window_saver.await);
 
         // Save search ranker usage data
         persistence::save_with_logging(
@@ -4217,12 +4231,14 @@ mod tests {
         .await
         .expect("initialize returns a response");
 
-        let window = crate::protocol_revision_telemetry::load_durable_window(data_dir.path())
-            .expect("load durable stdio aggregate");
-        assert!(window.snapshot.total >= 1);
+        let window = crate::protocol_revision_telemetry::window::read_window_v2(
+            &crate::protocol_revision_telemetry::window::window_paths(data_dir.path()).0,
+        )
+        .expect("load durable stdio aggregate");
+        assert!(window.stdio.total >= 1);
         assert!(
             window
-                .snapshot
+                .stdio
                 .by_transport
                 .get("stdio")
                 .copied()
@@ -4231,7 +4247,7 @@ mod tests {
         );
         assert!(
             window
-                .snapshot
+                .stdio
                 .by_revision
                 .get("2025-11-25")
                 .copied()

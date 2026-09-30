@@ -180,6 +180,13 @@ pub struct Registry {
     shadow_counts: [u64; 16],
     session_attributions: BTreeMap<u64, SessionAttribution>,
     session_order: VecDeque<u64>,
+    /// The same observations, split by transport. The merged fields above are
+    /// the public view; a retirement decision reads one transport only, so a
+    /// stdio request can never stand in for HTTP traffic (U1 v2 window).
+    per_transport: BTreeMap<&'static str, Snapshot>,
+    /// Requests with no revision, by bounded caller key (named client, else
+    /// User-Agent family). Diagnoses the unattributed share; gates nothing.
+    missing_revision_agents: BTreeMap<String, u64>,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -234,16 +241,6 @@ pub struct DurableWindow {
 }
 
 impl DurableWindow {
-    fn empty(now: u64) -> Self {
-        Self {
-            schema_version: DURABLE_WINDOW_SCHEMA.to_string(),
-            started_at_unix_seconds: now,
-            updated_at_unix_seconds: now,
-            snapshot: Snapshot::default(),
-            tools_list_shadow: empty_shadow_counts(),
-        }
-    }
-
     /// Evaluate the persisted counters using the durable start timestamp.
     pub fn retirement_decision_at(
         &self,
@@ -265,31 +262,29 @@ pub struct DurableTelemetrySink {
     lock_path: PathBuf,
     previous_snapshot: Snapshot,
     previous_shadow: BTreeMap<String, u64>,
+    previous_agents: BTreeMap<String, u64>,
     parent_sync_pending: bool,
 }
 
 impl DurableTelemetrySink {
     /// Open or create the durable measurement window below `data_dir`.
+    ///
+    /// A v1 window is refused with the archive instruction, never converted.
     pub fn open(data_dir: &Path) -> io::Result<Self> {
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
         std::fs::create_dir_all(&directory)?;
         force_directory_owner_only(&directory)?;
-        let window_path = directory.join(DURABLE_WINDOW_FILE);
-        let lock_path = directory.join(".window.lock");
+        let (window_path, lock_path) = window::window_paths(data_dir);
         {
             let _lock = ExclusiveFileLock::acquire(&lock_path)?;
-            if window_path.exists() {
-                read_window_file(&window_path)?;
-            } else {
-                write_window_atomic(&window_path, &DurableWindow::empty(unix_seconds()?))?;
-                sync_parent_directory(&window_path)?;
-            }
+            window::read_or_create(&window_path, unix_seconds()?)?;
         }
         Ok(Self {
             window_path,
             lock_path,
             previous_snapshot: Snapshot::default(),
             previous_shadow: empty_shadow_counts(),
+            previous_agents: BTreeMap::new(),
             parent_sync_pending: false,
         })
     }
@@ -297,41 +292,57 @@ impl DurableTelemetrySink {
     /// Add counters observed since this sink's preceding successful write.
     pub fn persist_registry(&mut self, registry: &Registry) -> io::Result<()> {
         self.persist(
-            registry.snapshot(),
+            registry.transport_snapshot(Transport::Stdio),
             registry.shadow_snapshot(),
+            registry.missing_revision_agents(),
             unix_seconds()?,
         )
     }
 
     /// Persist the current process-global counters.
     pub fn persist_global(&mut self) -> io::Result<()> {
-        let (snapshot, shadow) = {
+        let (snapshot, shadow, agents) = {
             let registry = global()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            (registry.snapshot(), registry.shadow_snapshot())
+            (
+                registry.transport_snapshot(Transport::Stdio),
+                registry.shadow_snapshot(),
+                registry.missing_revision_agents(),
+            )
         };
-        self.persist(snapshot, shadow, unix_seconds()?)
+        self.persist(snapshot, shadow, agents, unix_seconds()?)
     }
 
     fn persist(
         &mut self,
         current: Snapshot,
         current_shadow: BTreeMap<String, u64>,
+        current_agents: BTreeMap<String, u64>,
         now: u64,
     ) -> io::Result<()> {
-        self.persist_with_parent_sync(current, current_shadow, now, sync_parent_directory)
+        self.persist_with_parent_sync(
+            current,
+            current_shadow,
+            current_agents,
+            now,
+            sync_parent_directory,
+        )
     }
 
+    /// Stdio writes deltas: many children share `stdio`, each adding only
+    /// what it observed since its own last successful write.
     fn persist_with_parent_sync(
         &mut self,
         current: Snapshot,
         current_shadow: BTreeMap<String, u64>,
+        current_agents: BTreeMap<String, u64>,
         now: u64,
         sync_parent: impl FnOnce(&Path) -> io::Result<()>,
     ) -> io::Result<()> {
         let snapshot_delta = snapshot_delta(&current, &self.previous_snapshot);
         let shadow_delta = map_delta(&current_shadow, &self.previous_shadow);
+        let agents_delta = map_delta(&current_agents, &self.previous_agents);
         if snapshot_delta.total == 0 && shadow_delta.values().all(|count| *count == 0) {
             if self.parent_sync_pending {
                 sync_parent(&self.window_path)?;
@@ -341,14 +352,16 @@ impl DurableTelemetrySink {
         }
 
         let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
-        let mut window = read_window_file(&self.window_path)?;
-        add_snapshot(&mut window.snapshot, &snapshot_delta)?;
+        let mut window = window::read_window_v2(&self.window_path)?;
+        add_snapshot(&mut window.stdio, &snapshot_delta)?;
         add_map(&mut window.tools_list_shadow, &shadow_delta)?;
+        add_map(&mut window.missing_revision_agents, &agents_delta)?;
         window.updated_at_unix_seconds = window.updated_at_unix_seconds.max(now);
-        validate_window(&window)?;
-        write_window_atomic(&self.window_path, &window)?;
+        window::validate_window_v2(&window)?;
+        write_json_atomic(&self.window_path, &window)?;
         self.previous_snapshot = current;
         self.previous_shadow = current_shadow;
+        self.previous_agents = current_agents;
         self.parent_sync_pending = true;
         sync_parent(&self.window_path)?;
         self.parent_sync_pending = false;
@@ -383,18 +396,37 @@ impl Registry {
         client: &str,
         transport: Transport,
     ) {
-        self.total += 1;
+        self.observe_request_from(requested_revision, client, transport, None);
+    }
+
+    /// [`Self::observe_request`] with the caller's raw User-Agent, reduced to a
+    /// bounded family before anything is stored.
+    pub(crate) fn observe_request_from(
+        &mut self,
+        requested_revision: Option<&str>,
+        client: &str,
+        transport: Transport,
+        user_agent: Option<&str>,
+    ) {
         let client = client_label(client);
+        let revision = revision_label(requested_revision);
+        self.total += 1;
         *self.by_client.entry(client.to_string()).or_insert(0) += 1;
         *self
             .by_transport
             .entry(transport.as_str().to_string())
             .or_insert(0) += 1;
-        match revision_label(requested_revision) {
-            Some(rev) => {
-                *self.by_revision.entry(rev.to_string()).or_insert(0) += 1;
-            }
+        match revision {
+            Some(rev) => *self.by_revision.entry(rev.to_string()).or_insert(0) += 1,
             None => self.unattributed += 1,
+        }
+        let slice = self.per_transport.entry(transport.as_str()).or_default();
+        count_snapshot(slice, revision, client, transport);
+        if revision.is_none() {
+            *self
+                .missing_revision_agents
+                .entry(missing_revision_agent(client, user_agent).to_string())
+                .or_insert(0) += 1;
         }
     }
 
@@ -465,6 +497,19 @@ impl Registry {
     /// Count for one of the finite `tools/list` filter combinations.
     pub fn shadow_count(&self, filters: ListFilters) -> u64 {
         self.shadow_counts[shadow_index(filters)]
+    }
+
+    /// This process's observations on one transport only.
+    pub(crate) fn transport_snapshot(&self, transport: Transport) -> Snapshot {
+        self.per_transport
+            .get(transport.as_str())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Requests with no revision, by bounded caller key.
+    pub(crate) fn missing_revision_agents(&self) -> BTreeMap<String, u64> {
+        self.missing_revision_agents.clone()
     }
 
     fn shadow_snapshot(&self) -> BTreeMap<String, u64> {
@@ -611,6 +656,80 @@ fn revision_label(revision: Option<&str>) -> Option<&'static str> {
         .copied()
         .find(|candidate| *candidate == revision)
         .or(Some(OTHER_REVISION))
+}
+
+/// Add one already-labelled observation to a per-transport slice.
+fn count_snapshot(
+    slice: &mut Snapshot,
+    revision: Option<&'static str>,
+    client: &'static str,
+    transport: Transport,
+) {
+    slice.total += 1;
+    *slice.by_client.entry(client.to_string()).or_insert(0) += 1;
+    *slice
+        .by_transport
+        .entry(transport.as_str().to_string())
+        .or_insert(0) += 1;
+    match revision {
+        Some(rev) => *slice.by_revision.entry(rev.to_string()).or_insert(0) += 1,
+        None => slice.unattributed += 1,
+    }
+}
+
+/// Named clients that identify a caller on their own.
+const NAMED_CLIENTS: &[&str] = &["claude", "codex", "cursor", "vscode", "chatgpt"];
+/// Fixed User-Agent families. Raw agents are never stored (MIK-6704).
+pub(crate) const USER_AGENT_FAMILIES: &[&str] = &[
+    "python-urllib",
+    "python-requests",
+    "python-httpx",
+    "curl",
+    "xh",
+    "httpie",
+    "node",
+    "go",
+    "reqwest",
+    "absent",
+    "other",
+];
+
+/// Bounded key for a request that named no revision. A named client wins;
+/// an unknown or missing `clientInfo` falls through to the agent family, so
+/// it cannot hide a more specific caller.
+fn missing_revision_agent(client: &'static str, user_agent: Option<&str>) -> &'static str {
+    if NAMED_CLIENTS.contains(&client) {
+        return client;
+    }
+    user_agent_family(user_agent)
+}
+
+fn user_agent_family(user_agent: Option<&str>) -> &'static str {
+    let _ = user_agent;
+    if true {
+        return "other"; // RED STUB
+    }
+    let Some(agent) = user_agent.map(str::trim).filter(|a| !a.is_empty()) else {
+        return "absent";
+    };
+    let agent = agent.to_ascii_lowercase();
+    // Order matters: "python-requests" also contains "python", and HTTPie's
+    // agent is "HTTPie/x", so the specific names are tried first.
+    [
+        ("python-urllib", "python-urllib"),
+        ("python-requests", "python-requests"),
+        ("python-httpx", "python-httpx"),
+        ("curl/", "curl"),
+        ("xh/", "xh"),
+        ("httpie", "httpie"),
+        ("node", "node"),
+        ("undici", "node"),
+        ("go-http-client", "go"),
+        ("reqwest", "reqwest"),
+    ]
+    .into_iter()
+    .find_map(|(needle, family)| agent.contains(needle).then_some(family))
+    .unwrap_or("other")
 }
 
 fn client_label(client: &str) -> &'static str {
@@ -949,8 +1068,8 @@ fn unix_seconds() -> io::Result<u64> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
-    let bytes = serde_json::to_vec_pretty(window)
+fn write_json_atomic(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temporary = path.with_extension("json.tmp");
     {
@@ -1004,6 +1123,28 @@ pub fn observe_inbound_request(
     session_id: Option<&str>,
     transport: Transport,
 ) {
+    observe_inbound_request_from(
+        request,
+        params,
+        method,
+        protocol_header,
+        session_id,
+        transport,
+        None,
+    );
+}
+
+/// [`observe_inbound_request`] with the raw `User-Agent`, which only ever
+/// becomes a bounded family key.
+pub(crate) fn observe_inbound_request_from(
+    request: &Value,
+    params: Option<&Value>,
+    method: &str,
+    protocol_header: Option<&str>,
+    session_id: Option<&str>,
+    transport: Transport,
+    user_agent: Option<&str>,
+) {
     if method.starts_with("notifications/") {
         return;
     }
@@ -1049,7 +1190,7 @@ pub fn observe_inbound_request(
             },
         );
     }
-    reg.observe_request(requested_label, client, transport);
+    reg.observe_request_from(requested_label, client, transport, user_agent);
     drop(reg);
     emit_request_metrics(requested_label, client, transport);
     tracing::debug!(
@@ -1209,6 +1350,23 @@ pub fn global_shadow_count(filters: ListFilters) -> u64 {
         .shadow_count(filters)
 }
 
+/// This process's HTTP counts since start, as its U1 segment records them.
+pub(crate) fn global_segment_counts() -> window::SegmentCounts {
+    let registry = global()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    window::SegmentCounts {
+        snapshot: registry.transport_snapshot(Transport::Http),
+        missing_revision_agents: registry.missing_revision_agents(),
+        tools_list_shadow: registry.shadow_snapshot(),
+    }
+}
+
+/// Wall-clock Unix seconds; 0 only on a clock set before 1970.
+pub(crate) fn unix_seconds_now() -> u64 {
+    unix_seconds().unwrap_or(0)
+}
+
 fn emit_request_metrics(requested_revision: Option<&str>, client: &str, transport: Transport) {
     let _ = (requested_revision, client, transport);
     #[cfg(feature = "metrics")]
@@ -1241,6 +1399,9 @@ pub(crate) fn reset_global_for_tests() {
         .reset();
 }
 
+#[path = "protocol_revision_telemetry_window.rs"]
+pub(crate) mod window;
+
 #[cfg(test)]
 #[path = "protocol_revision_telemetry_lock_tests.rs"]
 mod lock_tests;
@@ -1248,6 +1409,68 @@ mod lock_tests;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The operator's U1 decision (RFC-0060 runbook). Run exactly as:
+    /// `cargo test --lib protocol_revision_telemetry::tests::u1_production_decision
+    /// -- --ignored --exact --nocapture` with `U1_DATA_DIR`, `U1_POPULATION`,
+    /// `U1_LISTEN` and `U1_EXE_PREFIX`. Writes `decision.json` beside the window.
+    #[test]
+    #[ignore = "operator-run against a production data directory"]
+    fn u1_production_decision() {
+        let env = |name: &str| std::env::var(name).ok();
+        let data_dir = PathBuf::from(env("U1_DATA_DIR").expect("U1_DATA_DIR is required"));
+        let declaration = window::parse_declaration(
+            env("U1_POPULATION").as_deref(),
+            env("U1_LISTEN").as_deref(),
+            env("U1_EXE_PREFIX").as_deref(),
+        )
+        .expect("a complete declaration");
+        let (window_path, _) = window::window_paths(&data_dir);
+        let file = window::read_window_v2(&window_path).expect("a readable v2 window");
+        let (span, outcome) = window::decide(&file, &declaration);
+        for (index, segment) in file.http_segments.iter().enumerate() {
+            println!(
+                "segment {index}: listen={} exe={} opened={} last={} clean={} concurrent={}",
+                segment.listen,
+                segment.exe,
+                segment.opened_at,
+                segment.last_checkpoint_at,
+                segment.closed_cleanly,
+                segment.opened_while_another_was_open
+            );
+        }
+        if let Some(span) = &span {
+            println!(
+                "sealed span: {} .. {} ({} segments)\n{}",
+                span.started_at,
+                span.ended_at,
+                span.segments,
+                distribution_table(&span.snapshot)
+            );
+        }
+        println!("decision: {outcome:?}");
+        let record = json!({
+            "declaration": {
+                "population": ["http"],
+                "listen": declaration.listen,
+                "exe_prefix": declaration.exe_prefix,
+            },
+            "span": span.as_ref().map(|s| json!({
+                "started_at": s.started_at,
+                "ended_at": s.ended_at,
+                "segments": s.segments,
+                "snapshot": s.snapshot,
+            })),
+            "missing_revision_agents": file
+                .http_segments
+                .iter()
+                .map(|s| s.missing_revision_agents.clone())
+                .collect::<Vec<_>>(),
+            "decision": format!("{outcome:?}"),
+        });
+        write_json_atomic(&window_path.with_file_name("decision.json"), &record)
+            .expect("write decision.json");
+    }
 
     #[test]
     fn initialize_protocol_version_is_attributed() {
@@ -1551,29 +1774,39 @@ mod tests {
         registry.observe_request(Some("2025-11-25"), "codex", Transport::Stdio);
 
         let error = sink
-            .persist_with_parent_sync(registry.snapshot(), registry.shadow_snapshot(), 1, |_| {
-                Err(io::Error::other("injected parent sync failure"))
-            })
+            .persist_with_parent_sync(
+                registry.transport_snapshot(Transport::Stdio),
+                registry.shadow_snapshot(),
+                registry.missing_revision_agents(),
+                1,
+                |_| {
+                    Err(io::Error::other("injected parent sync failure"))
+                },
+            )
             .expect_err("parent sync must fail after the rename");
         assert_eq!(error.kind(), io::ErrorKind::Other);
         assert!(sink.parent_sync_pending);
         assert_eq!(
-            load_durable_window(directory.path())
+            window::read_window_v2(&window::window_paths(directory.path()).0)
                 .unwrap()
-                .snapshot
+                .stdio
                 .total,
             1
         );
 
-        sink.persist_with_parent_sync(registry.snapshot(), registry.shadow_snapshot(), 2, |_| {
-            Ok(())
-        })
+        sink.persist_with_parent_sync(
+            registry.transport_snapshot(Transport::Stdio),
+            registry.shadow_snapshot(),
+            registry.missing_revision_agents(),
+            2,
+            |_| Ok(()),
+        )
         .expect("retry pending parent sync");
         assert!(!sink.parent_sync_pending);
         assert_eq!(
-            load_durable_window(directory.path())
+            window::read_window_v2(&window::window_paths(directory.path()).0)
                 .unwrap()
-                .snapshot
+                .stdio
                 .total,
             1
         );
@@ -1590,7 +1823,7 @@ mod tests {
         let path = dir.path().join("window.json");
         std::fs::write(path.with_extension("json.tmp"), "stale").unwrap();
 
-        write_window_atomic(&path, &DurableWindow::empty(1)).unwrap();
+        write_json_atomic(&path, &window::WindowV2::empty(1)).unwrap();
 
         // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
         assert_owner_only("1718-W5", &path, false);

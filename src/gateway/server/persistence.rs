@@ -313,4 +313,89 @@ mod tests {
             "stop returned while the aborted task still held its state"
         );
     }
+
+    #[tokio::test]
+    async fn protocol_window_saver_seals_its_segment_on_the_shutdown_broadcast() {
+        // Nothing drains here: the saver must close on the broadcast itself,
+        // because a post-drain close is SIGKILLed while an SSE stream is open.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (shutdown_tx, _) = tokio::sync::broadcast::channel(1);
+        let saver = spawn_protocol_window_saver(
+            dir.path().to_path_buf(),
+            crate::protocol_revision_telemetry::window::WriterIdentity {
+                listen: "127.0.0.1:39401".to_string(),
+                exe: "/opt/mcp-gateway/mcp-gateway".to_string(),
+                process_started_at: 1,
+            },
+            std::time::Duration::from_secs(3600),
+            shutdown_tx.subscribe(),
+        );
+        shutdown_tx.send(()).expect("a subscriber exists");
+        tokio::time::timeout(std::time::Duration::from_secs(5), saver)
+            .await
+            .expect("the saver closes without waiting for a drain")
+            .expect("the saver task does not panic");
+        let (path, _) = crate::protocol_revision_telemetry::window::window_paths(dir.path());
+        let window = crate::protocol_revision_telemetry::window::read_window_v2(&path)
+            .expect("a v2 window");
+        assert_eq!(window.http_segments.len(), 1);
+        assert!(window.http_segments[0].closed_cleanly);
+    }
+}
+
+/// How often an HTTP process rewrites its U1 window segment.
+pub(super) const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(5);
+
+/// Keep this HTTP process's U1 segment current, and seal it on shutdown.
+///
+/// The close is written on the shutdown broadcast, not after the drain:
+/// open connections get `server.shutdown_timeout` (30 s by default) and
+/// launchd SIGKILLs after 20 s, so a post-drain close would never land while
+/// an SSE stream is open. Requests are counted on arrival and the stopped
+/// listener admits none, so nothing counted later belongs to this segment.
+/// A sink that fails to open is retried every tick; counts are cumulative
+/// from process start, so a late open still records everything.
+pub(super) fn spawn_protocol_window_saver(
+    data_dir: PathBuf,
+    identity: crate::protocol_revision_telemetry::window::WriterIdentity,
+    every: std::time::Duration,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    use crate::protocol_revision_telemetry::{global_segment_counts, window::HttpSegmentSink};
+    tokio::spawn(async move {
+        let mut sink: Option<HttpSegmentSink> = None;
+        let mut interval = tokio::time::interval(every);
+        loop {
+            let close = tokio::select! {
+                _ = interval.tick() => false,
+                _ = shutdown.recv() => false, // RED STUB
+            };
+            if close {
+                // ponytail: the listener stops accepting right after the same
+                // broadcast; a short yield orders the close after it. Hook the
+                // listener's accept-stop directly if this ever proves racy.
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            let now = crate::protocol_revision_telemetry::unix_seconds_now();
+            if sink.is_none() {
+                match HttpSegmentSink::open(&data_dir, identity.clone(), now) {
+                    Ok(opened) => sink = Some(opened),
+                    Err(error) => warn!(
+                        %error,
+                        data_dir = %data_dir.display(),
+                        "HTTP protocol-revision telemetry is not durable; do not start the measurement window"
+                    ),
+                }
+            }
+            if let Some(sink) = sink.as_mut()
+                && let Err(error) = sink.checkpoint(&global_segment_counts(), now, close)
+            {
+                warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
+            }
+            if close {
+                break;
+            }
+        }
+    })
 }
