@@ -88,7 +88,7 @@ async fn a_direct_call_never_acts_under_another_callers_session() {
 
     // THEN: u2 runs under its own (default) profile, and u1's session is not charged
     assert!(
-        answer.get("error").is_none(),
+        answer.get("error").is_none() && answer.get("result").is_some(),
         "the call ran under the presented session's profile: {answer}"
     );
     assert!(
@@ -117,8 +117,9 @@ async fn a_direct_call_keeps_its_own_session() {
         "params": { "name": "alpha_read", "arguments": {} }
     });
     let (_, answer) = post(&f.router, "/mcp/alpha", "u1", Some(&session), &call).await;
+    let message = answer["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        answer.get("error").is_some(),
+        message.contains("'locked' routing profile"),
         "the owner's own profile was not applied: {answer}"
     );
 }
