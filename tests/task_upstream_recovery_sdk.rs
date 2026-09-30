@@ -467,7 +467,7 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
 /// a restart. A legacy row takes the backend-level fallback, and the backend
 /// is reachable, so the result is delivered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_version_3_row_still_recovers_and_delivers_its_result() {
+async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from_a_version_3_row() {
     pins::require_supported_trust_override();
     let owned_root = tempfile::Builder::new()
         .prefix("upstream-sdk-v3")
