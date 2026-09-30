@@ -70,6 +70,8 @@ mod callback_admin_denial_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
+mod replay_policy_tests;
+#[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(test)]
 mod direct_guards_tests;
