@@ -61,7 +61,7 @@ fn secret() -> String {
 /// end on a space, so normalization cannot shorten them.
 fn solid_start(s: &str) -> usize {
     let b = s.as_bytes();
-    (200..)
+    (200..s.len() - 79)
         .find(|&i| b[i] != b' ' && b[i + 62] != b' ' && b[i + 78] != b' ')
         .unwrap()
 }
@@ -255,7 +255,7 @@ fn relay_outside_window_not_flagged() {
 
     let inside = detector();
     inside.record_delivery_at(T, A, true, &s, t0);
-    let before = t0 + window - Duration::from_secs(1);
+    let before = t0 + window.checked_sub(Duration::from_secs(1)).unwrap();
     assert!(inside.check_egress_at(B, U, &s, before).is_some());
 
     // "Within the window" is inclusive.
@@ -278,7 +278,13 @@ fn stale_sensitivity_not_refreshed() {
     let window = RelayParams::default().window;
     let d = detector();
     d.record_delivery_at(T, A, true, &s, t0);
-    d.record_delivery_at(T, A, false, &s, t0 + window - Duration::from_secs(1));
+    d.record_delivery_at(
+        T,
+        A,
+        false,
+        &s,
+        t0 + window.checked_sub(Duration::from_secs(1)).unwrap(),
+    );
     assert!(d.check_egress_at(B, U, &s, t0 + window).is_some());
     let late = t0 + window + Duration::from_secs(1);
     assert!(d.check_egress_at(B, U, &s, late).is_none());
