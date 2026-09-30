@@ -324,6 +324,13 @@ impl Shared {
         if record.revision != revision {
             return Err(StoreError::RevisionConflict);
         }
+        // Terminal is absorbing: a row another writer settled is not closed twice.
+        if matches!(
+            task.status(),
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            return Err(StoreError::InvalidTransition);
+        }
         let at = self.now();
         for event in [
             TaskTransition::StatusMessage(Some(reason)),
@@ -331,10 +338,6 @@ impl Shared {
         ] {
             task.transition(event, at)
                 .map_err(|_| StoreError::InvalidTransition)?;
-        }
-        if task.status() != TaskStatus::Cancelled {
-            // Already terminal: nothing to close.
-            return Err(StoreError::InvalidTransition);
         }
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
         // Drops the round before the record is measured.

@@ -426,3 +426,25 @@ async fn closing_a_round_cancels_it_with_the_reason_in_one_write() {
     assert_eq!(wire["statusMessage"], "the reason");
     assert!(store.input_round_for_test(task.id()).0.is_none());
 }
+
+/// Mutant: a settled row closed again (a second terminal write and publish).
+#[tokio::test]
+async fn closing_an_already_settled_round_writes_nothing() {
+    let (_dir, store, task) = opened().await;
+    let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
+    let closed = store
+        .close_round(OWNER, task.id(), revision, "first".to_owned())
+        .await
+        .expect("an open round closes");
+    let again = store
+        .close_round(OWNER, task.id(), closed.revision, "second".to_owned())
+        .await;
+    assert!(
+        matches!(again, Err(StoreError::InvalidTransition)),
+        "{again:?}"
+    );
+    assert_eq!(
+        store.get(OWNER, task.id()).unwrap().revision,
+        closed.revision
+    );
+}
