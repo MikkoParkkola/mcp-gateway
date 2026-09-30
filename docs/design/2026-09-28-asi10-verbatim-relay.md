@@ -198,3 +198,106 @@ independent of anomaly [13]. One-match test [7]. `Common` poisoning disclosed (5
 `CollusionRelay` -> `-32002` on both routes (increment 2); `Common` = spread, not public; hard
 bound: nothing under 48 chars matches; ReadOnly corner moot. Seat A = first reviewer; B =
 fallback second seat (preferred second seat: HTTP 429 in rounds 1-2; it reviewed round 3).
+
+## 13. Increment 2 wiring (addendum r2, 2026-09-30; scope 2a ruled by the coordinator)
+
+The pure module landed in #2433. This section records how increment 2 wires it in, measured
+against the release line at 6198c9e84. Where it disagrees with §2, this section wins. Revision r2
+addresses review round 1.
+
+**Corrections to §2.**
+- No `CallerKey` type exists. The control key is the string from `identity::caller_key`
+  (`router/identity.rs:350`).
+- When there is no identity, each route falls back before the firewall sees the call: meta uses
+  the session id (`handlers.rs:1390-1392`), direct uses `direct:{backend}`
+  (`backend_handlers.rs:58-72`).
+- The router and `MetaMcp` build separate `Firewall` instances (`server/mod.rs:1235`, `:1788`).
+- The router's pre-check misses `gateway_run_playbook` and chains. Every meta backend call instead
+  passes through `MetaMcp::accounted_dispatch` (`invoke.rs:3370`).
+- The direct delivery point is `DirectRouteGuards::after_dispatch` (`direct_guards.rs:45-83`), but
+  idempotency cache hits return before it runs (`backend_handlers.rs:1042-1045`).
+
+**One detector.** `Gateway` builds one `Arc<CollusionDetector>` when `action != off` and injects
+it into both firewalls with a crate-internal `with_collusion`. Recording and checking therefore
+share state.
+
+**Caller.** A crate-internal `RelayCaller` is either `Keyed(key)` (`caller_key` was non-empty) or
+`Unkeyed(fallback)`. It is decided before the fallback:
+- meta: in the router, then carried to dispatch as a `pub(crate)` field on
+  `MetaMcpCallerContext`, which playbook steps inherit (`support.rs:391-404`);
+- direct: in `direct_control_identity`.
+
+**Egress check (rows 2, 12, 13).** `Firewall::check_relay(caller, server, tool, args)` runs:
+- meta: in `accounted_dispatch`, before dispatch, on the resolved arguments. This covers invoke,
+  execute, playbooks and chains in one place.
+- direct: next to `check_request`.
+
+The check:
+1. A `server:tool` matching `non_egress` is skipped.
+2. Under `block`, `Unkeyed` is refused, whether or not anomaly detection is on. Under `observe`,
+   an `Unkeyed` egress increments an internal counter (the exported metric is increment 3) and is
+   then checked under its fallback key. It is never refused.
+3. Otherwise `check_egress_at` runs on the argument text. A finding becomes a `CollusionRelay`
+   `Finding` (Medium) whose `matched` is `"{T} -> {U}"` plus the A/B digests and match count, never
+   content. If T's name has been evicted from the name map, `matched` carries T's digest instead.
+4. Under `block` the call is refused with `-32002`. On meta this is an `Error` mapped to `-32002`,
+   kept intact through playbook error wrapping; on direct it goes through the existing
+   `is_anomaly_block` branch.
+5. `is_anomaly_block()` keeps its SequenceAnomaly/High test and adds "or every finding is
+   `CollusionRelay`".
+6. The verdict is audited.
+
+**Recording (rows 1, 11, 15, 17), staged then committed.**
+- meta: `accounted_dispatch` stages `(caller, "server:tool", value)` for each successful backend
+  result, after that call's own response gates (context integrity included), into a per-request
+  `RelayReceipts` collector (a `pub(crate)` field on `MetaMcpCallerContext`). The router commits
+  the collector after `finalize_response_after_inspection` only if the delivered response is not
+  an error or refusal; a refused delivery commits nothing (row 11). Each stage carries its own
+  source, so a chain or multi-target response is attributed per step, not per aggregate.
+  Pre-redaction caveat: staged values precede the router's response firewall pass. That pass
+  redacts credentials, which are mostly shorter than the 63-char match floor.
+- direct: a delivery-only helper records the final value at `after_dispatch`'s `Ok(response)`,
+  after redaction and the provenance stamp, and also on the idempotency cache-hit return. There is
+  no accounting replay.
+
+**Sensitivity.** A staged or recorded value is sensitive when:
+- its source matches `sources`, or
+- the gateway's own context-integrity result for that call reports `personal_data`,
+  `financial_data` or `guarded_material`.
+On meta this is read from the evaluation at the stage point, where the value is not yet wrapped;
+on direct, from the `_context_integrity` metadata the gateway attached. A backend-forged field can
+only mark its own content sensitive: extra findings, never fewer.
+
+**Text extracted.** A bounded walker joins JSON string leaves with newlines. On responses it
+excludes the gateway-owned `_context_integrity` subtree. On arguments it walks every string,
+including any caller-supplied `_context_integrity`. It stops at 64 KiB of text, cuts on a UTF-8
+boundary, and counts cuts in its own counter (`source_truncated` counts fingerprints, not bytes).
+Arguments get no text cap, since a cap would let a padded payload hide a relay; the request body
+limit bounds them (`server.max_body_size`, 10 MiB). Past the cut, results can relay undetected,
+and repetitive text can exhaust the 1,024-fingerprint keep limit before 64 KiB.
+
+**Startup validation (row 16).** When `action != off`, a collusion check in
+`FirewallConfig::validate`, run before its anomaly-off early return, refuses:
+- `firewall.enabled: false`;
+- `min_matches == 0`;
+- `common_principals < 2`;
+- `window_secs == 0`;
+- invalid globs.
+Without the `firewall` feature, strict keys already refuse the unread `security.firewall`, and
+`missing_feature()` gains that entry so the error names the feature. That test runs in the
+post-merge feature-combinations job, and a red result there blocks.
+
+**Config and public API (pending operator approval).**
+- `FirewallConfig.collusion: CollusionConfig { action: CollusionAction, window_secs, min_matches,
+  common_principals, sources, non_egress }`;
+- `ScanType::CollusionRelay`;
+- `is_anomaly_block()` widened.
+`allowed_flows` with its test, and the metric, are increment 3.
+
+**Tests.** The §8 rows 1, 2, 11, 12, 13 (minus the allowlist), 15 and 16, plus:
+- one relay per dispatch entry (invoke, execute, playbook, chain) to prove the chokepoint;
+- a direct cache-hit record;
+- an argument-side `_context_integrity` relay;
+- a chain attribution case (T unrelated, V relays);
+- the result cap;
+- name-map eviction.
