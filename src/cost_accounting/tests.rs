@@ -247,3 +247,19 @@ fn an_empty_session_id_opens_no_session_bucket() {
     );
     assert_eq!(tracker.key_snapshot("bob").unwrap().window_24h.tokens, 100);
 }
+
+#[test]
+fn session_less_spend_still_counts_in_the_aggregate() {
+    // The admin total covers every call, with or without a session.
+    let tracker = CostTracker::new();
+    tracker.record("s1", Some("alice"), "srv", "t", 100, 15.0);
+    tracker.record("", Some("bob"), "srv", "t", 200, 15.0);
+
+    let total = tracker.aggregate();
+    assert_eq!(total.total_calls, 2);
+    assert_eq!(total.total_tokens, 300);
+    assert_eq!(
+        total.session_count, 1,
+        "no session was opened for the empty id"
+    );
+}
