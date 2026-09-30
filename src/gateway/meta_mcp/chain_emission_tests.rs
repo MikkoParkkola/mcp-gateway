@@ -484,3 +484,25 @@ async fn unverified_upstream_is_declared_not_hidden() {
     assert_eq!(own.prev, None);
     assert_eq!(own.input.as_deref(), Some(received.as_str()));
 }
+
+/// cr1 HIGH: a chained receipt with no challenge on record fails closed, and
+/// a non-object `_meta` refuses the challenge instead of skipping it.
+#[test]
+fn a_missing_challenge_fails_closed() {
+    use super::chain_receipt::{ChainReceipt, ChainSlot, inject_nonce};
+    use crate::config::ChainMode;
+    let slot = ChainSlot::default();
+    let mut result = body();
+    let err = meta(Some(ChainEmit::OnRequest))
+        .chain_receive((ChainMode::Verify, &[], None), &mut result, None, &slot)
+        .expect_err("no challenge on record");
+    assert_eq!(err.to_rpc_code(), -32001);
+    assert!(matches!(*slot.lock(), ChainReceipt::Refused));
+    for bad in [json!(null), json!(7), json!([]), json!("x")] {
+        let mut params = json!({"name": "t", "_meta": bad});
+        assert!(inject_nonce(&mut params, "n").is_err(), "{params}");
+    }
+    let mut params = json!({"name": "t", "_meta": {"keep": 1}});
+    inject_nonce(&mut params, "n").expect("object _meta");
+    assert_eq!(params["_meta"]["keep"], 1);
+}

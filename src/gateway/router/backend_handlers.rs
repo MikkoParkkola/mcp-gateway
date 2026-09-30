@@ -270,12 +270,9 @@ fn normalize_tools_list_response(
         return;
     };
 
-    // Parsed element by element on purpose. A single descriptor the `Tool`
-    // shape cannot accept used to abort the whole pass and forward the list
-    // verbatim — which handed a backend a one-element bypass for the exclusion
-    // applied to all of its siblings. An unparseable element is now dropped:
-    // it cannot be judged by the call predicate, and forwarding it would
-    // disclose a name the caller may not invoke (A3).
+    // Element by element: one unparseable descriptor must not forward the
+    // whole list verbatim (a bypass). It is dropped, since it cannot be judged
+    // and would disclose a name the caller may not invoke (A3).
     let mut tools = Vec::with_capacity(items.len());
     for item in items {
         match serde_json::from_value::<Tool>(item.clone()) {
@@ -757,12 +754,15 @@ async fn backend_handler_inner(
         .ok()
         .flatten();
     // Then this dispatch's own challenge for a chained backend (ASI07 R7).
-    let chained = backend.chain_policy().0;
-    if method == "tools/call"
-        && let Some(sent) = params.as_mut()
-        && let Err(e) = state.meta_mcp.chain_challenge(chained, sent)
-    {
-        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+    let mut challenge = None;
+    if let (Some(sent), "tools/call") = (params.as_mut(), method.as_str()) {
+        match state
+            .meta_mcp
+            .chain_challenge(backend.chain_policy().0, sent)
+        {
+            Ok(minted) => challenge = minted,
+            Err(e) => return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK),
+        }
     }
 
     // End-user identity propagation for the direct backend route (MIK-6704 /
@@ -817,12 +817,10 @@ async fn backend_handler_inner(
             .backends
             .get(&name)
             .and_then(|b| b.identity_propagation_config().cloned());
-        // Passthrough (ADR-008 rung 2, MIK-6746): a backend whose caller attaches
-        // its OWN credential is handled here — forward it verbatim, mint/store
-        // NOTHING (INV-4). Any other propagation strategy is resolved by the
-        // shared minting chokepoint. Isolation (INV-3) holds by construction:
-        // each request forwards its own header via `request_with_headers`, never
-        // via the shared transport, and the direct route keeps no per-user cache.
+        // Passthrough (ADR-008 rung 2, MIK-6746): the caller's OWN credential is
+        // forwarded verbatim, nothing minted or stored (INV-4); other strategies
+        // use the shared minting chokepoint. Isolation (INV-3) holds: each
+        // request forwards its own header, with no per-user cache.
         let passthrough_cfg = idp_cfg.clone().filter(|c| {
             c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
         });
@@ -1086,8 +1084,9 @@ async fn backend_handler_inner(
         ))
         .await;
         let (params, client) = (params.as_ref(), client.as_ref());
+        let seen = (&call, challenge.as_deref());
         let forward =
-            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward);
+            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward);
         return match forward {
             Ok(mut response) => {
                 // Restore the caller's ID over the transport's own.
@@ -1134,7 +1133,8 @@ async fn backend_handler_inner(
         let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
         if method == "tools/call" {
             let (params, client) = (params.as_ref(), client.as_ref());
-            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward)
+            let seen = (&call, challenge.as_deref());
+            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward)
         } else {
             forward.inspect(|_| record_client_success(&state, client.as_ref()))
         }

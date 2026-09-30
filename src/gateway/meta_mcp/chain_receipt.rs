@@ -46,17 +46,18 @@ pub(crate) fn mint_nonce() -> crate::Result<String> {
 }
 
 /// Write this gateway's challenge into `params._meta`, keeping every other
-/// member (design D2/R7). The only writer of the outbound chain nonce.
-pub(crate) fn inject_nonce(params: &mut Value, nonce: &str) {
-    let Some(members) = params.as_object_mut() else {
-        return;
-    };
+/// member (design D2/R7). The only writer of the outbound chain nonce. A
+/// `_meta` that is not an object cannot carry it, so the call is refused
+/// rather than dispatched unchallenged.
+pub(crate) fn inject_nonce(params: &mut Value, nonce: &str) -> crate::Result<()> {
+    let malformed = || crate::Error::json_rpc(-32602, "malformed request fields: _meta");
+    let members = params.as_object_mut().ok_or_else(malformed)?;
     let meta = members
         .entry("_meta")
         .or_insert_with(|| Value::Object(serde_json::Map::new()));
-    if let Some(meta) = meta.as_object_mut() {
-        meta.insert(CHAIN_NONCE_META.to_owned(), Value::String(nonce.to_owned()));
-    }
+    let meta = meta.as_object_mut().ok_or_else(malformed)?;
+    meta.insert(CHAIN_NONCE_META.to_owned(), Value::String(nonce.to_owned()));
+    Ok(())
 }
 
 fn refusal(rule: &str) -> crate::Error {
@@ -165,7 +166,7 @@ impl super::super::MetaMcp {
             return Ok(None);
         }
         let nonce = mint_nonce()?;
-        inject_nonce(params, &nonce);
+        inject_nonce(params, &nonce)?;
         Ok(Some(nonce))
     }
 
@@ -179,8 +180,17 @@ impl super::super::MetaMcp {
         challenge: Option<&str>,
         slot: &ChainSlot,
     ) -> crate::Result<()> {
-        let (Some(identity), Some(challenge)) = (self.chain_signer.as_deref(), challenge) else {
+        let Some(identity) = self.chain_signer.as_deref() else {
             return Ok(());
+        };
+        if policy.0 == ChainMode::Off {
+            return Ok(());
+        }
+        // A chained backend answered without this dispatch's challenge on
+        // record: fail closed, never an unchecked eligible result.
+        let Some(challenge) = challenge else {
+            *slot.lock() = ChainReceipt::Refused;
+            return Err(refusal("challenge"));
         };
         match receive(identity, policy, result, challenge, now()) {
             Ok(outcome) => {

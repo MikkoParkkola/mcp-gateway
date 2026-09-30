@@ -62,6 +62,26 @@ async fn direct_challenge_keeps_other_meta_members() {
     );
 }
 
+/// cr1 HIGH: a non-object `_meta` cannot carry the challenge, so a chained
+/// direct call is refused before dispatch, never forwarded unchallenged.
+#[tokio::test]
+async fn direct_non_object_meta_is_refused_before_dispatch() {
+    for mode in ["verify", "require"] {
+        let upstream = FakeUpstream::start(Mode::Honest).await;
+        let d = HttpGateway::start(d_config(&upstream.url, mode, "on_request")).await;
+        for meta in [json!(null), json!(7), json!([]), json!("x")] {
+            let (path, mut body) = request(Route::Direct, "m-2", None);
+            body["params"]["_meta"] = meta.clone();
+            let response = post(&d, &path, &body).await;
+            assert_eq!(
+                response["error"]["code"], -32602,
+                "{mode}/{meta}: {response}"
+            );
+        }
+        assert!(upstream.calls().is_empty(), "{mode}: nothing dispatched");
+    }
+}
+
 /// F1/F1b: with message signing on and `emit: always`, the invoke nonce is
 /// the chain's last nonce; with both present the chain nonce wins.
 #[tokio::test]

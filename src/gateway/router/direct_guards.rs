@@ -44,7 +44,7 @@ impl DirectRouteGuards {
     /// A transport failure is returned unchanged for the caller's failure arm.
     pub(crate) fn after_dispatch(
         state: &AppState,
-        call: &BackendCall<'_>,
+        (call, challenge): (&BackendCall<'_>, Option<&str>),
         params: Option<&Value>,
         client: Option<&AuthenticatedClient>,
         warnings: &[String],
@@ -53,13 +53,9 @@ impl DirectRouteGuards {
         let meta = &state.meta_mcp;
         meta.account_dispatch(call, DirectOutcome::from_response(&forward));
         let mut response = forward?;
-        // ASI07 inc3 raw receipt: verify before the gates read the reply. The
-        // only chain nonce left in `params` is the one this gateway wrote.
+        // ASI07 inc3 raw receipt: verify before the gates read the reply,
+        // against the challenge this dispatch minted (never read back).
         let slot = crate::gateway::meta_mcp::response_security::chain_receipt::ChainSlot::default();
-        let challenge = params
-            .and_then(|p| p.get("_meta"))
-            .and_then(|m| m.get(crate::protocol::mrtr::CHAIN_NONCE_META))
-            .and_then(Value::as_str);
         if let Some(result) = response.result.as_mut() {
             meta.chain_receive_for(call.server, result, challenge, &slot)?;
         }
