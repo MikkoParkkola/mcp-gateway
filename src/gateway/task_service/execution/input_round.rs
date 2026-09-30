@@ -108,24 +108,42 @@ impl<'a> Settling<'a> {
         }
     }
 
-    /// Record the calls a plan actually made, in the row, before it settles or
-    /// parks. `false` only when they do not fit the record budget (#2450).
-    async fn persist_targets(&self) -> bool {
-        if !matches!(
+    /// The calls a plan actually dispatched, for the settlement to commit with
+    /// its outcome. `None` for a call whose one target was recorded at creation.
+    fn plan_targets(&self) -> Option<Vec<Target>> {
+        matches!(
             self.call.tool.as_str(),
             "gateway_execute" | "gateway_run_playbook"
-        ) {
+        )
+        .then(|| {
+            self.owned
+                .dispatch_log()
+                .snapshot()
+                .into_iter()
+                .map(|(server, tool)| Target { server, tool })
+                .collect()
+        })
+    }
+
+    async fn settle(&self, event: TaskTransition) {
+        self.executor
+            .settle_cas_with(
+                self.principal,
+                self.id,
+                self.revision,
+                (event, self.plan_targets()),
+            )
+            .await;
+    }
+
+    /// Record a parked plan's calls so far; the resume's log starts empty.
+    /// `false` means they are NOT durable, and the round must not be parked.
+    async fn park_targets(&self) -> bool {
+        let Some(targets) = self.plan_targets() else {
             return true;
-        }
-        let targets: Vec<Target> = self
-            .owned
-            .dispatch_log()
-            .snapshot()
-            .into_iter()
-            .map(|(server, tool)| Target { server, tool })
-            .collect();
+        };
         let Ok(owner) = self.executor.service.owner(self.principal) else {
-            return true;
+            return false;
         };
         let stored = self
             .executor
@@ -133,31 +151,14 @@ impl<'a> Settling<'a> {
             .store
             .add_targets(owner.as_digest(), self.id, self.revision, targets)
             .await;
-        !matches!(stored, Err(StoreError::Capacity))
-    }
-
-    async fn settle(&self, event: TaskTransition) {
-        // A result whose targets cannot be recorded could never be re-authorized:
-        // the task fails, explicitly, rather than store an empty list.
-        let event = if !self.persist_targets().await && matches!(event, TaskTransition::Complete(_))
-        {
-            TaskTransition::Fail(JsonRpcError {
-                code: -32603,
-                message: "the task's backend calls exceed the record size limit".to_owned(),
-                data: None,
-            })
-        } else {
-            event
-        };
-        self.executor
-            .settle_cas(self.principal, self.id, self.revision, event)
-            .await;
+        // A row a cancel already moved is not parked either way.
+        matches!(stored, Ok(()) | Err(StoreError::RevisionConflict))
     }
 
     /// Commit `input_required` with the continuation, then release: the worker
     /// returns and the row waits with no owner.
     async fn park(&self, round: InputRequired) {
-        if !self.persist_targets().await {
+        if !self.park_targets().await {
             return self
                 .settle(TaskTransition::Complete(abandoned_input_round()))
                 .await;

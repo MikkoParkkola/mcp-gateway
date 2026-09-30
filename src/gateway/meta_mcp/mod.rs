@@ -2245,7 +2245,12 @@ impl MetaMcp {
                 ) {
                     return error_response_preserving_status(id, &error);
                 }
-                let attestation = caller.retry.attestation.as_deref();
+                // The token rides where the current request's own check reads it.
+                let attestation = if tool_name == "gateway_invoke" {
+                    policy_arguments.get("attestation").and_then(Value::as_str)
+                } else {
+                    caller.retry.attestation.as_deref()
+                };
                 self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
                     .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
             }

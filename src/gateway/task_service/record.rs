@@ -208,7 +208,7 @@ impl PreparedTask {
     /// Build a prepared task from an admitted lease's binding and its one-shot
     /// publication token. The digests are the binding's own: the task service
     /// stores what admission derived and never derives identity itself.
-    pub(super) fn admitted(
+    pub(super) fn admitted_with_targets(
         task: &Task,
         binding: &crate::idempotency::admission::TaskBinding,
         publication: crate::idempotency::admission::TaskPublication,
@@ -240,6 +240,17 @@ impl PreparedTask {
             },
             publication: Some(publication),
         }
+    }
+
+    /// [`Self::admitted_with_targets`] for a call that records none.
+    #[cfg(test)]
+    pub(super) fn admitted(
+        task: &Task,
+        binding: &crate::idempotency::admission::TaskBinding,
+        publication: crate::idempotency::admission::TaskPublication,
+        backend: &str,
+    ) -> Self {
+        Self::admitted_with_targets(task, binding, publication, backend, Vec::new())
     }
 
     #[cfg(test)]

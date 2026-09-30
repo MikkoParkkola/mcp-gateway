@@ -101,6 +101,7 @@ impl TaskService {
     /// new-key worker-cap refusal writes nothing and drops the admission lease.
     /// Every store failure is `Unavailable` and releases both the permit and the
     /// unresolved publication. `Created` retains its permit for the consumer.
+    #[cfg(test)]
     pub(crate) async fn create(
         &self,
         request: Request<'_>,
@@ -126,7 +127,7 @@ impl TaskService {
                     return Ok(CreateOutcome::Capacity);
                 };
                 let binding = lease.binding().clone();
-                let prepared = PreparedTask::admitted(
+                let prepared = PreparedTask::admitted_with_targets(
                     task,
                     &binding,
                     lease.into_publication(),
