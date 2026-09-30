@@ -21,12 +21,14 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{DateTime, Utc};
 
 use super::record::{
-    CommittedTask, InterruptedTask, MARKER_VERSION, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask,
-    RECORD_VERSION, Record, UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
+    CommittedTask, INPUT_ROUND_VERSION, InterruptedTask, MARKER_VERSION, MAX_UPSTREAM_HANDLE_BYTES,
+    PreparedTask, Record, UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
 };
 use crate::fs_lock::{DirPin, ExclusiveFileLock};
 #[cfg(unix)]
 use std::fs::rename;
+#[path = "store_input.rs"]
+pub(crate) mod input;
 #[cfg(windows)]
 #[path = "store_windows.rs"]
 mod platform;
@@ -443,7 +445,7 @@ impl Shared {
         // Unreachable in practice; a record that can hold no further revision is
         // out of room rather than broken.
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
-        record.model = task.snapshot();
+        record.set_model(&task);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);
@@ -773,7 +775,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             tracing::warn!(%error, path = %path.display(), "task record does not parse");
             StoreError::CorruptRecord
         })?;
-        if !(1..=RECORD_VERSION).contains(&record.version) {
+        if !(1..=INPUT_ROUND_VERSION).contains(&record.version) {
             tracing::warn!(path = %path.display(), version = record.version, "unsupported task record version");
             return Err(StoreError::CorruptRecord);
         }
