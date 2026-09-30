@@ -108,6 +108,10 @@ pub(crate) fn clamp_delivered_scope(result: &mut Value) {
 
 /// `serialize_with` for a wire slot that carries a result: serializes the
 /// value as [`clamp_delivered_scope`] would leave it.
+#[expect(
+    clippy::ref_option,
+    reason = "serde's serialize_with passes the field as &Option<Value>"
+)]
 pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
     result: &Option<Value>,
     serializer: S,
