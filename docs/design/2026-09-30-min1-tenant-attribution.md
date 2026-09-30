@@ -1,7 +1,8 @@
 # MIK-7116 4.0 slice: MIN.1 attribution, MIN.2 observe, MIN.4 measurement
 
-Status: v3. v2 was reviewed by two seats (both SHIP-WITH-FIXES); a later
-seat raised H1-H3 and M6, all verified at source and folded in below.
+Status: v4. v2 was reviewed by two seats (both SHIP-WITH-FIXES); a later
+seat raised H1-H3 and M6 (folded into v3). v3 seat 1: REWORK on MEDIUM/LOW
+findings only, each verified at source and folded in (disposition table).
 Base: `docs/ranking-1-release-line` @ `d5fa1ac66` (after #2421, #2448, #2449,
 #2456).
 
@@ -26,12 +27,14 @@ MIN.2-observe; §8 is MIN.4.
 | Meta and direct build **separate** `Firewall` instances, so separate `TenantGuard` windows | `gateway/server/mod.rs:1228-1238` ("each keeps its own") |
 | `ContextDataClass` comes from the context-integrity kernel; never empty (defaults to `Public`) | `context_integrity/kernel.rs` |
 | **Both** routes run the kernel: direct `after_dispatch` → `MetaMcp::gate_payload` → `apply_response_gates` → `apply_context_integrity` | `router/direct_guards.rs:57`, `meta_mcp/invoke/dispatch_guards.rs:184`, `meta_mcp/invoke.rs:1463-1523` |
-| Three D1 writers call `log_invocation_correlated`: meta invoke (D1-d), direct (D2), meta pre-dispatch refusal (#2421) | `meta_mcp/invoke/audit.rs:207`, `router/backend_handlers/direct_audit.rs:94`, `router/meta_refusal_audit.rs:51` |
-| D1 domain fields are a `serde_json::Map`; the chain hash and HMAC cover every field but `entry_hash`/`sig`/`key_id` | `security/transparency_log.rs:379-411` |
+| Three D1 writers call `log_invocation_correlated`: meta invoke (D1-d), direct (D2), meta pre-dispatch refusal (#2421) | `meta_mcp/invoke/audit.rs:132`, `router/backend_handlers/direct_audit.rs:149`, `router/meta_refusal_audit.rs:101` |
+| D1 domain fields are a `serde_json::Map`; the chain hash covers every field but `entry_hash`/`sig`/`key_id`, and the HMAC also authenticates `key_id` | `security/transparency_log.rs:379-411,621-630,694-725` |
 | A record over `MAX_RECORD_BYTES` (4 MiB) fails the append; under `FailClosed` the call is then refused | `transparency_log_append.rs:73`, `transparency_log_rotation.rs:51` |
-| `DISPATCH_FAILURE` is a task-local read inside `with_dispatch_scope` and returned as an owned value; `audit_invocation` runs **after** the scope ends | `meta_mcp/invoke/audit.rs:168-190`, `invoke.rs:1352-1363` |
-| Idempotency and response-cache hits return before `apply_response_gates` | `invoke.rs:1890-1903`, `invoke.rs:~2015` |
-| The response cache is shared across principals unless identity propagation binds it | `invoke.rs:45-49` |
+| `DISPATCH_FAILURE` is a task-local read inside `with_dispatch_scope` and returned as an owned value; `audit_invocation` runs **after** the scope ends | `meta_mcp/invoke/audit.rs:29-50`, `invoke.rs:1352-1363` |
+| Three cache hits return before `apply_response_gates`: meta idempotency, meta response cache, direct idempotency | `invoke.rs:1890-1903`, `invoke.rs:~2015`, `router/backend_handlers.rs:1044-1047` |
+| Caches are partitioned per resolved caller (grant subject, OIDC actor, credential digest); unresolved authenticated callers bypass caching; anonymous callers share one namespace | `meta_mcp/support.rs:163-193,221-233` |
+| The canonical firewall key: length-prefixed, subject outranks credential, a certificate subject re-derived from the certificate (never its display name) | `router/identity.rs:340-363` (`caller_key`, `pub(super)`) |
+| The context-integrity kernel classifies at most the first and last 32 KiB of a larger text; no finding → `Public` | `context_integrity/kernel.rs:28-29,437-442,592-601` |
 
 ## Design
 
@@ -74,13 +77,18 @@ guard may refuse. Nothing is refused that was not before.
   dropped silently on direct.
 - **Outside a scope** (upstream task recovery, `upstream.rs:427,462`) the note
   is a no-op; that record keeps request-side tenants only.
-- **Cache hits (H2):** both hit returns (`invoke.rs:1903`, `~2015`) are inside
-  the scope. Each calls `note_cached_response(&cached)`, which notes response
-  tenants and runs `ContextIntegrityKernel::evaluate` on the cached value for
-  its `data_classes` (pure; same cost as the miss path's evaluation). A hit
-  is recorded like a miss. This matters because the default cache is shared
-  across principals (`invoke.rs:45-49`), so a hit can be the cross-principal
-  read MIN.2 must see.
+- **Cache hits (H2, v3 seat 1 F1/F2):** all three hit returns note
+  `tenants` from the **delivered** cached value and mark the record
+  `attribution: "cached_delivery"`; they carry no `data_classes` and feed no
+  MIN.2 observation. A cached value is post-gate (summarised, stripped or
+  withheld content may have lost the raw tenants), so re-classifying it cannot
+  reproduce the miss; hit ≠ miss is stated, not hidden. MIN.2 loses nothing
+  that matters: caches are partitioned per resolved caller
+  (`support.rs:163-193`), so a hit replays to the principal whose miss was
+  already observed, and pooled anonymous callers are unkeyed, never observed.
+  Recorded undercount: a replay after the window expires does not re-enter the
+  window. The direct idempotency hit (`backend_handlers.rs:1044`) runs inside
+  the direct scope once `backend_handler_inner` is wrapped.
 
 ### 3. Representation and records
 
@@ -102,7 +110,11 @@ guard may refuse. Nothing is refused that was not before.
   `MAX_RECORDED_TENANTS = 1024` sorted hashes and, when truncated, adds
   `tenants_total: N` as the overflow marker. A `const` assertion ties the cap
   to `MAX_RECORD_BYTES` (1024 × 19 B ≈ 19 KiB, far under 4 MiB), so a large
-  tenant set can no longer push a record past the cap and refuse the call.
+  tenant set adds at most ~19 KiB. This bounds the **addition**, not the
+  whole record: a record already within 19 KiB of 4 MiB could now cross it.
+  No existing record comes near (the largest fields are fixed-size hashes and
+  short names), so the qualified claim is: attribution cannot by itself refuse
+  a call.
   The writer rejects an `extra` key that collides with a domain or chain
   field.
 
@@ -128,6 +140,9 @@ log_request` keeps its signature.
 - Attribution needs the `firewall` feature (default-on) and `arg_keys`;
   records need the transparency log.
 - Text blocks over 1 MiB are not parsed for tenants.
+- The kernel classifies only the first and last 32 KiB of a larger text, so
+  sensitive data only in the middle is classed `Public` and MIN.2 misses it.
+  Pre-existing classifier bound, not changed here; MIN.4 measures it (§8).
 
 ### 5. Public API
 
@@ -135,7 +150,10 @@ log_request` keeps its signature.
 `TransparencyLogger::log_invocation_correlated` signatures; fields of
 `ContextProvenance`, `ContextIntegrityClassification`, `FirewallVerdict`;
 `TenantGuardConfig` keys. New items are `pub(crate)`; `with_dispatch_scope`
-widens `pub(super)` → `pub(crate)` (crate-internal). Doc-only change on
+widens `pub(super)` → `pub(crate)` (crate-internal); `identity::caller_key`
+widens `pub(super)` → `pub(crate)` if the direct writer needs it outside
+`router`; `MetaMcpCallerContext` gains a `pub(crate)` field (the struct lives
+in the private `gateway::meta_mcp` module and is not re-exported). Doc-only change on
 `TenantGuardConfig::enabled`/`arg_keys`: attribution runs with
 `enabled = false`.
 
@@ -168,14 +186,20 @@ Enforcement is a later switch, after MIN.KILL.
   cross-tenant read).
 - **Where:** in the meta and direct D1 writers, which hold the caller and
   the owned notes. Cache hits count (§2).
-- **Key:** `identity::caller_key` inputs as available per route:
-  `grant_subject` → `subject:<authority>:<subject>`, else credential
-  principal → `credential:<principal>`. No key → no observation, recorded as
-  `cross_tenant: "unkeyed"`. `ponytail:` the meta caller context carries no
-  `CertIdentity`, so an mTLS-only caller may key differently on the two
-  routes; carry `caller_key` in `MetaMcpCallerContext` before enforcement.
+- **Key (v3 seat 1 F3):** exactly `identity::caller_key(subject, cert,
+  client)`, the firewall's canonical key, computed at the router while the
+  certificate and client are in hand (both routes already compute it as
+  `control_identity`). Meta carries it in a new `pub(crate) observer_key`
+  field on `MetaMcpCallerContext`; direct carries it in `DirectCall`. Empty
+  key → no observation, recorded as `cross_tenant: "unkeyed"`. Route parity is
+  by construction (one function, same inputs), which closes the v3 mTLS
+  `ponytail:`.
 - **Record:** `cross_tenant: "would_block"` (or `"unkeyed"`) only when it
-  applies. The first read's record already carries `tenants` +
+  applies, and on every observed sensitive read `observer` = 16 hex of
+  SHA-256 over the canonical key (not raw; the key embeds credential
+  principals). The read and the would-block records correlate by `observer`,
+  not by `who` (v3 seat 1 F4: one subject on five credentials is five `who`
+  values but one observer). The first read's record already carries `tenants` +
   `data_classes`, so "an audit entry for both the read and the block" is two
   D1 records correlated by `who`.
 - The request-side breadth guard (`tenant_guard.enabled`,
@@ -193,7 +217,8 @@ Enforcement is a later switch, after MIN.KILL.
   `structuredContent`), `expect: "flag" | "clean"`: single-customer support,
   repeated reads, directory listing, public docs, a legitimate cross-tenant
   incident review (`clean`, an expected false positive, the case MIN.3 is
-  for), a numeric id the phone pattern misreads, and true cross-tenant copy
+  for), a numeric id the phone pattern misreads, a sensitive row only in the
+  middle of a > 64 KiB text (expected false negative), and true cross-tenant copy
   sessions (`flag`). Each step runs through the production extractor, the
   production kernel and the §7 rule, so classifier false positives are
   measured.
@@ -204,8 +229,8 @@ Enforcement is a later switch, after MIN.KILL.
   holds by construction; a test asserts a would-block response is delivered
   unchanged.
 - **Runbook** (`docs/release/mik-7116-min-kill-observe-runbook.md`): set
-  `arg_keys` with `enabled: false`, run one week, count distinct `who` with a
-  `cross_tenant == "would_block"` record (checked-in `jq`), apply MIN.KILL:
+  `arg_keys` with `enabled: false`, run one week, count distinct `observer` with a
+  `cross_tenant == "would_block"` record (unique principals, not episodes) (checked-in `jq`), apply MIN.KILL:
   fewer than 5 → MIN.1 only, no enforcement.
 
 ### Increments (one per PR)
@@ -224,7 +249,14 @@ Enforcement is a later switch, after MIN.KILL.
 | v2 grok HIGH | direct route has a D1 record | correct (§3) |
 | v2 grok MED | `data_classes` never empty | emission rule (§3) |
 | H1 | direct route also runs `apply_response_gates` | verified (`direct_guards.rs:57`); single capture point, and direct now gets `data_classes` and MIN.2 (v2 said neither) |
-| H2 | cache hits skip the gates | verified; hits note tenants and classify the cached value (§2); needed because the cache is shared across principals |
+| H2 | cache hits skip the gates | verified; superseded by v3 seat 1 F2 below |
 | H3 | large tenant set → record > 4 MiB → call refused | verified (`transparency_log_append.rs:73`); cap 1024 + `tenants_total` (§3) |
 | M6 | task-local ends before `audit_invocation` | verified; notes returned owned from the scope (§2) |
 | v3 self-check | meta and direct firewalls are separate instances | MIN.2 window on `MetaMcp` (§7) |
+| v3 seat 1 F1 MED | direct idempotency hit unattributed | verified (`backend_handlers.rs:1044`); third hit site covered (§2) |
+| v3 seat 1 F2 MED | re-classifying cached (post-gate) content ≠ raw attribution | accepted; hits carry delivered-content tenants, marked, no classes, no MIN.2 (§2) |
+| v3 seat 1 F3 MED | ad-hoc observer key loses `caller_key` guarantees | accepted; `caller_key` carried crate-private on both routes (§7) |
+| v3 seat 1 F4 MED | counting `who` ≠ counting principals | accepted; `observer` fingerprint, runbook counts it (§7, §8) |
+| v3 seat 1 F5 LOW | cap bounds the addition, not the record | claim qualified (§3) |
+| v3 seat 1 F6 LOW | kernel 64 KiB sampling blind spot | documented (§4), corpus session added (§8) |
+| v3 seat 1 citations | writer lines, task-local lines, HMAC `key_id`, cache-shared claim | corrected |

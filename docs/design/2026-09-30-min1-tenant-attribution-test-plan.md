@@ -1,6 +1,6 @@
 # MIK-7116.MIN.1: test plan
 
-Design: `2026-09-30-min1-tenant-attribution.md` (v3). Increment 1 = T1-T12, T23-T26; increment 2 = T13-T19, T27; increment 3 = T20-T22. Tests are written
+Design: `2026-09-30-min1-tenant-attribution.md` (v4). Increment 1 = T1-T12, T23-T26, T28; increment 2 = T13-T19, T27, T29; increment 3 = T20-T22. Tests are written
 first, committed and pushed as a draft PR, and must fail on the base for the
 stated reason before implementation starts. The red commit carries
 `pub(crate)` signature stubs only (extractors return an empty set, the new log
@@ -31,7 +31,8 @@ public helper, not from the implementation's wrapper.
 
 | T23 | unit, transparency log | `log_invocation_attributed` with 1025 distinct tenant hashes | record holds exactly 1024 sorted hashes and `tenants_total == 1025`; `verify_log` passes; with 1024 there is no `tenants_total` | no writer |
 | T24 | unit, transparency log | `extra` containing `route` (a domain field) and `entry_hash` (a chain field) | both rejected with an error, nothing appended | no writer |
-| T25 | integration, meta D1 | as T7 with the response cache on; same call twice | the second (hit) record carries the same `tenants` and `data_classes` as the first | hits skip the gates |
+| T25 | integration, meta D1 | as T7 with the response cache on; same call twice; then again with a context-integrity `withhold` policy | hit record: `tenants` from the delivered value, `attribution == "cached_delivery"`, no `data_classes`, no `cross_tenant`/`observer`; under `withhold` the hit record carries no response tenant (the delivered value holds none) | hits skip the gates |
+| T28 | integration, direct D1 | direct idempotent call twice (same key) whose reply names `cust-9` | second record: `tenants ∋ h(cust-9)`, `attribution == "cached_delivery"` | direct hit unscoped |
 | T26 | integration, direct D1 | as T12, response inspection in action mode with an `AKIA…` key in the reply | outcome ≠ `ok`; `tenants ∋ h(cust-9)`; no `data_classes` | no field |
 
 ### MIN.2 observe (design §7)
@@ -42,12 +43,13 @@ so a classifier change fails loudly instead of silently turning the test green).
 
 | # | Level | Setup | Assertion | Red on base because |
 |---|---|---|---|---|
-| T13 | integration, meta D1 | as T7; API-key caller `ci`; call 1 returns a sensitive row for `cust-A`, call 2 a sensitive row for `cust-B` | record 1: `tenants == [h(cust-A)]`, `data_classes ∋ "personal_data"`, no `cross_tenant`; record 2: `cross_tenant == "would_block"`; call 2's result is `Ok` and its content still carries the backend's `cust-B` row (observe mode withholds nothing; the default kernel is monitor-only, so the row is delivered) | no field |
+| T13 | integration, meta D1 | as T7; API-key caller `ci`; call 1 returns a sensitive row for `cust-A`, call 2 a sensitive row for `cust-B` | record 1: `tenants == [h(cust-A)]`, `data_classes ∋ "personal_data"`, `observer` present, no `cross_tenant`; record 2's `observer` equals record 1's; record 2: `cross_tenant == "would_block"`; call 2's result is `Ok` and its content still carries the backend's `cust-B` row (observe mode withholds nothing; the default kernel is monitor-only, so the row is delivered) | no field |
 | T14 | integration, meta D1 | as T13, call 2 for `cust-A` again | record 2 has no `cross_tenant` | green guard (same tenant ≠ cross-tenant) |
 | T15 | integration, meta D1 | as T13, call 2 returns a **non-sensitive** row (`{"customer_id":"cust-B","plan":"pro"}`) | no `cross_tenant` on record 2; then call 3, sensitive for `cust-A` → still no `cross_tenant` (non-sensitive reads are not recorded) | green guard |
 | T16 | integration, meta D1 | one call whose response holds sensitive rows for `cust-A` and `cust-B` | its record has `cross_tenant == "would_block"` | no field |
 | T17 | integration, meta D1 | as T13 but calls 1 and 2 from different API keys | neither record has `cross_tenant` | green guard (per-principal key) |
 | T18 | integration, meta D1 | as T13 with an anonymous caller | record has `cross_tenant == "unkeyed"` | no field |
+| T29 | unit, identity | `observer` for: two mTLS callers sharing a certificate display name; a subject whose id contains `:`; one subject on two API keys; the same caller on meta and direct | distinct, distinct, equal, equal (equals `caller_key` on each route) | no field |
 | T27 | integration, mixed routes | shared state (`direct_guards_fixture.rs` harness): sensitive read for `cust-A` via meta `gateway_invoke`, then for `cust-B` via direct `/mcp/{name}`, same API key | the direct record has `cross_tenant == "would_block"` | no field; proves one window across routes |
 | T19 | unit, tenant_guard | two sensitive observations for different tenants, the second after `window_secs` has elapsed (`record_at` with a fixed `Instant`) | not would-block | green guard (window honoured) |
 
@@ -56,11 +58,11 @@ so a classifier change fails loudly instead of silently turning the test green).
 | # | Level | Setup | Assertion | Red on base because |
 |---|---|---|---|---|
 | T20 | lib test | load `tests/fixtures/mik_7116_min4_corpus.json` via `include_str!`; run each session through the production extractor, `ContextIntegrityKernel::default()` and the §7 observer | confusion counts equal the table in `docs/release/mik-7116-min4-fp-measurement.md` (the test parses that table) | observer stub returns never-flag, so TP = 0 ≠ documented |
-| T21 | lib test | the corpus | holds ≥ 3 `flag` and ≥ 8 `clean` sessions; at least one `clean` session is a legitimate cross-tenant incident review, and at least one `clean` session returns a ≥ 9-digit numeric id that the phone pattern (`kernel.rs:34`) misreads as personal data | corpus absent |
+| T21 | lib test | the corpus | holds ≥ 3 `flag` and ≥ 8 `clean` sessions; at least one `clean` session is a legitimate cross-tenant incident review, and at least one `clean` session returns a ≥ 9-digit numeric id that the phone pattern (`kernel.rs:34`) misreads as personal data, and at least one `flag` session whose sensitive row sits only in the middle of a > 64 KiB text (a documented false negative) | corpus absent |
 
 The runbook's `jq` count is checked by T22: run it (via `std::process::Command`
 only if `jq` is on PATH; otherwise the test is skipped with a printed reason)
-over the log T13 wrote, and expect `1`. `ponytail:` a skip-when-absent test is
+over a log with: one subject on five API keys each would-blocking (→ 1), five distinct subjects each would-blocking (→ 5), one subject would-blocking in two windows (→ 1), an unkeyed caller (→ not counted). Expected total `6`. `ponytail:` a skip-when-absent test is
 weak; CI images carry `jq`, and a missing `jq` is visible in the output.
 
 Existing suites that must stay green unchanged: `tests/mik_7116_tenant_acs.rs`,
