@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #2130: sign-in by link behind a same-host TLS-terminating proxy. The link
-//! is redeemed at the loopback URL, as before; the session cookie is set on the
-//! public origin by a one-time handoff that arrives through the proxy.
+//! is redeemed at the loopback URL, as before; that page shows a one-time code
+//! the operator enters in a same-origin form on the public origin, which sets
+//! the session cookie there. The code never travels in a URL.
 
 use super::*;
 
 const PUBLIC: &str = "https://gw.example";
-const HANDOFF_PREFIX: &str = "https://gw.example/dashboard?handoff=";
+const HANDOFF: &str = "/dashboard/handoff";
 
 /// An HTTPS `public_url` in front of this plain-HTTP loopback listener.
 async fn behind_https_front() -> (Arc<AppState>, tempfile::TempDir) {
@@ -16,16 +17,57 @@ async fn behind_https_front() -> (Arc<AppState>, tempfile::TempDir) {
     (state, dir)
 }
 
-/// `uri` as a same-host proxy forwards it: loopback peer, public `Host`, and
-/// the forwarding headers every convention-following proxy adds.
-fn forwarded(uri: &str) -> Request<Body> {
-    let mut request = get(uri, None);
-    let headers = request.headers_mut();
-    headers.insert(header::HOST, "gw.example".parse().unwrap());
-    headers.insert("x-forwarded-for", "203.0.113.9".parse().unwrap());
-    headers.insert("x-forwarded-proto", "https".parse().unwrap());
-    headers.insert("x-forwarded-host", "gw.example".parse().unwrap());
-    request
+/// A browser request on the public origin as a same-host proxy forwards it:
+/// loopback peer, public `Host`, forwarding headers, and the fetch metadata a
+/// browser sends for `site`.
+fn through_proxy(method: &str, body: &str, site: &str, cookie: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(HANDOFF)
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_345))))
+        .header(header::HOST, "gw.example")
+        .header("x-forwarded-for", "203.0.113.9")
+        .header("x-forwarded-proto", "https")
+        .header("x-forwarded-host", "gw.example")
+        .header("sec-fetch-site", site);
+    if method == "POST" {
+        let origin = if site == "same-origin" {
+            PUBLIC
+        } else {
+            "https://evil.example"
+        };
+        builder = builder
+            .header(header::ORIGIN, origin)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    }
+    if let Some(handle) = cookie {
+        builder = builder.header(header::COOKIE, format!("{SESSION_COOKIE}={handle}"));
+    }
+    builder
+        .body(Body::from(body.to_string()))
+        .expect("request builds")
+}
+
+fn submit(code: &str, cookie: Option<&str>) -> Request<Body> {
+    through_proxy("POST", &format!("code={code}"), "same-origin", cookie)
+}
+
+fn header_is(reply: &Reply, name: &str, value: &str) -> bool {
+    reply.headers.get(name).is_some_and(|v| v == value)
+}
+
+/// Neither caching nor a `Referer` may carry anything from these pages.
+fn assert_private(reply: &Reply) {
+    assert!(
+        header_is(reply, "cache-control", "no-store"),
+        "{:?}",
+        reply.headers
+    );
+    assert!(
+        header_is(reply, "referrer-policy", "no-referrer"),
+        "{:?}",
+        reply.headers
+    );
 }
 
 fn location(reply: &Reply) -> String {
@@ -37,22 +79,18 @@ fn location(reply: &Reply) -> String {
         .to_string()
 }
 
-fn no_referrer(reply: &Reply) -> bool {
-    reply
-        .headers
-        .get("referrer-policy")
-        .is_some_and(|v| v == "no-referrer")
-}
-
-/// Redeem the startup link at the loopback URL and return the handoff value.
-async fn hand_off(state: &Arc<AppState>) -> String {
+/// Redeem the startup link at the loopback URL and return the code it shows.
+async fn code_from_link(state: &Arc<AppState>) -> (Reply, String) {
     let value = state.dashboard_bootstrap.peek().expect("startup value");
     let out = send(state, redeem(&value, None)).await;
-    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
-    location(&out)
-        .strip_prefix(HANDOFF_PREFIX)
-        .unwrap_or_else(|| panic!("a handoff to the public origin: {}", location(&out)))
-        .to_string()
+    assert_eq!(out.status, StatusCode::OK, "{}", out.body);
+    let code = out
+        .body
+        .split_once(r#"<code id="handoff">"#)
+        .and_then(|(_, rest)| rest.split_once("</code>"))
+        .map(|(code, _)| code.to_string())
+        .unwrap_or_else(|| panic!("a code on the page: {}", out.body));
+    (out, code)
 }
 
 fn session_handle(reply: &Reply) -> String {
@@ -65,35 +103,53 @@ fn session_handle(reply: &Reply) -> String {
         .to_string()
 }
 
-/// The loopback redemption spends the link and hands off to the public origin
-/// without setting a cookie a browser would scope to the loopback host.
+/// The loopback redemption spends the link, shows a code and where to enter
+/// it, and sets no cookie a browser would scope to the loopback host.
 #[tokio::test]
-async fn a_loopback_redemption_hands_off_to_the_public_origin() {
+async fn a_loopback_redemption_shows_a_code_for_the_public_origin() {
     let (state, _dir) = behind_https_front().await;
-    let value = state.dashboard_bootstrap.peek().expect("startup value");
-    let out = send(&state, redeem(&value, None)).await;
+    let (out, code) = code_from_link(&state).await;
 
-    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
-    let target = location(&out);
-    let handoff = target.strip_prefix(HANDOFF_PREFIX).unwrap_or_default();
-    assert!(handoff.len() >= 22, "a 128-bit or longer handoff: {target}");
+    assert!(code.len() >= 22, "a 128-bit or longer code: {code}");
+    assert!(
+        out.body.contains("https://gw.example/dashboard/handoff"),
+        "{}",
+        out.body
+    );
     assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
-    assert!(no_referrer(&out), "{:?}", out.headers);
+    assert_private(&out);
     assert_eq!(state.dashboard_bootstrap.peek(), None, "the link is spent");
 }
 
-/// The handoff, arriving through the proxy, sets a Secure session cookie and
-/// sends the browser on to a clean `/dashboard`; the session is an admin one.
+/// The form on the public origin holds nothing and is served to anyone.
 #[tokio::test]
-async fn the_handoff_signs_in_through_the_proxy() {
+async fn the_code_form_is_served_on_the_public_origin() {
     let (state, _dir) = behind_https_front().await;
-    let handoff = hand_off(&state).await;
+    let out = send(&state, through_proxy("GET", "", "none", None)).await;
 
-    let out = send(&state, forwarded(&format!("/dashboard?handoff={handoff}"))).await;
+    assert_eq!(out.status, StatusCode::OK, "{}", out.body);
+    assert!(
+        out.body.contains(r#"action="/dashboard/handoff""#),
+        "{}",
+        out.body
+    );
+    assert!(out.body.contains(r#"name="code""#), "{}", out.body);
+    assert_private(&out);
+}
+
+/// The code, posted through the proxy, sets a Secure session cookie and sends
+/// the browser on to `/dashboard`; the session is an admin one, and nothing
+/// in the reply repeats the code.
+#[tokio::test]
+async fn the_code_signs_in_through_the_proxy() {
+    let (state, _dir) = behind_https_front().await;
+    let (_, code) = code_from_link(&state).await;
+
+    let out = send(&state, submit(&code, None)).await;
 
     assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
     assert_eq!(location(&out), "/dashboard");
-    assert!(no_referrer(&out), "{:?}", out.headers);
+    assert_private(&out);
     assert!(out.set_cookie().contains("Secure"), "{}", out.set_cookie());
     let handle = session_handle(&out);
     assert!(is_admin_view(
@@ -101,35 +157,67 @@ async fn the_handoff_signs_in_through_the_proxy() {
     ));
     for (name, value) in &out.headers {
         let value = value.to_str().unwrap_or_default();
-        assert!(
-            !value.contains(&handoff),
-            "{name} echoes the handoff: {value}"
-        );
+        assert!(!value.contains(&code), "{name} repeats the code: {value}");
     }
-    assert!(!out.body.contains(&handoff), "{}", out.body);
+    assert!(!out.body.contains(&code), "{}", out.body);
 }
 
-/// A handoff is single use, and a wrong value neither signs in nor spends the
+/// A code is single use, and a wrong one neither signs in nor spends the
 /// live one.
 #[tokio::test]
-async fn a_handoff_is_single_use_and_a_wrong_one_spends_nothing() {
+async fn a_code_is_single_use_and_a_wrong_one_spends_nothing() {
     let (state, _dir) = behind_https_front().await;
-    let handoff = hand_off(&state).await;
+    let (_, code) = code_from_link(&state).await;
 
-    let wrong = send(
-        &state,
-        forwarded("/dashboard?handoff=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-    )
-    .await;
+    let wrong = send(&state, submit(&"A".repeat(code.len()), None)).await;
     assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "{}", wrong.body);
     assert!(wrong.set_cookie().is_empty(), "{}", wrong.set_cookie());
+    assert_private(&wrong);
 
-    let first = send(&state, forwarded(&format!("/dashboard?handoff={handoff}"))).await;
+    let first = send(&state, submit(&code, None)).await;
     assert_eq!(first.status, StatusCode::SEE_OTHER, "{}", first.body);
 
-    let again = send(&state, forwarded(&format!("/dashboard?handoff={handoff}"))).await;
+    let again = send(&state, submit(&code, None)).await;
     assert_eq!(again.status, StatusCode::UNAUTHORIZED, "{}", again.body);
     assert!(again.set_cookie().is_empty(), "{}", again.set_cookie());
+}
+
+/// A browser already holding a session cookie, live or dead, still signs in
+/// with the code: the exchange runs before the cookie is judged.
+#[tokio::test]
+async fn a_code_signs_in_past_a_live_or_dead_cookie() {
+    for dead in [false, true] {
+        let (state, _dir) = behind_https_front().await;
+        let held = issue(&state);
+        if dead {
+            age(&state, &held, IDLE + MIN);
+        }
+        let (_, code) = code_from_link(&state).await;
+
+        let out = send(&state, submit(&code, Some(&held))).await;
+
+        assert_eq!(
+            out.status,
+            StatusCode::SEE_OTHER,
+            "dead={dead}: {}",
+            out.body
+        );
+        assert_ne!(session_handle(&out), held, "dead={dead}: a fresh session");
+    }
+}
+
+/// A cross-site post is refused by the origin gate and spends nothing.
+#[tokio::test]
+async fn a_cross_site_post_of_the_code_is_refused() {
+    let (state, _dir) = behind_https_front().await;
+    let (_, code) = code_from_link(&state).await;
+
+    let forged = through_proxy("POST", &format!("code={code}"), "cross-site", None);
+    let out = send(&state, forged).await;
+    assert_eq!(out.status, StatusCode::FORBIDDEN, "{}", out.body);
+
+    let real = send(&state, submit(&code, None)).await;
+    assert_eq!(real.status, StatusCode::SEE_OTHER, "{}", real.body);
 }
 
 /// A link can be minted in this shape: its redemption now works.
