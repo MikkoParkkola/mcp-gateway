@@ -341,6 +341,8 @@ mod tests {
     }
 
     #[test]
+    // Unix-only: on Windows a contended try_acquire fails with PermissionDenied, not WouldBlock (CI run 36666721615).
+    #[cfg(unix)]
     fn personal_accounts_try_lock_refuses_contention_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".personal-account-authority.lock");

@@ -11,14 +11,11 @@ use std::collections::HashMap;
 #[path = "stdio_windows_env_tests.rs"]
 mod windows_env;
 
-// Unix-only child environment scenario: shared by the two env-isolation tests below.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
 const CHILD_SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_CHILD_ENV_SCENARIO";
-// Unix-only child environment scenario: shared by the two env-isolation tests below.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
 const PARENT_SECRET_ENV: &str = "MCP_GATEWAY_TEST_PARENT_SECRET";
-// Unix-only child environment scenario: shared by the two env-isolation tests below.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
 const EXPLICIT_BACKEND_ENV: &str = "MCP_GATEWAY_TEST_EXPLICIT_BACKEND";
 
 #[test]
@@ -243,8 +240,7 @@ async fn request_cleans_pending_entry_when_write_fails() {
 /// entry — the RAII `PendingRequestGuard` must. A real child that answers
 /// `initialize` but never answers `prompts/list` holds the request open so
 /// the drop happens mid-await.
-// Unix-only: the fake MCP server is a `sh` script, which Windows does not provide.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: the fake MCP server is a `sh` script, which Windows does not provide.
 #[tokio::test]
 async fn cancelled_request_does_not_strand_pending_entry() {
     let workspace = tempfile::tempdir().expect("workspace");
@@ -308,8 +304,7 @@ done
 }
 
 #[test]
-// Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
 fn backend_subprocess_receives_only_safe_and_explicit_environment() {
     let current_test_binary = std::env::current_exe().expect("resolve current test binary");
     let scenario_name = "transport::stdio::tests::stdio_child_environment_isolation_scenario";
@@ -336,8 +331,7 @@ fn backend_subprocess_receives_only_safe_and_explicit_environment() {
 }
 
 #[tokio::test]
-// Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
 async fn stdio_child_environment_isolation_scenario() {
     if std::env::var_os(CHILD_SCENARIO_ENV).is_none() {
         return;
@@ -408,8 +402,7 @@ done
 
 /// Is dropping every handle enough to reap the child, or does the reader
 /// task's strong `Arc` keep the whole thing alive?
-// Unix-only: drives a real child and reads the process table via `kill`.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: drives a real child and reads the process table via `kill`.
 #[tokio::test]
 async fn dropping_the_last_handle_reaps_the_child() {
     let workspace = tempfile::tempdir().expect("workspace");
