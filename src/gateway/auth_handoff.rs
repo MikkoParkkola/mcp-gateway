@@ -51,12 +51,20 @@ pub(super) fn code_page(origin: &str, code: &str) -> Response {
 /// `GET /dashboard/handoff`: a form that holds nothing, served to anyone.
 #[cfg(feature = "webui")]
 pub(crate) fn handoff_form() -> Response {
-    private(html(format!(
+    let mut response = private(html(format!(
         "<!doctype html><meta charset=\"utf-8\"><title>Dashboard sign-in</title>\
          <form method=\"post\" action=\"{HANDOFF_PATH}\"><label>Code \
          <input name=\"code\" autocomplete=\"off\" required autofocus></label> \
          <button>Sign in</button></form>"
-    )))
+    )));
+    // A form posted from a page under `no-referrer` sends `Origin: null`
+    // (Fetch), which the origin gate refuses. `same-origin` keeps the Origin
+    // and still sends no `Referer` off this origin; this URL holds nothing.
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    response
 }
 
 /// `POST /dashboard/handoff`: spend the posted code for a session.
@@ -105,10 +113,10 @@ pub(crate) fn redeem_handoff(
 pub(crate) fn private(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
-    );
+    // A page that set its own policy keeps it: the code form needs one.
+    headers
+        .entry(header::REFERRER_POLICY)
+        .or_insert(HeaderValue::from_static("no-referrer"));
     response
 }
 

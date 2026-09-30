@@ -136,7 +136,18 @@ async fn the_code_form_is_served_on_the_public_origin() {
         out.body
     );
     assert!(out.body.contains(r#"name="code""#), "{}", out.body);
-    assert_private(&out);
+    assert!(
+        header_is(&out, "cache-control", "no-store"),
+        "{:?}",
+        out.headers
+    );
+    // `no-referrer` here would make the browser post `Origin: null`, which the
+    // origin gate refuses: the form keeps its Origin with `same-origin`.
+    assert!(
+        header_is(&out, "referrer-policy", "same-origin"),
+        "{:?}",
+        out.headers
+    );
 }
 
 /// The code, posted through the proxy, sets a Secure session cookie and sends
@@ -296,18 +307,23 @@ async fn a_wrong_method_on_the_code_path_is_private_too() {
 async fn a_code_posted_on_the_loopback_origin_is_not_spent() {
     let (state, _dir) = behind_https_front().await;
     let (_, code) = code_from_link(&state).await;
+    // This listener's own origin, which the origin gate admits: the refusal
+    // must come from the handoff, not from the gate.
+    let port = state.live_config.running().server.port;
     let local = Request::builder()
         .method("POST")
         .uri(HANDOFF)
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_346))))
-        .header(header::ORIGIN, "http://127.0.0.1")
+        .header(header::HOST, format!("127.0.0.1:{port}"))
+        .header(header::ORIGIN, format!("http://127.0.0.1:{port}"))
         .header("sec-fetch-site", "same-origin")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .body(Body::from(format!("code={code}")))
         .expect("request builds");
 
     let out = send(&state, local).await;
-    assert_ne!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    assert!(out.body.contains("public HTTPS address"), "{}", out.body);
     assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
 
     let real = send(&state, submit(&code, None)).await;
