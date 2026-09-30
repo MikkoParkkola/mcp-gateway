@@ -111,10 +111,10 @@ mod guarded {
             Self(value)
         }
 
-        /// Seal a value served from cache. Cached results were guarded at store
-        /// time (the cache is populated only after `apply_context_integrity`),
-        /// so re-serving them is in-policy without re-running the guard.
+        /// Seal a value served from cache, in policy as guarded at store time (the cache
+        /// fills only after `apply_context_integrity`); the call is a cached delivery.
         pub(super) fn from_cache(value: Value) -> Self {
+            super::audit::note_cached();
             Self(value)
         }
 
@@ -146,7 +146,7 @@ use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_t
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
-mod audit;
+pub(crate) mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
@@ -1349,19 +1349,12 @@ impl MetaMcp {
             // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
             let traced =
                 Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
-            let (result, dispatch_failure) = audit::with_dispatch_scope(traced).await;
+            let (result, notes) = audit::with_dispatch_scope(traced).await;
             // Single delivery boundary: unwrap the guard-sealed result.
             let result = result.map(GuardedValue::into_inner);
             // One record per call, refusals and failures included (D1-d).
-            self.audit_invocation(
-                args,
-                session_id,
-                caller,
-                &trace_id_clone,
-                result,
-                dispatch_failure,
-            )
-            .await
+            self.audit_invocation(args, session_id, caller, &trace_id_clone, result, notes)
+                .await
         })
         .await
     }
@@ -1468,7 +1461,7 @@ impl MetaMcp {
         trace_id: &str,
         result: Value,
     ) -> Result<Value> {
-        let mut result = result;
+        let mut result = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -2806,7 +2799,7 @@ impl MetaMcp {
             ContextActionRisk::Medium
         };
 
-        let evaluation = self.context_integrity_kernel.read().evaluate(input);
+        let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
         {

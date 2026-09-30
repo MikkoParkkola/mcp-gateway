@@ -7,6 +7,7 @@ use axum::{Json, http::StatusCode};
 use serde_json::Value;
 
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::audit::DispatchNotes;
 use crate::identity_grants::GrantSubject;
 use crate::protocol::RequestId;
 use crate::security::audit::{
@@ -27,6 +28,8 @@ pub(super) struct DirectCall {
     request_hash: String,
     otel_trace_id: Option<String>,
     who: AuditWho,
+    /// MIK-7116.MIN.1: the tool's `arguments` as sent, for request tenants.
+    arguments: Value,
     /// The id of the incoming request: a refusal answers `id: null`, and the
     /// `FailClosed` 503 must still echo what the caller sent.
     request_id: Option<RequestId>,
@@ -57,6 +60,7 @@ impl DirectCall {
             request_hash: sha256_of(params),
             otel_trace_id,
             who: AuditWho::from_request(client, grant_subject),
+            arguments: params.get("arguments").cloned().unwrap_or(Value::Null),
             request_id: request
                 .get("id")
                 .and_then(|id| serde_json::from_value(id.clone()).ok()),
@@ -96,6 +100,7 @@ pub(super) async fn record(
     server: &str,
     call: DirectCall,
     answer: Answer,
+    notes: DispatchNotes,
 ) -> Answer {
     let (status, Json(body)) = &answer;
     let outcome = direct_outcome(*status, body);
@@ -113,6 +118,9 @@ pub(super) async fn record(
     };
     // D1-d.1: a failed call has no response hash.
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
+    // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
+    let tenants = state.meta_mcp.request_tenants(&call.arguments);
+    let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
     // D2-f: the caller's W3C trace id, else a trace id; no session rung.
     let trace_id = crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
     let envelope = AuditEnvelope {
@@ -146,12 +154,13 @@ pub(super) async fn record(
                 server: &srv,
                 tool: tool.as_deref(),
             };
-            log.log_invocation_correlated(
+            log.log_invocation_attributed(
                 key,
                 &envelope,
                 target,
                 &request_hash,
                 response_hash.as_deref(),
+                attribution,
             )
         })
         .await;

@@ -21,6 +21,7 @@
 //!
 //! The logger is thread-safe via an internal `Mutex<BufWriter>`.
 
+use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
@@ -64,6 +65,10 @@ struct AuditEntry<'a> {
     artifact_kind: Option<ResponseArtifactKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     policy_targets: Option<&'a [ResponsePolicyTarget]>,
+    /// MIK-7116.MIN.1: the tenants a request names, each as `hash_argument`
+    /// of the id, sorted; absent when it names none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tenants: Option<Vec<String>>,
 }
 
 impl AuditLogger {
@@ -106,6 +111,37 @@ impl AuditLogger {
         args: &Value,
         verdict: &FirewallVerdict,
     ) {
+        let correlation = ResponseCorrelation {
+            session_id,
+            caller,
+            external_server: server,
+            external_tool: tool,
+        };
+        self.log_request_attributed(&correlation, args, verdict, &BTreeSet::new());
+    }
+
+    /// As [`Self::log_request`], naming the request's `tenants` (raw ids,
+    /// hashed here) in the entry (MIK-7116.MIN.1).
+    pub(crate) fn log_request_attributed(
+        &self,
+        correlation: &ResponseCorrelation<'_>,
+        args: &Value,
+        verdict: &FirewallVerdict,
+        tenants: &BTreeSet<String>,
+    ) {
+        let ResponseCorrelation {
+            session_id,
+            caller,
+            external_server: server,
+            external_tool: tool,
+        } = *correlation;
+        let tenants = (!tenants.is_empty()).then(|| {
+            let hashed: BTreeSet<String> = tenants
+                .iter()
+                .map(|id| hash_argument(&Value::String(id.clone())))
+                .collect();
+            hashed.into_iter().collect()
+        });
         let entry = AuditEntry {
             timestamp: Utc::now().to_rfc3339(),
             event: "request",
@@ -121,6 +157,7 @@ impl AuditLogger {
             schema_version: None,
             artifact_kind: None,
             policy_targets: None,
+            tenants,
         };
         self.write_entry(&entry);
     }
@@ -173,6 +210,7 @@ impl AuditLogger {
             schema_version: Some(2),
             artifact_kind: Some(artifact),
             policy_targets: Some(targets),
+            tenants: None,
         };
         self.write_entry(&entry);
     }
