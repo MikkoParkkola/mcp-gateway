@@ -25,7 +25,8 @@ impl Drop for RestorePermissions {
 }
 
 #[cfg(not(unix))]
-pub(super) type RestorePermissions = ();
+// Never constructed here; not `Copy`, so the rows can still `drop` the guard.
+pub(super) type RestorePermissions = Box<()>;
 
 /// A symlink whose target does not exist. On Windows a missing target is a file link.
 fn dangling_symlink(target: &Path, link: &Path) {
