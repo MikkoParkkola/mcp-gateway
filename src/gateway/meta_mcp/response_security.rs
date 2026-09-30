@@ -5,6 +5,42 @@
 
 pub(crate) use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
 
+use std::sync::Arc;
+
+use super::MetaMcp;
+use crate::attestation::BnautAttestationSigner;
+
+/// Result-shaping signers, set once at startup before the router serves calls.
+impl MetaMcp {
+    /// Enable signed runtime provenance stamping (MIK-6905, rung 1.2).
+    ///
+    /// When set, every aggregated tool result is stamped with a signed
+    /// `_meta.provenance` receipt. Off by default; the field is `None` unless
+    /// this is called, so the stamping branch never runs on the hot path
+    /// otherwise.
+    pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
+        self.provenance_signer = Some(Arc::new(signer));
+    }
+
+    /// Enable ASI07 origin-link emission.
+    pub(crate) fn set_chain_signer(
+        &mut self,
+        signer: crate::security::signature_chain::ChainSigner,
+        emit: crate::config::ChainEmit,
+    ) {
+        self.chain_signer = Some((Arc::new(signer), emit));
+    }
+
+    /// Enable shadow claim capture (MIK-6908, rung 3.1).
+    ///
+    /// Only has an observable effect once `provenance_signer` is also
+    /// `Some` — capture runs alongside stamping at the same chokepoint, not
+    /// independently of it.
+    pub fn enable_claim_capture(&mut self, sink: Arc<crate::trust::ClaimCaptureSink>) {
+        self.claim_capture = Some(sink);
+    }
+}
+
 /// Map an authenticated external operation to its response-policy targets.
 pub(crate) fn meta_response_targets(
     external_tool: &str,
@@ -55,6 +91,8 @@ pub(crate) enum DeliveryInspection {
     AlreadyInspected,
 }
 
+pub(crate) use crate::protocol::ChainSource;
+
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.
 pub(crate) struct ResponseDeliveryContext<'a> {
     pub method: &'a str,
@@ -62,6 +100,10 @@ pub(crate) struct ResponseDeliveryContext<'a> {
     pub correlation: ResponseCorrelation<'a>,
     pub mutation: crate::security::response_policy::ResponseMutationPolicy,
     pub signing: Option<&'a super::signing::SigningInvocationContext>,
+    /// Eligibility of this result for a chain link.
+    pub chain_source: ChainSource,
+    /// `io.mcp-gateway/chain-nonce` captured from the request, if any.
+    pub chain_nonce: Option<&'a str>,
 }
 
 impl super::MetaMcp {
@@ -119,6 +161,20 @@ impl super::MetaMcp {
             context.targets,
             context.mutation,
             inspection,
+        );
+        // After the firewall, before the v2 HMAC: the link covers the final
+        // content and the MAC covers the link.
+        // Egress: no result leaves with a chain this gateway did not just sign.
+        if let Some(result) = response.result.as_mut() {
+            crate::security::signature_chain::strip_chain(result);
+        }
+        let invoke_nonce =
+            (context.signing).and_then(super::signing::SigningInvocationContext::invoke_nonce);
+        self.emit_origin_link(
+            &mut response,
+            context.chain_source,
+            context.chain_nonce,
+            invoke_nonce,
         );
 
         // A disabled signer and ordinary/admission/refusal errors must never
@@ -315,6 +371,133 @@ impl super::MetaMcp {
     }
 }
 
+impl super::MetaMcp {
+    /// Attach this gateway's origin link to an eligible success result: on
+    /// every one under `emit: always`, else only when the request carried a
+    /// chain nonce. The `gateway_invoke` nonce is a fallback value, never a
+    /// trigger. A result that cannot carry a link is refused, not delivered
+    /// unlinked.
+    fn emit_origin_link(
+        &self,
+        response: &mut crate::protocol::JsonRpcResponse,
+        source: ChainSource,
+        chain_nonce: Option<&str>,
+        invoke_nonce: Option<&str>,
+    ) {
+        use crate::security::signature_chain::{LinkSource, attach_origin_link};
+        let Some((signer, emit)) = &self.chain_signer else {
+            return;
+        };
+        let src = match source {
+            ChainSource::Backend => LinkSource::Live,
+            ChainSource::Replay => LinkSource::Replay,
+            ChainSource::NotEligible => return,
+        };
+        let triggered = *emit == crate::config::ChainEmit::Always || chain_nonce.is_some();
+        let Some(result) = response.result.as_mut() else {
+            return;
+        };
+        if response.error.is_some() || !triggered {
+            return;
+        }
+        let nonce = chain_nonce.or(invoke_nonce);
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if attach_origin_link(signer, result, src, nonce, ts).is_err() {
+            *response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+                response.id.take(),
+                -32001,
+                "Result cannot carry a signature chain link",
+            );
+        }
+    }
+}
+
+/// Whether the response gates passed a result through or replaced or
+/// transformed it (A3 R2'). Server-owned: never read back from the payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GateEffect {
+    /// The backend's answer, unchanged by the gates.
+    PassedThrough,
+    /// Context integrity withheld, refused or transformed the result.
+    Enforced,
+}
+
+impl super::MetaMcp {
+    /// Finish a direct-route response after its idempotency settle, so the
+    /// stored body never carries a link: strip any chain from every method's
+    /// result, then link a `tools/call` result the response gates passed
+    /// through (`chain_source` set by the direct guards). A replay from the
+    /// direct store records no origin and is never linked (A3 L1).
+    pub(crate) fn finish_direct(
+        &self,
+        response: &mut crate::protocol::JsonRpcResponse,
+        method: &str,
+        chain_nonce: Option<&str>,
+    ) {
+        if let Some(result) = response.result.as_mut() {
+            crate::security::signature_chain::strip_chain(result);
+        }
+        if method == "tools/call" && !response.delivery_refusal {
+            let source = response.chain_source;
+            self.emit_origin_link(response, source, chain_nonce, None);
+        }
+    }
+}
+
+/// Shape a meta-tool result into its reply. Only a success result takes the
+/// dispatch's chain source (A3 R5); every error stays `NotEligible`.
+pub(super) fn shape_meta_result(
+    id: crate::protocol::RequestId,
+    tool_name: &str,
+    result: crate::Result<serde_json::Value>,
+    shape: super::ResultShape,
+    declared: crate::protocol::meta::Declared,
+    source: ChainSource,
+) -> crate::protocol::JsonRpcResponse {
+    let mut response = match result {
+        Ok(content) => match shape {
+            // MRTR.11a: an interim round must not be pretty-printed into
+            // `content[0].text`. `wrap_tool_success` states `is_error:
+            // false` and buries `resultType` inside a JSON string, where
+            // neither a protocol client nor the firewall's
+            // `PreserveInputRequired` policy can read it — a question
+            // committed as an answer. The task worker already escapes via
+            // `super::ResultShape::Native`; this is the same escape for the
+            // synchronous thread, gated so a backend cannot mint one.
+            super::ResultShape::Wrapped => {
+                match super::interim_promotion::promote_interim(&content, declared) {
+                    super::interim_promotion::Promotion::Native => {
+                        crate::protocol::JsonRpcResponse::success(id, content)
+                    }
+                    super::interim_promotion::Promotion::Wrap => {
+                        let has_output_schema = tool_name == "gateway_search_tools";
+                        crate::gateway::meta_mcp_helpers::wrap_tool_success(
+                            id,
+                            &content,
+                            has_output_schema,
+                        )
+                    }
+                    super::interim_promotion::Promotion::UpstreamFault(message) => {
+                        super::error_response_preserving_status(
+                            id,
+                            &crate::Error::json_rpc(-32603, message),
+                        )
+                    }
+                }
+            }
+            super::ResultShape::Native => crate::protocol::JsonRpcResponse::success(id, content),
+        },
+        Err(e) => super::error_response_preserving_status(id, &e),
+    };
+    if response.error.is_none() && response.result.is_some() {
+        response.chain_source = source;
+    }
+    response
+}
+
 #[cfg(all(test, feature = "firewall"))]
 #[path = "response_challenge_tests.rs"]
 mod challenge_tests;
@@ -322,3 +505,7 @@ mod challenge_tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "response_delivery_tests.rs"]
 mod delivery_tests;
+
+#[cfg(test)]
+#[path = "chain_emission_tests.rs"]
+mod chain_emission_tests;

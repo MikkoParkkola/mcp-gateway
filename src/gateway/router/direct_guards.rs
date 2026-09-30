@@ -55,13 +55,19 @@ impl DirectRouteGuards {
         let mut response = forward?;
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
-                Ok(mut result) => {
+                Ok((mut result, effect)) => {
                     if !warnings.is_empty()
                         && let Some(obj) = result.as_object_mut()
                     {
                         obj.insert("_cost_warnings".to_string(), serde_json::json!(warnings));
                     }
                     response.result = Some(result);
+                    // A3: only a gated-through backend answer can be linked.
+                    if effect
+                        == crate::gateway::meta_mcp::response_security::GateEffect::PassedThrough
+                    {
+                        response.chain_source = crate::protocol::ChainSource::Backend;
+                    }
                 }
                 // A post-dispatch refusal: the backend ran and was accounted;
                 // the caller gets the gate's error with HTTP 200, settled.
