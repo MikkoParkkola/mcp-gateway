@@ -50,7 +50,9 @@ mod server;
 /// `gateway` can name it WITHOUT `server` itself becoming crate-visible.
 /// It is the stdio caller's audit and display principal only: it decides
 /// nothing, since `CallerProvenance` and the retained-result keys follow the
-/// transport's mark (`StdioNonce`) instead (MIK-7272.OWNER.3).
+/// transport's mark (`StdioNonce`) instead (MIK-7272.OWNER.3). Only tests
+/// outside `gateway` still name it.
+#[cfg(test)]
 pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
 /// The stdio transport's mark: the only proof of `CallerProvenance::LocalTransport`.
 pub(crate) use server::StdioNonce;
