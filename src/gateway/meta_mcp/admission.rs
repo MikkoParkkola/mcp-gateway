@@ -11,6 +11,7 @@ use crate::security::audit::AuditOutcome;
 use crate::{Error, Result};
 
 use super::MetaMcp;
+use super::effects::{Effect, meta_tool_effect};
 
 #[path = "admission_plan.rs"]
 mod plan;
@@ -474,19 +475,7 @@ impl MetaMcp {
         }
         // These compiled discovery/reporting tools do not execute external work.
         // Backend annotations and operator target strings cannot add built-ins.
-        let read_only = matches!(
-            tool_name,
-            "gateway_search"
-                | "gateway_list_servers"
-                | "gateway_list_tools"
-                | "gateway_search_tools"
-                | "gateway_get_stats"
-                | "gateway_cost_report"
-                | "gateway_webhook_status"
-                | "gateway_list_disabled_capabilities"
-                | "gateway_get_profile"
-                | "gateway_list_profiles"
-        );
+        let read_only = meta_tool_effect(tool_name) == Effect::ReadOnly;
         // A retained result is still protected by today's authorization. Plan
         // loading and every target check precede lookup, including mismatches.
         let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
