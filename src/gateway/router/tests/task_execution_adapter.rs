@@ -79,6 +79,7 @@ mod refusals;
 mod replay_policy;
 mod result_shapes;
 mod settlement;
+mod stored_result_policy;
 mod signing_joint;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
