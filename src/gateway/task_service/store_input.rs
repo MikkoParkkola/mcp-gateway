@@ -32,9 +32,126 @@ pub(crate) enum ProvideOutcome {
     },
     /// The set would be complete but no worker is free. Nothing written.
     PoolFull,
+    /// The round is closed: its continuation deadline or the task's TTL has
+    /// passed. Nothing written.
+    #[allow(dead_code)] // red commit: produced by the fix
+    Closed(RoundClosed),
+}
+
+/// Why an open round no longer takes answers (#2429).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoundClosed {
+    /// The stored continuation's deadline, in unix seconds, has passed.
+    #[allow(dead_code)] // red commit: produced by the fix
+    Continuation(u64),
+    /// The task's own TTL has elapsed.
+    Ttl,
+}
+
+impl RoundClosed {
+    /// The sentence a refused update and the cancelled task both carry.
+    pub(crate) fn reason(self) -> String {
+        match self {
+            Self::Continuation(deadline) => {
+                let at = i64::try_from(deadline)
+                    .ok()
+                    .and_then(|secs| DateTime::<Utc>::from_timestamp(secs, 0))
+                    .map_or_else(|| deadline.to_string(), |at| at.to_rfc3339());
+                format!("the input round closed at its continuation deadline ({at})")
+            }
+            Self::Ttl => "the input round closed when the task's TTL elapsed".to_owned(),
+        }
+    }
+}
+
+/// Test-only seams on the store: the commit hook, and a frozen clock for the
+/// deadline decisions. Production has none of these fields.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct TestSeams {
+    pub(super) hook: std::sync::Mutex<Option<super::CommitHook>>,
+    clock: std::sync::Mutex<Option<DateTime<Utc>>>,
+    clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,
+}
+
+impl Shared {
+    /// The clock every round-deadline decision reads. Wall time in production;
+    /// a test may freeze it per store.
+    #[allow(dead_code)] // red commit: read by the fix
+    pub(super) fn now(&self) -> DateTime<Utc> {
+        #[cfg(test)]
+        if let Some(frozen) = *self
+            .seams
+            .clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            return frozen;
+        }
+        Utc::now()
+    }
 }
 
 impl TaskStore {
+    /// The store's clock (see [`Shared::now`]).
+    #[allow(dead_code)] // red commit: read by the fix
+    pub(crate) fn now(&self) -> DateTime<Utc> {
+        self.0.now()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_clock_for_test(&self, at: Option<DateTime<Utc>>) {
+        *self
+            .0
+            .seams
+            .clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = at;
+    }
+
+    /// Freeze the clock at `at` right after the next completing write commits.
+    #[cfg(test)]
+    pub(crate) fn set_clock_after_next_resume(&self, at: DateTime<Utc>) {
+        *self
+            .0
+            .seams
+            .clock_after_resume
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
+    }
+
+    /// Hold the ordering lock, as a writer would.
+    #[cfg(test)]
+    pub(crate) fn hold_order_for_test(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.0.order()
+    }
+
+    /// The stored round (if open) and the revision of task `id`, whoever owns it.
+    #[cfg(test)]
+    pub(crate) fn input_round_for_test(&self, id: &str) -> (Option<InputRound>, u64) {
+        let state = self.0.state();
+        let entry = state.entries.get(id).expect("the task exists");
+        (entry.record.input_round.clone(), entry.record.revision)
+    }
+
+    /// Settle an open round `cancelled` with `reason` as its status message,
+    /// in ONE write: the round is dropped before the record is measured.
+    ///
+    /// # Errors
+    /// `RevisionConflict` when the row moved; `InvalidTransition` when no
+    /// round is open.
+    #[allow(dead_code)] // red commit: called by the fix
+    pub(crate) async fn close_round(
+        &self,
+        owner: &str,
+        id: &str,
+        revision: u64,
+        reason: String,
+    ) -> Result<CommittedTask, StoreError> {
+        let _ = (owner, id, revision, reason);
+        Err(StoreError::Storage)
+    }
+
     /// Commit `input_required` together with the round's continuation.
     ///
     /// # Errors
@@ -83,7 +200,10 @@ impl TaskStore {
     /// Every open round past the TTL its record was created with, as
     /// `(id, revision, owner digest)`. A compact snapshot: each settlement
     /// re-checks the revision under the ordering lock.
-    pub(crate) fn expired_input_rounds(&self, now: DateTime<Utc>) -> Vec<(String, u64, String)> {
+    pub(crate) fn expired_input_rounds(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Vec<(String, u64, String, RoundClosed)> {
         let state = self.0.state();
         if !state.ready {
             return Vec::new();
@@ -100,6 +220,7 @@ impl TaskStore {
                     id.clone(),
                     entry.record.revision,
                     entry.record.admission.principal_digest.clone(),
+                    RoundClosed::Ttl,
                 )
             })
             .collect()

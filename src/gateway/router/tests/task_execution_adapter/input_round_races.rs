@@ -202,7 +202,7 @@ async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
     );
 }
 
-async fn state_with_config(
+pub(super) async fn state_with_config(
     mock: &Arc<MockBackend>,
     config: crate::config::Config,
 ) -> (Arc<AppState>, tempfile::TempDir) {

@@ -420,6 +420,14 @@ pub(super) async fn tasks_update(
         InputOutcome::PoolFull => {
             JsonRpcResponse::error(Some(id), -32603, "task worker pool is full, retry")
         }
+        InputOutcome::Closed(closed) => JsonRpcResponse::error(
+            Some(id),
+            -32602,
+            format!(
+                "inputResponses refused: {}; the task is being cancelled",
+                closed.reason()
+            ),
+        ),
         InputOutcome::NotFound => missing_task_error(id),
         InputOutcome::Unavailable => store_unavailable(id),
     }

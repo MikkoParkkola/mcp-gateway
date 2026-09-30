@@ -138,7 +138,7 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     // An open input round past its TTL is cancelled here, continuation and
     // all; a later pass deletes it like any terminal row after retention.
     let mut round_failure = None;
-    for (id, revision, owner_digest) in service.store.expired_input_rounds(Utc::now()) {
+    for (id, revision, owner_digest, _closed) in service.store.expired_input_rounds(Utc::now()) {
         let cancelled = executor
             .commit(super::TaskWrite::Recover {
                 owner_digest: &owner_digest,

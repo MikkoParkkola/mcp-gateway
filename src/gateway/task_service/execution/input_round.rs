@@ -23,7 +23,7 @@ use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor, WriteOutcom
 use crate::gateway::router::AppState;
 use crate::gateway::task_service::record::InputRound;
 use crate::gateway::task_service::store::StoreError;
-use crate::gateway::task_service::store::input::ProvideOutcome;
+use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
 use crate::protocol::mrtr::{InputRequired, RetryFields};
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
@@ -127,6 +127,7 @@ impl<'a> Settling<'a> {
             tool: self.call.tool.clone(),
             arguments: self.call.arguments.clone(),
             accepted_inputs: Map::new(),
+            continuation_deadline: None,
         };
         let parked = self
             .executor
@@ -218,6 +219,8 @@ pub(crate) enum InputOutcome {
     Busy,
     /// No worker is free; the round stays open and the answers unapplied.
     PoolFull,
+    /// The round closed at its continuation deadline or the task's TTL.
+    Closed(RoundClosed),
     NotFound,
     Unavailable,
 }
@@ -289,6 +292,7 @@ impl TaskExecutor {
                     InputOutcome::Accepted
                 }
                 Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
+                Ok(ProvideOutcome::Closed(closed)) => InputOutcome::Closed(closed),
                 Ok(ProvideOutcome::Resumed { task, round, slot }) => {
                     let revision = task.revision;
                     executor.published(&WriteOutcome::Transitioned(task), &id);
@@ -369,4 +373,36 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;
+}
+
+/// When a parked round stops taking answers (#2429): the sealed
+/// continuation's own expiry, less the margin. `Ok(None)` when no
+/// continuation is stored; an error when it cannot be opened or is already
+/// due, since such a round could only ever fail.
+#[allow(dead_code)] // red commit: called by the fix
+pub(super) fn round_deadline(
+    keyring: &crate::protocol::continuation::Keyring,
+    request_state: Option<&str>,
+    now: u64,
+) -> Result<Option<u64>, crate::protocol::continuation::ContinuationError> {
+    let _ = (keyring, request_state, now);
+    Ok(None)
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::round_deadline;
+    use crate::protocol::continuation::{ContinuationState, now_unix_secs};
+
+    /// Mutant: an envelope that does not open is parked with no deadline.
+    #[test]
+    fn an_unopenable_continuation_has_no_deadline_to_park_with() {
+        let state = ContinuationState::new();
+        let refused = round_deadline(state.keyring(), Some("not-an-envelope"), now_unix_secs());
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(
+            round_deadline(state.keyring(), None, now_unix_secs()).ok(),
+            Some(None)
+        );
+    }
 }
