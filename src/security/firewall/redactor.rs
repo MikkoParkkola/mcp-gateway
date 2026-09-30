@@ -13,13 +13,15 @@
 //! * `credential_patterns` — a `RegexSet` that performs a single-pass check
 //!   whether *any* pattern matches a string (fast O(n) detection).
 //! * `credential_regexes` — the same patterns compiled as individual `Regex`
-//!   objects, used to perform targeted `replace_all` replacements once a match
-//!   is confirmed, so that surrounding text is preserved.
+//!   objects, used to locate every matched span once a match is confirmed.
+//!   Overlapping spans are merged and replaced once, so that surrounding
+//!   text is preserved and no fragment of an overlapped match survives.
 //!
 //! # Privacy
 //!
-//! Matched fragments are truncated to 40 characters in `Finding::matched` so
-//! credential values are not propagated into audit logs or structured spans.
+//! A finding's `matched` excerpt is the redacted text, truncated to 40
+//! characters, so credential values are not propagated into audit logs or
+//! structured spans.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,7 +34,7 @@ use super::{Finding, FindingLocation, ScanType, Severity};
 pub struct Redactor {
     /// Fast multi-pattern matcher for detection (single DFA pass).
     set: RegexSet,
-    /// Individual compiled regexes for targeted `replace_all`.
+    /// Individual compiled regexes that locate each matched span.
     regexes: Vec<Regex>,
     /// Human-readable description for each pattern (same index as the regex vec).
     descriptions: Vec<&'static str>,
@@ -170,18 +172,29 @@ impl Redactor {
         if matched.is_empty() {
             return None;
         }
-        let mut redacted = text.to_owned();
-        for &idx in &matched {
-            redacted = self.regexes[idx]
-                .replace_all(&redacted, "[REDACTED:credential]")
-                .into_owned();
+        // Every span is found in the original text and overlapping spans are
+        // replaced once: replacing one pattern's match first can break another
+        // match and leave its characters behind (#2145).
+        let mut spans: Vec<(usize, usize)> = matched
+            .iter()
+            .flat_map(|&idx| overlapping_spans(&self.regexes[idx], text))
+            .collect();
+        spans.sort_unstable();
+        let mut redacted = String::with_capacity(text.len());
+        let mut cursor = 0;
+        for (start, end) in merge_spans(spans) {
+            redacted.push_str(&text[cursor..start]);
+            redacted.push_str("[REDACTED:credential]");
+            cursor = end;
         }
-        // A key finding shows the redacted key: a bare 40-char token would
+        redacted.push_str(&text[cursor..]);
+        // A finding shows the redacted text: a bare 40-char token would
         // otherwise survive the truncation whole into the audit log.
-        let (suffix, shown) = match site {
-            Site::Value => ("", text),
-            Site::Key => (" (object key)", redacted.as_str()),
+        let suffix = match site {
+            Site::Value => "",
+            Site::Key => " (object key)",
         };
+        let shown = redacted.as_str();
         for &idx in &matched {
             findings.push(Finding {
                 scan_type: ScanType::Credentials,
@@ -235,6 +248,36 @@ impl Default for Redactor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Every match of `re` in `text`, including matches that overlap one another:
+/// `find_iter` resumes after a match's end, so a second credential starting
+/// inside the first would be missed. Each search restarts one char after the
+/// previous match's start.
+// ponytail: a search per match start; every pattern opens with a literal
+// prefix, so restarts only land on the next prefix occurrence.
+fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut at = 0;
+    while let Some(m) = re.find_at(text, at) {
+        spans.push((m.start(), m.end()));
+        // No pattern matches empty text, so `m.start()` is inside `text`.
+        at = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
+    }
+    spans
+}
+
+/// Merge sorted spans that overlap or touch, so no character between two
+/// matched spans can survive and touching tokens share one marker.
+fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -681,5 +724,14 @@ mod tests {
         let findings = redactor().scan_and_redact(&mut v);
         assert_eq!(findings.len(), 2, "{findings:?}");
         assert_eq!(v["t"], "é—[REDACTED:credential]\u{a0}ü");
+    }
+
+    /// `overlapping_spans` restarts one char after each match start, which
+    /// assumes no pattern can match empty text.
+    #[test]
+    fn no_credential_pattern_matches_empty_text() {
+        for re in &redactor().regexes {
+            assert!(!re.is_match(""), "{re}");
+        }
     }
 }
