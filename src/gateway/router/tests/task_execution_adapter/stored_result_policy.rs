@@ -180,3 +180,52 @@ async fn a_legacy_single_backend_row_is_delivered_when_its_backend_is_reachable(
     strip_targets(&state, &id);
     assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
 }
+
+fn code_mode_call(id: i64, key: &str) -> Value {
+    keyed(
+        modern(
+            id,
+            "tools/call",
+            json!({
+                "name": "gateway_execute",
+                "arguments": { "chain": [{ "tool": format!("{BACKEND}:{TOOL}"), "arguments": {} }] },
+                "task": {}
+            }),
+            true,
+        ),
+        key,
+    )
+}
+
+async fn finished_code_mode(state: &Arc<AppState>, key: &str) -> String {
+    let created = post(state, "key-a", code_mode_call(5, key)).await;
+    let id = task_id(&created);
+    let done = poll_until_terminal(state, "key-a", &id).await;
+    std::assert_eq!(status_of(&done), "completed", "{done}");
+    id
+}
+
+#[tokio::test]
+async fn a_finished_code_mode_task_is_delivered_when_nothing_is_withheld() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_code_mode(&state, "b-code-control").await;
+    std::assert_eq!(
+        status_of(&get_task(&state, "key-a", &id).await),
+        "completed"
+    );
+    let repeat = post(&state, "key-a", code_mode_call(6, "b-code-control")).await;
+    std::assert_eq!(task_id(&repeat), id, "{repeat}");
+}
+
+#[tokio::test]
+async fn a_finished_code_mode_task_is_refused_on_get_and_on_repeat_once_its_tool_is_withheld() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_code_mode(&state, "b-code").await;
+    withhold(&state, TOOL);
+    assert_refused(&get_task(&state, "key-a", &id).await, "code-mode tasks/get");
+    let repeat = post(&state, "key-a", code_mode_call(7, "b-code")).await;
+    assert_refused(&repeat, "code-mode repeat");
+    std::assert_eq!(mock.calls(), 1, "no second dispatch: {:?}", mock.seen());
+}

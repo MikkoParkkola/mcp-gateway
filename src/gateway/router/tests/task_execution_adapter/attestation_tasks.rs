@@ -172,3 +172,37 @@ async fn surfaced_task_enforce_rechecks_token_at_dispatch() {
     );
     assert_eq!(mock.calls(), 0, "the expired task must not dispatch");
 }
+
+/// A finished task is read with the same recovery token a working one needs.
+#[tokio::test]
+async fn a_finished_task_read_needs_a_valid_recovery_token_under_enforce() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = surfaced_enforced(&mock).await;
+    let created = post(
+        &state,
+        "key-a",
+        surfaced_task(820, "fin-att", Some(&token(chrono::TimeDelta::minutes(5)))),
+    )
+    .await;
+    let id = task_id(&created);
+    let read = |token: Option<String>| {
+        let mut body = task_method(821, "tasks/get", json!({ "taskId": id }));
+        if let Some(token) = token {
+            body["params"]["_meta"][crate::gateway::meta_mcp::upstream::RECOVERY_META] =
+                json!({ "attestation": token });
+        }
+        post(&state, "key-a", body)
+    };
+    let mut settled = Value::Null;
+    for _ in 0..2_000 {
+        settled = read(Some(token(chrono::TimeDelta::minutes(5)))).await;
+        if is_terminal(&status_of(&settled)) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(status_of(&settled), "completed", "{settled}");
+    let bare = read(None).await;
+    assert_eq!(bare.pointer("/error/code"), Some(&json!(-32002)), "{bare}");
+    assert!(bare.get("result").is_none(), "{bare}");
+}
