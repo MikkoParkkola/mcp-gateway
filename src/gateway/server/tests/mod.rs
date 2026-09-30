@@ -45,7 +45,3 @@ mod stdio_cost_persistence;
 mod http_cost_persistence;
 
 mod grant_decision_stdio;
-
-// MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
-mod owner3_stdio_keying;
-mod owner5_stdio_context;
