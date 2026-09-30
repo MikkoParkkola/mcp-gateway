@@ -26,6 +26,27 @@ impl std::fmt::Debug for HeldCredential {
     }
 }
 
+impl HeldCredential {
+    /// A digest of exactly what was presented. Session ownership keys on this,
+    /// not on the validated principal: a delegated OIDC bearer's principal is
+    /// its stable actor, so two tokens for one subject share it. Each part is
+    /// length-prefixed and an absent part is `-`, so no two presentations
+    /// collide.
+    pub(crate) fn digest(&self) -> String {
+        let part = |value: Option<&String>| {
+            value.map_or_else(|| "-".to_string(), |v| format!("{}:{v}", v.len()))
+        };
+        crate::hashing::sha256_hex(
+            format!(
+                "{}|{}",
+                part(self.session.as_ref()),
+                part(self.bearer.as_ref())
+            )
+            .as_bytes(),
+        )
+    }
+}
+
 /// The session cookie and bearer credential `headers` present, held for later
 /// re-validation; `None` when they present neither.
 pub(crate) fn held_credential(headers: &axum::http::HeaderMap) -> Option<HeldCredential> {

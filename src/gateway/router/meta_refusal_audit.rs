@@ -58,6 +58,9 @@ impl<'a> Refused<'a> {
         message: String,
         status: StatusCode,
     ) -> axum::response::Response {
+        // D4: every meta-route refusal decided before dispatch is counted
+        // here, with or without a log; the meta layer never sees it.
+        crate::security::security_metrics::meta_refused(code);
         let Some(log) = state.transparency_log.as_ref() else {
             return build_error_response(Some(id), code, message, self.session_id, status);
         };

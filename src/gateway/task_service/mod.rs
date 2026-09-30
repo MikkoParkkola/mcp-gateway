@@ -44,8 +44,8 @@ pub use execution::TaskExecutor;
 /// constructor — so the only thing an outside caller can write is `task: None`.
 pub use execution::TaskIntent;
 pub(crate) use execution::{
-    OwnedAdmissionRequest, OwnedCallerContext, TaskCall, UpstreamAnswer, UpstreamHandle,
-    UpstreamRecovery,
+    InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall, UpstreamAnswer,
+    UpstreamHandle, UpstreamRecovery,
 };
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its

@@ -132,8 +132,41 @@ fn finish(failure: Option<ServiceError>) -> Result<(), ServiceError> {
 /// report success over a directory it could not delete from.
 async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     let service = Arc::clone(&executor.service);
+    // The deletion snapshot is taken FIRST, so a round cancelled below is
+    // deleted by a later pass, never in the same one.
     let candidates = service.store.expired_candidates(Utc::now());
-    let mut outcome = Ok(());
+    // An open input round past its TTL is cancelled here, continuation and
+    // all; a later pass deletes it like any terminal row after retention.
+    let mut round_failure = None;
+    for (id, revision, owner_digest) in service.store.expired_input_rounds(Utc::now()) {
+        let cancelled = executor
+            .commit(super::TaskWrite::Recover {
+                owner_digest: &owner_digest,
+                id: &id,
+                revision,
+                event: crate::protocol::tasks::TaskTransition::Cancel,
+            })
+            .await;
+        let Err(failure) = cancelled else {
+            continue;
+        };
+        // A cancel refused because the round moved (answered, cancelled, gone)
+        // is benign. The commit reports a refused transition the way it reports
+        // a failed write, so the row itself says which one this was: still an
+        // open round after the refusal means the store failed.
+        let moved = matches!(failure, super::CommitFailure::RevisionConflict)
+            || service.store.get(&owner_digest, &id).map_or_else(
+                |error| matches!(error, StoreError::NotFound),
+                |row| row.task.status() != crate::protocol::tasks::TaskStatus::InputRequired,
+            );
+        if moved {
+            tracing::debug!(task_id = %id, "expired input round moved before its cancel");
+        } else {
+            tracing::warn!(task_id = %id, "expired input round not cancelled");
+            round_failure = Some(ServiceError::Unavailable);
+        }
+    }
+    let mut outcome = round_failure.map_or(Ok(()), Err);
     for (id, revision) in candidates {
         match service
             .store

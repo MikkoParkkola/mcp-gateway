@@ -114,7 +114,8 @@ async fn expiry_deletes_every_expired_terminal_row_with_its_key_and_capacity() {
 }
 
 /// Expiry is conditional, and its conditions are the record's own: an unexpired
-/// TTL, a null TTL, and a live status each retain a row that a deadline-only
+/// TTL, a null TTL, and a working status each retain a row, while an open input
+/// round past its TTL is cancelled. They retain a row that a deadline-only
 /// sweep would take. Retention is asserted while sentinels are actually being
 /// swept, so a loop that never ran cannot pass this row.
 #[tokio::test]
@@ -206,10 +207,18 @@ async fn expiry_retains_unexpired_null_ttl_and_live_rows_across_real_sweeps() {
         (&unexpired, "an unexpired record"),
         (&unlimited, "a null-TTL record"),
         (&working, "a Working record past its TTL"),
-        (&asking, "an InputRequired record past its TTL"),
     ] {
         assert_retained(&service, &dir, row, what);
     }
+    // An open input round past its TTL is not a live row any more
+    // (MIK-7311.LIFECYCLE.1, design §4.4): the expiry pass cancels it, and a
+    // later pass deletes it like any terminal row.
+    assert!(
+        service
+            .get(OWNER, &asking.id)
+            .map_or(true, |held| { held.task.status() == TaskStatus::Cancelled }),
+        "an InputRequired record past its TTL must be cancelled or gone"
+    );
 
     let second = seed(
         &service,
@@ -228,10 +237,18 @@ async fn expiry_retains_unexpired_null_ttl_and_live_rows_across_real_sweeps() {
         (&unexpired, "an unexpired record"),
         (&unlimited, "a null-TTL record"),
         (&working, "a Working record past its TTL"),
-        (&asking, "an InputRequired record past its TTL"),
     ] {
         assert_retained(&service, &dir, row, what);
     }
+    // An open input round past its TTL is not a live row any more
+    // (MIK-7311.LIFECYCLE.1, design §4.4): the expiry pass cancels it, and a
+    // later pass deletes it like any terminal row.
+    assert!(
+        service
+            .get(OWNER, &asking.id)
+            .map_or(true, |held| { held.task.status() == TaskStatus::Cancelled }),
+        "an InputRequired record past its TTL must be cancelled or gone"
+    );
 
     guard.shutdown().await.expect("the sweep stops");
     service.shutdown().await.expect("custody is released");
