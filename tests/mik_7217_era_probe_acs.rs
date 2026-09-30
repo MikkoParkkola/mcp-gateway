@@ -15,6 +15,8 @@
 //! value itself, because no accessor for it exists on `Backend`; see the header of each test for
 //! what it does and does not pin.
 
+#![allow(unsafe_code)] // `set_var` is unsafe in edition 2024; see `widen_probe_cap`
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
