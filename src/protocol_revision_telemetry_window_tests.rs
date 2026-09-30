@@ -274,6 +274,20 @@ fn t5_checkpoints_are_cumulative_and_survive_a_failed_write() {
 }
 
 #[test]
+fn t5_after_the_seal_an_http_request_is_refused_and_not_counted() {
+    // Final review: a request counted after the seal was lost. Sealing and
+    // counting now exclude each other, so a counted request is in the seal.
+    let mut registry = Registry::new();
+    assert!(registry.observe_request_from(Some("2026-07-28"), "claude", Transport::Http, None));
+    registry.http_sealed = true;
+    assert!(!registry.observe_request_from(Some("2025-06-18"), "claude", Transport::Http, None));
+    assert!(registry.observe_request_from(Some("2025-06-18"), "claude", Transport::Stdio, None));
+    let http = registry.transport_snapshot(Transport::Http);
+    assert_eq!(http.total, 1);
+    assert_eq!(http.by_revision.get("2025-06-18"), None);
+}
+
+#[test]
 fn t5_internal_observations_never_reach_a_segment() {
     let mut registry = Registry::new();
     registry.observe_request(Some("2025-06-18"), "claude", Transport::Internal);

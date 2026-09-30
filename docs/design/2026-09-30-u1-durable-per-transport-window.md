@@ -101,14 +101,18 @@ C. **One durable window per data directory, partitioned by transport, loss-sensi
     (30 s by default), and launchd SIGKILLs the operator's gateway after its default 20 s exit
     timeout. The plist sets no `ExitTimeOut`. An open SSE stream would therefore kill every
     post-drain close.
-  - Why this is exact: counting happens after identity and body read
-    (`router/handlers.rs`, `router/backend_handlers.rs`), so the outermost middleware gives every
-    accepted request a pending-observation token. The handler drops the token right after
-    counting, and a refusal drops it with the request. After the listener stops, the saver seals
-    only when no token is outstanding. Past a 10 s deadline (under launchd's 20 s kill) the
-    segment stays unclean and the decision blocks. Every admitted request is therefore in the
-    segment, or the segment is not certified. (Final review: an earlier text claimed a time
-    boundary was enough; it is not, because the loss can correlate with revision.)
+  - Why this is exact: the seal and the count exclude each other. On the shutdown broadcast the
+    saver takes the counts and sets `http_sealed` in one critical section under the registry
+    lock (`window::global_segment_counts(true)`). The registry refuses any HTTP observation after
+    that (`Registry::observe_request_from` returns `false`), and both HTTP handlers answer such a
+    request with 503 without serving it (`router/helpers.rs`, `window_sealed_response`). A served
+    request is therefore always in the sealed counts. Only the moment of counting matters: a long
+    tool call, an SSE stream or a task counted before the seal runs to completion and holds
+    nothing open. The seal is immediate, so the operator's always-on callers
+    (`periodic-refresh.sh` every 60 s, agents) cannot keep a restart from sealing clean. The cost:
+    a request that arrives after shutdown begins is refused and retried against the next
+    process. (Final review: a time boundary alone lost post-seal counts, and a pending-request
+    gauge could not see requests not yet admitted.)
   - Counter dirtiness and lifecycle metadata are tracked separately, so a shutdown with no new
     requests still writes the close.
 - **`Transport::Internal`** is a label that nothing observes in production. A segment's snapshot

@@ -545,15 +545,4 @@ pub(crate) fn create_router_with_accounts(
         origin_policy,
         origin_guard::origin_guard_middleware,
     ))
-    // Outermost: U1 holds a segment's seal until every accepted request is counted.
-    .layer(middleware::from_fn(pending_observation_middleware))
-}
-
-async fn pending_observation_middleware(
-    mut request: axum::extract::Request,
-    next: middleware::Next,
-) -> axum::response::Response {
-    use crate::protocol_revision_telemetry::window::PendingObservation;
-    request.extensions_mut().insert(PendingObservation::begin());
-    next.run(request).await
 }

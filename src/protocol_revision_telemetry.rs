@@ -185,6 +185,9 @@ pub struct Registry {
     /// Requests with no revision, by bounded caller key (named client, else
     /// User-Agent family). Diagnoses the unattributed share; gates nothing.
     missing_revision_agents: BTreeMap<String, u64>,
+    /// Set when this process's U1 segment seals: later HTTP requests are
+    /// refused, not counted, so every counted request is in the seal.
+    http_sealed: bool,
 }
 
 /// Snapshot for `/metrics` tests and the Linear table.
@@ -363,18 +366,22 @@ impl Registry {
         client: &str,
         transport: Transport,
     ) {
-        self.observe_request_from(requested_revision, client, transport, None);
+        let _ = self.observe_request_from(requested_revision, client, transport, None);
     }
 
     /// [`Self::observe_request`] with the caller's raw User-Agent, reduced to a
-    /// bounded family before anything is stored.
+    /// bounded family before anything is stored. Returns `false`, counting
+    /// nothing, for an HTTP request after this process's segment sealed.
     pub(crate) fn observe_request_from(
         &mut self,
         requested_revision: Option<&str>,
         client: &str,
         transport: Transport,
         user_agent: Option<&str>,
-    ) {
+    ) -> bool {
+        if transport == Transport::Http && self.http_sealed {
+            return false;
+        }
         let client = client_label(client);
         let revision = revision_label(requested_revision);
         self.total += 1;
@@ -395,6 +402,7 @@ impl Registry {
                 .entry(window::missing_revision_agent(client, user_agent).to_string())
                 .or_insert(0) += 1;
         }
+        true
     }
 
     fn bind_session(&mut self, session_id: &str, attribution: SessionAttribution) {
@@ -898,7 +906,7 @@ pub fn observe_inbound_request(
     session_id: Option<&str>,
     transport: Transport,
 ) {
-    observe_inbound_request_from(
+    let _ = observe_inbound_request_from(
         request,
         params,
         method,
@@ -910,7 +918,10 @@ pub fn observe_inbound_request(
 }
 
 /// [`observe_inbound_request`] with the raw `User-Agent`, which only ever
-/// becomes a bounded family key.
+/// becomes a bounded family key. `false` means this process's U1 segment has
+/// sealed: the caller must refuse the request, which is then neither counted
+/// nor served.
+#[must_use]
 pub(crate) fn observe_inbound_request_from(
     request: &Value,
     params: Option<&Value>,
@@ -919,9 +930,9 @@ pub(crate) fn observe_inbound_request_from(
     session_id: Option<&str>,
     transport: Transport,
     user_agent: Option<&str>,
-) {
+) -> bool {
     if method.starts_with("notifications/") {
-        return;
+        return true;
     }
     let initialize_params = (method == "initialize").then_some(params).flatten();
     let explicit_requested = request_meta_value(request, params, META_PROTOCOL_VERSION)
@@ -965,7 +976,9 @@ pub(crate) fn observe_inbound_request_from(
             },
         );
     }
-    reg.observe_request_from(requested_label, client, transport, user_agent);
+    if !reg.observe_request_from(requested_label, client, transport, user_agent) {
+        return false;
+    }
     drop(reg);
     emit_request_metrics(requested_label, client, transport);
     tracing::debug!(
@@ -974,6 +987,7 @@ pub(crate) fn observe_inbound_request_from(
         transport = transport.as_str(),
         "mcp728.u1 inbound request observation"
     );
+    true
 }
 
 /// Record the extensions a client negotiated for one `tools/call`.

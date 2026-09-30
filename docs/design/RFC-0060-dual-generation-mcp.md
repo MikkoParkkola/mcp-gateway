@@ -137,9 +137,9 @@ The decision certifies HTTP only. Stdio children record no segments, so a
 stdio observation in the window, or a declaration other than `http`, blocks
 with `PopulationMismatch`.
 
-A segment seals only after every request its process accepted has been
-counted. If requests are still uncounted 10 s after shutdown starts, the
-segment stays unclean and the decision blocks: restart gently during the window.
+A segment seals the moment shutdown begins. From then on the process refuses
+new HTTP requests with 503 instead of counting them, so every served request
+is in the sealed counts. Calls already counted finish normally.
 
 Missing-revision requests stay in the 2% gate; the
 per-caller breakdown (named client, else User-Agent family) only identifies

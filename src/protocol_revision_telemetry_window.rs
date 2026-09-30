@@ -231,6 +231,16 @@ pub(crate) struct SegmentCounts {
     pub tools_list_shadow: BTreeMap<String, u64>,
 }
 
+impl SegmentCounts {
+    /// Valid counts for a process that has served nothing yet.
+    pub(crate) fn empty() -> Self {
+        Self {
+            tools_list_shadow: empty_shadow_counts(),
+            ..Self::default()
+        }
+    }
+}
+
 impl HttpSegmentSink {
     /// Append this process's segment. Under the lock, a previous segment that
     /// is not closed marks the new one as opened alongside another writer.
@@ -511,40 +521,6 @@ impl super::Registry {
     }
 }
 
-/// HTTP requests accepted but not yet counted. A segment seals only once
-/// this reaches zero, so no admitted request is counted after its seal.
-static PENDING_OBSERVATIONS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-/// One accepted HTTP request that has not been counted yet. The outermost
-/// middleware creates it; the handler drops it right after counting, and any
-/// early refusal drops it with the request.
-#[derive(Clone)]
-pub(crate) struct PendingObservation {
-    _guard: std::sync::Arc<PendingGuard>,
-}
-
-struct PendingGuard;
-
-impl PendingObservation {
-    pub(crate) fn begin() -> Self {
-        PENDING_OBSERVATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Self {
-            _guard: std::sync::Arc::new(PendingGuard),
-        }
-    }
-}
-
-impl Drop for PendingGuard {
-    fn drop(&mut self) {
-        PENDING_OBSERVATIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-pub(crate) fn pending_observations() -> usize {
-    PENDING_OBSERVATIONS.load(std::sync::atomic::Ordering::SeqCst)
-}
-
 /// Named clients that identify a caller on their own.
 pub(crate) const NAMED_CLIENTS: &[&str] = &["claude", "codex", "cursor", "vscode", "chatgpt"];
 /// Fixed User-Agent families. Raw agents are never stored (MIK-6704).
@@ -600,10 +576,14 @@ fn user_agent_family(user_agent: Option<&str>) -> &'static str {
 }
 
 /// This process's HTTP counts since start, as its U1 segment records them.
-pub(crate) fn global_segment_counts() -> SegmentCounts {
-    let registry = super::global()
+///
+/// `seal` refuses every later HTTP request in the same critical section, so
+/// the returned counts hold every request this process will ever serve.
+pub(crate) fn global_segment_counts(seal: bool) -> SegmentCounts {
+    let mut registry = super::global()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    registry.http_sealed |= seal;
     SegmentCounts {
         snapshot: registry.transport_snapshot(Transport::Http),
         missing_revision_agents: registry.missing_revision_agents(),

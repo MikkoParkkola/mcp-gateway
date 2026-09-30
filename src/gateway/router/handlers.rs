@@ -474,12 +474,8 @@ pub(super) async fn meta_mcp_handler(
 #[allow(clippy::too_many_lines)]
 async fn meta_mcp_dispatch(
     State(state): State<Arc<AppState>>,
-    mut http_request: axum::http::Request<axum::body::Body>,
+    http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
-    // Held until this request is counted (U1 seal ordering); `read_body` would drop it.
-    let pending = http_request
-        .extensions_mut()
-        .remove::<crate::protocol_revision_telemetry::window::PendingObservation>();
     // Extract headers and authenticated client from request
     let headers = http_request.headers().clone();
     let client = http_request
@@ -698,7 +694,7 @@ async fn meta_mcp_dispatch(
     let protocol_header = headers
         .get("mcp-protocol-version")
         .and_then(|value| value.to_str().ok());
-    crate::protocol_revision_telemetry::observe_inbound_request_from(
+    if !crate::protocol_revision_telemetry::observe_inbound_request_from(
         &request,
         params.as_ref(),
         &method,
@@ -708,8 +704,9 @@ async fn meta_mcp_dispatch(
         headers
             .get(axum::http::header::USER_AGENT)
             .and_then(|value| value.to_str().ok()),
-    );
-    drop(pending);
+    ) {
+        return super::helpers::window_sealed_response().into_response();
+    }
 
     // Which protocol generation is this request written against? Decided per
     // request, not per connection: 2026-07-28 removed the handshake precisely so

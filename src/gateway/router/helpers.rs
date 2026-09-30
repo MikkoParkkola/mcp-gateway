@@ -116,6 +116,18 @@ pub(super) fn build_http_response(
     (status, Json(body))
 }
 
+/// The refusal for a request that arrives after this process's U1 window
+/// segment sealed: it is neither counted nor served, so the client retries
+/// against the next process.
+pub(super) fn window_sealed_response() -> (StatusCode, Json<Value>) {
+    build_http_error_response(
+        None,
+        -32000,
+        "U1 window sealed: this gateway is shutting down; retry",
+        StatusCode::SERVICE_UNAVAILABLE,
+    )
+}
+
 /// Build a JSON-RPC HTTP error body without attaching a session header.
 pub(super) fn build_http_error_response(
     id: Option<RequestId>,
