@@ -265,3 +265,27 @@ async fn a_code_past_its_credential_cap_is_refused() {
     assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
     assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
 }
+
+/// A live session cookie does not leave a link unspent: the exchange decides
+/// a link, not the cookie beside it.
+#[tokio::test]
+async fn a_link_redeemed_with_a_live_cookie_is_spent() {
+    let (state, _dir) = fixture().await;
+    let live = issue(&state);
+    let value = state.dashboard_bootstrap.peek().expect("startup value");
+
+    let out = send(&state, redeem(&value, Some(&live))).await;
+
+    assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    assert_eq!(state.dashboard_bootstrap.peek(), None, "the link is spent");
+    assert_private(&out);
+}
+
+/// Every answer on the handoff path is private, a router 405 included.
+#[tokio::test]
+async fn a_wrong_method_on_the_code_path_is_private_too() {
+    let (state, _dir) = behind_https_front().await;
+    let out = send(&state, through_proxy("PUT", "", "same-origin", None)).await;
+    assert_eq!(out.status, StatusCode::METHOD_NOT_ALLOWED, "{}", out.body);
+    assert_private(&out);
+}

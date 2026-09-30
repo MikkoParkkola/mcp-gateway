@@ -87,7 +87,7 @@ pub(crate) fn redeem_handoff(
 }
 
 /// Nothing on these pages may be cached or sent onward as a `Referer`.
-fn private(mut response: Response) -> Response {
+pub(crate) fn private(mut response: Response) -> Response {
     let headers = response.headers_mut();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(

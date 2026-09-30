@@ -35,10 +35,21 @@ pub const LOGOUT_PATH: &str = "/dashboard/logout";
 /// reason: the posted code is the credential, and a session cookie the browser
 /// already holds, live or dead, must not decide it.
 pub fn logout_router() -> Router<Arc<AppState>> {
-    Router::new().route(LOGOUT_PATH, post(logout)).route(
-        crate::gateway::auth::HANDOFF_PATH,
-        get(handoff_form).post(handoff_code),
-    )
+    // Every answer on the handoff path, including a router 405 or an
+    // extractor 413, is neither cached nor sent onward as a `Referer`.
+    let handoff = Router::new()
+        .route(
+            crate::gateway::auth::HANDOFF_PATH,
+            get(handoff_form).post(handoff_code),
+        )
+        .layer(axum::middleware::map_response(handoff_private));
+    Router::new()
+        .route(LOGOUT_PATH, post(logout))
+        .merge(handoff)
+}
+
+async fn handoff_private(response: Response) -> Response {
+    crate::gateway::auth::handoff_private(response)
 }
 
 async fn handoff_form() -> Response {

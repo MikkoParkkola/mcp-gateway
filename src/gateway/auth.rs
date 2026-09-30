@@ -48,7 +48,7 @@ mod handoff;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 use bootstrap::{bootstrap_param, try_dashboard_bootstrap};
 #[cfg(feature = "webui")]
-pub(crate) use handoff::{HANDOFF_PATH, handoff_form, redeem_handoff};
+pub(crate) use handoff::{HANDOFF_PATH, handoff_form, private as handoff_private, redeem_handoff};
 
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
@@ -737,6 +737,10 @@ pub async fn auth_middleware(
     let has_authorization = request
         .headers()
         .contains_key(axum::http::header::AUTHORIZATION);
+    // A link being redeemed is decided by the exchange, never by a cookie the
+    // browser holds: a live one must not leave the link unspent (#2130).
+    let is_bootstrap = request.uri().path() == "/dashboard"
+        && request.uri().query().and_then(bootstrap_param).is_some();
     // The kind a dead cookie is refused as, when it is refused on its own.
     let mut dead_session = None;
     if let Some(handle) = session_cookie_value(request.headers()) {
@@ -750,7 +754,7 @@ pub async fn auth_middleware(
             .dashboard_bootstrap
             .check_session(&handle, Now::read(), &limits, touch)
         {
-            SessionCheck::Valid if !has_authorization => {
+            SessionCheck::Valid if !has_authorization && !is_bootstrap => {
                 request.extensions_mut().insert(dashboard_client());
                 return next.run(request).await;
             }
@@ -766,8 +770,6 @@ pub async fn auth_middleware(
         // operator is re-entering, exactly when a stale cookie is present), or
         // a public path, which needs no credential at all.
         let has_bearer = presented_credential(request.headers()).is_some();
-        let is_bootstrap = request.uri().path() == "/dashboard"
-            && request.uri().query().and_then(bootstrap_param).is_some();
         if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
             auth_failure(kind);
             return session_ended_response(cookie_secure(&state));
@@ -863,7 +865,7 @@ async fn authenticate_request(
     // no cookie yet, so this is the one path where a credential arrives in the
     // URL — which is why the value is single-use and is not the admin token.
     if let Some(response) = try_dashboard_bootstrap(&state, &request) {
-        return response;
+        return handoff::private(response);
     }
 
     let token = presented_credential(request.headers());
