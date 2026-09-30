@@ -9,7 +9,6 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::AppState;
-use super::helpers::build_http_error_response;
 use crate::gateway::auth::NamedApiKey;
 
 /// The refusal message, verbatim from the design.
@@ -34,6 +33,5 @@ pub(super) fn hardened_identity_refusal(
         api_key.map(NamedApiKey::is_personal),
     );
     // Red-first stub: the gate lands in the next commit.
-    let _ = (StatusCode::FORBIDDEN, build_http_error_response, REFUSAL);
     None
 }
