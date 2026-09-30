@@ -141,8 +141,9 @@ async fn the_code_form_is_served_on_the_public_origin() {
         "{:?}",
         out.headers
     );
-    // `no-referrer` here would make the browser post `Origin: null`, which the
-    // origin gate refuses: the form keeps its Origin with `same-origin`.
+    // Do not tighten this to `no-referrer`: under that policy a browser posts
+    // the form with `Origin: null` (Fetch, "serialize a request origin"),
+    // which the origin gate refuses. `same-origin` keeps the form's Origin.
     assert!(
         header_is(&out, "referrer-policy", "same-origin"),
         "{:?}",
