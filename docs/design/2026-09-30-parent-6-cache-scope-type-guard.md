@@ -79,8 +79,10 @@ the wire runs it on every serialization:
   `"result"`: `rg '"result"\s*:'` over `src/gateway/{router,server,streaming.rs}` finds only test
   fixtures and audit rows.
 - The task snapshot's retained `result` (`src/protocol/tasks.rs:108-109`), which `tasks/get` and
-  completed-task admission replay deliver inside the envelope. Records persisted before this
-  change are clamped when they are served, because the clamp runs on output, not on storage.
+  completed-task admission replay deliver inside the envelope. The attribute applies to every
+  serialization of the snapshot, including the task store's (`task_service/store.rs:664`), so
+  newly stored records are private as well. Records stored before this change are clamped when
+  they are served.
 
 `finalize_response_after_inspection` (`response_security.rs:80`) also calls the clamp before
 signing. The signed bytes are therefore already private, and the serializer's clamp is a no-op on
@@ -88,9 +90,17 @@ signed paths: the signature stays valid. The firewall's single-inspection behavi
 (`AlreadyInspected`) is unchanged, because replacing a scope with the constant `"private"` needs
 no re-scan.
 
-Out of this boundary, filed as a 4.0.1 issue under the release bar (MEDIUM, configuration
-dependent): a configured webhook `event_type: "message"` whose payload is a JSON-RPC result is
-emitted on the legacy SSE stream as raw data (`webhooks/mod.rs:581-610`, `streaming.rs:486-490`).
+The webhook `message` path is the one raw delivery that serializes neither type
+(`webhooks/mod.rs:581-603` keeps the whole payload; `streaming.rs:486-489` writes it as SSE data).
+It is closed in this change, because the criterion says "no surface". Before emission, a `message`
+payload that is a JSON-RPC response (it has an `id` and a `result` object) gets
+`clamp_delivered_scope` on its `result`. Requests and notifications pass unchanged. This resolves
+#2471.
+
+**Ordering contract (closing record).** The firewall inspects the canonical backend artifact first.
+Then the clamp runs, then signing, then audit, then serialization. The pre-sign clamp is required,
+not redundant: the signer authenticates the in-memory result map, not the serialized bytes
+(`message_signing_v2.rs:55-95`).
 
 **3. Proof: behaviour on every exit, plus a source check on the two attributes.**
 - Functional tests assert exact `"private"` on successful responses. The exits and the tests that
@@ -150,6 +160,35 @@ Each test asserts a successful response and exactly `"private"`. A stub backend 
    carries the construction half of the closing record.
 7. **Source check that both result slots carry `serialize_with = clamp`,** and that no other
    writer of `"cacheScope"` exists. Red before the change.
+8. **Webhook `message` to legacy SSE:** the payload
+   `{"jsonrpc":"2.0","id":1,"result":{"cacheScope":"public"}}` arrives as `"private"`. A
+   notification payload passes byte-identical.
+9. **Signed delivery.** A public top-level result goes through the signing-enabled finalizer. The
+   MAC must verify against the serialized delivery, including the request id and nonce, and the
+   scope must be `"private"`. Also covered: a blocked response stays result-free and unsigned, and
+   `AlreadyInspected` triggers no second inspection.
+10. **Fixtures that cannot pre-clean the evidence.**
+    - Upstream frames and old-format stored task records are raw bytes. Each test first asserts
+      that its fixture contains `"public"`.
+    - The idempotency replay test proves the stored input is public and that no backend dispatch
+      happens.
+11. **Serializer unit cases.**
+    - An absent key stays absent. `private` is unchanged. `public`, `null`, a number and an
+      unknown string all become `private`.
+    - A nested `"cacheScope"` inside tool data, and JSON strings, are preserved exactly.
+    - Batch and response-bearing SSE output are covered.
+12. **Completed-task retry.** A repeated task-producing `tools/call` with the same idempotency key
+    returns the stored envelope (`execution.rs:73-79`) with the retained result `"private"`.
+
+## Resolution of round 3 (both seats ADOPT-WITH-CHANGES)
+
+| Finding (seat, severity) | Resolution |
+|---|---|
+| The webhook exception contradicts "no surface" (seat 1 HIGH, seat 2 MEDIUM) | Closed in this change (Decision 2) and test 8; #2471 is resolved by it. |
+| The pre-sign clamp is unprotected by tests (seats 1 and 2, MEDIUM) | Test 9, plus the ordering contract in the closing record. |
+| Fixtures can normalize away the evidence (seat 1, MEDIUM) | Test 10; the storage statement is corrected. |
+| Compatibility and transports are not covered (seat 1, MEDIUM) | Test 11. |
+| Completed-task replay on create (seat 2, LOW) | Test 12. |
 
 ## Resolution of round 2 (seat 1 REDESIGN; the seat 2 output was empty)
 
@@ -157,7 +196,7 @@ Each test asserts a successful response and exactly `"private"`. A stub backend 
 |---|---|
 | Two direct-route success exits bypass the clamp (HIGH) | The clamp moves from call sites into the serializer of `JsonRpcResponse.result`; test 1 covers all three exits. |
 | Retained task results remain public inside the envelope (HIGH) | The same serializer clamp sits on the task snapshot's `result` slot, and applies to records written before the change; test 4. |
-| Webhook `message` events carry raw results (MEDIUM) | Filed as a 4.0.1 issue under the release bar; configuration dependent. |
+| Webhook `message` events carry raw results (MEDIUM) | Filed as #2471, then closed in scope in round 3. |
 | The meta/stdio red test could not go red (MEDIUM) | Test 3 uses a surfaced backend tool; test 2 names a fixture that can answer `resources/read`. |
 | The closing record overstated structural enforcement (MEDIUM) | Construction and delivery are named separately; the source checks are recorded as drift checks, with their limit stated. |
 
