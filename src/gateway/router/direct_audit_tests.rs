@@ -25,12 +25,15 @@ use crate::transport::Transport;
 
 mod meta_refusal;
 mod meta_replay;
+#[cfg(feature = "firewall")]
+mod tenants;
 
 /// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.
 struct Scripted {
     calls: Arc<AtomicUsize>,
     error: Option<i32>,
+    reply: Option<Value>,
 }
 
 #[async_trait::async_trait]
@@ -52,7 +55,9 @@ impl Transport for Scripted {
             (_, Some(code)) => JsonRpcResponse::error(Some(id), code, "backend says no"),
             _ => JsonRpcResponse::success(
                 id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+                self.reply.clone().unwrap_or_else(
+                    || json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+                ),
             ),
         })
     }
@@ -86,6 +91,24 @@ struct Setup {
     /// The router's request firewall, scanning arguments (#2420).
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     request_firewall: bool,
+    /// The backend's `tools/call` result, instead of a plain "ok".
+    reply: Option<Value>,
+    /// MIK-7116.MIN.1: `arg_keys` on both routes' firewalls, guard at `limit`
+    /// (0 = guard off, attribution only).
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    tenant_limit: Option<usize>,
+    meta_mode: MetaMode,
+}
+
+/// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
+#[derive(Default, PartialEq)]
+enum MetaMode {
+    #[default]
+    Plain,
+    /// Response inspection refuses a HIGH finding instead of annotating it.
+    InspectionBlocks,
+    /// The idempotency cache is on, so a re-issued key replays.
+    Idempotent,
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
@@ -123,6 +146,7 @@ async fn fixture(setup: Setup) -> Fixture {
         backend.set_transport_for_test(Arc::new(Scripted {
             calls: Arc::clone(&calls),
             error: setup.backend_error,
+            reply: setup.reply.clone(),
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
@@ -142,6 +166,34 @@ async fn fixture(setup: Setup) -> Fixture {
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_transparency_log(Arc::clone(&log));
+    #[cfg(feature = "firewall")]
+    if let Some(limit) = setup.tenant_limit {
+        let config = crate::security::firewall::FirewallConfig {
+            tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
+                enabled: limit > 0,
+                max_tenants_per_window: limit,
+                arg_keys: vec!["customer_id".to_string()],
+                ..Default::default()
+            },
+            ..crate::security::firewall::FirewallConfig::default()
+        };
+        let firewall = |config| {
+            Arc::new(crate::security::firewall::Firewall::from_config(
+                config, None,
+            ))
+        };
+        state_mut.firewall = Some(firewall(config.clone()));
+        meta.set_firewall(Some(firewall(config)));
+    }
+    if setup.meta_mode == MetaMode::InspectionBlocks {
+        meta.enable_response_inspection_action_mode();
+    }
+    if setup.meta_mode == MetaMode::Idempotent {
+        meta.enable_idempotency(
+            Arc::new(crate::idempotency::IdempotencyCache::new()),
+            crate::idempotency::CLEANUP_INTERVAL,
+        );
+    }
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(Arc::clone(&log));
     let router = create_router(Arc::clone(&state));

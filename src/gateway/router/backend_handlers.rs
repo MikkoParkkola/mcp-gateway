@@ -500,13 +500,7 @@ pub(super) async fn backend_handler(
         );
     }
 
-    // D2: one write per tools/call, whichever of the inner returns answered.
-    let mut call = None;
-    let answer = backend_handler_inner(Arc::clone(&state), name.clone(), request, &mut call).await;
-    match call {
-        Some(call) => direct_audit::record(&state, &name, call, answer).await,
-        None => answer,
-    }
+    direct_audit::audited_call(Arc::clone(&state), name, request).await
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1049,10 +1043,12 @@ async fn backend_handler_inner(
             params.as_ref(),
         ) {
             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
+                crate::gateway::meta_mcp::invoke::audit::note_cached();
                 let response = JsonRpcResponse::success(id.clone(), cached);
                 return build_http_response(&response, StatusCode::OK);
             }
             Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
+                crate::gateway::meta_mcp::invoke::audit::note_cached();
                 let response = cached_error_response(Some(id.clone()), &error);
                 return build_http_response(&response, StatusCode::OK);
             }

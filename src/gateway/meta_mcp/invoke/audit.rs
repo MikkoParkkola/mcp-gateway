@@ -3,8 +3,12 @@
 //! D1: one invocation record per `gateway_invoke`, written around
 //! `invoke_tool_traced` so refusals and failures are recorded too.
 
-use serde_json::Value;
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 
+use serde_json::{Map, Value};
+
+use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::JsonRpcResponse;
 use crate::security::audit::{
@@ -27,28 +31,164 @@ impl AuditWho {
     }
 }
 
-tokio::task_local! {
+/// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
+/// owned value: the scope ends before the invocation record is written.
+#[derive(Debug, Default)]
+pub(crate) struct DispatchNotes {
     /// The code of a backend dispatch failure that `invoke_tool_traced`
-    /// turned into an `isError` tool result, for this call only.
-    static DISPATCH_FAILURE: std::cell::Cell<Option<i32>>;
+    /// turned into an `isError` tool result.
+    failure: Option<i32>,
+    /// MIK-7116.MIN.1: tenants the raw backend response named, noted before
+    /// any response gate could refuse or rewrite it.
+    response_tenants: BTreeSet<String>,
+    /// The context-integrity kernel's data classes for that response, as
+    /// their snake-case names.
+    data_classes: BTreeSet<String>,
+    /// Served from a cache: no gate ran, so the delivered value is attributed.
+    cached: bool,
+}
+
+tokio::task_local! {
+    /// The notes of the call running in this scope, for this call only.
+    static NOTES: RefCell<DispatchNotes>;
+}
+
+/// Outside [`with_dispatch_scope`] (upstream task recovery) this does nothing.
+fn note(f: impl FnOnce(&mut DispatchNotes)) {
+    let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));
 }
 
 /// Note that the backend dispatch failed with `error`, though the caller will
-/// get a tool result. Outside [`with_dispatch_scope`] this does nothing.
+/// get a tool result.
 pub(super) fn note_dispatch_failure(error: &Error) {
-    let _ = DISPATCH_FAILURE.try_with(|cell| cell.set(Some(error.to_rpc_code())));
+    note(|notes| notes.failure = Some(error.to_rpc_code()));
 }
 
-/// Run one invocation, returning its output and any dispatch failure noted in it.
-pub(super) async fn with_dispatch_scope<F: std::future::Future>(
+/// MIK-7116.MIN.1: note the tenants a raw backend `result` names, and hand it
+/// on unchanged. Called first in the response gates, on both routes.
+pub(super) fn noted_response(meta: &MetaMcp, result: Value) -> Value {
+    let tenants = meta.response_tenants(&result);
+    if !tenants.is_empty() {
+        note(|notes| notes.response_tenants.extend(tenants));
+    }
+    result
+}
+
+/// MIK-7116.MIN.1: note the kernel's data classes, and hand the evaluation on.
+pub(super) fn noted_classes(evaluation: ContextIntegrityEvaluation) -> ContextIntegrityEvaluation {
+    let classes = &evaluation.classification.data_classes;
+    let names = classes
+        .iter()
+        .filter_map(|class| match serde_json::to_value(class) {
+            Ok(Value::String(name)) => Some(name),
+            _ => None,
+        });
+    let names: Vec<String> = names.collect();
+    note(|notes| notes.data_classes.extend(names));
+    evaluation
+}
+
+/// MIK-7116.MIN.1: this call is answered from a cache, past every gate.
+pub(crate) fn note_cached() {
+    note(|notes| notes.cached = true);
+}
+
+/// Run one invocation, returning its output and what its gates noted.
+pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
     future: F,
-) -> (F::Output, Option<i32>) {
-    DISPATCH_FAILURE
-        .scope(std::cell::Cell::new(None), async {
+) -> (F::Output, DispatchNotes) {
+    NOTES
+        .scope(RefCell::new(DispatchNotes::default()), async {
             let output = future.await;
-            (output, DISPATCH_FAILURE.with(std::cell::Cell::get))
+            (output, NOTES.with(RefCell::take))
         })
         .await
+}
+
+impl DispatchNotes {
+    /// The outcome of a call whose result read as `outcome`: a backend failure
+    /// delivered as a tool result is still an `error`.
+    pub(crate) fn outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
+        match (outcome, self.failure) {
+            (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
+            (outcome, _) => outcome,
+        }
+    }
+
+    /// MIK-7116.MIN.1: the attribution fields of one invocation record, given
+    /// the request's tenants and the `delivered` value (attributed instead of
+    /// the raw response on a cache hit). Empty when the call named no tenant,
+    /// so a deployment without `arg_keys` keeps its record schema.
+    pub(crate) fn attribution(
+        &self,
+        meta: &MetaMcp,
+        mut tenants: BTreeSet<String>,
+        delivered: Option<&Value>,
+    ) -> Map<String, Value> {
+        if self.cached {
+            if let Some(value) = delivered {
+                tenants.extend(meta.response_tenants(value));
+            }
+        } else {
+            tenants.extend(self.response_tenants.iter().cloned());
+        }
+        let mut fields = Map::new();
+        if tenants.is_empty() {
+            return fields;
+        }
+        let hashed: BTreeSet<String> = tenants
+            .into_iter()
+            .map(|id| crate::security::hash_argument(&Value::String(id)))
+            .collect();
+        fields.insert(
+            "tenants".into(),
+            hashed.into_iter().collect::<Vec<_>>().into(),
+        );
+        if !self.data_classes.is_empty() {
+            let classes: Vec<Value> = self
+                .data_classes
+                .iter()
+                .cloned()
+                .map(Value::String)
+                .collect();
+            fields.insert("data_classes".into(), classes.into());
+        }
+        if self.cached {
+            fields.insert("attribution".into(), "cached_delivery".into());
+        }
+        fields
+    }
+}
+
+impl MetaMcp {
+    /// MIK-7116.MIN.1: the tenants a tool's own `arguments` name, under the
+    /// firewall's `tenant_guard.arg_keys`. Empty without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn request_tenants(&self, arguments: &Value) -> BTreeSet<String> {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.request_tenants(arguments);
+        }
+        let _ = arguments;
+        BTreeSet::new()
+    }
+
+    /// MIK-7116.MIN.1: the tenants a tool result names. Empty without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn response_tenants(&self, result: &Value) -> BTreeSet<String> {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.response_tenants(result);
+        }
+        let _ = result;
+        BTreeSet::new()
+    }
 }
 
 fn sha256_of(value: &Value) -> String {
@@ -64,8 +204,9 @@ impl MetaMcp {
     ///
     /// `request_hash` covers `args` as the caller sent them, gateway directives
     /// included; `response_hash` covers the value returned to the caller
-    /// (D1-d.1). A failed call has no response hash. `dispatch_failure` is
-    /// the code of a backend failure the call converted to a tool result.
+    /// (D1-d.1). A failed call has no response hash. `notes` carries
+    /// the backend failure code a call converted to a tool result, and the
+    /// tenant attribution its gates saw.
     pub(super) async fn audit_invocation(
         &self,
         args: &Value,
@@ -73,7 +214,7 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         trace_id: &str,
         result: Result<Value>,
-        dispatch_failure: Option<i32>,
+        notes: DispatchNotes,
     ) -> Result<Value> {
         // D4: counted before the log check, so auth off still counts.
         if let Some(reason) = crate::security::security_metrics::meta_denial(&result) {
@@ -86,25 +227,26 @@ impl MetaMcp {
         let Some(outcome) = AuditOutcome::from_result(&result) else {
             return result;
         };
-        // A backend failure delivered as a tool result is still an `error`.
-        let outcome = match (outcome, dispatch_failure) {
-            (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
-            (outcome, _) => outcome,
-        };
+        let outcome = notes.outcome(outcome);
+        // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
+        let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
+        let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
+        let attribution = notes.attribution(self, tenants, result.as_ref().ok());
         let facts =
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of));
         // #2472: a replay of this execution is recorded with these facts.
         if let Some(lease) = caller.execution {
             lease.note_audit(facts.clone());
         }
-        self.write_invocation(log, args, session_id, caller, trace_id, &facts)
+        self.write_invocation(log, args, session_id, caller, trace_id, &facts, attribution)
             .await
             .and(result)
     }
 
     /// Write one meta invocation record with `facts` (outcome and response
-    /// hash). `Err` only when the write failed under
+    /// hash) and `attribution`. `Err` only when the write failed under
     /// [`AuditFailurePolicy::FailClosed`] (D1-f).
+    #[allow(clippy::too_many_arguments)]
     async fn write_invocation(
         &self,
         log: &std::sync::Arc<crate::security::TransparencyLogger>,
@@ -113,6 +255,7 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         trace_id: &str,
         facts: &super::super::admission::ReplayAudit,
+        attribution: Map<String, Value>,
     ) -> Result<()> {
         let server = args
             .get("server")
@@ -157,7 +300,7 @@ impl MetaMcp {
         let (srv, tl, request_hash) = (server.to_string(), tool.to_string(), sha256_of(args));
         let written = log
             .append_bounded(move |log| {
-                log.log_invocation_correlated(
+                log.log_invocation_attributed(
                     CorrelationKey {
                         id: &key_id,
                         source: key_source,
@@ -166,6 +309,7 @@ impl MetaMcp {
                     InvocationTarget::meta(&srv, &tl),
                     &request_hash,
                     response_hash.as_deref(),
+                    attribution,
                 )
             })
             .await;
@@ -226,8 +370,26 @@ impl MetaMcp {
         };
         let trace_id =
             crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
+        // MIK-7116.MIN.1: a replay is answered past every gate, so it is
+        // attributed like a cached delivery, from the value it delivers.
+        let delivered = replay.result.as_ref();
+        let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(&envelope);
+        let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
+        let attribution = DispatchNotes {
+            cached: true,
+            ..DispatchNotes::default()
+        }
+        .attribution(self, tenants, delivered);
         match self
-            .write_invocation(log, &envelope, session_id, caller, &trace_id, &facts)
+            .write_invocation(
+                log,
+                &envelope,
+                session_id,
+                caller,
+                &trace_id,
+                &facts,
+                attribution,
+            )
             .await
         {
             Ok(()) => replay,

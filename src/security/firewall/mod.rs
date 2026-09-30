@@ -479,10 +479,28 @@ impl Firewall {
 
         // 4. Audit log every request (including clean ones).
         if let Some(ref audit) = self.audit {
-            audit.log_request(session_id, server, tool, caller, args, &verdict);
+            let labels = crate::security::response_policy::ResponseCorrelation {
+                session_id,
+                caller,
+                external_server: server,
+                external_tool: tool,
+            };
+            let tenants = self.tenant_guard.request_tenants(args);
+            audit.log_request_attributed(&labels, args, &verdict, &tenants);
         }
 
         verdict
+    }
+
+    /// MIK-7116.MIN.1: the tenants a request's `args` name under
+    /// `tenant_guard.arg_keys`, whether or not the guard may refuse.
+    pub(crate) fn request_tenants(&self, args: &Value) -> std::collections::BTreeSet<String> {
+        self.tenant_guard.request_tenants(args)
+    }
+
+    /// MIK-7116.MIN.1: the tenants a tool result names (text-JSON included).
+    pub(crate) fn response_tenants(&self, result: &Value) -> std::collections::BTreeSet<String> {
+        self.tenant_guard.response_tenants(result)
     }
 
     /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Pushes a
@@ -824,6 +842,9 @@ mod verification {
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[path = "tenant_audit_tests.rs"]
+mod tenant_audit_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
