@@ -57,6 +57,8 @@ const MEASURED_CLIENTS: &[&str] = &[
     "chatgpt",
     "other",
 ];
+// Only the metrics registration enumerates transports now the v1 window is gone.
+#[cfg(feature = "metrics")]
 const MEASURED_TRANSPORTS: &[Transport] = &[Transport::Http, Transport::Stdio, Transport::Internal];
 /// Directory below the gateway data directory that holds the restart-safe window.
 pub const DURABLE_TELEMETRY_DIR: &str = "protocol-revision-telemetry";
