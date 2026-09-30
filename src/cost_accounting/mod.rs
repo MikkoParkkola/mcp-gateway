@@ -491,13 +491,16 @@ impl CostTracker {
     ) {
         let rec = CostRecord::new(backend, tool, token_count, price_per_million);
 
-        // Per-session
-        self.per_session
-            .entry(session_id.to_string())
-            .or_insert_with(|| {
-                Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
-            })
-            .record(rec.clone());
+        // Per-session. An empty id is no session (a 2026-07-28 request has
+        // none): keying on it would pool every such caller into one bucket.
+        if !session_id.is_empty() {
+            self.per_session
+                .entry(session_id.to_string())
+                .or_insert_with(|| {
+                    Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
+                })
+                .record(rec.clone());
+        }
 
         // Per-key (if we have a key name)
         if let Some(key_name) = api_key_name {
@@ -521,6 +524,9 @@ impl CostTracker {
     /// Snapshot the cost for a session.
     #[must_use]
     pub fn session_snapshot(&self, session_id: &str) -> Option<SessionCostSnapshot> {
+        if session_id.is_empty() {
+            return None;
+        }
         self.per_session.get(session_id).map(|sc| sc.snapshot())
     }
 
