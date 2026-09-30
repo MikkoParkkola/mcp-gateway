@@ -336,6 +336,17 @@ async fn meta_stored_error_replay_after_block_is_refused() {
         "the first answer must be the firewall's JSON-RPC error: {first}"
     );
     assert_eq!(fx.deliveries(), 1, "{first}");
+    // Retained: unblocked, the re-issue is answered with the stored error.
+    let kept = post(&fx, "/mcp", &call(3, "gateway_invoke", &invoke)).await;
+    assert!(
+        kept.contains("firewall") && kept.contains("\"id\":3"),
+        "{kept}"
+    );
+    assert_eq!(
+        fx.deliveries(),
+        1,
+        "the stored error was not retained: {kept}"
+    );
     fx.withhold_t();
     let second = post(&fx, "/mcp", &call(2, "gateway_invoke", &invoke)).await;
     assert!(
@@ -364,8 +375,9 @@ async fn meta_replay_without_a_block_is_still_deduplicated() {
     assert_eq!(fx.deliveries(), 1, "{second}");
 }
 
-/// R1p. Direct route, pass-through backend: the security gate is skipped by
-/// design, but the AX-010 block still comes before the cached replay.
+/// R1p. Direct route, pass-through backend: the gate's key check, which
+/// carries the AX-010 block, runs above its pass-through return, so the block
+/// comes before the cached replay here too.
 #[tokio::test]
 async fn passthrough_replay_after_block_is_refused() {
     let fx = fixture_with(Answer::Done, true).await;
