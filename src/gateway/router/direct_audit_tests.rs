@@ -23,6 +23,8 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+mod meta_refusal;
+
 /// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.
 struct Scripted {
@@ -80,6 +82,9 @@ struct Setup {
     fail_closed: bool,
     backend_error: Option<i32>,
     agent_identity: Option<crate::config::AgentIdentityConfig>,
+    /// The router's request firewall, scanning arguments (#2420).
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    request_firewall: bool,
 }
 
 /// Backends `alpha` and `beta`, one logger shared by both routes.
@@ -122,6 +127,17 @@ async fn fixture(setup: Setup) -> Fixture {
     }
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
+    }
+    #[cfg(feature = "firewall")]
+    if setup.request_firewall {
+        state_mut.firewall = Some(Arc::new(crate::security::firewall::Firewall::from_config(
+            crate::security::firewall::FirewallConfig {
+                enabled: true,
+                scan_requests: true,
+                ..crate::security::firewall::FirewallConfig::default()
+            },
+            None,
+        )));
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_transparency_log(Arc::clone(&log));
@@ -171,9 +187,13 @@ enum Caller {
 }
 
 async fn post(fx: &Fixture, backend: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
+    post_to(fx, &format!("/mcp/{backend}"), body, caller).await
+}
+
+async fn post_to(fx: &Fixture, uri: &str, body: &str, caller: &Caller) -> (StatusCode, Value) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
-        .uri(format!("/mcp/{backend}"))
+        .uri(uri)
         .header("content-type", "application/json");
     if matches!(caller, Caller::Key) {
         builder = builder.header("authorization", "Bearer k");

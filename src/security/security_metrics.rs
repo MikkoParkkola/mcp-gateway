@@ -133,11 +133,9 @@ pub(crate) fn denied(route: DenialRoute, reason: DenialReason) {
     .increment(1);
 }
 
-/// Count a meta-route refusal the router answers before the meta layer runs,
-/// and hand its code on to the answer.
-pub(crate) fn meta_refused(code: i32) -> i32 {
+/// Count a meta-route refusal the router answers before the meta layer runs.
+pub(crate) fn meta_refused(code: i32) {
     denied(DenialRoute::Meta, DenialReason::of(code, false, false));
-    code
 }
 
 /// The meta route's reason for `result`, when D1 records it as `denied`.
