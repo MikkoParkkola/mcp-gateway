@@ -1,6 +1,9 @@
 # MIK-7116 4.0 slice: MIN.1 attribution, MIN.2 observe, MIN.4 measurement
 
-Status: v4. v2 was reviewed by two seats (both SHIP-WITH-FIXES); a later
+Status: v5 (pending lead ruling on round 3). Verdicts by version: v3 read by
+seat 1 (gpt-6-astra): REWORK, MED/LOW only. v4 read by seat 2 (degraded:
+gpt-5.4, same vendor as seat 1; synthetic-review 429 on three attempts):
+REWORK, 2 HIGH + 1 MED, all verified and folded into v5. Earlier: v2 was reviewed by two seats (both SHIP-WITH-FIXES); a later
 seat raised H1-H3 and M6 (folded into v3). v3 seat 1: REWORK on MEDIUM/LOW
 findings only, each verified at source and folded in (disposition table).
 Base: `docs/ranking-1-release-line` @ `d5fa1ac66` (after #2421, #2448, #2449,
@@ -137,6 +140,14 @@ log_request` keeps its signature.
 ### 4. Known gaps, not fixed here
 
 - Upstream task recovery runs outside a scope: request-side tenants only.
+- **Meta secured-execution replay writes no D1 record at the base** (v4 seat 2
+  H-b): `SyncAdmission::Replay` (`meta_mcp/admission.rs:210`) is served from
+  the router (`handlers.rs:1673,1699`) without `invoke_tool`, so
+  `audit_invocation` never runs, contrary to D1-d's "one record per call".
+  Pre-existing and outside MIN.1's diff: tracked as its own issue and fixed in
+  its own PR, which increment 1 then extends with `tenants` +
+  `attribution: "cached_delivery"` like the other hits. MIN.1 is not moved to
+  met until that record exists.
 - Attribution needs the `firewall` feature (default-on) and `arg_keys`;
   records need the transparency log.
 - Text blocks over 1 MiB are not parsed for tenants.
@@ -185,11 +196,24 @@ Enforcement is a later switch, after MIN.KILL.
   Non-sensitive responses record nothing (a directory listing is not a
   cross-tenant read).
 - **Where:** in the meta and direct D1 writers, which hold the caller and
-  the owned notes. Cache hits count (§2).
+  the owned notes. Cache hits do not observe (§2).
+- **What an observation means (v4 seat 2 H-a):** a *sensitive fetch* made
+  for the principal, i.e. the backend returned it under their call. On
+  `/mcp` the router's response-firewall pass (`handlers.rs:1716-1738`) runs
+  after `invoke_tool`, so a response it then blocks has already been
+  observed. Accepted for observe mode: nothing is withheld on the verdict,
+  the overcount is bounded by response-firewall blocks (secret or
+  exfiltration findings, each already in the firewall NDJSON), and the MIN.4
+  corpus holds one such session so the rate carries it. Before enforcement
+  the observation moves after the delivery pass (the notes would have to
+  leave `handle_tools_call`); recorded as the enforcement precondition next
+  to the key.
 - **Key (v3 seat 1 F3):** exactly `identity::caller_key(subject, cert,
   client)`, the firewall's canonical key, computed at the router while the
-  certificate and client are in hand (both routes already compute it as
-  `control_identity`). Meta carries it in a new `pub(crate) observer_key`
+  certificate and client are in hand (the raw `caller_key` value, **not** `control_identity`: both routes'
+  `control_identity` replaces an empty key with a session / per-backend
+  fallback, `handlers.rs:1385-1409`, `backend_handlers.rs:58-69`, which would
+  hide unkeyed callers). Meta carries it in a new `pub(crate) observer_key`
   field on `MetaMcpCallerContext`; direct carries it in `DirectCall`. Empty
   key → no observation, recorded as `cross_tenant: "unkeyed"`. Route parity is
   by construction (one function, same inputs), which closes the v3 mTLS
@@ -260,3 +284,6 @@ Enforcement is a later switch, after MIN.KILL.
 | v3 seat 1 F5 LOW | cap bounds the addition, not the record | claim qualified (§3) |
 | v3 seat 1 F6 LOW | kernel 64 KiB sampling blind spot | documented (§4), corpus session added (§8) |
 | v3 seat 1 citations | writer lines, task-local lines, HMAC `key_id`, cache-shared claim | corrected |
+| v4 seat 2 H-a HIGH | MIN.2 observes content the later response firewall blocks | verified; observation defined as sensitive fetch, overcount bounded and measured, move-after-delivery set as an enforcement precondition (§7) |
+| v4 seat 2 H-b HIGH | meta replay bypasses attribution and audit | verified; pre-existing D1-d gap, split to its own issue/PR; MIN.1 extends it and waits for it (§4) |
+| v4 seat 2 M | `control_identity` ≠ raw `caller_key` | accepted; claim corrected, raw key used (§7) |

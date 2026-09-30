@@ -1,6 +1,6 @@
 # MIK-7116.MIN.1: test plan
 
-Design: `2026-09-30-min1-tenant-attribution.md` (v4). Increment 1 = T1-T12, T23-T26, T28; increment 2 = T13-T19, T27, T29; increment 3 = T20-T22. Tests are written
+Design: `2026-09-30-min1-tenant-attribution.md` (v4). Increment 1 = T1-T12, T23-T26, T28; increment 2 = T13-T19, T27, T29, T30; increment 3 = T20-T22. Tests are written
 first, committed and pushed as a draft PR, and must fail on the base for the
 stated reason before implementation starts. The red commit carries
 `pub(crate)` signature stubs only (extractors return an empty set, the new log
@@ -49,6 +49,7 @@ so a classifier change fails loudly instead of silently turning the test green).
 | T16 | integration, meta D1 | one call whose response holds sensitive rows for `cust-A` and `cust-B` | its record has `cross_tenant == "would_block"` | no field |
 | T17 | integration, meta D1 | as T13 but calls 1 and 2 from different API keys | neither record has `cross_tenant` | green guard (per-principal key) |
 | T18 | integration, meta D1 | as T13 with an anonymous caller | record has `cross_tenant == "unkeyed"` | no field |
+| T30 | integration, meta D1 | as T13 but the router's response firewall blocks call 2's delivery (credential in the reply) | record 2 still carries `observer` and `cross_tenant == "would_block"`; the caller got a refusal (documents the fetch semantics; flips when enforcement moves the observation) | no field |
 | T29 | unit, identity | `observer` for: two mTLS callers sharing a certificate display name; a subject whose id contains `:`; one subject on two API keys; the same caller on meta and direct | distinct, distinct, equal, equal (equals `caller_key` on each route) | no field |
 | T27 | integration, mixed routes | shared state (`direct_guards_fixture.rs` harness): sensitive read for `cust-A` via meta `gateway_invoke`, then for `cust-B` via direct `/mcp/{name}`, same API key | the direct record has `cross_tenant == "would_block"` | no field; proves one window across routes |
 | T19 | unit, tenant_guard | two sensitive observations for different tenants, the second after `window_secs` has elapsed (`record_at` with a fixed `Instant`) | not would-block | green guard (window honoured) |
