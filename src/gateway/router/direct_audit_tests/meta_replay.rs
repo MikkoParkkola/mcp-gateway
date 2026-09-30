@@ -80,5 +80,38 @@ async fn meta_replay_writes_an_invocation_record() {
     );
     assert_eq!(replay["request_hash"], original["request_hash"], "{replay}");
     assert!(replay.get("response_hash").is_some(), "{replay}");
+    assert_eq!(
+        replay["response_hash"], original["response_hash"],
+        "{replay}"
+    );
     assert_eq!(replay["who"]["credential_kind"], "api_key", "{replay}");
+}
+
+/// A replayed failure is recorded as the failure it was: the delivered replay
+/// wraps the tool result in a successful envelope, so the record takes the
+/// first execution's own outcome, code and response hash, kept server-side.
+#[tokio::test]
+async fn meta_replay_of_a_failure_keeps_its_outcome() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        backend_error: Some(-32010),
+        ..Setup::default()
+    })
+    .await;
+    let (status, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, second) = post_modern(&fx, &keyed_invoke(2).0).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{second}");
+
+    let all = invocations(&fx);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let (original, replay) = (&all[0], &all[1]);
+    assert_ne!(
+        original["outcome"], "ok",
+        "the first run failed: {original}"
+    );
+    for field in ["outcome", "error_code", "response_hash", "request_hash"] {
+        assert_eq!(replay[field], original[field], "{field}: {replay}");
+    }
 }

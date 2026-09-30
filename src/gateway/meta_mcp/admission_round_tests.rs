@@ -52,7 +52,7 @@ fn continuation_original_client_key_admits_each_round_once() {
     ));
     let replay = call(&meta, &round, &json!({"q":1}), 4);
     match replay {
-        Ok(SyncAdmission::Replay(response)) => {
+        Ok(SyncAdmission::Replay(response, _)) => {
             assert_eq!(response.id, Some(RequestId::Number(4)));
             assert_eq!(response.result, Some(json!({"marker":"round-one"})));
         }

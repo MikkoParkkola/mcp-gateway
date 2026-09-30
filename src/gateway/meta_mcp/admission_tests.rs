@@ -135,7 +135,7 @@ fn admit(
 }
 
 fn assert_replay(result: Result<SyncAdmission>, id: i64) {
-    let Ok(SyncAdmission::Replay(response)) = result else {
+    let Ok(SyncAdmission::Replay(response, _)) = result else {
         panic!("unchanged allowed operation must replay its retained secured result");
     };
     assert_eq!(response.id, Some(RequestId::Number(id)));

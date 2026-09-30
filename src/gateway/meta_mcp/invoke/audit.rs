@@ -91,12 +91,36 @@ impl MetaMcp {
             (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
             (outcome, _) => outcome,
         };
+        let facts =
+            super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of));
+        // #2472: a replay of this execution is recorded with these facts.
+        if let Some(lease) = caller.execution {
+            lease.note_audit(facts.clone());
+        }
+        self.write_invocation(log, args, session_id, caller, trace_id, &facts)
+            .await
+            .and(result)
+    }
+
+    /// Write one meta invocation record with `facts` (outcome and response
+    /// hash). `Err` only when the write failed under
+    /// [`AuditFailurePolicy::FailClosed`] (D1-f).
+    async fn write_invocation(
+        &self,
+        log: &std::sync::Arc<crate::security::TransparencyLogger>,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+        trace_id: &str,
+        facts: &super::super::admission::ReplayAudit,
+    ) -> Result<()> {
         let server = args
             .get("server")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let tool = args.get("tool").and_then(Value::as_str).unwrap_or_default();
-        let response_hash = result.as_ref().ok().map(sha256_of);
+        let outcome = facts.outcome();
+        let response_hash = facts.response_hash().map(str::to_string);
         // MIK-7215.CONTROL.3/.3a: the caller's W3C trace id spans the whole
         // call, the session id is the legacy fallback, and the id minted for
         // this invocation keys the case where neither exists.
@@ -143,24 +167,25 @@ impl MetaMcp {
             })
             .await;
         match written {
-            Ok(()) => result,
+            Ok(()) => Ok(()),
             Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
                 tracing::error!(server, tool, trace_id, %error, "invocation audit write failed; result withheld");
                 Err(Error::AuditUnavailable)
             }
             Err(error) => {
                 tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
-                result
+                Ok(())
             }
         }
     }
 
     /// #2472: record a replay of a completed execution, which is a delivered
     /// call like any other (D1-d). Only an invocation is recorded, over the
-    /// envelope its first execution hashed; a meta tool that wrote no
-    /// invocation record the first time writes none on replay. The response
-    /// hash covers the value delivered again. Under `FailClosed` a failed
-    /// write withholds the replay (D1-f).
+    /// envelope its first execution hashed, and with that execution's
+    /// outcome and response hash (`audit`), so it reads as the original
+    /// record did. A meta tool that wrote no invocation record the first
+    /// time writes none on replay. Under `FailClosed` a failed write
+    /// withholds the replay (D1-f).
     pub(crate) async fn audit_replay(
         &self,
         tool_name: &str,
@@ -168,7 +193,11 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
         replay: JsonRpcResponse,
+        audit: Option<super::super::admission::ReplayAudit>,
     ) -> JsonRpcResponse {
+        let Some(log) = self.transparency_logger.as_ref() else {
+            return replay;
+        };
         let envelope = if tool_name == "gateway_invoke" {
             arguments.clone()
         } else if let Some(server) = self.surfaced_tool_server(tool_name) {
@@ -176,22 +205,36 @@ impl MetaMcp {
         } else {
             return replay;
         };
-        let result = match (&replay.result, &replay.error) {
-            (Some(value), _) => Ok(value.clone()),
-            (None, Some(error)) => Err(Error::json_rpc(error.code, error.message.clone())),
-            (None, None) => return replay,
+        let facts = match audit {
+            Some(facts) => facts,
+            // A result stored before #2472 carries no facts: derive them from
+            // the replayed response, where a wrapped tool error reads as `ok`.
+            None => {
+                let result = match (&replay.result, &replay.error) {
+                    (Some(value), _) => Ok(value.clone()),
+                    (None, Some(error)) => Err(Error::json_rpc(error.code, error.message.clone())),
+                    (None, None) => return replay,
+                };
+                let Some(outcome) = AuditOutcome::from_result(&result) else {
+                    return replay;
+                };
+                super::super::admission::ReplayAudit::new(
+                    outcome,
+                    result.as_ref().ok().map(sha256_of),
+                )
+            }
         };
         let trace_id =
             crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
         match self
-            .audit_invocation(&envelope, session_id, caller, &trace_id, result, None)
+            .write_invocation(log, &envelope, session_id, caller, &trace_id, &facts)
             .await
         {
-            Err(error @ Error::AuditUnavailable) => replay.id.clone().map_or_else(
+            Ok(()) => replay,
+            Err(error) => replay.id.clone().map_or_else(
                 || JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),
                 |id| super::super::error_response_preserving_status(id, &error),
             ),
-            _ => replay,
         }
     }
 
