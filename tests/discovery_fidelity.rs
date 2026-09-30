@@ -6,10 +6,7 @@
 //!
 //! Every run uses the real binary in an isolated home with a cleared
 //! environment. The sentinel stands for a credential.
-// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs). The child's home also comes from HOME.
-#![cfg(unix)]
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -63,6 +60,9 @@ impl Home {
     fn zed_settings_path(&self) -> PathBuf {
         if cfg!(target_os = "macos") {
             self.root.join(".config/zed/settings.json")
+        } else if cfg!(windows) {
+            // The debug-build seam follows XDG_CONFIG_HOME on Windows too.
+            self.xdg.join("Zed/settings.json")
         } else {
             self.xdg.join("zed/settings.json")
         }
@@ -80,11 +80,17 @@ impl Home {
         command
             .env_clear()
             .env("HOME", &self.root)
+            .env("USERPROFILE", &self.root)
+            .env("MCP_GATEWAY_TEST_HOME_DIR", &self.root)
             .env("XDG_CONFIG_HOME", &self.xdg)
             .env("PATH", self.root.join("no-system-programs"))
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .args(args);
+        // A cleared environment loses the Windows system root the process needs to start.
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", root);
+        }
         if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
             command.env("LLVM_PROFILE_FILE", profile);
         }
@@ -154,8 +160,13 @@ fn commented_zed_settings_are_discovered_with_env_headers_and_args() {
         remote.headers.get("X-Demo").map(String::as_str),
         Some(SENTINEL)
     );
-    let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "the config holding the values is owner-only");
+    // Unix-only: asserts POSIX mode bits; Windows owner-only comes from DACLs (win_acl).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the config holding the values is owner-only");
+    }
 }
 
 #[test]

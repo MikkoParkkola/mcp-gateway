@@ -234,11 +234,8 @@ async fn t1e_write_and_append_failures() {
 /// T1f: an existing journal left group-readable is tightened to 0600, and a
 /// journal whose last line has no newline (a torn append) gets one before the
 /// next entry, so the new entry parses.
-// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
-#[cfg(unix)]
 #[tokio::test]
 async fn t1f_existing_journal_is_repaired() {
-    use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("grants.yaml");
     change(&path, upsert(row("g1", "r"), false)).await.unwrap();
@@ -246,12 +243,21 @@ async fn t1f_existing_journal_is_repaired() {
     let mut bytes = std::fs::read(&journal).unwrap();
     bytes.extend_from_slice(b"{\"torn\":");
     std::fs::write(&journal, &bytes).unwrap();
-    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o644)).unwrap();
+    // Unix-only: POSIX mode bits; Windows has none (owner-only comes from DACLs).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
 
     change(&path, upsert(row("g2", "r"), false)).await.unwrap();
 
-    let mode = std::fs::metadata(&journal).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&journal).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
     let parsed = parse_journal(&std::fs::read(&journal).unwrap());
     let ids: Vec<_> = parsed.entries.iter().map(|e| e.grant_id.as_str()).collect();
     assert_eq!(ids, vec!["g1", "g2"]);

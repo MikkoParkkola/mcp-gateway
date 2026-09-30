@@ -271,15 +271,22 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
 }
 
 // GH462.CONFIG.3 / GH462.CONFIG.5: existing symlink differs from a missing config.
-#[cfg(unix)]
 #[test]
 fn gh462_discovery_persistence_preserves_dangling_symlink() {
-    use std::os::unix::fs::MetadataExt;
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("discovered.yaml");
     let target = dir.path().join("absent-target.yaml");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&target, &output).unwrap();
-    let identity = std::fs::symlink_metadata(&output).unwrap();
+    // A missing target is a file link on Windows; Developer Mode allows creating it.
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(&target, &output).unwrap();
+    #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(&output).unwrap();
+        (metadata.dev(), metadata.ino())
+    };
     let result =
         write_discovered_to_config(&[make_discovered_server("gh462-import")], Some(&output));
     assert!(
@@ -287,8 +294,12 @@ fn gh462_discovery_persistence_preserves_dangling_symlink() {
         "a dangling symlink was replaced by defaults"
     );
     assert_eq!(std::fs::read_link(&output).unwrap(), target);
-    let after = std::fs::symlink_metadata(&output).unwrap();
-    assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
+    #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
+    {
+        use std::os::unix::fs::MetadataExt;
+        let after = std::fs::symlink_metadata(&output).unwrap();
+        assert_eq!((after.dev(), after.ino()), identity);
+    }
     assert!(!target.exists());
 }
 

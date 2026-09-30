@@ -415,18 +415,16 @@ async fn store_06_malformed_ids_never_derive_paths_or_change_storage() {
     store.close().await.unwrap();
 }
 
-// POSIX mode bits and symlinks: asserts 0700/0600 and refuses symlinked sources; Windows uses DACLs (win_acl).
+// Unix-only: asserts 0700/0600 and refuses a group/world-writable source (POSIX mode bits); Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn store_06_private_modes_and_unsafe_sources_are_enforced() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::PermissionsExt;
     for unsafe_kind in [
         "directory-mode",
         "record-mode",
-        "record-link",
-        "lease-link",
-        // A lease that IS a regular file and is NOT private. The link case
-        // above cannot reach this: a symlink fails BOTH halves of the guard, so
+        // A lease that IS a regular file and is NOT private. The link cases
+        // in `store_06_symlinked_sources_are_refused` cannot reach this: a symlink fails BOTH halves of the guard, so
         // it never proves the guard is a disjunction. Custody of a lease other
         // users can write is not custody.
         "lease-mode",
@@ -460,14 +458,6 @@ async fn store_06_private_modes_and_unsafe_sources_are_enforced() {
             "record-mode" => {
                 fs::set_permissions(&record, fs::Permissions::from_mode(0o644)).unwrap();
             }
-            "record-link" => {
-                fs::remove_file(&record).unwrap();
-                symlink(&outside, &record).unwrap();
-            }
-            "lease-link" => {
-                fs::remove_file(&lease).unwrap();
-                symlink(&outside, &lease).unwrap();
-            }
             "lease-mode" => {
                 fs::set_permissions(&lease, fs::Permissions::from_mode(0o644)).unwrap();
             }
@@ -485,6 +475,50 @@ async fn store_06_private_modes_and_unsafe_sources_are_enforced() {
             manifest(dir.path()),
             before,
             "failed readiness preserves types, inode, modes, links and bytes"
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"untouched");
+    }
+}
+
+#[tokio::test]
+async fn store_06_symlinked_sources_are_refused() {
+    for unsafe_kind in ["record-link", "lease-link", "record-directory"] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tasks");
+        let store = open(&path).await;
+        let lease = created_sidecar(&path);
+        let task = task();
+        store
+            .create(PreparedTask::for_test(&task, OWNER, 1))
+            .await
+            .unwrap();
+        store.close().await.unwrap();
+        let record = path.join(format!("{}.json", task.id()));
+        let outside = dir.path().join("outside");
+        fs::write(&outside, b"untouched").unwrap();
+        match unsafe_kind {
+            "record-link" => {
+                fs::remove_file(&record).unwrap();
+                crate::test_symlink::symlink(&outside, &record).unwrap();
+            }
+            "lease-link" => {
+                fs::remove_file(&lease).unwrap();
+                crate::test_symlink::symlink(&outside, &lease).unwrap();
+            }
+            _ => {
+                fs::remove_file(&record).unwrap();
+                fs::create_dir(&record).unwrap();
+            }
+        }
+        let before = manifest(dir.path());
+        assert!(matches!(
+            TaskStore::open(&path, StoreLimits::default()).await,
+            Err(StoreError::UnsafeStore)
+        ));
+        assert_eq!(
+            manifest(dir.path()),
+            before,
+            "failed readiness changes nothing"
         );
         assert_eq!(fs::read(&outside).unwrap(), b"untouched");
     }

@@ -203,6 +203,21 @@ pub(crate) fn icacls(row: &str, path: &Path, args: &[&str]) {
     }
 }
 
+/// Deny the current user `rights` (`icacls` letters such as `WD,AD`) on `path`:
+/// the Windows counterpart of a fixture's `chmod` taking a permission away.
+pub(crate) fn deny_user(row: &str, path: &Path, rights: &str) {
+    icacls(
+        row,
+        path,
+        &["/deny", &format!("*{}:({rights})", user_sid())],
+    );
+}
+
+/// Remove the deny entries `deny_user` planted for the current user.
+pub(crate) fn remove_deny(row: &str, path: &Path) {
+    icacls(row, path, &["/remove:d", &format!("*{}", user_sid())]);
+}
+
 /// A parsed `O:...D:...` descriptor, for field-by-field checks.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Parsed {
