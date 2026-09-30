@@ -1887,6 +1887,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "icu_normalizer",
  "jsonschema",
  "jsonwebtoken",
  "log",
