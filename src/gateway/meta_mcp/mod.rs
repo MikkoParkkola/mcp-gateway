@@ -2218,6 +2218,8 @@ impl MetaMcp {
         intent: crate::gateway::task_service::TaskIntent,
         (session_id, caller): (Option<&str>, &MetaMcpCallerContext<'_>),
     ) -> JsonRpcResponse {
+        use crate::gateway::task_service::execution::BeginOutcome;
+
         let task = crate::gateway::task_service::Task::create_at(
             tool_name,
             chrono::Utc::now(),
@@ -2232,7 +2234,6 @@ impl MetaMcp {
             tool: tool_name.to_owned(),
             arguments,
         };
-        use crate::gateway::task_service::execution::BeginOutcome;
         match executor.begin(intent, task, backend, call).await {
             Ok(BeginOutcome::Existing(stored)) => {
                 // The request's own policy, then the calls that produced the

@@ -400,6 +400,29 @@ pub(super) async fn poll_until_terminal(state: &Arc<AppState>, principal: &str, 
     }
 }
 
+/// [`poll_until_terminal`] for an enforcing gateway: a finished task is only
+/// delivered to a read that presents a fresh recovery attestation token
+/// (`fresh_token` is called once per read).
+pub(super) async fn poll_until_terminal_attested(
+    state: &Arc<AppState>,
+    principal: &str,
+    id: &str,
+    fresh_token: impl Fn() -> String,
+) -> Value {
+    const ATTEMPTS: usize = 2_000;
+    for _ in 0..ATTEMPTS {
+        let mut body = task_method(9_001, "tasks/get", json!({ "taskId": id }));
+        body["params"]["_meta"][crate::gateway::meta_mcp::upstream::RECOVERY_META] =
+            json!({ "attestation": fresh_token() });
+        let last = post(state, principal, body).await;
+        if is_terminal(&status_of(&last)) {
+            return last;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("task {id} never reached a terminal status in {ATTEMPTS} attested reads");
+}
+
 /// Assert a task is `completed` carrying exactly the mock's successful result.
 pub(super) fn assert_carries_the_backend_result(fetched: &Value) {
     std::assert_eq!(
