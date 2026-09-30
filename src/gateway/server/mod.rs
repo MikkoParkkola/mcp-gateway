@@ -3316,8 +3316,12 @@ impl Gateway {
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
-                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response, _)) => {
-                    break 'tool_call response;
+                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
+                    // #2480: a replay is a delivered call, recorded as its first run was.
+                    let (args, session) = (arguments.as_ref(), Some(session_id));
+                    break 'tool_call meta_mcp
+                        .audit_replay(&tool_name, args, session, &caller, response, audit)
+                        .await;
                 }
                 Err(error) => {
                     break 'tool_call JsonRpcResponse::error(
