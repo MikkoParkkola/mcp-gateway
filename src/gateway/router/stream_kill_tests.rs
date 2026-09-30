@@ -247,9 +247,15 @@ async fn idem5_direct_killed_side_effecting_call_executes_once() {
     let (_, body) = send(&fx, "/mcp/alpha", &call(2, "w", &json!({}), Some(KEY))).await;
 
     assert_eq!(fx.deliveries(), 1, "the re-issue re-executed: {body}");
-    assert!(
-        body.contains("outcome is unknown") && body.contains("\"isError\":true"),
+    let answer: Value = serde_json::from_str(&body).expect("the re-issue answers JSON");
+    assert_eq!(
+        answer.pointer("/result/isError"),
+        Some(&Value::Bool(true)),
         "the re-issue must carry the stored uncertain outcome: {body}"
+    );
+    assert!(
+        body.contains("outcome is unknown"),
+        "the stored outcome names itself uncertain: {body}"
     );
 }
 
