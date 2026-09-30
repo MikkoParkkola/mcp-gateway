@@ -10,6 +10,9 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::config::TransportConfig;
+#[cfg(not(target_os = "macos"))]
+use crate::home_dir::config_dir;
+use crate::home_dir::home_dir;
 use crate::{Error, Result};
 
 use super::{DiscoveredServer, DiscoverySource, ServerMetadata};
@@ -533,14 +536,14 @@ impl ConfigScanner {
 
     /// Get Claude Code CLI config path (`~/.claude.json`).
     fn claude_code_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
         Ok(home.join(".claude.json"))
     }
 
     /// Get Cursor standalone mcp.json path (`~/.cursor/mcp.json`).
     fn cursor_mcp_json_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
         Ok(home.join(".cursor/mcp.json"))
     }
@@ -549,7 +552,7 @@ impl ConfigScanner {
     /// config directory joined with `zed` (Linux) or `Zed` elsewhere.
     fn zed_config_path() -> Result<PathBuf> {
         let home = || {
-            dirs::home_dir()
+            home_dir()
                 .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))
         };
 
@@ -563,13 +566,13 @@ impl ConfigScanner {
         #[cfg(target_os = "macos")]
         let path = home()?.join(".config/zed/settings.json");
         #[cfg(target_os = "linux")]
-        let path = match dirs::config_dir() {
+        let path = match config_dir() {
             Some(dir) => dir,
             None => home()?.join(".config"),
         }
         .join("zed/settings.json");
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        let path = match dirs::config_dir() {
+        let path = match config_dir() {
             Some(dir) => dir,
             None => home()?.join(".config"),
         }
@@ -580,21 +583,21 @@ impl ConfigScanner {
 
     /// Get Continue.dev config path (`~/.continue/config.json`).
     fn continue_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
         Ok(home.join(".continue/config.json"))
     }
 
     /// Get `OpenAI` Codex CLI config path (`~/.codex/config.json`).
     fn codex_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
         Ok(home.join(".codex/config.json"))
     }
 
     /// Get Claude Desktop config path
     fn claude_desktop_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
 
         #[cfg(target_os = "macos")]
@@ -611,7 +614,7 @@ impl ConfigScanner {
 
     /// Get VS Code settings path
     fn vscode_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
 
         #[cfg(target_os = "macos")]
@@ -628,7 +631,7 @@ impl ConfigScanner {
 
     /// Get Cursor settings path
     fn cursor_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
 
         #[cfg(target_os = "macos")]
@@ -645,7 +648,7 @@ impl ConfigScanner {
 
     /// Get Windsurf config path
     fn windsurf_config_path() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
 
         #[cfg(target_os = "macos")]
@@ -662,7 +665,7 @@ impl ConfigScanner {
 
     /// Get generic MCP config directory
     fn mcp_config_dir() -> Result<PathBuf> {
-        let home = dirs::home_dir()
+        let home = home_dir()
             .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
 
         Ok(home.join(".config/mcp"))

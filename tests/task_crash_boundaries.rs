@@ -22,6 +22,7 @@
 //! which the gateway's TLS verifier honours on that branch alone (see
 //! `task_upstream_recovery_sdk/pins.rs`). macOS CI builds tests without
 //! running them.
+// Unix-non-Apple only: SIGKILL and SSL_CERT_FILE; see the module header.
 #![cfg(all(unix, not(target_vendor = "apple")))]
 
 #[path = "task_upstream_recovery/helper.rs"]
@@ -331,7 +332,10 @@ async fn a_create_killed_between_commit_and_ack_is_recovered_by_its_owner_only()
         id = tokio::time::timeout(OBSERVE_BOUND, paused) => {
             id.expect("the child pauses at Published within the bound")
         }
-        answer = create => panic!("the create was answered while paused at Published: {answer}"),
+        answer = create => panic!(
+            "the create was answered while paused at Published: {answer}\n{}",
+            gateway.logs()
+        ),
     };
     gateway.kill().await;
     recovered_by_its_owner_only(

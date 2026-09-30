@@ -278,6 +278,21 @@ impl Fixture {
         .await
     }
 
+    /// The mutating target with the transparency log writing to `log` (#2480).
+    pub(super) async fn start_audited(log: &std::path::Path) -> Self {
+        let log = log.to_string_lossy().into_owned();
+        Self::start_with(
+            move |url, require_nonce| {
+                let mut config = signing_config_for(url, require_nonce, Target::MutatingUncached);
+                config.security.transparency_log.enabled = true;
+                config.security.transparency_log.path = log;
+                config
+            },
+            false,
+        )
+        .await
+    }
+
     /// `server.idempotency_key` under test (F10), on either target shape.
     pub(super) async fn start_keyed_mode(
         target: Target,

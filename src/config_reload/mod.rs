@@ -1038,6 +1038,7 @@ pub struct ConfigWatcher {
     /// the gateway shuts down.
     _chain: Arc<watch_chain::ChainWatch>,
     /// What the reload task did with `EnvFile` triggers.
+    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
     #[cfg(all(test, target_os = "linux"))]
     env_reloads: Arc<env_poll::EnvReloadCounts>,
 }
@@ -1055,6 +1056,7 @@ impl ConfigWatcher {
     }
 
     /// What the reload task did with `EnvFile` triggers so far.
+    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
     #[cfg(all(test, target_os = "linux"))]
     fn env_reloads(&self) -> &env_poll::EnvReloadCounts {
         &self.env_reloads
@@ -1121,6 +1123,7 @@ impl ConfigWatcher {
 
         Ok(Self {
             _chain: chain,
+            // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
             #[cfg(all(test, target_os = "linux"))]
             env_reloads,
         })
@@ -2197,6 +2200,7 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 }
 
 mod env_poll;
+// Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
 #[cfg(all(test, target_os = "linux"))]
 mod env_poll_e2e_tests;
 pub(crate) mod grant_audit;

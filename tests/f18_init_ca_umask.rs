@@ -5,6 +5,7 @@
 //!
 //! The umask is set in a child shell, never here: `umask(2)` is process-wide and
 //! would race every other test that creates a file.
+// Unix-only: sets umask 002 in a child `sh` and asserts POSIX mode bits.
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt as _;

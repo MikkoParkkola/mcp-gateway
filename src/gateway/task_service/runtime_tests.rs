@@ -214,22 +214,26 @@ mod expiry;
 /// writable `HOME` kept every chart pod from starting. The control proves the
 /// same path opens once the parent is writable, so the refusal is about the
 /// parent and nothing else.
-// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
-#[cfg(unix)]
 #[tokio::test]
 async fn task_store_under_readonly_home_is_fatal() {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
 
     let root = tempfile::tempdir().expect("a fixture root");
     let home = root.path().join("home");
     fs::create_dir(&home).unwrap();
-    fs::set_permissions(&home, fs::Permissions::from_mode(0o500)).unwrap();
+    // Unix takes the write mode away; Windows denies the user write and append (DACL).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::deny_user("readonly-home", &home, "WD,AD");
     let store_dir = home.join(".mcp-gateway").join("tasks");
 
     // Root ignores the mode bits, so the premise cannot be observed there.
     if fs::write(home.join("probe"), b"").is_ok() {
-        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        make_writable(&home);
         // A skip in CI would make this pin pass without testing anything, so
         // CI must run it unprivileged; only a local root shell may skip.
         assert!(
@@ -246,10 +250,21 @@ async fn task_store_under_readonly_home_is_fatal() {
         "a store under an unwritable home must refuse to open"
     );
 
-    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    make_writable(&home);
     let (service, _executor) =
         open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions())
             .await
             .expect("the same path opens once its parent is writable");
     service.shutdown().await.expect("custody is released");
+}
+
+/// Undo the fixture's write denial on `dir`.
+fn make_writable(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::remove_deny("readonly-home", dir);
 }

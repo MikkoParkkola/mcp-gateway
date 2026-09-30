@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! F18 I4: a control-plane collection other users can change is refused, and a
 //! missing one is still an empty collection.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt as _;

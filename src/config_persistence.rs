@@ -13,7 +13,7 @@ use crate::config::Config;
 pub fn gateway_data_dir() -> PathBuf {
     resolve_gateway_data_dir(
         std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
-        dirs::home_dir(),
+        crate::home_dir::home_dir(),
     )
 }
 

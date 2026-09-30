@@ -8,6 +8,7 @@
 //!
 //! "Today" is computed when the case runs; one that straddles UTC midnight
 //! sees the loader drop the seeded day.
+// Unix-only: stops the gateway with `kill -TERM`; Windows has no SIGTERM.
 #![cfg(all(unix, feature = "cost-governance"))]
 
 use std::io::{Read as _, Write as _};

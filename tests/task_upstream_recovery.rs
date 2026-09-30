@@ -10,6 +10,7 @@
 //! `TasksExtension` over Docket. Everything asserted here is about this
 //! gateway's own store, route, authorization and counting.
 
+// Unix-only: the crash is a SIGKILL whose death by signal the helper asserts (helper.rs:523-542).
 #![cfg(unix)]
 
 #[path = "task_upstream_recovery/helper.rs"]

@@ -353,125 +353,8 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
     entries
 }
 
-#[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
-mod unix_io {
-    use super::*;
-    use std::os::unix::fs::{PermissionsExt, symlink};
-
-    #[derive(Clone, Copy, Debug)]
-    pub(super) enum Failure {
-        Unreadable,
-        DeniedParent,
-        Dangling,
-    }
-
-    pub(super) struct RestorePermissions(PathBuf, std::fs::Permissions);
-
-    impl Drop for RestorePermissions {
-        fn drop(&mut self) {
-            std::fs::set_permissions(&self.0, self.1.clone()).unwrap();
-        }
-    }
-
-    pub(super) fn prepare(home: &Path, failure: Failure) -> PathBuf {
-        let parent = home.join("config");
-        std::fs::create_dir(&parent).unwrap();
-        let path = parent.join("gateway.yaml");
-        if matches!(failure, Failure::Dangling) {
-            symlink(parent.join("missing-target.yaml"), &path).unwrap();
-        } else {
-            write_config(&path, &baseline()).unwrap();
-            assert!(Config::load_literal(Some(&path)).is_ok());
-        }
-        path
-    }
-
-    pub(super) fn deny(path: &Path, failure: Failure) -> Option<RestorePermissions> {
-        let target = match failure {
-            Failure::Unreadable => path,
-            Failure::DeniedParent => path.parent().unwrap(),
-            Failure::Dangling => {
-                assert!(std::fs::symlink_metadata(path).unwrap().is_symlink());
-                assert_eq!(
-                    std::fs::File::open(path).unwrap_err().kind(),
-                    std::io::ErrorKind::NotFound
-                );
-                return None;
-            }
-        };
-        let restore = RestorePermissions(
-            target.to_owned(),
-            std::fs::metadata(target).unwrap().permissions(),
-        );
-        std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o0)).unwrap();
-        // An elevated runner must not silently skip an ineffective fixture.
-        assert_eq!(
-            std::fs::File::open(path).unwrap_err().kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-        if matches!(failure, Failure::DeniedParent) {
-            assert_eq!(
-                std::fs::symlink_metadata(path).unwrap_err().kind(),
-                std::io::ErrorKind::PermissionDenied
-            );
-        }
-        Some(restore)
-    }
-
-    // GH462.CONFIG.3: helper matrix, independent of admin/setup error mapping.
-    macro_rules! loader_io_case {
-        ($name:ident, $failure:expr) => {
-            #[test]
-            fn $name() {
-                let failure = $failure;
-                let home = tempfile::tempdir().unwrap();
-                let path = prepare(home.path(), failure);
-                let before = tree_snapshot(home.path());
-                let guard = deny(&path, failure);
-                let result = load_existing_or_default(&path);
-                drop(guard);
-                assert!(result.is_err(), "{failure:?} was mistaken for absence");
-                assert_eq!(tree_snapshot(home.path()), before);
-            }
-        };
-    }
-
-    loader_io_case!(gh462_loader_unreadable, Failure::Unreadable);
-    loader_io_case!(gh462_loader_denied_parent, Failure::DeniedParent);
-    loader_io_case!(gh462_loader_dangling, Failure::Dangling);
-
-    // GH462.CONFIG.3: six failure/path pairs; context helper asserts live invariants.
-    macro_rules! mutation_io_case {
-        ($name:ident, $failure:expr, $with_context:expr) => {
-            #[tokio::test]
-            async fn $name() {
-                let failure = $failure;
-                let home = tempfile::tempdir().unwrap();
-                let path = prepare(home.path(), failure);
-                let before = tree_snapshot(home.path());
-                let guard = deny(&path, failure);
-                refused_mutation(&path, $with_context).await;
-                drop(guard);
-                assert_eq!(tree_snapshot(home.path()), before);
-            }
-        };
-    }
-
-    mutation_io_case!(gh462_unreadable_without_context, Failure::Unreadable, false);
-    mutation_io_case!(gh462_unreadable_with_context, Failure::Unreadable, true);
-    mutation_io_case!(
-        gh462_denied_parent_without_context,
-        Failure::DeniedParent,
-        false
-    );
-    mutation_io_case!(
-        gh462_denied_parent_with_context,
-        Failure::DeniedParent,
-        true
-    );
-    mutation_io_case!(gh462_dangling_without_context, Failure::Dangling, false);
-    mutation_io_case!(gh462_dangling_with_context, Failure::Dangling, true);
-}
+#[path = "gh462_config_preservation/io_failure.rs"]
+mod io_failure;
 
 #[cfg(feature = "webui")]
 mod cli {
@@ -509,6 +392,8 @@ mod cli {
         command
             .env_clear()
             .env("HOME", home)
+            .env("MCP_GATEWAY_TEST_HOME_DIR", home)
+            .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root))) // a cleared Windows environment cannot start
             .env("USERPROFILE", home)
             .env("XDG_CONFIG_HOME", home.join(".config"))
             .env("APPDATA", home.join("AppData/Roaming"))
@@ -636,7 +521,6 @@ mod cli {
     async fn gh462_setup_empty_discovery_without_client() {
         invalid_empty_discovery(false).await;
     }
-    #[cfg(unix)] // Windows `dirs::home_dir()` ignores HOME/USERPROFILE
     #[tokio::test]
     async fn gh462_valid_config_control_reaches_empty_discovery() {
         let home = tempfile::tempdir().unwrap();
@@ -656,12 +540,11 @@ mod cli {
     }
 
     // GH462.CONFIG.3: actual CLI I/O behavior, preserving even a dangling entry.
-    #[cfg(unix)]
     macro_rules! cli_io_case {
         ($name:ident, $failure:ident, $setup:expr, $configure_client:expr) => {
             #[tokio::test]
             async fn $name() {
-                use super::unix_io::{Failure, deny, prepare};
+                use super::io_failure::{Failure, deny, prepare};
                 let failure = Failure::$failure;
                 let home = tempfile::tempdir().unwrap();
                 seed_client(home.path());
@@ -676,33 +559,31 @@ mod cli {
         };
     }
 
-    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 (POSIX mode bits).
     cli_io_case!(gh462_add_unreadable, Unreadable, false, false);
-    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 (POSIX mode bits).
     cli_io_case!(gh462_add_denied_parent, DeniedParent, false, false);
-    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_add_dangling, Dangling, false, false);
-    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 (POSIX mode bits).
     cli_io_case!(gh462_setup_unreadable, Unreadable, true, true);
-    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 (POSIX mode bits).
     cli_io_case!(gh462_setup_denied_parent, DeniedParent, true, true);
-    #[cfg(all(unix, feature = "config-export"))] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+    #[cfg(feature = "config-export")]
     cli_io_case!(gh462_setup_dangling, Dangling, true, true);
-    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 (POSIX mode bits).
     cli_io_case!(
         gh462_setup_unreadable_without_client,
         Unreadable,
         true,
         false
     );
-    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
+    #[cfg(unix)] // Unix-only: failure injected with chmod 0 (POSIX mode bits).
     cli_io_case!(
         gh462_setup_denied_parent_without_client,
         DeniedParent,
         true,
         false
     );
-    #[cfg(unix)] // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     cli_io_case!(gh462_setup_dangling_without_client, Dangling, true, false);
 
     // GH462.CONFIG.4 / .5: positive control proves client-writing fixture is live.
@@ -773,9 +654,9 @@ mod cli {
 
     valid_cli_case!(gh462_add_missing, false, false);
     valid_cli_case!(gh462_add_valid, false, true);
-    #[cfg(all(unix, feature = "config-export"))] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
+    #[cfg(feature = "config-export")]
     valid_cli_case!(gh462_setup_missing, true, false);
-    #[cfg(all(unix, feature = "config-export"))] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
+    #[cfg(feature = "config-export")]
     valid_cli_case!(gh462_setup_valid, true, true);
 
     // GH462.CONFIG.6: binary isolation enables non-vacuous secret/override checks.
@@ -812,6 +693,5 @@ mod cli {
         };
     }
     reference_cli_case!(gh462_add_references, false);
-    #[cfg(unix)] // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     reference_cli_case!(gh462_setup_references, true);
 }

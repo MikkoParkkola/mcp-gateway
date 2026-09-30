@@ -246,15 +246,13 @@ async fn unreadable_cause_survives_a_failed_plan_write() {
 
 /// A restart that spells the same grant file differently (here a symlink)
 /// keeps the consumed journal ids, so no entry is recorded a second time.
-// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
-#[cfg(unix)]
 #[test]
 fn a_path_alias_keeps_the_consumed_ids() {
     let dir = tempfile::tempdir().unwrap();
     let real = dir.path().join("grants.yaml");
     std::fs::write(&real, "x").unwrap();
     let alias = dir.path().join("alias.yaml");
-    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    crate::test_symlink::symlink(&real, &alias).unwrap();
     let mut state = super::grant_audit_plan::State::fresh(&real);
     state.consumed.insert("e1".to_string());
 
@@ -268,15 +266,13 @@ fn a_path_alias_keeps_the_consumed_ids() {
 
 /// After a switch to another spelling, the state records the new one: the
 /// old spelling (here a symlink) may be deleted without resetting the ids.
-// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
-#[cfg(unix)]
 #[test]
 fn a_switched_path_survives_removing_the_old_spelling() {
     let dir = tempfile::tempdir().unwrap();
     let real = dir.path().join("grants.yaml");
     std::fs::write(&real, "x").unwrap();
     let alias = dir.path().join("alias.yaml");
-    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    crate::test_symlink::symlink(&real, &alias).unwrap();
     let mut state = super::grant_audit_plan::State::fresh(&alias);
     state.consumed.insert("e1".to_string());
     let state = state.for_path(&real);

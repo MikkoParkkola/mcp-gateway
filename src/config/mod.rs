@@ -305,7 +305,7 @@ impl Config {
         }
 
         // Home-relative candidate
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::home_dir::home_dir() {
             let p = home.join(".config/mcp-gateway/gateway.yaml");
             if p.exists() {
                 tracing::debug!("Auto-discovered config: {}", p.display());
