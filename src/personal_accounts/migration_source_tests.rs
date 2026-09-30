@@ -25,6 +25,7 @@ const RECORD: &str = r#"{
 fn seed(dir: &Path, name: &str, body: &str, mode: u32) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, body).expect("seed");
+    // POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

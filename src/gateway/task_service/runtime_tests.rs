@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+// POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
 #[cfg(unix)]
 use super::ServiceError;
 use super::{StoreLimits, open_runtime};
@@ -40,6 +41,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
     .await
     .expect("an absent store path is created by the store's own creator");
     assert!(store_dir.is_dir());
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -62,6 +64,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
     reopened.shutdown().await.expect("custody is released");
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn open_runtime_refuses_an_existing_group_readable_directory_unchanged() {

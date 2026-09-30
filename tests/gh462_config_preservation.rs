@@ -313,6 +313,7 @@ fn gh462_shared_loader_distinguishes_missing_valid_and_invalid_files() {
 #[derive(Debug, PartialEq, Eq)]
 struct EntrySnapshot {
     contents: Vec<u8>,
+    // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
     #[cfg(unix)]
     identity: (u64, u64),
 }
@@ -332,6 +333,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
             } else {
                 std::fs::read(&path).unwrap()
             };
+            // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
             #[cfg(unix)]
             let identity = {
                 use std::os::unix::fs::MetadataExt;
@@ -342,6 +344,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
                 path.strip_prefix(root).unwrap().to_owned(),
                 EntrySnapshot {
                     contents: value,
+                    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
                     #[cfg(unix)]
                     identity,
                 },
@@ -353,6 +356,7 @@ fn tree_snapshot(root: &Path) -> BTreeMap<PathBuf, EntrySnapshot> {
     entries
 }
 
+// Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
 #[cfg(unix)]
 mod unix_io {
     use super::*;
@@ -676,18 +680,25 @@ mod cli {
         };
     }
 
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(unix)]
     cli_io_case!(gh462_add_unreadable, Unreadable, false, false);
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(unix)]
     cli_io_case!(gh462_add_denied_parent, DeniedParent, false, false);
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(unix)]
     cli_io_case!(gh462_add_dangling, Dangling, false, false);
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(all(unix, feature = "config-export"))]
     cli_io_case!(gh462_setup_unreadable, Unreadable, true, true);
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(all(unix, feature = "config-export"))]
     cli_io_case!(gh462_setup_denied_parent, DeniedParent, true, true);
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(all(unix, feature = "config-export"))]
     cli_io_case!(gh462_setup_dangling, Dangling, true, true);
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(unix)]
     cli_io_case!(
         gh462_setup_unreadable_without_client,
@@ -695,6 +706,7 @@ mod cli {
         true,
         false
     );
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(unix)]
     cli_io_case!(
         gh462_setup_denied_parent_without_client,
@@ -702,6 +714,7 @@ mod cli {
         true,
         false
     );
+    // Unix-only: failure injected with chmod 0 or a dangling symlink (POSIX mode bits).
     #[cfg(unix)]
     cli_io_case!(gh462_setup_dangling_without_client, Dangling, true, false);
 
@@ -773,8 +786,10 @@ mod cli {
 
     valid_cli_case!(gh462_add_missing, false, false);
     valid_cli_case!(gh462_add_valid, false, true);
+    // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     #[cfg(all(unix, feature = "config-export"))] // same HOME reason
     valid_cli_case!(gh462_setup_missing, true, false);
+    // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     #[cfg(all(unix, feature = "config-export"))]
     valid_cli_case!(gh462_setup_valid, true, true);
 
@@ -812,6 +827,7 @@ mod cli {
         };
     }
     reference_cli_case!(gh462_add_references, false);
+    // Unix-only: Windows `dirs::home_dir()` ignores HOME/USERPROFILE, so the child cannot be given an isolated home.
     #[cfg(unix)]
     reference_cli_case!(gh462_setup_references, true);
 }

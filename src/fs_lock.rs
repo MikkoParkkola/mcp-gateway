@@ -251,6 +251,7 @@ pub(crate) fn lock_attempts(lock_path: &Path) -> usize {
 mod tests {
     use super::*;
 
+    // Unix-only: reads inode identity (MetadataExt) to prove the inherited descriptor is released.
     #[cfg(unix)]
     #[track_caller]
     fn assert_owner_drop_releases_inherited_descriptor(
@@ -326,18 +327,21 @@ mod tests {
     }
 
     #[test]
+    // Unix-only: inherited-descriptor (fd dup) release scenario.
     #[cfg(unix)]
     fn personal_accounts_s11_blocking_drop_releases_inherited_descriptor() {
         assert_owner_drop_releases_inherited_descriptor(ExclusiveFileLock::acquire);
     }
 
     #[test]
+    // Unix-only: inherited-descriptor (fd dup) release scenario.
     #[cfg(unix)]
     fn personal_accounts_s11_nonblocking_drop_releases_inherited_descriptor() {
         assert_owner_drop_releases_inherited_descriptor(ExclusiveFileLock::try_acquire);
     }
 
     #[test]
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     fn personal_accounts_try_lock_refuses_contention_without_waiting() {
         let dir = tempfile::tempdir().unwrap();
@@ -367,6 +371,7 @@ mod tests {
     }
 
     #[test]
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     fn personal_accounts_try_lock_creates_private_sidecar() {
         use std::os::unix::fs::PermissionsExt as _;

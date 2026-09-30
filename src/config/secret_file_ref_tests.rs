@@ -8,6 +8,7 @@ use super::*;
 fn secret(dir: &std::path::Path, name: &str, body: &[u8], mode: u32) -> std::path::PathBuf {
     let path = dir.join(name);
     crate::gateway::test_helpers::write_owner_only(&path, body).expect("write secret");
+    // POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -70,6 +71,7 @@ fn file_ref_relative_path_refused() {
     }
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[test]
 fn file_ref_bad_file_refused() {
@@ -114,6 +116,7 @@ fn file_ref_at_exact_cap_accepted() {
     assert_eq!(resolve(&newline).unwrap().len(), 64 * 1024 - 1);
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[test]
 fn file_ref_bad_file_fails_the_load() {
@@ -128,6 +131,7 @@ fn file_ref_bad_file_fails_the_load() {
     );
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[test]
 fn message_signing_file_key_error_propagates() {

@@ -268,6 +268,7 @@ fn s02_reencrypting_same_record_uses_fresh_nonces() {
 }
 
 #[test]
+// POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
 #[cfg(unix)]
 fn s03_explicit_initialization_creates_encrypted_authority_and_reopens() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -516,6 +517,7 @@ fn s02_grant_debug_omits_credentials_and_provider_identity() {
 #[path = "fifo_tests.rs"]
 mod fifo;
 
+// Unix-only: the store suite asserts 0700/0600 modes and uses mode-bit fault injection.
 #[cfg(unix)]
 #[path = "store_tests.rs"]
 mod store;
@@ -568,6 +570,7 @@ pub(super) mod private_io {
     use std::fs::File;
     use std::path::Path;
 
+    // POSIX mode bits: creates the fixture directory 0700 and files 0600 (DirBuilderExt).
     #[cfg(unix)]
     pub(crate) fn create_dir(path: &Path) {
         use std::os::unix::fs::DirBuilderExt as _;

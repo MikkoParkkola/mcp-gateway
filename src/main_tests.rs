@@ -253,6 +253,7 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
         if original.contains("bad/name") {
             assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));
         }
+        // Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
         #[cfg(unix)]
         let identity = {
             use std::os::unix::fs::MetadataExt;
@@ -261,6 +262,7 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
         };
         assert!(write_discovered_to_config(std::slice::from_ref(&server), Some(&output)).is_err());
         assert_eq!(std::fs::read(&output).unwrap(), original.as_bytes());
+        // Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;

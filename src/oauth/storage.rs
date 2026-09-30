@@ -550,6 +550,7 @@ mod tests {
         assert_eq!(store.load_client_id("other", resource), None);
     }
 
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     #[test]
     fn save_client_id_file_is_owner_only() {
@@ -786,6 +787,7 @@ mod tests {
         );
     }
 
+    // Unix-only: a read-only descriptor makes the write fail with EBADF; Windows reports a different error.
     #[cfg(unix)]
     #[test]
     fn write_secret_tmp_removes_leaked_temp_on_write_failure() {

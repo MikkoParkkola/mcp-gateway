@@ -1741,6 +1741,7 @@ fn absolute_watch_path_keeps_a_symlinked_file_unresolved() {
     );
 }
 
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn config_watch_paths_covers_the_symlink_and_its_target() {
@@ -1782,6 +1783,7 @@ fn config_watch_paths_of_a_plain_file_is_a_single_path() {
     );
 }
 
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[test]
 fn a_retargeted_symlink_is_matched_at_its_new_target() {

@@ -11,10 +11,13 @@ use std::collections::HashMap;
 #[path = "stdio_windows_env_tests.rs"]
 mod windows_env;
 
+// Unix-only child environment scenario: shared by the two env-isolation tests below.
 #[cfg(unix)]
 const CHILD_SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_CHILD_ENV_SCENARIO";
+// Unix-only child environment scenario: shared by the two env-isolation tests below.
 #[cfg(unix)]
 const PARENT_SECRET_ENV: &str = "MCP_GATEWAY_TEST_PARENT_SECRET";
+// Unix-only child environment scenario: shared by the two env-isolation tests below.
 #[cfg(unix)]
 const EXPLICIT_BACKEND_ENV: &str = "MCP_GATEWAY_TEST_EXPLICIT_BACKEND";
 
@@ -304,6 +307,7 @@ done
 }
 
 #[test]
+// Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
 #[cfg(unix)]
 fn backend_subprocess_receives_only_safe_and_explicit_environment() {
     let current_test_binary = std::env::current_exe().expect("resolve current test binary");
@@ -331,6 +335,7 @@ fn backend_subprocess_receives_only_safe_and_explicit_environment() {
 }
 
 #[tokio::test]
+// Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
 #[cfg(unix)]
 async fn stdio_child_environment_isolation_scenario() {
     if std::env::var_os(CHILD_SCENARIO_ENV).is_none() {

@@ -1962,6 +1962,7 @@ pub(super) struct RealChildWedgedClose {
     pub(super) child: tokio::sync::Mutex<Option<tokio::process::Child>>,
 }
 
+// Process reaping and pid liveness (ps state, zombie detection); unix-only.
 #[cfg(unix)]
 #[async_trait]
 impl Transport for RealChildWedgedClose {
@@ -2006,11 +2007,13 @@ pub(super) fn process_state(pid: u32) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+// Process reaping and pid liveness (ps state, zombie detection); unix-only.
 #[cfg(unix)]
 pub(super) fn is_alive(pid: u32) -> bool {
     process_state(pid).is_some_and(|s| !s.starts_with('Z'))
 }
 
+// Process reaping and pid liveness (ps state, zombie detection); unix-only.
 #[cfg(unix)]
 pub(super) async fn spawn_probe_child() -> (tokio::process::Child, u32) {
     let child = tokio::process::Command::new("sleep")

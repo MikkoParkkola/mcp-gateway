@@ -7,6 +7,7 @@ use std::env;
 use super::*;
 use crate::gateway::test_helpers::write_owner_only;
 
+// POSIX mode bits: chmod 0000 forces PermissionDenied; Windows directory/file attributes do not deny reads.
 #[cfg(unix)]
 #[test]
 fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing() {
