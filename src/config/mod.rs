@@ -595,12 +595,8 @@ impl Config {
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
-                let sec = &mut config.security;
-                sec.signature_chain = sec
-                    .signature_chain
-                    .take()
-                    .map(|c| c.resolved(&overlay))
-                    .transpose()?;
+                let chain = &mut config.security.signature_chain;
+                SignatureChainConfig::resolve_section(chain, &overlay)?;
                 refs
             }
             Expansion::Literal => (BTreeSet::new(), SecretFileDigests::new()),

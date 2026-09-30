@@ -585,6 +585,8 @@ impl Gateway {
             // while the gateway is built or awaited on.
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
+            let chain = &mut config.security.signature_chain; // key identity, as at load
+            crate::config::SignatureChainConfig::resolve_section(chain, &overlay)?;
         }
         posture::log_startup(&config);
 
@@ -1393,10 +1395,8 @@ impl Gateway {
             let webhook_registry_for_load = Arc::clone(&webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
 
-            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES.
-            //
-            // The background scan below exists so a large capability directory
-            // does not delay the listener binding, and it stays the default.
+            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES. The background
+            // scan exists so a large directory does not delay the listener.
             // But when the configuration declares `accounts.descriptors`, the
             // scan is also the ADMISSION GATE that rejects a capability whose
             // `auth.account` names no declared descriptor or whose `auth.key`

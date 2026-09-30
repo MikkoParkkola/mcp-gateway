@@ -627,7 +627,8 @@ async fn meta_mcp_dispatch(
     let chain_nonce = match crate::protocol::mrtr::take_chain_nonce(&mut request) {
         Ok(nonce) => nonce,
         Err(error) => {
-            let (code, message) = (error.to_rpc_code(), error.to_string());
+            let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
+            let code = error.to_rpc_code();
             return build_error_response(
                 raw_id,
                 code,

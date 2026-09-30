@@ -144,6 +144,34 @@ async fn cs_http_forged_enforcement_metadata_does_not_suppress_the_link() {
     assert_eq!(origin(&response)["src"], "live", "{response}");
 }
 
+/// A3 L2 on the production path: under `emit: always` with no chain nonce,
+/// the link takes the `gateway_invoke` nonce while message signing is on, and
+/// `null` while it is off (the invoke nonce is only captured with signing on).
+#[tokio::test]
+async fn l2_invoke_nonce_fallback_follows_message_signing() {
+    for signing in [true, false] {
+        let backend = BackendFixture::start(backend_result()).await;
+        let mut config = chain_config(&backend.url);
+        config["security"]["signature_chain"]["emit"] = json!("always");
+        config["security"]["message_signing"]["enabled"] = json!(signing);
+        let gateway = HttpGateway::start(config).await;
+        let session = gateway.initialize().await;
+        let response = gateway
+            .call(&session, &signed_invoke("l2", "hmac-l2-nonce"))
+            .await;
+        let expected = if signing {
+            json!("hmac-l2-nonce")
+        } else {
+            Value::Null
+        };
+        assert_eq!(
+            origin(&response)["nonce"],
+            expected,
+            "signing={signing}: {response}"
+        );
+    }
+}
+
 /// CS (HTTP): a meta-only tool is gateway-authored and never chained.
 #[tokio::test]
 async fn cs_http_meta_only_tool_is_not_chained() {

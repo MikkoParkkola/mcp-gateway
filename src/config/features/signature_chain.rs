@@ -56,22 +56,47 @@ impl std::fmt::Debug for SignatureChainConfig {
 impl SignatureChainConfig {
     /// Resolve the secret reference, validate the seed and key id, and build
     /// the signer. The decoded seed lives only inside the signer; errors name
-    /// the field, never the seed.
+    /// the field, never the seed. A seed that no longer matches the identity
+    /// recorded at load is refused, so the running config always describes the
+    /// key that signs.
     pub(crate) fn resolve_with_env(
         &self,
         overlay: &crate::config::EnvOverlay,
     ) -> crate::Result<crate::security::signature_chain::ChainSigner> {
+        use sha2::Digest as _;
         let seed = self.seed(overlay)?;
+        let identity: [u8; 32] = sha2::Sha256::digest(&seed).into();
+        if self
+            .resolved_identity
+            .is_some_and(|recorded| recorded != identity)
+        {
+            return Err(crate::Error::ConfigValidation(
+                "security.signature_chain.signing_key changed while the gateway started".into(),
+            ));
+        }
         crate::security::signature_chain::ChainSigner::from_seed(&seed, &self.key_id)
     }
 
-    /// Validate at config load and record the seed's identity for reload.
+    /// Validate once and record the seed's identity for reload; a section that
+    /// already carries one is returned unchanged.
     pub(crate) fn resolved(mut self, overlay: &crate::config::EnvOverlay) -> crate::Result<Self> {
         use sha2::Digest as _;
+        if self.resolved_identity.is_some() {
+            return Ok(self);
+        }
         let seed = self.seed(overlay)?;
         crate::security::signature_chain::ChainSigner::from_seed(&seed, &self.key_id)?;
         self.resolved_identity = Some(sha2::Sha256::digest(&seed).into());
         Ok(self)
+    }
+
+    /// [`Self::resolved`] on an optional section, in place.
+    pub(crate) fn resolve_section(
+        section: &mut Option<Self>,
+        overlay: &crate::config::EnvOverlay,
+    ) -> crate::Result<()> {
+        *section = section.take().map(|c| c.resolved(overlay)).transpose()?;
+        Ok(())
     }
 
     fn seed(&self, overlay: &crate::config::EnvOverlay) -> crate::Result<Vec<u8>> {
