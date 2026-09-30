@@ -507,8 +507,7 @@ pub(super) async fn backend_handler(
         );
     }
 
-    // D2: one write per tools/call, whichever of the inner returns answered,
-    // with what its gates noted in the dispatch scope (MIK-7116.MIN.1).
+    // D2: one write per tools/call, with the notes of its dispatch scope.
     let mut call = None;
     let inner = Box::pin(backend_handler_inner(
         Arc::clone(&state),
@@ -1055,6 +1054,7 @@ async fn backend_handler_inner(
                 return build_http_response(&response, StatusCode::OK);
             }
             Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
+                crate::gateway::meta_mcp::invoke::audit::note_cached();
                 let response = cached_error_response(Some(id.clone()), &error);
                 return build_http_response(&response, StatusCode::OK);
             }

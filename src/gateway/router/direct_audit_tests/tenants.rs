@@ -163,3 +163,31 @@ async fn meta_tenant_guard_refusal_record_names_the_tenants() {
     assert!(entry.get("data_classes").is_none(), "{entry}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0);
 }
+
+/// A replayed terminal error is a cached delivery too: no backend ran, so the
+/// record says so, names the request's tenants and carries no data classes.
+#[tokio::test]
+async fn direct_cached_error_replay_is_marked_cached() {
+    let fx = fixture(Setup {
+        backend_error: Some(-32010),
+        tenant_limit: Some(0),
+        meta_mode: MetaMode::Idempotent,
+        ..Setup::default()
+    })
+    .await;
+    for _ in 0..2 {
+        let _ = post_modern(&fx, "/mcp/alpha", &direct_call("cust-1", Some("k-err"))).await;
+    }
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "the second call must replay"
+    );
+    let all = invocations(&fx);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let (first, replay) = (&all[0], &all[1]);
+    assert!(first.get("attribution").is_none(), "{first}");
+    assert_eq!(replay["attribution"], "cached_delivery", "{replay}");
+    assert_eq!(replay["tenants"], sorted(&["cust-1"]), "{replay}");
+    assert!(replay.get("data_classes").is_none(), "{replay}");
+}
