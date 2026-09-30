@@ -293,10 +293,15 @@ impl InputRequired {
                 .collect(),
             Some(_) => return None,
         };
-        let request_state = result
-            .get("requestState")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        // The same rule for the state (#2416): a present `requestState` that is
+        // not a string is a malformed round, not an absent state. Read as
+        // absent, a question would later be resumed with answers and no
+        // backend continuation, restarting work the backend meant to continue.
+        let request_state = match result.get("requestState") {
+            None => None,
+            Some(Value::String(state)) => Some(state.clone()),
+            Some(_) => return None,
+        };
         // An exchange with no question and no state can be advanced by nobody:
         // the client has nothing to answer and the retry would carry nothing
         // back to the backend. Classifying it as interim anyway mints a

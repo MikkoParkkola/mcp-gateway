@@ -1838,42 +1838,30 @@ async fn meta_mcp_dispatch(
         // The owner is `task_principal`'s answer, not the raw session key: it is
         // what admission was keyed on when the record was created, and reading
         // with anything else would miss a task the caller does own.
-        "tasks/get" => {
-            // The recovery read re-authorizes the ORIGINAL target with THIS
-            // request's live context, so the context is handed over whole
-            // rather than rebuilt inside the arm from a different set of
-            // extractions.
-            tasks::tasks_get(
-                &state,
-                &owner,
-                id.clone(),
-                params.as_ref(),
-                &tasks::RecoveryCaller {
-                    client: client.as_ref(),
-                    oauth_agent_identity: oauth_agent_identity.as_ref(),
-                    cert_identity: cert_identity.as_ref(),
-                    api_key_name: client.as_ref().map(|client| client.name.as_str()),
-                    // Recovery is an AUTHORIZATION context, not an attribution
-                    // record: its own doc comment says it "checks
-                    // authorization only", and `signing: None` keeps
-                    // `check_invocation_policy` running on this read. So it
-                    // reads the proven principal, never the declared label.
-                    agent_id: agent_identity.proven_agent_id(),
-                    grant_subject: grant_subject.clone(),
-                    verified_identity: verified_identity.as_ref(),
-                    is_admin: client.as_ref().is_some_and(|client| client.admin),
-                    input_capabilities: declared_capabilities,
-                    session_id: Some(session_id.as_str()),
-                },
-            )
-            .await
+        // Both arms act for THIS request's live context: a recovery read
+        // re-authorizes the original target with it, and an update that
+        // completes an input round resumes the call as it.
+        "tasks/get" | "tasks/update" => {
+            let caller = tasks::RecoveryCaller {
+                client: client.as_ref(),
+                oauth_agent_identity: oauth_agent_identity.as_ref(),
+                cert_identity: cert_identity.as_ref(),
+                api_key_name: client.as_ref().map(|client| client.name.as_str()),
+                // An AUTHORIZATION context, not an attribution record: the
+                // proven principal, never the declared label.
+                agent_id: agent_identity.proven_agent_id(),
+                grant_subject: grant_subject.clone(),
+                verified_identity: verified_identity.as_ref(),
+                is_admin: client.as_ref().is_some_and(|client| client.admin),
+                input_capabilities: declared_capabilities,
+                session_id: Some(session_id.as_str()),
+            };
+            if method == "tasks/get" {
+                tasks::tasks_get(&state, &owner, id.clone(), params.as_ref(), &caller).await
+            } else {
+                tasks::tasks_update(&state, &owner, id.clone(), params.as_ref(), &caller).await
+            }
         }
-        // `tasks/update` and `tasks/cancel` differ in what they do to the
-        // record — one acknowledges without writing, the other commits a
-        // durable terminal transition — but both answer with the bare
-        // completion the specification asks for, and neither echoes the task
-        // back. Separate arms because they no longer share an implementation.
-        "tasks/update" => tasks::tasks_update(&state, &owner, id.clone(), params.as_ref()).await,
         "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params.as_ref()).await,
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
