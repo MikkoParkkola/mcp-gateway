@@ -162,6 +162,10 @@ impl DispatchNotes {
 impl MetaMcp {
     /// MIK-7116.MIN.1: the tenants a tool's own `arguments` name, under the
     /// firewall's `tenant_guard.arg_keys`. Empty without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
     pub(crate) fn request_tenants(&self, arguments: &Value) -> BTreeSet<String> {
         #[cfg(feature = "firewall")]
         if let Some(firewall) = &self.firewall {
@@ -172,6 +176,10 @@ impl MetaMcp {
     }
 
     /// MIK-7116.MIN.1: the tenants a tool result names. Empty without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
     pub(crate) fn response_tenants(&self, result: &Value) -> BTreeSet<String> {
         #[cfg(feature = "firewall")]
         if let Some(firewall) = &self.firewall {
