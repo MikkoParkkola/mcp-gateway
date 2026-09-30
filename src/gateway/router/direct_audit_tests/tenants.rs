@@ -191,3 +191,28 @@ async fn direct_cached_error_replay_is_marked_cached() {
     assert_eq!(replay["tenants"], sorted(&["cust-1"]), "{replay}");
     assert!(replay.get("data_classes").is_none(), "{replay}");
 }
+
+/// #2523. A direct `tools/call` with no `arguments` member is scanned by the
+/// firewall over `params` itself; the refusal record must name the tenants
+/// that refusal read, not none.
+#[tokio::test]
+async fn direct_refusal_without_arguments_names_the_tenants() {
+    let fx = fixture(Setup {
+        tenant_limit: Some(1),
+        ..Setup::default()
+    })
+    .await;
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                      "params": {"name": "t", "rows": [{"customer_id": "cust-1"},
+                                                       {"customer_id": "cust-2"}]}});
+    let (status, answer) = post(&fx, "alpha", &body.to_string(), &Caller::Session).await;
+    assert!(
+        status != StatusCode::OK || answer.get("error").is_some(),
+        "the guard must refuse: {answer}"
+    );
+    let entry = only_invocation(&fx);
+    assert_eq!(entry["route"], "direct", "{entry}");
+    assert_ne!(entry["outcome"], "ok", "{entry}");
+    assert_eq!(entry["tenants"], sorted(&["cust-1", "cust-2"]), "{entry}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0);
+}
