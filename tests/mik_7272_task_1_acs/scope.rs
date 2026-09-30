@@ -57,6 +57,17 @@ async fn tasks_get_returns_a_retained_public_claim_as_private() {
     assert_eq!(raw.result.expect("a result")["cacheScope"], "public");
 
     let fx = state_from_with(public_mcp_auth(), CountedBackend::claiming_public()).await;
+    // The confirmation gate classifies a surfaced tool from the backend's
+    // CACHED descriptor only (`classify_surfaced`, `get_cached_tool`), and the
+    // fixture backend connects lazily: with a cold cache the tool reads as
+    // unclassified and the create is refused for a missing capability. Warm it.
+    fx.state
+        .backends
+        .get(fixture::BACKEND)
+        .expect("the fixture backend is registered")
+        .get_tools_shared()
+        .await
+        .expect("the tool list warms the descriptor cache");
     let create = keyed(
         modern(
             70,
