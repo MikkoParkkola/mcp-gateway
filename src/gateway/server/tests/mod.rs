@@ -49,3 +49,8 @@ mod grant_decision_stdio;
 // MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
 mod owner3_stdio_keying;
 mod owner5_stdio_context;
+
+// MIK-7272.OWNER.1 and OWNER.4 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I2).
+mod owner1_stdio_management;
+mod owner1_stdio_reload;
+mod owner4_stdio_policy;
