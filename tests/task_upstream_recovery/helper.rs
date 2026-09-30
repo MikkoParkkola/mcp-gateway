@@ -448,6 +448,14 @@ impl Gateway {
             }
         }
         command.env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"));
+        // The bound port is read from an info-level banner, so an inherited
+        // filter keeps its own directives but may not hide that one line.
+        if let Ok(filter) = std::env::var("RUST_LOG") {
+            command.env(
+                "RUST_LOG",
+                format!("{filter},mcp_gateway::gateway::server::support=info"),
+            );
+        }
         for (key, value) in env {
             command.env(key, value);
         }
