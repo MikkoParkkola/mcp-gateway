@@ -52,3 +52,48 @@ and the stored-chain mapping. Every surviving mutant is killed or recorded with 
 - CHANGELOG fragment.
 - OWASP ASI07 row (CHAIN.3), rewritten from H1-H7.
 - The GH1944.CHAIN.1 ledger note, with the evidence (run IDs) and the accepted limits.
+
+## r2 (round 1: seat 1 DO-NOT-SHIP, seat 2 SHIP-WITH-FIXES; every finding accepted)
+
+Harness. The fake upstream becomes a small dynamic MCP server in the test (not the fixed-result
+`BackendFixture`). It records each request it receives (D's outbound `_meta`) and each response it
+sends, and it signs with test code according to a per-test mode:
+
+- honest: answers the nonce it received;
+- tampered signature;
+- fixed wrong nonce;
+- replay of its first response;
+- stale `ts`;
+- wrong origin key;
+- wrong last signer;
+- changed content;
+- dropped middle hop (U1 + U3);
+- oversized-after-append;
+- no chain;
+- `input_required`;
+- unsolicited task handle.
+
+The real second gateway stays only in H1/H1d (interop). "Preserved" is asserted as JSON-value
+equality between each delivered upstream link and the link the upstream recorded sending, not as
+raw-byte equality.
+
+Changed and added rows:
+
+| # | Change |
+|---|---|
+| H2-H7 | Parameterized over both routes (`gateway_invoke` and direct `tools/call`). Added modes: wrong origin (`Origin`), wrong last signer (`LastSigner`), changed content (`Content`), a replay window set to 30 s with `ts` 31 s old (`Stale`, so the configured value is what is passed). H4 becomes "replay of the upstream's first response to a second dispatch" (`Nonce`). Each row asserts the refusal names the rule, and the upstream saw exactly one request per call. |
+| N1/N2 | Two calls carry the same explicit client nonce, for `verify` and `require`. Each outbound nonce is 32 hex characters, differs from the client nonce, and differs across calls. N2 covers the sanitized and passthrough arms, absent and populated `_meta`, and keeps arbitrary members. `off` makes no write beyond the client-nonce strip. |
+| I1b | `verify` + `input_required`: stripped, `NotEligible`, no chain, round proceeds unchained. |
+| K3 | Unsolicited task handle returned to a synchronous `require` call: -32001 at raw receipt; zero polls, zero handle captures. |
+| K2 | Now "a freshly polled completion from a `verify` backend carries no chain". Also a valid synchronous chained call next to a task call on the same backend: the synchronous call is chained. |
+| P2 | Replaced: the upstream chain is well under `max_links` and each link is under 1 KiB, but the total is close enough to 16 KiB that D's appended link crosses it: -32001. A control with a shorter chain fits and verifies. |
+| F1 | Positive fallback: signing on, `emit: always`, invoke nonce only. A two-link chain whose last nonce is the invoke nonce; the oracle verifies with that nonce. F1b: both nonces present, the chain nonce wins. |
+| R1 | Firewall redaction on a chained result: the delivered text is redacted, the oracle computes H(delivered) independently and it equals D.out, and D.in equals the upstream's recorded `out`. |
+| G1 | Adds a unit assertion: `GateEffect::Enforced` clears both `chain_source` and the upstream outcome, and a serialized response contains neither. |
+| Z2 | Adds stored-classification cases (verified, unverified, mode-only chained with no outcome), each stored as `ChainedBackend`. Each replay requests a chain with a fresh nonce and asserts a successful response with no chain key. |
+| C1 | Adds controls: a valid `verify` config loads; an omitted mode defaults to `off`; empty `chain_origins` is refused; each refusal names its field. |
+| X1 | Scope negatives, with the backend opted in to `verify`, each with a chain nonce, none chained: a surfaced (named) tool, Code Mode execute, a playbook step, a capability backend, and a direct-route non-`tools/call` method. |
+
+Mutant rule (binding). An inequivalent surviving mutant on a required rule blocks acceptance; only
+an equivalent mutant may be recorded with a reason. The raw-receipt `verify_chain` bypass must be
+killed by the tamper, swap and dropped-hop rows on both routes.
