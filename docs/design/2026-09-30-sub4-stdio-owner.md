@@ -219,6 +219,17 @@ config reload classifies `security` as restart-required (`config_reload/mod.rs:5
 "Current" therefore means the policy passed with the request being dispatched. Live policy
 publication is not designed here; it would be a feature (4.1 by the scope rule).
 
+Two stores can replay, and the order was re-verified against #1951 (HTTP replays the cache
+before the tool-block check, `router/backend_handlers.rs:1015` vs `:1042`; meta route
+`invoke.rs:~1858`). On stdio every `tools/call` runs signing preparation, then `admit_meta_sync`
+(`server/mod.rs:3298-3325`), which checks policy before the admission-ledger replay
+(`meta_mcp/admission.rs:~277-301`; gateway tools through `authorize_execution_plan`,
+`admission_plan.rs:52,87`). Only after that does `invoke_tool_traced` reach the `IdempotencyCache`
+(`invoke.rs:1855-1857`), which has no policy check of its own. Stdio is therefore protected by
+caller order, not by construction. The #1951 fix belongs to the controls lane (IDEM), and this lane
+does not edit `invoke.rs` or `backend_handlers.rs`; the tests below pin the stdio order so a
+regression from either lane turns them red.
+
 Mechanism exists (F5). Tests at the dispatcher level, against ONE `MetaMcp` (one admission ledger
 and retained-output cache), calling the same `dispatch_single_with_sink` the stdio loop calls:
 
@@ -336,3 +347,4 @@ Each increment's test plan is written into `docs/design/test-plan.md` under a
   the settlement matrix, the unbounded writer join at EOF, and the D4 wording. One LOW: OWNER.3
   reframed as preventive hardening (D1).
 - Rev 1, seat 2: pending at the time of writing.
+- Coordinator note (#1951): D3 re-verified; stdio order recorded, fix left to the controls lane.
