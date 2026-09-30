@@ -147,11 +147,11 @@ async fn link_count_cap_on_append() {
 #[tokio::test]
 async fn byte_cap_after_append() {
     for route in ROUTES {
-        // 23 links of 695 bytes = 15,885 received (< 16,384); D's link with a
-        // 200-byte client nonce adds ~640, which crosses the cap.
+        // 23 links with 270-byte nonces = ~15,970 bytes received (< 16,384);
+        // D's link with a 200-byte client nonce adds ~640, crossing the cap.
         let upstream = FakeUpstream::start(Mode::Padded {
             links: 23,
-            pad: 256,
+            pad: 270,
         })
         .await;
         let mut config = d_config(&upstream.url, "verify", "on_request");
