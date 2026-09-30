@@ -33,7 +33,7 @@ pub(crate) use upstream::UpstreamCapture;
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
 
-use super::record::CommittedTask;
+use super::record::{CommittedTask, Target};
 use super::service::{CreateOutcome, ServiceError, TaskService};
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
@@ -99,12 +99,17 @@ pub(crate) enum TaskWrite<'a> {
         request: &'a OwnedAdmissionRequest,
         task: &'a Task,
         backend: &'a str,
+        /// The single backend call the task makes, when it makes exactly one.
+        targets: Vec<Target>,
     },
     Settle {
         principal: &'a str,
         id: &'a str,
         revision: u64,
         event: TaskTransition,
+        /// A plan's dispatched calls, committed in the same write as its
+        /// outcome. `None` for a call whose target was recorded at creation.
+        targets: Option<Vec<Target>>,
     },
     Cancel {
         principal: &'a str,
@@ -376,11 +381,12 @@ impl TaskExecutor {
                 request,
                 task,
                 backend,
+                targets,
             } => {
                 let workers = Arc::clone(&self.workers);
                 let created = self
                     .service
-                    .create(request.borrow(), task, backend, move || {
+                    .create_targeted(request.borrow(), task, (backend, targets), move || {
                         workers.try_acquire_owned().ok()
                     })
                     .await
@@ -404,8 +410,9 @@ impl TaskExecutor {
                 id,
                 revision,
                 event,
+                targets,
             } => {
-                self.transition_write(principal, id, revision, event)
+                self.transition_write(principal, id, revision, (event, targets))
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
@@ -417,7 +424,7 @@ impl TaskExecutor {
                 revision,
                 event,
             } => {
-                self.transition_digest_write(owner_digest, id, revision, event)
+                self.transition_digest_write(owner_digest, id, revision, (event, None))
                     .await?
             }
             TaskWrite::Cancel {
@@ -425,7 +432,7 @@ impl TaskExecutor {
                 id,
                 revision,
             } => {
-                self.transition_write(principal, id, revision, TaskTransition::Cancel)
+                self.transition_write(principal, id, revision, (TaskTransition::Cancel, None))
                     .await?
             }
         };
@@ -445,13 +452,13 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
-        event: TaskTransition,
+        outcome: (TaskTransition, Option<Vec<Target>>),
     ) -> Result<(WriteOutcome, bool, CommitStage, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, event)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome)
             .await
     }
 

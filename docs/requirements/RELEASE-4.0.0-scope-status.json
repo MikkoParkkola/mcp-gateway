@@ -1100,11 +1100,17 @@
     },
     {
       "id": "GH1944.CHAIN.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews). Increment 2 (#2381): origin-link emission and backend-chain strip only; CHAIN.1 itself (append and verify across hops) is increment 3. Known limits of increment 2, accepted into the reviewed design by amendment A3 r5 (delta review, both seats, 2026-09-30); neither is required by a literal AC and neither makes CHAIN.1 met: (1) direct-route idempotent replays are not linked (the direct store can hold gateway-authored side-effect notices and records no origin); (2) the gateway_invoke nonce is the fallback link nonce only while message_signing is enabled."
+      "evidence": [
+        "tests/signature_chain_hops.rs",
+        "tests/signature_chain_hops/rows_hops.rs",
+        "tests/signature_chain_hops/rows_policy.rs",
+        "src/security/signature_chain_tests.rs",
+        "src/gateway/meta_mcp/chain_receipt.rs"
+      ],
+      "note": "Met 2026-09-30 (#2483, squash 7406d020b). A backend set to signature_chain verify or require gets a fresh per-call challenge; the reply's chain is checked at raw receipt against trusted keys, pinned origin and last signer, link digests, content, the challenge and freshness, and this gateway appends its own link, so the client verifies the whole chain (tests/signature_chain_hops/rows_hops.rs:18). A tampered signature, wrong origin, wrong last signer, changed content, dropped middle hop, stale or foreign nonce is refused under require and marked up: unverified under verify (rows_hops.rs:47-110); reorder and re-signing break prev linkage (src/security/signature_chain_tests.rs:157,183,478). Green Tests, Windows and Clippy in CI run 36753302778 and feature combinations run 36753490334 on head b657a5b73. Scope, as designed and in UPGRADING-4.0 item 107: gateway_invoke and direct-route tools/call only; response cache bypassed and idempotent replays carry no chain; tasks, Code Mode, playbooks and capability backends are unchained. The OWASP ASI07 row stays PARTIAL.\n\n--- prior note follows ---\nPending. Response signing covers one hop only (src/security/message_signing.rs); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:22 records the ASI07 gap. Tracked in #1944. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews). Increment 2 (#2381): origin-link emission and backend-chain strip only; CHAIN.1 itself (append and verify across hops) is increment 3. Known limits of increment 2, accepted into the reviewed design by amendment A3 r5 (delta review, both seats, 2026-09-30); neither is required by a literal AC and neither makes CHAIN.1 met: (1) direct-route idempotent replays are not linked (the direct store can hold gateway-authored side-effect notices and records no origin); (2) the gateway_invoke nonce is the fallback link nonce only while message_signing is enabled."
     },
     {
       "id": "GH1945.COLLUDE.1",
@@ -1399,27 +1405,40 @@
     },
     {
       "id": "MIK-7217.ERA.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
+      "evidence": [
+        "src/backend/era_stale_probe_tests.rs",
+        "docs/design/2026-09-30-era-1-2-stale-probe-refusal.md",
+        "src/protocol/era.rs",
+        "src/backend/era.rs"
+      ],
+      "note": "MET: a detached re-probe now stores its answer only while its transport is still held by a pool slot, checked and written under that slot's read guard (install_if_held), so force_restart mid-probe leaves the recorded era unchanged. Tests: a_restart_mid_reprobe_refuses_the_old_peers_answer, the_era_after_a_replacement_is_the_new_peers_own_answer, the_installer_holds_the_slot_guard_while_it_stores, a_declined_install_writes_nothing_and_reports_why. Red proof: CI run 36679269962 on 67ce61af7 (the two behavioural tests failed at their assertions; the ERA.3 twin passed). Green: CI run 36681893146 on b929b2ad9 (Tests, Windows, macOS, clippy, fmt green). Reviews: design two seats (both OpenAI-family, degraded: grok 402, kimi empty), test plan one seat; final review recorded on PR #2489. Coverage limit: no test drives a per-user slot through the backend or a real idle eviction."
     },
     {
       "id": "MIK-7217.ERA.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. era_probe_discarded appears nowhere in src/ or tests/."
+      "evidence": [
+        "src/backend/era_stale_probe_tests.rs",
+        "docs/design/2026-09-30-era-1-2-stale-probe-refusal.md",
+        "src/protocol/era.rs",
+        "tests/nfr_obs_3_era_observability.rs"
+      ],
+      "note": "MET: the refusal emits era_probe_discarded on mcp_gateway::observed with backend, reason=transport_replaced, and the probe's outcome, evidence, duration_ms and trigger (no error_code). Asserted by a_restart_mid_reprobe_refuses_the_old_peers_answer and a_declined_install_writes_nothing_and_reports_why. Red proof: CI run 36679269962 on 67ce61af7 (the two behavioural tests failed at their assertions; the ERA.3 twin passed). Green: CI run 36681893146 on b929b2ad9 (Tests, Windows, macOS, clippy, fmt green)."
     },
     {
       "id": "MIK-7217.ERA.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; closes with ERA.1 as its regression guard."
+      "evidence": [
+        "tests/nfr_obs_3_era_observability.rs",
+        "src/backend/era_stale_probe_tests.rs"
+      ],
+      "note": "MET: without a replacement a re-probe answer is committed and no record is emitted (without_a_restart_the_reprobe_answer_is_committed); a_contradiction_reprobes_and_the_whole_read_moves_with_it and a_reprobe_that_gets_no_answer_returns_the_era_to_assumed are unchanged and green in CI run 36681893146 on b929b2ad9 (Tests, Windows, macOS, clippy, fmt green)."
     }
   ],
   "decisions": [

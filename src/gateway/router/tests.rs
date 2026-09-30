@@ -630,6 +630,7 @@ pub(super) fn scoped_auth_config(admin: bool) -> AuthConfig {
             allowed_tools: Some(vec!["allowed_tool".to_string()]),
             denied_tools: None,
             admin,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()

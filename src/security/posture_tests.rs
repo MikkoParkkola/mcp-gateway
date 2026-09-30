@@ -363,3 +363,20 @@ fn hardened_refuses_a_block_threshold_below_the_floor() {
     // Standard keeps its own semantics: detection off, nothing checked.
     load(&firewall_yaml("standard", Some("0.85")));
 }
+
+/// Row 12b (#1881): under hardened the egress proxy is refused at load, since
+/// it is a route out that the destination policy does not govern.
+#[test]
+fn hardened_refuses_capability_egress_proxy() {
+    let yaml = |posture: &str| {
+        format!(
+            "security:\n  posture: {posture}\ncapabilities:\n  egress_proxy: \"http://proxy.internal:3128\"\n"
+        )
+    };
+    let error = load_err(&yaml("hardened"));
+    assert!(error.contains("capabilities.egress_proxy"), "{error}");
+    assert!(error.contains("security.posture=hardened"), "{error}");
+    // Standard keeps the proxy.
+    let config = load(&yaml("standard"));
+    assert!(config.capabilities.egress_proxy.is_some());
+}

@@ -24,6 +24,7 @@ use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
 mod meta_refusal;
+mod meta_replay;
 
 /// A backend that answers `tools/list` with its one tool `t` and anything
 /// else with a text result, or with a JSON-RPC error when `error` is set.
@@ -169,6 +170,7 @@ fn key_for_alpha(denied_tools: Option<Vec<String>>) -> AuthConfig {
             allowed_tools: None,
             denied_tools,
             admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         public_paths: vec!["/health".to_string()],
         client_circuit_breaker: None,

@@ -76,8 +76,9 @@ async fn a_captured_handle_is_recorded_at_version_three_with_its_descriptor() {
     let record = durable_record(root.path(), &task_id);
     assert_eq!(
         record["version"],
-        json!(3),
-        "a row that captured a handle is written at the version that introduced the field: {record}"
+        json!(5),
+        "a direct task records its target at creation (#2450), which raises the row to version 5; \
+         the handle's own descriptor is asserted below: {record}"
     );
     assert_eq!(
         record["dispatched"],

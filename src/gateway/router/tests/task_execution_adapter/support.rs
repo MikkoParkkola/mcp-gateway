@@ -77,6 +77,7 @@ pub(super) fn two_principal_auth() -> AuthConfig {
         allowed_tools: None,
         denied_tools: None,
         admin,
+        kind: crate::config::ApiKeyKind::Shared,
     };
     AuthConfig {
         enabled: true,
@@ -419,6 +420,30 @@ pub(super) async fn poll_until_terminal(state: &Arc<AppState>, principal: &str, 
         );
         tokio::task::yield_now().await;
     }
+}
+
+/// [`poll_until_terminal`] for an enforcing gateway: a finished task is only
+/// delivered to a read that presents a fresh recovery attestation token
+/// (`fresh_token` is called once per read).
+pub(super) async fn poll_until_terminal_attested(
+    state: &Arc<AppState>,
+    principal: &str,
+    id: &str,
+    fresh_token: impl Fn() -> String,
+) -> Value {
+    const BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+    let deadline = tokio::time::Instant::now() + BOUND;
+    while tokio::time::Instant::now() < deadline {
+        let mut body = task_method(9_001, "tasks/get", json!({ "taskId": id }));
+        body["params"]["_meta"][crate::gateway::meta_mcp::upstream::RECOVERY_META] =
+            json!({ "attestation": fresh_token() });
+        let last = post(state, principal, body).await;
+        if is_terminal(&status_of(&last)) {
+            return last;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("task {id} never reached a terminal status in {BOUND:?} of attested reads");
 }
 
 /// Assert a task is `completed` carrying exactly the mock's successful result.

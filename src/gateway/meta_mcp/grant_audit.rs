@@ -335,7 +335,15 @@ impl super::MetaMcp {
         // invocation), and a concrete type here overflows auto-trait checks.
         let future: Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> =
             Box::pin(self.invoke_tool_in_slot(args, session_id, caller));
-        slot_result(logger, future).await
+        let outcome = slot_result(logger, future).await;
+        // #2450: every step that got past the authorization chokepoint is a
+        // target of the task's result, whatever it then did: an error, or an
+        // audit failure after the call, does not un-dispatch it. Only an
+        // authorization refusal proves nothing was sent.
+        if !matches!(outcome, Err(Error::Forbidden { .. })) {
+            super::dispatch_log::note_completed(args);
+        }
+        outcome
     }
 
     /// The dispatch check, unless signing prepared this call: then only
