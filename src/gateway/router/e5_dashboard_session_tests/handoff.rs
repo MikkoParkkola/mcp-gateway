@@ -289,3 +289,32 @@ async fn a_wrong_method_on_the_code_path_is_private_too() {
     assert_eq!(out.status, StatusCode::METHOD_NOT_ALLOWED, "{}", out.body);
     assert_private(&out);
 }
+
+/// A code posted on the loopback origin is refused and not spent: a cookie
+/// set there would be scoped to the wrong host, and the sign-in would fail.
+#[tokio::test]
+async fn a_code_posted_on_the_loopback_origin_is_not_spent() {
+    let (state, _dir) = behind_https_front().await;
+    let (_, code) = code_from_link(&state).await;
+    let local = Request::builder()
+        .method("POST")
+        .uri(HANDOFF)
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_346))))
+        .header(header::ORIGIN, "http://127.0.0.1")
+        .header("sec-fetch-site", "same-origin")
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(format!("code={code}")))
+        .expect("request builds");
+
+    let out = send(&state, local).await;
+    assert_ne!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
+    assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
+
+    let real = send(&state, submit(&code, None)).await;
+    assert_eq!(
+        real.status,
+        StatusCode::SEE_OTHER,
+        "the code is still live: {}",
+        real.body
+    );
+}

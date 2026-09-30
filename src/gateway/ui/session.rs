@@ -57,8 +57,18 @@ async fn handoff_form() -> Response {
 }
 
 /// The body is read by the extractor, under the router's configured limit.
-async fn handoff_code(State(state): State<Arc<AppState>>, body: axum::body::Bytes) -> Response {
-    crate::gateway::auth::redeem_handoff(&state.dashboard_bootstrap, &state.live_config, &body)
+async fn handoff_code(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    crate::gateway::auth::redeem_handoff(
+        &state.dashboard_bootstrap,
+        &state.live_config,
+        origin,
+        &body,
+    )
 }
 
 /// Revoke the presented session server-side, clear the cookie and send the

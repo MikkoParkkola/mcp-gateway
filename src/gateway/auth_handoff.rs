@@ -26,7 +26,11 @@ pub(crate) const HANDOFF_PATH: &str = "/dashboard/handoff";
 /// The HTTPS origin browsers reach this gateway at, from the live
 /// `public_url`; `None` when there is none or it is not HTTPS.
 pub(super) fn public_origin(state: &AuthState) -> Option<String> {
-    let live = state.live_config.get();
+    public_origin_of(&state.live_config)
+}
+
+fn public_origin_of(live: &crate::config_reload::LiveConfig) -> Option<String> {
+    let live = live.get();
     let url = url::Url::parse(live.server.public_url.as_deref()?).ok()?;
     (url.scheme() == "https").then(|| url.origin().ascii_serialization())
 }
@@ -65,8 +69,19 @@ pub(crate) fn handoff_form() -> Response {
 pub(crate) fn redeem_handoff(
     bootstrap: &DashboardBootstrap,
     live: &crate::config_reload::LiveConfig,
+    origin: Option<&str>,
     body: &[u8],
 ) -> Response {
+    // Spent anywhere but the public origin, the code would set a cookie there
+    // that a browser drops: refuse it, unspent. `Origin` is written by the
+    // browser and passed through by a proxy, unlike `Host`, which a proxy may
+    // rewrite to this listener's own address.
+    if origin.is_none() || public_origin_of(live).as_deref() != origin {
+        warn!("Dashboard handoff refused: the code was not posted on the public origin");
+        return private(bearer_unauthorized_response(
+            "Enter the code on the gateway's public HTTPS address, at /dashboard/handoff.",
+        ));
+    }
     let code = url::form_urlencoded::parse(body)
         .find(|(key, _)| key == "code")
         .map(|(_, value)| value.trim().to_string());
