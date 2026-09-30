@@ -304,12 +304,19 @@ impl TaskExecutor {
                 }
                 Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
                 Ok(ProvideOutcome::Closed(closed)) => {
-                    // Settle it now rather than at the next sweep, so a closed
-                    // round never looks live. A lost race leaves it to the sweep.
-                    if let Ok(current) = executor.service.store.get(&digest, &id) {
-                        let _ = executor
-                            .close_round(&digest, &id, current.revision, closed.reason())
-                            .await;
+                    // Settle it now rather than at the next sweep. Either way the
+                    // round is closed to answers: every later one is refused the
+                    // same way, and the sweep retries a close that fails here.
+                    let settled = match executor.service.store.get(&digest, &id) {
+                        Ok(current) => {
+                            executor
+                                .close_round(&digest, &id, current.revision, closed.reason())
+                                .await
+                        }
+                        Err(_) => Err(super::CommitFailure::RevisionConflict),
+                    };
+                    if let Err(super::CommitFailure::Service(error)) = settled {
+                        tracing::warn!(task_id = %id, ?error, "closed input round not settled yet; the sweep retries");
                     }
                     InputOutcome::Closed(closed)
                 }
