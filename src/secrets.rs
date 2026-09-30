@@ -275,6 +275,7 @@ mod tests {
         assert!(std::env::var("SECRETS_OVERLAY_ONLY").is_err());
     }
 
+    // macOS-only (W-L9): exercises the macOS keychain pattern.
     #[cfg(target_os = "macos")]
     #[test]
     fn test_keychain_pattern_detection() {

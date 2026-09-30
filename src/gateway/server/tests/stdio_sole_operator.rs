@@ -26,7 +26,6 @@ use crate::backend::BackendRegistry;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, api_key_digest_spec};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::GatewayKeyPair;
-use crate::gateway::server::STDIO_CREDENTIAL_PRINCIPAL;
 use crate::gateway::server::account_bindings::{ServeMode, install_account_strategies};
 use crate::identity_propagation::{CallerProof, CallerProvenance};
 use crate::personal_accounts::config::{
@@ -145,6 +144,7 @@ fn api_key(name: &str, secret: &[u8]) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 
@@ -184,9 +184,11 @@ async fn stdio_caller_with_auth_off_is_the_sole_operator() {
         single_user: false,
         dashboard_session: crate::config::DashboardSessionConfig::default(),
     };
+    // The transport's own provenance: only the stdio module can supply the
+    // mark (MIK-7272.OWNER.3).
     let caller = CallerProof::new(
         None,
-        CallerProvenance::classify(Some(STDIO_CREDENTIAL_PRINCIPAL)),
+        CallerProvenance::local_transport(super::super::StdioNonce::process()),
     );
     let error = resolve_under(ServeMode::Stdio, auth, caller).await;
     assert!(

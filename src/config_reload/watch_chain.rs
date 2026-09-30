@@ -217,6 +217,7 @@ impl ChainWatch {
         self.ledger.lock().clone()
     }
 
+    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
     #[cfg(all(test, target_os = "linux"))]
     pub(super) fn watched(&self) -> BTreeSet<PathBuf> {
         self.watched_now()
@@ -318,7 +319,7 @@ pub(super) fn spawn_rewatch_task(
     })
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 #[path = "watch_chain_tests.rs"]
 mod tests;
 

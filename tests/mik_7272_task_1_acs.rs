@@ -434,6 +434,7 @@ mod http {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            kind: mcp_gateway::config::ApiKeyKind::Shared,
         };
         AuthConfig {
             enabled: true,

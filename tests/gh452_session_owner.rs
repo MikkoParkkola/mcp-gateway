@@ -55,6 +55,7 @@ async fn state(
                     allowed_tools: None,
                     denied_tools: None,
                     admin: false,
+                    kind: mcp_gateway::config::ApiKeyKind::Shared,
                 })
                 .collect(),
             public_paths: if public_mcp {

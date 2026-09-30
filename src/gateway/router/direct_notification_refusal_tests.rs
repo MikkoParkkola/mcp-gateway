@@ -383,6 +383,7 @@ async fn a_refused_notification_leaves_the_client_breaker_untouched() {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
             enabled: true,

@@ -822,6 +822,7 @@ mod tests {
     }
 }
 
+// Unix-only (W-L1): asserts POSIX mode bits on the written key; Windows uses DACLs (win_acl).
 #[cfg(all(test, unix))]
 mod private_key_permission_tests {
     use super::*;

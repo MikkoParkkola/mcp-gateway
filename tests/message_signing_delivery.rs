@@ -8,8 +8,12 @@
 #[path = "common/signing_gateway.rs"]
 mod signing_gateway;
 
-use serde_json::json;
-use signing_gateway::{BackendFixture, HttpGateway, fixture_config, invoke};
+use std::process::Stdio;
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use signing_gateway::{BACKEND, BackendFixture, HttpGateway, KEY, TOOL, fixture_config, invoke};
+use tokio::io::AsyncWriteExt as _;
 
 fn backend_result() -> serde_json::Value {
     json!({"content": [{"type": "text", "text": "signing delivery sentinel"}]})
@@ -61,12 +65,13 @@ async fn signing_1_real_http_startup_installs_the_configured_signer() {
     let gateway = HttpGateway::start(fixture_config(&backend.url)).await;
     let session = gateway.initialize().await;
     let started = chrono::Utc::now().timestamp();
-    let response = gateway
-        .call(
-            &session,
-            &invoke(json!(41), json!("startup-nonce"), json!({})),
-        )
-        .await;
+    let wire = call_wire(
+        &gateway,
+        &session,
+        &invoke(json!(41), json!("startup-nonce"), json!({})),
+    )
+    .await;
+    let response: Value = serde_json::from_str(&wire).expect("delivered JSON");
 
     assert_eq!(
         backend.calls().len(),
@@ -99,6 +104,65 @@ async fn signing_1_real_http_startup_installs_the_configured_signer() {
         "MAC must be lowercase hexadecimal: {signature}"
     );
     assert_delivered_payload(&response);
+    // VERIFY.1: the MAC over the delivered bytes verifies with the configured
+    // key, and one changed byte of the body makes it fail.
+    let id = json!({"kind": "number", "value": "41"});
+    assert!(
+        oracle_accepts(&wire, &id, "startup-nonce").await,
+        "the delivered MAC must verify with the configured key: {wire}"
+    );
+    let tampered = wire.replacen("delivery sentinel", "delivery sentinem", 1);
+    assert_ne!(
+        tampered, wire,
+        "the sentinel must be in the delivered bytes"
+    );
+    assert!(
+        !oracle_accepts(&tampered, &id, "startup-nonce").await,
+        "a tampered byte must fail the MAC: {tampered}"
+    );
+}
+
+/// POST `request` and return the delivered body exactly as received.
+async fn call_wire(gateway: &HttpGateway, session: &str, request: &Value) -> String {
+    gateway
+        .client
+        .post(format!("{}/mcp", gateway.url))
+        .header("mcp-session-id", session)
+        .json(request)
+        .send()
+        .await
+        .expect("gateway HTTP response")
+        .text()
+        .await
+        .expect("gateway response body")
+}
+
+/// Whether the independent ECMAScript oracle (`tests/common/signing_verifier.mjs`,
+/// no gateway code) accepts `wire` as signed with [`KEY`] for `id` and `nonce`.
+async fn oracle_accepts(wire: &str, id: &Value, nonce: &str) -> bool {
+    let verifier =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/signing_verifier.mjs");
+    let mut child = tokio::process::Command::new("node")
+        .arg(verifier)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("node is required for the independent signing oracle");
+    let input = json!({"wire": wire, "options": {"key": KEY, "keyId": "signing-test-current",
+        "expectedId": id, "expectedNonce": nonce, "now": chrono::Utc::now().timestamp()}});
+    let mut stdin = child.stdin.take().expect("oracle stdin");
+    stdin
+        .write_all(input.to_string().as_bytes())
+        .await
+        .expect("write oracle stdin");
+    drop(stdin);
+    tokio::time::timeout(Duration::from_secs(30), child.wait())
+        .await
+        .expect("bounded oracle")
+        .expect("oracle process")
+        .success()
 }
 
 #[tokio::test]
@@ -191,4 +255,73 @@ async fn signing_6_disabled_dormant_secret_preserves_unsigned_calls() {
         !backend.calls().is_empty(),
         "disabled fixture never dispatched"
     );
+}
+
+const PLAYBOOK: &str = "name: sig6
+description: one backend step
+steps:
+  - name: echo
+    tool: echo
+    server: signing_fixture
+    arguments: {}
+";
+
+/// SIGNING.6: with `require_nonce` on, a surfaced (named) tool, a Code Mode
+/// execute and a playbook step each succeed without a nonce and arrive
+/// unsigned; only `gateway_invoke` is signed, so only it demands a nonce.
+#[tokio::test]
+async fn signing_6_required_nonce_leaves_other_surfaces_unsigned() {
+    let backend = BackendFixture::start(backend_result()).await;
+    let playbooks = tempfile::TempDir::new().expect("playbook directory");
+    std::fs::write(playbooks.path().join("sig6.yaml"), PLAYBOOK).expect("write playbook");
+    let mut config = fixture_config(&backend.url);
+    assert_eq!(config["security"]["message_signing"]["require_nonce"], true);
+    config["meta_mcp"] = json!({"surfaced_tools": [{"server": BACKEND, "tool": TOOL}]});
+    config["playbooks"] = json!({"enabled": true, "directories": [playbooks.path()]});
+    let named = HttpGateway::start(config.clone()).await;
+    config["code_mode"] = json!({"enabled": true});
+    let code_mode = HttpGateway::start(config).await;
+
+    let unsigned_invoke = json!({"jsonrpc": "2.0", "id": 60, "method": "tools/call", "params": {
+        "name": "gateway_invoke", "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}}}});
+    let session = named.initialize().await;
+    let refused = named.call(&session, &unsigned_invoke).await;
+    assert_eq!(
+        refused["error"]["code"], -32001,
+        "control: require_nonce must be live here: {refused}"
+    );
+    let calls = [
+        (&named, "named tool", json!({"name": TOOL, "arguments": {}})),
+        (
+            &named,
+            "playbook step",
+            json!({"name": "gateway_run_playbook",
+            "arguments": {"name": "sig6"}}),
+        ),
+        (
+            &code_mode,
+            "Code Mode execute",
+            json!({"name": "gateway_execute",
+            "arguments": {"chain": [{"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}}]}}),
+        ),
+    ];
+    for (id, (gateway, surface, params)) in (61..).zip(calls) {
+        let dispatched = backend.calls().len();
+        let session = gateway.initialize().await;
+        let request = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params});
+        let response = gateway.call(&session, &request).await;
+        assert!(
+            response.get("error").is_none() && response["result"]["isError"] != true,
+            "{surface} must succeed without a nonce: {response}"
+        );
+        assert!(
+            response["result"].get("_signature").is_none(),
+            "{surface} must arrive unsigned: {response}"
+        );
+        assert_eq!(
+            backend.calls().len(),
+            dispatched + 1,
+            "{surface} must reach the backend once: {response}"
+        );
+    }
 }

@@ -7,38 +7,59 @@
 //! same-origin form on the public origin, which sets the session cookie there.
 //! The code never travels in a URL, so no proxy access log, history entry or
 //! `Referer` carries it, and no proxy header is trusted to vouch for anything.
+//!
+//! Only a build with the dashboard (`webui`) hands off; `private` alone is
+//! shared, since every bootstrap answer uses it.
 
-use axum::http::{HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderValue, header};
+use axum::response::Response;
+#[cfg(feature = "webui")]
+use axum::{http::StatusCode, response::IntoResponse};
 #[cfg(feature = "webui")]
 use tracing::warn;
 
 #[cfg(feature = "webui")]
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 
-use super::AuthState;
 #[cfg(feature = "webui")]
-use super::{DashboardBootstrap, Now, Redemption, bearer_unauthorized_response};
+use super::{AuthState, DashboardBootstrap, Now, Redemption, bearer_unauthorized_response};
 
 /// Where the code is entered, on the public origin.
+#[cfg(feature = "webui")]
 pub(crate) const HANDOFF_PATH: &str = "/dashboard/handoff";
 
 /// The HTTPS origin browsers reach this gateway at, from the live
 /// `public_url`; `None` when there is none or it is not HTTPS.
-pub(super) fn public_origin(state: &AuthState) -> Option<String> {
+#[cfg(feature = "webui")]
+fn public_origin(state: &AuthState) -> Option<String> {
     public_origin_of(&state.live_config)
 }
 
+#[cfg(feature = "webui")]
 fn public_origin_of(live: &crate::config_reload::LiveConfig) -> Option<String> {
     let live = live.get();
     let url = url::Url::parse(live.server.public_url.as_deref()?).ok()?;
     (url.scheme() == "https").then(|| url.origin().ascii_serialization())
 }
 
+/// The loopback redemption's hand-off (#2130): spend the link and answer
+/// with a one-time code for the public origin. `None` when there is no HTTPS
+/// public origin, or the link is no longer the live value.
+#[cfg(feature = "webui")]
+pub(super) fn hand_off(state: &AuthState, candidate: &str) -> Option<Response> {
+    let origin = public_origin(state)?;
+    let Redemption { not_after } = state.dashboard_bootstrap.consume_capped(candidate)?;
+    let code = state
+        .dashboard_bootstrap
+        .mint_handoff(Now::read(), not_after);
+    Some(code_page(&origin, &code))
+}
+
 /// The loopback redemption's answer: the code, and where to enter it. There is
 /// deliberately no link to follow: a navigation from this loopback page to the
 /// public origin is cross-site, which the origin gate refuses.
-pub(super) fn code_page(origin: &str, code: &str) -> Response {
+#[cfg(feature = "webui")]
+fn code_page(origin: &str, code: &str) -> Response {
     let (origin, code) = (escape(origin), escape(code));
     private(html(format!(
         "<!doctype html><meta charset=\"utf-8\"><title>Dashboard sign-in</title>\
@@ -120,6 +141,7 @@ pub(crate) fn private(mut response: Response) -> Response {
     response
 }
 
+#[cfg(feature = "webui")]
 fn html(body: String) -> Response {
     (
         StatusCode::OK,
@@ -129,6 +151,7 @@ fn html(body: String) -> Response {
         .into_response()
 }
 
+#[cfg(feature = "webui")]
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")

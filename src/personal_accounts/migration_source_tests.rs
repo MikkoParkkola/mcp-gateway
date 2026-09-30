@@ -94,7 +94,7 @@ fn an_absent_source_refuses_naming_the_path_and_the_override() {
 /// principal's account. `symlink_metadata` is what makes this detectable:
 /// plain `metadata` reports the target's type and mode and would call this a
 /// private regular file.
-// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
+// Unix-only: asserts POSIX mode bits on the planted target; the Windows symlink refusal runs in windows_tests.rs:642.
 #[cfg(unix)]
 #[test]
 fn a_symlink_at_the_resolved_path_refuses_even_to_a_valid_record() {

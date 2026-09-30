@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::gateway::authz::ToolAuthorizer;
 use crate::gateway::destructive_confirmation::ConfirmationChannel;
+use crate::gateway::meta_mcp::dispatch_log::DispatchLog;
 use crate::gateway::meta_mcp::{Authentication, MetaMcpCallerContext};
 use crate::gateway::router::{AppState, OwnedRouterAuthorizer, RouterAuthorizer};
 use crate::idempotency::admission::{Mode, Request};
@@ -52,6 +53,9 @@ pub(crate) struct OwnedCallerContext {
     /// it at dispatch, where it is re-validated (MIK-7570.ATTEST.1 part 3).
     /// In memory only, like the rest of this struct.
     retry: RetryFields,
+    /// The backend calls this context's dispatches completed (#2450): a plan's
+    /// targets, persisted by the worker before it settles or parks the task.
+    dispatch_log: std::sync::Arc<DispatchLog>,
 }
 
 impl OwnedCallerContext {
@@ -95,7 +99,12 @@ impl OwnedCallerContext {
                 attestation,
                 ..RetryFields::default()
             },
+            dispatch_log: std::sync::Arc::default(),
         }
+    }
+
+    pub(crate) fn dispatch_log(&self) -> &std::sync::Arc<DispatchLog> {
+        &self.dispatch_log
     }
 
     pub(crate) fn state(&self) -> &std::sync::Weak<AppState> {

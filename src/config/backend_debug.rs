@@ -35,6 +35,9 @@ impl std::fmt::Debug for BackendConfig {
             .field("runtime_profile", &self.runtime_profile)
             .field("identity_propagation", &self.identity_propagation)
             .field("account", &self.account)
+            .field("signature_chain", &self.signature_chain)
+            .field("chain_origins", &self.chain_origins)
+            .field("chain_signer", &self.chain_signer)
             .finish()
     }
 }

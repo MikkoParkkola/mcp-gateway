@@ -109,6 +109,7 @@ fn verify_with(
         signer: C.0,
         replay_window: WINDOW,
         max_links,
+        purpose: ChainPurpose::Forward,
     };
     verify_chain(chain, &policy, &received(), NONCE, NOW)
 }
@@ -353,6 +354,48 @@ fn outgoing_chain_within_max_links() {
     );
     let links = verify_with(&wire(&build(&hops(7), |_, _| {})), 8).expect("7 links");
     assert_eq!(links.len(), 7);
+}
+
+/// P1 (inc3 R3): a client may verify a chain of exactly `max_links`; a
+/// forwarding gateway needs room for its own link.
+#[test]
+fn terminal_purpose_accepts_exactly_max_links() {
+    let keys = trusted();
+    let origins = vec![A.0.to_owned()];
+    let at_max = wire(&build(&hops(8), |_, _| {}));
+    let with = |purpose| ChainPolicy {
+        trusted_keys: &keys,
+        origins: &origins,
+        signer: C.0,
+        replay_window: WINDOW,
+        max_links: 8,
+        purpose,
+    };
+    let terminal = verify_chain(
+        &at_max,
+        &with(ChainPurpose::Terminal),
+        &received(),
+        NONCE,
+        NOW,
+    );
+    assert_eq!(terminal.map(|links| links.len()), Ok(8));
+    let forward = verify_chain(
+        &at_max,
+        &with(ChainPurpose::Forward),
+        &received(),
+        NONCE,
+        NOW,
+    );
+    assert_eq!(forward, Err(ChainRefusal::Size));
+    let over = wire(&build(&hops(9), |_, _| {}));
+    let terminal = verify_chain(
+        &over,
+        &with(ChainPurpose::Terminal),
+        &received(),
+        NONCE,
+        NOW,
+    );
+    assert_eq!(terminal, Err(ChainRefusal::Size));
 }
 
 #[test]
@@ -620,6 +663,7 @@ fn untrusted_or_bad_signature_refused() {
         signer: C.0,
         replay_window: WINDOW,
         max_links: 8,
+        purpose: ChainPurpose::Forward,
     };
     assert_eq!(
         verify_chain(&wire(&abc()), &policy, &received(), NONCE, NOW),

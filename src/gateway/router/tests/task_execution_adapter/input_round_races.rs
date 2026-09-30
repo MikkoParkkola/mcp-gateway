@@ -105,6 +105,7 @@ async fn an_update_sent_the_instant_the_round_is_visible_succeeds() {
     let visible = get_task(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&visible), "input_required", "{visible}");
 
+    let started = tokio::time::Instant::now();
     let racing = {
         let (state, id) = (Arc::clone(&state), id.clone());
         tokio::spawn(async move { post(&state, "key-a", completing(2, &id)).await })
@@ -118,7 +119,20 @@ async fn an_update_sent_the_instant_the_round_is_visible_succeeds() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     producer.let_go();
 
-    let acked = racing.await.expect("the update task joins");
+    let mut acked = racing.await.expect("the update task joins");
+    // An update waits at most one second for the producer (`PRODUCE_SEAM_WAIT`)
+    // and then answers "task busy, retry" with the round still open. On a slow
+    // runner the steps above can outlast that bound, and the seam is then not
+    // what ran; the retry the answer asks for must still succeed. Inside the
+    // bound the first answer must succeed.
+    let outran_the_bound = started.elapsed() >= Duration::from_millis(900);
+    if outran_the_bound
+        && acked.pointer("/error/message").and_then(Value::as_str) == Some("task busy, retry")
+    {
+        let still_open = get_task(&state, "key-a", &id).await;
+        std::assert_eq!(status_of(&still_open), "input_required", "{still_open}");
+        acked = post(&state, "key-a", completing(4, &id)).await;
+    }
     std::assert!(
         acked.get("error").is_none(),
         "the seam update succeeds: {acked}"
@@ -251,7 +265,18 @@ async fn a_resume_with_the_pool_full_is_refused_and_the_round_stays_open() {
 
     gate.release();
     poll_until_terminal(&state, "key-a", &busy).await;
-    let retried = post(&state, "key-a", completing(4, &parked_id)).await;
+    // The worker returns its permit just after it settles, so the terminal
+    // status is visible a moment before the pool has room: a refusal that
+    // still says "pool is full" is the retry the error asks for, bounded.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut retried = post(&state, "key-a", completing(4, &parked_id)).await;
+    while retried.pointer("/error/message").and_then(Value::as_str)
+        == Some("task worker pool is full, retry")
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        retried = post(&state, "key-a", completing(4, &parked_id)).await;
+    }
     std::assert!(
         retried.get("error").is_none(),
         "a retry after the pool frees resumes: {retried}"
