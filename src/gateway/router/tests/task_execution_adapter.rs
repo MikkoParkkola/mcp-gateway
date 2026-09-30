@@ -77,9 +77,11 @@ mod lifecycle;
 /// authenticated reader alike.
 mod query_serialization;
 mod refusals;
+mod replay_policy;
 mod result_shapes;
 mod settlement;
 mod signing_joint;
+mod stored_result_policy;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided

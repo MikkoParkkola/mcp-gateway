@@ -21,8 +21,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{DateTime, Utc};
 
 use super::record::{
-    CommittedTask, INPUT_ROUND_VERSION, InterruptedTask, MARKER_VERSION, MAX_UPSTREAM_HANDLE_BYTES,
-    PreparedTask, Record, UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
+    CommittedTask, InterruptedTask, MARKER_VERSION, MAX_LOADABLE_VERSION,
+    MAX_UPSTREAM_HANDLE_BYTES, PreparedTask, Record, UPSTREAM_VERSION, UpstreamRecord,
+    widest_handle_reservation,
 };
 use crate::fs_lock::{DirPin, ExclusiveFileLock};
 #[cfg(unix)]
@@ -32,7 +33,11 @@ pub(crate) mod input;
 #[cfg(windows)]
 #[path = "store_windows.rs"]
 mod platform;
-use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
+#[path = "store_targets.rs"]
+pub(crate) mod targets;
+#[cfg(test)]
+use crate::protocol::tasks::TaskTransition;
+use crate::protocol::tasks::{Task, TaskStatus};
 #[cfg(windows)]
 use platform::{
     create_private_dir, has_mode, judge_store_dir, open_new_private, open_record, rename, sync_dir,
@@ -177,12 +182,10 @@ impl TaskStore {
             return Err(StoreError::Unavailable);
         }
         let entry = owned(&state, owner, id)?;
-        Ok(CommittedTask {
-            task: entry.task.clone(),
-            revision: entry.record.revision,
-        })
+        Ok(CommittedTask::of(entry.task.clone(), &entry.record))
     }
 
+    #[cfg(test)]
     pub(crate) async fn transition(
         &self,
         owner: &str,
@@ -411,6 +414,7 @@ impl Shared {
         Ok(committed)
     }
 
+    #[cfg(test)]
     fn transition_blocking(
         &self,
         owner: &str,
@@ -437,10 +441,7 @@ impl Shared {
         if !change.changed {
             // A late outcome against a settled task is not a failure and is not
             // a write: the first terminal commit stays the committed one.
-            return Ok(CommittedTask {
-                revision: record.revision,
-                task,
-            });
+            return Ok(CommittedTask::of(task, &record));
         }
         // Unreachable in practice; a record that can hold no further revision is
         // out of room rather than broken.
@@ -556,15 +557,11 @@ impl Shared {
     /// Make a committed record visible to readers. Called only after the write
     /// is durable, which is what keeps an acknowledgement behind its record.
     fn publish(&self, task: Task, record: Record) -> CommittedTask {
-        let revision = record.revision;
-        let committed = task.clone();
+        let committed = CommittedTask::of(task.clone(), &record);
         self.state()
             .entries
             .insert(task.id().to_owned(), Entry { task, record });
-        CommittedTask {
-            task: committed,
-            revision,
-        }
+        committed
     }
 
     /// The test-only commit hook. Production installs none and pays nothing.
@@ -771,7 +768,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             tracing::warn!(%error, path = %path.display(), "task record does not parse");
             StoreError::CorruptRecord
         })?;
-        if !(1..=INPUT_ROUND_VERSION).contains(&record.version) {
+        if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
             tracing::warn!(path = %path.display(), version = record.version, "unsupported task record version");
             return Err(StoreError::CorruptRecord);
         }

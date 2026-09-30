@@ -31,6 +31,8 @@ pub(crate) enum Answer {
     Result(Value),
     /// One result per `tools/call`, in order; the last one repeats.
     Sequence(Vec<Value>),
+    /// A JSON-RPC error from the backend itself, after the call was received.
+    Failure,
 }
 
 impl Answer {
@@ -184,6 +186,13 @@ impl MockBackend {
         let value = match &self.answer {
             Answer::Result(value) => value,
             Answer::Sequence(values) => &values[call.min(values.len() - 1)],
+            Answer::Failure => {
+                return JsonRpcResponse::error(
+                    Some(RequestId::Number(1)),
+                    -32000,
+                    "mock-backend-failed",
+                );
+            }
         };
         JsonRpcResponse::success(RequestId::Number(1), value.clone())
     }

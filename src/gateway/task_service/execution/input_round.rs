@@ -21,7 +21,7 @@ use super::settlement::{
 use super::worker::inspect_settled;
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor, WriteOutcome};
 use crate::gateway::router::AppState;
-use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
+use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound, Target};
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
 use crate::protocol::mrtr::{InputRequired, RetryFields};
@@ -108,15 +108,61 @@ impl<'a> Settling<'a> {
         }
     }
 
+    /// The calls a plan actually dispatched, for the settlement to commit with
+    /// its outcome. `None` for a call whose one target was recorded at creation.
+    fn plan_targets(&self) -> Option<Vec<Target>> {
+        matches!(
+            self.call.tool.as_str(),
+            "gateway_execute" | "gateway_run_playbook"
+        )
+        .then(|| {
+            self.owned
+                .dispatch_log()
+                .snapshot()
+                .into_iter()
+                .map(|(server, tool)| Target { server, tool })
+                .collect()
+        })
+    }
+
     async fn settle(&self, event: TaskTransition) {
         self.executor
-            .settle_cas(self.principal, self.id, self.revision, event)
+            .settle_cas_with(
+                self.principal,
+                self.id,
+                self.revision,
+                (event, self.plan_targets()),
+            )
             .await;
+    }
+
+    /// Record a parked plan's calls so far; the resume's log starts empty.
+    /// `false` means they are NOT durable, and the round must not be parked.
+    async fn park_targets(&self) -> bool {
+        let Some(targets) = self.plan_targets() else {
+            return true;
+        };
+        let Ok(owner) = self.executor.service.owner(self.principal) else {
+            return false;
+        };
+        let stored = self
+            .executor
+            .service
+            .store
+            .add_targets(owner.as_digest(), self.id, self.revision, targets)
+            .await;
+        // A row a cancel already moved is not parked either way.
+        matches!(stored, Ok(()) | Err(StoreError::RevisionConflict))
     }
 
     /// Commit `input_required` with the continuation, then release: the worker
     /// returns and the row waits with no owner.
     async fn park(&self, round: InputRequired) {
+        if !self.park_targets().await {
+            return self
+                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .await;
+        }
         let Ok(owner) = self.executor.service.owner(self.principal) else {
             return self
                 .settle(TaskTransition::Complete(abandoned_input_round()))
@@ -209,6 +255,10 @@ async fn dispatch(
         call.arguments.clone(),
         owned.session_id(),
         &caller,
+    );
+    let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+        Arc::clone(owned.dispatch_log()),
+        dispatched,
     );
     tokio::select! {
         biased;

@@ -47,6 +47,7 @@ pub(crate) use execution::{
     InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall, UpstreamAnswer,
     UpstreamHandle, UpstreamRecovery,
 };
+pub(crate) use record::{CommittedTask, Target};
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
 /// name has to be reachable from outside the crate.
