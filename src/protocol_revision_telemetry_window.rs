@@ -239,6 +239,25 @@ impl HttpSegmentSink {
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
         std::fs::create_dir_all(&directory)?;
         super::force_directory_owner_only(&directory)?;
+        // A predecessor seals 250 ms after its shutdown signal, so a fast
+        // restart can get here first. An unclosed predecessor gets a bounded
+        // chance to seal before it counts as concurrent. A live writer or a
+        // crashed one never seals, so both are still flagged.
+        // ponytail: blocks the caller for at most 2 s, and only when the last
+        // segment is unclosed; move to a non-blocking lock if that shows up.
+        for _ in 0..8 {
+            let unsealed = {
+                let _lock = lock(&lock_path)?;
+                read_or_create(&window_path, now)?
+                    .http_segments
+                    .last()
+                    .is_some_and(|previous| !previous.closed_cleanly)
+            };
+            if !unsealed {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
         let _lock = lock(&lock_path)?;
         let mut window = read_or_create(&window_path, now)?;
         let opened_while_another_was_open = window

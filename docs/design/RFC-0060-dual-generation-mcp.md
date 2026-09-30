@@ -135,7 +135,14 @@ whose clients are all HTTP. Design and review:
 
 The decision certifies HTTP only. Stdio children record no segments, so a
 stdio observation in the window, or a declaration other than `http`, blocks
-with `PopulationMismatch`. Missing-revision requests stay in the 2% gate; the
+with `PopulationMismatch`.
+
+Known bound: a request still uploading its body when a segment seals is counted
+after the seal and belongs to no segment. This loss is limited to restart
+moments, which the 300 s coverage budget already bounds, and it is not biased
+toward any revision. Record the number of restarts in the result comment.
+
+Missing-revision requests stay in the 2% gate; the
 per-caller breakdown (named client, else User-Agent family) only identifies
 which callers to fix.
 

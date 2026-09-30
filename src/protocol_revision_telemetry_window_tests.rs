@@ -164,6 +164,25 @@ fn path_of(dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[test]
+fn t3_a_successor_that_opens_before_its_predecessor_seals_is_not_concurrent() {
+    // Final review, seat 2: the predecessor seals 250 ms after its shutdown
+    // signal, and a fast restart can open inside that window.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut first = HttpSegmentSink::open(dir.path(), identity(PROD, 10), 10).expect("open");
+    let sealer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        first
+            .checkpoint(&counts("2026-07-28", 1), 11, true)
+            .expect("seal");
+    });
+    HttpSegmentSink::open(dir.path(), identity(PROD, 11), 11).expect("successor");
+    sealer.join().expect("sealer thread");
+    let window = read_window_v2(&path_of(dir.path())).expect("read");
+    assert!(window.http_segments[0].closed_cleanly);
+    assert!(!window.http_segments[1].opened_while_another_was_open);
+}
+
+#[test]
 fn t4_foreign_writers_and_coverage_gaps_block() {
     let good = || segment(0, 8 * DAY, true, http_snapshot("2026-07-28", 100));
     let mut compat_after = good();
