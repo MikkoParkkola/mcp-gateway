@@ -21,10 +21,6 @@ use mcp_gateway::{
 };
 use tracing::{error, info};
 
-// ── New command imports ────────────────────────────────────────────────────────
-// These modules live in the binary-only `commands/` tree and are not part of
-// the library crate, so they are imported directly here.
-
 /// Stack for the thread that runs the async main body.
 ///
 /// Clap's derived parser needs about 900 KB of stack in an unoptimized build
