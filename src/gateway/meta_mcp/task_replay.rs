@@ -45,6 +45,10 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
+        if stored.output_free {
+            // Only the gateway's own bounded error: no backend output to judge.
+            return Ok(());
+        }
         if stored.targets.is_empty() {
             // A recording gateway's empty list means nothing was dispatched.
             return if stored.targets_recorded {

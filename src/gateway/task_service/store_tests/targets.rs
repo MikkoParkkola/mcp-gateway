@@ -121,3 +121,53 @@ async fn targets_that_overflow_the_record_budget_are_refused_not_truncated() {
     assert!(store.get(OWNER, task.id()).unwrap().targets.is_empty());
     store.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_settlement_that_overflows_beside_parked_targets_still_ends_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TaskStore::open(
+        &dir.path().join("tasks"),
+        StoreLimits {
+            record_bytes: 4 * 1024,
+            ..StoreLimits::default()
+        },
+    )
+    .await
+    .unwrap();
+    let task = task();
+    store
+        .create(PreparedTask::for_test(&task, OWNER, 1))
+        .await
+        .unwrap();
+    let parked = (0..60)
+        .map(|n| Target {
+            server: format!("s{n:03}"),
+            tool: "echo".into(),
+        })
+        .collect();
+    store
+        .add_targets(OWNER, task.id(), 1, parked)
+        .await
+        .unwrap();
+    let big = json!({ "content": [{ "type": "text", "text": "q".repeat(3_000) }] });
+
+    let settled = store
+        .settle_bounded(
+            OWNER,
+            task.id(),
+            1,
+            (TaskTransition::Complete(big), Some(Vec::new())),
+            at(1),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(settled.task.status(), TaskStatus::Failed);
+    assert!(settled.output_free && settled.targets.is_empty());
+    assert!(
+        !serde_json::to_string(&settled.task.wire())
+            .unwrap()
+            .contains("qqqq")
+    );
+    store.close().await.unwrap();
+}
