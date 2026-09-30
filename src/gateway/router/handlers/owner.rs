@@ -42,6 +42,7 @@ pub(super) fn session_owner(client: Option<&AuthenticatedClient>) -> SessionOwne
 /// # Errors
 ///
 /// The refusal response for an identity header that breaks the mode's rules.
+#[allow(clippy::result_large_err)] // early-return pattern mirrors existing handlers
 pub(super) async fn request_session_owner(
     state: &AppState,
     headers: &HeaderMap,
