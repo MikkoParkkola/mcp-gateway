@@ -35,7 +35,9 @@ pub(crate) mod input;
 mod platform;
 #[path = "store_targets.rs"]
 pub(crate) mod targets;
-use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
+#[cfg(test)]
+use crate::protocol::tasks::TaskTransition;
+use crate::protocol::tasks::{Task, TaskStatus};
 #[cfg(windows)]
 use platform::{
     create_private_dir, has_mode, judge_store_dir, open_new_private, open_record, rename, sync_dir,
