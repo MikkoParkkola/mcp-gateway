@@ -45,6 +45,7 @@ use crate::security::{
 mod owner;
 mod tasks;
 
+pub(super) use owner::owner_of;
 use owner::request_session_owner;
 #[cfg(test)]
 use owner::session_owner;
