@@ -24,6 +24,8 @@ pub struct ResolvedApiKey {
     pub denied_tools: Option<Vec<String>>,
     /// Admin-level UI and management tool access.
     pub admin: bool,
+    /// Configured `kind: personal`: one holder, so a per-caller identity.
+    pub(super) personal: bool,
 }
 
 impl std::fmt::Debug for ResolvedApiKey {
@@ -41,6 +43,7 @@ impl std::fmt::Debug for ResolvedApiKey {
             .field("allowed_tools", &self.allowed_tools)
             .field("denied_tools", &self.denied_tools)
             .field("admin", &self.admin)
+            .field("personal", &self.personal)
             .finish_non_exhaustive()
     }
 }

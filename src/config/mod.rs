@@ -52,16 +52,16 @@ pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file}
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
-    AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit, CircuitBreakerConfig,
-    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
-    DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, HealthCheckConfig,
-    IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig,
-    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
-    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig,
-    ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig,
-    RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig, TasksConfig,
-    ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, ApiKeyKind,
+    AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit,
+    CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
+    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig,
+    HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
+    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
+    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
+    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
+    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig,
+    TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
 pub(crate) use features::{api_key_expired, parse_api_key_digest};
 

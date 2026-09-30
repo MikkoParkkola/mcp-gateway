@@ -77,6 +77,7 @@ pub(super) fn two_principal_auth() -> AuthConfig {
         allowed_tools: None,
         denied_tools: None,
         admin,
+        kind: crate::config::ApiKeyKind::Shared,
     };
     AuthConfig {
         enabled: true,

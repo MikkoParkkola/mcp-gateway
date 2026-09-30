@@ -91,6 +91,7 @@ async fn send_as(admin: bool, uri: &str, method: &str) -> (StatusCode, Value, bo
             allowed_tools: None,
             denied_tools: None,
             admin,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         ..Default::default()
     };

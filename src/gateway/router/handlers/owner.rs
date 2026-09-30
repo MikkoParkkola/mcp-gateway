@@ -6,9 +6,10 @@ use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 
 use super::super::AppState;
+use super::super::hardened_identity::hardened_identity_refusal;
 use super::super::identity::{caller_grant_subject, identity_refusal_response, subject_key};
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::auth::live::held_credential;
+use crate::gateway::auth::{AuthenticatedClient, NamedApiKey};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::session_id::SessionOwner;
 use crate::identity_grants::GrantSubject;
@@ -65,7 +66,13 @@ pub(super) async fn request_session_owner(
     )
     .await
     .map_err(|refusal| identity_refusal_response(refusal).into_response())?;
-    let owner = owner_of(subject_key(subject.as_ref(), cert), headers, client);
+    let key = subject_key(subject.as_ref(), cert);
+    if let Some(refusal) =
+        hardened_identity_refusal(state, key.as_deref(), extensions.get::<NamedApiKey>())
+    {
+        return Err(refusal.into_response());
+    }
+    let owner = owner_of(key, headers, client);
     Ok((subject, owner))
 }
 
