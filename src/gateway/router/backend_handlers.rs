@@ -1000,6 +1000,35 @@ async fn backend_handler_inner(
     {
         return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
     }
+    // SECURITY: apply tool policy, name validation, and input sanitization to
+    // tools/call requests unless the backend explicitly opts into pass-through
+    // mode (passthrough: true in config — only for fully-trusted internals).
+    // #2445: before the idempotency cache below, so a call the gate now
+    // refuses is refused on the re-issue too, never answered from the cache.
+    let sanitized = if method == "tools/call" {
+        match apply_backend_tool_call_security(
+            &state,
+            &name,
+            BackendAuthContext {
+                client: client.as_ref(),
+                oauth_agent_identity: oauth_agent_identity.as_ref(),
+                cert_identity: cert_identity.as_ref(),
+                #[cfg(feature = "firewall")]
+                grant_subject: grant_subject.as_ref(),
+            },
+            params.as_ref(),
+            &id,
+            &backend,
+            ((identity_key.as_deref(), &propagated_headers), &failed),
+        )
+        .await
+        {
+            Err(rejection) => return rejection,
+            Ok(sanitized) => sanitized, // `None`: pass-through, forwarded as sent
+        }
+    } else {
+        None
+    };
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
@@ -1035,67 +1064,41 @@ async fn backend_handler_inner(
         }
     }
 
-    // SECURITY: apply tool policy, name validation, and input sanitization to
-    // tools/call requests unless the backend explicitly opts into pass-through
-    // mode (passthrough: true in config — only for fully-trusted internals).
-    if method == "tools/call" {
-        match apply_backend_tool_call_security(
-            &state,
-            &name,
-            BackendAuthContext {
-                client: client.as_ref(),
-                oauth_agent_identity: oauth_agent_identity.as_ref(),
-                cert_identity: cert_identity.as_ref(),
-                #[cfg(feature = "firewall")]
-                grant_subject: grant_subject.as_ref(),
-            },
-            params.as_ref(),
-            &id,
-            &backend,
-            ((identity_key.as_deref(), &propagated_headers), &failed),
-        )
-        .await
-        {
-            Ok(Some(sanitized_params)) => {
-                let warnings = match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
-                    Ok(warnings) => warnings,
-                    Err(e) => {
-                        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
-                    }
-                };
-                // Forward the sanitized params to the backend
-                let forward = Box::pin(dispatch_armed(
-                    idem_reservation.as_mut(),
-                    dispatch_in_scope(
-                        &backend,
-                        &method,
-                        &id,
-                        Some(sanitized_params),
-                        &propagated_headers,
-                        identity_key.as_deref(),
-                    ),
-                ))
-                .await;
-                let (params, client) = (params.as_ref(), client.as_ref());
-                let forward = DirectRouteGuards::after_dispatch(
-                    &state, &call, params, client, &warnings, forward,
-                );
-                return match forward {
-                    Ok(mut response) => {
-                        // Restore the caller's ID over the transport's own.
-                        response.id = Some(id.clone());
-                        stamp_direct_provenance(&state, &name, params, client, &mut response);
-                        settle_direct_idempotency(idem_reservation.as_mut(), &response);
-                        build_http_response(&response, StatusCode::OK)
-                    }
-                    // Settled as terminal unless raised before dispatch
-                    // (ADR-012 consequence 1; see `settle_direct_failure`).
-                    Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
-                };
+    if let Some(sanitized_params) = sanitized {
+        let warnings = match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
+            Ok(warnings) => warnings,
+            Err(e) => {
+                return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
             }
-            Err(rejection) => return rejection,
-            Ok(None) => {} // passthrough backend: forward the params as sent
-        }
+        };
+        // Forward the sanitized params to the backend
+        let forward = Box::pin(dispatch_armed(
+            idem_reservation.as_mut(),
+            dispatch_in_scope(
+                &backend,
+                &method,
+                &id,
+                Some(sanitized_params),
+                &propagated_headers,
+                identity_key.as_deref(),
+            ),
+        ))
+        .await;
+        let (params, client) = (params.as_ref(), client.as_ref());
+        let forward =
+            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward);
+        return match forward {
+            Ok(mut response) => {
+                // Restore the caller's ID over the transport's own.
+                response.id = Some(id.clone());
+                stamp_direct_provenance(&state, &name, params, client, &mut response);
+                settle_direct_idempotency(idem_reservation.as_mut(), &response);
+                build_http_response(&response, StatusCode::OK)
+            }
+            // Settled as terminal unless raised before dispatch
+            // (ADR-012 consequence 1; see `settle_direct_failure`).
+            Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
+        };
     }
 
     // Forward to backend. `tools/list` drains the whole upstream catalogue
