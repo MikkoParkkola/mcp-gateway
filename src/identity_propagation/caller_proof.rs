@@ -75,6 +75,12 @@ impl CallerProvenance {
     /// (`personal_accounts::vault`), and a predicate the enforcement point
     /// cannot call is a comment. Carrying the provenance in the type only helps
     /// if something reads it.
+    ///
+    /// Stdio contexts that carry no mark (the prompt and resource handlers,
+    /// which have no caller context) classify `Credential` and are admitted
+    /// here only because both states qualify. Tightening this to
+    /// `LocalTransport` alone would refuse them: thread the mark through those
+    /// builders first (MIK-7272.OWNER.3).
     pub(crate) fn establishes_the_operator(self) -> bool {
         match self {
             Self::LocalTransport | Self::Credential => true,

@@ -131,6 +131,13 @@ async fn stdio_results_are_keyed_by_transport_not_by_name() {
             "{label} must get its own admission, not the transport's result"
         );
     }
+
+    // "The real stdio owner works": the transport still replays its own.
+    let own = outcome(admit(&fixture, &transport(&authorizer, &retry), 3));
+    assert!(
+        own.starts_with("replay") && own.contains(MARKER),
+        "the transport must replay its own completed result: {own}"
+    );
 }
 
 /// T3.2. The reverse order: a result completed under the principal text alone
