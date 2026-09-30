@@ -70,7 +70,7 @@ pub struct JsonRpcResponse {
     /// or serialized; it excludes both client strikes and success resets.
     #[serde(skip)]
     pub(crate) delivery_refusal: bool,
-    /// Server-owned chain eligibility; never on the wire, NotEligible by default.
+    /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
     #[serde(skip)]
     pub(crate) chain_source: super::ChainSource,
 }

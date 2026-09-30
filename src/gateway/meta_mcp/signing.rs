@@ -144,7 +144,7 @@ impl SigningInvocationContext {
         }
     }
 
-    /// The well-formed gateway_invoke `nonce`, if any: the chain's fallback
+    /// The well-formed `gateway_invoke` `nonce`, if any: the chain's fallback
     /// nonce. Never validates, admits or consumes anything.
     pub(crate) fn invoke_nonce(&self) -> Option<&str> {
         match &self.nonce {

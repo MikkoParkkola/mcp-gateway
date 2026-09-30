@@ -369,7 +369,7 @@ impl super::MetaMcp {
 impl super::MetaMcp {
     /// Attach this gateway's origin link to an eligible success result: on
     /// every one under `emit: always`, else only when the request carried a
-    /// chain nonce. The gateway_invoke nonce is a fallback value, never a
+    /// chain nonce. The `gateway_invoke` nonce is a fallback value, never a
     /// trigger. A result that cannot carry a link is refused, not delivered
     /// unlinked.
     fn emit_origin_link(
@@ -437,6 +437,57 @@ impl super::MetaMcp {
             self.emit_origin_link(response, ChainSource::Backend, chain_nonce, None);
         }
     }
+}
+
+/// Shape a meta-tool result into its reply. Only a success result takes the
+/// dispatch's chain source (A3 R5); every error stays `NotEligible`.
+pub(super) fn shape_meta_result(
+    id: crate::protocol::RequestId,
+    tool_name: &str,
+    result: crate::Result<serde_json::Value>,
+    shape: super::ResultShape,
+    declared: crate::protocol::meta::Declared,
+    source: ChainSource,
+) -> crate::protocol::JsonRpcResponse {
+    let mut response = match result {
+        Ok(content) => match shape {
+            // MRTR.11a: an interim round must not be pretty-printed into
+            // `content[0].text`. `wrap_tool_success` states `is_error:
+            // false` and buries `resultType` inside a JSON string, where
+            // neither a protocol client nor the firewall's
+            // `PreserveInputRequired` policy can read it — a question
+            // committed as an answer. The task worker already escapes via
+            // `super::ResultShape::Native`; this is the same escape for the
+            // synchronous thread, gated so a backend cannot mint one.
+            super::ResultShape::Wrapped => {
+                match super::interim_promotion::promote_interim(&content, declared) {
+                    super::interim_promotion::Promotion::Native => {
+                        crate::protocol::JsonRpcResponse::success(id, content)
+                    }
+                    super::interim_promotion::Promotion::Wrap => {
+                        let has_output_schema = tool_name == "gateway_search_tools";
+                        crate::gateway::meta_mcp_helpers::wrap_tool_success(
+                            id,
+                            &content,
+                            has_output_schema,
+                        )
+                    }
+                    super::interim_promotion::Promotion::UpstreamFault(message) => {
+                        super::error_response_preserving_status(
+                            id,
+                            &crate::Error::json_rpc(-32603, message),
+                        )
+                    }
+                }
+            }
+            super::ResultShape::Native => crate::protocol::JsonRpcResponse::success(id, content),
+        },
+        Err(e) => super::error_response_preserving_status(id, &e),
+    };
+    if response.error.is_none() && response.result.is_some() {
+        response.chain_source = source;
+    }
+    response
 }
 
 #[cfg(all(test, feature = "firewall"))]

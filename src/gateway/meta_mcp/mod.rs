@@ -59,7 +59,6 @@ use crate::{Error, Result};
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
     build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
-    wrap_tool_success,
 };
 use super::meta_mcp_tool_defs::{
     MetaToolExposure, MetaToolGates, ToolTotal, build_meta_tools_filtered,
@@ -2396,38 +2395,8 @@ impl MetaMcp {
             }
         };
 
-        let mut response = match result {
-            Ok(content) => match shape {
-                // MRTR.11a: an interim round must not be pretty-printed into
-                // `content[0].text`. `wrap_tool_success` states `is_error:
-                // false` and buries `resultType` inside a JSON string, where
-                // neither a protocol client nor the firewall's
-                // `PreserveInputRequired` policy can read it — a question
-                // committed as an answer. The task worker already escapes via
-                // `ResultShape::Native`; this is the same escape for the
-                // synchronous thread, gated so a backend cannot mint one.
-                ResultShape::Wrapped => {
-                    match interim_promotion::promote_interim(&content, caller.input_capabilities) {
-                        interim_promotion::Promotion::Native => {
-                            JsonRpcResponse::success(id, content)
-                        }
-                        interim_promotion::Promotion::Wrap => {
-                            let has_output_schema = tool_name == "gateway_search_tools";
-                            wrap_tool_success(id, &content, has_output_schema)
-                        }
-                        interim_promotion::Promotion::UpstreamFault(message) => {
-                            error_response_preserving_status(id, &Error::json_rpc(-32603, message))
-                        }
-                    }
-                }
-                ResultShape::Native => JsonRpcResponse::success(id, content),
-            },
-            Err(e) => error_response_preserving_status(id, &e),
-        };
-        if response.error.is_none() && response.result.is_some() {
-            response.chain_source = source;
-        }
-        response
+        let declared = caller.input_capabilities;
+        response_security::shape_meta_result(id, tool_name, result, shape, declared, source)
     }
 }
 

@@ -15,7 +15,7 @@ use crate::protocol::ChainSource;
 use serde_json::Value;
 
 /// A tool result that has passed (or is exempt from) the render guard,
-/// with its chain eligibility (A3: NotEligible unless marked `backend`).
+/// with its chain eligibility (A3: `NotEligible` unless marked `backend`).
 pub(super) struct GuardedValue(Value, ChainSource);
 
 impl GuardedValue {

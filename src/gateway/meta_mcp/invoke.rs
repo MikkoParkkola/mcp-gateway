@@ -2095,9 +2095,7 @@ impl MetaMcp {
         arm_for_dispatch(idem_reservation.as_mut());
         // A3 R1: only an MCP backend's own answer can be chain-eligible; a
         // capability's `Ok` also covers its local refusals and inner cache.
-        let mcp_backend = !self
-            .get_capabilities()
-            .is_some_and(|cap| server == cap.name);
+        let mcp_backend = self.get_capabilities().is_none_or(|cap| server != cap.name);
         let dispatch_result = Box::pin(self.accounted_dispatch(
             server,
             tool,
@@ -5398,7 +5396,8 @@ mod identity_propagation_enforcement_tests {
         );
         let served = second
             .expect("the duplicate is served from the cache")
-            .into_inner();
+            .into_parts()
+            .0;
         assert!(
             served.to_string().contains("outcome is unknown"),
             "the duplicate was served something other than the uncertainty marker: {served}"
