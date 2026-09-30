@@ -1,1 +1,0 @@
-- Cache: a delivered `cacheScope` is never `public`. Every result the gateway sends is clamped to `private`, including a backend's own `public` on the direct route, task envelopes and webhook `message` events; `CacheScope::Public` is now uninhabited and `CacheScope::for_list` is removed (MIK-7211.PARENT.6, item 108 of the 4.0 upgrade guide).
