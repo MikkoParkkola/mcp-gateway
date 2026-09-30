@@ -226,8 +226,14 @@ async fn ac_control_3a_empty_modern_session_is_not_a_correlation_key() {
         .expect("the invoke path stamps its minted trace id into the response")
         .to_string();
     let raw = std::fs::read_to_string(&log_path).expect("read log");
-    assert!(
-        raw.contains(&minted) && raw.contains("\"correlation_source\":\"trace_id\""),
-        "an empty session id must fall through to the minted trace id: minted={minted} log={raw}"
+    let entry: Value = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| entry.get("correlation_source").is_some())
+        .expect("one correlated invocation entry");
+    assert_eq!(
+        (entry["session_id"].as_str(), entry["correlation_source"].as_str()),
+        (Some(minted.as_str()), Some("trace_id")),
+        "an empty session id must fall through to the minted trace id: {raw}"
     );
 }
