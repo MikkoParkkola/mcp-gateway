@@ -1657,7 +1657,13 @@ async fn meta_mcp_dispatch(
             // have pre-applied is applied again at the dispatch chokepoint that
             // the worker's own call goes through.
             let admission = if caller.task.is_some() {
-                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected)
+                // #2450: a repeat can be answered from the stored task, so the
+                // policy a lease would apply runs here too.
+                let session = Some(session_id.as_str());
+                let policy = state
+                    .meta_mcp
+                    .check_task_admission_policy(&caller, tool_name, &arguments, session);
+                policy.map(|()| crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected)
             } else {
                 state.meta_mcp.admit_meta_sync(
                     &caller,
