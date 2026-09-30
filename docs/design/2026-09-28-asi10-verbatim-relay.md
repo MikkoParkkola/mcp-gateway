@@ -305,8 +305,9 @@ post-merge feature-combinations job, and a red result there blocks.
 ### 13.1 Increment 2a-i (delta r3, 2026-09-30; split ruled by the coordinator)
 
 Reviewed in one round by two independent seats, both SHIP-WITH-FIXES with no HIGH finding; the
-fixes are folded in below. Deferred, as LOW: a relay-specific refusal prefix instead of the
-shared "Anomaly detection blocked:", and a pre-merge run of the no-default `validate` step.
+fixes are folded in below. Deferred, as LOW: a pre-merge run of the no-default binary probe.
+Found while writing the tests, after review: the recording cap had to shrink from 64 KiB to 6 KiB
+to fit the detector's fingerprint keep limit (see Recording). The final review covers it.
 
 Increment 2a is split. **2a-i** is the direct route plus the shared config and state.
 **2a-ii** covers the meta route (`accounted_dispatch` check, delivery-boundary recording on HTTP
@@ -367,7 +368,8 @@ the meta pre-check and meta is 2a-ii.
 4. A hit becomes a `CollusionRelay` finding (`Medium`, `RequestArgs`) whose `matched` is the
    hex digests of source, receiver and sender plus the match count, never content. Under
    `observe` the verdict is `Warn` and the call proceeds. Under `block` it is refused through
-   the existing `is_anomaly_block` branch: `-32002`, HTTP 403. Nothing is dispatched and no
+   its own branch beside the anomaly one: `-32002`, HTTP 403, message "Relay detection
+   blocked: ..." (a relay-specific prefix, as review seat 2 suggested). Nothing is dispatched and no
    idempotency reservation is taken, because the check runs before `direct_route_idempotency`
    (#2445 ordering).
 5. The verdict is audit-logged like `check_request`'s.
@@ -383,8 +385,10 @@ delivered response carries a `result`, whether or not an `error` sits beside it.
 refusals (a fresh response with no `result`) and transport failures record nothing.
 The source is `server:tool`.
 - Text: string leaves of `result`, joined with `\n`, skipping the `_context_integrity` subtree.
-  Capped at 64 KiB of text: the first and last 32 KiB, each cut on a UTF-8 boundary, so a
-  tail-only excerpt still matches. Each cut is counted; the middle of a larger result is the
+  Capped at 6 KiB of text: the first and last 3 KiB, each cut on a UTF-8 boundary, so a
+  tail-only excerpt still matches. The cap sits under the detector's 1,024-fingerprint keep
+  limit (about 8.7K characters, kept in text order); the 64 KiB first proposed would have
+  dropped every tail fingerprint. Each cut is counted; the middle of a larger result is the
   known, observable residual.
 - Sensitive: `server:tool` matches `sources`, OR the result's gateway-attached
   `_context_integrity.classification.data_classes` holds `personal_data`, `financial_data` or
