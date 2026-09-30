@@ -171,6 +171,95 @@ impl super::AbortOnDrop {
     }
 }
 
+/// How often an HTTP process rewrites its U1 window segment.
+const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Keep this HTTP process's U1 segment current, and seal it on shutdown.
+///
+/// The seal is written on the shutdown broadcast, not after the drain: open
+/// connections get `server.shutdown_timeout` (30 s by default) and launchd
+/// sends SIGKILL after 20 s, so a post-drain seal would never land while an SSE
+/// stream is open. Sealing takes the counts and refuses every later HTTP
+/// request in one critical section (`global_segment_counts(Some(seal))`), so a
+/// request is either in the sealed counts or refused unserved (503). A call
+/// counted before the seal finishes normally, however long it runs.
+/// A sink that fails to open is retried every tick; counts are cumulative
+/// from process start, so a late open still records everything.
+///
+/// `None` when `server.protocol_revision_window` is `off`: nothing is recorded,
+/// nothing is sealed, and shutdown serves requests as in 3.5.x.
+pub(super) fn spawn_window_saver(
+    enabled: bool,
+    data_dir: PathBuf,
+    listen: std::net::SocketAddr,
+    seal: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    shutdown: tokio::sync::broadcast::Receiver<()>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    use crate::protocol_revision_telemetry::window::{WriterIdentity, unix_seconds_now};
+    if !enabled {
+        return None;
+    }
+    let identity = WriterIdentity {
+        listen: listen.to_string(),
+        exe: std::env::current_exe()
+            .map_or_else(|_| "unknown".to_string(), |path| path.display().to_string()),
+        process_started_at: unix_seconds_now(),
+    };
+    Some(spawn_protocol_window_saver(
+        data_dir,
+        identity,
+        PROTOCOL_WINDOW_SAVE_INTERVAL,
+        Box::new(move |close: bool| {
+            crate::protocol_revision_telemetry::window::global_segment_counts(
+                close.then_some(seal.as_ref()),
+            )
+        }),
+        shutdown,
+    ))
+}
+
+fn spawn_protocol_window_saver(
+    data_dir: PathBuf,
+    identity: crate::protocol_revision_telemetry::window::WriterIdentity,
+    every: std::time::Duration,
+    counts: Box<dyn Fn(bool) -> crate::protocol_revision_telemetry::window::SegmentCounts + Send>,
+    mut shutdown: tokio::sync::broadcast::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    use crate::protocol_revision_telemetry::window::HttpSegmentSink;
+    tokio::spawn(async move {
+        let mut sink: Option<HttpSegmentSink> = None;
+        let mut interval = tokio::time::interval(every);
+        loop {
+            let close = tokio::select! {
+                _ = interval.tick() => false,
+                _ = shutdown.recv() => true,
+            };
+            let now = crate::protocol_revision_telemetry::window::unix_seconds_now();
+            if sink.is_none() {
+                match HttpSegmentSink::open(&data_dir, identity.clone(), now) {
+                    Ok(opened) => sink = Some(opened),
+                    Err(error) => warn!(
+                        %error,
+                        data_dir = %data_dir.display(),
+                        "HTTP protocol-revision telemetry is not durable; do not start the measurement window"
+                    ),
+                }
+            }
+            // Taken whether or not the sink is open: the seal must refuse later
+            // requests even when this process's segment could not be written.
+            let segment_counts = counts(close);
+            if let Some(sink) = sink.as_mut()
+                && let Err(error) = sink.checkpoint(&segment_counts, now, close)
+            {
+                warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
+            }
+            if close {
+                break;
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,93 +481,4 @@ mod tests {
         assert!(window.http_segments[0].closed_cleanly);
         assert!(SEAL_REQUESTED.load(std::sync::atomic::Ordering::SeqCst));
     }
-}
-
-/// How often an HTTP process rewrites its U1 window segment.
-const PROTOCOL_WINDOW_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Keep this HTTP process's U1 segment current, and seal it on shutdown.
-///
-/// The seal is written on the shutdown broadcast, not after the drain: open
-/// connections get `server.shutdown_timeout` (30 s by default) and launchd
-/// sends SIGKILL after 20 s, so a post-drain seal would never land while an SSE
-/// stream is open. Sealing takes the counts and refuses every later HTTP
-/// request in one critical section (`global_segment_counts(Some(seal))`), so a
-/// request is either in the sealed counts or refused unserved (503). A call
-/// counted before the seal finishes normally, however long it runs.
-/// A sink that fails to open is retried every tick; counts are cumulative
-/// from process start, so a late open still records everything.
-///
-/// `None` when `server.protocol_revision_window` is `off`: nothing is recorded,
-/// nothing is sealed, and shutdown serves requests as in 3.5.x.
-pub(super) fn spawn_window_saver(
-    enabled: bool,
-    data_dir: PathBuf,
-    listen: std::net::SocketAddr,
-    seal: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    shutdown: tokio::sync::broadcast::Receiver<()>,
-) -> Option<tokio::task::JoinHandle<()>> {
-    use crate::protocol_revision_telemetry::window::{WriterIdentity, unix_seconds_now};
-    if !enabled {
-        return None;
-    }
-    let identity = WriterIdentity {
-        listen: listen.to_string(),
-        exe: std::env::current_exe()
-            .map_or_else(|_| "unknown".to_string(), |path| path.display().to_string()),
-        process_started_at: unix_seconds_now(),
-    };
-    Some(spawn_protocol_window_saver(
-        data_dir,
-        identity,
-        PROTOCOL_WINDOW_SAVE_INTERVAL,
-        Box::new(move |close: bool| {
-            crate::protocol_revision_telemetry::window::global_segment_counts(
-                close.then_some(seal.as_ref()),
-            )
-        }),
-        shutdown,
-    ))
-}
-
-fn spawn_protocol_window_saver(
-    data_dir: PathBuf,
-    identity: crate::protocol_revision_telemetry::window::WriterIdentity,
-    every: std::time::Duration,
-    counts: Box<dyn Fn(bool) -> crate::protocol_revision_telemetry::window::SegmentCounts + Send>,
-    mut shutdown: tokio::sync::broadcast::Receiver<()>,
-) -> tokio::task::JoinHandle<()> {
-    use crate::protocol_revision_telemetry::window::HttpSegmentSink;
-    tokio::spawn(async move {
-        let mut sink: Option<HttpSegmentSink> = None;
-        let mut interval = tokio::time::interval(every);
-        loop {
-            let close = tokio::select! {
-                _ = interval.tick() => false,
-                _ = shutdown.recv() => true,
-            };
-            let now = crate::protocol_revision_telemetry::window::unix_seconds_now();
-            if sink.is_none() {
-                match HttpSegmentSink::open(&data_dir, identity.clone(), now) {
-                    Ok(opened) => sink = Some(opened),
-                    Err(error) => warn!(
-                        %error,
-                        data_dir = %data_dir.display(),
-                        "HTTP protocol-revision telemetry is not durable; do not start the measurement window"
-                    ),
-                }
-            }
-            // Taken whether or not the sink is open: the seal must refuse later
-            // requests even when this process's segment could not be written.
-            let segment_counts = counts(close);
-            if let Some(sink) = sink.as_mut()
-                && let Err(error) = sink.checkpoint(&segment_counts, now, close)
-            {
-                warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
-            }
-            if close {
-                break;
-            }
-        }
-    })
 }
