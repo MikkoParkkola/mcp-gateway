@@ -77,6 +77,15 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
                 .to_string(),
         ));
     }
+    // #1881: the egress proxy is a route out the destination policy cannot see.
+    if config.capabilities.egress_proxy.is_some() {
+        return Err(Error::ConfigValidation(
+            "security.posture=hardened refuses capabilities.egress_proxy: capability traffic \
+             through a proxy bypasses the destination policy; remove the key or set \
+             security.posture: standard"
+                .to_string(),
+        ));
+    }
     let context_integrity = &mut config.security.context_integrity;
     if matches!(
         context_integrity.preset,
