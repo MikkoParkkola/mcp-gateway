@@ -364,8 +364,9 @@ async fn meta_replay_without_a_block_is_still_deduplicated() {
     assert_eq!(fx.deliveries(), 1, "{second}");
 }
 
-/// R1p. Direct route, pass-through backend: the security gate is skipped by
-/// design, but the AX-010 block still comes before the cached replay.
+/// R1p. Direct route, pass-through backend: the gate's key check, which
+/// carries the AX-010 block, runs above its pass-through return, so the block
+/// comes before the cached replay here too.
 #[tokio::test]
 async fn passthrough_replay_after_block_is_refused() {
     let fx = fixture_with(Answer::Done, true).await;
