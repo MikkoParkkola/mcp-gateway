@@ -74,8 +74,8 @@ pub fn result_body() -> Value {
 fn link(
     gw: &str,
     up: &str,
-    prev: Option<String>,
-    input: Option<String>,
+    prev: Option<&str>,
+    input: Option<&str>,
     out: &str,
     nonce: &str,
     ts: u64,
@@ -111,8 +111,8 @@ fn chain_for(mode: Mode, result: &Value, nonce: &str) -> Option<Vec<Value>> {
             let second = link(
                 V_ID,
                 "verified",
-                Some(link_hash(&first)),
-                Some(out.clone()),
+                Some(link_hash(&first).as_str()),
+                Some(out.as_str()),
                 &out,
                 nonce,
                 fresh,
@@ -128,13 +128,14 @@ fn chain_for(mode: Mode, result: &Value, nonce: &str) -> Option<Vec<Value>> {
             )]
         }
         Mode::DroppedMiddleHop => {
-            let first = origin(V_ID, V_SEED, "v-nonce", fresh);
+            // Origin and last signer are both accepted; only the linkage breaks.
+            let first = origin(U_ID, U_SEED, "u-nonce", fresh);
             let removed = link_hash(&json!({"a removed": "hop"}));
             let last = link(
                 U_ID,
                 "verified",
-                Some(removed),
-                Some(out.clone()),
+                Some(removed.as_str()),
+                Some(out.as_str()),
                 &out,
                 nonce,
                 fresh,
@@ -143,8 +144,8 @@ fn chain_for(mode: Mode, result: &Value, nonce: &str) -> Option<Vec<Value>> {
         }
         Mode::Padded { links, pad } => {
             let mut chain = vec![sign(
-                link(V_ID, "none", None, None, &out, &"p".repeat(pad), fresh),
-                V_SEED,
+                link(U_ID, "none", None, None, &out, &"p".repeat(pad), fresh),
+                U_SEED,
             )];
             for i in 1..links {
                 let (gw, seed) = if i + 1 == links {
@@ -160,8 +161,8 @@ fn chain_for(mode: Mode, result: &Value, nonce: &str) -> Option<Vec<Value>> {
                 let next = link(
                     gw,
                     "verified",
-                    Some(link_hash(&chain[i - 1])),
-                    Some(out.clone()),
+                    Some(link_hash(&chain[i - 1]).as_str()),
+                    Some(out.as_str()),
                     &out,
                     &hop_nonce,
                     fresh,
