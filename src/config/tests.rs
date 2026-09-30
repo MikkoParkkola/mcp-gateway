@@ -36,9 +36,11 @@ fn unreadable_invalid_config_reports_secure_container_remediation_before_parsing
         message.contains(&path.display().to_string()),
         "the diagnostic must name the selected config path: {message}"
     );
+    // Unix names the container UID/GID to grant; Windows says to grant it through the ACL.
+    let remediation = if cfg!(windows) { "ACL" } else { "1001" };
     assert!(
-        message.contains("1001"),
-        "the diagnostic must name the official container UID/GID: {message}"
+        message.contains(remediation),
+        "the diagnostic must carry the platform's remediation ({remediation}): {message}"
     );
     assert!(
         !message.contains("invalid type") && !message.contains("invalid YAML"),
