@@ -1150,13 +1150,18 @@
     },
     {
       "id": "MIK-7407.RESPONSE.3",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "src/gateway/server/mod.rs:2972"
+        "src/gateway/server/tests/stdio_response_firewall.rs:153",
+        "src/gateway/server/tests/stdio_response_firewall.rs:190",
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:179",
+        "src/gateway/meta_mcp/response_security.rs:91",
+        "src/gateway/task_service/execution/worker.rs:462",
+        "src/gateway/router/handlers.rs:1744"
       ],
-      "note": "Built, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
+      "note": "Closed by #2390 (da78488b1, fixes #2358). stdio: counted fixtures drive the real stdio serving path; a blocked tool call, a surfaced tools/list, the discovery lists and gateway_invoke are refused with exactly one inspection (stdio_refuses_blocked_responses_with_one_inspection), and allowed ones are served with exactly one (stdio_serves_allowed_responses_with_one_inspection). Discovery responses are inspected once, on their raw value: a server-owned marker (discovery_inspected, never serialised) set only after the meta-tool match makes the router pass, the delivery finalizer and task settlement skip them; HTTP pinned by allowed_discovery_listings_are_inspected_once. Mutants NOFLAG, ROUTERSKIP, FINALSKIP, ANYTOOL caught (runs 36620547421 and 36627286348). Coverage follow-up (retry under a discovery name, task-mode discovery): #2431, 4.0.1.\n\n--- prior note follows ---\nBuilt, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
     },
     {
       "id": "MIK-7407.RESPONSE.4",
@@ -1177,15 +1182,17 @@
     },
     {
       "id": "MIK-7407.RESPONSE.5",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
         "src/gateway/meta_mcp/response_security.rs:175",
         "src/gateway/router/tests/meta_firewall_verdict.rs:564",
-        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149"
+        "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149",
+        "src/gateway/server/tests/stdio_response_firewall.rs:153",
+        "src/gateway/server/tests/stdio_response_firewall.rs:190"
       ],
-      "note": "Built on HTTP: counted per-instance inspection fixtures for meta tools/call, tools/list and the discovery tools, with policy-target rules; the delivery-attempt event (record_response_delivery_attempt) hashes the final response after filtering and signing. Open: no counted stdio fixture (see RESPONSE.3), so 'every route' is not yet proven."
+      "note": "Met with #2390 (da78488b1): the stdio route now has counted negative and positive fixtures with scan-count falsifiers (stdio_refuses_blocked_responses_with_one_inspection, stdio_serves_allowed_responses_with_one_inspection, including a Warn-rule redaction), beside the HTTP counted fixtures below, so every route is proven. Mutants FINALSKIP and ANYTOOL caught on the stdio rows (runs 36620547421 and 36627286348).\n\n--- prior note follows ---\nBuilt on HTTP: counted per-instance inspection fixtures for meta tools/call, tools/list and the discovery tools, with policy-target rules; the delivery-attempt event (record_response_delivery_attempt) hashes the final response after filtering and signing. Open: no counted stdio fixture (see RESPONSE.3), so 'every route' is not yet proven."
     },
     {
       "id": "MIK-7406.VERIFY.1",
