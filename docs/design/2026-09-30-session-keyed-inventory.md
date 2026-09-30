@@ -58,7 +58,7 @@ rest being tests. It also covered the files that pattern misses because they nam
 | 23 | Spec-preview promoted tools | `mod.rs:506,1509-1532`; `spec_preview.rs:311-335` | legacy | Refusal on modern, as row 22 | skipped silently today: needs the same refusal | MIK-7272.ORDER.2 |
 | 24 | Negotiated-revision binding (cache revision bucket, telemetry) | `protocol_revision_telemetry.rs:401-438,583-605` | legacy | Revision echoed per request | yes, `handlers.rs` `cache_protocol_revision` | NFR.OBS.1 |
 | 25 | Upstream `MCP-Session-Id` buckets (backend affinity) | `transport/http/mod.rs:314,1112-1120,1467-1486`; `backend/ops.rs:191,508-523` | legacy upstream | Keyed on caller identity already; header stripped for modern peers | yes, `http/mod.rs:412,1241` | STATELESS.3a |
-| 26 | Direct-route profile and cost key | `backend_handlers.rs:665-673,994` | both | Caller key, as row 27; never the raw unverified header | no; gap G6 | none |
+| 26 | Direct-route profile and cost key | `backend_handlers.rs:665-673,994` | both | Caller key, as row 27 | no; see G6 | none |
 | 27 | Direct-route firewall identity | `backend_handlers.rs:58-72,136`; `direct_guards.rs:119` | both | Caller key, else `direct:{backend}` | yes | CONTROL.1a/2 |
 
 **Dormant** (session-keyed, no production caller): `simhash.rs:379-439`, `prompt_cache.rs:110`,
@@ -126,7 +126,6 @@ These are recorded here, not fixed here. Each is routed through the 4.0 lane rul
   - Setup: modern protocol, auth off, `anomaly_detection` on (default off,
     `firewall/mod.rs:143`).
   - Effect: every meta-route call has an empty caller key, so the firewall refuses all of them.
-- **G6.** The direct route keys its profile and cost on the raw inbound `mcp-session-id` header,
-  with no ownership check (row 26).
+- **G6.** A security finding, routed privately to the release coordinator on 2026-09-30.
 - **G7.** MIK-7215.CONTROL.5 cites the 12-row RFC-0061 table as complete. This inventory replaces
   it as the governing list.
