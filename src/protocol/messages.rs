@@ -51,8 +51,12 @@ pub struct JsonRpcResponse {
     pub jsonrpc: String,
     /// Request ID (`null` when the response cannot be correlated to a request)
     pub id: Option<RequestId>,
-    /// Result (on success)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Result (on success). Serialized through the `cacheScope` clamp: no
+    /// delivered result claims a scope other than `private` (MIK-7211.PARENT.6).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::protocol::cacheable::serialize_delivered_result"
+    )]
     pub result: Option<Value>,
     /// Error (on failure)
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -97,6 +97,47 @@ pub fn scope_for_method(method: &str) -> CacheScope {
         .map_or(CacheScope::Private, |(_, scope)| *scope)
 }
 
+/// Whether `result` carries a `cacheScope` that is not exactly `"private"`.
+fn scope_needs_clamp(result: &Value) -> bool {
+    result
+        .get("cacheScope")
+        .is_some_and(|scope| scope.as_str() != Some("private"))
+}
+
+/// Make a result about to leave the gateway claim no scope but `private`.
+///
+/// STUB (PARENT.6 red commit): does nothing yet.
+pub(crate) fn clamp_delivered_scope(result: &mut Value) {
+    let _ = result;
+}
+
+/// `serialize_with` for a wire slot that carries a result: serializes the
+/// value as [`clamp_delivered_scope`] would leave it.
+pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
+    result: &Option<Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    match result {
+        Some(value) if scope_needs_clamp(value) => {
+            let mut clamped = value.clone();
+            clamp_delivered_scope(&mut clamped);
+            clamped.serialize(serializer)
+        }
+        Some(value) => value.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// The SSE `data` of a `message` event: the payload as text, with a JSON-RPC
+/// response's `result` clamped by [`clamp_delivered_scope`]. Requests and
+/// notifications pass unchanged.
+///
+/// STUB (PARENT.6 red commit): passes everything unchanged.
+pub(crate) fn message_event_data(payload: &Value) -> String {
+    payload.to_string()
+}
+
 /// The `resultType` of a result, defaulting as the specification requires.
 ///
 /// > Clients **MUST** treat results from earlier-protocol servers that omit the
@@ -165,3 +206,6 @@ mod tests {
         assert!(!is_error(&json!([true])));
     }
 }
+
+#[cfg(test)]
+mod clamp_tests;

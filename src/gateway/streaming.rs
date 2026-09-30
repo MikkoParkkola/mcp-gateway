@@ -486,7 +486,7 @@ pub fn create_sse_response(
                     let event = if notification.event_type == "message" {
                         Event::default()
                             .event("message")
-                            .data(notification.data.to_string())
+                            .data(crate::protocol::cacheable::message_event_data(&notification.data))
                     } else {
                         Event::default()
                             .event(&notification.event_type)

@@ -494,3 +494,6 @@ pub(super) async fn tasks_cancel(
         Err(_) => store_unavailable(id),
     }
 }
+
+#[cfg(test)]
+mod scope_tests;

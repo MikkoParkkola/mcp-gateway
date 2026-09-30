@@ -28,6 +28,7 @@ mod unkeyed_admission;
 mod stdout_death_admission;
 
 mod r2_stdio_keys;
+mod stdio_cache_scope;
 mod stdio_listing_scope;
 #[cfg(feature = "firewall")]
 mod stdio_response_firewall;

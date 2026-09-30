@@ -121,6 +121,13 @@ impl super::MetaMcp {
             inspection,
         );
 
+        // MIK-7211.PARENT.6: the scope is settled before signing. The signer
+        // authenticates this in-memory result, so a clamp left to the
+        // serializer would change bytes the MAC already covers.
+        if let Some(result) = response.result.as_mut() {
+            crate::protocol::cacheable::clamp_delivered_scope(result);
+        }
+
         // A disabled signer and ordinary/admission/refusal errors must never
         // validate captured nonce state or increment finalization failures.
         if self.message_signer.is_some()

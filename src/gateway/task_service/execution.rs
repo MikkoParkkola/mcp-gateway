@@ -521,3 +521,6 @@ fn commit_to_service(error: CommitFailure) -> ServiceError {
         CommitFailure::RevisionConflict => ServiceError::Unavailable,
     }
 }
+
+#[cfg(test)]
+mod scope_tests;

@@ -727,3 +727,6 @@ async fn finalize_gateway_invoke_response_preserves_defensive_bypasses() {
         .expect("enabled positive control");
     verify(&signed, Some(NONCE)).expect("independent MAC of enabled control");
 }
+
+#[path = "signing_scope_tests.rs"]
+mod scope_tests;

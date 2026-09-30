@@ -313,27 +313,43 @@ mod http {
         assert_eq!(body["result"]["cacheScope"], "private", "{body}");
     }
 
+    /// `resources/read` for a gateway-owned guide: the one URI the fixture can
+    /// answer successfully, because the gateway serves it without a backend.
+    async fn post_guide_read(id: i64) -> (StatusCode, Value) {
+        let uri = "gateway://guides/quickstart";
+        let mut body = modern("resources/read", id);
+        body["params"]["uri"] = json!(uri);
+        let mut owned = modern_headers("resources/read");
+        owned.push(("mcp-name", uri.to_string()));
+        let borrowed: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        post(body, &borrowed).await
+    }
+
     #[tokio::test]
     async fn ac_cache_3_no_response_from_this_gateway_claims_public() {
-        // The stop-the-line, asserted across every cacheable method rather than
-        // the one that was convenient to write.
+        // The stop-the-line, asserted across every cacheable method, each a
+        // SUCCESSFUL response carrying exactly "private". `!= "public"` passed
+        // on errors and on a missing key, which is why it was replaced.
+        let mut answers = Vec::new();
         for (i, method) in [
             "tools/list",
             "prompts/list",
             "resources/list",
-            "resources/read",
             "resources/templates/list",
         ]
         .iter()
         .enumerate()
         {
-            let id = 100 + i64::try_from(i).expect("a five-element index fits");
-            let (_, body) = post_modern(method, id).await;
-            let scope = &body["result"]["cacheScope"];
-            assert_ne!(
-                scope, "public",
-                "{method} must not tell a shared cache it may serve this across \
-                 authorization contexts: {body}"
+            let id = 100 + i64::try_from(i).expect("a four-element index fits");
+            answers.push((*method, post_modern(method, id).await));
+        }
+        answers.push(("resources/read", post_guide_read(104).await));
+        for (method, (status, body)) in answers {
+            assert_eq!(status, StatusCode::OK, "{method}: {body}");
+            assert!(body.get("error").is_none(), "{method} must succeed: {body}");
+            assert_eq!(
+                body["result"]["cacheScope"], "private",
+                "{method} must claim exactly private: {body}"
             );
         }
     }
