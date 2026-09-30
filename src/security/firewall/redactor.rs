@@ -63,9 +63,11 @@ const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
         r#"(?i)(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*['"][A-Za-z0-9+/=]{20,}['"]"#,
         "Generic API Key in key=value",
     ),
-    // JWT — three base64url segments separated by dots
+    // JWT — base64url segments separated by dots. The whole chain of segments
+    // is one match: a JWT that starts at another's second segment then ends
+    // with it, so no signature can survive an overlap (#2145).
     (
-        r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+        r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]{10,})+",
         "JSON Web Token",
     ),
     // PEM private key header (RSA / EC / DSA or generic)
@@ -253,7 +255,9 @@ impl Default for Redactor {
 /// How far behind the furthest end already matched a restart may begin. The
 /// longest fixed-length pattern is 66 bytes, and a match of an unbounded
 /// pattern can only overlap the end of another by starting in its short
-/// prefix, since the earlier greedy body stopped where its class ends.
+/// prefix, since the earlier greedy body stopped where its class ends. The JWT
+/// pattern takes a whole chain of segments for the same reason: a JWT starting
+/// at another's second segment ends with that chain.
 const OVERLAP_WINDOW: usize = 256;
 
 /// Every match of `re` in `text`, including matches that overlap one another:
@@ -765,5 +769,37 @@ mod tests {
         );
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(v["t"], "[REDACTED:credential]");
+    }
+
+    /// A JWT that starts at another's second segment, behind a long third
+    /// segment: its signature lies past the first match and far outside a
+    /// restart window, so the whole segment chain must be one match.
+    fn chained_jwts() -> String {
+        let seg = |n: usize| format!("{}{}", concat!("ey", "J"), "a".repeat(n));
+        format!(
+            "{}.{}.{}.{} end",
+            seg(10),
+            seg(10),
+            seg(512),
+            "s".repeat(43)
+        )
+    }
+
+    #[test]
+    fn a_jwt_overlapping_another_leaves_no_signature() {
+        let mut v = json!({ "t": chained_jwts() });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(v["t"], "[REDACTED:credential] end");
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].matched, "[REDACTED:credential] end");
+    }
+
+    #[test]
+    fn a_jwt_overlapping_another_in_a_key_leaves_no_signature() {
+        let mut v = json!({ chained_jwts(): 1 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(v, json!({ "[REDACTED:credential] end": 1 }));
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(findings[0].matched, "[REDACTED:credential] end");
     }
 }
