@@ -129,6 +129,8 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
+| 105 | Reserved: lands with #2461 | None yet |
+| 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2934,6 +2936,33 @@ no subject keep the 3.x behaviour.
 
 **Action:** a client that proves a subject and renews its bearer token mid-session must
 re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
+
+## 106. Hardened requires a per-caller identity
+
+**Startup:** no notice, applies only to `security.posture: hardened`
+
+`security.posture: hardened` is new in 4.0. Under it, every HTTP MCP request, on `/mcp` (POST,
+GET and DELETE) and on `/mcp/{name}`, must identify one caller before its body is read. Any of
+these identifies one: a subject proven by an IdP (OIDC or Cloudflare Access), a trusted proxy
+header, an mTLS client certificate, an agent JWT, or an API key configured `kind: personal`.
+A request that has none is refused with HTTP 403 and JSON-RPC `-32600 "per-caller identity required
+(security.posture=hardened)"`.
+
+A shared API key (`kind: shared`, the default), the static bearer token and a dashboard session
+are shared credentials, so on their own they are refused. That includes MCP calls from the
+dashboard: under hardened, the dashboard needs an IdP or Access subject. stdio is exempt.
+`security.posture: standard`, the default, is unchanged.
+
+**Action:** before adopting `hardened`, give every HTTP caller an identity, or set
+`kind: personal` on an API key that exactly one person holds:
+
+```yaml
+auth:
+  api_keys:
+    - name: alice
+      key_sha256: "sha256:..."
+      kind: personal
+```
 
 ## Upgrading from 3.5.x: a walkthrough
 

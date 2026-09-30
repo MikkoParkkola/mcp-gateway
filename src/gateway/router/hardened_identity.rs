@@ -9,7 +9,9 @@ use axum::http::StatusCode;
 use serde_json::Value;
 
 use super::AppState;
+use super::helpers::build_http_error_response;
 use crate::gateway::auth::NamedApiKey;
+use crate::security::SecurityPosture;
 
 /// The refusal message, verbatim from the design.
 pub(super) const REFUSAL: &str = "per-caller identity required (security.posture=hardened)";
@@ -27,12 +29,8 @@ pub(super) fn hardened_identity_refusal(
     subject_key: Option<&str>,
     api_key: Option<&NamedApiKey>,
 ) -> Option<(StatusCode, Json<Value>)> {
-    let _ = (
-        state.live_config.running().security.posture,
-        subject_key,
-        api_key.map(NamedApiKey::is_personal),
-    );
-    // Red-first stub: the gate lands in the next commit.
-    let _ = (StatusCode::FORBIDDEN, REFUSAL);
-    None
+    let hardened = state.live_config.running().security.posture == SecurityPosture::Hardened;
+    let identified = subject_key.is_some() || api_key.is_some_and(NamedApiKey::is_personal);
+    (hardened && !identified)
+        .then(|| build_http_error_response(None, -32600, REFUSAL, StatusCode::FORBIDDEN))
 }
