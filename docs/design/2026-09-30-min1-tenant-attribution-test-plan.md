@@ -1,6 +1,6 @@
 # MIK-7116.MIN.1: test plan
 
-Design: `2026-09-29-min1-tenant-attribution.md` (v2). Tests are written
+Design: `2026-09-30-min1-tenant-attribution.md` (v3). Increment 1 = T1-T12, T23-T26; increment 2 = T13-T19, T27; increment 3 = T20-T22. Tests are written
 first, committed and pushed as a draft PR, and must fail on the base for the
 stated reason before implementation starts. The red commit carries
 `pub(crate)` signature stubs only (extractors return an empty set, the new log
@@ -17,7 +17,7 @@ public helper, not from the implementation's wrapper.
 | # | Level | Setup | Assertion | Red on base because |
 |---|---|---|---|---|
 | T1 | unit, firewall | `audit_log` file; `tenant_guard { enabled: false, arg_keys: [customer_id] }`; `check_request` with `{"filter": {"customer_id": "cust-1"}}` | allowed; `request` line `tenants == [h("cust-1")]`; raw `cust-1` absent from the line | no field |
-| T2 | unit, firewall | as T1, `enabled: true, max: 1`; principal `p1` asks `cust-1` then `cust-2` | second blocked with `CrossTenantReach`; its line `tenants == [h("cust-2")]` | refusal line never names the tenant |
+| T2 | unit, firewall | as T1, `enabled: true, max: 1`; principal `p1` asks `cust-1` then `cust-2` | second blocked with `CrossTenantReach`; its line `tenants == [h("cust-2")]`; with a transparency log on the `/mcp` route, the #2421 refusal record has `tenants == [h("cust-2")]` and no `data_classes` | refusal line and record never name the tenant |
 | T3 | unit, firewall | `audit_log`, default `tenant_guard`; request with `customer_id` | line has no `tenants` key | green guard (schema stability) |
 | T4 | unit, tenant_guard | `enabled: true, max: 1`; `response_tenants` and `request_tenants` over values naming `cust-2`, then `check(p1, cust-1)` | `Allowed`: extraction never records | green guard (double-count regression) |
 | T5 | unit, tenant_guard | `response_tenants` over text-JSON `{"rows":[{"customer_id":"cust-9"}]}` in `content[0].text`, and over `{"structuredContent":{"customer_id":7}}` | `{"cust-9"}` and `{"7"}` | stub returns empty |
@@ -27,7 +27,12 @@ public helper, not from the implementation's wrapper.
 | T9 | integration, meta D1 | as T7 with no firewall | record has neither `tenants` nor `data_classes` | green guard |
 | T10 | integration, meta D1 | as T7 but the call names no tenant | record has neither field (`data_classes` is never empty, so this catches the unconditional-write mistake) | green guard |
 | T11 | integration, meta D1 | the T7 log file | `verify_log` succeeds; after changing one character inside `tenants`, it fails | no field |
-| T12 | integration, direct D1 (`router/direct_audit_tests.rs` harness) | firewall `arg_keys`, transparency log; direct `tools/call` with `customer_id: cust-1`, backend reply naming `cust-9` | the direct record: `route == "direct"`, `tenants == sorted[h(cust-1), h(cust-9)]`, no `data_classes` | no field |
+| T12 | integration, direct D1 (`router/direct_audit_tests.rs` harness) | firewall `arg_keys`, transparency log; direct `tools/call` with `customer_id: cust-1`, backend reply naming `cust-9` | the direct record: `route == "direct"`, `tenants == sorted[h(cust-1), h(cust-9)]`, `data_classes` a non-empty array | no field; also proves the direct scope carries the notes |
+
+| T23 | unit, transparency log | `log_invocation_attributed` with 1025 distinct tenant hashes | record holds exactly 1024 sorted hashes and `tenants_total == 1025`; `verify_log` passes; with 1024 there is no `tenants_total` | no writer |
+| T24 | unit, transparency log | `extra` containing `route` (a domain field) and `entry_hash` (a chain field) | both rejected with an error, nothing appended | no writer |
+| T25 | integration, meta D1 | as T7 with the response cache on; same call twice | the second (hit) record carries the same `tenants` and `data_classes` as the first | hits skip the gates |
+| T26 | integration, direct D1 | as T12, response inspection in action mode with an `AKIA…` key in the reply | outcome ≠ `ok`; `tenants ∋ h(cust-9)`; no `data_classes` | no field |
 
 ### MIN.2 observe (design §7)
 
@@ -43,6 +48,7 @@ so a classifier change fails loudly instead of silently turning the test green).
 | T16 | integration, meta D1 | one call whose response holds sensitive rows for `cust-A` and `cust-B` | its record has `cross_tenant == "would_block"` | no field |
 | T17 | integration, meta D1 | as T13 but calls 1 and 2 from different API keys | neither record has `cross_tenant` | green guard (per-principal key) |
 | T18 | integration, meta D1 | as T13 with an anonymous caller | record has `cross_tenant == "unkeyed"` | no field |
+| T27 | integration, mixed routes | shared state (`direct_guards_fixture.rs` harness): sensitive read for `cust-A` via meta `gateway_invoke`, then for `cust-B` via direct `/mcp/{name}`, same API key | the direct record has `cross_tenant == "would_block"` | no field; proves one window across routes |
 | T19 | unit, tenant_guard | two sensitive observations for different tenants, the second after `window_secs` has elapsed (`record_at` with a fixed `Instant`) | not would-block | green guard (window honoured) |
 
 ### MIN.4 measurement (design §8)
@@ -62,8 +68,6 @@ Existing suites that must stay green unchanged: `tests/mik_7116_tenant_acs.rs`,
 `router/direct_audit_tests.rs`.
 
 Not tested, with reason:
-- A meta-route firewall refusal writing a D1 record: it does not, before or
-  after (pre-existing D1-d gap); T2 covers the refusal's record.
 - Upstream task recovery: its note is a documented no-op; request-side tenants
   only.
 
