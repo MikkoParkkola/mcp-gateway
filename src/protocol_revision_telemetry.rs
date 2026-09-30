@@ -62,8 +62,6 @@ const MEASURED_TRANSPORTS: &[Transport] = &[Transport::Http, Transport::Stdio, T
 pub const DURABLE_TELEMETRY_DIR: &str = "protocol-revision-telemetry";
 /// Durable aggregate filename read by operators after the measurement window.
 pub const DURABLE_WINDOW_FILE: &str = "window.json";
-/// Schema identifier for the operator-readable aggregate.
-pub const DURABLE_WINDOW_SCHEMA: &str = "mcp_protocol_revision_window.v1";
 
 /// Inbound transport for a negotiated session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,37 +217,6 @@ pub enum RetirementBlocked {
     OtherAtOrAboveRetirementThreshold,
     /// HTTP and stdio evidence do not cover the same production window.
     WindowMisaligned,
-}
-
-/// Restart-safe aggregate for a production measurement window.
-///
-/// The file contains bounded labels only. It never stores raw client names,
-/// session identifiers, request bodies, or tool arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DurableWindow {
-    /// Stable on-disk schema identifier.
-    pub schema_version: String,
-    /// Unix timestamp when this window started.
-    pub started_at_unix_seconds: u64,
-    /// Most recent successful aggregate update, recorded as Unix seconds for operator inspection
-    /// after the seven-day window.
-    pub updated_at_unix_seconds: u64,
-    /// Cross-process request counters accumulated since `started_at_unix_seconds`.
-    pub snapshot: Snapshot,
-    /// All 16 bounded `tools/list` filter combinations, including zeroes.
-    pub tools_list_shadow: BTreeMap<String, u64>,
-}
-
-impl DurableWindow {
-    /// Evaluate the persisted counters using the durable start timestamp.
-    pub fn retirement_decision_at(
-        &self,
-        now_unix_seconds: u64,
-    ) -> Result<Vec<String>, RetirementBlocked> {
-        let elapsed =
-            Duration::from_secs(now_unix_seconds.saturating_sub(self.started_at_unix_seconds));
-        retire_revisions(&self.snapshot, elapsed)
-    }
 }
 
 /// Cross-process sink used by stdio servers.
@@ -797,56 +764,6 @@ pub fn durable_window_path(data_dir: &Path) -> PathBuf {
         .join(DURABLE_WINDOW_FILE)
 }
 
-/// Load and validate the operator-readable production window.
-pub fn load_durable_window(data_dir: &Path) -> io::Result<DurableWindow> {
-    read_window_file(&durable_window_path(data_dir))
-}
-
-/// Evaluate the production decision from exact-window HTTP and stdio evidence.
-///
-/// HTTP observations live in Prometheus while stdio observations live in the
-/// durable window. A revision is eligible only when both independent sources
-/// mark it below the threshold for the same window.
-pub fn production_retirement_decision(
-    data_dir: &Path,
-    http_snapshot: &Snapshot,
-    http_started_at_unix_seconds: u64,
-) -> io::Result<Result<Vec<String>, RetirementBlocked>> {
-    production_retirement_decision_at(
-        data_dir,
-        http_snapshot,
-        http_started_at_unix_seconds,
-        unix_seconds()?,
-    )
-}
-
-/// Time-injected production decision used by deterministic tests and offline exports.
-pub fn production_retirement_decision_at(
-    data_dir: &Path,
-    http_snapshot: &Snapshot,
-    http_started_at_unix_seconds: u64,
-    ended_at_unix_seconds: u64,
-) -> io::Result<Result<Vec<String>, RetirementBlocked>> {
-    let window = load_durable_window(data_dir)?;
-    if http_started_at_unix_seconds != window.started_at_unix_seconds {
-        return Ok(Err(RetirementBlocked::WindowMisaligned));
-    }
-    let elapsed =
-        Duration::from_secs(ended_at_unix_seconds.saturating_sub(http_started_at_unix_seconds));
-    let stdio_candidates = match window.retirement_decision_at(ended_at_unix_seconds) {
-        Ok(candidates) => candidates,
-        Err(blocked) => return Ok(Err(blocked)),
-    };
-    let http_candidates = match retire_revisions(http_snapshot, elapsed) {
-        Ok(candidates) => candidates,
-        Err(blocked) => return Ok(Err(blocked)),
-    };
-    Ok(Ok(stdio_candidates
-        .into_iter()
-        .filter(|candidate| http_candidates.contains(candidate))
-        .collect()))
-}
-
 fn snapshot_delta(current: &Snapshot, previous: &Snapshot) -> Snapshot {
     Snapshot {
         by_revision: map_delta(&current.by_revision, &previous.by_revision),
@@ -895,61 +812,6 @@ fn checked_counter_add(current: u64, increment: u64) -> io::Result<u64> {
     current
         .checked_add(increment)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "telemetry counter overflow"))
-}
-
-fn read_window_file(path: &Path) -> io::Result<DurableWindow> {
-    let bytes = std::fs::read(path)?;
-    let window: DurableWindow = serde_json::from_slice(&bytes)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    validate_window(&window)?;
-    Ok(window)
-}
-
-fn validate_window(window: &DurableWindow) -> io::Result<()> {
-    if window.schema_version != DURABLE_WINDOW_SCHEMA {
-        return Err(invalid_window("unsupported durable telemetry schema"));
-    }
-    if window.updated_at_unix_seconds < window.started_at_unix_seconds {
-        return Err(invalid_window("window update precedes its start"));
-    }
-    validate_bounded_keys(
-        &window.snapshot.by_revision,
-        MEASURED_REVISIONS
-            .iter()
-            .copied()
-            .chain(std::iter::once(OTHER_REVISION)),
-        "revision",
-    )?;
-    validate_bounded_keys(
-        &window.snapshot.by_client,
-        MEASURED_CLIENTS.iter().copied(),
-        "client",
-    )?;
-    validate_bounded_keys(
-        &window.snapshot.by_transport,
-        MEASURED_TRANSPORTS
-            .iter()
-            .map(|transport| transport.as_str()),
-        "transport",
-    )?;
-    if checked_counter_sum(window.snapshot.by_revision.values().copied())?
-        .checked_add(window.snapshot.unattributed)
-        != Some(window.snapshot.total)
-    {
-        return Err(invalid_window("revision counters do not equal total"));
-    }
-    if checked_counter_sum(window.snapshot.by_client.values().copied())? != window.snapshot.total {
-        return Err(invalid_window("client counters do not equal total"));
-    }
-    if checked_counter_sum(window.snapshot.by_transport.values().copied())? != window.snapshot.total
-    {
-        return Err(invalid_window("transport counters do not equal total"));
-    }
-    let expected_shadow = empty_shadow_counts();
-    if window.tools_list_shadow.keys().ne(expected_shadow.keys()) {
-        return Err(invalid_window("tools/list shadow labels are incomplete"));
-    }
-    Ok(())
 }
 
 fn validate_bounded_keys<'a>(

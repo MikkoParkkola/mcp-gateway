@@ -131,7 +131,7 @@ backend" and "fails a capability file" first.**
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
 | 105 | Reserved: lands with a pending change | None yet |
 | 106 | Reserved: lands with a pending change | None yet |
-| 107 | The protocol-revision measurement window is per transport; a v1 window is refused | Archive the old `protocol-revision-telemetry` directory before starting a measurement window |
+| 107 | The protocol-revision measurement window is per transport; a v1 window is refused, and the v1 window API is removed | Archive the old `protocol-revision-telemetry` directory before starting a measurement window |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2948,8 +2948,13 @@ stdio keeps its counts apart, so a stdio request can no longer stand in for HTTP
 window is not converted: the gateway keeps serving, logs that telemetry is not durable, and leaves
 the file untouched. The decision is run as described in RFC-0060.
 
+The v1 library items are removed from `mcp_gateway::protocol_revision_telemetry`: `DurableWindow`,
+`load_durable_window`, `production_retirement_decision`, `production_retirement_decision_at` and
+`DURABLE_WINDOW_SCHEMA`. Each of them would fail on, or misdescribe, every window this version writes.
+
 **Action:** move the old `protocol-revision-telemetry` directory aside before starting a
-measurement window.
+measurement window. Code that called the removed items has no replacement API: the decision is an
+operator procedure (RFC-0060), not a library call.
 
 ## Upgrading from 3.5.x: a walkthrough
 
