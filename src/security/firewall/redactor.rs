@@ -600,4 +600,86 @@ mod tests {
         redactor().scan_and_redact(&mut v);
         assert_eq!(v["t"], "[REDACTED:credential] [REDACTED:credential]");
     }
+
+    // ── #2145: overlapping patterns are redacted as one span ────────────────
+
+    /// A quoted `api_key` value with an AWS-shaped run inside it: both the AWS
+    /// and the generic key=value pattern match, and the AWS span sits inside
+    /// the generic one. Lowercase padding keeps the AWS match to its 20 chars.
+    fn nested_aws_in_api_key() -> String {
+        format!(
+            "cfg api_key=\"abcd{}EXAMPLEKEY012345wxyz\" end",
+            concat!("AK", "IA")
+        )
+    }
+
+    #[test]
+    fn a_credential_inside_another_leaves_no_fragment() {
+        let mut v = json!({ "t": nested_aws_in_api_key() });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 2, "AWS and generic key: {findings:?}");
+        assert_eq!(v["t"], "cfg [REDACTED:credential] end");
+    }
+
+    #[test]
+    fn an_overlapping_key_leaves_no_fragment_in_key_or_finding() {
+        let mut v = json!({ nested_aws_in_api_key(): 1 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(v, json!({ "cfg [REDACTED:credential] end": 1 }));
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        for finding in &findings {
+            for fragment in ["abcd", "wxyz", "EXAMPLEKEY"] {
+                assert!(!finding.matched.contains(fragment), "{finding:?}");
+            }
+        }
+    }
+
+    /// The GitHub span ends inside the AWS span: neither contains the other.
+    #[test]
+    fn partially_overlapping_credentials_leave_no_fragment() {
+        let text = format!(
+            "{}{}{}ZZEXAMPLEKEY0123 end",
+            concat!("gh", "p_"),
+            "abcdefghij".repeat(3),
+            concat!("AK", "IA")
+        );
+        let mut v = json!({ "t": text });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 2, "GitHub and AWS: {findings:?}");
+        assert_eq!(v["t"], "[REDACTED:credential] end");
+    }
+
+    /// Two matches of ONE pattern overlap: the second AWS key starts inside
+    /// the first, where a scan resuming after the first match would miss it.
+    fn overlapping_aws_keys() -> String {
+        let prefix = concat!("AK", "IA");
+        format!("{prefix}{}{prefix}{} end", "A".repeat(12), "B".repeat(16))
+    }
+
+    #[test]
+    fn overlapping_matches_of_one_pattern_leave_no_fragment() {
+        let mut v = json!({ "t": overlapping_aws_keys() });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert_eq!(v["t"], "[REDACTED:credential] end");
+    }
+
+    #[test]
+    fn overlapping_matches_of_one_pattern_in_a_key_leave_no_fragment() {
+        let mut v = json!({ overlapping_aws_keys(): 1 });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(v, json!({ "[REDACTED:credential] end": 1 }));
+        assert!(!findings[0].matched.contains("BBBB"), "{findings:?}");
+    }
+
+    /// Touching tokens share one marker; multibyte text around them is kept.
+    #[test]
+    fn touching_tokens_share_one_marker_and_keep_multibyte_text() {
+        let a = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
+        let b = concat!("gh", "o_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        let mut v = json!({ "t": format!("é—{a}{b}\u{a0}ü") });
+        let findings = redactor().scan_and_redact(&mut v);
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert_eq!(v["t"], "é—[REDACTED:credential]\u{a0}ü");
+    }
 }
