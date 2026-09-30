@@ -8,6 +8,7 @@
 //! request is served as in 3.5.x. With `record`, the segment sealed on the
 //! broadcast, so the request reaches counting after the seal and is refused
 //! with 503, unserved.
+// Unix-only: the case stops the gateway with SIGTERM, which Windows has no equivalent of.
 #![cfg(unix)]
 
 use std::io::{Read as _, Write as _};
