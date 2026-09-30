@@ -29,6 +29,8 @@ mod stdout_death_admission;
 
 mod r2_stdio_keys;
 mod stdio_listing_scope;
+#[cfg(feature = "firewall")]
+mod stdio_response_firewall;
 
 mod stdio_initialize_order;
 

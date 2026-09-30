@@ -137,6 +137,17 @@ impl TransitionTracker {
         true
     }
 
+    /// Whether [`Self::record_pair`] would record `from -> to` now: the pair
+    /// is already known, or the map is below `max_pairs`.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn can_learn(&self, from: &str, to: &str, max_pairs: usize) -> bool {
+        let known = self
+            .transitions
+            .get(from)
+            .is_some_and(|inner| inner.contains_key(to));
+        known || self.distinct_pairs.load(Ordering::Relaxed) < max_pairs
+    }
+
     /// Transitions out of `from_tool`: `(all successors, to_tool only)`.
     ///
     /// One pass that reads each counter once, so the pair is a consistent
