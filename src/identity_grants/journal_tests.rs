@@ -179,6 +179,7 @@ async fn t1b_a_refused_change_appends_nothing() {
 }
 
 /// T1d: the journal is created owner-only.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[tokio::test]
 async fn t1d_journal_is_created_0600() {
@@ -233,6 +234,7 @@ async fn t1e_write_and_append_failures() {
 /// T1f: an existing journal left group-readable is tightened to 0600, and a
 /// journal whose last line has no newline (a torn append) gets one before the
 /// next entry, so the new entry parses.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[tokio::test]
 async fn t1f_existing_journal_is_repaired() {
@@ -320,6 +322,7 @@ async fn a_refused_change_on_a_missing_file_leaves_no_lock() {
 
 /// A journal path planted as a symlink is refused: the append must not land
 /// on, or chmod, the file it points at.
+// Unix-only: needs an unprivileged symlink; Windows symlink creation requires a privilege.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_symlinked_journal_is_refused() {
@@ -343,6 +346,7 @@ async fn a_symlinked_journal_is_refused() {
 /// group/world-writable journal may already carry entries this process never
 /// wrote, and chmod-ing it to 0600 would launder that history for the next
 /// reader. T1f's 0o644 (read-only exposure) still gets tightened.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #[cfg(unix)]
 #[tokio::test]
 async fn a_writable_by_others_journal_is_refused() {

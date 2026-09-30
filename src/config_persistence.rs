@@ -351,6 +351,7 @@ mod tests {
     }
 
     #[test]
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     fn a_written_config_is_not_readable_by_other_users() {
         // A config can hold a bearer token and API keys. Loopback isolates
@@ -367,6 +368,7 @@ mod tests {
     }
 
     #[test]
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     fn the_scratch_file_is_not_readable_by_other_users_either() {
         // The scratch file exists next to the config for the duration of the

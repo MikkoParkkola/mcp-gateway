@@ -116,6 +116,7 @@ async fn a_wedged_close_does_not_stall_the_idle_reaper() {
 ///
 /// Real time, not a paused clock: the reap is done by the OS and tokio's orphan
 /// queue. Same ownership shape as `a_close_that_times_out_still_reaps_the_child`.
+// Unix-only: reaping is observed through the POSIX process table (zombie state).
 #[cfg(unix)]
 #[tokio::test]
 async fn a_timed_out_eviction_close_still_reaps_the_child() {
@@ -199,6 +200,7 @@ async fn stop_drains_a_close_that_eviction_detached() {
 
 /// Reaped means gone from the process table. A killed child nobody has waited
 /// on is a zombie: `is_alive` is false for it, `is_reaped` is not true (#2301).
+// Unix-only: reaping is observed through the POSIX process table (zombie state).
 #[cfg(unix)]
 pub(super) fn is_reaped(pid: u32) -> bool {
     super::pool_tests::process_state(pid).is_none()
@@ -207,6 +209,7 @@ pub(super) fn is_reaped(pid: u32) -> bool {
 /// #2301: the probe the reap tests use must tell a zombie from a reaped
 /// child. A killed child that nobody waits on is a zombie, so holding the
 /// `Child` without awaiting it fails `is_reaped`; awaiting it passes.
+// Unix-only: reaping is observed through the POSIX process table (zombie state).
 #[cfg(unix)]
 #[tokio::test]
 async fn is_reaped_rejects_a_zombie_until_it_is_waited_on() {
