@@ -29,7 +29,7 @@ impl MetaMcp {
     ) -> Option<JsonRpcResponse> {
         if !matches!(
             stored.task.status(),
-            TaskStatus::Completed | TaskStatus::Failed
+            TaskStatus::Cancelled
         ) {
             return None;
         }
