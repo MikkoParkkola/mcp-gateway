@@ -62,7 +62,7 @@ fn http_config(port: u16, env_file: &str, auth: bool, backend: bool) -> String {
         ""
     };
     format!(
-        "server:\n  host: \"127.0.0.1\"\n  port: {port}\n{auth}env_files:\n  - \"{env_file}\"\n{backends}"
+        "server:\n  host: \"127.0.0.1\"\n  port: {port}\n{auth}env_files:\n  - '{env_file}'\n{backends}"
     )
 }
 
