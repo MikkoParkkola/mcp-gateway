@@ -19,11 +19,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Latency arms A, B, L, T were built by this branch's first commit.
         include:
-          - { cell: A, ref: 32f135a61fb50c20a044fb4c2347bc1cf8015d89 }
-          - { cell: B, ref: e138680a542b41fa156a94a1ffc9decd9692be77 }
-          - { cell: L, ref: 1393e01451c260428029a82519944e588c9adac1 }
-          - { cell: T, ref: 92959720d30eb41d9a1429e24fd3fef6328d1f58 }
+          # Symbol builds for profiling only: same codegen, symbols and line
+          # tables kept. Never used as a latency arm.
+          - { cell: Bsym, ref: e138680a542b41fa156a94a1ffc9decd9692be77, sym: true }
+          - { cell: Tsym, ref: 92959720d30eb41d9a1429e24fd3fef6328d1f58, sym: true }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,6 +35,9 @@ jobs:
           toolchain: 1.98.0
       - name: Build
         shell: bash
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: ${{ matrix.sym && 'false' || 'true' }}
+          CARGO_PROFILE_RELEASE_DEBUG: ${{ matrix.sym && 'line-tables-only' || 'false' }}
         run: |
           rustc --version
           cargo build --release --locked --bin mcp-gateway
