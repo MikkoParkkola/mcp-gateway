@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/search.rs b/src/gateway/meta_mcp/search.rs
+index 74f54897c..4c8f37d49 100644
+--- a/src/gateway/meta_mcp/search.rs
++++ b/src/gateway/meta_mcp/search.rs
+@@ -257,7 +257,7 @@ impl MetaMcp {
+                     continue;
+                 }
+                 collect_tool_tags(&tool, all_tags);
+-                if tool_matches_query(&cap.name, &tool, query) {
++                if tool_matches_query("", &tool, query) {
+                     // A chain target is a name too: only admitted ones (A3).
+                     let chains: Vec<String> = capability
+                         .metadata
