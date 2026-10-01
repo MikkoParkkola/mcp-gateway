@@ -76,8 +76,7 @@ impl DestinationPolicy {
             .parse::<IpAddr>()
         {
             Ok(addr) if self.denies(addr) => Err(Error::Protocol(format!(
-                "SSRF blocked: host targets {}",
-                super::denied_address(addr)
+                "SSRF blocked: host targets private/reserved address {addr}"
             ))),
             _ => Ok(()),
         }

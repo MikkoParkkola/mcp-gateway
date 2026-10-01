@@ -153,7 +153,8 @@ async fn private_pin_refuses_metadata_names() {
     };
     let named = resolve("fd00:ec2::254")
         .await
-        .expect_err("metadata by name")
+        .err()
+        .expect("metadata by name")
         .to_string();
     // A name's refusal never says what it resolved to: that would answer
     // internal DNS for the caller (MIK-7633 AC7 keeps it generic).

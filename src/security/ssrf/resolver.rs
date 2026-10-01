@@ -181,8 +181,7 @@ pub async fn resolve_and_validate_host<R: HostResolver>(
     for ip in &ips {
         if is_private_or_reserved(*ip) {
             return Err(Error::Protocol(format!(
-                "SSRF blocked: '{host}' resolves to {}",
-                super::denied_address(*ip)
+                "SSRF blocked: '{host}' resolves to private/reserved address {ip}"
             )));
         }
     }
