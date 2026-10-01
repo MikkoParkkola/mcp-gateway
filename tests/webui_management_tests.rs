@@ -194,18 +194,16 @@ async fn make_app_state_with_reload(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("RSA key gen failed"));
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let live_config = Arc::new(LiveConfig::new(config.clone()));
-    let reload_context = Arc::new(
-        ReloadContext::new(
-            config_path.clone(),
-            Arc::clone(&live_config),
-            Arc::clone(&backends),
-            config.failsafe.clone(),
-            config.meta_mcp.cache_ttl,
-        )
-        .expect("the registry pairs with the config"),
-    );
+    let reload_context = ReloadContext::new(
+        config_path.clone(),
+        Arc::clone(&live_config),
+        Arc::clone(&backends),
+        config.failsafe.clone(),
+        config.meta_mcp.cache_ttl,
+    )
+    .map(Arc::new)
+    .expect("the registry pairs with the config");
     meta_mcp.set_reload_context(reload_context);
-
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
 
     let subscriptions = Arc::new(SubscriptionRegistry::new(64, authorizer.clone()));

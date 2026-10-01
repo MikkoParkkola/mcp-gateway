@@ -599,7 +599,6 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
-        // An empty registry: nothing has connected, so this cannot refuse.
         backends.enforce_destinations(
             DestinationPolicy::for_posture(config.security.posture),
             &config.security.hardened.private_backends,
