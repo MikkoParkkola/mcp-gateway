@@ -46,88 +46,24 @@ mod source_checks {
         }
     }
 
-    const MARKER: &str = "#[cfg(test)]";
-
-    /// `text` without the items gated by `#[cfg(test)]`: each marker and the
-    /// one item after it. A mention of the attribute anywhere but the start of
-    /// a line is prose, not a marker.
-    fn production_text(text: &str) -> String {
-        let mut out = String::new();
-        let mut rest = text;
-        while let Some(at) = marker(rest) {
-            out.push_str(&rest[..at]);
-            rest = skip_item(&rest[at + MARKER.len()..]);
-        }
-        out.push_str(rest);
-        out
+    /// Whether `text` names the key outside a line comment. Nothing is
+    /// stripped: test code counts too, so a file is excused only by name.
+    fn writes_the_key(text: &str) -> bool {
+        text.lines()
+            .any(|l| !l.trim_start().starts_with("//") && l.contains("\"cacheScope\""))
     }
 
-    /// Byte offset of the first line whose trimmed start is the marker.
-    fn marker(text: &str) -> Option<usize> {
-        let mut offset = 0;
-        for line in text.split_inclusive('\n') {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with(MARKER) {
-                return Some(offset + line.len() - trimmed.len());
-            }
-            offset += line.len();
-        }
-        None
-    }
-
-    /// What follows the item at the start of `text`: past its `;`, or past the
-    /// `}` matching its first `{`. Braces inside string literals are counted
-    /// too; they balance in the test code this skips.
-    fn skip_item(text: &str) -> &str {
-        let mut depth = 0usize;
-        for (i, c) in text.char_indices() {
-            match c {
-                ';' if depth == 0 => return &text[i + 1..],
-                '{' => depth += 1,
-                '}' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        return &text[i + 1..];
-                    }
-                }
-                _ => {}
-            }
-        }
-        ""
-    }
-
-    /// The production part of `path`, and nothing of test-only files.
-    fn production_lines(path: &Path) -> Vec<String> {
-        let name = path.to_string_lossy();
-        if name.contains("tests") || name.ends_with("_tests.rs") || name.contains("/tests/") {
-            return Vec::new();
-        }
-        let text = std::fs::read_to_string(path).expect("source reads");
-        production_text(&text).lines().map(str::to_owned).collect()
-    }
-
-    /// The drift check must see a production writer that follows a
-    /// test-gated item; cutting the file at the first `#[cfg(test)]` hid it.
+    /// Cutting a file at its first `#[cfg(test)]` hid every production writer
+    /// after a test-gated item. The check reads whole files now.
     #[test]
-    fn a_writer_after_a_test_gated_item_is_still_production() {
+    fn a_writer_after_a_test_gated_item_is_still_seen() {
         let text = concat!(
-            "fn a() {}\n",
             "#[cfg(test)]\n",
-            "mod t {\n    fn x() { let _ = \"cacheScope\"; }\n}\n",
-            "#[cfg(test)]\n",
-            "#[path = \"t_tests.rs\"]\n",
-            "mod t_tests;\n",
+            "mod t {}\n",
             "fn b() { let _ = \"cacheScope\"; }\n",
-            "/// Mentions `#[cfg(test)]` in prose.\n",
-            "fn c() { let _ = \"cacheScope\"; }\n",
         );
-        let production = production_text(text);
-        assert_eq!(
-            production.matches("\"cacheScope\"").count(),
-            2,
-            "{production}"
-        );
-        assert!(!production.contains("fn x()"), "{production}");
+        assert!(writes_the_key(text));
+        assert!(!writes_the_key("// \"cacheScope\" in a comment\n"));
     }
 
     /// Test 7 (b). A drift check, and labelled as one: `"cacheScope"` is
@@ -139,9 +75,21 @@ mod source_checks {
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
             &mut files,
         );
+        // The two production writers, then every test file that names the key.
+        // Fails closed: a new file naming it fails here until it is reviewed
+        // and listed.
         let allowed = [
             "src/gateway/router/handlers.rs",
             "src/protocol/cacheable.rs",
+            "src/gateway/meta_mcp/chain_emission_tests.rs",
+            "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
+            "src/gateway/meta_mcp/signing_delivery_scope_tests.rs",
+            "src/gateway/router/handlers/tasks/scope_tests.rs",
+            "src/gateway/server/tests/stdio_cache_scope.rs",
+            "src/gateway/task_service/execution/scope_tests.rs",
+            "src/gateway/webhooks/message_clamp_tests.rs",
+            "src/protocol/cacheable/clamp_tests.rs",
+            "src/protocol/tasks/scope_clamp_tests.rs",
         ];
         let mut offenders = Vec::new();
         for path in files {
@@ -149,10 +97,8 @@ mod source_checks {
             if allowed.iter().any(|a| shown.ends_with(a)) {
                 continue;
             }
-            let hit = production_lines(&path)
-                .iter()
-                .any(|l| !l.trim_start().starts_with("//") && l.contains("\"cacheScope\""));
-            if hit {
+            let text = std::fs::read_to_string(&path).expect("source reads");
+            if writes_the_key(&text) {
                 offenders.push(shown);
             }
         }
