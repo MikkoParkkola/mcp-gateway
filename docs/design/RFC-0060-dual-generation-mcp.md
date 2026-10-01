@@ -98,7 +98,7 @@ This prevents uncertainty from making a revision look safe to remove. Revisions
 with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: not started.** Stop all gateway processes, archive any
+**Production window: started 2026-10-02 01:22:04 CEST, ends 2026-10-09 01:22 CEST** (live gateway 4.0.0-e2c34b78; baseline scrape sha256 87133a1c…; a restart invalidates it). The procedure below is how it was set up. Stop all gateway processes, archive any
 earlier `protocol-revision-telemetry` directory, deploy, and then start the
 gateways. The new durable file's `started_at_unix_seconds` is the stdio baseline;
 take the HTTP baseline scrape after all bounded metric series have been
