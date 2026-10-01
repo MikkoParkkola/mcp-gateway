@@ -37,6 +37,8 @@ mod attestation_routes;
 mod chain_direct;
 mod descriptor_withholding;
 mod f24_resource_subscribe;
+/// MIK-7215.CONTROL.5 G4: arm and hints key on the caller.
+mod g4_caller_keyed;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
@@ -2602,6 +2604,7 @@ async fn run_step_with_identity(
         agent_declared: None,
         grant_subject: None,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: None,
         is_admin: client.admin,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -2821,6 +2824,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         agent_declared: None,
         grant_subject: None,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -3249,6 +3253,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         agent_declared: None,
         grant_subject: None,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
