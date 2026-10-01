@@ -99,11 +99,11 @@ impl TaskRoute<'_> {
     /// missing task causes nothing below it. `recover` runs for a working task
     /// (HTTP's bounded upstream read; nothing on stdio). `refuse` is the
     /// transport's delivery check on the ONE snapshot returned.
-    pub(crate) async fn get<R>(
+    pub(crate) async fn get<'p, R>(
         &self,
         id: RequestId,
-        params: Option<&Value>,
-        recover: impl FnOnce(&str) -> R,
+        params: Option<&'p Value>,
+        recover: impl FnOnce(&'p str) -> R,
         refuse: impl FnOnce(&CommittedTask) -> Option<JsonRpcResponse>,
     ) -> JsonRpcResponse
     where

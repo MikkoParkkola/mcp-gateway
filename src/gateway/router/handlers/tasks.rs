@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Task eligibility, wire envelopes, and the three `tasks/*` arms.
+//! Task eligibility, the task intent, and the HTTP glue of the three `tasks/*` arms.
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
@@ -16,7 +16,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
-use crate::protocol::tasks::{Task, TaskOptions};
+use crate::protocol::tasks::TaskOptions;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// Admission principal: verified identity when present, else the session key.
