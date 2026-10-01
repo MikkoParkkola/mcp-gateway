@@ -543,8 +543,9 @@ async fn held_backend() -> (
 
 /// U9: EOF while a task is still running waits for it. `run_stdio_on` is
 /// still serving while the held call is open, returns once it settles, and
-/// the store, reopened, holds the task completed: the worker finished before
-/// the store closed (a task cut off at exit would recover as failed).
+/// the store, reopened at once, is free and holds the backend's own result:
+/// the worker finished before the store closed. A task cut off instead would
+/// recover at reopen as completed with a restart error, never with `done`.
 #[tokio::test]
 async fn eof_drains_a_running_task_before_returning() {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -572,7 +573,7 @@ async fn eof_drains_a_running_task_before_returning() {
         .with_data_dir(data.path().to_path_buf());
     let (mut stdin, input) = tokio::io::duplex(64 * 1024);
     let (output, reader) = tokio::io::duplex(1 << 20);
-    let served = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+    let mut served = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
     let mut lines = BufReader::new(reader).lines();
     let handshake = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
         "protocolVersion": "2025-06-18", "capabilities": {},
@@ -606,9 +607,12 @@ async fn eof_drains_a_running_task_before_returning() {
         .expect("the held call reaches the backend")
         .expect("fixture alive");
     drop(stdin);
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    // Five seconds is far past EOF's own work; a server that does not drain
+    // returns well inside it, one that does is still held by the barrier.
     assert!(
-        !served.is_finished(),
+        tokio::time::timeout(Duration::from_secs(5), &mut served)
+            .await
+            .is_err(),
         "EOF waits for the running task instead of returning past it"
     );
     release.send_modify(|open| *open = true);
@@ -623,9 +627,14 @@ async fn eof_drains_a_running_task_before_returning() {
     let task = service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the local operator's task is in its store");
+    let wire = crate::gateway::task_route::task_envelope(&task.task, "complete");
     assert_eq!(
         task.task.status(),
         crate::protocol::tasks::TaskStatus::Completed,
-        "settled by its own worker before the store closed"
+        "{wire}"
+    );
+    assert!(
+        wire.to_string().contains("done") && !wire.to_string().contains("gateway_restart"),
+        "settled by its own worker with the backend's result, not by recovery: {wire}"
     );
 }
