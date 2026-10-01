@@ -17,8 +17,14 @@ impl MetaMcp {
         if let Some(tracker) = self.get_transition_tracker() {
             tracker.remove_session(session_id);
         }
-        if let Some(stats) = &self.stats {
-            stats.remove_session(session_id);
+    }
+
+    /// Forget the last tool recorded under a caller key whose idle deadline
+    /// passed (gap G4). Hints key on the caller, and a caller key has no
+    /// session end, so only the deadline reclaims it.
+    pub fn forget_caller(&self, key: &str) {
+        if let Some(tracker) = self.get_transition_tracker() {
+            tracker.remove_session(key);
         }
     }
 }

@@ -234,6 +234,7 @@ fn with_policy_caller<R>(
         agent_declared: None,
         grant_subject: caller.grant_subject.clone(),
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: caller.verified_identity,
         is_admin: caller.is_admin,
         input_capabilities: caller.input_capabilities,

@@ -195,6 +195,10 @@ pub struct MetaMcpCallerContext<'a> {
     /// Set by the two stdio context builders only (no constructor outside
     /// `gateway::server`); binds continuations to the stdio client.
     pub(crate) stdio_nonce: Option<&'a crate::gateway::server::StdioNonce>,
+    /// The caller's `CallerKey` (`router::identity::caller_key`), `None` when
+    /// it has none. The A/B arm and the prefetch hints key on it (gap G4);
+    /// only the HTTP route derives one.
+    pub(crate) caller_key: Option<&'a str>,
     /// Whether the caller holds admin. Carried here because meta-tools with
     /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
     /// `router::authorization`, which only knows whole tools.
@@ -277,6 +281,16 @@ impl<'a> MetaMcpCallerContext<'a> {
             .filter(|text| !text.starts_with(LOCAL_OPERATOR_PREFIX))
     }
 
+    /// Who the A/B arm and the prefetch hints key on (MIK-7215.CONTROL.5, G4):
+    /// the caller key, else a real session id (a legacy connection or stdio,
+    /// neither shared). A keyless modern caller has neither: no arm of its
+    /// own and no hints, never the empty id every such caller shares.
+    pub(crate) fn experiment_key<'s>(&'s self, session_id: Option<&'s str>) -> Option<&'s str> {
+        self.caller_key
+            .filter(|key| !key.is_empty())
+            .or_else(|| session_key(session_id))
+    }
+
     /// How this caller was established. The stdio transport's mark decides
     /// `LocalTransport`; principal text alone never does (MIK-7272.OWNER.3).
     pub(crate) fn provenance(&self) -> crate::identity_propagation::CallerProvenance {
@@ -317,6 +331,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,
+            caller_key: self.caller_key,
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),
