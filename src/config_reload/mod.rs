@@ -652,6 +652,7 @@ fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'static str, boo
         "cache" => cache,
         "runtime" => runtime,
         "tasks" => tasks,
+        "events" => events,
         // Fail-closed on purpose. Eager replacement of a descriptor's authority,
         // resource, issuer or scopes is NOT implemented, so an `accounts` edit
         // is reported as outstanding until a restart rather than claimed as
