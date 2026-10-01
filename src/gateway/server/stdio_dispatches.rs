@@ -33,7 +33,9 @@ impl Cancelled {
     /// Queue `frame` on `permit` unless this dispatch was cancelled, and mark
     /// it answered. The check and the enqueue run under the lock `cancel`
     /// records under, so no frame is queued after the cancel was processed.
-    /// Called from inside the dispatch's own task, which is what names it.
+    /// Called from inside the dispatch's own task, which is what names it. The
+    /// inline path answers on the serve loop's own task, which is never joined
+    /// here: it leaves one stale `answered` entry, the same id every time.
     pub(super) fn send_unless_cancelled(
         &self,
         id: Option<&RequestId>,

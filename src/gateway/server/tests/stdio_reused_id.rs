@@ -141,3 +141,30 @@ async fn a_cancelled_id_is_reusable_before_its_dispatch_is_joined() {
         "the second cancel hit the cancelled dispatch; the reused id's call kept running"
     );
 }
+
+/// Joining the answered predecessor leaves the reused id mapped to its
+/// in-flight successor, which a cancel still reaches.
+#[tokio::test]
+async fn joining_a_predecessor_keeps_the_reused_ids_mapping() {
+    let mut dispatches = StdioDispatches::default();
+    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let first = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
+    let answered = tokio::time::timeout(BOUND, stdout.recv()).await;
+    assert_eq!(answered.expect("first answered"), Some(json!("first")));
+
+    let (alive, dropped) = oneshot::channel::<()>();
+    dispatches.spawn(Some(id()), async move {
+        let _alive = alive;
+        std::future::pending::<()>().await;
+    });
+    drop(first);
+    let joined = tokio::time::timeout(BOUND, dispatches.join_next()).await;
+    assert!(matches!(joined, Ok(Some(Ok(())))), "the first dispatch joined");
+
+    dispatches.cancel(&id());
+    let outcome = tokio::time::timeout(BOUND, dropped).await;
+    assert!(
+        outcome.is_ok(),
+        "joining the predecessor unmapped the reused id; its call kept running"
+    );
+}
