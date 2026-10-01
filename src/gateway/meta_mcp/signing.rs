@@ -254,6 +254,18 @@ impl SigningInvocationContext {
         }
     }
 
+    /// Refuse a malformed nonce before any gate can answer the call: the
+    /// task-augmented gate answers before [`super::MetaMcp::prepare_signing_invocation`]
+    /// would see it, and its answer must not be the finalizer's `-32603`.
+    pub(crate) fn refuse_malformed_nonce(&self) -> crate::Result<()> {
+        if self.origin == Origin::Unsigned {
+            return Ok(());
+        }
+        self.nonce_value()
+            .map(drop)
+            .inspect_err(|_| record_nonce_rejection(NONCE_REASON_INVALID))
+    }
+
     /// How the response is delivered: a malformed nonce cannot deliver, and
     /// a well-formed one signs only once it has passed admission.
     pub(crate) fn delivery(&self) -> crate::Result<SigningDelivery<'_>> {

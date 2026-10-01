@@ -28,7 +28,9 @@ const MAX_HOPS: usize = 10;
 pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
     let builder = match destination {
         DestinationPolicy::Configured => Client::builder(),
-        DestinationPolicy::Public => crate::security::ssrf::pinned_client_builder(),
+        policy @ (DestinationPolicy::Public | DestinationPolicy::Private) => {
+            crate::security::ssrf::pinned_client_builder_for(policy)
+        }
     };
     builder
         .timeout(Duration::from_secs(30))
