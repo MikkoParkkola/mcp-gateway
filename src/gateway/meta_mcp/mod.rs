@@ -2765,3 +2765,7 @@ mod session_bound_tests;
 #[cfg(test)]
 #[path = "session_cleanup_tests.rs"]
 mod session_cleanup_tests;
+
+#[cfg(test)]
+#[path = "session_inflight_tests.rs"]
+mod session_inflight_tests;

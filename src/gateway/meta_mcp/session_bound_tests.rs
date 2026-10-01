@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7681.GH2473.2 and MIK-7682.GH2568.2: the per-session stores stay
-//! bounded. Many sessions reaped by their TTL leave no entry in any store, and
-//! a call still in flight when its session ends leaves nothing after the grace
-//! pass. Both go through the production wiring: `wire_meta_session_cleanup`,
-//! the multiplexer reaper and `SessionLifecycle::reap`.
+//! MIK-7681.GH2473.2: each per-session store stays bounded. Many sessions
+//! reaped by their TTL leave no entry, one test per store, through the
+//! production wiring: `wire_meta_session_cleanup` and the multiplexer reaper.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,9 +11,7 @@ use super::MetaMcp;
 use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::gateway::session_id::SessionOwner;
-use crate::gateway::session_lifecycle::{
-    END_GRACE, SessionLifecycle, now_unix, wire_meta_session_cleanup,
-};
+use crate::gateway::session_lifecycle::{SessionLifecycle, wire_meta_session_cleanup};
 use crate::gateway::streaming::NotificationMultiplexer;
 use crate::transition::TransitionTracker;
 
@@ -46,38 +42,52 @@ fn wired() -> Wired {
     }
 }
 
-/// Write one entry under `id` in every per-session store, as a call would.
-fn write_every_store(w: &Wired, id: &str) {
-    w.meta.session_profiles.set_profile(id, "strict");
-    w.meta.session_state.set_state(id, "working");
-    w.meta
-        .cost_tracker
-        .record(id, None, "backend", "tool", 10, 1.0);
-    w.tracker.record_transition(id, "backend:tool");
-    #[cfg(feature = "spec-preview")]
-    w.meta
-        .session_promoted
-        .insert(id.to_owned(), vec!["tool".to_owned()]);
+/// One per-session store: how a call writes it, and how many entries it holds.
+struct Store {
+    write: fn(&Wired, &str),
+    count: fn(&Wired) -> usize,
 }
 
-/// Entries per store: profile, FSM state, cost, last tool, promoted tools.
-fn counts(w: &Wired) -> [usize; 5] {
-    #[cfg(feature = "spec-preview")]
-    let promoted = w.meta.session_promoted.len();
-    #[cfg(not(feature = "spec-preview"))]
-    let promoted = 0;
-    [
-        w.meta.session_profiles.len(),
-        w.meta.session_state.len(),
-        usize::try_from(w.meta.cost_tracker.aggregate().session_count)
-            .expect("fits"),
-        w.tracker.key_count(),
-        promoted,
-    ]
-}
+const PROFILE: Store = Store {
+    write: |w, id| w.meta.session_profiles.set_profile(id, "strict"),
+    count: |w| w.meta.session_profiles.len(),
+};
+const FSM_STATE: Store = Store {
+    write: |w, id| {
+        w.meta.session_state.set_state(id, "working");
+    },
+    count: |w| w.meta.session_state.len(),
+};
+const COST: Store = Store {
+    write: |w, id| {
+        w.meta
+            .cost_tracker
+            .record(id, None, "backend", "tool", 10, 1.0);
+    },
+    count: cost_sessions,
+};
 
-#[tokio::test]
-async fn many_sessions_reaped_by_their_ttl_leave_no_entry_in_any_store() {
+fn cost_sessions(w: &Wired) -> usize {
+    let sessions = w.meta.cost_tracker.aggregate().session_count;
+    usize::try_from(sessions).expect("fits")
+}
+const LAST_TOOL: Store = Store {
+    write: |w, id| w.tracker.record_transition(id, "backend:tool"),
+    count: |w| w.tracker.key_count(),
+};
+#[cfg(feature = "spec-preview")]
+const PROMOTED: Store = Store {
+    write: |w, id| {
+        w.meta
+            .session_promoted
+            .insert(id.to_owned(), vec!["tool".to_owned()]);
+    },
+    count: |w| w.meta.session_promoted.len(),
+};
+
+/// Open `SESSIONS` legacy sessions, write `store` under each, let the reaper
+/// expire them all by their TTL, and find the store empty again.
+async fn reaped_sessions_leave_the_store_empty(store: &Store) {
     let w = wired();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::new(BackendRegistry::new()),
@@ -91,10 +101,9 @@ async fn many_sessions_reaped_by_their_ttl_leave_no_entry_in_any_store() {
     for _ in 0..SESSIONS {
         let (id, receiver) = multiplexer.get_or_create_session_for(None, &owner);
         drop(receiver);
-        write_every_store(&w, &id);
+        (store.write)(&w, &id);
     }
-    let seeded = counts(&w);
-    assert_eq!(seeded[0], SESSIONS, "seeded every store: {seeded:?}");
+    assert_eq!((store.count)(&w), SESSIONS, "one entry per session");
 
     multiplexer.spawn_reaper_on(Arc::clone(&w.lifecycle));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -106,37 +115,31 @@ async fn many_sessions_reaped_by_their_ttl_leave_no_entry_in_any_store() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    assert_eq!(
-        counts(&w),
-        [0; 5],
-        "every store returns to empty once its sessions expire"
-    );
+    assert_eq!((store.count)(&w), 0, "the expired sessions left entries");
 }
 
 #[tokio::test]
-async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_pass() {
-    let w = Arc::new(wired());
-    let release = Arc::new(tokio::sync::Notify::new());
-    // The call resolved its session before the end and writes after it.
-    let call = {
-        let w = Arc::clone(&w);
-        let release = Arc::clone(&release);
-        tokio::spawn(async move {
-            release.notified().await;
-            write_every_store(&w, "gone");
-        })
-    };
+async fn reaped_sessions_leave_no_routing_profile() {
+    reaped_sessions_leave_the_store_empty(&PROFILE).await;
+}
 
-    w.lifecycle.on_disconnect("gone");
-    release.notify_one();
-    call.await.expect("the call finished");
-    assert_eq!(
-        counts(&w)[0],
-        1,
-        "the late write landed after the first cleanup pass"
-    );
+#[tokio::test]
+async fn reaped_sessions_leave_no_fsm_state() {
+    reaped_sessions_leave_the_store_empty(&FSM_STATE).await;
+}
 
-    w.lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
+#[tokio::test]
+async fn reaped_sessions_leave_no_cost_bucket() {
+    reaped_sessions_leave_the_store_empty(&COST).await;
+}
 
-    assert_eq!(counts(&w), [0; 5], "nothing the late call wrote survives");
+#[tokio::test]
+async fn reaped_sessions_leave_no_last_tool() {
+    reaped_sessions_leave_the_store_empty(&LAST_TOOL).await;
+}
+
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn reaped_sessions_leave_no_promoted_tools() {
+    reaped_sessions_leave_the_store_empty(&PROMOTED).await;
 }
