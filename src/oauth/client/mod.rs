@@ -158,8 +158,7 @@ pub struct OAuthClient {
     /// Callback host override (default: "localhost", dual-binds IPv4+IPv6).
     callback_host: Option<String>,
 
-    /// How the authorization URL reaches the person who approves it: the
-    /// system browser. A field so a test can stand in for that person.
+    /// Hands the authorization URL to its approver (the browser; a test in tests).
     open_browser: Box<dyn Fn(&str) -> bool + Send + Sync>,
 
     /// Fixed callback port (None = OS-assigned).
@@ -1206,12 +1205,11 @@ fn open_browser(url: &str) -> bool {
     result.is_ok()
 }
 
+#[cfg(test)]
+mod authorize_tests;
 pub(crate) mod destination;
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod authorize_tests;
 
 #[cfg(test)]
 mod cwe532_debug_redaction {
