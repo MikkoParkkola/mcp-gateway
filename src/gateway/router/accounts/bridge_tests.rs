@@ -72,6 +72,11 @@ fn only_one_nonempty_session_cookie_yields_a_token() {
         sole_cookie(&headers(&["a=1", "token=abc"]), NAME),
         Some("abc")
     );
+    assert_eq!(
+        sole_cookie(&headers(&["flag; token=abc"]), NAME),
+        Some("abc"),
+        "a pair with no `=` is skipped, not fatal"
+    );
     for lines in [
         vec!["token=a; token=b"],
         vec!["token=a", "token=b"],
