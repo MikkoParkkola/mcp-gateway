@@ -86,6 +86,7 @@ mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
 mod effects;
+mod events_hook;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
@@ -400,6 +401,8 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
     pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
+    /// MCP Events hub (MIK-7630); unset while events are off or on stdio.
+    pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
@@ -679,6 +682,7 @@ impl MetaMcp {
         Self {
             backends,
             change_feed: std::sync::OnceLock::new(),
+            events: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
@@ -1682,6 +1686,8 @@ impl MetaMcp {
             self.change_feed(),
         );
 
+        let mut capabilities = serde_json::to_value(capabilities).unwrap_or_default();
+        self.advertise_events(&mut capabilities);
         serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
@@ -1744,7 +1750,9 @@ impl MetaMcp {
         // `protocol::meta::classify_request` records.
         let result =
             build_initialize_result(negotiated_version, &instructions, era, self.change_feed());
-        JsonRpcResponse::success_serialized(id, result)
+        let mut result = serde_json::to_value(result).unwrap_or_default();
+        self.advertise_events(&mut result["capabilities"]);
+        JsonRpcResponse::success(id, result)
     }
 
     /// The initialize instructions as this caller may read them: counts over

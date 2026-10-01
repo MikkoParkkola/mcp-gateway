@@ -77,6 +77,9 @@ pub struct PinningResolver<R = SystemResolver> {
     /// What a resolved address is checked against: `Public` unless a listed
     /// private backend's client asks for `Private`.
     policy: super::DestinationPolicy,
+    /// Operator CIDRs reachable although the policy denies them (the events
+    /// client's `callback_allow_private`). Empty for every other caller.
+    allowed: std::sync::Arc<[(IpAddr, u8)]>,
 }
 
 impl<R: HostResolver> PinningResolver<R> {
@@ -85,7 +88,15 @@ impl<R: HostResolver> PinningResolver<R> {
         Self {
             inner: std::sync::Arc::new(inner),
             policy: super::DestinationPolicy::Public,
+            allowed: std::sync::Arc::new([]),
         }
+    }
+
+    /// Exempt exactly `allowed` from the policy. [`super::destination::ALWAYS_DENIED`]
+    /// stays denied even inside an allowed range.
+    pub(crate) fn with_allowed(mut self, allowed: Vec<(IpAddr, u8)>) -> Self {
+        self.allowed = allowed.into();
+        self
     }
 
     /// Check resolved addresses against `policy` instead of `Public`.
@@ -101,6 +112,7 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
         // Clone the Arc so the future is 'static (no borrow of self).
         let inner = std::sync::Arc::clone(&self.inner);
         let policy = self.policy;
+        let allowed = std::sync::Arc::clone(&self.allowed);
         Box::pin(async move {
             type BoxErr = Box<dyn std::error::Error + Send + Sync>;
             let ips = inner
@@ -109,7 +121,7 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
                 .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as BoxErr)?;
 
             for ip in &ips {
-                if policy.denies(*ip) {
+                if policy.denies(*ip) && !in_allowed(&allowed, *ip) {
                     // The address stays in the log: the refusal reaches callers,
                     // and naming it would answer internal DNS for them.
                     tracing::warn!(host = %host, address = %ip, "SSRF pin refused a resolved address");
@@ -125,6 +137,24 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
             Ok(addrs)
         })
     }
+}
+
+/// Whether `ip` falls inside one of `allowed`; never for an always-denied address.
+pub(crate) fn in_allowed(allowed: &[(IpAddr, u8)], ip: IpAddr) -> bool {
+    if super::destination::ALWAYS_DENIED.contains(&ip) {
+        return false;
+    }
+    allowed.iter().any(|&(net, len)| match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(a)) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(len)).unwrap_or(0);
+            u32::from(n) & mask == u32::from(a) & mask
+        }
+        (IpAddr::V6(n), IpAddr::V6(a)) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(len)).unwrap_or(0);
+            u128::from(n) & mask == u128::from(a) & mask
+        }
+        _ => false,
+    })
 }
 
 /// The pinning resolver refused an address: a policy answer, not a network

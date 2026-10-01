@@ -126,6 +126,41 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
     // Validate auth config doesn't contain actual secrets
     validate_no_secrets(&capability.auth)?;
 
+    validate_webhook_events(capability)?;
+
+    Ok(())
+}
+
+/// An `event:` block (MIK-7630) needs a field mapping to project from: the
+/// event path never falls back to the raw body. Its filters must be mapped
+/// keys, and `dedupe` only knows `body`.
+fn validate_webhook_events(capability: &CapabilityDefinition) -> Result<()> {
+    for (route, webhook) in &capability.webhooks {
+        let Some(event) = &webhook.event else {
+            continue;
+        };
+        let refuse = |why: &str| {
+            Err(Error::Config(format!(
+                "Capability '{}' webhook route '{route}': {why}",
+                capability.name
+            )))
+        };
+        if webhook.transform.data.is_empty() {
+            return refuse("an event block needs a non-empty transform.data mapping");
+        }
+        if let Some(filter) = event
+            .filters
+            .iter()
+            .find(|f| !webhook.transform.data.contains_key(*f))
+        {
+            return refuse(&format!(
+                "event filter '{filter}' is not a transform.data key"
+            ));
+        }
+        if event.dedupe.as_deref().is_some_and(|d| d != "body") {
+            return refuse("event dedupe must be 'body' when set");
+        }
+    }
     Ok(())
 }
 
