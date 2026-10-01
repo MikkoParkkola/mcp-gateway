@@ -327,9 +327,9 @@ def stub_handler(stub, emit_token):
             self.reply(404, {"error": "not found"})
 
         def do_POST(self):
-            n = int(self.headers.get("Content-Length") or 0)
-            if n > MAX_BODY:
-                return self.reply(413, {"error": "too large"})
+            n, refused = body_length(self.headers)
+            if refused:
+                return self.reply(refused, {"error": "bad or too large Content-Length"})
             raw = self.rfile.read(n)
             hdrs = {k: v for k, v in self.headers.items() if k.lower() not in ("authorization", "cookie")}
             try:
@@ -347,6 +347,18 @@ def stub_handler(stub, emit_token):
     return H
 
 
+def body_length(headers):
+    """(bytes to read, None) for a usable Content-Length, else (0, status):
+    400 when it is not a non-negative integer, 413 when it is over MAX_BODY."""
+    try:
+        n = int(headers.get("Content-Length") or 0)
+    except ValueError:
+        return 0, 400
+    if n < 0:
+        return 0, 400
+    return (0, 413) if n > MAX_BODY else (n, None)
+
+
 def receiver_handler(secret, seen):
     key = decode_whsec(secret)
     need = ("webhook-id", "webhook-timestamp", "webhook-signature", "X-MCP-Subscription-Id")
@@ -356,7 +368,12 @@ def receiver_handler(secret, seen):
             pass
 
         def do_POST(self):
-            body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            n, refused = body_length(self.headers)
+            if refused:
+                self.send_response(refused)
+                self.end_headers()
+                return
+            body = self.rfile.read(n)
             h = self.headers
             ok = all(h.get(x) for x in need) and verify(
                 key, h["webhook-id"], h["webhook-timestamp"], body, h["webhook-signature"])
@@ -436,9 +453,12 @@ def selftest(workdir):
     logged = open(log).read()
     assert secret not in logged and secret[6:] not in logged and "/hook" not in logged, "log leaks secret or path"
     assert os.stat(store).st_mode & 0o077 == 0 and os.stat(log).st_mode & 0o077 == 0, "store/log not owner-only"
+    for bad, status in (("x", 400), ("-1", 400), (str(MAX_BODY + 1), 413)):
+        assert body_length({"Content-Length": bad}) == (0, status), f"Content-Length {bad!r} accepted"
+    assert body_length({"Content-Length": "5"}) == (5, None) and body_length({}) == (0, None)
     srv.shutdown()
     rcv.shutdown()
-    print("selftest PASS: discover, list, short-secret, verify, idempotent, persist, filter, sign, unsubscribe, redaction")
+    print("selftest PASS: discover, list, short-secret, verify, idempotent, persist, filter, sign, unsubscribe, redaction, length")
     return 0
 
 
