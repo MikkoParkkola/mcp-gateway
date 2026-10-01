@@ -405,3 +405,19 @@ async fn a_legacy_row_is_refused_on_repeat_when_its_tool_is_withheld() {
     assert_refused(&repeat, "withheld");
     assert_ne!(repeat.pointer("/result/taskId"), Some(&json!(id)));
 }
+
+/// The same refusal when the tool is withheld by policy rather than by its
+/// description: here the error budget has disabled the capability.
+#[tokio::test]
+async fn a_legacy_row_is_refused_when_its_tool_is_disabled_by_policy() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_invoke(&state, "b-legacy-disabled").await;
+    strip_targets(&state, &id);
+    let cfg = crate::kill_switch::budget::CapabilityErrorBudgetConfig::default();
+    let kill = state.meta_mcp.kill_switch();
+    for _ in 0..cfg.min_samples.max(cfg.window_size) {
+        kill.record_capability_failure(BACKEND, TOOL, &cfg);
+    }
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+}

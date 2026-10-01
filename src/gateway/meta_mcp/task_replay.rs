@@ -56,7 +56,7 @@ impl MetaMcp {
             return if stored.targets_recorded {
                 Ok(())
             } else {
-                self.authorize_legacy_row(stored, session, caller)
+                self.authorize_legacy_row(stored, attestation, session, caller)
             };
         }
         // Names only: no current policy reads a target's arguments.
@@ -74,11 +74,14 @@ impl MetaMcp {
 
     /// A row written before targets were recorded. A plan (by the task's own
     /// tool name, never the backend label) has no provenance and is refused;
-    /// anything else faces the backend-level checks. Capability auto-disable is
-    /// keyed by (backend, tool), so it cannot be applied backend-wide.
+    /// anything else faces the backend-level checks, and then, because the row
+    /// cannot name the tool it ran (`task.tool()` is the meta tool), is refused
+    /// while any tool its backend lists is withheld from this caller, or while
+    /// that list is not known in full (MIK-7686).
     fn authorize_legacy_row(
         &self,
         stored: &CommittedTask,
+        attestation: Option<&str>,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
@@ -106,6 +109,29 @@ impl MetaMcp {
             .is_some_and(|backend| backend.gate_saturated());
         if self.kill_switch.is_killed(server) || saturated {
             return Err(refuse("the backend that produced this result is disabled"));
+        }
+        let withheld = || {
+            refuse(
+                "stored task result has no recorded tool, and its backend has a withheld \
+                 or unlisted tool",
+            )
+        };
+        let Some(backend) = self.backends.get(server) else {
+            return Err(withheld());
+        };
+        let (tools, truncated) = backend.cached_tools_snapshot_and_truncated();
+        if !backend.cached_tools_known() || truncated || backend.withholds_any_tool() {
+            return Err(withheld());
+        }
+        for tool in tools.iter() {
+            let args =
+                super::upstream::recovery_policy_args(server, &tool.name, &json!({}), attestation);
+            if self
+                .check_invocation_policy(&args, session, caller)
+                .is_err()
+            {
+                return Err(withheld());
+            }
         }
         Ok(())
     }
