@@ -45,7 +45,13 @@ the durable recovery transition.
      inline.
    - **No race between the two paths.** The worker and the owner read take the same per-task
      query slot (`worker.rs:432` `acquire_query_lease`, and `upstream.rs:221` and `:310`, both via
-     `query_slot`), so they never settle one task concurrently. A commit can still lose to a
+     `query_slot`). Each holds it from (a) through (d):
+     - The worker gets the lease back with its terminal answer (`Followed::Terminal`,
+       `worker.rs:390-392`) and releases it only after `settle_cas` (`worker.rs:378-386`).
+     - The owner read holds the slot around the whole of `query_and_commit`
+       (`upstream.rs:221-226`).
+     The settlement hook runs inside that span on both paths, so they never settle, or record,
+     one task concurrently. A commit can still lose to a
      non-recovery writer, such as a cancel. Then the record stands for a recovery that did not
      land, as a live call's record stands when its delivery then fails.
    - `Followed::Retained` and `Followed::Overtaken`, and a query that is `Live` or `Unavailable`,
@@ -64,7 +70,7 @@ the durable recovery transition.
 | `route` | `"task_recovery"`. Written through `log_invocation_attributed` with a route string from a crate-private route type. The public `InvocationRoute` enum (`src/security/audit.rs:259`) is unchanged, so this needs no public API change. Record readers parse `route` as a string; a test round-trips the value through the log's own verifier and reader |
 | `server`, `tool` | the job's backend and tool |
 | `task_id` | new field: the gateway task id. It is the join key to the submission record |
-| `request_hash` | `sha256` of the canonical `{"task_id": <id>}`. The recovering path does not hold the original request; the call's request hash is on the submission record |
+| `request_hash` | `sha256` of the canonical `{"task_id": <id>}`. The record writer requires the field. The recovering path does not hold the original request, so it hashes the join key it does hold, and says so here. The call's real request hash is on the submission record |
 | `response_hash` | `sha256` of the processed result from step (b). Absent when that transition is a failure (a policy refusal or a screened peer failure) |
 | `outcome`, `error_code` | from the processed transition, through `audit_invocation`'s mapping. A gate refusal is a failure with its code |
 | `who` | built from the principal the task was admitted under, the one the recovering path holds and nothing more. No credential kind, API key name or grant subject is claimed |
@@ -79,7 +85,8 @@ processed result became, so a refused or rewritten handle still joins.
 - **FailClosed:** a failed write at (c) means the recovered content is not committed. The task
   commits `Fail(-32005, "audit log unavailable")` instead, with no backend content, as a live call
   withholds its result and answers `-32005`.
-- **BestEffort:** the failure is logged and the transition commits.
+- **BestEffort:** the failure is logged, counted (`mcp_audit_settlement_write_failures_total`),
+  and the transition commits.
 - A crash between (c) and (d) leaves a record and no settlement. The next recovery attempt
   re-queries and records again, so a crash can over-record but never deliver unrecorded content.
   This is the synchronous path's own window: a live call that crashes after its write and before
@@ -140,3 +147,9 @@ Each of R1, R3-R7 runs on both paths, the worker and the owner read.
   - Lead ruling: match the synchronous order if it is better. It is (write before `complete_delivery`). So r3 writes before the commit, FailClosed withholds the content as a live call does, and the crash window becomes the synchronous path's own over-record window.
 - r3 (2026-10-01):
   - gpt-review SHIP-WITH-FIXES. One MEDIUM: the helper paragraph still said "after a committed transition". Fixed in r3.1: the helper takes the proposed transition at step (c). R6-R7 now run on both paths, and R8 adds the cancel case.
+  - synthetic-review (GLM) SHIP-WITH-FIXES:
+    - MEDIUM: the same helper contradiction, fixed in r3.1.
+    - MEDIUM: R6 and R7 were not run on both paths, fixed in r3.1.
+    - MEDIUM: the claimed lease span was unstated. It is verified and cited in r3.2: both paths hold the slot from (a) through (d).
+    - Improvements applied: the BestEffort counter, and the `request_hash` statement.
+    - Improvements not applied: one shared settle function (left to the implementation) and an attempt ordinal (crash over-records join by `task_id`).
