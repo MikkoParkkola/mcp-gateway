@@ -49,13 +49,13 @@ async fn a_round_that_starts_past_the_aggregate_budget_ends_on_the_deadline() {
     let content = json!({"branch": "main"});
     let client = FakeClient::new(accepts(3, &content));
     let backend = SlowBackend {
-        delay: Duration::from_millis(200),
+        delay: Duration::from_millis(900),
         calls: Mutex::new(0),
     };
     let records = Records::default();
     let bounds = BridgeBounds {
-        aggregate: Duration::from_millis(100),
-        per_prompt: Duration::from_millis(50),
+        aggregate: Duration::from_millis(500),
+        per_prompt: Duration::from_millis(400),
         ..BridgeBounds::DEFAULT
     };
 
@@ -92,7 +92,7 @@ async fn a_round_gate_refusal_of_another_kind_passes_through_unchanged() {
     let gate = CountingGate {
         admitted: 0,
         seen: Mutex::new(0),
-        refusal: || BridgeError::RequestBudgetExhausted,
+        refusal: || BridgeError::MalformedInterim,
     };
     let records = Records::default();
 
@@ -106,12 +106,13 @@ async fn a_round_gate_refusal_of_another_kind_passes_through_unchanged() {
     )
     .await;
 
-    assert_eq!(outcome, Err(BridgeError::RequestBudgetExhausted));
+    assert_eq!(outcome, Err(BridgeError::MalformedInterim));
     assert!(client.frames().is_empty(), "a refused round asks no one");
     assert!(
         backend.calls().is_empty(),
         "a refused round retries nothing"
     );
+    assert_eq!(*gate.seen.lock().unwrap(), 1, "the gate was consulted once");
 }
 
 /// The same holds on the gate call for the round handed back: a refusal of
@@ -119,13 +120,13 @@ async fn a_round_gate_refusal_of_another_kind_passes_through_unchanged() {
 #[tokio::test]
 async fn a_handed_back_gate_refusal_of_another_kind_passes_through_unchanged() {
     let content = json!({"branch": "main"});
-    let client = FakeClient::new(accepts(6, &content));
-    let backend = FakeBackend::new(vec![asking(&[("k", ask("again?"))]); 6]);
     let rounds = usize::try_from(BridgeBounds::DEFAULT.rounds).unwrap();
+    let client = FakeClient::new(accepts(rounds * 2, &content));
+    let backend = FakeBackend::new(vec![asking(&[("k", ask("again?"))]); rounds * 2]);
     let gate = CountingGate {
         admitted: rounds,
         seen: Mutex::new(0),
-        refusal: || BridgeError::NeverReached,
+        refusal: || BridgeError::MalformedInterim,
     };
     let records = Records::default();
 
@@ -139,11 +140,16 @@ async fn a_handed_back_gate_refusal_of_another_kind_passes_through_unchanged() {
     )
     .await;
 
-    assert_eq!(outcome, Err(BridgeError::NeverReached));
+    assert_eq!(outcome, Err(BridgeError::MalformedInterim));
     assert_eq!(
         backend.calls().len(),
         rounds,
         "every asked round was retried"
+    );
+    assert_eq!(
+        client.frames().len(),
+        rounds,
+        "every gated round was asked in-band"
     );
     assert_eq!(
         *gate.seen.lock().unwrap(),
