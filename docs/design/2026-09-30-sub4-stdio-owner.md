@@ -609,18 +609,29 @@ Decisions:
        of the process.
    - `ServiceError` collapses a lease conflict into `Unavailable` (`task_service/service.rs:89`).
      Stdio does not need to tell the two apart, because every failure degrades the same way.
-7. **Lease direction: OPEN, for the lead.** After I4, the first gateway to open the default
-   `tasks.store_dir` holds the lease. A stdio gateway that a desktop client spawned therefore
-   makes a later `mcp-gateway serve` (HTTP) on the same default config fail fast with "task store
-   at '…' could not be opened" (`server/mod.rs:1877`). Today that HTTP start succeeds. Options:
-   - (a) Accept and document. The fix is a separate `tasks.store_dir` per transport, and both
-     the error text and the docs say so.
-   - (b) HTTP degrades like stdio. This changes HTTP's fail-fast rule and the advertisement.
-   - (c) Stdio uses the store only when `tasks.store_dir` is set explicitly. This gives a
-     config key new meaning, which is a config change.
-
-   Recommended: (a), with the HTTP error naming the likely holder. This is escalated with the
-   rev 5 review.
+7. **Lease direction: decided by the lead, 2026-10-01, option (d).** Stdio derives its own
+   store from the same base path: `expand_home_path(tasks.store_dir).join("stdio")`. It is
+   resolved literally, with no new config key, and the derived path is logged at open.
+   - **No contention by default.** HTTP keeps `tasks.store_dir` and stdio uses its `stdio`
+     subdirectory, so neither holds the other's lease. The HTTP store's loader ignores the
+     subdirectory: it reads only `task-*.json` names (`task_service/store.rs:665,747-749`), and
+     the directory judge accepts it (`:903-905`). Rejected options:
+     - (a): a running desktop-spawned stdio gateway would turn into an HTTP startup failure on the
+       default config. That is an upgrade regression.
+     - (b) and (c), as before.
+   - **Relocation carries over.** Moving the base directory and rewriting `tasks.store_dir`
+     moves the stdio store with it.
+   - **A second concurrent stdio gateway** finds the lease held and degrades as in item 6: no
+     durable tasks, and discover and `initialize` stay honest.
+   - **Explicitly shared directory.** An operator who points HTTP's `tasks.store_dir` at another
+     config's stdio subdirectory meets the existing lease rule. HTTP fails fast, and its error now
+     names the likely holder: "held by another gateway process, possibly a stdio gateway using
+     `<base>/stdio`". This is the only HTTP-visible change; the error text is tested.
+   - **I-OWN is still tested,** by configuring HTTP explicitly onto the stdio directory once stdio
+     has exited.
+   - **Documented** in the `tasks.store_dir` config doc comment (`src/config/features/tasks.rs`),
+     `docs/UPGRADING-4.0.md`, and `docs/runbooks/backup-restore-and-keys.md`. The backup runbook
+     needs no procedure change, because the subdirectory is inside the backed-up directory.
 8. **Placement.**
    - New code goes in sibling modules: `gateway/task_route.rs`, `gateway/task_service/host.rs`
      (`TaskHost`, `StdioTaskHost`), and `gateway/server/stdio_tasks.rs` (open, creation, the
@@ -697,5 +708,5 @@ failing tests are written.
 - Rev 4 also records D1 as built in #2494: a reserved NUL-prefixed owner principal replaces rev
   3's "own domain string", and catalogue tag plumbing is dropped (no decision depends on it).
 - Rev 5 (2026-10-01, at `bf5c901e3`): D6 rev 5 added after the I4 inventory found the worker's
-  `AppState` dependency. Sized to the lead, who ruled option (A). Item 7 (lease direction) is open
-  with the lead. Sent to two seats on the design delta before code.
+  `AppState` dependency. Sized to the lead, who ruled option (A). Item 7 (lease direction) ruled
+  option (d) by the lead: stdio uses `<store_dir>/stdio`. Sent to two seats on the design delta before code.

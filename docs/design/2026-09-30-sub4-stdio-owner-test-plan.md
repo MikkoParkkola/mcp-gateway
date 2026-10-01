@@ -314,7 +314,7 @@ Written 2026-10-01 at `bf5c901e3`. The red commit comes after rev 5's review.
   helper is left as it is.
 - **Config.**
   - `server.modern_protocol: true`;
-  - `tasks.store_dir` under a temp root, mode `0700`;
+  - `tasks.store_dir` = `<root>/tasks`. Stdio derives `<root>/tasks/stdio` (D6 rev 5 item 7);
   - one HTTP fixture backend that counts `tools/call` rounds. Its `slow` tool answers after 3 s,
     so a kill can land mid-call.
 - **HTTP side.** I-OWN rows start an HTTP gateway on the same config from a second process, once
@@ -340,14 +340,16 @@ They are green on arrival, and the mutant batch is their proof.
 | T1 | `stdio_serves_tasks_get_and_says_no_such_task` | After `initialize`, `tasks/get` for a random id. | -32602 "no such task", the HTTP text (`router/handlers.rs:112-114`). | RED: -32601 "Method not found" |
 | T2 | `the_local_operator_creates_and_retrieves_a_task` | A task-augmented `tools/call` of the fixture tool with key K, then `tasks/get` until terminal. | The first answer is a create-task result carrying a `taskId`. The terminal task carries the fixture's result. Backend rounds = 1. | RED: answered synchronously, with no `taskId` |
 | T3 | `the_task_survives_a_reopen` | T2, then close stdin, wait for exit, and respawn on the same config. `tasks/get` the id. | The same terminal result. Backend rounds still 1. | RED (no task) |
-| T4 | `the_task_survives_a_relocation` | T2, then exit. Rename the store directory to a new path, rewrite `tasks.store_dir` in the config, and respawn. `tasks/get` the id. | The same terminal result. No file in the store names a gateway instance id (the store files' names and fields are compared before and after: unchanged apart from the path). | RED |
+| T4 | `the_task_survives_a_relocation` | T2, then exit. Rename the base directory `<root>/tasks` to a new path, rewrite `tasks.store_dir` in the config, and respawn. `tasks/get` the id. | The same terminal result. No file in the store names a gateway instance id (the store files' names and fields are compared before and after: unchanged apart from the path). | RED |
 | T5 | `another_store_does_not_have_it` | T2, then exit. Respawn with `tasks.store_dir` pointing at a fresh empty directory. `tasks/get` the id. | -32602 "no such task". | RED: -32601 |
-| T6 | `i_own_a_same_store_http_owner_cannot_reach_it` (invariant I-OWN) | T2, then exit. Start HTTP on the same store with auth off (owner `local:auth-disabled:tasks:v1`) and run `tasks/get`, `tasks/cancel` and `tasks/update` for the id. Repeat with auth on and an API-key client (owner `credential:…`). Stop HTTP, respawn stdio, and run `tasks/get`. | Every HTTP call answers -32602 "no such task". The stdio read afterwards still returns the result, so the cancel did not land. | RED (no task to protect) |
-| T7 | `a_held_store_degrades_stdio_and_stops_advertising_tasks` | Start HTTP on the store first, then spawn stdio on the same config. | Stdio serves `gateway_list_servers`. `tasks/get` answers -32601. Neither the modern `initialize` answer nor `server/discover` contains the Tasks extension. | RED: both advertise Tasks today |
+| T6 | `i_own_a_same_store_http_owner_cannot_reach_it` (invariant I-OWN) | T2, then exit. Start HTTP with `tasks.store_dir` set explicitly to stdio's directory `<root>/tasks/stdio`, with auth off (owner `local:auth-disabled:tasks:v1`) and run `tasks/get`, `tasks/cancel` and `tasks/update` for the id. Repeat with auth on and an API-key client (owner `credential:…`). Stop HTTP, respawn stdio, and run `tasks/get`. | Every HTTP call answers -32602 "no such task". The stdio read afterwards still returns the result, so the cancel did not land. | RED (no task to protect) |
+| T7 | `a_held_store_degrades_stdio_and_stops_advertising_tasks` | Spawn stdio A and keep it running. Spawn stdio B on the same config. | B serves `gateway_list_servers`. `tasks/get` answers -32601. Neither the modern `initialize` answer nor `server/discover` contains the Tasks extension. | RED: both advertise Tasks today |
 | T8 | `discover_declares_tasks_when_stdio_serves_them` | Stdio with its store open: `server/discover`, then `tasks/get` for a random id. | Tasks is declared, and the `tasks/get` answer is -32602, not -32601 (D6 item 5: every declared extension is served). | RED: -32601 |
 | T9 | `an_interrupted_stdio_task_is_settled_not_rerun` | A task on the `slow` tool. Kill the child (SIGKILL) about 1 s after the create answer, then respawn. `tasks/get` the id. | Terminal and an error, with the restart result `unknown` / `gateway_restart_after_dispatch` (`recovery.rs:123-137`). Backend rounds = 1 after 5 s. | RED (no task) |
-| T10 | `an_http_restart_settles_a_stdio_task_but_cannot_read_it` | As T9, but HTTP is started on the store after the kill. Then stop HTTP and respawn stdio. | HTTP `tasks/get` answers -32602. Stdio afterwards reads the settled restart result. Backend rounds = 1. | RED (no task) |
+| T10 | `an_http_restart_settles_a_stdio_task_but_cannot_read_it` | As T9, but after the kill HTTP is started with `tasks.store_dir` set explicitly to `<root>/tasks/stdio`. Then stop HTTP and respawn stdio. | HTTP `tasks/get` answers -32602. Stdio afterwards reads the settled restart result. Backend rounds = 1. | RED (no task) |
 | T11 | `stdio_task_creation_ignores_the_http_auth_gate` | Config with `auth.enabled: true` and one API key. Stdio creates a task as in T2. | The task is created and completes (D6 rev 5 item 5). | RED (no task) |
+| T12 | `http_and_stdio_share_a_config_without_contention` | With stdio A running on the default config, start HTTP on the same config. Run a task over each. | HTTP starts. Both create and read their own tasks. `<root>/tasks/stdio` exists and holds only stdio's records. Neither transport reads the other's task. | RED: stdio has no store today, so it creates no `stdio` subdirectory and no task |
+| T13 | `an_explicitly_shared_store_names_the_holder` | Stdio A running. Start HTTP with `tasks.store_dir` = `<root>/tasks/stdio`. | HTTP exits non-zero, and its error names the path and "possibly a stdio gateway". | RED: stdio holds no lease today, so HTTP starts |
 
 T3, T4 and T5 together are the row's "reopens or relocates … another store". T6 and T10 are its
 "same-store HTTP owner cannot retrieve or alias". T4's file comparison and the absence of any
@@ -372,6 +374,7 @@ global index are its "no global lookup and no new instance UUID".
 | N3 | stdio's owner is the text `"stdio"` instead of `LocalOperator` | U3, T6 (auth-off HTTP owner differs, so T6 alone may not kill it; U3's `"stdio"` probe does) |
 | N4 | the degradation flag is ignored by discover and initialize | T7 |
 | N5 | stdio opens a fresh temp store instead of `tasks.store_dir` | T3, T4 |
+| N8 | stdio opens `tasks.store_dir` itself, not its `stdio` subdirectory | T12 (HTTP fails to start on the held lease) |
 | N6 | the stdio creation path keeps HTTP's auth gate | T11 |
 | N7 | the `Stdio` host's authorizer allows every target, skipping `ToolPolicy` | U5 |
 
@@ -379,5 +382,4 @@ global index are its "no global lookup and no new instance UUID".
 
 - Leg (b), the independent functional drive of the digest-pinned image (D6 item 4), runs after
   merge and before grading.
-- Lease direction: D6 rev 5 item 7 is open with the lead. If the lead takes (a), a doc line and an
-  error-text test are added to this plan before the red commit.
+- The lease direction is decided (D6 rev 5 item 7, option (d)). It is covered by T7, T12 and T13 and mutant N8.
