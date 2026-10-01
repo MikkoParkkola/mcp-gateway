@@ -50,7 +50,7 @@ const WORD: &str = "zorbulate";
 /// Every JSON-RPC method the mock received, in arrival order.
 type Seen = Arc<Mutex<Vec<String>>>;
 
-fn answer(id: &Value, payload: Value) -> Json<Value> {
+fn answer(id: &Value, payload: &Value) -> Json<Value> {
     let mut frame = json!({ "jsonrpc": "2.0", "id": id });
     frame
         .as_object_mut()
@@ -67,14 +67,14 @@ async fn mock_handler(State(seen): State<Seen>, Json(body): Json<Value>) -> Json
     match method.as_str() {
         "server/discover" => answer(
             &id,
-            json!({ "result": {
+            &json!({ "result": {
                 "capabilities": {},
                 "supportedVersions": ["2026-07-28", "2025-11-25"]
             }}),
         ),
         "tools/list" => answer(
             &id,
-            json!({ "result": { "tools": [{
+            &json!({ "result": { "tools": [{
                 "name": TOOL,
                 "description": format!("A widget only a 2026 peer can {WORD}"),
                 "inputSchema": { "type": "object", "properties": {} }
@@ -82,7 +82,7 @@ async fn mock_handler(State(seen): State<Seen>, Json(body): Json<Value>) -> Json
         ),
         _ => answer(
             &id,
-            json!({ "error": { "code": -32601, "message": "Method not found" } }),
+            &json!({ "error": { "code": -32601, "message": "Method not found" } }),
         ),
     }
 }
