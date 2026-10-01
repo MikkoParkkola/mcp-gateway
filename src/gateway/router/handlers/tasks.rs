@@ -6,26 +6,18 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{AppState, missing_task_error, task_id_param};
+use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::router::OwnedRouterAuthorizer;
-use crate::gateway::task_service::{InputOutcome, OwnedCallerContext, ServiceError, TaskIntent};
+use crate::gateway::task_route::{TaskOwnerText, TaskRoute, is_task_dispatchable};
+use crate::gateway::task_service::{OwnedCallerContext, TaskIntent};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
 use crate::protocol::tasks::{Task, TaskOptions};
 use crate::protocol::{JsonRpcResponse, RequestId};
-
-/// Tools that may be handed to the worker after the confirmation gate.
-fn is_task_dispatchable(meta_mcp: &MetaMcp, tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "gateway_invoke" | "gateway_execute" | "gateway_run_playbook"
-    ) || meta_mcp.surfaced_tool_server(tool_name).is_some()
-}
 
 /// Admission principal: verified identity when present, else the session key.
 pub(super) fn task_principal(
@@ -63,23 +55,6 @@ pub(super) fn route_task_owner(
         None if !state.auth_config.enabled => AUTH_DISABLED_TASK_OWNER.to_owned(),
         None => task_principal(None, owner_key),
     }
-}
-
-/// `Task::wire()` plus the envelope discriminator the arm supplies.
-pub(super) fn task_envelope(task: &Task, result_type: &str) -> Value {
-    let mut value = serde_json::to_value(task.wire()).unwrap_or(Value::Null);
-    if let Some(object) = value.as_object_mut() {
-        object.insert("resultType".into(), json!(result_type));
-    }
-    value
-}
-
-fn ack_complete() -> Value {
-    json!({ "resultType": "complete" })
-}
-
-fn store_unavailable(id: RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
 }
 
 /// Everything the task-intent decision reads about one `tools/call`.
@@ -167,7 +142,7 @@ pub(super) fn task_intent_for_call(
     Ok(Some(TaskIntent {
         executor: Arc::clone(&state.task_executor),
         owned: OwnedCallerContext::new(
-            Arc::downgrade(state),
+            crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),
             OwnedRouterAuthorizer::capture(req.client, req.oauth_agent_identity, req.cert_identity),
             req.api_key_name.map(str::to_owned),
             req.agent_id.map(crate::security::OwnedProvenAgentId::from),
@@ -277,40 +252,32 @@ pub(super) async fn tasks_get(
     params: Option<&Value>,
     caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
-    let Some(task_id) = task_id_param(params) else {
-        return missing_task_error(id);
-    };
-    // The existing owner-scoped lookup FIRST. A foreign or missing identity gets
-    // the existing absence response and causes zero upstream calls, because
-    // there is nothing below this line for it to reach.
-    let committed = match state.tasks.get(owner, task_id) {
-        Ok(committed) => committed,
-        Err(ServiceError::NotFound) => return missing_task_error(id),
-        Err(_) => return store_unavailable(id),
-    };
-    if committed.task.status() == crate::protocol::tasks::TaskStatus::Working {
-        recover_from_upstream(state, owner, task_id, params, caller).await;
-    }
-    // ONE read after recovery: the snapshot that is authorized is the snapshot
-    // returned, so a task that turned terminal during recovery or through a
-    // concurrent worker is checked too.
-    match state.tasks.get(owner, task_id) {
-        Ok(current) => {
-            let refusal = with_policy_caller(state, caller, |policy_caller| {
-                state.meta_mcp.refuse_stored_delivery(
-                    &id,
-                    &current,
-                    crate::gateway::meta_mcp::upstream::recovery_attestation(params),
-                    caller.session_id,
-                    policy_caller,
-                )
-            });
-            refusal.unwrap_or_else(|| {
-                JsonRpcResponse::success(id, task_envelope(&current.task, "complete"))
-            })
-        }
-        Err(ServiceError::NotFound) => missing_task_error(id),
-        Err(_) => store_unavailable(id),
+    let owner_text = TaskOwnerText::Http(owner.to_owned());
+    route(state, &owner_text)
+        .get(
+            id.clone(),
+            params,
+            |task_id| recover_from_upstream(state, owner, task_id, params, caller),
+            |current| {
+                with_policy_caller(state, caller, |policy_caller| {
+                    state.meta_mcp.refuse_stored_delivery(
+                        &id,
+                        current,
+                        crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                        caller.session_id,
+                        policy_caller,
+                    )
+                })
+            },
+        )
+        .await
+}
+
+fn route<'a>(state: &'a Arc<AppState>, owner: &'a TaskOwnerText) -> TaskRoute<'a> {
+    TaskRoute {
+        service: &state.tasks,
+        executor: &state.task_executor,
+        owner,
     }
 }
 
@@ -403,96 +370,12 @@ pub(super) async fn tasks_update(
     params: Option<&Value>,
     caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
-    let Some(task_id) = task_id_param(params) else {
-        return missing_task_error(id);
-    };
-    let answers = params.and_then(|params| params.get("inputResponses"));
-    if !crate::protocol::mrtr::input_responses_nonempty(answers) {
-        return match state.tasks.update(owner, task_id, 0, json!({})).await {
-            Ok(_) => JsonRpcResponse::success(id, ack_complete()),
-            Err(ServiceError::NotFound) => missing_task_error(id),
-            Err(_) => store_unavailable(id),
-        };
-    }
-    let Some(Value::Object(answers)) = answers.cloned() else {
-        return JsonRpcResponse::error(Some(id), -32602, "inputResponses must be an object");
-    };
-    // Owner-scoped first: a foreign or absent task is answered as absent
-    // before anything about a round is said.
-    match state.tasks.get(owner, task_id) {
-        Ok(current)
-            if current.task.status() == crate::protocol::tasks::TaskStatus::InputRequired => {}
-        Ok(current) => return settled_or_no_round(id, &current.task),
-        Err(ServiceError::NotFound) => return missing_task_error(id),
-        Err(_) => return store_unavailable(id),
-    }
-    let outcome = state
-        .task_executor
-        .provide_input(
-            update_caller(state, owner, params, caller),
-            owner,
-            task_id,
-            answers,
-        )
-        .await;
-    match outcome {
-        InputOutcome::Accepted => JsonRpcResponse::success(id, ack_complete()),
-        // A cancel may have landed between the look-up above and the write.
-        InputOutcome::NotOutstanding => match state.tasks.get(owner, task_id) {
-            Ok(current) => settled_or_no_round(id, &current.task),
-            Err(ServiceError::NotFound) => missing_task_error(id),
-            Err(_) => store_unavailable(id),
-        },
-        InputOutcome::TooLarge => JsonRpcResponse::error(
-            Some(id),
-            -32602,
-            "inputResponses exceed the task record size limit",
-        ),
-        InputOutcome::Busy => JsonRpcResponse::error(Some(id), -32603, "task busy, retry"),
-        InputOutcome::PoolFull => {
-            JsonRpcResponse::error(Some(id), -32603, "task worker pool is full, retry")
-        }
-        InputOutcome::Closed(closed) => JsonRpcResponse::error(
-            Some(id),
-            -32602,
-            format!(
-                "inputResponses refused: {}; the round is closed",
-                closed.reason()
-            ),
-        ),
-        InputOutcome::NotFound => missing_task_error(id),
-        InputOutcome::Unavailable => store_unavailable(id),
-    }
-}
-
-/// A late answer to a settled task is told how it settled, with the reason it
-/// carries (#2429); a live task without a round gets the plain refusal.
-fn settled_or_no_round(id: RequestId, task: &Task) -> JsonRpcResponse {
-    let wire = serde_json::to_value(task.wire()).unwrap_or_default();
-    let status = wire
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !matches!(status, "completed" | "failed" | "cancelled") {
-        return no_round(id);
-    }
-    let reason = wire
-        .get("statusMessage")
-        .and_then(Value::as_str)
-        .map_or_else(String::new, |message| format!(": {message}"));
-    JsonRpcResponse::error(
-        Some(id),
-        -32602,
-        format!("inputResponses refused: the task is {status}{reason}"),
-    )
-}
-
-fn no_round(id: RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        Some(id),
-        -32602,
-        "inputResponses are not accepted until an input round is outstanding",
-    )
+    let owner_text = TaskOwnerText::Http(owner.to_owned());
+    route(state, &owner_text)
+        .update(id, params, |owner| {
+            update_caller(state, owner, params, caller)
+        })
+        .await
 }
 
 /// The resume's caller: THIS update request's live identity, the bundle
@@ -504,7 +387,7 @@ fn update_caller(
     caller: &RecoveryCaller<'_>,
 ) -> OwnedCallerContext {
     OwnedCallerContext::new(
-        Arc::downgrade(state),
+        crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),
         OwnedRouterAuthorizer::capture(
             caller.client,
             caller.oauth_agent_identity,
@@ -533,26 +416,11 @@ fn update_caller(
 }
 
 pub(super) async fn tasks_cancel(
-    state: &AppState,
+    state: &Arc<AppState>,
     owner: &str,
     id: RequestId,
     params: Option<&Value>,
 ) -> JsonRpcResponse {
-    let Some(task_id) = task_id_param(params) else {
-        return missing_task_error(id);
-    };
-    let committed = match state.tasks.get(owner, task_id) {
-        Ok(committed) => committed,
-        Err(ServiceError::NotFound) => return missing_task_error(id),
-        Err(_) => return store_unavailable(id),
-    };
-    match state
-        .task_executor
-        .cancel(owner, task_id, committed.revision)
-        .await
-    {
-        Ok(_) => JsonRpcResponse::success(id, ack_complete()),
-        Err(ServiceError::NotFound) => missing_task_error(id),
-        Err(_) => store_unavailable(id),
-    }
+    let owner_text = TaskOwnerText::Http(owner.to_owned());
+    route(state, &owner_text).cancel(id, params).await
 }

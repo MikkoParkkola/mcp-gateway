@@ -131,11 +131,11 @@ const MAX_PROMOTED_PER_SESSION: usize = 10;
 /// Reserved prefix for principals the gateway itself assigns. A NUL cannot
 /// occur in an HTTP header value or in any principal the auth layer derives
 /// (hex digests and fixed words), so no presented credential starts with it.
-const LOCAL_OPERATOR_PREFIX: char = '\0';
+pub(crate) const LOCAL_OPERATOR_PREFIX: char = '\0';
 
 /// The principal the stdio transport's own contexts key their retained
 /// results under. See [`MetaMcpCallerContext::owner_principal`].
-const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
+pub(crate) const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
 
 /// Authenticated caller context for a `tools/call` dispatch.
 ///
