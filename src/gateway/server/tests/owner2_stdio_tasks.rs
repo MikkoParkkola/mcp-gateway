@@ -394,30 +394,7 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
         .expect("EOF returns within the bound")
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
-    let reopened = crate::gateway::task_service::open_runtime(
-        &stdio_tasks::store_dir(&config),
-        1,
-        crate::gateway::task_service::StoreLimits::default(),
-        Arc::new(
-            crate::gateway::subscription_registry::SubscriptionRegistry::new(
-                1,
-                crate::gateway::auth::AuthState {
-                    auth_config: Arc::new(
-                        crate::gateway::auth::ResolvedAuthConfig::try_from_config(
-                            &config.auth,
-                            &crate::config::EnvOverlay::default(),
-                        )
-                        .expect("auth config"),
-                    ),
-                    key_server: None,
-                    dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
-                    tls_enabled: false,
-                    live_config: Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
-                },
-            ),
-        ),
-    )
-    .await;
+    let reopened = reopen(&config).await;
     assert!(
         reopened.is_ok(),
         "the lease is free once run_stdio_on returned"
@@ -483,4 +460,172 @@ async fn a_legacy_task_member_is_answered_synchronously() {
         "not a task: {answer}"
     );
     assert_eq!(fixture.rounds.load(Ordering::SeqCst), 1, "{answer}");
+}
+
+/// Open the stdio store `config` names, as the next process would.
+async fn reopen(
+    config: &Config,
+) -> Result<
+    (
+        Arc<crate::gateway::task_service::TaskService>,
+        Arc<crate::gateway::task_service::TaskExecutor>,
+    ),
+    crate::gateway::task_service::ServiceError,
+> {
+    let auth_config = crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+        &config.auth,
+        &crate::config::EnvOverlay::default(),
+    )
+    .expect("auth config");
+    crate::gateway::task_service::open_runtime(
+        &stdio_tasks::store_dir(config),
+        1,
+        crate::gateway::task_service::StoreLimits::default(),
+        Arc::new(
+            crate::gateway::subscription_registry::SubscriptionRegistry::new(
+                1,
+                crate::gateway::auth::AuthState {
+                    auth_config: Arc::new(auth_config),
+                    key_server: None,
+                    dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
+                    tls_enabled: false,
+                    live_config: Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+                },
+            ),
+        ),
+    )
+    .await
+}
+
+/// A backend whose `held` tool reports arrival, then answers only once the
+/// test opens the barrier.
+async fn held_backend() -> (
+    String,
+    tokio::sync::watch::Receiver<usize>,
+    tokio::sync::watch::Sender<bool>,
+) {
+    let (arrived_tx, arrived) = tokio::sync::watch::channel(0_usize);
+    let (release, release_rx) = tokio::sync::watch::channel(false);
+    let arrived_tx = Arc::new(arrived_tx);
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
+            let arrived = Arc::clone(&arrived_tx);
+            let mut release = release_rx.clone();
+            async move {
+                let result = match request.get("method").and_then(Value::as_str) {
+                    Some("initialize") => json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": BACKEND, "version": "0"},
+                    }),
+                    Some("tools/list") => json!({"tools": [
+                        {"name": "held", "inputSchema": {"type": "object"}},
+                    ]}),
+                    Some("tools/call") => {
+                        arrived.send_modify(|seen| *seen += 1);
+                        drop(release.wait_for(|open| *open).await);
+                        json!({"content": [{"type": "text", "text": "done"}]})
+                    }
+                    _ => json!({}),
+                };
+                axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    tokio::spawn(async move { drop(axum::serve(listener, app).await) });
+    (format!("http://{address}/"), arrived, release)
+}
+
+/// U9: EOF while a task is still running waits for it. `run_stdio_on` is
+/// still serving while the held call is open, returns once it settles, and
+/// the store, reopened, holds the task completed: the worker finished before
+/// the store closed (a task cut off at exit would recover as failed).
+#[tokio::test]
+async fn eof_drains_a_running_task_before_returning() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let (url, mut arrived, release) = held_backend().await;
+    let store = tempfile::tempdir().expect("store root");
+    let mut config = Config::default();
+    config.tasks.store_dir = store.path().display().to_string();
+    config.server.shutdown_timeout = Duration::from_secs(20);
+    config.backends.insert(
+        BACKEND.to_string(),
+        BackendConfig {
+            enabled: true,
+            transport: TransportConfig::Http {
+                http_url: url,
+                streamable_http: true,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        },
+    );
+    let data = tempfile::tempdir().expect("data dir");
+    let gateway = Gateway::new(config.clone())
+        .await
+        .expect("gateway boots")
+        .with_data_dir(data.path().to_path_buf());
+    let (mut stdin, input) = tokio::io::duplex(64 * 1024);
+    let (output, reader) = tokio::io::duplex(1 << 20);
+    let served = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+    let mut lines = BufReader::new(reader).lines();
+    let handshake = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {},
+        "clientInfo": {"name": "owner2", "version": "1"}}});
+    stdin
+        .write_all(format!("{handshake}\n").as_bytes())
+        .await
+        .expect("write");
+    tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+        .await
+        .expect("handshake answered in time")
+        .expect("read");
+    let created = modern_call(1, "held", "u9", true);
+    stdin
+        .write_all(format!("{created}\n").as_bytes())
+        .await
+        .expect("write");
+    let answer = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+        .await
+        .expect("answered in time")
+        .expect("read")
+        .expect("a line");
+    let answer: Value = serde_json::from_str(&answer).expect("one frame");
+    let id = answer
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("a task handle: {answer}"))
+        .to_owned();
+    tokio::time::timeout(Duration::from_secs(10), arrived.wait_for(|seen| *seen >= 1))
+        .await
+        .expect("the held call reaches the backend")
+        .expect("fixture alive");
+    drop(stdin);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(
+        !served.is_finished(),
+        "EOF waits for the running task instead of returning past it"
+    );
+    release.send_modify(|open| *open = true);
+    tokio::time::timeout(Duration::from_secs(30), served)
+        .await
+        .expect("EOF returns once the task settled")
+        .expect("no panic")
+        .expect("run_stdio_on returns Ok");
+    let (service, _executor) = reopen(&config)
+        .await
+        .expect("the lease is free once run_stdio_on returned");
+    let task = service
+        .get(LOCAL_OPERATOR_PRINCIPAL, &id)
+        .expect("the local operator's task is in its store");
+    assert_eq!(
+        task.task.status(),
+        crate::protocol::tasks::TaskStatus::Completed,
+        "settled by its own worker before the store closed"
+    );
 }
