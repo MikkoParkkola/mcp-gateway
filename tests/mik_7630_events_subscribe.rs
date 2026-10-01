@@ -36,11 +36,12 @@ async fn start(root: &Path, receiver: &Receiver, events: Value) -> Gateway {
 }
 
 fn params(url: &str, secret: &str, arguments: Value) -> Value {
-    json!({
+    let mut params = json!({
         "name": EVENT,
-        "arguments": arguments,
         "delivery": {"mode": "webhook", "url": url, "secret": secret},
-    })
+    });
+    params["arguments"] = arguments;
+    params
 }
 
 fn subs_on_disk(root: &Path) -> usize {

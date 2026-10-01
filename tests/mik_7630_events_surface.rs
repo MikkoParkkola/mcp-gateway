@@ -112,7 +112,7 @@ async fn events_methods_are_not_found_when_disabled_and_never_proxied() {
     let (backend, seen) = events_speaking_backend().await;
     let mut cfg = config(root.path(), &json!({}));
     cfg["backends"] = json!({"mock": {"http_url": backend, "streamable_http": true}});
-    cfg["security"] = json!({"trust_configured_backends": true});
+    cfg["security"]["trust_configured_backends"] = json!(true);
     cfg["auth"]["api_keys"][0]["backends"] = json!(["hooks", "mock"]);
     let on = Gateway::start(root.path(), cfg).await;
     let answer = on.rpc(Some(ALICE), "events/list", json!({})).await;

@@ -72,6 +72,8 @@ pub fn config(root: &Path, events: &Value) -> Value {
         "capabilities": {"enabled": true, "name": "hooks",
             "directories": [caps.to_string_lossy()]},
         "webhooks": {"enabled": true, "require_signature": false},
+        // Auth on requires an audit log (UPGRADING-4.0 §43).
+        "security": {"transparency_log": {"enabled": true, "path": "audit.jsonl"}},
         "events": events_section,
     })
 }
