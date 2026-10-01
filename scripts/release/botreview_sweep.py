@@ -29,6 +29,16 @@ pullRequest(number:$n){reviewThreads(first:100,after:$after){pageInfo{hasNextPag
 nodes{comments(first:1){nodes{author{login __typename} url path line originalLine}}}}}}}"""
 
 
+def body_findings(reviews: list[dict]) -> list[dict]:
+    """Bot reviews whose summary body may hold a finding no inline thread carries."""
+    return []
+
+
+def linked_reviews(ledger: str) -> set[tuple[str, str]]:
+    """(PR, review id) pairs the ledger links by `#pullrequestreview-<id>`."""
+    return set()
+
+
 def gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
 
