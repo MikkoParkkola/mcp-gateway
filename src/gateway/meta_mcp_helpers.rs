@@ -462,12 +462,15 @@ fn glob_match_chars(text: &[char], pattern: &[char]) -> bool {
 /// tags), or the name of the backend that serves it. The serving backend is
 /// part of the haystack because a caller that knows which server it wants
 /// otherwise has to guess a tool name to find that server's tools at all.
-pub(crate) fn tool_matches_query(_server: &str, tool: &Tool, query: &str) -> bool {
+pub(crate) fn tool_matches_query(server: &str, tool: &Tool, query: &str) -> bool {
     let name_lower = tool.name.to_lowercase();
     let desc_lower = tool.description.as_deref().unwrap_or("").to_lowercase();
+    let server_lower = server.to_lowercase();
 
     query.split_whitespace().any(|word| {
-        word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower)
+        word_matches_text(word, &name_lower)
+            || word_matches_text(word, &desc_lower)
+            || word_matches_text(word, &server_lower)
     })
 }
 
