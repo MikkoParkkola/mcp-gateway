@@ -288,6 +288,33 @@ jobs:
           ignore-unfixed: true
           trivyignores: .trivyignore
 
+      # Release-line commits publish nothing (every push is main-only), so a
+      # functional verifier has no way to get the exact image CI built. Export
+      # the scanned image with its content ID so it can be pinned after
+      # `docker load`. Registry pushes are untouched.
+      - name: Export the scanned image (release-line push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        # explicit bash enables pipefail, so a failed `docker save` fails the step
+        shell: bash
+        run: |
+          mkdir -p image-export
+          image="${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
+          id="$(docker image inspect --format '{{.Id}}' "$image")"
+          echo "$id" > "image-export/image-id-${{ matrix.arch }}.txt"
+          docker save "$image" | gzip > "image-export/image-${{ matrix.arch }}.tar.gz"
+          echo "image-${{ matrix.arch }} ${{ github.sha }} ${id}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the scanned image (release-line push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.arch }}-${{ github.sha }}
+          path: image-export/
+          retention-days: 7
+          if-no-files-found: error
+          # the image is already gzipped
+          compression-level: 0
+
       # Every other gate in this file inspects the image at rest: trivy reads
       # layers, cosign signs a digest, syft walks a filesystem. None of them
       # start a container, so an image that exits on startup passes all of them
