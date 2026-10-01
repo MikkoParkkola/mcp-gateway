@@ -26,8 +26,6 @@ pub struct UsageStats {
     /// Populated from `usage.cache_read_input_tokens` (Anthropic) or
     /// `usage.prompt_tokens_details.cached_tokens` (`OpenAI`) in backend responses.
     cached_tokens_by_server: DashMap<String, AtomicU64>,
-    /// Cumulative prompt-cached tokens per conversation/session (key = session ID)
-    cached_tokens_by_session: DashMap<String, AtomicU64>,
 }
 
 impl UsageStats {
@@ -59,10 +57,9 @@ impl UsageStats {
 
     /// Record prompt-cached tokens returned by a backend response.
     ///
-    /// `server` identifies the backend; `session_id` is optional and, when
-    /// provided, accumulates per-conversation cache hit data.  `tokens == 0`
-    /// is silently ignored to keep the counters clean.
-    pub fn record_cached_tokens(&self, server: &str, session_id: Option<&str>, tokens: u64) {
+    /// `server` identifies the backend. `tokens == 0` is silently ignored to
+    /// keep the counters clean.
+    pub fn record_cached_tokens(&self, server: &str, tokens: u64) {
         if tokens == 0 {
             return;
         }
@@ -70,13 +67,6 @@ impl UsageStats {
             .entry(server.to_string())
             .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(tokens, Ordering::Relaxed);
-
-        if let Some(sid) = session_id {
-            self.cached_tokens_by_session
-                .entry(sid.to_string())
-                .or_insert_with(|| AtomicU64::new(0))
-                .fetch_add(tokens, Ordering::Relaxed);
-        }
     }
 
     /// Total cached tokens across all backends.
@@ -92,18 +82,6 @@ impl UsageStats {
         self.cached_tokens_by_server
             .get(server)
             .map_or(0, |e| e.load(Ordering::Relaxed))
-    }
-
-    /// Cached tokens for a specific session.
-    pub fn cached_tokens_for_session(&self, session_id: &str) -> u64 {
-        self.cached_tokens_by_session
-            .get(session_id)
-            .map_or(0, |e| e.load(Ordering::Relaxed))
-    }
-
-    /// Drop a session's cached-token counter (called on session disconnect).
-    pub fn remove_session(&self, session_id: &str) {
-        self.cached_tokens_by_session.remove(session_id);
     }
 
     /// Get usage count for a specific tool
@@ -336,9 +314,9 @@ mod tests {
         let stats = UsageStats::new();
 
         // WHEN: recording cached tokens for two servers
-        stats.record_cached_tokens("backend-a", None, 500);
-        stats.record_cached_tokens("backend-a", None, 300);
-        stats.record_cached_tokens("backend-b", None, 200);
+        stats.record_cached_tokens("backend-a", 500);
+        stats.record_cached_tokens("backend-a", 300);
+        stats.record_cached_tokens("backend-b", 200);
 
         // THEN: per-server counts are correct
         assert_eq!(stats.cached_tokens_for_server("backend-a"), 800);
@@ -347,39 +325,26 @@ mod tests {
     }
 
     #[test]
-    fn record_cached_tokens_per_session() {
-        let stats = UsageStats::new();
-        stats.record_cached_tokens("srv", Some("session-1"), 400);
-        stats.record_cached_tokens("srv", Some("session-1"), 100);
-        stats.record_cached_tokens("srv", Some("session-2"), 250);
-
-        assert_eq!(stats.cached_tokens_for_session("session-1"), 500);
-        assert_eq!(stats.cached_tokens_for_session("session-2"), 250);
-        assert_eq!(stats.cached_tokens_for_session("unknown"), 0);
-    }
-
-    #[test]
     fn record_cached_tokens_zero_is_ignored() {
         let stats = UsageStats::new();
-        stats.record_cached_tokens("srv", Some("s1"), 0);
+        stats.record_cached_tokens("srv", 0);
         assert_eq!(stats.cached_tokens_for_server("srv"), 0);
-        assert_eq!(stats.cached_tokens_for_session("s1"), 0);
     }
 
     #[test]
     fn total_cached_tokens_sums_all_servers() {
         let stats = UsageStats::new();
-        stats.record_cached_tokens("a", None, 100);
-        stats.record_cached_tokens("b", None, 200);
-        stats.record_cached_tokens("c", None, 300);
+        stats.record_cached_tokens("a", 100);
+        stats.record_cached_tokens("b", 200);
+        stats.record_cached_tokens("c", 300);
         assert_eq!(stats.total_cached_tokens(), 600);
     }
 
     #[test]
     fn snapshot_includes_cached_tokens() {
         let stats = UsageStats::new();
-        stats.record_cached_tokens("backend-x", None, 1000);
-        stats.record_cached_tokens("backend-y", None, 500);
+        stats.record_cached_tokens("backend-x", 1000);
+        stats.record_cached_tokens("backend-y", 500);
 
         let snap = stats.snapshot(50);
         assert_eq!(snap.total_cached_tokens, 1500);

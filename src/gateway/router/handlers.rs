@@ -30,7 +30,6 @@ use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::session_id::session_fp;
-#[cfg(feature = "firewall")]
 use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -1494,6 +1493,22 @@ async fn meta_mcp_dispatch(
             // One request owns admission through dispatch and secured delivery.
             // A route change may conflict on representation, never create a
             // second owner for the same verified principal and explicit key.
+            // The A/B arm and the prefetch hints key on the caller (G4). Its
+            // reclaim deadline is renewed here, in every build, because those
+            // entries have no session end to reclaim them.
+            let caller_key = super::identity::caller_key(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+            );
+            if let Some(ref lifecycle) = state.session_lifecycle
+                && !caller_key.is_empty()
+            {
+                lifecycle.track(
+                    caller_key.clone(),
+                    session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
+                );
+            }
             let mut caller = MetaMcpCallerContext {
                 // Built above, after every gate that can still refuse, and only
                 // carried here: the dispatch chokepoint is what hands it over.
@@ -1511,6 +1526,7 @@ async fn meta_mcp_dispatch(
                 agent_declared,
                 grant_subject,
                 stdio_nonce: None,
+                caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
                 input_capabilities: declared_capabilities,

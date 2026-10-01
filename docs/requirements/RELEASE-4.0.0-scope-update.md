@@ -17,7 +17,7 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 113
+Approved supplemental criteria: 134
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
@@ -151,6 +151,27 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | MIK-7217.ERA.1 | When a backend's transport is replaced by force_restart while a re-probe is in flight, the in-flight probe's answer is refused and the recorded era is unchanged (MIK-7217 ERA.1). | VALIDATION |
 | MIK-7217.ERA.2 | In that sequence the refusal writes an era_probe_discarded record naming the reason (MIK-7217 ERA.2, the OBS.3 record). | VALIDATION |
 | MIK-7217.ERA.3 | Without a restart a re-probe answer is committed as today, with no regression in a_contradiction_reprobes_and_the_whole_read_moves_with_it (MIK-7217 ERA.3). | VALIDATION |
+| MIK-7630.EVENTS.1 | server/discover advertises the events capability only when events are enabled and a source is configured; with events off every events/* method answers -32601 and none is proxied to a backend (MIK-7630 AC 1). | EVENTS |
+| MIK-7630.EVENTS.2 | events/list returns webhook-delivery descriptors derived from configured sources (opt-in webhook routes with a field mapping, backend notifications, task settlement), filtered to what the caller may see; an invisible event answers -32011 on subscribe (MIK-7630 AC 2). | EVENTS |
+| MIK-7630.EVENTS.3 | events/subscribe is idempotent on a deterministic id over principal, callback URL, name and JCS-canonical arguments, accepts only whsec_ secrets of 24-64 decoded bytes, and activates only after a single-use challenge echoed by the callback compares equal in constant time, cached per principal and URL (MIK-7630 AC 3). | EVENTS |
+| MIK-7630.EVENTS.4 | Subscriptions and their verification persist across a gateway restart and resume delivery without a re-subscribe; ttlMs is clamped to the configured floor and ceiling and refreshBefore is null only when no expiry was requested and allowed (MIK-7630 AC 3). | EVENTS |
+| MIK-7630.EVENTS.5 | Outbound delivery is HTTPS only, checks and pins the resolved address at connect time through the SSRF destination policy, follows no redirect, never sends a body over 256 KiB, keeps one webhook-id per event across retries, signs every attempt afresh and does not retry 410 or 413 (MIK-7630 AC 4). | EVENTS |
+| MIK-7630.EVENTS.6 | A delivered body carries only eventId, name, timestamp, data, cursor and the provenance _meta; the gateway adds no instruction text to the payload (MIK-7630 AC 5). | EVENTS |
+| MIK-7630.EVENTS.7 | events/unsubscribe is idempotent, requires an authenticated principal, can address only the caller's own subscription and cancels its pending deliveries (MIK-7630 AC 6). | EVENTS |
+| MIK-7630.EVENTS.8 | An end-to-end test drives a signed inbound webhook to a filtered subscription and a receiver that verifies every signature, and one ChatGPT run over a tunnel completes subscribe, verification, delivery and unsubscribe (MIK-7630 AC 7). | EVENTS |
+| MIK-7630.SOURCE.1 | Backend MCP notifications (tools, resources and prompts list_changed and resources/updated) from 2026-07-28 HTTP, pre-2026 HTTP and stdio backends become events, opening an upstream subscription only while an event subscription needs it (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.SOURCE.2 | A task reaching a terminal state becomes a task.settled event delivered only to the task's owner, without the task result (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.SOURCE.3 | Event sources plug in through one adapter interface with refcounted first- and last-subscriber hooks, so a test-only source is delivered end to end without changing the events core (MIK-7630 extended scope; the 4.0.1 sources depend on it). | EVENTS |
+| MIK-7630.SAFETY.1 | Every event payload passes the response firewall before it is written for delivery; a block verdict dead-letters it and replay re-scans (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.2 | Every delivery attempt writes one MIN.1-attributed audit record holding the body hash, callback host, attempt number and tenant attribution, never the body or secret (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.3 | Visibility and the tenant guard apply to events/list, events/subscribe and every fan-out, so revoked access stops delivery at the next event (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.4 | whsec secrets are stored owner-only and appear in no log, audit record, RPC answer, admin answer or dead-letter listing (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.5 | Subscriptions are capped per principal and globally (-32013), each subscription is rate-limited by delay rather than drop, and deliveries are charged through cost governance (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.6 | Each delivered event carries the gateway provenance receipt in _meta, inside the signed body (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.RELIABLE.1 | Pending deliveries are held in a durable outbox, retried with bounded exponential backoff within 15 minutes and resumed after a restart with the same webhook-id (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.RELIABLE.2 | Event ids are stable per occurrence and subscription across retries, restarts and replays, and inbound webhook repeats are dropped by delivery id where a route configures one (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.RELIABLE.3 | Undeliverable events go to a dead-letter store with a reason and can be listed and replayed through an admin route and CLI, with the Meta-MCP tool count unchanged (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.DISCOVER.1 | Events visible to a caller are returned by gateway_search as kind event with their input schema (MIK-7630 extended scope). | DISCOVERY |
 
 ## Boundaries
 

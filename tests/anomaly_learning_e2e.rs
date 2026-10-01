@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use signing_gateway::{BACKEND, BackendFixture, HttpGateway};
 
 const ROUNDS: usize = 25;
+const TOKEN: &str = "anomaly-e2e-token-0123456789abcdef0123";
 
 async fn start() -> (BackendFixture, HttpGateway) {
     let backend = BackendFixture::start(json!({"content": [{"type": "text", "text": "ok"}]})).await;
@@ -23,12 +24,15 @@ async fn start() -> (BackendFixture, HttpGateway) {
         .map(|name| json!({"name": name, "description": "fixture tool", "inputSchema": {"type": "object"}}))
         .collect();
     backend.set_tools(json!({ "tools": tools }));
-    let gateway = HttpGateway::start(json!({
+    let mut gateway = HttpGateway::start(json!({
         "server": {"host": "127.0.0.1", "modern_protocol": true},
+        "auth": {"enabled": true, "bearer_token": TOKEN},
         "cache": {"enabled": false},
         "backends": {(BACKEND): {"http_url": backend.url, "streamable_http": true}},
         "security": {
             "trust_configured_backends": true,
+            // Auth on needs the audit log; relative to the child's own directory.
+            "transparency_log": {"enabled": true, "path": "audit.jsonl"},
             "firewall": {
                 "enabled": true,
                 "anomaly_detection": true,
@@ -38,6 +42,15 @@ async fn start() -> (BackendFixture, HttpGateway) {
         }
     }))
     .await;
+    // On HTTP the detector needs a caller key, so the calls carry a credential.
+    let mut headers = reqwest::header::HeaderMap::new();
+    let bearer = format!("Bearer {TOKEN}").parse().expect("header value");
+    headers.insert(reqwest::header::AUTHORIZATION, bearer);
+    gateway.client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("HTTP client");
     (backend, gateway)
 }
 
