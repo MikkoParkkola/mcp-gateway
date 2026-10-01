@@ -83,16 +83,20 @@ def macro_argument_lines(lines, lo, hi):
                 text = text[match.end() - 1 :]
             depth += text.count("(") - text.count(")")
             if depth <= 0:
-                simple, nesting = [], 0
+                simple, nesting, fresh = [], 0, True
                 for m in range(head + 1, n + 1):
                     code = strip_literals(lines[m - 1])
-                    # Only a line at the argument list's own level: anything
-                    # inside a nested block, call or array is that
-                    # expression's logic, not a field.
-                    if nesting == 0 and is_simple_argument(code):
+                    text = code.strip()
+                    # Only a whole field on its own line, at the argument
+                    # list's own level: it starts a fresh argument and ends
+                    # with its comma. A continuation (`&& check(),`), a line
+                    # left open (`flag = a`) or anything inside a nested
+                    # block, call or array is logic, not a field.
+                    if nesting == 0 and fresh and text.endswith(",") and is_simple_argument(code):
                         simple.append(m)
                     nesting += sum(code.count(c) for c in "({[") - sum(code.count(c) for c in ")}]")
                     nesting = max(nesting, 0)
+                    fresh = nesting == 0 and text.endswith(",")
                 calls.append((head, simple))
                 break
     return calls
