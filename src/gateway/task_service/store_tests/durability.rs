@@ -731,3 +731,51 @@ async fn store_04_a_record_of_exactly_the_cap_is_accepted_on_both_write_paths() 
     assert_eq!(store.get(OWNER, task.id()).unwrap().revision, 1);
     store.close().await.unwrap();
 }
+
+/// Mutant: a store path that cannot be inspected is treated as absent and
+/// created, or as a usable directory.
+#[cfg(unix)]
+#[tokio::test]
+async fn open_refuses_a_store_path_it_cannot_inspect_and_creates_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("not-a-directory");
+    fs::write(&blocker, b"").unwrap();
+    assert!(matches!(
+        TaskStore::open(&blocker.join("tasks"), StoreLimits::default()).await,
+        Err(StoreError::Unavailable)
+    ));
+    assert!(blocker.is_file(), "the file in the way is left as found");
+
+    // Positive control: the same open succeeds beside it.
+    open(&dir.path().join("tasks")).await.close().await.unwrap();
+}
+
+/// Mutant: a lease that cannot be inspected is created over, or reported as an
+/// ownership conflict instead of refused.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn open_refuses_a_lease_it_cannot_inspect_and_creates_none() {
+    // PATH_MAX is 4096 with the terminator: the store directory fits, the
+    // `store.lease` inside it does not, so only the lease inspection fails.
+    const DIR_LEN: usize = 4090;
+    let dir = tempfile::tempdir().unwrap();
+    let mut path = dir.path().to_path_buf();
+    let remaining = DIR_LEN - path.as_os_str().len();
+    let parts = remaining.div_ceil(201);
+    let letters = remaining - parts;
+    for part in 0..parts {
+        let width = letters / parts + usize::from(part < letters % parts);
+        path.push("d".repeat(width));
+    }
+    assert_eq!(path.as_os_str().len(), DIR_LEN);
+
+    assert!(matches!(
+        TaskStore::open(&path, StoreLimits::default()).await,
+        Err(StoreError::Unavailable)
+    ));
+    assert_eq!(
+        fs::read_dir(&path).unwrap().count(),
+        0,
+        "no lease and no record was created"
+    );
+}
