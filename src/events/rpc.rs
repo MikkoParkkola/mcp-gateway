@@ -218,11 +218,6 @@ impl EventsHub {
         let existing = self.store.get(&id).filter(|s| s.live(now));
         let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
             .unwrap_or_else(|_| chrono::Duration::zero());
-        let (previous_secret, previous_until) = match &existing {
-            Some(old) if old.secret != secret => (Some(old.secret.clone()), Some(now + grace)),
-            Some(old) => (old.previous_secret.clone(), old.previous_until),
-            None => (None, None),
-        };
         let record = Subscription {
             v: 1,
             id: id.clone(),
@@ -232,17 +227,19 @@ impl EventsHub {
             name: descriptor.name.clone(),
             arguments,
             secret: secret.to_owned(),
-            previous_secret,
-            previous_until,
+            // Rotation and delivery history are taken from the stored row
+            // inside the store's commit, never from this earlier read.
+            previous_secret: None,
+            previous_until: None,
             granted_at: now,
             expires_at,
             active: true,
-            failed_since: existing.as_ref().and_then(|s| s.failed_since),
-            last_delivery_at: existing.as_ref().and_then(|s| s.last_delivery_at),
-            last_error: existing.as_ref().and_then(|s| s.last_error.clone()),
+            failed_since: None,
+            last_delivery_at: None,
+            last_error: None,
         };
         blocking(self, move |store| {
-            store.admit(record, !verified, caps, now, tail)
+            store.admit(record, !verified, caps, grace, now, tail)
         })
         .await?
         .map_err(cap_refusal)?;

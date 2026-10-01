@@ -9,6 +9,7 @@
 //! principal, which a stdio session does not carry.
 
 mod client;
+mod limiter;
 mod records;
 mod rpc;
 mod store;
@@ -16,7 +17,6 @@ mod types;
 mod webhook_source;
 
 use std::net::IpAddr;
-use std::num::NonZeroU32;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -29,14 +29,12 @@ use crate::config::EventsConfig;
 use crate::gateway::WebhookRegistry;
 use types::EventDescriptor;
 
-type HostLimiter = governor::DefaultKeyedRateLimiter<String>;
-
 /// The events core: configuration, store, callback client and catalogue.
 pub(crate) struct EventsHub {
     config: EventsConfig,
     store: Arc<store::Store>,
     client: client::CallbackClient,
-    verify_limit: HostLimiter,
+    verify_limit: limiter::HostLimiter,
     webhooks: RwLock<Option<Arc<parking_lot::RwLock<WebhookRegistry>>>>,
 }
 
@@ -60,13 +58,14 @@ impl EventsHub {
             .map_err(|e| {
                 crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
             })?;
-        let per_minute =
-            NonZeroU32::new(config.verification_per_host_per_minute).unwrap_or(NonZeroU32::MIN);
         Ok(Arc::new(Self {
             config: config.clone(),
             store: Arc::new(store),
             client: client::CallbackClient::new(allowed)?,
-            verify_limit: governor::RateLimiter::keyed(governor::Quota::per_minute(per_minute)),
+            verify_limit: limiter::HostLimiter::new(
+                config.verification_per_host_per_minute,
+                MAX_TRACKED_HOSTS,
+            ),
             webhooks: RwLock::new(None),
         }))
     }
@@ -76,16 +75,9 @@ impl EventsHub {
         *self.webhooks.write() = Some(registry);
     }
 
-    /// Take one verification token for `host`. The limiter's key set is
-    /// bounded: idle hosts are shed first, then a new host is refused.
+    /// Take one verification slot for `host`.
     fn host_admitted(&self, host: &str) -> bool {
-        if self.verify_limit.len() >= MAX_TRACKED_HOSTS {
-            self.verify_limit.retain_recent();
-            if self.verify_limit.len() >= MAX_TRACKED_HOSTS {
-                return false;
-            }
-        }
-        self.verify_limit.check_key(&host.to_owned()).is_ok()
+        self.verify_limit.admit(host, std::time::Instant::now())
     }
 
     /// Every descriptor any source offers now, sorted by name.
