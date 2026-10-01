@@ -58,6 +58,8 @@ fn domain_err<T>(result: Result<T, AccountsConfigError>, what: &str) -> Accounts
 struct CountingOverlay {
     values: Vec<(String, String)>,
     looked_up: RefCell<Vec<String>>,
+    /// Every reference handed to `resolve_reference`, in any spelling.
+    references: RefCell<Vec<String>>,
 }
 
 impl CountingOverlay {
@@ -68,11 +70,16 @@ impl CountingOverlay {
                 .map(|(k, v)| ((*k).into(), (*v).into()))
                 .collect(),
             looked_up: RefCell::new(Vec::new()),
+            references: RefCell::new(Vec::new()),
         }
     }
 
     fn lookups(&self) -> Vec<String> {
         self.looked_up.borrow().clone()
+    }
+
+    fn references(&self) -> Vec<String> {
+        self.references.borrow().clone()
     }
 }
 
@@ -88,6 +95,7 @@ impl CountingOverlay {
 
 impl SecretOverlay for CountingOverlay {
     fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String> {
+        self.references.borrow_mut().push(reference.to_string());
         // `env:` through this fake; `file:` and literals as production does.
         match reference.strip_prefix("env:") {
             Some(name) => Ok(self.resolve(name)),
@@ -697,7 +705,8 @@ fn adapter_runtime_refuses_a_literal_store_key_without_an_overlay_read() {
         }
     );
     assert!(
-        !env.lookups().iter().any(|name| name == KEY_B64),
+        !env.lookups().iter().any(|name| name == KEY_B64)
+            && !env.references().iter().any(|r| r == KEY_B64),
         "the literal is never resolved"
     );
 }
@@ -750,11 +759,21 @@ fn descriptor_identity_and_strategy_placement_are_refused() {
         "provider must be nonempty"
     );
     let strategy = EXTERNAL.split_once("external_strategy").unwrap().1;
-    for mode in ["shared", "personal_managed"] {
-        let yaml = format!("mode: {mode}\nprovider: p\nexternal_strategy{strategy}");
-        let refused = validate_descriptors(Some(&with_descriptor("a", &yaml)));
-        assert!(refused.is_err(), "{mode}: {refused:?}");
-    }
+    let managed = "mode: personal_managed\nprovider: p\nresource: https://api.fixture.test/\n\
+        issuer: https://issuer.fixture.test\n\
+        authorization_endpoint: https://issuer.fixture.test/authorize\n\
+        token_endpoint: https://issuer.fixture.test/token\nclient_id: c\n\
+        redirect_uri: https://gateway.fixture.test/callback\nscopes: [read]\n\
+        send_resource_parameter: true\n";
+    validate_descriptors(Some(&with_descriptor("a", managed)))
+        .expect("control: a complete managed descriptor is accepted");
+    assert_eq!(
+        problem(&with_descriptor(
+            "a",
+            &format!("{managed}external_strategy{strategy}")
+        )),
+        "external_strategy is valid only on mode external"
+    );
     let shared = format!("mode: shared\nprovider: p\nexternal_strategy{strategy}");
     assert_eq!(
         problem(&with_descriptor("a", &shared)),
@@ -794,4 +813,10 @@ fn an_external_descriptor_needs_a_minting_required_valid_strategy() {
         "token_exchange without an endpoint fails the strategy's own validation"
     );
     assert!(refused(EXTERNAL).is_ok());
+    let with_endpoint =
+        format!("{exchange}  token_exchange_endpoint: https://issuer.fixture.test/exchange\n");
+    assert!(
+        refused(&with_endpoint).is_ok(),
+        "token_exchange with its endpoint"
+    );
 }

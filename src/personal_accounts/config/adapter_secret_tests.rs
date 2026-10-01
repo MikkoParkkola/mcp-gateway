@@ -26,6 +26,8 @@ use super::super::SecretOverlay;
 struct FakeOverlay {
     values: BTreeMap<String, String>,
     reads: RefCell<Vec<String>>,
+    /// Every reference handed to `resolve_reference`, in any spelling.
+    references: RefCell<Vec<String>>,
 }
 
 impl FakeOverlay {
@@ -36,11 +38,16 @@ impl FakeOverlay {
                 .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
                 .collect(),
             reads: RefCell::new(Vec::new()),
+            references: RefCell::new(Vec::new()),
         }
     }
 
     fn reads(&self) -> Vec<String> {
         self.reads.borrow().clone()
+    }
+
+    fn references(&self) -> Vec<String> {
+        self.references.borrow().clone()
     }
 }
 
@@ -53,6 +60,7 @@ impl FakeOverlay {
 
 impl SecretOverlay for FakeOverlay {
     fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String> {
+        self.references.borrow_mut().push(reference.to_string());
         // `env:` through this fake; `file:` and literals as production does.
         match reference.strip_prefix("env:") {
             Some(name) => Ok(self.resolve(name)),
@@ -554,7 +562,8 @@ fn a_literal_adapter_reference_is_left_to_the_shape_check_by_both_separation_hal
     validate_no_gateway_material_reuse(std::slice::from_ref(&literal), &overlay, &credentials)
         .expect("a literal is not resolved, so it is not compared as material");
     assert!(
-        !overlay.reads().iter().any(|name| name == "plain-literal"),
+        !overlay.reads().iter().any(|name| name == "plain-literal")
+            && !overlay.references().iter().any(|r| r == "plain-literal"),
         "the literal must not be looked up as a variable"
     );
     assert!(validate(&[literal]).is_err(), "validate owns the refusal");
