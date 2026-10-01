@@ -270,7 +270,7 @@ advertisable was wrong.
 
 ### U7 RESOLVED — the session-keyed inventory, and what it costs
 
-**Superseded 2026-09-30 as the governing list** by `docs/design/2026-09-30-session-keyed-inventory.md` (27 behaviours, MIK-7211.PARENT.7). The table below is kept as history. MIK-7215.CONTROL.5 holds removals against the new inventory.
+**Superseded 2026-09-30 as the governing list** by `docs/design/2026-09-30-session-keyed-inventory.md` (28 behaviours, MIK-7211.PARENT.7). The table below is kept as history. MIK-7215.CONTROL.5 holds removals against the new inventory.
 
 Run 2026-08-29: `rg -c session_id src/ --type rust` returns **32 source files**. The 2026-08-22
 review named six behaviours; the true surface is a different order of magnitude, and several of the
