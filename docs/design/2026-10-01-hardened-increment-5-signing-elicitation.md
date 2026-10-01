@@ -72,7 +72,10 @@ that under `hardened` only an elicitation-declaring `initialize` can create a le
 **Row 10 (direct route).** No handshake state is added. The direct route classifies each
 request exactly as `/mcp` does: the duplicate-safe header read (`handlers.rs:589-595`) and
 `classify_and_observe` (`handlers.rs:722-741`), refusing `RequestShape::Malformed` with
-`-32602` (so a modern header over a legacy body cannot pass as modern). A request whose era is
+`-32602` (so a modern header over a legacy body cannot pass as modern), then the `/mcp`
+header checks: a revision served in neither era, an unsupported modern revision, the
+single-occurrence and header/body mirroring checks (`handlers.rs:808-934`). That block moves
+into one function both routes call, unchanged for `/mcp`, so the two cannot drift. A request whose era is
 `Legacy` is refused with the same 403 + `-32600`, unless it is an `initialize` declaring
 elicitation. This classification runs only under `hardened`; standard keeps today's path.
 Notifications from such a client are refused too (403 with `{}`, as the identity refusal).
@@ -98,6 +101,7 @@ key to pass row 8. Rows 10 and 11: the production router as in
 | 7 | `hardened_signs_tools_call_on_both_routes` | a non-invoke meta `tools/call` and a direct `tools/call`, each with a `_meta` nonce: `_signature` verifies with the v2 MAC and binds the nonce | keep the `gateway_invoke`-only capture |
 | 7 | `hardened_tool_call_nonce_replay_refused` | same nonce twice on each route, and once on each route: every second use refused before dispatch, backend saw one call | admit after dispatch / skip admission on the direct route / a per-route store |
 | 7 | `hardened_meta_stored_result_is_resigned` | an idempotent meta-route replay is delivered with a fresh `_signature` binding the replaying nonce, and the stored copy has none | keep the `gateway_invoke`-only `owns_signature` |
+| 7 | `task_gate_answer_is_unsigned_and_keeps_its_nonce` | a task-augmented destructive call's challenge carries no `_signature`; the follow-up with the same nonce is admitted and signed | admit before the task gate |
 | 7 | `malformed_signing_nonce_refused` | an empty or 257-byte `_meta` nonce on each route: `-32602`, nothing dispatched | skip nonce validation |
 | 7 | `hardened_direct_cached_result_is_signed` | an idempotent replay on the direct route is served from the cache (backend still at one call) and signed against the replaying nonce | leave the `CachedResult` exit unsigned |
 | 7 | `confirmation_follow_up_needs_a_fresh_nonce` | a destructive meta tool's in-band challenge is signed; the follow-up with a new nonce completes signed; with the first nonce it is refused | skip admission for the follow-up |
@@ -106,10 +110,23 @@ key to pass row 8. Rows 10 and 11: the production router as in
 | 10 | `hardened_refuses_legacy_without_elicitation_no_session` | legacy `initialize` without elicitation: 403, the text, no `mcp-session-id`, session count unchanged | check after the mint |
 | 10 | `hardened_refuses_legacy_without_elicitation_get` | GET with no live session: refused, nothing minted | skip GET |
 | 10 | `hardened_legacy_request_without_session_refused` | legacy `tools/list` with no session: refused, nothing minted; after an elicitation-declaring `initialize` the same request is served | mint on non-initialize |
-| 10 | `hardened_direct_legacy_refused` | direct legacy `tools/call` refused with backend at 0 calls; an elicitation `initialize` and a well-formed modern request pass; a modern header over a legacy body, a doubled header, and an unsupported revision are each refused, backend still at 0 calls | skip the direct route / trust the header alone |
+| 10 | `modern_request_mints_no_session_for_legacy_resume` | a modern request returns no `mcp-session-id`, and a following legacy request without a session is refused | mint on the modern branch |
+| 10 | `hardened_direct_legacy_refused` | direct legacy `tools/call` refused with backend at 0 calls; an elicitation `initialize` and a well-formed modern request pass; a modern header over a legacy body, a doubled header, and an unsupported revision and a header/body name mismatch are each refused, otherwise-valid modern metadata, backend still at 0 calls | skip the direct route / trust the header alone / skip the shared header checks |
 | 11 | `hardened_legacy_confirmation_policy_refuses` | legacy session, unconfirmable destructive call: `-32001` under hardened, WARN-and-proceed under standard | keep `for_legacy()` under hardened |
 | 16 | `standard_posture_applies_no_override` (extended) | standard: signing not forced, legacy without elicitation served on `/mcp` and the direct route | apply any override under standard |
 | 16 | `standard_signing_keeps_invoke_only_scope` | standard with signing explicitly enabled: non-invoke meta and direct results unsigned, `gateway_invoke` signed as before | widen capture without the posture check |
+
+### Existing hardened fixtures
+
+Row 6 makes a signing secret mandatory under `hardened`, on both entry points: `Config::load`
+and `Gateway::new`, whose `validate_with_env` reaches `resolve_with_env`
+(`config/mod.rs:782`) after `posture::resolve` (`server/mod.rs:583-588`). Every existing
+hardened fixture that passes through either one gains a 32-byte `message_signing.shared_secret`
+in the same commit as the forcing: `src/security/posture_tests.rs`,
+`src/security/firewall/anomaly_posture_tests.rs`, the 4b startup and reload tests
+(`src/gateway/server/tests/hardened_destination.rs`, `tests/posture_reload.rs`) and
+`tests/hardened_backend_env_proxy.rs`. Router fixtures built with a hand-set posture (rows 8,
+10, 11) do not call `posture::resolve` and are unaffected.
 
 ## 4. Upgrade guide and ledger
 
@@ -149,3 +166,12 @@ and that T14 waits on 4c (decision 8).
   (`config/mod.rs:588-590`), and the other call (`:782`, in `validate_with_env`) runs after
   `posture::resolve` on that path, and on the literal (rewrite) path where the posture is
   deliberately not applied.
+
+## 7. Review dispositions (seat A, delta round 2)
+
+- MEDIUM, the direct route lacks `/mcp`'s separate header checks: ACCEPTED. The block at
+  `handlers.rs:808-934` becomes one function both routes call; negative tests use otherwise
+  valid modern metadata.
+- Improvements taken: `task_gate_answer_is_unsigned_and_keeps_its_nonce`,
+  `modern_request_mints_no_session_for_legacy_resume`.
+- Round 1 dispositions (sections 5 and 6) were judged closed.
