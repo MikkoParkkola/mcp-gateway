@@ -337,6 +337,14 @@ class HeadLineCalls(unittest.TestCase):
         self.assertEqual(result[4], [2], "the head is unverifiable whatever its count")
         self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
 
+    def test_an_unverifiable_head_still_excludes_its_reached_plain_field_lines(self):
+        # The head's count still proves the macro was reached, so a plain field
+        # on a later line that reads zero is excluded as before.
+        body = '    debug!(url = %clean(x),\n        n = y,\n    );\n'
+        result = self.grade(body, {2: 1, 3: 0})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[8], ["src/lib.rs:3 (head 2=1)"])
+
     def test_plain_fields_on_the_head_line_stay_covered(self):
         result = self.grade('    debug!(url = %x, kind = ?k, n = 3, "seen {}", x);\n', {2: 1})
         self.assertEqual(result[0], "ok")
