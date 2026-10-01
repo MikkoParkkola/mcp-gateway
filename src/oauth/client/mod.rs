@@ -846,6 +846,8 @@ impl OAuthClient {
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server.wait_for_callback().await?;
 
+        debug!(code = %callback_result.code, "Received authorization code");
+
         // RFC 9207, before the code is redeemed: a code that came from another
         // authorization server must not be sent to this one's token endpoint.
         validate_issuer(callback_result.iss.as_deref(), &auth_meta.issuer).map_err(|mismatch| {
