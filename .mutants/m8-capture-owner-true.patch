@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/upstream.rs b/src/gateway/task_service/execution/upstream.rs
+index d486a729d..01d6364d0 100644
+--- a/src/gateway/task_service/execution/upstream.rs
++++ b/src/gateway/task_service/execution/upstream.rs
+@@ -118,7 +118,7 @@ impl TaskExecutor {
+         capture: UpstreamCapture,
+     ) -> bool {
+         let Ok(owner) = self.service.owner(principal) else {
+-            return false;
++            return true;
+         };
+         // The descriptor's binding to this record is the record's own admitted
+         // operation digest, read here rather than recomputed: a digest derived

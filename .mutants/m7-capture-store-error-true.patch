@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/upstream.rs b/src/gateway/task_service/execution/upstream.rs
+index d486a729d..25316d975 100644
+--- a/src/gateway/task_service/execution/upstream.rs
++++ b/src/gateway/task_service/execution/upstream.rs
+@@ -151,7 +151,7 @@ impl TaskExecutor {
+                     ?error,
+                     "upstream handle not made durable; this task stays unrecoverable"
+                 );
+-                false
++                true
+             }
+         }
+     }

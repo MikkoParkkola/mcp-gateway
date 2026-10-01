@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/upstream.rs b/src/gateway/task_service/execution/upstream.rs
+index d486a729d..9f6821f75 100644
+--- a/src/gateway/task_service/execution/upstream.rs
++++ b/src/gateway/task_service/execution/upstream.rs
+@@ -223,7 +223,7 @@ impl TaskExecutor {
+         // Trust is re-evaluated against CURRENT configuration and the peer's own
+         // declaration. An adapter dropped, or a backend untrusted since the
+         // submission, refuses here — before the wire, not after.
+-        if !adapter.claims(&descriptor.backend).await {
++        if false && !adapter.claims(&descriptor.backend).await {
+             return Err(RecoveryRefusal::Unclaimed);
+         }
+ 

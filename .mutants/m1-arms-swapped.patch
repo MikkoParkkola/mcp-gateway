@@ -1,0 +1,15 @@
+diff --git a/src/gateway/task_service/execution/upstream.rs b/src/gateway/task_service/execution/upstream.rs
+index d486a729d..4fc4115e0 100644
+--- a/src/gateway/task_service/execution/upstream.rs
++++ b/src/gateway/task_service/execution/upstream.rs
+@@ -171,8 +171,8 @@ impl TaskExecutor {
+                 .store
+                 .upstream_of(owner_digest, id)
+                 .map_err(|error| match error {
+-                    StoreError::NotFound => RecoveryRefusal::NotRecoverable,
+-                    _ => RecoveryRefusal::Unavailable,
++                    StoreError::NotFound => RecoveryRefusal::Unavailable,
++                    _ => RecoveryRefusal::NotRecoverable,
+                 })?;
+         // A terminal row is served unchanged; an interrupted input round keeps
+         // its reviewed I3 treatment and is not continued here.

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/upstream.rs b/src/gateway/task_service/execution/upstream.rs
+index d486a729d..c30151bee 100644
+--- a/src/gateway/task_service/execution/upstream.rs
++++ b/src/gateway/task_service/execution/upstream.rs
+@@ -358,7 +358,7 @@ impl TaskExecutor {
+         let Ok((descriptor, _, status)) = self.service.store.upstream_of(owner_digest, id) else {
+             return false;
+         };
+-        status == TaskStatus::Working
++        true
+             && descriptor.is_none_or(|durable| {
+                 durable.handle == handle.handle && durable.backend == handle.backend
+             })

@@ -1,0 +1,10 @@
+head_sha	4a7675449d2863c89b04350d086cc968a59470f0
+m1-arms-swapped	linux	m1-arms-swapped.patch	--lib recovery_target_tells_absent_from_unavailable
+m2-terminal-guard-dropped	linux	m2-terminal-guard-dropped.patch	--lib recovery_target_tells_absent_from_unavailable
+m3-denied-dropped	linux	m3-denied-dropped.patch	--lib recovery_issues_no_query_without_a_claiming_adapter
+m4-claims-dropped	linux	m4-claims-dropped.patch	--lib recovery_issues_no_query_without_a_claiming_adapter
+m5-live-store-error-true	linux	m5-live-store-error-true.patch	--lib a_handle_is_live_only_for_a_readable_working_row_that_matches
+m6-live-status-dropped	linux	m6-live-status-dropped.patch	--lib a_handle_is_live_only_for_a_readable_working_row_that_matches
+m7-capture-store-error-true	linux	m7-capture-store-error-true.patch	--lib capture_refuses_an_unattributable_principal_an_absent_row_and_a_stale_revision
+m8-capture-owner-true	linux	m8-capture-owner-true.patch	--lib capture_refuses_an_unattributable_principal_an_absent_row_and_a_stale_revision
+m9-fits-owner-true	linux	m9-fits-owner-true.patch	--lib the_descriptor_preflight_refuses_what_it_cannot_measure_or_fit

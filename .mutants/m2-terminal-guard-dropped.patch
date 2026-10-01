@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/upstream.rs b/src/gateway/task_service/execution/upstream.rs
+index d486a729d..f84d49e4c 100644
+--- a/src/gateway/task_service/execution/upstream.rs
++++ b/src/gateway/task_service/execution/upstream.rs
+@@ -176,7 +176,7 @@ impl TaskExecutor {
+                 })?;
+         // A terminal row is served unchanged; an interrupted input round keeps
+         // its reviewed I3 treatment and is not continued here.
+-        if status != TaskStatus::Working {
++        if false && status != TaskStatus::Working {
+             return Err(RecoveryRefusal::NotRecoverable);
+         }
+         descriptor.ok_or(RecoveryRefusal::NotRecoverable)
