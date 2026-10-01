@@ -585,3 +585,34 @@ fn verify_compares_the_hash_at_the_mark() {
         "{msg}"
     );
 }
+
+/// MIK-7712 AC1, review: the active segment holding the committed marker is
+/// emptied (or deleted) with `.hwm` kept. The newest surviving record is then
+/// the seal, below the mark, so the restart records the loss there too.
+#[test]
+fn an_emptied_active_below_the_mark_is_not_forgotten() {
+    for delete in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+        rotate_n(&l, &path, 1);
+        drop(l);
+        delete_hwm(&path);
+        drop(TransparencyLogger::open(cfg(&path, 1, true)).unwrap());
+        assert_eq!(event(lines(&path).last().unwrap()), Some(MARK));
+        if delete {
+            std::fs::remove_file(&path).unwrap();
+        } else {
+            std::fs::write(&path, b"").unwrap();
+        }
+        let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+        rotate_retained(&l, &path, 5);
+        drop(l);
+        let r = verify_segments(&path, &cfg(&path, 1, true), VerifyMode::Live).unwrap();
+        assert!(
+            !r.ok,
+            "an emptied active laundered the finding (deleted: {delete})"
+        );
+        assert!(r.error_message.unwrap().contains(MARK), "deleted: {delete}");
+    }
+}

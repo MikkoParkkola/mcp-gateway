@@ -229,6 +229,14 @@ pub(super) fn recover(
     // A tail that ends below the authenticated mark lost committed records
     // whether the cut was torn or fell on a newline (MIK-7712).
     let mut below_mark = false;
+    // The newest surviving record when the active file holds none: the
+    // newest seal, or nothing.
+    let sealed_tail = |sealed: &[Segment]| -> io::Result<u64> {
+        Ok(match sealed.last() {
+            Some(segment) => seal_of(segment)?.map_or(0, |(counter, _)| counter),
+            None => 0,
+        })
+    };
     let mut state = match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
             let (counter, hash, event, v) = record_head(&line)?;
@@ -240,6 +248,7 @@ pub(super) fn recover(
                 segments::sync_dir(path)?;
                 let sealed = segments::list_segments(path)?;
                 let carry = newest_finding(&sealed, config)?;
+                below_mark = hw.as_ref().is_some_and(|h| counter < h.counter);
                 open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
             } else {
                 let resumed = resume_active(path, counter, hash, &sealed, hw.as_ref(), now)?;
@@ -251,10 +260,14 @@ pub(super) fn recover(
         }
         Ok(None) => {
             let carry = newest_finding(&sealed, config)?;
+            let tail = sealed_tail(&sealed)?;
+            below_mark = hw.as_ref().is_some_and(|h| tail < h.counter);
             open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let carry = newest_finding(&sealed, config)?;
+            let tail = sealed_tail(&sealed)?;
+            below_mark = hw.as_ref().is_some_and(|h| tail < h.counter);
             open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
         }
         Err(e) => return Err(e),
