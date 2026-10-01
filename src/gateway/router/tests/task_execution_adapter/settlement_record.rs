@@ -164,7 +164,7 @@ impl Recovery {
     async fn wait_for_queries(&self, count: usize) {
         let deadline = Instant::now() + ARRIVAL_BOUND;
         while self.queries() < count {
-            assert!(
+            std::assert!(
                 Instant::now() < deadline,
                 "only {} upstream queries in {ARRIVAL_BOUND:?}; {count} expected",
                 self.queries()
@@ -262,14 +262,14 @@ async fn fixture(setup: Setup, path: Path) -> Fixture {
     backend.set_transport_for_test(Arc::new(Peer {
         envelope_extra: setup.envelope_extra,
     }) as Arc<dyn Transport>);
-    assert!(state.backends.register(backend), "the peer must register");
+    std::assert!(state.backends.register(backend), "the peer must register");
     let recovery = Arc::new(Recovery {
         retain_first: matches!(path, Path::OwnerRead),
         answer: setup.answer,
         queries: AtomicUsize::new(0),
         release: Arc::new(tokio::sync::Semaphore::new(0)),
     });
-    assert!(
+    std::assert!(
         state
             .task_executor
             .install_recovery(Arc::clone(&recovery) as Arc<dyn UpstreamRecovery>),
@@ -323,7 +323,7 @@ async fn join_workers(state: &Arc<AppState>) {
     let joined = tokio::time::timeout(bound, state.task_executor.drain(bound))
         .await
         .expect("the worker settles within the fixture bound");
-    assert!(joined.is_clean(), "the worker must finish: {joined:?}");
+    std::assert!(joined.is_clean(), "the worker must finish: {joined:?}");
 }
 
 impl Fixture {
@@ -372,7 +372,7 @@ impl Fixture {
     /// The one settlement record, or a failure naming every record written.
     fn only_settlement(&self, path: Path) -> Value {
         let found = self.settlement_records();
-        assert_eq!(
+        std::assert_eq!(
             found.len(),
             1,
             "{path:?}: exactly one `task_recovery` record per recovered task; log: {:?}",
@@ -402,19 +402,19 @@ async fn r1_a_recovered_result_writes_one_settlement_record() {
         )
         .await;
         let (id, fetched) = fx.settle(path, |_| {}).await;
-        assert_eq!(status_of(&fetched), "completed", "{path:?}: {fetched}");
+        std::assert_eq!(status_of(&fetched), "completed", "{path:?}: {fetched}");
 
         let record = fx.only_settlement(path);
-        assert_eq!(record["task_id"], json!(id), "{path:?}: {record}");
-        assert_eq!(record["server"], json!(BACKEND), "{path:?}: {record}");
-        assert_eq!(record["tool"], json!(TOOL), "{path:?}: {record}");
-        assert_eq!(record["outcome"], json!("ok"), "{path:?}: {record}");
-        assert_eq!(
+        std::assert_eq!(record["task_id"], json!(id), "{path:?}: {record}");
+        std::assert_eq!(record["server"], json!(BACKEND), "{path:?}: {record}");
+        std::assert_eq!(record["tool"], json!(TOOL), "{path:?}: {record}");
+        std::assert_eq!(record["outcome"], json!("ok"), "{path:?}: {record}");
+        std::assert_eq!(
             record["tenants"],
             json!([h("cust-9")]),
             "{path:?}: {record}"
         );
-        assert!(
+        std::assert!(
             record["data_classes"]
                 .as_array()
                 .is_some_and(|classes| !classes.is_empty()),
@@ -423,33 +423,33 @@ async fn r1_a_recovered_result_writes_one_settlement_record() {
         let delivered = fetched
             .pointer("/result/result")
             .unwrap_or_else(|| panic!("{path:?}: a completed task serves its result: {fetched}"));
-        assert_eq!(
+        std::assert_eq!(
             record["response_hash"],
             json!(sha256_of(delivered)),
             "{path:?}: the hash covers the processed result: {record}"
         );
-        assert_eq!(
+        std::assert_eq!(
             record["request_hash"],
             json!(sha256_of(&json!({ "task_id": id }))),
             "{path:?}: the request hash is of the join key the recovering path holds: {record}"
         );
-        assert_eq!(
+        std::assert_eq!(
             record["correlation_source"],
             json!("task_id"),
             "{path:?}: {record}"
         );
-        assert_eq!(record["session_id"], json!(id), "{path:?}: {record}");
-        assert_eq!(
+        std::assert_eq!(record["session_id"], json!(id), "{path:?}: {record}");
+        std::assert_eq!(
             record["who"]["account"],
             json!(admission_principal()),
             "{path:?}: {record}"
         );
-        assert!(
+        std::assert!(
             record["who"].get("credential_kind").is_none(),
             "{path:?}: the recovering path claims no credential: {record}"
         );
         let text = std::fs::read_to_string(fx.log_dir.path().join("audit.jsonl")).unwrap();
-        assert!(
+        std::assert!(
             !text.contains("cust-9"),
             "{path:?}: a raw tenant id was written"
         );
@@ -468,12 +468,12 @@ async fn r2_an_owner_read_names_the_admission_principal_not_the_reader() {
     .await;
     let _ = fx.settle(path, |_| {}).await;
     let record = fx.only_settlement(path);
-    assert_eq!(
+    std::assert_eq!(
         record["who"]["account"],
         json!(admission_principal()),
         "{record}"
     );
-    assert_ne!(
+    std::assert_ne!(
         record["caller"],
         json!("principal-a"),
         "the reader's key name is not the admission principal: {record}"
@@ -491,16 +491,16 @@ async fn r3_a_refused_recovered_result_is_recorded_with_its_tenants() {
         setup.refusing = true;
         let fx = fixture(setup, path).await;
         let (_, fetched) = fx.settle(path, |_| {}).await;
-        assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
+        std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
 
         let record = fx.only_settlement(path);
-        assert!(
+        std::assert!(
             tenants_of(&record).contains(&json!(h("cust-9"))),
             "{path:?}: {record}"
         );
-        assert_ne!(record["outcome"], json!("ok"), "{path:?}: {record}");
-        assert_eq!(record["error_code"], json!(-32603), "{path:?}: {record}");
-        assert!(record.get("response_hash").is_none(), "{path:?}: {record}");
+        std::assert_ne!(record["outcome"], json!("ok"), "{path:?}: {record}");
+        std::assert_eq!(record["error_code"], json!(-32603), "{path:?}: {record}");
+        std::assert!(record.get("response_hash").is_none(), "{path:?}: {record}");
     }
 }
 
@@ -515,15 +515,15 @@ async fn r4_a_screened_peer_failure_is_recorded_with_its_code() {
         )
         .await;
         let (_, fetched) = fx.settle(path, |_| {}).await;
-        assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
+        std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
 
         let record = fx.only_settlement(path);
-        assert_eq!(record["error_code"], json!(-32050), "{path:?}: {record}");
-        assert!(
+        std::assert_eq!(record["error_code"], json!(-32050), "{path:?}: {record}");
+        std::assert!(
             tenants_of(&record).contains(&json!(h("cust-9"))),
             "{path:?}: {record}"
         );
-        assert!(record.get("response_hash").is_none(), "{path:?}: {record}");
+        std::assert!(record.get("response_hash").is_none(), "{path:?}: {record}");
     }
 }
 
@@ -541,18 +541,18 @@ async fn r5_an_oversize_result_is_recorded_and_delivered_bounded() {
         )
         .await;
         let (_, fetched) = fx.settle(path, |_| {}).await;
-        assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
-        assert!(
+        std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
+        std::assert!(
             !fetched.to_string().contains("cust-9"),
             "{path:?}: no backend content is delivered"
         );
 
         let record = fx.only_settlement(path);
-        assert!(
+        std::assert!(
             tenants_of(&record).contains(&json!(h("cust-9"))),
             "{path:?}: {record}"
         );
-        assert!(
+        std::assert!(
             record["response_hash"]
                 .as_str()
                 .is_some_and(|hash| hash.starts_with("sha256:")),
@@ -573,10 +573,10 @@ async fn r6_a_failed_write_under_fail_closed_withholds_the_result() {
             .settle(path, |fx| fx.log.set_append_failure_for_test(true))
             .await;
         fx.log.set_append_failure_for_test(false);
-        assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
+        std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
         let body = fetched.to_string();
-        assert!(body.contains("-32005"), "{path:?}: {body}");
-        assert!(
+        std::assert!(body.contains("-32005"), "{path:?}: {body}");
+        std::assert!(
             !body.contains("cust-9"),
             "{path:?}: recovered content delivered: {body}"
         );
@@ -598,8 +598,8 @@ async fn r7_a_failed_write_under_best_effort_commits_the_result() {
             .settle(path, |fx| fx.log.set_append_failure_for_test(true))
             .await;
         fx.log.set_append_failure_for_test(false);
-        assert_eq!(status_of(&fetched), "completed", "{path:?}: {fetched}");
-        assert!(
+        std::assert_eq!(status_of(&fetched), "completed", "{path:?}: {fetched}");
+        std::assert!(
             fx.log.append_failures() > failures,
             "{path:?}: the settlement write was attempted and its failure counted"
         );
@@ -628,9 +628,9 @@ async fn r8_a_worker_and_an_owner_read_write_one_record() {
     fx.recovery.release_all();
     let fetched = reader.await.expect("the owner's read answers");
     join_workers(&fx.state).await;
-    assert_eq!(status_of(&fetched), "completed", "{fetched}");
+    std::assert_eq!(status_of(&fetched), "completed", "{fetched}");
     let record = fx.only_settlement(path);
-    assert_eq!(record["task_id"], json!(id), "{record}");
+    std::assert_eq!(record["task_id"], json!(id), "{record}");
 }
 
 /// R8 (b): a cancel that wins the commit after the record was written leaves
@@ -656,7 +656,7 @@ async fn r8_a_cancel_winning_after_the_record_leaves_one_record() {
     });
     let deadline = Instant::now() + ARRIVAL_BOUND;
     while !stall.0.is_entered() {
-        assert!(
+        std::assert!(
             Instant::now() < deadline,
             "no settlement record write began before the recovery's commit"
         );
@@ -668,17 +668,17 @@ async fn r8_a_cancel_winning_after_the_record_leaves_one_record() {
         task_method(9_002, "tasks/cancel", json!({ "taskId": id })),
     )
     .await;
-    assert!(cancelled.get("error").is_none(), "{cancelled}");
+    std::assert!(cancelled.get("error").is_none(), "{cancelled}");
     stall.0.release();
     let _ = reader.await.expect("the owner's read answers");
 
     let fetched = get_task(&fx.state, "key-a", &id).await;
-    assert_eq!(
+    std::assert_eq!(
         status_of(&fetched),
         "cancelled",
         "the cancel's commit stands: {fetched}"
     );
-    assert_eq!(fx.settlement_records().len(), 1, "{:?}", fx.records());
+    std::assert_eq!(fx.settlement_records().len(), 1, "{:?}", fx.records());
 }
 
 /// R9: the submission record carries the gateway task id whenever the raw
@@ -700,15 +700,15 @@ async fn r9_the_submission_record_carries_the_task_id() {
             .into_iter()
             .filter(|record| record["route"] == "meta")
             .collect();
-        assert_eq!(submissions.len(), 1, "refused={refused}: {submissions:?}");
+        std::assert_eq!(submissions.len(), 1, "refused={refused}: {submissions:?}");
         let submission = &submissions[0];
-        assert_eq!(
+        std::assert_eq!(
             submission["task_id"],
             json!(id),
             "refused={refused}: {submission}"
         );
         if refused {
-            assert_ne!(submission["outcome"], json!("ok"), "{submission}");
+            std::assert_ne!(submission["outcome"], json!("ok"), "{submission}");
         }
     }
 }
@@ -726,21 +726,21 @@ async fn r10_a_plain_call_is_unchanged_and_the_log_verifies() {
     let _ = fx.settle(path, |_| {}).await;
     let before = fx.records().len();
     let answered = post(&fx.state, "key-a", sync_invoke(7, json!({ "n": 2 }))).await;
-    assert!(answered.get("error").is_none(), "{answered}");
+    std::assert!(answered.get("error").is_none(), "{answered}");
 
     let records = fx.records();
-    assert_eq!(
+    std::assert_eq!(
         records.len(),
         before + 1,
         "one record for the plain call: {records:?}"
     );
     let plain = records.last().expect("the plain call's record");
-    assert_eq!(plain["route"], json!("meta"), "{plain}");
-    assert!(plain.get("task_id").is_none(), "{plain}");
+    std::assert_eq!(plain["route"], json!("meta"), "{plain}");
+    std::assert!(plain.get("task_id").is_none(), "{plain}");
 
-    assert_eq!(fx.settlement_records().len(), 1, "{records:?}");
+    std::assert_eq!(fx.settlement_records().len(), 1, "{records:?}");
     let verified =
         crate::security::transparency_log::verify_log(&fx.log_dir.path().join("audit.jsonl"))
             .expect("the log reads");
-    assert!(verified.ok, "{verified:?}");
+    std::assert!(verified.ok, "{verified:?}");
 }
