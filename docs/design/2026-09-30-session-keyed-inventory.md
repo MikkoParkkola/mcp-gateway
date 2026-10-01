@@ -41,7 +41,8 @@ add no row: see "Stdio". The re-run also added two sites to row 20 that the firs
   - cost recording and the cost snapshot (`cost_accounting/mod.rs:501,538`);
   - the prompt-cache key (`gateway/meta_mcp/invoke.rs:1967`);
   - audit correlation (`gateway/meta_mcp/invoke/audit.rs:338-340`);
-  - stream delivery (`gateway/streaming.rs:371`).
+  - stream delivery (`gateway/streaming.rs:371`);
+  - the response session header (`gateway/router/helpers.rs:32-39`), which holds no state.
 
   Every other `if let Some(sid)` treats `""` as one session shared by every modern caller. Rows
   marked *shared ""* have that defect.
