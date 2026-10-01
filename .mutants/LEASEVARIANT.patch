@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index 7aa5e0dc1..ccad49936 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -714,7 +714,7 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
+         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+         Err(error) => {
+             tracing::warn!(%error, path = %shown_path, "task store lease unreadable");
+-            return Err(StoreError::Uninspectable);
++            return Err(StoreError::Unavailable);
+         }
+     }
+     ExclusiveFileLock::try_acquire(lease).map_err(|error| {
