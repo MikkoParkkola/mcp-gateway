@@ -616,3 +616,34 @@ fn an_emptied_active_below_the_mark_is_not_forgotten() {
         assert!(r.error_message.unwrap().contains(MARK), "deleted: {delete}");
     }
 }
+
+/// MIK-7712, review: after an emptied active, the restart writes the
+/// replacement open record, then the marker. A crash between the two leaves
+/// only the open record, which carries the loss itself.
+#[test]
+fn a_crash_after_the_replacement_open_record_keeps_the_loss() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    drop(TransparencyLogger::open(cfg(&path, 1, true)).unwrap());
+    std::fs::write(&path, b"").unwrap();
+    drop(TransparencyLogger::open(cfg(&path, 1, true)).unwrap());
+    let active = lines(&path);
+    assert_eq!(
+        event(&active[0]),
+        Some("audit_segment_opened"),
+        "{active:?}"
+    );
+    assert_eq!(event(active.last().unwrap()), Some(MARK), "{active:?}");
+    // The crash: the marker never reached the disk.
+    cut_tail(&path, 1);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_retained(&l, &path, 5);
+    drop(l);
+    let r = verify_segments(&path, &cfg(&path, 1, true), VerifyMode::Live).unwrap();
+    assert!(!r.ok, "a crash before the marker lost the finding");
+    assert!(r.error_message.unwrap().contains(MARK));
+}

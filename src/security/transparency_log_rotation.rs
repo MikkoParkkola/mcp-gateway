@@ -249,6 +249,7 @@ pub(super) fn recover(
                 let sealed = segments::list_segments(path)?;
                 let carry = newest_finding(&sealed, config)?;
                 below_mark = hw.as_ref().is_some_and(|h| counter < h.counter);
+                let carry = lost_from(carry, below_mark, counter);
                 open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
             } else {
                 let resumed = resume_active(path, counter, hash, &sealed, hw.as_ref(), now)?;
@@ -262,12 +263,14 @@ pub(super) fn recover(
             let carry = newest_finding(&sealed, config)?;
             let tail = sealed_tail(&sealed)?;
             below_mark = hw.as_ref().is_some_and(|h| tail < h.counter);
+            let carry = lost_from(carry, below_mark, tail);
             open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let carry = newest_finding(&sealed, config)?;
             let tail = sealed_tail(&sealed)?;
             below_mark = hw.as_ref().is_some_and(|h| tail < h.counter);
+            let carry = lost_from(carry, below_mark, tail);
             open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
         }
         Err(e) => return Err(e),
@@ -337,6 +340,17 @@ pub(super) fn recover(
     state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
     Ok(state)
+}
+
+/// The finding the replacement open record carries. A loss found below the
+/// mark is carried from the first lost counter, so a crash after that record
+/// is synced but before the marker cannot lose it (MIK-7712).
+fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
+    if below_mark {
+        Some(carry.map_or(tail + 1, |at| at.min(tail + 1)))
+    } else {
+        carry
+    }
 }
 
 /// An active file whose last record is an ordinary record.
@@ -440,16 +454,17 @@ pub(super) fn open_after_seal(
         // An unrotated log whose active file was deleted: continue the
         // counter so verify names the missing records.
         let hw = hw.expect("hw_counter > 0");
-        let fields = housekeeping(
-            EV_OPENED,
-            &[
-                ("segment_seq", hw.segment_seq.into()),
-                // Names the link, as every open record does, so the exporter
-                // can resume here; verify still reports the missing counters.
-                ("prev_segment_final_hash", hw.entry_hash.clone().into()),
-                ("segment_opened_at", now.into()),
-            ],
-        );
+        let mut extra: Vec<(&str, Value)> = vec![
+            ("segment_seq", hw.segment_seq.into()),
+            // Names the link, as every open record does, so the exporter
+            // can resume here; verify still reports the missing counters.
+            ("prev_segment_final_hash", hw.entry_hash.clone().into()),
+            ("segment_opened_at", now.into()),
+        ];
+        if let Some(at) = carry {
+            extra.push((HWM_MISSING_AT, at.into()));
+        }
+        let fields = housekeeping(EV_OPENED, &extra);
         let hash = write_synced(
             &mut fresh()?,
             config,

@@ -324,6 +324,9 @@ fn rechained_forgery_with_stale_sig_fails_signed_verify() {
     let signed = verify_log_signed(tmp.path(), &cfg).unwrap();
     assert!(!signed.ok, "signed verify must reject a stale-sig forgery");
     assert_eq!(signed.error_at_counter, Some(forged_counter));
+    // The signature, not only the mark, is what refuses it here.
+    let msg = signed.error_message.unwrap_or_default();
+    assert!(msg.contains("HMAC sig mismatch"), "{msg}");
 }
 
 // HMAC.1: an intact signed log passes verify_log_signed.

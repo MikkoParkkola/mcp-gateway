@@ -53,6 +53,11 @@ pub(super) const REPEAT_WINDOW: Duration = Duration::from_secs(600);
 /// Keys the store holds at most; a full store records every decision.
 const REPEAT_CAP: usize = 4096;
 
+/// How long a re-check record waits for the repeat check and its append
+/// together. The append inside is also held to the log's own bound (F20),
+/// whichever is shorter.
+const LEDGER_WAIT: Duration = Duration::from_secs(5);
+
 /// The last written re-check decision per task, caller and target.
 ///
 /// One async lock spans the repeat check, the append and the remember, so
@@ -267,8 +272,21 @@ async fn write_records(
     let mut first_failure = None;
     for note in select_records(notes) {
         // Held across the append: check, write and remember are one step.
+        // The wait and the append share one deadline, so a queue of re-checks
+        // behind slow writes fails like a slow append does (F20).
+        let started = tokio::time::Instant::now();
+        let deadline = LEDGER_WAIT;
         let mut ledger = match &note.repeat {
-            Some(mark) => Some(mark.store.0.lock().await),
+            Some(mark) => match tokio::time::timeout(deadline, mark.store.0.lock()).await {
+                Ok(guard) => Some(guard),
+                Err(_) => {
+                    first_failure.get_or_insert(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "grant decision record timed out waiting for its repeat check",
+                    ));
+                    continue;
+                }
+            },
             None => None,
         };
         let now = Instant::now();
@@ -278,8 +296,11 @@ async fn write_records(
             continue;
         }
         let (fields, envelope) = (note.fields.clone(), note.envelope());
+        let remaining = deadline.saturating_sub(started.elapsed());
         let written = logger
-            .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
+            .append_bounded_within(Some(remaining), move |log| {
+                log.append_event(fields, &envelope).map(|_| ())
+            })
             .await;
         match written {
             // Remembered only once written: a failed write suppresses nothing.
