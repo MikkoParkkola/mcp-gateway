@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use dashmap::DashMap;
-use reqwest::Client;
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
@@ -19,7 +18,6 @@ use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
-use crate::transport::websocket::WebSocketTransport;
 use crate::transport::{HttpTransport, StdioTransport, Transport, isolated_package_manager_env};
 use crate::{Error, Result};
 
@@ -167,6 +165,7 @@ impl Backend {
             stopped: std::sync::atomic::AtomicBool::new(false),
             budgets: super::ShutdownBudgets::default(),
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
+            destination: std::sync::OnceLock::new(),
         }
     }
 
@@ -392,13 +391,14 @@ impl Backend {
                 // Create OAuth client if configured
                 let oauth_client = self.create_oauth_client(http_url)?;
 
-                let transport = HttpTransport::new_with_oauth(
+                let transport = HttpTransport::with_destination(
                     http_url,
                     self.config.headers.clone(),
                     self.config.timeout,
                     *streamable_http,
                     oauth_client,
                     protocol_version.clone(),
+                    self.destination(),
                 )?;
                 // MIK-6735 fix 2: a per-user pool slot's transport serves
                 // exactly one caller identity for its whole lifetime, which
@@ -438,8 +438,7 @@ impl Backend {
                 ws_url,
                 protocol_version,
             } => {
-                let (headers, timeout) = (&self.config.headers, self.config.timeout);
-                WebSocketTransport::start(ws_url, headers, timeout, protocol_version.clone())
+                self.start_websocket(ws_url, protocol_version.clone())
                     .await?
             }
             #[cfg(feature = "a2a")]
@@ -522,11 +521,7 @@ impl Backend {
 
         info!(backend = %self.name, "Initializing OAuth client");
 
-        // Create HTTP client for OAuth requests
-        let http_client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| Error::OAuth(format!("Failed to create OAuth HTTP client: {e}")))?;
+        let http_client = crate::oauth::client::destination::http_client(self.destination())?;
 
         // Get or create token storage
         let storage = Arc::new(
@@ -535,7 +530,8 @@ impl Backend {
         );
 
         // Create OAuth client
-        let oauth = OAuthClient::new(
+        let oauth = OAuthClient::with_destination(
+            self.destination(),
             http_client,
             self.name.clone(),
             resource_url.to_string(),

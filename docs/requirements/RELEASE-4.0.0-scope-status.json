@@ -1069,11 +1069,15 @@
     },
     {
       "id": "GH1941.SIGN.1",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "PENDING 2026-09-29, one conjunct unmet. #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles for every binary, SBOM and SHA256SUMS.txt, verifies the downloaded DRAFT assets (.github/workflows/release.yml:432-434) and refuses uploads onto a published release (:357-361). The criterion also requires the job to re-check the PUBLISHED release afterwards; release.yml ends at `gh release edit --draft=false` (:440) with no post-publication download and verify, and no wiring test for one. Returns to met when that step and its wiring check land (#2402). #1941 was closed before this was noticed.\n\n--- prior note follows ---\nPending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        ".github/workflows/release.yml",
+        "scripts/release/test_check_tag_manifest.py",
+        "scripts/release/test_workflow_wiring_mutations.py"
+      ],
+      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-442, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
     },
     {
       "id": "GH1942.HARDEN.1",
@@ -1225,11 +1229,17 @@
     },
     {
       "id": "MIK-7581.DOCS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7581, operator 4.0 gating 2026-09-26). README.md:54 has a \"What's new in 4.0\" section; the badge, the release-notes and CHANGELOG lead, the multi-user guide lead-in and per-claim citations are not yet checked. Distinct from MIK-7570.DOCS.1 (team guide, runbook, upgrade guide, client matrix)."
+      "evidence": [
+        "README.md",
+        "CHANGELOG.md",
+        "docs/MULTI_USER.md",
+        "docs/release/4.0.0-beta.2-notes.md",
+        "docs/release/v4.0.0-release-notes-DRAFT.md"
+      ],
+      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file and test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
     },
     {
       "id": "GH2294.AUDIT.1",
@@ -1300,11 +1310,11 @@
     },
     {
       "id": "MIK-7217.SEARCH.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. The breaker half is tested (src/backend/tests.rs:1179, :1202, :1458, :1482); no test asserts gateway_search visibility of a modern-era backend. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
+      "evidence": ["tests/mik_7217_search_modern_visible.rs:247", "src/gateway/meta_mcp/era_gate_tests.rs:220"],
+      "note": "Met 2026-10-01 by #2528: a_2026_speaking_backend_is_visible_to_gateway_search_and_leaves_the_breaker_closed (tests/mik_7217_search_modern_visible.rs:247), green in CI run 36795559225 on 084810d9e. Mutant run 36798563070 (throwaway/mutants-2528): all 3 RED - startup forced to the legacy handshake (src/backend/lifecycle.rs:434), the modern arm of finish_startup handshaking (src/transport/http/mod.rs:843), and the discover probe skipped (src/backend/lifecycle.rs:423). Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md), which read PARTIAL: breaker half tested (src/backend/tests.rs:1179, :1202, :1458, :1482), search half untested. That audit missed the unit test at src/gateway/meta_mcp/era_gate_tests.rs:220 (MetaMcp over a stub transport whose era came from its discover answer). The new test is the end-to-end half: real HTTP startup against a peer that refuses initialize and ping, then gateway_search and gateway_search_tools through POST /mcp. Not covered: the warm-start path (src/gateway/server/warmstart.rs) is not driven here. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
     },
     {
       "id": "MIK-7217.CLAIMS.1",
@@ -1396,11 +1406,24 @@
     },
     {
       "id": "MIK-7272.LIFE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
+      "evidence": [
+        "src/gateway/server/tests/life1_stdio_cancel.rs:238",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:257",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:290",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:304",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:367",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:411",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:431",
+        "src/gateway/server/mod.rs:2543",
+        "src/gateway/server/mod.rs:2491",
+        "src/gateway/server/mod.rs:2659",
+        "src/gateway/server/stdio_dispatches.rs:28",
+        "src/gateway/server/stdio_channel.rs:106"
+      ],
+      "note": "Met 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
     },
     {
       "id": "MIK-7324.COV.3",
