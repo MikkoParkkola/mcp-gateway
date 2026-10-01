@@ -612,12 +612,17 @@ async fn r7_a_failed_write_under_best_effort_commits_the_result() {
             path,
         )
         .await;
-        let (failures, deliveries) = (fx.log.append_failures(), fx.deliveries());
+        // Counted when the fault is armed, past the submission's own writes.
+        let armed = std::cell::Cell::new((0, 0));
         // One append fails: the first one after the terminal answer, which is
         // the settlement record. The read's delivery event after it is written.
         let (_, fetched) = fx
-            .settle(path, |fx| fx.log.fail_next_append_for_test())
+            .settle(path, |fx| {
+                armed.set((fx.log.append_failures(), fx.deliveries()));
+                fx.log.fail_next_append_for_test();
+            })
             .await;
+        let (failures, deliveries) = armed.get();
         std::assert_eq!(status_of(&fetched), "completed", "{path:?}: {fetched}");
         std::assert_eq!(
             fx.log.append_failures(),
