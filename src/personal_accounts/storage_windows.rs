@@ -26,7 +26,8 @@ pub(super) fn private_directory(path: &Path) -> Result<crate::fs_lock::DirPin, A
         return Err(AccountError::InvalidConfiguration);
     }
     private_fs::judge_dir(&dir, path).map_err(|reason| {
-        tracing::warn!(?reason, path = %path.display(), "account store directory is not private");
+        let shown_path = path.display();
+        tracing::warn!(?reason, path = %shown_path, "account store directory is not private");
         AccountError::InvalidConfiguration
     })?;
     Ok(crate::fs_lock::DirPin(dir))

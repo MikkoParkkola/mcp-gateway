@@ -18,6 +18,13 @@ event was emitted. Those argument lines are excluded, but only when the
 macro's head line has a non-zero count (the call was reached); every excluded
 line is printed with its head count so the exclusion can be audited.
 
+A call (or any non-plain argument) on a macro's head line
+(`debug!(url = %clean(x), ..)`) is the reverse case: it shares the head line, so the head's count says the
+macro was reached, not that the call ran. Such a head line is graded as missed
+whatever its count and listed as unverifiable (MIK-7725), so the rule can fail
+spuriously but never pass an unrun call. Compute the value into a local before
+the macro and pass the local.
+
 Exit status: 0 when every Critical row clears the floor, 1 otherwise. A row
 whose function is gone, or that no given report measured, fails.
 """
@@ -66,6 +73,91 @@ _VALUE = r"(?:" + _PATH + r'|""|\'\'|-?\d[\w.]*)'
 PLAIN_FIELD = re.compile(
     r"^(?:[A-Za-z_][\w.]*\s*=\s*)?[%?]?" + _VALUE + r"\s*,$"
 )
+
+
+# A head line is verifiable only when the WHOLE line has one plain shape:
+# indent, an optional `tracing::` path, a level macro and `!(`, then
+# comma-separated plain items (a quote-free string literal, `name = [%|?]value`,
+# or a bare `[%|?]value`, where a value is an identifier path or a number), an
+# optional trailing comma, and an optional `)` and `;`. Any other line holding a
+# tracing macro name is unverifiable: a second statement, a char literal, a raw
+# string, a comment, another delimiter, a call. One anchored match, no
+# stripping or parsing, so there is no preprocessing step to fool. Spurious
+# fails are possible; an unrun call passing is not.
+_LEVELS = ("trace", "debug", "info", "warn", "error", "event", "span")
+# A head-line value is an identifier or `::` path, or a numeric literal. No `.`:
+# a field access can run user Deref code, which this line's count cannot vouch
+# for. (The argument-line rule above keeps its own, separately ruled whitelist.)
+_HEAD_PATH = r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*"
+_NUMBER = r"-?\d[\d_]*(?:\.\d[\d_]*)?(?:[iuf](?:8|16|32|64|128|size))?"
+_ITEM_VALUE = r"[%?]?(?:" + _HEAD_PATH + r"|" + _NUMBER + r")"
+_ITEM = r'(?:"[^"\\]*"|[A-Za-z_]\w*\s*=\s*' + _ITEM_VALUE + r"|" + _ITEM_VALUE + r")"
+PLAIN_HEAD = re.compile(
+    r"^\s*(?:(?:::)?tracing::)?(?:trace|debug|info|warn|error|event)!\(\s*"
+    r"(?:" + _ITEM + r"(?:\s*,\s*" + _ITEM + r")*\s*,?)?"
+    r"\s*(?:\)\s*;?)?\s*$"
+)
+TRACING_NAME = re.compile(
+    r"(?<!\w)(?:" + "|".join(_LEVELS) + r")\s*(?:/\*.*?\*/\s*)*!"
+)
+# The head-line rule recognises a tracing macro by its name. Two things could
+# hide one under another name, and neither is parsed (parsing is what kept
+# leaking):
+# - A renaming `use` of a tracing item: the grade fails closed (INDIRECT) on
+#   any `use` that mentions tracing and holds `as` not followed by `_`.
+# - A `macro_rules!` wrapper: every macro defined in `src/` is treated as a
+#   possible tracing macro, so a line invoking one in a Critical function is
+#   unverifiable (only a level macro can match PLAIN_HEAD).
+_GAP = r"(?:\s|/\*.*?\*/|//[^\n]*\n)*"
+_USE_STATEMENT = re.compile(r"(?<!\w)use\b[^;]*;", re.S)
+_RENAMING = re.compile(r"\bas\b(?!\s*_(?!\w))")
+_MACRO_DEF = re.compile(r"(?<!\w)macro_rules" + _GAP + r"!" + _GAP + r"(?:r#)?(\w+)", re.S)
+
+
+def tracing_indirections(root):
+    """`file: what` for each renaming `use` of a tracing item in `src/`."""
+    found = []
+    for path in sorted((Path(root) / "src").rglob("*.rs")):
+        for use in _USE_STATEMENT.findall(path.read_text()):
+            if "tracing" in use and _RENAMING.search(use):
+                found.append(f"{path.relative_to(root).as_posix()}: renaming use of a tracing item")
+    return found
+
+
+# Macros known not to log, so a line invoking only these is graded by its count.
+# Any other macro (a level macro, a local `macro_rules!`, or one from a crate
+# that might wrap tracing) puts the line under PLAIN_HEAD. A local definition
+# that shadows one of these names takes it off the list.
+SAFE_MACROS = frozenset({
+    "assert", "assert_eq", "assert_ne", "concat", "debug_assert", "debug_assert_eq",
+    "debug_assert_ne", "env", "eprintln", "format", "format_args", "include_str",
+    "json", "matches", "panic", "print", "println", "stringify", "unimplemented",
+    "unreachable", "vec", "write", "writeln", "counter",
+})
+# `if !(..)`, `return !(..)`: a keyword before `!` is a negation, not a macro.
+_KEYWORDS = frozenset({
+    "if", "else", "while", "match", "return", "in", "let", "for", "loop", "move",
+    "break", "continue", "as", "mut", "ref", "await", "async", "unsafe", "yield",
+})
+_ANY_MACRO = re.compile(r"(?<![\w])(?:r#)?(\w+)" + _GAP + r"!" + _GAP + r"[(\[{]", re.S)
+
+
+def macro_names(root):
+    """The macro names a line may invoke and still be graded by its count:
+    SAFE_MACROS minus any name a `macro_rules!` in `src/` defines."""
+    local = set()
+    for path in (Path(root) / "src").rglob("*.rs"):
+        local.update(_MACRO_DEF.findall(path.read_text()))
+    return SAFE_MACROS - local
+
+
+def head_has_call(raw, safe=SAFE_MACROS):
+    """True when this raw source line invokes a macro outside `safe` (or names
+    a tracing level) but is not, as a whole, a plain head line (see above)."""
+    unsafe = TRACING_NAME.search(raw) or any(
+        name not in safe and name not in _KEYWORDS for name in _ANY_MACRO.findall(raw)
+    )
+    return bool(unsafe) and not PLAIN_HEAD.match(raw)
 
 
 def is_plain_field(code):
@@ -155,7 +247,11 @@ def read_inventory(path):
 
 def grade(root, inventory, lcovs):
     hits = read_lcov(lcovs, root)
-    results = []
+    names = macro_names(root)
+    results = [
+        ("INDIRECT", {"path": what.split(":", 1)[0], "fn": what.split(": ", 1)[1], "occurrence": "-"}, None, None, [])
+        for what in tracing_indirections(root)
+    ]
     for row in read_inventory(inventory):
         if row["tier"] != "critical":
             continue
@@ -170,9 +266,14 @@ def grade(root, inventory, lcovs):
         if not counts:
             results.append(("UNMEASURED", row, lo, hi, []))
             continue
+        unverifiable = []
+        for n in range(lo, hi + 1):
+            if n in counts and head_has_call(lines[n - 1], names):
+                unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
+                counts[n] = 0
         excluded = []
         for head, arguments in macro_argument_lines(lines, lo, hi):
-            if counts.get(head, 0) > 0:
+            if hits[row["path"]].get(head, 0) > 0:
                 for n in arguments:
                     if n in counts and counts[n] == 0:
                         del counts[n]
@@ -181,7 +282,7 @@ def grade(root, inventory, lcovs):
         missed = sorted(n for n, c in counts.items() if c == 0)
         pct = 100.0 * covered / len(counts)
         status = "ok" if pct >= FLOOR else "BELOW"
-        results.append((status, row, lo, hi, missed, covered, len(counts), pct, excluded))
+        results.append((status, row, lo, hi, missed, covered, len(counts), pct, excluded, unverifiable))
     return results
 
 
@@ -197,10 +298,12 @@ def main(argv=None):
         status, row = result[0], result[1]
         where = f"{row['path']}:{row['fn']}#{row['occurrence']}"
         if status in ("ok", "BELOW"):
-            _, _, lo, hi, missed, covered, total, pct, excluded = result
+            _, _, lo, hi, missed, covered, total, pct, excluded, unverifiable = result
             print(f"{status}\t{pct:6.2f}%\t{covered}/{total}\t{where}\tlines {lo}-{hi}\tmissed={missed}")
             for line in excluded:
                 print(f"  excluded tracing argument line {line}")
+            for line in unverifiable:
+                print(f"  unverifiable tracing head line {line}: graded missed")
             failed += status == "BELOW"
         else:
             print(f"{status}\t-\t-\t{where}")
