@@ -3,7 +3,8 @@
 //! `gateway_search_tools` matches a query against the serving backend's name.
 use super::*;
 
-/// A backend whose name appears in none of its tools' names or descriptions.
+/// The backend under test. Only `codesearch_index` carries this name itself;
+/// every other tool can match it through the serving backend alone.
 const BACKEND: &str = "codesearch";
 
 async fn named_meta(caps: &[(&str, &str)], registry: ProfileRegistry) -> (MetaMcp, Vec<TempDir>) {
@@ -33,8 +34,11 @@ fn profile(deny: Option<Vec<String>>) -> ProfileRegistry {
 
 #[tokio::test]
 async fn a_query_naming_the_backend_finds_its_tools() {
-    let (meta, _dirs) =
-        named_meta(&[("lookup_snippet", "returns exact snippets")], profile(None)).await;
+    let (meta, _dirs) = named_meta(
+        &[("lookup_snippet", "returns exact snippets")],
+        profile(None),
+    )
+    .await;
     let response = meta
         .search_tools_anon(&json!({ "query": BACKEND }), None)
         .await
