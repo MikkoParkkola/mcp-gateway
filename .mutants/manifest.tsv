@@ -1,0 +1,4 @@
+head_sha	08ed9dd867bb1fac2e8b7b952851aee359c59ca5
+# PR 2615 issuer redaction
+AUD	linux	aud.patch	--lib config::features::key_server::tests::issuer_refusals_echo_only_the_origin -- --exact
+CLEAR	linux	clear.patch	--lib config::features::key_server::tests::issuer_refusals_echo_only_the_origin -- --exact

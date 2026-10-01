@@ -1,0 +1,13 @@
+diff --git a/src/config/features/key_server.rs b/src/config/features/key_server.rs
+index 89ebe6baf..5aa6cf7ff 100644
+--- a/src/config/features/key_server.rs
++++ b/src/config/features/key_server.rs
+@@ -171,7 +171,7 @@ impl KeyServerConfig {
+                     "key_server.oidc[{idx}] (issuer '{}') must declare at least one non-empty \
+                      audience; an empty `audiences` list accepts a token minted for any client \
+                      (audience-confusion, MIK-6784)",
+-                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
++                    provider.issuer
+                 )));
+             }
+             // MIK-7704: discovery and keys come from these URLs; over cleartext

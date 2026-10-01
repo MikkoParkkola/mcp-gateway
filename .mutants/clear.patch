@@ -1,0 +1,13 @@
+diff --git a/src/config/features/key_server.rs b/src/config/features/key_server.rs
+index 89ebe6baf..c9f895390 100644
+--- a/src/config/features/key_server.rs
++++ b/src/config/features/key_server.rs
+@@ -180,7 +180,7 @@ impl KeyServerConfig {
+                 return Err(Error::ConfigValidation(format!(
+                     "key_server.oidc[{idx}] issuer '{}' is non-HTTPS and off this machine; \
+                      use https://, or http:// only to a loopback host",
+-                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
++                    provider.issuer
+                 )));
+             }
+             for (field, url) in [
