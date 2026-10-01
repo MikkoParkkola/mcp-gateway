@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/upstream.rs b/src/gateway/meta_mcp/upstream.rs
+index 80be8d44f..4fe10fbbb 100644
+--- a/src/gateway/meta_mcp/upstream.rs
++++ b/src/gateway/meta_mcp/upstream.rs
+@@ -316,7 +316,6 @@ impl UpstreamSubmission {
+             let mut slot = self.handle.lock();
+             if slot.is_none() {
+                 *slot = Some(handle.to_owned());
+-                super::invoke::audit::note_upstream_task(&self.task_id);
+             }
+         }
+     }

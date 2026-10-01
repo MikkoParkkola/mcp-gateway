@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 815c98fc3..25c6aa2f1 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -477,7 +477,7 @@ impl MetaMcp {
+             trace_id: Some(task.id.to_string()),
+             otel_trace_id: None,
+             outcome: notes.settled_outcome(outcome),
+-            who: AuditWho::from_actor_id(principal),
++            who: AuditWho::from_actor_id(&format!("{principal}x")),
+         };
+         let response_hash = result.as_ref().ok().map(sha256_of);
+         let request_hash = sha256_of(&serde_json::json!({ "task_id": task.id }));

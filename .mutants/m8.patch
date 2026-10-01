@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 815c98fc3..833c778ae 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -472,7 +472,7 @@ impl MetaMcp {
+         let Some(outcome) = AuditOutcome::from_result(&result) else {
+             return proposed;
+         };
+-        let attribution = notes.attribution(self, BTreeSet::new(), result.as_ref().ok());
++        let attribution = Map::new();
+         let envelope = AuditEnvelope {
+             trace_id: Some(task.id.to_string()),
+             otel_trace_id: None,

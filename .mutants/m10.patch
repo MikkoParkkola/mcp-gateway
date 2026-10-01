@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 815c98fc3..9fd490eec 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -170,7 +170,7 @@ impl DispatchNotes {
+     fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
+         match (self.outcome(outcome), self.refusal) {
+             (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
+-                AuditOutcome::Denied(code)
++                AuditOutcome::Error(code)
+             }
+             (AuditOutcome::Error(code), Some(AuditOutcome::Invalid(_))) => {
+                 AuditOutcome::Invalid(code)

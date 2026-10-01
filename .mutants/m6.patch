@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_attributed.rs b/src/security/transparency_log_attributed.rs
+index 56a4a060b..08643faf9 100644
+--- a/src/security/transparency_log_attributed.rs
++++ b/src/security/transparency_log_attributed.rs
+@@ -23,7 +23,7 @@ pub(crate) const MAX_RECORDED_TENANTS: usize = 1024;
+ /// The `route` of a settlement record ([`TransparencyLogger::log_task_settlement`]).
+ const TASK_RECOVERY_ROUTE: &str = "task_recovery";
+ /// Its `correlation_source`: the `session_id` field holds the gateway task id.
+-const TASK_ID_CORRELATION: &str = "task_id";
++const TASK_ID_CORRELATION: &str = "trace_id";
+ 
+ /// What an invocation entry says about the call, beside the hashes.
+ struct Record<'a> {

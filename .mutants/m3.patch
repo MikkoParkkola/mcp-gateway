@@ -1,0 +1,18 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 815c98fc3..bf610aa96 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -504,12 +504,7 @@ impl MetaMcp {
+             Ok(()) => proposed,
+             Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
+                 tracing::error!(server, tool, task_id, %error, "settlement audit write failed; result withheld");
+-                let withheld = Error::AuditUnavailable;
+-                TaskTransition::Fail(crate::protocol::JsonRpcError {
+-                    code: withheld.to_rpc_code(),
+-                    message: withheld.to_string(),
+-                    data: None,
+-                })
++                proposed
+             }
+             Err(error) => {
+                 tracing::warn!(server, tool, task_id, %error, "settlement audit write failed (non-fatal)");

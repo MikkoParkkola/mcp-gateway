@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/upstream.rs b/src/gateway/task_service/execution/upstream.rs
+index 0f804442c..3507ba2fd 100644
+--- a/src/gateway/task_service/execution/upstream.rs
++++ b/src/gateway/task_service/execution/upstream.rs
+@@ -306,7 +306,7 @@ impl TaskExecutor {
+         // is recorded before its result is stored. A writer that lands
+         // meanwhile wins the revision below; the record then stands for a
+         // recovery that did not land.
+-        let event = settle(event, notes).await;
++        drop((settle, notes));
+         match self
+             .commit(TaskWrite::Recover {
+                 owner_digest,

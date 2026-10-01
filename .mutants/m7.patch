@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 815c98fc3..be8729cc7 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -480,7 +480,7 @@ impl MetaMcp {
+             who: AuditWho::from_actor_id(principal),
+         };
+         let response_hash = result.as_ref().ok().map(sha256_of);
+-        let request_hash = sha256_of(&serde_json::json!({ "task_id": task.id }));
++        let request_hash = sha256_of(&serde_json::json!({ "id": task.id }));
+         let (id, server, tool) = (
+             task.id.to_owned(),
+             task.server.to_owned(),

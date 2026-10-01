@@ -1,0 +1,13 @@
+head_sha	045098e5f4b213c616c355ac2d6b237eb0291132
+# batch 1 for #2545 on the head above (MIN.1 gap 1 settlement record)
+M1	linux	m1.patch	--lib -- settlement_record::r1_a_recovered_result_writes_one_settlement_record
+M2	linux	m2.patch	--lib -- settlement_record::r2_an_owner_read_names_the_admission_principal_not_the_reader
+M3	linux	m3.patch	--lib -- settlement_record::r6_a_failed_write_under_fail_closed_withholds_the_result
+M4	linux	m4.patch	--lib -- settlement_record::r9_the_submission_record_carries_the_task_id
+M5	linux	m5.patch	--lib -- settlement_record::r2_an_owner_read_names_the_admission_principal_not_the_reader
+M6	linux	m6.patch	--lib -- settlement_record::r1_a_recovered_result_writes_one_settlement_record
+M7	linux	m7.patch	--lib -- settlement_record::r1_a_recovered_result_writes_one_settlement_record
+M8	linux	m8.patch	--lib -- settlement_record::r1_a_recovered_result_writes_one_settlement_record
+M9	linux	m9.patch	--lib -- settlement_tests::a_failed_best_effort_settlement_write_is_counted
+M10	linux	m10.patch	--lib -- settlement_tests::a_refused_settlement_keeps_the_refusal_class
+M11	linux	m11.patch	--lib -- settlement_tests::recover_task_result_notes_its_refusal

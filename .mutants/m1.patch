@@ -1,0 +1,16 @@
+diff --git a/src/gateway/task_service/execution/worker.rs b/src/gateway/task_service/execution/worker.rs
+index e95adcc71..d2d9cd455 100644
+--- a/src/gateway/task_service/execution/worker.rs
++++ b/src/gateway/task_service/execution/worker.rs
+@@ -389,10 +389,7 @@ async fn follow_upstream_job(
+             tool: &job.tool,
+             id,
+         };
+-        let event = state
+-            .meta_mcp()
+-            .audit_settlement(task, event, &notes, principal)
+-            .await;
++        let _ = (task, &notes);
+         executor.settle_cas(principal, id, revision, event).await;
+     }
+     lease.release(executor, id).await;

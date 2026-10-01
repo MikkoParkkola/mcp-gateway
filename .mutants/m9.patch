@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 815c98fc3..3c339b9d8 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -513,8 +513,6 @@ impl MetaMcp {
+             }
+             Err(error) => {
+                 tracing::warn!(server, tool, task_id, %error, "settlement audit write failed (non-fatal)");
+-                telemetry_metrics::counter!("mcp_audit_settlement_write_failures_total")
+-                    .increment(1);
+                 proposed
+             }
+         }
