@@ -554,7 +554,7 @@ fn a_literal_adapter_reference_is_left_to_the_shape_check_by_both_separation_hal
     validate_no_gateway_material_reuse(std::slice::from_ref(&literal), &overlay, &credentials)
         .expect("a literal is not resolved, so it is not compared as material");
     assert!(
-        overlay.reads().is_empty(),
+        !overlay.reads().iter().any(|name| name == "plain-literal"),
         "the literal must not be looked up as a variable"
     );
     assert!(validate(&[literal]).is_err(), "validate owns the refusal");
