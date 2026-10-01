@@ -1,0 +1,16 @@
+diff --git a/src/gateway/server/stdio_dispatches.rs b/src/gateway/server/stdio_dispatches.rs
+index 5eff558c9..07bd83baf 100644
+--- a/src/gateway/server/stdio_dispatches.rs
++++ b/src/gateway/server/stdio_dispatches.rs
+@@ -131,8 +131,9 @@ impl StdioDispatches {
+             }
+         }
+         let mut marks = self.cancelled.0.lock();
+-        marks.cancelled.remove(&task);
+-        marks.answered.remove(&task);
++        let _ = task;
++        marks.cancelled.clear();
++        marks.answered.clear();
+         drop(marks);
+         Some(joined.map(|_| ()))
+     }

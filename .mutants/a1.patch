@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_dispatches.rs b/src/gateway/server/stdio_dispatches.rs
+index 5eff558c9..74eca4494 100644
+--- a/src/gateway/server/stdio_dispatches.rs
++++ b/src/gateway/server/stdio_dispatches.rs
+@@ -86,7 +86,7 @@ impl StdioDispatches {
+             Entry::Occupied(mut entry) => {
+                 let marks = self.cancelled.0.lock();
+                 let (old, _) = entry.get();
+-                if marks.answered.contains(old) || marks.cancelled.contains(old) {
++                if false {
+                     drop(marks);
+                     self.by_task.insert(handle.id(), entry.key().clone());
+                     entry.insert((handle.id(), handle));

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_dispatches.rs b/src/gateway/server/stdio_dispatches.rs
+index 5eff558c9..1ebcf8d2d 100644
+--- a/src/gateway/server/stdio_dispatches.rs
++++ b/src/gateway/server/stdio_dispatches.rs
+@@ -43,7 +43,7 @@ impl Cancelled {
+         frame: Value,
+     ) {
+         let mut marks = self.0.lock();
+-        let task = tokio::task::try_id();
++        let task = tokio::task::try_id().filter(|_| false);
+         if !task.is_some_and(|task| marks.cancelled.contains(&task)) {
+             permit.send(frame);
+         }
