@@ -44,6 +44,17 @@ fn params(url: &str, secret: &str, arguments: Value) -> Value {
     params
 }
 
+/// The method's own result: the transport stamps every modern result with
+/// `resultType` and `_meta.serverInfo`, which are not the method's answer.
+fn bare(answer: &Value) -> Value {
+    let mut result = answer["result"].clone();
+    if let Some(map) = result.as_object_mut() {
+        map.remove("resultType");
+        map.remove("_meta");
+    }
+    result
+}
+
 fn subs_on_disk(root: &Path) -> usize {
     std::fs::read_dir(root.join("events/subs")).map_or(0, |d| d.flatten().count())
 }
@@ -412,7 +423,7 @@ async fn unsubscribe_is_idempotent_and_scoped_to_the_caller() {
         let answer = gw
             .rpc(Some(caller), "events/unsubscribe", by_id.clone())
             .await;
-        assert_eq!(answer["result"], json!({}), "{answer}");
+        assert_eq!(bare(&answer), json!({}), "{answer}");
         assert_eq!(
             subs_on_disk(root.path()),
             1,
@@ -421,7 +432,7 @@ async fn unsubscribe_is_idempotent_and_scoped_to_the_caller() {
     }
     for _ in 0..2 {
         let answer = gw.rpc(Some(ALICE), "events/unsubscribe", key.clone()).await;
-        assert_eq!(answer["result"], json!({}), "{answer}");
+        assert_eq!(bare(&answer), json!({}), "{answer}");
     }
     assert_eq!(subs_on_disk(root.path()), 0);
 }
@@ -553,7 +564,7 @@ async fn verification_lives_as_long_as_its_subscriptions() {
                     json!({"name": EVENT, "arguments": {}, "delivery": {"url": url}}),
                 )
                 .await;
-            assert_eq!(u["result"], json!({}), "{u}");
+            assert_eq!(bare(&u), json!({}), "{u}");
         }
     };
     let challenges = || rx.challenges().len();

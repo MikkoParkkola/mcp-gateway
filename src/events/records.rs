@@ -174,7 +174,14 @@ pub(crate) fn write_record<T: Serialize>(
 pub(crate) fn remove_record(dir: &Path, name: &str) -> std::io::Result<()> {
     match std::fs::remove_file(dir.join(name)) {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
-        _ => sync_dir(dir),
+        // Unlinked: memory must follow, so a failed sync is logged, not
+        // returned as though the record were still there.
+        _ => {
+            if let Err(error) = sync_dir(dir) {
+                tracing::warn!(%error, dir = %dir.display(), "events store: directory sync failed after unlink");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -189,15 +196,18 @@ pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(Pat
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let parsed = std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .filter(|v| {
-                v.get("v")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|v| v <= u64::from(MAX_LOADABLE_VERSION))
-            })
-            .and_then(|v| serde_json::from_value::<T>(v).ok());
+        // Mode-checked on the handle it is read from: a subscription file
+        // holds a secret, so a loosened or foreign-owned one is refused.
+        let parsed =
+            crate::config::read_checked_bytes(&path, crate::config::CheckedFile::EventsRecord)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                .filter(|v| {
+                    v.get("v")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|v| v <= u64::from(MAX_LOADABLE_VERSION))
+                })
+                .and_then(|v| serde_json::from_value::<T>(v).ok());
         if let Some(record) = parsed {
             records.push((path, record));
         } else {

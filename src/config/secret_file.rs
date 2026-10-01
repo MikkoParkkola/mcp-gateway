@@ -31,6 +31,8 @@ pub(crate) enum SecretFile {
     TlsKey,
     /// An OAuth token file under `~/.mcp-gateway/oauth/`.
     OAuthToken,
+    /// An MCP Events store record (a subscription holds its `whsec` secret).
+    EventsRecord,
     /// A capability `file:/path.json:field` credential.
     CredentialFile,
     /// `mtls.server_cert` or `mtls.ca_cert`.
@@ -69,6 +71,7 @@ impl SecretFile {
             Self::Reference => "secret file",
             Self::TlsKey => "TLS private key",
             Self::OAuthToken => "OAuth token file",
+            Self::EventsRecord => "events store record",
             Self::CredentialFile => "credential file",
             Self::TlsCert => "TLS certificate",
             Self::TlsCrl => "certificate revocation list",
@@ -445,6 +448,8 @@ pub(crate) enum CheckedFile {
     TlsCrl,
     /// An OAuth token file.
     OAuthToken,
+    /// An MCP Events store record.
+    EventsRecord,
     /// A capability `file:/path.json:field` credential.
     CredentialFile,
     /// The identity-grants file.
@@ -478,6 +483,7 @@ fn checked_class(what: CheckedFile) -> SecretFile {
         CheckedFile::TlsCert => SecretFile::TlsCert,
         CheckedFile::TlsCrl => SecretFile::TlsCrl,
         CheckedFile::OAuthToken => SecretFile::OAuthToken,
+        CheckedFile::EventsRecord => SecretFile::EventsRecord,
         CheckedFile::CredentialFile => SecretFile::CredentialFile,
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,

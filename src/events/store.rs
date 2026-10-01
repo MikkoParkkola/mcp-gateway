@@ -291,14 +291,16 @@ impl Store {
                 // Not put in place (the previous row, if any, is intact): put
                 // the verification back as it was, so a failed commit neither
                 // leaves an extra record nor resets a tail.
+                // Memory follows the disk: it changes only where the
+                // restore reached it.
                 let restored = if let Some(prior) = prior {
-                    let restored = write_record(&self.verified_dir, &key, &prior).map(|_| ());
-                    state.verified.insert(key, prior);
-                    restored
+                    write_record(&self.verified_dir, &key, &prior).map(|_| {
+                        state.verified.insert(key, prior);
+                    })
                 } else {
-                    let restored = remove_record(&self.verified_dir, &key);
-                    state.verified.remove(&key);
-                    restored
+                    remove_record(&self.verified_dir, &key).map(|()| {
+                        state.verified.remove(&key);
+                    })
                 };
                 if let Err(restore) = restored {
                     tracing::warn!(%restore, "events store: verification rollback failed");
