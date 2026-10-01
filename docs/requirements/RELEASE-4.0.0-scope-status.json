@@ -1330,11 +1330,16 @@
     },
     {
       "id": "MIK-7217.STDIO.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). CAVEAT on MET baseline rows DISCOVER.1a/1b: the stdio arm calls discover_document(false) unconditionally (src/gateway/server/mod.rs:2946). README states stdio discover lists only the handshake revisions; documentation alone does not close this row."
+      "evidence": [
+        "src/gateway/server/tests/stdio1_discover_versions.rs:68",
+        "src/gateway/server/tests/stdio1_discover_versions.rs:76",
+        "src/gateway/server/mod.rs:2315",
+        "src/gateway/server/mod.rs:2993"
+      ],
+      "note": "Met 2026-10-01 (#2549, squash d09c3d0db). The stdio arm now passes server.modern_protocol, read once at stdio start (src/gateway/server/mod.rs:2315), to discover_document (:2993), so the caveat below is closed. Exact-version tests over run_stdio_on: modern on lists the legacy revisions then 2026-07-28 (src/gateway/server/tests/stdio1_discover_versions.rs:68), modern off lists exactly the legacy revisions (src/gateway/server/tests/stdio1_discover_versions.rs:76). S1 was red on the pre-fix code (CI run 36818921264: the four legacy versions, no 2026-07-28), the only failure in that run. Mutants D1 (the arm passes false) and D2 (passes true) RED on the final head (run 36831018875). Two code-review seats SHIP. CI green on 5617bdd69, Windows included; feature combinations run 36831057212. The README, the release-notes draft and the CHANGELOG highlights no longer state the limitation.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). CAVEAT on MET baseline rows DISCOVER.1a/1b: the stdio arm calls discover_document(false) unconditionally (src/gateway/server/mod.rs:2946). README states stdio discover lists only the handshake revisions; documentation alone does not close this row."
     },
     {
       "id": "MIK-7272.OWNER.1",
@@ -1423,24 +1428,30 @@
     },
     {
       "id": "MIK-7272.LIFE.1",
-      "status": "pending",
-      "stage": "graded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "src/gateway/server/tests/life1_stdio_cancel.rs:238",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:257",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:290",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:304",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:367",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:411",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:431",
-        "src/gateway/server/mod.rs:2543",
-        "src/gateway/server/mod.rs:2491",
-        "src/gateway/server/mod.rs:2659",
-        "src/gateway/server/stdio_dispatches.rs:28",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:241",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:260",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:293",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:307",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:370",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:414",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:434",
+        "src/gateway/server/tests/stdio_reused_id.rs:44",
+        "src/gateway/server/tests/stdio_reused_id.rs:69",
+        "src/gateway/server/tests/stdio_reused_id.rs:96",
+        "src/gateway/server/tests/stdio_reused_id.rs:130",
+        "src/gateway/server/tests/stdio_reused_id.rs:151",
+        "src/gateway/server/mod.rs:2528",
+        "src/gateway/server/mod.rs:2534",
+        "src/gateway/server/mod.rs:2667",
+        "src/gateway/server/stdio_dispatches.rs:39",
+        "src/gateway/server/stdio_dispatches.rs:78",
         "src/gateway/server/stdio_channel.rs:106"
       ],
-      "note": "Reopened 2026-10-01 (GH1625.BOTREVIEW.1 sweep): an automated review on #2519 (https://github.com/MikkoParkkola/mcp-gateway/pull/2519#discussion_r4150902099, codex P1) holds at source. A client may reuse a request id once its answer is out, but the answered dispatch is mapped until the serve loop reaps it: StdioDispatches::spawn keeps the old mapping for the reused id (src/gateway/server/stdio_dispatches.rs:65-75), so a cancel aborts the finished task and the new call runs on, and a late cancel for the answered id also silences the next call that reuses it. A cancel that does not release the call it names fails clause (1), so the grade was wrong. Fix: #2557. Re-graded when it merges.\n\n--- prior note follows ---\nMet 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
+      "note": "Met again 2026-10-01 (#2557, squash f51c8de54). The defect the reopen names is fixed at source: dispatch marks (cancelled, answered) are keyed by task, not request id (src/gateway/server/stdio_dispatches.rs:23-50); spawn remaps an id whose dispatch has answered or was cancelled (:78-100), so a cancel for a reused id reaches the call it names; join_next clears only the reaped task's marks and keeps a remapped id mapped (:116-140). Five tests drive the window directly (src/gateway/server/tests/stdio_reused_id.rs:44, :69, :96, :130, :151); the first two were red on the pre-fix code for the stated reasons and were the only failures. Mutants A1-A6 RED on the final head (run 36834861091): no remap, answered never marked, every mark cleared on join, remap only on answered, no task id, and the reap's ownership check dropped. Two code-review seats (SHIP; SHIP-WITH-FIXES, its test suggestion taken). CI and feature combinations (run 36834861320) green on 0bd8a1047, Windows included. Clauses (1)-(3) as graded before, now on the current lines: the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2528-2534) and the original rows stand at src/gateway/server/tests/life1_stdio_cancel.rs:241, :260, :293, :307, :370, :414 and :434.\n\n--- prior note follows ---\nReopened 2026-10-01 (GH1625.BOTREVIEW.1 sweep): an automated review on #2519 (https://github.com/MikkoParkkola/mcp-gateway/pull/2519#discussion_r4150902099, codex P1) holds at source. A client may reuse a request id once its answer is out, but the answered dispatch is mapped until the serve loop reaps it: StdioDispatches::spawn keeps the old mapping for the reused id (src/gateway/server/stdio_dispatches.rs:65-75), so a cancel aborts the finished task and the new call runs on, and a late cancel for the answered id also silences the next call that reuses it. A cancel that does not release the call it names fails clause (1), so the grade was wrong. Fix: #2557. Re-graded when it merges.\n\n--- prior note follows ---\nMet 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
     },
     {
       "id": "MIK-7324.COV.3",
