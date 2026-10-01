@@ -174,6 +174,30 @@ impl KeyServerConfig {
                     provider.issuer
                 )));
             }
+            // MIK-7704: discovery and keys come from these URLs; over cleartext
+            // anyone on the path can swap the keys and mint accepted tokens.
+            if crate::key_server::oidc::issuer_is_cleartext(&provider.issuer) {
+                return Err(Error::ConfigValidation(format!(
+                    "key_server.oidc[{idx}] issuer '{}' is non-HTTPS and off this machine; \
+                     use https://, or http:// only to a loopback host",
+                    provider.issuer
+                )));
+            }
+            for (field, url) in [
+                ("jwks_uri", &provider.jwks_uri),
+                ("discovery_url", &provider.discovery_url),
+            ] {
+                // The URL is not echoed: an operator-written one may carry a query.
+                if url
+                    .as_deref()
+                    .is_some_and(|u| !crate::key_server::oidc::is_secure_fetch_url(u))
+                {
+                    return Err(Error::ConfigValidation(format!(
+                        "key_server.oidc[{idx}].{field} is non-HTTPS and off this machine; \
+                         use https://, or http:// only to a loopback host"
+                    )));
+                }
+            }
         }
         for (idx, policy) in self.policies.iter().enumerate() {
             self.validate_policy_match(idx, &policy.match_criteria)?;

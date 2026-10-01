@@ -139,6 +139,7 @@ backend" and "fails a capability file" first.**
 | 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result whose nonce was admitted, on `/mcp` and `/mcp/{backend}`, is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]` (answers given before admission are unsigned); a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 | 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
+| 115 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3264,6 +3265,31 @@ New key `security.hardened.private_backends: [backend names]`, default empty, re
 
 **Action:** to adopt `hardened` with a local or in-cluster HTTP backend, add its name to
 `security.hardened.private_backends`. List only the backends that need it.
+
+## 115. Key-server OIDC URLs must be HTTPS off this machine
+
+**Startup:** refuses to start, only when a `key_server.oidc` issuer, `jwks_uri` or `discovery_url` is `http://` to a host that is not loopback
+
+The gateway fetches each provider's discovery document and signing keys from these URLs. Over
+cleartext, anyone on the path can swap the keys and mint tokens the key server accepts. The
+issuer check only logged a warning; it now refuses.
+
+- `key_server.oidc[N] issuer '...' is non-HTTPS and off this machine` (or
+  `key_server.oidc[N].jwks_uri` / `.discovery_url`) at load. The `jwks_uri` and
+  `discovery_url` are not echoed.
+- A token whose `iss` names such an issuer is refused at verification too.
+- An https issuer's discovery document that names an `http://` `jwks_uri`, loopback included,
+  is refused, as before.
+- `http://` to `localhost`, `127.0.0.0/8` or `::1` is allowed, as for backend credentials. It
+  was refused at fetch time before, so a loopback `jwks_uri` such as the one in
+  `examples/token-exchange-live.yaml` now works. A loopback issuer's discovery document may
+  name a loopback `jwks_uri`.
+- An issuer that is not a URL (the gateway's own `mcp-gateway`) is unaffected; only its
+  explicit `jwks_uri` is fetched and checked.
+- A redirect while fetching keys or discovery may only move to `https://`, and a loopback
+  fetch follows no redirect and never uses a proxy.
+
+**Action:** use `https://` for every `key_server.oidc` URL, or a loopback host for local testing.
 
 ## Upgrading from 3.5.x: a walkthrough
 

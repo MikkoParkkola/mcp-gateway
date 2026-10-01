@@ -14,7 +14,9 @@
 //!
 //! # Security properties
 //!
-//! - JWKS fetched only over HTTPS (enforced by the `reqwest` TLS requirement).
+//! - Discovery and JWKS are fetched only over HTTPS, or plain HTTP to a
+//!   loopback host without any proxy; redirects may only move to HTTPS. A
+//!   cleartext issuer off this machine is refused at load and at verify.
 //! - Unknown `kid` triggers a single cache refresh before failing; prevents
 //!   indefinite re-fetching if the key truly does not exist.
 //! - Clock leeway of 60 seconds tolerates minor clock skew between the `IdP` and
@@ -100,6 +102,33 @@ pub enum OidcError {
     /// The OIDC discovery document returned a non-HTTPS `jwks_uri`.
     #[error("OIDC discovery returned insecure (non-HTTPS) jwks_uri: {0}")]
     InsecureJwksUri(String),
+
+    /// The provider's issuer is a cleartext URL off this machine, so its
+    /// discovery document and keys cannot be trusted (MIK-7704).
+    #[error("OIDC issuer is non-HTTPS and off this machine: {0}")]
+    InsecureIssuer(String),
+
+    /// A discovery or JWKS fetch named a cleartext URL off this machine. The
+    /// URL is not echoed: an operator-written one may carry a query.
+    #[error("OIDC refuses to fetch a non-HTTPS URL off this machine")]
+    InsecureFetch,
+
+    /// The HTTP client could not be built at startup, so nothing is fetched.
+    #[error("OIDC HTTP client is unavailable; see the startup log")]
+    ClientUnavailable,
+}
+
+/// A redirect from an `https://` fetch may only move to `https://`.
+fn remote_hop_allowed(next: &url::Url) -> bool {
+    next.scheme() == "https"
+}
+
+/// Keep a built client, or log once and keep none: a fallback client would
+/// drop the redirect and proxy policy the builder carries.
+fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
+    client
+        .inspect_err(|e| warn!(error = %e, "OIDC HTTP client could not be built"))
+        .ok()
 }
 
 /// Verified identity extracted from a valid OIDC ID token.
@@ -222,7 +251,13 @@ pub struct JwksCache {
     inner: DashMap<String, CachedJwks>,
     /// Resolved `jwks_uri` per issuer, from the OIDC discovery document.
     discovery: DashMap<String, CachedDiscovery>,
-    http: reqwest::Client,
+    /// For `https://` URLs; honours the environment's proxy settings.
+    /// `None` when the client could not be built: every fetch then fails
+    /// rather than fall back to a client without this policy.
+    http: Option<reqwest::Client>,
+    /// For `http://` to a loopback host. Never proxied: an inherited
+    /// `HTTP_PROXY` would carry the cleartext request off this machine.
+    loopback: Option<reqwest::Client>,
     /// How long to cache a fetched JWKS (default 1 hour).
     ttl: Duration,
 }
@@ -231,16 +266,58 @@ impl JwksCache {
     /// Create with default 1-hour TTL.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_remote_proxy(None)
+    }
+
+    /// The production clients; `proxy`, when given, replaces the
+    /// environment's proxy for `https://` fetches only, so a test can show
+    /// the loopback client never uses one.
+    fn with_remote_proxy(proxy: Option<reqwest::Proxy>) -> Self {
+        // Not `https_only`: that would refuse the loopback carve-out too.
+        // Every fetch picks its client by URL (`client_for`).
+        let remote = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() > 5 {
+                    attempt.error("OIDC fetch exceeded 5 redirects")
+                } else if remote_hop_allowed(attempt.url()) {
+                    attempt.follow()
+                } else {
+                    attempt.error("OIDC refuses a redirect to a non-HTTPS URL")
+                }
+            }))
+            .timeout(Duration::from_secs(10));
+        let remote = match proxy {
+            Some(proxy) => remote.proxy(proxy),
+            None => remote,
+        };
+        // A loopback fetch follows no redirect: a hop off the machine would
+        // leave unproxied, and nothing legitimate needs one.
+        let loopback = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                attempt.error("OIDC refuses a redirect from a loopback fetch")
+            }))
+            .no_proxy()
+            .timeout(Duration::from_secs(10));
         Self {
             inner: DashMap::new(),
             discovery: DashMap::new(),
-            http: reqwest::Client::builder()
-                .https_only(true)
-                .timeout(Duration::from_secs(10))
-                .build()
-                .unwrap_or_default(),
+            http: built(remote.build()),
+            loopback: built(loopback.build()),
             ttl: Duration::from_secs(3600),
         }
+    }
+
+    /// The client allowed to fetch `url`, or a refusal for a cleartext URL
+    /// off this machine. Every fetch goes through here, so none can skip it.
+    fn client_for(&self, url: &str) -> Result<&reqwest::Client, OidcError> {
+        let client = if crate::gateway::auth::is_https_url(url) {
+            &self.http
+        } else if is_loopback_http_url(url) {
+            &self.loopback
+        } else {
+            return Err(OidcError::InsecureFetch);
+        };
+        client.as_ref().ok_or(OidcError::ClientUnavailable)
     }
 
     /// Test-only constructor injecting a custom HTTP client.
@@ -248,7 +325,7 @@ impl JwksCache {
     /// Lets an in-process integration test point the JWKS fetch at a
     /// self-signed-certificate test server (e.g. the gateway's own
     /// `/auth/token` handler under test, MIK-6729) without weakening the
-    /// production `https_only(true)` default client built by [`Self::new`].
+    /// production client built by [`Self::new`].
     /// Compiled out of non-test builds entirely — there is no way to reach
     /// this constructor from production code.
     #[cfg(test)]
@@ -256,7 +333,8 @@ impl JwksCache {
         Self {
             inner: DashMap::new(),
             discovery: DashMap::new(),
-            http,
+            loopback: Some(http.clone()),
+            http: Some(http),
             ttl: Duration::from_secs(3600),
         }
     }
@@ -283,8 +361,9 @@ impl JwksCache {
             return Ok(cached.jwks_uri.clone());
         }
 
+        let client = self.client_for(discovery_url)?;
         debug!(issuer = %issuer, "Fetching OIDC discovery from {discovery_url}");
-        let doc: OidcDiscoveryDocument = self.http.get(discovery_url).send().await?.json().await?;
+        let doc: OidcDiscoveryDocument = client.get(discovery_url).send().await?.json().await?;
         let jwks_uri = validate_discovery_document(issuer, doc)?;
 
         self.discovery.insert(
@@ -314,8 +393,9 @@ impl JwksCache {
             return Ok(cached.keys.clone());
         }
 
+        let client = self.client_for(jwks_uri)?;
         debug!(issuer = %issuer, "Fetching JWKS from {jwks_uri}");
-        let jwks: JwkSet = self.http.get(jwks_uri).send().await?.json().await?;
+        let jwks: JwkSet = client.get(jwks_uri).send().await?.json().await?;
 
         self.inner.insert(
             issuer.to_string(),
@@ -399,9 +479,10 @@ impl OidcVerifier {
             .find(|p| &p.issuer == issuer)
             .ok_or_else(|| OidcError::UnknownIssuer(issuer.clone()))?;
 
-        // Validate issuer URL
-        if !crate::gateway::auth::is_https_url(&provider.issuer) {
-            warn!(issuer = %provider.issuer, "OIDC issuer is not HTTPS");
+        // Refused here as well as at load: a verifier built without config
+        // validation must not trust keys fetched over cleartext.
+        if issuer_is_cleartext(&provider.issuer) {
+            return Err(OidcError::InsecureIssuer(provider.issuer.clone()));
         }
 
         // Replay protection: check token age against the caller's cap. The
@@ -643,10 +724,32 @@ fn default_discovery_url(issuer: &str) -> String {
     format!("{base}/.well-known/openid-configuration")
 }
 
+/// `http://` to a loopback host: never leaves the machine. Decided by the
+/// classifier the cleartext backend guard uses, so the two cannot drift.
+fn is_loopback_http_url(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "http" && crate::gateway::is_loopback_host(u.host_str().unwrap_or_default())
+    })
+}
+
+/// A URL the gateway may fetch OIDC material from: `https://`, or `http://`
+/// to a loopback host (the carve-out `allow_cleartext_credentials` makes).
+pub(crate) fn is_secure_fetch_url(url: &str) -> bool {
+    crate::gateway::auth::is_https_url(url) || is_loopback_http_url(url)
+}
+
+/// An issuer that is a URL but not a secure one. An issuer that is not a URL
+/// at all (the gateway's own `mcp-gateway` assertions) is never fetched; only
+/// its explicit `jwks_uri` is, and that is checked on its own.
+pub(crate) fn issuer_is_cleartext(issuer: &str) -> bool {
+    url::Url::parse(issuer).is_ok() && !is_secure_fetch_url(issuer)
+}
+
 /// Validate a fetched OIDC discovery document and extract a trusted `jwks_uri`.
 ///
 /// Enforces the `OpenID Connect Discovery` §4.3 mix-up defense (the document's
-/// `issuer` must equal the requested issuer) and rejects a non-HTTPS `jwks_uri`.
+/// `issuer` must equal the requested issuer) and rejects a non-HTTPS `jwks_uri`,
+/// except a loopback one for a loopback issuer.
 fn validate_discovery_document(
     requested_issuer: &str,
     doc: OidcDiscoveryDocument,
@@ -657,7 +760,11 @@ fn validate_discovery_document(
             actual: doc.issuer,
         });
     }
-    if !crate::gateway::auth::is_https_url(&doc.jwks_uri) {
+    // The document is remote input: it may keep a loopback issuer's keys on
+    // loopback, but may not point an https issuer at a cleartext URL.
+    let loopback_to_loopback =
+        is_loopback_http_url(requested_issuer) && is_loopback_http_url(&doc.jwks_uri);
+    if !crate::gateway::auth::is_https_url(&doc.jwks_uri) && !loopback_to_loopback {
         return Err(OidcError::InsecureJwksUri(doc.jwks_uri));
     }
     Ok(doc.jwks_uri)
