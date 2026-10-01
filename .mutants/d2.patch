@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index 91550e80c..a587898c0 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -2990,7 +2990,7 @@ impl Gateway {
+                         client.tasks,
+                         JsonRpcResponse::success_serialized(
+                             id,
+-                            meta_mcp.discover_document(client.modern),
++                            meta_mcp.discover_document(true),
+                         ),
+                     ),
+                     "initialize" => stdio_tasks::advertised(

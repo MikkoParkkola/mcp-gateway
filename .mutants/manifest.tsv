@@ -1,0 +1,4 @@
+head_sha	5617bdd697bc392117347755545c63595b04febd
+# batch 3 for #2549 on the head above: D1/D2 after merging the release line (#2544 and #2540 landed)
+D1	linux	d1.patch	--lib -- stdio1_discover_versions::stdio_discover_advertises_2026_when_modern_is_on
+D2	linux	d2.patch	--lib -- stdio1_discover_versions::stdio_discover_hides_2026_when_modern_is_off
