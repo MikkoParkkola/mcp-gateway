@@ -63,6 +63,7 @@ pub(crate) enum StoreError {
     /// unsafe): distinct from `Unavailable` so a failure to look is never
     /// confused with a failure after looking.
     #[error("task store path could not be inspected")]
+    #[allow(dead_code)] // removed by the next commit, which returns it
     Uninspectable,
     #[error("corrupt task record")]
     CorruptRecord,
