@@ -991,7 +991,7 @@ impl Backend {
     /// trade - leaking one transport beats terminating a live request - and the
     /// poll backs off to seconds and warns once so it stays cheap and visible
     /// rather than silent.
-    pub(super) fn close_after_last_owner(&self, old: Arc<dyn Transport>) {
+    fn close_after_last_owner(&self, old: Arc<dyn Transport>) {
         const FIRST_POLL: Duration = Duration::from_millis(20);
         const MAX_POLL: Duration = Duration::from_secs(5);
         const WARN_AFTER: Duration = Duration::from_secs(300);

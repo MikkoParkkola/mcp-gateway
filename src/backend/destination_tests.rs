@@ -509,3 +509,34 @@ fn registering_a_started_backend_into_a_hardened_registry_retires_it() {
             .is_none()
     );
 }
+
+// A request still holding the retired transport does not keep its unpinned
+// connection open: pinning outranks it, so the close does not wait for it.
+#[tokio::test]
+async fn a_retired_transport_closes_while_a_request_still_holds_it() {
+    let registry = BackendRegistry::new();
+    let backend = Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: transport("http://127.0.0.1:{port}/mcp", 9),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    backend.set_transport_for_test(Arc::new(Started(Arc::clone(&closed))));
+    let in_flight = backend
+        .pooled_transport_for_test(&super::PoolKey::Shared)
+        .expect("seeded");
+    registry.enforce_destinations(DestinationPolicy::Public, &[]);
+    for _ in 0..100 {
+        if closed.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(closed.load(Ordering::SeqCst), "closed despite the holder");
+    drop(in_flight);
+}

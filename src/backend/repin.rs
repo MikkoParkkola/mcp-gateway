@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use tracing::{debug, warn};
+use tracing::warn;
 
 use super::Backend;
 use super::pool::PooledEntry;
@@ -35,10 +35,12 @@ impl Backend {
         Ok(())
     }
 
-    /// Take every started transport out of the pool, so the next use rebuilds
-    /// under the current destination policy (MIK-7700). In-flight requests
-    /// keep their handle; each retired transport closes when its last user
-    /// lets go. Synchronous: it runs from registry pairing.
+    /// Take every started transport out of the pool and close it, so the
+    /// next use rebuilds under the current destination policy (MIK-7700).
+    ///
+    /// Closed at once, not when the last holder lets go: a request or stream
+    /// still running on a retired transport is on an unpinned connection, and
+    /// pinning outranks it. Such a request fails and its retry rebuilds.
     pub(crate) fn retire_started_transports(&self) {
         let retired: Vec<Arc<dyn Transport>> = {
             let _cleanups = self.replaced_transport_cleanups.lock();
@@ -53,17 +55,26 @@ impl Backend {
         warn!(
             backend = %self.name,
             count = retired.len(),
-            "Retiring transports started before the destination policy was set"
+            "Closing transports started before the destination policy was set"
         );
-        // Closing waits on a spawned task, which needs a runtime. Without
-        // one the handles are dropped here: an HTTP or WebSocket transport
-        // holds no child process, and its connections close with it.
-        if tokio::runtime::Handle::try_current().is_ok() {
+        // Closing is async. Without a runtime the handles are dropped here:
+        // an HTTP or WebSocket transport holds no child process, and its
+        // connections close with it.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            warn!(backend = %self.name, "No runtime: retired transports dropped, not closed");
+            return;
+        };
+        let name = self.name.clone();
+        let handle = runtime.spawn(async move {
             for old in retired {
-                self.close_after_last_owner(old);
+                if let Err(error) = old.close().await {
+                    warn!(backend = %name, %error, "Retired transport failed to close cleanly");
+                }
             }
-        } else {
-            debug!(backend = %self.name, "No runtime: retired transports dropped, not closed");
-        }
+        });
+        // Tracked like a replaced transport's close, so `stop()` drains it.
+        let mut pending = self.replaced_transport_cleanups.lock();
+        pending.handles.retain(|h| !h.is_finished());
+        pending.handles.push(handle);
     }
 }
