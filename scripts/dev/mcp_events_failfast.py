@@ -362,6 +362,8 @@ def body_length(headers):
     raw = values[0].strip()
     if not (raw.isascii() and raw.isdigit()):
         return 0, 400
+    if len(raw.lstrip("0")) > len(str(MAX_BODY)):
+        return 0, 413  # too long to convert cheaply, and certainly over MAX_BODY
     n = int(raw)
     return (0, 413) if n > MAX_BODY else (n, None)
 
@@ -461,7 +463,7 @@ def selftest(workdir):
     assert secret not in logged and secret[6:] not in logged and "/hook" not in logged, "log leaks secret or path"
     assert os.stat(store).st_mode & 0o077 == 0 and os.stat(log).st_mode & 0o077 == 0, "store/log not owner-only"
     for bad, status in (("x", 400), ("-1", 400), ("+5", 400), ("1_0", 400), ("", 400),
-                        (str(MAX_BODY + 1), 413)):
+                        (str(MAX_BODY + 1), 413), ("9" * 5000, 413)):
         assert body_length({"Content-Length": bad}) == (0, status), f"Content-Length {bad!r} accepted"
     two = email.message.Message()
     two["Content-Length"], two["Content-Length"] = "2", "999999"
