@@ -132,12 +132,15 @@ backend" and "fails a capability file" first.**
 | 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record. Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 | 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
-| 108 | Reserved: lands with a pending change | None yet |
+| 108 | A `cacheScope` the gateway delivers is always `private`: a backend's `public` (or a malformed value) is rewritten on every route, and `CacheScope::Public` can no longer be built | A cache in front of the gateway that relied on a backend's `public` no longer shares across callers; that sharing was never safe. Rust users of the library: `CacheScope::Public` now holds `std::convert::Infallible` and `CacheScope::for_list` is removed; use `CacheScope::Private` |
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 | 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
-| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result on `/mcp` and `/mcp/{backend}` is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]`; a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
+| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result whose nonce was admitted, on `/mcp` and `/mcp/{backend}`, is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]` (answers given before admission are unsigned); a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
+| 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
+| 115 | A legacy session now expires after `streaming.session_ttl` of inactivity, not at that age; when it ends (an owned `DELETE /mcp` or the reaper), its routing profile, workflow state, cost bucket and other per-session state are reclaimed, and its cost stays in the aggregate | None. A client that kept a session open across the 30-minute mark keeps it, and its profile, while it stays active |
+| 116 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1549,6 +1552,16 @@ counters. After a power loss on the hot invocation path, which flushes but does 
 verify can report such a gap for records that never reached disk. To verify a copied set that
 has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
 On a signed log, `.hwm` is signed too.
+
+Limitation: this detects a partial deletion, not a total one. Anyone with write access to the
+whole audit directory (a compromised gateway service account, a shared volume, a log-shipping
+agent's credentials, not only full host control) can delete every segment and the `.hwm`
+together. `audit verify` on the emptied path reports that nothing exists to read; once the
+gateway restarts and starts a fresh log, verify passes on it, and nothing in the directory
+shows an earlier log existed. A log stored only in that directory cannot prove it existed.
+Forward audit records off-host (for example through `control_plane.export` to a SIEM where the
+gateway account cannot delete or alter records already landed). An off-host anchor is not built
+in 4.0.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -3098,6 +3111,24 @@ chain nonce. Tasks, Code Mode, playbooks and capability backends are not chained
 **Action:** none unless you chain gateways. The three backend settings are refused at startup,
 naming the field, when `chain_origins` or `chain_signer` is missing or names a key absent from
 `trusted_keys`, or when this gateway has no `security.signature_chain`.
+## 108. A delivered `cacheScope` is never `public`
+
+**Startup:** no notice
+
+In 3.x, the direct backend route (`/mcp/{name}`) forwarded a backend's own result unchanged, so a
+backend that answered `"cacheScope": "public"` to a call computed from the caller's session reached
+the client as `public`, and a shared cache could serve it to other callers. In 4.0 every result the
+gateway delivers (HTTP, batch, SSE, stdio, task envelopes and webhook `message` events) is clamped: a
+`cacheScope` that is not `"private"` is delivered as `"private"`. A result with no `cacheScope` is
+unchanged, and nested tool data is never rewritten. For library users, `CacheScope::Public` now
+carries `std::convert::Infallible`, so no value can be built, and `CacheScope::for_list` is removed.
+Data persisted before 4.0 with `public` scope, such as a stored task result, keeps its stored value
+and is read and delivered as `private`; nothing needs to be flushed.
+
+**Action:** none for clients. A shared cache that relied on a backend's `public` must stop; the
+gateway will not vouch for a response it computed from one caller's state. Rust code that named
+`CacheScope::for_list` or built `CacheScope::Public` should use `CacheScope::Private`.
+
 ## 109. SSRF refusals are typed, and hardened pins backend destinations
 
 **Startup:** no notice; fails a backend, only under `security.posture: hardened` and only a backend at a loopback or private-network address
@@ -3187,13 +3218,17 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
 - **Signing.** `security.message_signing.enabled` is forced on, whatever the file says, so
   `security.message_signing.shared_secret` must resolve to at least 32 bytes (an env-only
   `${VAR}` reference resolves) or the gateway refuses to start. Every successful `tools/call`
-  result, on `/mcp` and on `/mcp/{backend}`, carries the v2 `_signature`. Its nonce is
+  result whose nonce was admitted, on `/mcp` and on `/mcp/{backend}`, carries the v2
+  `_signature`. Its nonce is
   `params._meta["io.mcp-gateway/nonce"]` (`gateway_invoke` keeps `arguments.nonce`; sending both
   is refused `-32602`). A nonce is admitted once, before dispatch, in one replay store for both
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
-  dispatch, is refused, so send a new one per request. `require_nonce` stays your choice. A
-  task-augmented destructive call's confirmation challenge is delivered unsigned, since its
-  nonce has not been admitted yet. A result that cannot be signed is refused `-32603`.
+  dispatch, is refused, so send a new one per request (after a task-augmented call's challenge
+  the first nonce was never spent, so resending it there is accepted). `require_nonce` stays your choice. A
+  malformed nonce is refused `-32602` before anything else. Answers given before the nonce is
+  admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
+  call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
+  undeclared-key refusal. A result that cannot be signed is refused `-32603`.
 - **Elicitation.** A legacy (2025-era) client must declare `elicitation` in `initialize`.
   Without it, `initialize` is refused with 403 and `-32600 "client must declare elicitation
   (security.posture=hardened)"` and no session is created. Every other legacy request, and
@@ -3238,6 +3273,73 @@ a commit that then loses (to a cancel that lands first, or a store failure) leav
 a recovery that did not land. A live call has the same window: its record is written
 (`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
 (`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
+
+## 114. Hardened can name backends that may reach private networks
+
+**Startup:** refuses to start, only under `security.posture: hardened` and only when `security.hardened.private_backends` names a backend that is not configured
+
+New key `security.hardened.private_backends: [backend names]`, default empty, read only under
+`security.posture: hardened` (under `standard` it is accepted and has no effect).
+
+- A listed backend may reach loopback (127.0.0.0/8, ::1), RFC 1918 (10/8, 172.16/12,
+  192.168/16) and unique-local (fc00::/7) addresses, by literal or by name: names are still
+  resolved once and pinned, and redirects and OAuth endpoints are held to the same rule. It
+  never reaches link-local (169.254.0.0/16, fe80::/10, which includes 169.254.169.254) or the
+  AWS IPv6 metadata address `fd00:ec2::254`, and every other special-use range item 109 refuses
+  stays refused.
+- Every backend not listed keeps item 109's public-only rule.
+- A listed name that is not under `backends` refuses start, naming it.
+- `security.hardened` is restart-only: a reload that changes it is refused with
+  `config reload refused: security.hardened requires restart`.
+
+**Action:** to adopt `hardened` with a local or in-cluster HTTP backend, add its name to
+`security.hardened.private_backends`. List only the backends that need it.
+
+## 115. Sessions expire when idle, and their state goes with them
+
+**Startup:** no notice
+
+`streaming.session_ttl` (default 30 minutes) used to be measured from a legacy session's
+creation. A session that only POSTs holds no stream, so a busy one was reaped at that age, and
+since 4.0 never adopts a presented id, its next request got a new session on the default routing
+profile, losing a profile narrowed by `gateway_set_profile`. The TTL is now idle time: every
+request that resumes or acts under the session, on `/mcp` and on the direct `/mcp/{name}` route,
+renews it. A session with no request and no open stream for the TTL is still reaped.
+
+When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
+is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
+and spec-preview promotions. Before, these were never removed and grew with every session. The
+ended session's calls, tokens and cost stay in the operator's aggregate totals. A second pass
+two minutes after the end removes state that a call still in flight wrote under the ended id; a
+call that runs longer than that (a backend `timeout` above two minutes) can still leave an entry.
+
+**Action:** none. A client that relied on a session being replaced after 30 minutes should send
+`DELETE /mcp` instead.
+
+## 116. Key-server OIDC URLs must be HTTPS off this machine
+
+**Startup:** refuses to start, only when a `key_server.oidc` issuer, `jwks_uri` or `discovery_url` is `http://` to a host that is not loopback
+
+The gateway fetches each provider's discovery document and signing keys from these URLs. Over
+cleartext, anyone on the path can swap the keys and mint tokens the key server accepts. The
+issuer check only logged a warning; it now refuses.
+
+- `key_server.oidc[N] issuer '...' is non-HTTPS and off this machine` (or
+  `key_server.oidc[N].jwks_uri` / `.discovery_url`) at load. The `jwks_uri` and
+  `discovery_url` are not echoed.
+- A token whose `iss` names such an issuer is refused at verification too.
+- An https issuer's discovery document that names an `http://` `jwks_uri`, loopback included,
+  is refused, as before.
+- `http://` to `localhost`, `127.0.0.0/8` or `::1` is allowed, as for backend credentials. It
+  was refused at fetch time before, so a loopback `jwks_uri` such as the one in
+  `examples/token-exchange-live.yaml` now works. A loopback issuer's discovery document may
+  name a loopback `jwks_uri`.
+- An issuer that is not a URL (the gateway's own `mcp-gateway`) is unaffected; only its
+  explicit `jwks_uri` is fetched and checked.
+- A redirect while fetching keys or discovery may only move to `https://`, and a loopback
+  fetch follows no redirect and never uses a proxy.
+
+**Action:** use `https://` for every `key_server.oidc` URL, or a loopback host for local testing.
 
 ## Upgrading from 3.5.x: a walkthrough
 

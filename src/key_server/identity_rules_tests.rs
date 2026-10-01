@@ -468,3 +468,50 @@ async fn empty_backend_grant_is_refused_with_its_own_code() {
     assert_eq!(status, 403);
     assert_eq!(body["error"], "access_denied", "no matching rule: {body}");
 }
+
+/// MIK-7704: a verifier for `issuer` whose keys are the harness's own, served
+/// on loopback. Built without load-time validation, the way an embedder or a
+/// future caller might, so `verify` itself has to refuse a cleartext issuer.
+fn unvalidated_verifier(h: &Harness, issuer: &str) -> OidcVerifier {
+    let provider = crate::config::KeyServerProviderConfig {
+        issuer: issuer.to_string(),
+        jwks_uri: Some(format!("http://{}/.well-known/jwks.json", h.addr)),
+        discovery_url: None,
+        auto_discover: false,
+        audiences: vec![AUD.to_string()],
+        allowed_domains: Vec::new(),
+    };
+    OidcVerifier::with_http_client(vec![provider], reqwest::Client::new())
+}
+
+const AGE: KeyServerOidcConfig = KeyServerOidcConfig {
+    token_age: crate::key_server::TokenAgeCap::MaxIat(300),
+};
+
+// The forged-token path: whoever sits on the wire to a cleartext issuer can
+// serve their own keys, so a token naming that issuer proves nothing.
+#[tokio::test]
+async fn token_from_a_cleartext_issuer_is_refused() {
+    let h = Harness::start(&config_yaml("[]", "")).await;
+    let issuer = "http://idp.example";
+    let token = h.mint(issuer, "attacker", &json!({}));
+    let err = unvalidated_verifier(&h, issuer)
+        .verify(&token, &AGE)
+        .await
+        .expect_err("a token from a cleartext issuer must be refused");
+    assert!(err.to_string().contains("non-HTTPS"), "{err}");
+}
+
+// The refusal keys on the scheme, not its spelling, and spares loopback.
+#[tokio::test]
+async fn token_from_an_uppercase_https_or_loopback_issuer_verifies() {
+    let h = Harness::start(&config_yaml("[]", "")).await;
+    for issuer in ["HTTPS://idp-u.example", "http://127.0.0.1:1", "mcp-gateway"] {
+        let token = h.mint(issuer, "alice", &json!({}));
+        let id = unvalidated_verifier(&h, issuer)
+            .verify(&token, &AGE)
+            .await
+            .unwrap_or_else(|e| panic!("{issuer}: {e}"));
+        assert_eq!(id.issuer, issuer);
+    }
+}

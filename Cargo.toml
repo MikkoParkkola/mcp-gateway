@@ -4,7 +4,7 @@ version = "4.0.0-beta.2"
 edition = "2024"
 rust-version = "1.95"
 authors = ["Mikko Parkkola <mikko.parkkola@iki.fi>"]
-description = "Universal MCP Gateway - compact Meta-MCP surface over many backends"
+description = "Universal MCP Gateway - compact Meta-MCP surface over many backends, bridging MCP revisions"
 license = "PolyForm-Noncommercial-1.0.0"
 homepage = "https://github.com/MikkoParkkola/mcp-gateway"
 repository = "https://github.com/MikkoParkkola/mcp-gateway"
@@ -320,3 +320,6 @@ unused_async = "allow"
 # Mechanically rewriting 50+ call sites risks subtle semantic confusion
 # (e.g. 3600 read as "an hour" vs "60 minutes" vs "magic number").
 duration_suboptimal_units = "allow"
+# New in Rust 1.99. The suggested `assert_eq!(x, [] as [T; 0])` names a type
+# for an empty slice and reads worse than `assert!(x.is_empty())`.
+assert_is_empty = "allow"

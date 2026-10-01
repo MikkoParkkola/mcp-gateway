@@ -10,6 +10,14 @@ body; its coverage is the share of those with a non-zero count, over the union
 of the reports. Give one report per platform run (Linux and Windows), so a
 `#[cfg(windows)]` function is graded by the run that compiles it.
 
+Tracing macro arguments: a plain field (a literal, identifier or path value) on its own line inside
+`trace!`/`debug!`/`info!`/`warn!`/`error!`/`event!`/`span!` is compiled twice,
+once for the subscriber and once into tracing's log-fallback branch, and the
+instrument attributes such lines to a region that reads zero even when the
+event was emitted. Those argument lines are excluded, but only when the
+macro's head line has a non-zero count (the call was reached); every excluded
+line is printed with its head count so the exclusion can be audited.
+
 Exit status: 0 when every Critical row clears the floor, 1 otherwise. A row
 whose function is gone, or that no given report measured, fails.
 """
@@ -41,6 +49,65 @@ def body_range(lines, start):
         if seen and depth <= 0:
             return start, i + 1
     return start, len(lines)
+
+
+TRACING_MACRO = re.compile(
+    r"(?<![\w:])(?:tracing::)?(trace|debug|info|warn|error|event|span)!\s*\("
+)
+
+
+# The only argument lines ever excluded (a whitelist; everything else stays
+# graded): exactly one field, `[name =] [%|?]value,`, where the value is a
+# literal, a bare identifier, or a field/path access (`a.b`, `a::b`). No call,
+# parenthesis, operator, postfix `?`, closure or macro. Literals are already
+# blanked by strip_literals, so a string or char shows as `""` / `''`.
+_PATH = r"[A-Za-z_]\w*(?:(?:\.|::)[A-Za-z_]\w*)*"
+_VALUE = r"(?:" + _PATH + r'|""|\'\'|-?\d[\w.]*)'
+PLAIN_FIELD = re.compile(
+    r"^(?:[A-Za-z_][\w.]*\s*=\s*)?[%?]?" + _VALUE + r"\s*,$"
+)
+
+
+def is_plain_field(code):
+    return bool(PLAIN_FIELD.match(code.strip()))
+
+
+def macro_argument_lines(lines, lo, hi):
+    """(head, argument lines) for each tracing macro call inside lo..hi."""
+    calls = []
+    for head in range(lo, hi + 1):
+        code = strip_literals(lines[head - 1])
+        match = TRACING_MACRO.search(code)
+        if not match:
+            continue
+        depth = 0
+        for n in range(head, hi + 1):
+            text = strip_literals(lines[n - 1])
+            if n == head:
+                text = text[match.end() - 1 :]
+            depth += text.count("(") - text.count(")")
+            if depth <= 0:
+                simple, nesting, fresh = [], 0, True
+                for m in range(head + 1, n + 1):
+                    code = strip_literals(lines[m - 1])
+                    text = code.strip()
+                    if not text:
+                        # A blank or comment-only line carries no token: it
+                        # neither starts nor ends an argument.
+                        continue
+                    # Only a whole field on its own line, at the argument
+                    # list's own level: it starts a fresh argument and ends
+                    # with its comma. A continuation (`&& check(),`), a line
+                    # left open (`flag = a`) or anything inside a nested
+                    # block, call or array is logic, not a field.
+                    if nesting == 0 and fresh and is_plain_field(code):
+                        simple.append(m)
+                    nesting += sum(code.count(c) for c in "({[") - sum(code.count(c) for c in ")}]")
+                    nesting = max(nesting, 0)
+                    fresh = nesting == 0 and text.endswith(",")
+                calls.append((head, simple))
+                break
+    return calls
 
 
 def fn_line(lines, name, occurrence):
@@ -103,11 +170,18 @@ def grade(root, inventory, lcovs):
         if not counts:
             results.append(("UNMEASURED", row, lo, hi, []))
             continue
+        excluded = []
+        for head, arguments in macro_argument_lines(lines, lo, hi):
+            if counts.get(head, 0) > 0:
+                for n in arguments:
+                    if n in counts and counts[n] == 0:
+                        del counts[n]
+                        excluded.append(f"{row['path']}:{n} (head {head}={hits[row['path']][head]})")
         covered = sum(1 for c in counts.values() if c > 0)
         missed = sorted(n for n, c in counts.items() if c == 0)
         pct = 100.0 * covered / len(counts)
         status = "ok" if pct >= FLOOR else "BELOW"
-        results.append((status, row, lo, hi, missed, covered, len(counts), pct))
+        results.append((status, row, lo, hi, missed, covered, len(counts), pct, excluded))
     return results
 
 
@@ -123,8 +197,10 @@ def main(argv=None):
         status, row = result[0], result[1]
         where = f"{row['path']}:{row['fn']}#{row['occurrence']}"
         if status in ("ok", "BELOW"):
-            _, _, lo, hi, missed, covered, total, pct = result
+            _, _, lo, hi, missed, covered, total, pct, excluded = result
             print(f"{status}\t{pct:6.2f}%\t{covered}/{total}\t{where}\tlines {lo}-{hi}\tmissed={missed}")
+            for line in excluded:
+                print(f"  excluded tracing argument line {line}")
             failed += status == "BELOW"
         else:
             print(f"{status}\t-\t-\t{where}")

@@ -301,3 +301,147 @@ async fn same_subject_other_presented_token_new_session() {
         "the subject lost its own session"
     );
 }
+
+/// MIK-7215.CONTROL.5, gap G2: the owner's DELETE ends the session, so the
+/// per-session stores keyed by its id are reclaimed, and another session's are
+/// not.
+#[tokio::test]
+async fn an_owned_delete_reclaims_the_per_session_stores() {
+    let (state, _store) = test_router_app_state().await;
+    let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("the test owns the state"));
+    let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+    crate::gateway::session_lifecycle::wire_meta_session_cleanup(&lifecycle, &state.meta_mcp);
+    state.session_lifecycle = Some(lifecycle);
+    let state = Arc::new(state);
+
+    let gone = mint(&state, caller(Some("agent-a"), None)).await;
+    let kept = mint(&state, caller(Some("agent-b"), None)).await;
+    for id in [&gone, &kept] {
+        state.meta_mcp.session_profiles().set_profile(id, "strict");
+        state
+            .meta_mcp
+            .cost_tracker()
+            .record(id, None, "backend", "tool", 10, 1.0);
+    }
+
+    let (status, _) = send(
+        &state,
+        request(caller(Some("agent-a"), None), "DELETE", Some(&gone)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    assert_eq!(
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&gone, "default"),
+        "default"
+    );
+    assert!(
+        state
+            .meta_mcp
+            .cost_tracker()
+            .session_snapshot(&gone)
+            .is_none()
+    );
+    assert_eq!(
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&kept, "default"),
+        "strict"
+    );
+    assert!(
+        state
+            .meta_mcp
+            .cost_tracker()
+            .session_snapshot(&kept)
+            .is_some()
+    );
+}
+
+/// The idle deadline is not a session end: a legacy session that is only quiet
+/// keeps its profile and cost bucket through the 5-minute reclaim sweep.
+#[tokio::test]
+async fn a_live_session_keeps_its_stores_through_the_idle_reclaim() {
+    let (state, _store) = test_router_app_state().await;
+    let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("the test owns the state"));
+    let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+    crate::gateway::session_lifecycle::wire_meta_session_cleanup(&lifecycle, &state.meta_mcp);
+    state.session_lifecycle = Some(Arc::clone(&lifecycle));
+    let state = Arc::new(state);
+
+    let live = mint(&state, caller(Some("agent-a"), None)).await;
+    state
+        .meta_mcp
+        .session_profiles()
+        .set_profile(&live, "strict");
+    state
+        .meta_mcp
+        .cost_tracker()
+        .record(&live, None, "backend", "tool", 10, 1.0);
+    // With no caller key the firewall tracks the session id itself.
+    lifecycle.track(live.clone(), 0);
+
+    assert_eq!(lifecycle.reap(1), 1, "the deadline passed and was swept");
+
+    assert!(
+        state.multiplexer.has_session(&live),
+        "the session is still open"
+    );
+    assert_eq!(
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&live, "default"),
+        "strict",
+        "an idle sweep must not reset a live session's profile"
+    );
+    assert!(
+        state
+            .meta_mcp
+            .cost_tracker()
+            .session_snapshot(&live)
+            .is_some()
+    );
+}
+
+/// A legacy session that only POSTs holds no stream, so it is always "without
+/// receivers"; the reaper must go by its last activity, not its age, or a busy
+/// session is replaced mid-use and starts again on the default profile.
+#[tokio::test]
+async fn a_session_older_than_the_ttl_that_stays_active_keeps_its_profile() {
+    let streaming = crate::config::StreamingConfig {
+        session_ttl: std::time::Duration::from_millis(150),
+        session_reaper_interval: std::time::Duration::from_millis(20),
+        ..crate::config::StreamingConfig::default()
+    };
+    let (state, _store) =
+        crate::gateway::router::tests::test_router_app_state_with_streaming(streaming).await;
+    let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+    crate::gateway::session_lifecycle::wire_meta_session_cleanup(&lifecycle, &state.meta_mcp);
+    state.multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
+
+    let live = mint(&state, caller(Some("agent-a"), None)).await;
+    state
+        .meta_mcp
+        .session_profiles()
+        .set_profile(&live, "strict");
+
+    // Three times the TTL, never quiet for longer than a quarter of it.
+    for round in 0..12 {
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        assert!(
+            resumes(&state, caller(Some("agent-a"), None), "POST", &live).await,
+            "round {round}: the active session was replaced"
+        );
+    }
+    assert_eq!(
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&live, "default"),
+        "strict"
+    );
+}
