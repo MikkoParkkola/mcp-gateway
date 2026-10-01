@@ -279,26 +279,6 @@ impl NotificationMultiplexer {
         (id, rx)
     }
 
-    /// Resume `owner`'s live session named `session_id`, holding the
-    /// credential it presented; `None` when there is no such session. Never
-    /// opens one: under `hardened` only a declaring `initialize` may.
-    pub(crate) fn resume_session_scoped(
-        &self,
-        session_id: Option<&str>,
-        owner: &SessionOwner,
-        credential: Option<HeldCredential>,
-    ) -> Option<(String, broadcast::Receiver<TaggedNotification>)> {
-        let sessions = self.sessions.read();
-        let session = sessions
-            .get(session_id?)
-            .filter(|session| session.owner == *owner)?;
-        *session.credential.write() = credential;
-        Some((
-            session.id.expose_secret().to_string(),
-            session.tx.subscribe(),
-        ))
-    }
-
     /// Test seam: an anonymous session under a chosen id, which production
     /// never creates (every production id is minted, F9).
     #[cfg(test)]

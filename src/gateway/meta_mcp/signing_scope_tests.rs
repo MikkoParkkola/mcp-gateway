@@ -29,7 +29,7 @@ fn meta() -> MetaMcp {
     meta
 }
 
-fn call(name: &str, arguments: Value, nonce: Option<&str>) -> Value {
+fn call(name: &str, arguments: &Value, nonce: Option<&str>) -> Value {
     let mut request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": name, "arguments": arguments, "_meta": {}}});
     if let Some(nonce) = nonce {
@@ -42,7 +42,7 @@ fn call(name: &str, arguments: Value, nonce: Option<&str>) -> Value {
 /// is stripped; under `InvokeOnly` it is neither. The nonce leaves the request.
 #[test]
 fn hardened_capture_signs_every_tool_call() {
-    let mut request = call("gateway_list_servers", json!({}), Some("scope-nonce"));
+    let mut request = call("gateway_list_servers", &json!({}), Some("scope-nonce"));
     let context =
         SigningInvocationContext::capture_scoped(&mut request, SigningScope::EveryToolCall);
     assert!(
@@ -54,7 +54,7 @@ fn hardened_capture_signs_every_tool_call() {
         "the nonce is taken off the request before sanitization: {request}"
     );
 
-    let mut request = call("gateway_list_servers", json!({}), Some("scope-nonce"));
+    let mut request = call("gateway_list_servers", &json!({}), Some("scope-nonce"));
     let context = SigningInvocationContext::capture_scoped(&mut request, SigningScope::InvokeOnly);
     assert!(
         !context.owns_signature(),
@@ -73,7 +73,7 @@ async fn task_gate_answer_is_unsigned_and_keeps_its_nonce() {
     let meta = meta();
     let mut request = call(
         "gateway_kill_server",
-        json!({"server": "x"}),
+        &json!({"server": "x"}),
         Some("gate-nonce"),
     );
     let context =
@@ -97,7 +97,7 @@ async fn task_gate_answer_is_unsigned_and_keeps_its_nonce() {
 fn gateway_invoke_with_two_nonces_refused() {
     let mut request = call(
         "gateway_invoke",
-        json!({"server": "s", "tool": "t", "arguments": {}, "nonce": "argument-nonce"}),
+        &json!({"server": "s", "tool": "t", "arguments": {}, "nonce": "argument-nonce"}),
         Some("meta-nonce"),
     );
     let context =
@@ -114,7 +114,7 @@ fn gateway_invoke_with_two_nonces_refused() {
         ),
         (json!({"server": "s", "tool": "t"}), Some("meta-nonce")),
     ] {
-        let mut request = call("gateway_invoke", arguments, nonce);
+        let mut request = call("gateway_invoke", &arguments, nonce);
         let context =
             SigningInvocationContext::capture_scoped(&mut request, SigningScope::EveryToolCall);
         assert!(context.delivery().is_ok(), "a single nonce is well formed");

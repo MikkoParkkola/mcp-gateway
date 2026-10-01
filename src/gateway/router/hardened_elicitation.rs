@@ -59,7 +59,7 @@ pub(super) fn direct_refusal(
     request: &Value,
     method: &str,
     params: Option<&Value>,
-    id: &Option<RequestId>,
+    id: Option<&RequestId>,
 ) -> Option<(StatusCode, Json<Value>)> {
     // Read once, duplicate-safe, as `/mcp` does: a doubled header takes the
     // modern reading and is refused by the single-occurrence check.
@@ -72,13 +72,13 @@ pub(super) fn direct_refusal(
     let shape = crate::protocol::meta::classify_request(params, declared_version);
     if let RequestShape::Malformed { missing } = &shape {
         return Some(build_http_error_response(
-            id.clone(),
+            id.cloned(),
             -32602,
             format!("missing required request metadata: {}", missing.join(", ")),
             StatusCode::BAD_REQUEST,
         ));
     }
-    if let Some((rpc, status)) = super::handlers::request_check_refusal(
+    if let Some((rpc, status)) = super::handlers::request_checks::request_check_refusal(
         state,
         headers,
         &shape,
