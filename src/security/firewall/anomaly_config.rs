@@ -139,6 +139,7 @@ mod tests {
     fn keyless() -> Config {
         let mut config = Config::default();
         config.auth.enabled = false;
+        config.security.firewall.enabled = true;
         config.security.firewall.anomaly_detection = true;
         config
     }
@@ -164,12 +165,16 @@ mod tests {
             crate::security::caller_identity::CallerIdentityMode::TrustedProxy;
         let mut off = keyless();
         off.security.firewall.anomaly_detection = false;
+        // A disabled firewall scores nothing, so its detector flag is dormant.
+        let mut dormant = keyless();
+        dormant.security.firewall.enabled = false;
         for (name, config) in [
             ("auth", auth),
             ("mtls", mtls),
             ("agent_auth", agent),
             ("caller_identity", header),
             ("detection off", off),
+            ("firewall off", dormant),
         ] {
             assert!(
                 super::refuse_keyless_http_anomaly(&config).is_ok(),

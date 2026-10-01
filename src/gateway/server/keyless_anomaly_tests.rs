@@ -11,6 +11,7 @@ async fn http_start_with_keyless_anomaly_detection_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut config = Config::default();
     config.auth.enabled = false;
+    config.security.firewall.enabled = true;
     config.security.firewall.anomaly_detection = true;
     // Port 0 and temp stores: were the refusal missing, the start would bind
     // and serve, and the timeout below would fire.
