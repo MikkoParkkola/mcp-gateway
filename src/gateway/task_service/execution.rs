@@ -267,7 +267,7 @@ impl TaskExecutor {
             .commit(TaskWrite::Cancel {
                 principal,
                 id,
-                revision: current.revision,
+                revision: 0,
             })
             .await
         {

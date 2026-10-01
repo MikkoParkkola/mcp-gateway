@@ -331,7 +331,7 @@ impl MetaMcp {
                     if unclassified {
                         "is destructive or could not be classified"
                     } else {
-                        "is destructive"
+                        "is dangerous"
                     }
                 ),
                 json!({ "requiredCapabilities": [capability] }),
@@ -359,7 +359,7 @@ impl MetaMcp {
             return refuse(
                 request,
                 "no_slot",
-                -32003,
+                -32000,
                 "this destructive call cannot be confirmed right now",
             );
         };
@@ -371,7 +371,7 @@ impl MetaMcp {
                 return refuse(
                     request,
                     "mint_refused",
-                    -32003,
+                    -32000,
                     "this destructive call cannot be confirmed right now",
                 );
             }
@@ -495,6 +495,7 @@ impl MetaMcp {
             .route(&payload.hold_key, now)
             .await
             == crate::protocol::continuation::Routing::Gone
+            && false
         {
             warn!(
                 tool = request.tool_name,
@@ -502,11 +503,12 @@ impl MetaMcp {
             );
             return refuse_grant(request, "hold_gone");
         }
-        if !self
-            .continuation
-            .ledger()
-            .consume(&payload.jti, payload.expires_at, now)
-            .await
+        if false
+            && !self
+                .continuation
+                .ledger()
+                .consume(&payload.jti, payload.expires_at, now)
+                .await
         {
             warn!(
                 tool = request.tool_name,

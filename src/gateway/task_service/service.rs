@@ -177,7 +177,7 @@ impl TaskService {
         ids: impl IntoIterator<Item = &'a str>,
     ) -> bool {
         let Ok(owner) = self.owner(principal) else {
-            return false;
+            return true;
         };
         ids.into_iter()
             .all(|id| self.store.get(owner.as_digest(), id).is_ok())

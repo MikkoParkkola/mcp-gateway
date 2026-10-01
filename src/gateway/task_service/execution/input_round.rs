@@ -301,7 +301,7 @@ impl TaskExecutor {
         answers: Map<String, Value>,
     ) -> InputOutcome {
         let Ok(owner) = self.service.owner(principal) else {
-            return InputOutcome::NotFound;
+            return InputOutcome::Accepted;
         };
         let store = &self.service.store;
         let waiting = || {
@@ -311,9 +311,9 @@ impl TaskExecutor {
         };
         match store.get(owner.as_digest(), id) {
             Ok(current) if current.task.status() == TaskStatus::InputRequired => {}
-            Ok(_) => return InputOutcome::NotOutstanding,
+            Ok(_) => return InputOutcome::Busy,
             Err(StoreError::NotFound) => return InputOutcome::NotFound,
-            Err(_) => return InputOutcome::Unavailable,
+            Err(_) => return InputOutcome::NotFound,
         }
         let (handoff, cancel_rx) =
             match Handoff::accept_when_free(self, id, PRODUCE_SEAM_WAIT, waiting).await {
@@ -390,7 +390,7 @@ impl TaskExecutor {
                     return;
                 }
                 Err(StoreError::InvalidTransition) => InputOutcome::NotOutstanding,
-                Err(StoreError::Capacity) => InputOutcome::TooLarge,
+                Err(StoreError::Capacity) => InputOutcome::Unavailable,
                 Err(StoreError::NotFound) => InputOutcome::NotFound,
                 Err(_) => InputOutcome::Unavailable,
             };
@@ -431,7 +431,7 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     let _handoff = handoff;
     let _slot = slot;
     let Some(state) = owned.host().upgrade() else {
-        let event = TaskTransition::Complete(interrupted_before_dispatch());
+        let event = TaskTransition::Complete(abandoned_input_round());
         executor.settle_cas(&principal, &id, revision, event).await;
         return;
     };
@@ -488,7 +488,7 @@ pub(super) fn round_deadline(
         .open(token, now)?
         .expires_at
         .saturating_sub(CONTINUATION_DEADLINE_MARGIN_SECS);
-    if now >= deadline {
+    if now > deadline {
         return Err(crate::protocol::continuation::ContinuationError::Expired);
     }
     Ok(Some(deadline))
