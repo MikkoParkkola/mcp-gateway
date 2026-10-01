@@ -457,3 +457,41 @@ fn hardened_refuses_capability_egress_proxy() {
     let config = load(&yaml("standard"));
     assert!(config.capabilities.egress_proxy.is_some());
 }
+
+/// `security:` for `posture` with `private_backends` listing `names`, and two
+/// configured stdio backends, `a` and `b`.
+fn private_yaml(posture: &str, names: &str) -> String {
+    format!(
+        "backends:\n  a:\n    command: echo a\n  b:\n    command: echo b\nsecurity:\n  posture: \
+         {posture}\n{SIGNING_YAML}  hardened:\n    private_backends: [{names}]\n"
+    )
+}
+
+/// Row 17: under hardened a listed name that is no configured backend
+/// refuses start, naming it.
+#[test]
+fn hardened_refuses_missing_private_backend() {
+    let err = load_err(&private_yaml("hardened", "a, ghost"));
+    assert!(err.contains("names 'ghost'"), "{err}");
+    let config = load(&private_yaml("hardened", "a"));
+    assert_eq!(config.security.hardened.private_backends, ["a"]);
+}
+
+/// Row 16: under standard the key is accepted and refuses nothing.
+#[test]
+fn standard_ignores_private_backends() {
+    let config = load(&private_yaml("standard", "ghost"));
+    assert_eq!(config.security.hardened.private_backends, ["ghost"]);
+}
+
+/// `security.hardened` is restart-only: a reload that changes the list is
+/// refused, one that keeps it is not.
+#[test]
+fn reload_refuses_private_backends_change() {
+    let running = load(&private_yaml("hardened", "a"));
+    let changed = load(&private_yaml("hardened", "a, b"));
+    let same = load(&private_yaml("hardened", "a"));
+    let refusal = reload_refusal(&running, &changed).expect("a changed list is refused");
+    assert!(refusal.contains("security.hardened"), "{refusal}");
+    assert!(reload_refusal(&running, &same).is_none());
+}

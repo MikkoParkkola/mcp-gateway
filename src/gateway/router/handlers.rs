@@ -335,6 +335,10 @@ pub(super) async fn mcp_delete_handler(
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
             info!(session_id = %session_fp(id), "Session terminated by client");
+            // The id is dead from here; what was keyed by it goes too.
+            if let Some(ref lifecycle) = state.session_lifecycle {
+                lifecycle.on_disconnect(id);
+            }
             StatusCode::NO_CONTENT
         }
         Some(id) => {
@@ -682,6 +686,18 @@ async fn meta_mcp_dispatch(
     {
         return build_error_response(
             None,
+            error.to_rpc_code(),
+            crate::gateway::meta_mcp::signing::wire_error_message(&error),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
+    if let Some(error) = signing_context
+        .as_ref()
+        .and_then(|context| context.refuse_malformed_nonce().err())
+    {
+        return build_error_response(
+            raw_id,
             error.to_rpc_code(),
             crate::gateway::meta_mcp::signing::wire_error_message(&error),
             &session_id,

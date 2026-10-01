@@ -599,7 +599,10 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
-        backends.enforce_destination(DestinationPolicy::for_posture(config.security.posture));
+        backends.enforce_destinations(
+            DestinationPolicy::for_posture(config.security.posture),
+            &config.security.hardened.private_backends,
+        );
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding
@@ -1804,6 +1807,9 @@ impl Gateway {
         if let Some(ref firewall) = firewall_arc {
             crate::gateway::session_lifecycle::wire_session_lifecycle(&session_lifecycle, firewall);
         }
+
+        // The per-session stores `meta_mcp` owns are reclaimed the same way.
+        crate::gateway::session_lifecycle::wire_meta_session_cleanup(&session_lifecycle, &meta_mcp);
 
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
