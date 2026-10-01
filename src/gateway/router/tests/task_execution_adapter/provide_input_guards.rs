@@ -3,7 +3,7 @@
 //! `TaskExecutor::provide_input`'s own refusals, driven directly: the route
 //! checks the same facts first, so only a race reaches them over HTTP.
 use super::super::*;
-use super::input_round::{STATE_1, answer, ask, done, parked};
+use super::input_round::{STATE_1, answer, ask, done, parked, update};
 use super::support::*;
 
 use crate::gateway::router::OwnedRouterAuthorizer;
@@ -87,11 +87,14 @@ async fn provide_input_refuses_an_unattributable_foreign_absent_or_not_waiting_t
         "input_required"
     );
 
-    // Positive control: the owner's answers are accepted and the call resumes.
-    let accepted = exec
-        .provide_input(live(&state, &owner), &owner, &id, full())
-        .await;
-    assert!(matches!(accepted, InputOutcome::Accepted));
+    // Positive control: the owner's own request is accepted and the call resumes.
+    let acked = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(acked.get("error").is_none(), "{acked}");
     assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id).await);
 
     // A settled task is no longer waiting.
