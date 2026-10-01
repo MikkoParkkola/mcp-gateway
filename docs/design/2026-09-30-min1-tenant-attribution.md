@@ -114,7 +114,10 @@ guard may refuse. Nothing is refused that was not before.
   the delivered value. `uninspected` means part of the response was not read
   for tenants: a `content[].text` block exceeded the 1 MiB parse bound, or the
   reply was refused at raw receipt for its signature chain (unverified content
-  is not read). The record says so even when it names no tenant; `tenants` is
+  is not read). Gap 3 (lead ruling 2026-10-01): any response string that opens
+  like JSON must parse or is unread (depth limit, malformed text, bracket-led
+  prose: fail closed); JSON carried in a string, double-encoded text included,
+  is decoded and read up to three layers, and deeper encoding is unread. The record says so even when it names no tenant; `tenants` is
   then a lower bound. `cached_delivery_uninspected` means both. The parse
   bound stays, as a DoS limit.
 - **Cap (H3):** one crate-private writer,
