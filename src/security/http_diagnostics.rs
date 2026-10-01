@@ -38,12 +38,20 @@ pub fn safe_reqwest_message(context: &str, error: &reqwest::Error) -> String {
 
 /// Transport-layer reqwest failure: context + category, never `{e}`.
 ///
-/// Returns the coarse [`Error::Transport`], which ADR-012 settles as terminal.
+/// Returns the coarse [`Error::Transport`], which ADR-012 settles as terminal,
+/// except for a destination the SSRF pin refused, which is `Error::Protocol`
+/// (`-32600 SSRF blocked`).
 /// Use [`safe_request_error_for`] at a site that dispatches a side-effecting
 /// request and can name the URL it posted to.
 #[must_use]
 pub fn safe_request_error(context: &str, error: &reqwest::Error) -> Error {
-    Error::Transport(safe_reqwest_message(context, error))
+    ssrf_refusal(error).unwrap_or_else(|| Error::Transport(safe_reqwest_message(context, error)))
+}
+
+/// A destination the SSRF pin refused, typed `-32600 SSRF blocked` in every
+/// posture: a policy answer, never a connect failure to retry.
+pub(crate) fn ssrf_refusal(error: &reqwest::Error) -> Option<Error> {
+    crate::security::ssrf::ssrf_denial(error).map(|denied| Error::Protocol(denied.to_string()))
 }
 
 /// Whether the caller can prove its request never followed a redirect.
@@ -72,8 +80,9 @@ pub enum RedirectEvidence {
 /// [`Error::TransportConnect`], which `Error::is_pre_dispatch` admits and the
 /// idempotency layer therefore releases rather than settling as terminal.
 ///
-/// Every other shape -- a timeout, a decode failure, a connect failure after a
-/// redirect -- returns [`Error::Transport`] unchanged. A 307 re-submits the
+/// A destination the SSRF pin refused is `Error::Protocol`, as in
+/// [`safe_request_error`]. Every other shape -- a timeout, a decode failure, a
+/// connect failure after a redirect -- returns [`Error::Transport`] unchanged. A 307 re-submits the
 /// request body, so a connect failure to a redirect target says nothing about
 /// whether the origin that redirected had already executed the call.
 ///
@@ -90,6 +99,9 @@ pub fn safe_request_error_for(
     error: &reqwest::Error,
     redirect_evidence: RedirectEvidence,
 ) -> Error {
+    if let Some(refused) = ssrf_refusal(error) {
+        return refused;
+    }
     let message = safe_reqwest_message(context, error);
     if error.is_connect() && redirect_evidence == RedirectEvidence::NoRedirectFollowed {
         Error::TransportConnect(message)

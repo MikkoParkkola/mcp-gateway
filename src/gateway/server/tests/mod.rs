@@ -60,3 +60,6 @@ mod life1_stdio_cancel;
 
 // #2480: a stdio idempotent replay writes its invocation record.
 mod stdio_replay_audit;
+
+#[cfg(feature = "firewall")]
+mod hardened_destination;

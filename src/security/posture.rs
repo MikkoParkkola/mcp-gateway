@@ -15,6 +15,13 @@
 //!   0.9 refuses start) blocks;
 //! - a call whose transition cannot be learned because the learned-pair map
 //!   is full is refused rather than passed unscored;
+//! - `ssrf_protection` is on and `trust_configured_backends` off, and every
+//!   HTTP and WebSocket backend connects under
+//!   [`crate::security::ssrf::DestinationPolicy::Public`]: names are resolved
+//!   once and pinned, private literals are refused before anything connects,
+//!   OAuth URLs are checked before use, and proxy environment variables are
+//!   ignored. The policy is stamped by the backend registry, so a backend
+//!   used with no config at all has no posture and none is enforced;
 //! - startup is refused on a build without the `firewall` feature.
 //!
 //! Changing the posture needs a restart; a reload that changes it is refused.
@@ -94,6 +101,8 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
         context_integrity.preset = Preset::TeamShared;
     }
     context_integrity.non_bypassable = true;
+    config.security.ssrf_protection = true;
+    config.security.trust_configured_backends = false;
     #[cfg(feature = "firewall")]
     force_anomaly_blocking(&mut config.security.firewall)?;
     Ok(())
@@ -171,9 +180,11 @@ pub(crate) fn log_startup(config: &Config) {
         let firewall = String::new();
         tracing::info!(
             "security.posture=hardened enforcing: context_integrity preset={} \
-             non_bypassable={}{firewall}",
+             non_bypassable={} ssrf_protection={} trust_configured_backends={}{firewall}",
             preset.as_str().unwrap_or_default(),
-            context_integrity.non_bypassable
+            context_integrity.non_bypassable,
+            config.security.ssrf_protection,
+            config.security.trust_configured_backends
         );
     } else if let Some(warning) = unhardened_multi_user_warning(config) {
         tracing::warn!("{warning}");

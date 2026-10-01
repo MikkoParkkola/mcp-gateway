@@ -99,9 +99,12 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
 
             for ip in &ips {
                 if is_private_or_reserved(*ip) {
+                    // The address stays in the log: the refusal reaches callers,
+                    // and naming it would answer internal DNS for them.
+                    tracing::warn!(host = %host, address = %ip, "SSRF pin refused a resolved address");
                     let msg =
-                        format!("SSRF blocked: '{host}' resolves to private/reserved address {ip}");
-                    return Err(Box::new(std::io::Error::other(msg)) as BoxErr);
+                        format!("SSRF blocked: '{host}' resolves to a private/reserved address");
+                    return Err(Box::new(SsrfDenied(msg)) as BoxErr);
                 }
             }
 
@@ -111,6 +114,39 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
             Ok(addrs)
         })
     }
+}
+
+/// The pinning resolver refused an address: a policy answer, not a network
+/// fault, so it is never retried and answers `-32600` (see [`ssrf_denial`]).
+#[derive(Debug)]
+pub(crate) struct SsrfDenied(String);
+
+impl std::fmt::Display for SsrfDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SsrfDenied {}
+
+/// The [`PinningResolver`] refusal somewhere in `error`'s source chain.
+///
+/// Also looks inside an `io::Error`, whose `source()` skips the error it wraps.
+pub(crate) fn ssrf_denial<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a SsrfDenied> {
+    let mut next = Some(error);
+    while let Some(current) = next {
+        let wrapped = current
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .and_then(|inner| inner.downcast_ref::<SsrfDenied>());
+        if let Some(denied) = current.downcast_ref::<SsrfDenied>().or(wrapped) {
+            return Some(denied);
+        }
+        next = current.source();
+    }
+    None
 }
 
 /// Resolve a domain name and validate all returned IPs against SSRF deny lists.

@@ -89,12 +89,39 @@ fn posture_defaults_to_standard_and_round_trips() {
 
 #[test]
 fn standard_posture_applies_no_override() {
-    let config = load(&preset_yaml("standard", "monitor_only"));
+    let config = load(&format!(
+        "{}{SSRF_OFF}",
+        preset_yaml("standard", "monitor_only")
+    ));
     let ci = &config.security.context_integrity;
     assert_eq!(ci.preset, Preset::MonitorOnly);
     assert!(!ci.non_bypassable);
+    assert!(
+        !config.security.ssrf_protection,
+        "standard keeps the file's value"
+    );
+    assert!(config.security.trust_configured_backends);
     let mut config = config;
     resolve(&mut config, FirewallBuild::Absent).expect("standard never refuses");
+}
+
+/// Appended under a `security:` block: the two SSRF switches at their weakest.
+const SSRF_OFF: &str = "  ssrf_protection: false\n  trust_configured_backends: true\n";
+
+#[test]
+fn hardened_forces_ssrf_flags() {
+    let config = load(&format!(
+        "{}{SSRF_OFF}",
+        preset_yaml("hardened", "team_shared")
+    ));
+    assert!(
+        config.security.ssrf_protection,
+        "hardened forces SSRF protection"
+    );
+    assert!(
+        !config.security.trust_configured_backends,
+        "hardened re-checks configured backends"
+    );
 }
 
 #[test]
