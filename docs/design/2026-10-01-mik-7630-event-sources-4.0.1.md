@@ -247,3 +247,4 @@ exercises shared pollers and budget per poll).
 | 1 | B | SHIP-WITH-FIXES | Shared-poller charging rule (global budget for shared polls, per-delivery charge per subscriber); flap id; U10 relabelled as a structural guard landing first; occurrence scope, pool caps, capability removal and volatile fields specified; rows U11–U12. |
 | 2 | A | SHIP-WITH-FIXES | Watch options nested apart from capability arguments; digest taken before per-call metadata; random per-transition id survives poller restarts. |
 | 2 | B | SHIP-WITH-FIXES | Scheduler double-fire prevented by a persisted last-fired value, not the outbox; U4 split into shared and credentialed cases. |
+| 3 | A, B (combined packet) | no findings against this document | Both seats reviewed it in round 3 alongside the parent and raised nothing on it; its round-2 dispositions stand. Approved with the parent at round 5. |
