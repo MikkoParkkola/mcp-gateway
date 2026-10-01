@@ -39,7 +39,7 @@ fn discover(query: &str) -> Vec<SearchResult> {
     let ranker = SearchRanker::new();
     let candidates: Vec<SearchResult> = catalogue()
         .iter()
-        .filter(|t| tool_matches_query(t, query))
+        .filter(|t| tool_matches_query("cat", t, query))
         .map(|t| {
             SearchResult::new(
                 "cat",
