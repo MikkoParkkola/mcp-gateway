@@ -94,7 +94,7 @@ jobs:
   # storage) are graded from this report, unioned with the Linux one.
   coverage-windows:
     name: llvm-cov Windows-only rows
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
