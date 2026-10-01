@@ -417,6 +417,19 @@ impl MetaMcp {
         trace_id: &str,
         result: Value,
     ) -> crate::Result<Value> {
+        let gated = self.recover_gated(server, tool, api_key_name, trace_id, result);
+        super::invoke::audit::note_refusal(&gated);
+        gated
+    }
+
+    fn recover_gated(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> crate::Result<Value> {
         let output_schema = self
             .get_tool_registry()
             .and_then(|registry| registry.get(&format!("{server}:{tool}")))

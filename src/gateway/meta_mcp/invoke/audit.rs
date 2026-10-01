@@ -63,6 +63,9 @@ pub(crate) struct DispatchNotes {
     /// captured. The submission record carries it as the join key to the
     /// task's settlement record.
     upstream_task: Option<String>,
+    /// MIN.1 gap 1: how `audit_invocation` would class the refusal of a
+    /// recovered result, which recovery commits as a plain `-32603` failure.
+    refusal: Option<AuditOutcome>,
 }
 
 #[cfg(all(test, feature = "metrics"))]
@@ -125,6 +128,16 @@ pub(crate) fn note_upstream_task(id: &str) {
     note(|notes| notes.upstream_task = Some(id.to_owned()));
 }
 
+/// MIN.1 gap 1: note how a refused recovered `result` is classed, so its
+/// settlement record says `denied` where a live call's record would.
+pub(crate) fn note_refusal(result: &Result<Value>) {
+    if result.is_err()
+        && let Some(outcome) = AuditOutcome::from_result(result)
+    {
+        note(|notes| notes.refusal = Some(outcome));
+    }
+}
+
 /// MIK-7116.MIN.1: this call is answered from a cache, past every gate.
 pub(crate) fn note_cached() {
     note(|notes| notes.cached = true);
@@ -148,6 +161,20 @@ impl DispatchNotes {
     pub(crate) fn outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (outcome, self.failure) {
             (AuditOutcome::ToolError, Some(code)) => AuditOutcome::Error(code),
+            (outcome, _) => outcome,
+        }
+    }
+
+    /// MIN.1 gap 1: a settlement's outcome. A gate refusal keeps the class a
+    /// live call's record gives it, with the code the task commits.
+    fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
+        match (self.outcome(outcome), self.refusal) {
+            (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
+                AuditOutcome::Denied(code)
+            }
+            (AuditOutcome::Error(code), Some(AuditOutcome::Invalid(_))) => {
+                AuditOutcome::Invalid(code)
+            }
             (outcome, _) => outcome,
         }
     }
@@ -449,7 +476,7 @@ impl MetaMcp {
         let envelope = AuditEnvelope {
             trace_id: Some(task.id.to_string()),
             otel_trace_id: None,
-            outcome: notes.outcome(outcome),
+            outcome: notes.settled_outcome(outcome),
             who: AuditWho::from_actor_id(principal),
         };
         let response_hash = result.as_ref().ok().map(sha256_of);

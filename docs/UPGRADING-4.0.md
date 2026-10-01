@@ -3165,7 +3165,10 @@ settlement now writes its own invocation record, before the result is committed:
 - `correlation_source: "task_id"`, and `session_id` holds the task id;
 - `request_hash` is the hash of `{"task_id": <id>}`, since the recovering path does not hold the
   original request; the call's own request hash is on the submission record;
-- `response_hash`, `outcome`, `error_code`, `tenants` and `data_classes` as on a live call;
+- `response_hash`, `outcome`, `error_code`, `tenants` and `data_classes` as on a live call. A
+  recovered result a gate refuses settles as a `-32603` failure; its `outcome` keeps the class a
+  live call's record gives that refusal (`denied` for a response-firewall refusal), and
+  `error_code` is the code the task committed;
 - `who` names only the principal the task was admitted under, with no credential kind.
 
 The submission record carries the same `task_id` whenever the backend's task handle was captured.
@@ -3175,7 +3178,11 @@ with no backend content. Under `BestEffort`, it is logged and counted in
 
 **Action:** none unless you consume these records. Join a settlement record to its submission by
 `task_id`. A crash between the record and the commit can leave two settlement records for one
-task; it never leaves delivered content unrecorded.
+task; it never leaves delivered content unrecorded. The record is written before the commit, so
+a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
+a recovery that did not land. A live call has the same window: its record is written
+(`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
+(`src/gateway/router/handlers.rs:1897`), and stands if that delivery then fails.
 
 ## Upgrading from 3.5.x: a walkthrough
 
