@@ -283,6 +283,7 @@ impl BackendRegistry {
     /// when the running posture is `hardened`, so a caller-built registry
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
+    #[cfg(test)]
     pub(crate) fn enforce_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
         self.enforce_destinations(policy, &[]);
     }
