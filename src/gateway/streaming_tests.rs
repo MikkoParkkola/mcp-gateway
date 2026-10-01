@@ -297,10 +297,8 @@ async fn spawn_reaper_on_exits_when_multiplexer_is_dropped() {
 /// resumed after its TTL from creation, and reaped at once, survives.
 #[tokio::test]
 async fn a_hardened_resume_keeps_a_busy_session_from_the_reaper() {
-    let m = NotificationMultiplexer::new(
-        Arc::new(BackendRegistry::new()),
-        StreamingConfig::default(),
-    );
+    let m =
+        NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
     let owner = SessionOwner::Credential("alice".to_owned());
     let (id, receiver) = m.get_or_create_session_for(None, &owner);
     drop(receiver);
@@ -309,7 +307,8 @@ async fn a_hardened_resume_keeps_a_busy_session_from_the_reaper() {
     assert!(m.resume_session_scoped(Some(&id), &owner, None).is_some());
 
     assert!(
-        m.reap_expired_sessions(Duration::from_millis(50)).is_empty(),
+        m.reap_expired_sessions(Duration::from_millis(50))
+            .is_empty(),
         "a session resumed just now is not idle"
     );
 }
@@ -318,10 +317,8 @@ async fn a_hardened_resume_keeps_a_busy_session_from_the_reaper() {
 /// its stream; that use is activity too.
 #[tokio::test]
 async fn a_direct_backend_request_keeps_a_busy_session_from_the_reaper() {
-    let m = NotificationMultiplexer::new(
-        Arc::new(BackendRegistry::new()),
-        StreamingConfig::default(),
-    );
+    let m =
+        NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
     let owner = SessionOwner::Credential("alice".to_owned());
     let (id, receiver) = m.get_or_create_session_for(None, &owner);
     drop(receiver);
@@ -330,7 +327,8 @@ async fn a_direct_backend_request_keeps_a_busy_session_from_the_reaper() {
     assert!(m.touch_if_owned(&id, &owner));
 
     assert!(
-        m.reap_expired_sessions(Duration::from_millis(50)).is_empty(),
+        m.reap_expired_sessions(Duration::from_millis(50))
+            .is_empty(),
         "a session used just now is not idle"
     );
 }
