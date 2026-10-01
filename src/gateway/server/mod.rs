@@ -2983,10 +2983,9 @@ impl Gateway {
             (
                 match method.as_str() {
                     // 2026-07-28 MUST, answered without a handshake: on stdio it is
-                    // also the backward-compatibility probe. Always the legacy list:
-                    // this dispatcher has no running config, and the stateless
-                    // revision is specified over streamable HTTP (a limitation, not
-                    // a decision that stdio is excluded).
+                    // also the backward-compatibility probe. It lists 2026-07-28 when
+                    // `server.modern_protocol` was on at stdio start (MIK-7217.STDIO.1);
+                    // a batch is a legacy shape and always gets the legacy list.
                     "server/discover" => stdio_tasks::advertised(
                         client.tasks,
                         JsonRpcResponse::success_serialized(
