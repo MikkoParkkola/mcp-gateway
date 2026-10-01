@@ -72,7 +72,19 @@ def test_a_body_that_may_hold_more_than_its_threads_is_flagged():
     codex_plus = review(CODEX + "\nAlso: the key is written to the log.", comments=2)
     prose = review(overview("1", LINKED + "The token also leaks in logs.\n"), comments=1)
     unlinked = review(overview("1", "Open (1)\n- The token leaks in logs\n"), comments=1)
-    flagged = [finding, error, more_than_inline, two_counts, codex_plus, prose, unlinked]
+    severities = review(overview('1 <img alt="High"> · 2 <img alt="Low">', LINKED), comments=3)
+    none_plus = review(overview("None, but the token leaks"))
+    flagged = [
+        finding,
+        error,
+        more_than_inline,
+        two_counts,
+        codex_plus,
+        prose,
+        unlinked,
+        severities,
+        none_plus,
+    ]
     assert sweep.body_findings(flagged) == flagged
 
 
