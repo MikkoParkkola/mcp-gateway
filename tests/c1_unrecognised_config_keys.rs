@@ -386,7 +386,8 @@ async fn refused_reload_keeps_the_running_config() {
         registry,
         running.failsafe.clone(),
         Duration::from_secs(60),
-    );
+    )
+    .expect("the registry pairs with the config");
 
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,

@@ -56,6 +56,7 @@ fn context(path: &Path, config: Config) -> ReloadContext {
         config.failsafe,
         Duration::from_secs(60),
     )
+    .expect("the registry pairs with the config")
 }
 
 async fn refused_mutation(path: &Path, with_context: bool) {

@@ -267,7 +267,7 @@ impl BackendRegistry {
             return false;
         }
         if let Some(destinations) = self.destination.get() {
-            backend.restamp(destinations.for_backend(&backend.name));
+            backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         let name = backend.name.clone();
         self.backends.insert(name.clone(), backend);
@@ -284,9 +284,15 @@ impl BackendRegistry {
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
     ///
-    /// A backend that already started an HTTP or WebSocket transport before
-    /// its stamp started it unpinned; the stamp retires those transports, so
-    /// its next use rebuilds them under the stamped policy (MIK-7700).
+    /// The first such pairing is refused, recording and stamping nothing, when
+    /// a backend already connected (or is connecting) over HTTP or WebSocket
+    /// under no policy: that transport is unpinned and cannot be re-pinned in
+    /// place (MIK-7700). A start that races the pairing is refused when it
+    /// publishes (`Backend::publish`).
+    ///
+    /// # Errors
+    ///
+    /// Names the first such backend, and nothing else of its config.
     ///
     /// The backends named in `security.hardened.private_backends` are
     /// stamped `Private` instead. The policy and the names are one snapshot,
@@ -296,11 +302,11 @@ impl BackendRegistry {
         &self,
         policy: crate::security::ssrf::DestinationPolicy,
         private_backends: &[String],
-    ) {
+    ) -> crate::Result<()> {
         // Unset already means `Configured`; recording anything but `Public`
         // would let a standard pairing block a later hardened one.
         if policy != crate::security::ssrf::DestinationPolicy::Public {
-            return;
+            return Ok(());
         }
         let _stopping = self.stopping.lock();
         let destinations = self.destination.get_or_init(|| Destinations {
@@ -308,8 +314,9 @@ impl BackendRegistry {
             private: private_backends.iter().cloned().collect(),
         });
         for backend in &self.backends {
-            backend.restamp(destinations.for_backend(backend.key()));
+            backend.stamp_destination(destinations.for_backend(backend.key()));
         }
+        Ok(())
     }
 
     /// Route every membership change to one consumer (F24). Set once, by the HTTP server.

@@ -213,22 +213,9 @@ pub struct Backend {
 }
 
 impl Backend {
-    /// Set by [`BackendRegistry`]; the first stamp wins. Returns whether
-    /// this call set it.
-    pub(crate) fn stamp_destination(
-        &self,
-        policy: crate::security::ssrf::DestinationPolicy,
-    ) -> bool {
-        self.destination.set(policy).is_ok()
-    }
-
-    /// Stamp `policy` and, when this call set it, retire every transport the
-    /// backend started before: they were built under the unstamped
-    /// `Configured` policy (MIK-7700).
-    pub(crate) fn restamp(&self, policy: crate::security::ssrf::DestinationPolicy) {
-        if self.stamp_destination(policy) && self.destination_bound() {
-            self.retire_started_transports();
-        }
+    /// Set by [`BackendRegistry`]; the first stamp wins.
+    pub(crate) fn stamp_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
+        let _ = self.destination.set(policy);
     }
 
     /// Whether this backend's transports connect under its destination

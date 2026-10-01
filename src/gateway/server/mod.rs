@@ -599,10 +599,11 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
+        // An empty registry: nothing has connected, so this cannot refuse.
         backends.enforce_destinations(
             DestinationPolicy::for_posture(config.security.posture),
             &config.security.hardened.private_backends,
-        );
+        )?;
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding
@@ -1609,7 +1610,7 @@ impl Gateway {
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
-                )
+                )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
                 .with_stop(reload_stop),
@@ -2295,7 +2296,7 @@ impl Gateway {
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
-                )
+                )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(grant_sink.clone()),
             );

@@ -722,13 +722,16 @@ async fn concurrent_reloads_do_not_both_add_the_same_backend() {
     )
     .unwrap();
 
-    let ctx = Arc::new(ReloadContext::new(
-        config_path,
-        Arc::new(LiveConfig::new(Config::default())),
-        Arc::new(crate::backend::BackendRegistry::new()),
-        crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    ));
+    let ctx = Arc::new(
+        ReloadContext::new(
+            config_path,
+            Arc::new(LiveConfig::new(Config::default())),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config"),
+    );
 
     // WHEN: two reloads start while the reload lock is held, so both are queued
     // before either can read the config.
@@ -811,13 +814,16 @@ async fn a_config_write_waits_for_the_reload_lock() {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("gateway.yaml");
 
-    let ctx = Arc::new(ReloadContext::new(
-        config_path.clone(),
-        Arc::new(LiveConfig::new(Config::default())),
-        Arc::new(crate::backend::BackendRegistry::new()),
-        crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    ));
+    let ctx = Arc::new(
+        ReloadContext::new(
+            config_path.clone(),
+            Arc::new(LiveConfig::new(Config::default())),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config"),
+    );
 
     // WHEN: a write starts while the reload lock is held
     let started = Arc::new(tokio::sync::Barrier::new(2));
@@ -863,13 +869,16 @@ async fn a_queued_edit_does_not_erase_the_edit_it_waited_for() {
     let config_path = dir.path().join("gateway.yaml");
     crate::config_persistence::write_config(&config_path, &Config::default()).unwrap();
 
-    let ctx = Arc::new(ReloadContext::new(
-        config_path.clone(),
-        Arc::new(LiveConfig::new(Config::default())),
-        Arc::new(crate::backend::BackendRegistry::new()),
-        crate::config::FailsafeConfig::default(),
-        Duration::from_secs(60),
-    ));
+    let ctx = Arc::new(
+        ReloadContext::new(
+            config_path.clone(),
+            Arc::new(LiveConfig::new(Config::default())),
+            Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::FailsafeConfig::default(),
+            Duration::from_secs(60),
+        )
+        .expect("the registry pairs with the config"),
+    );
 
     // WHEN: an edit adding "beta" is queued behind the reload lock
     let started = Arc::new(tokio::sync::Barrier::new(2));
@@ -1106,6 +1115,7 @@ fn test_reload_context(config_path: &std::path::Path) -> ReloadContext {
         crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     )
+    .expect("the registry pairs with the config")
 }
 
 // -------------------------------------------------------------------------
@@ -1142,6 +1152,7 @@ fn posture_context(config_path: &std::path::Path, running: Config) -> ReloadCont
         crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     )
+    .expect("the registry pairs with the config")
 }
 
 #[tokio::test]
