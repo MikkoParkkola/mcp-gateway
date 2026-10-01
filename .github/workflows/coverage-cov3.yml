@@ -25,16 +25,34 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
+      # A test that kills an instrumented child mid-write leaves a profile with
+      # a corrupt header, and llvm-profdata then refuses to merge any profile.
+      # Drop those (named in the log) before each report.
+      - name: Write the corrupt-profile sweep
+        run: |
+          cat > sweep-profiles.sh <<'SWEEP'
+          set -u
+          tool="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
+          for f in target/llvm-cov-target/*.profraw; do
+            [ -e "$f" ] || continue
+            if ! "$tool" show "$f" > /dev/null 2>&1; then
+              echo "dropping corrupt profile: $f"
+              rm -f -- "$f"
+            fi
+          done
+          SWEEP
       - name: Lib unit tests
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov --no-report --all-features --lib --ignore-run-fail > lib-run.log 2>&1
           grep -E '^test result|FAILED|panicked' lib-run.log || true
+          bash sweep-profiles.sh
           cargo llvm-cov report --summary-only --json --output-path lib.json
       - name: Add every test target (the contract command)
         run: |
           cargo llvm-cov --no-report --all-features --tests --ignore-run-fail > all-run.log 2>&1
           grep -E '^test result|FAILED|panicked' all-run.log || true
+          bash sweep-profiles.sh
           cargo llvm-cov report --summary-only --json --output-path all.json
           cargo llvm-cov report --lcov --output-path all.lcov
       - name: Per-path table
