@@ -35,6 +35,7 @@ nodes{author{login __typename} url body comments{totalCount}}}}}}"""
 # fixed template. A body matching neither is unaccounted for.
 COPILOT_OVERVIEW = "<!-- ccr-overview-v2 -->"
 COPILOT_FINDINGS = re.compile(r"\*\*Findings:\*\*\s*(None|\d+)")
+SECTION_HEADING = re.compile(r"(Open|Resolved|Outdated) \(\d+\)")
 CODEX_TEMPLATE = (
     "### 💡 Codex Review Here are some automated review suggestions for this pull request. "
     "**Reviewed commit:** `SHA` <details> <summary>ℹ️ About Codex in GitHub</summary> <br/> "
@@ -56,11 +57,32 @@ def _accounted_for(review: dict) -> bool:
     """Whether every finding this review's body could carry is in its threads."""
     body, inline = review["body"], review["comments"]["totalCount"]
     if COPILOT_OVERVIEW in body:
-        stated = COPILOT_FINDINGS.findall(body)
-        if len(stated) != 1:
-            return False
-        return (0 if stated[0] == "None" else int(stated[0])) <= inline
+        return _copilot_findings_all_in_threads(body, inline)
     return _normalised(body) == CODEX_TEMPLATE
+
+
+def _copilot_findings_all_in_threads(body: str, inline: int) -> bool:
+    """A Copilot overview lists its findings after one `**Findings:**` line, each
+    as an item linking its inline thread, under `Open (n)`-style headings. Any
+    other line there, an unlinked item, or a count above the linked threads and
+    the inline comments means the body may say more than the threads do."""
+    stated = COPILOT_FINDINGS.findall(body)
+    if len(stated) != 1:
+        return False
+    count = 0 if stated[0] == "None" else int(stated[0])
+    start = body.index("**Findings:**")
+    end = body.find("<details>", start)
+    section = body[start:end if end >= 0 else len(body)].splitlines()[1:]
+    linked = set()
+    for line in section:
+        text = re.sub(r"<[^>]+>", "", line).strip()
+        if not text or SECTION_HEADING.fullmatch(text):
+            continue
+        thread = re.search(r"#discussion_r(\d+)", line)
+        if not (text.startswith("- ") and thread):
+            return False
+        linked.add(thread.group(1))
+    return count <= len(linked) and count <= inline
 
 
 def body_findings(reviews: list[dict]) -> list[dict]:
