@@ -34,7 +34,7 @@ nodes{author{login __typename} url body comments{totalCount}}}}}}"""
 # Copilot's overview states how many findings it raised; Codex's summary is a
 # fixed template. A body matching neither is unaccounted for.
 COPILOT_OVERVIEW = "<!-- ccr-overview-v2 -->"
-COPILOT_FINDINGS = re.compile(r"\*\*Findings:\*\*\s*(None|\d+)")
+FINDINGS_COUNTS = re.compile(r"\d+(?:\s*·\s*\d+)*")
 SECTION_HEADING = re.compile(r"(Open|Resolved|Outdated) \(\d+\)")
 CODEX_TEMPLATE = (
     "### 💡 Codex Review Here are some automated review suggestions for this pull request. "
@@ -66,10 +66,17 @@ def _copilot_findings_all_in_threads(body: str, inline: int) -> bool:
     as an item linking its inline thread, under `Open (n)`-style headings. Any
     other line there, an unlinked item, or a count above the linked threads and
     the inline comments means the body may say more than the threads do."""
-    stated = COPILOT_FINDINGS.findall(body)
-    if len(stated) != 1:
+    lines = [line for line in body.splitlines() if "**Findings:**" in line]
+    if len(lines) != 1:
         return False
-    count = 0 if stated[0] == "None" else int(stated[0])
+    # One count per severity, e.g. "1 · 2"; the severity names are image text.
+    stated = re.sub(r"<[^>]+>", "", lines[0].split("**Findings:**", 1)[1]).strip()
+    if stated == "None":
+        count = 0
+    elif FINDINGS_COUNTS.fullmatch(stated):
+        count = sum(int(n) for n in re.findall(r"\d+", stated))
+    else:
+        return False
     start = body.index("**Findings:**")
     end = body.find("<details>", start)
     section = body[start:end if end >= 0 else len(body)].splitlines()[1:]
