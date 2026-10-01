@@ -1,0 +1,15 @@
+head_sha	09e3df4cc0a328f948d5bc84afa613ab99443d6c
+# G2 FULL tier: each store eviction, each end trigger, each activity stamp, the fold, the grace pass.
+m1-forget-profile	linux	m1-forget-profile.patch	--lib gateway::meta_mcp::session_cleanup_tests::a_disconnect_reclaims_the_routing_profile_and_spares_other_sessions
+m2-forget-state	linux	m2-forget-state.patch	--lib gateway::meta_mcp::session_cleanup_tests::a_disconnect_reclaims_the_fsm_state
+m3-forget-cost	linux	m3-forget-cost.patch	--lib gateway::meta_mcp::session_cleanup_tests::a_disconnect_reclaims_the_session_cost_bucket
+m4-forget-transition	linux	m4-forget-transition.patch	--lib gateway::meta_mcp::session_cleanup_tests::a_disconnect_forgets_the_last_tool_so_no_transition_spans_it
+m5-forget-stats	linux	m5-forget-stats.patch	--lib gateway::meta_mcp::session_cleanup_tests::a_disconnect_reclaims_the_cached_token_counter
+m6-forget-promoted	linux	m6-forget-promoted.patch	--lib gateway::meta_mcp::session_cleanup_tests::a_disconnect_reclaims_the_promoted_tools
+m7-reaper-end	linux	m7-reaper-end.patch	--lib gateway::streaming::tests::the_reaper_fires_session_end_handlers_for_a_reaped_session
+m8-resume-stamp	linux	m8-resume-stamp.patch	--lib gateway::router::handlers::session_subject_tests::a_session_older_than_the_ttl_that_stays_active_keeps_its_profile
+m9-direct-stamp	linux	m9-direct-stamp.patch	--lib gateway::streaming::tests::a_direct_backend_request_keeps_a_busy_session_from_the_reaper
+m10-hardened-stamp	linux	m10-hardened-stamp.patch	--lib gateway::streaming::tests::a_hardened_resume_keeps_a_busy_session_from_the_reaper
+m11-cost-fold	linux	m11-cost-fold.patch	--lib cost_accounting::tests::removing_a_session_keeps_its_calls_in_the_aggregate
+m12-delete-end	linux	m12-delete-end.patch	--lib gateway::router::handlers::session_subject_tests::an_owned_delete_reclaims_the_per_session_stores
+m13-grace-pass	linux	m13-grace-pass.patch	--lib gateway::session_lifecycle::tests::a_session_end_is_cleaned_a_second_time_after_the_grace_period

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 8f9351d95..888c345a1 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -167,7 +167,7 @@ impl NotificationMultiplexer {
+ 
+                 for id in mux.reap_expired_sessions(ttl) {
+                     // A reaped id is dead; state keyed by it goes with it.
+-                    lifecycle.on_disconnect(&id);
++                    let _ = &id;
+                 }
+ 
+                 let reclaimed = lifecycle.reap(now_unix());

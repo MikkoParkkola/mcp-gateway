@@ -1,0 +1,12 @@
+diff --git a/src/gateway/streaming_ownership.rs b/src/gateway/streaming_ownership.rs
+index 38b7acea4..9082748c1 100644
+--- a/src/gateway/streaming_ownership.rs
++++ b/src/gateway/streaming_ownership.rs
+@@ -35,7 +35,6 @@ impl NotificationMultiplexer {
+             .get(session_id?)
+             .filter(|session| session.owner == *owner)?;
+         *session.credential.write() = credential;
+-        *session.last_active.write() = std::time::Instant::now();
+         Some((
+             session.id.expose_secret().to_string(),
+             session.tx.subscribe(),

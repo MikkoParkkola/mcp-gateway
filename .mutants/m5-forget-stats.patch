@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/session_end.rs b/src/gateway/meta_mcp/session_end.rs
+index 55a7f2553..e615d839b 100644
+--- a/src/gateway/meta_mcp/session_end.rs
++++ b/src/gateway/meta_mcp/session_end.rs
+@@ -18,7 +18,6 @@ impl MetaMcp {
+             tracker.remove_session(session_id);
+         }
+         if let Some(stats) = &self.stats {
+-            stats.remove_session(session_id);
+         }
+     }
+ }

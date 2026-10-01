@@ -1,0 +1,13 @@
+diff --git a/src/cost_accounting/mod.rs b/src/cost_accounting/mod.rs
+index 1a56dc13c..7fcb3df47 100644
+--- a/src/cost_accounting/mod.rs
++++ b/src/cost_accounting/mod.rs
+@@ -622,7 +622,7 @@ impl CostTracker {
+             &session.total_cost_micro_usd,
+         ];
+         for (total, add) in self.sessionless.iter().zip(ended) {
+-            total.fetch_add(add.load(Ordering::Relaxed), Ordering::Relaxed);
++            let _ = (total, add);
+         }
+     }
+ }

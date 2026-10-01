@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/session_end.rs b/src/gateway/meta_mcp/session_end.rs
+index 55a7f2553..a75bd3aa9 100644
+--- a/src/gateway/meta_mcp/session_end.rs
++++ b/src/gateway/meta_mcp/session_end.rs
+@@ -12,7 +12,6 @@ impl MetaMcp {
+         #[cfg(feature = "spec-preview")]
+         self.clear_session_promoted(session_id);
+         self.session_profiles.remove_session(session_id);
+-        self.session_state.remove_session(session_id);
+         self.cost_tracker.remove_session(session_id);
+         if let Some(tracker) = self.get_transition_tracker() {
+             tracker.remove_session(session_id);

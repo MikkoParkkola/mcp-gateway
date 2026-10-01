@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index 131950074..ed9fc53a6 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -337,7 +337,7 @@ pub(super) async fn mcp_delete_handler(
+             info!(session_id = %session_fp(id), "Session terminated by client");
+             // The id is dead from here; what was keyed by it goes too.
+             if let Some(ref lifecycle) = state.session_lifecycle {
+-                lifecycle.on_disconnect(id);
++                let _ = (lifecycle, id);
+             }
+             StatusCode::NO_CONTENT
+         }
