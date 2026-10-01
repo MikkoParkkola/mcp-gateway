@@ -362,9 +362,10 @@ def body_length(headers):
     raw = values[0].strip()
     if not (raw.isascii() and raw.isdigit()):
         return 0, 400
-    if len(raw.lstrip("0")) > len(str(MAX_BODY)):
+    digits = raw.lstrip("0") or "0"
+    if len(digits) > len(str(MAX_BODY)):
         return 0, 413  # too long to convert cheaply, and certainly over MAX_BODY
-    n = int(raw)
+    n = int(digits)
     return (0, 413) if n > MAX_BODY else (n, None)
 
 
@@ -468,6 +469,7 @@ def selftest(workdir):
     two = email.message.Message()
     two["Content-Length"], two["Content-Length"] = "2", "999999"
     assert body_length(two) == (0, 400), "conflicting Content-Length accepted"
+    assert body_length({"Content-Length": "0" * 5000 + "5"}) == (5, None), "leading zeros"
     assert body_length({"Content-Length": "5"}) == (5, None) and body_length({}) == (0, None)
     srv.shutdown()
     rcv.shutdown()
