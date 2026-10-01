@@ -54,8 +54,14 @@ Codex can also answer questions or update the PR. Try commenting "@codex address
 </details>"""
 
 
-def overview(findings):
-    return "<!-- ccr-overview-v2 -->\n## Copilot review overview\n\n**Findings:** %s\n" % findings
+def overview(findings, section=""):
+    return (
+        "<!-- ccr-overview-v2 -->\n## Copilot review overview\n\n**Findings:** %s\n%s"
+        "<details><summary>What changed</summary>table</details>\n" % (findings, section)
+    )
+
+
+LINKED = "Open (1)\n- [Escape the header](#discussion_r42) · New\n"
 
 
 def test_a_body_that_may_hold_more_than_its_threads_is_flagged():
@@ -64,13 +70,15 @@ def test_a_body_that_may_hold_more_than_its_threads_is_flagged():
     more_than_inline = review(overview("2"), comments=1)
     two_counts = review(overview("None") + "\n**Findings:** 3\n")
     codex_plus = review(CODEX + "\nAlso: the key is written to the log.", comments=2)
-    flagged = [finding, error, more_than_inline, two_counts, codex_plus]
+    prose = review(overview("1", LINKED + "The token also leaks in logs.\n"), comments=1)
+    unlinked = review(overview("1", "Open (1)\n- The token leaks in logs\n"), comments=1)
+    flagged = [finding, error, more_than_inline, two_counts, codex_plus, prose, unlinked]
     assert sweep.body_findings(flagged) == flagged
 
 
 def test_bodies_whose_findings_are_all_in_threads_are_not_flagged():
     none = review(overview("None"))
-    counted = review(overview("2"), comments=3)
+    counted = review(overview("1", LINKED), comments=3)
     codex = review(CODEX.replace("8b6eb7146d", "0123456789"), comments=1)
     empty = review("   ")
     human = review("Looks wrong to me.", kind="User")
