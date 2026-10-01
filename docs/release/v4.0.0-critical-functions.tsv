@@ -92,6 +92,7 @@ src/gateway/router/handlers.rs	session_owner_key	1	standard	borderline	session_o
 src/gateway/router/handlers/owner.rs	request_session_owner	1	critical	a,c	request_session_owner	Resolves the grant subject, refuses bad identity headers, applies the hardened refusal.
 src/gateway/router/handlers/owner.rs	owner_of	1	standard	borderline	owner_of	Session owner rule (subject plus held-credential digest) used by both routes.
 src/gateway/router/handlers/owner.rs	session_owner	1	standard	borderline	session_owner	Owner from the validated principal, not the display name.
+src/gateway/router/handlers/request_checks.rs	request_check_refusal	1	critical	b,d	request_check_refusal	Refuses a declared revision this build does not serve and a header that contradicts the body's revision
 src/gateway/router/handlers/tasks.rs	recover_from_upstream	1	critical	a	recover_from_upstream	Re-authorizes the original target against the current caller before any upstream recovery query
 src/gateway/router/handlers/tasks.rs	route_task_owner	1	critical	c	route_task_owner	Picks the one owner string for every task arm; never derived from request data
 src/gateway/router/handlers/tasks.rs	task_intent_for_call	1	critical	a	task_intent_for_call	Refuses task creation without a verified identity when auth is on, or without an idempotency key
@@ -100,6 +101,9 @@ src/gateway/router/handlers/tasks.rs	tasks_cancel	1	standard	borderline	tasks_ca
 src/gateway/router/handlers/tasks.rs	tasks_get	1	standard	borderline	tasks_get	Wires the recovery authz and refuse_stored_delivery checks into the read path
 src/gateway/router/handlers/tasks.rs	update_caller	1	standard	borderline	update_caller	Resume caller must be the live update requester, not the creator
 src/gateway/router/handlers/tasks.rs	with_policy_caller	1	standard	borderline	with_policy_caller	Builds the live policy context; carrying signing would skip the policy recheck
+src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
+src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
+src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
 src/gateway/router/hardened_identity.rs	hardened_identity_refusal	1	critical	a	hardened_identity_refusal	Hardened posture: 403 without a per-caller identity.
 src/gateway/router/helpers.rs	read_body	1	standard	borderline	read_body	Maps the max_body_size limit to a 413 refusal.
 src/gateway/router/identity.rs	caller_grant_subject	1	critical	a,b	caller_grant_subject	Resolves the caller subject; refuses spoofed or malformed identity headers.
