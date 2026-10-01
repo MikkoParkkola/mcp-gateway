@@ -2,15 +2,20 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Directory-listing surface for the Claude plugin bundle.
 //!
-//! The catalogue assertions call [`ToolCatalogue::load`] on the capabilities
-//! directory `plugin/bin/launch.js` points at. They do not keep a second list
+//! The catalogue assertion starts the published server the same way
+//! `plugin/bin/launch.js` starts it, then reads `tools/list` and the
+//! capability catalogue that process loaded. It does not keep a second list
 //! of tool names as the source of truth.
 
 use std::collections::HashSet;
 use std::fs;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
-use mcp_gateway::cli::invoke::ToolCatalogue;
 use serde_json::Value;
 use walkdir::WalkDir;
 
@@ -256,7 +261,7 @@ fn mcp_json_command_is_node_not_a_shell() {
 }
 
 #[test]
-fn launch_js_pins_package_and_names_capabilities_env() {
+fn launch_js_pins_package_and_passes_a_config_file() {
     let root = repo_root();
     let manifest: Value =
         serde_json::from_str(&read(&root.join("plugin/.claude-plugin/plugin.json")))
@@ -268,8 +273,26 @@ fn launch_js_pins_package_and_names_capabilities_env() {
         launch.contains(&pin),
         "launch.js must pin {pin}, got the published package line missing"
     );
-    assert!(launch.contains("MCP_GATEWAY_CAPABILITIES"));
-    assert!(launch.contains("serve --stdio"));
+    assert!(
+        launch.contains("\"--config\""),
+        "launch.js must pass a config file to the published binary"
+    );
+    assert!(launch.contains("\"serve\""));
+    assert!(launch.contains("\"--stdio\""));
+    assert!(
+        launch.contains("delete env[key]"),
+        "launch.js must drop an inherited MCP_GATEWAY_CAPABILITIES value"
+    );
+    assert!(
+        !launch.contains("MCP_GATEWAY_CAPABILITIES:"),
+        "launch.js must not assign MCP_GATEWAY_CAPABILITIES"
+    );
+    let capabilities = capabilities_dir_from_launcher(&root, &launch);
+    assert!(
+        capabilities.starts_with(root.join("plugin")),
+        "the catalogue the launcher names must live inside the plugin folder, got {}",
+        capabilities.display()
+    );
     assert!(
         launch.contains("spawn("),
         "launcher must start the package with child_process.spawn"
@@ -323,52 +346,171 @@ fn privacy_states_local_facts_and_plugin_has_no_email() {
     }
 }
 
-#[tokio::test]
-async fn catalogue_loader_drops_payment_and_generative_media() {
-    let root = repo_root();
-    let launch = read(&root.join("plugin/bin/launch.js"));
-    let capabilities = capabilities_dir_from_launcher(&root, &launch);
-    assert!(
-        capabilities.starts_with(root.join("plugin")),
-        "the catalogue the launcher loads must live inside the plugin folder, got {}",
-        capabilities.display()
-    );
-    let catalogue = ToolCatalogue::load(capabilities.to_str().expect("capabilities path is utf-8"))
-        .await
-        .unwrap_or_else(|err| panic!("ToolCatalogue::load failed: {err}"));
-    let names: HashSet<&str> = catalogue
-        .all()
-        .iter()
-        .map(|cap| cap.name.as_str())
-        .collect();
+const REMOVED_TOOLS: [&str; 9] = [
+    "stripe_charges",
+    "stripe_create_payment_intent",
+    "audio_tts",
+    "video_create",
+    "video_agent_create",
+    "avatar_list",
+    "voice_list",
+    "video_get",
+    "video_download",
+];
 
-    for removed in [
-        "stripe_charges",
-        "stripe_create_payment_intent",
-        "audio_tts",
-        "video_create",
-        "video_agent_create",
-        "avatar_list",
-        "voice_list",
-        "video_get",
-        "video_download",
-    ] {
-        assert!(
-            !names.contains(removed),
-            "{removed} is still loaded from {}",
-            capabilities.display()
-        );
+const KEPT_TOOLS: [&str; 4] = [
+    "stripe_list_charges",
+    "audio_transcribe",
+    "image_to_text",
+    "screenshot_url",
+];
+
+/// Kills the launcher process group. `node` spawns `npx`, which spawns the
+/// published binary; killing only the node pid leaves the server running.
+struct KillGroup(u32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{}", self.0)])
+            .output();
+        let yaml = std::env::temp_dir().join(format!("mcp-gateway-plugin-{}.yaml", self.0));
+        let _ = fs::remove_file(yaml);
     }
-    for kept in [
-        "stripe_list_charges",
-        "audio_transcribe",
-        "image_to_text",
-        "screenshot_url",
-    ] {
-        assert!(
-            names.contains(kept),
-            "{kept} was not loaded from {}",
-            capabilities.display()
-        );
+}
+
+fn tool_names(tools: &Value) -> HashSet<String> {
+    tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn message_by_id(lines: &[String], id: u64) -> Value {
+    for line in lines {
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if value.get("id").and_then(Value::as_u64) == Some(id) {
+            return value;
+        }
     }
+    panic!("JSON-RPC response id {id} was not in the server stdout");
+}
+
+fn stderr_tail(err: &str) -> String {
+    let tail: String = err.chars().rev().take(800).collect();
+    tail.chars().rev().collect()
+}
+
+fn assert_cut(label: &str, names: &HashSet<String>) {
+    for removed in REMOVED_TOOLS {
+        assert!(!names.contains(removed), "{label} still exposes {removed}");
+    }
+    for kept in KEPT_TOOLS {
+        assert!(names.contains(kept), "{label} does not expose {kept}");
+    }
+}
+
+#[test]
+fn published_serve_tools_list_drops_payment_and_generative_media() {
+    let root = repo_root();
+    let mut command = Command::new("node");
+    command
+        .arg(root.join("plugin/bin/launch.js"))
+        .current_dir(root.join("plugin"))
+        // A parent value of this name crashes 3.5.1 serve unless the launcher
+        // removes it. The nested form would retarget the catalogue.
+        .env("MCP_GATEWAY_CAPABILITIES", "not-a-struct")
+        .env(
+            "MCP_GATEWAY_CAPABILITIES__DIRECTORIES",
+            "/not-a-capability-directory",
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().expect("spawn node plugin/bin/launch.js");
+    let guard = KillGroup(child.id());
+    let stdout = child.stdout.take().expect("stdout");
+    let mut stderr = child.stderr.take().expect("stderr");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut lines = Vec::new();
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            lines.push(std::mem::take(&mut line));
+            if lines.iter().any(|item| item.contains("\"id\":3")) {
+                break;
+            }
+        }
+        let _ = tx.send(lines);
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = stderr.read_to_string(&mut buf);
+        buf
+    });
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"directory-plugin-surface","version":"0"}}}"#,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"gateway_list_tools","arguments":{"server":"gateway"}}}"#,
+    ];
+    for request in requests {
+        writeln!(stdin, "{request}").expect("write JSON-RPC");
+    }
+    let _ = stdin.flush();
+
+    let lines = match rx.recv_timeout(Duration::from_secs(45)) {
+        Ok(lines) => lines,
+        Err(_) => {
+            drop(guard);
+            let err = stderr_handle.join().unwrap_or_default();
+            panic!(
+                "published serve did not answer tools/list\n{}",
+                stderr_tail(&err)
+            );
+        }
+    };
+    drop(stdin);
+    drop(guard);
+    let err = stderr_handle.join().unwrap_or_default();
+    assert!(
+        !err.contains("invalid type"),
+        "published serve rejected its config: {}",
+        stderr_tail(&err)
+    );
+
+    let listed = message_by_id(&lines, 2);
+    let listed_names = tool_names(&listed["result"]["tools"]);
+    assert_cut("tools/list", &listed_names);
+    assert!(
+        listed_names.len() > KEPT_TOOLS.len(),
+        "tools/list returned only the surfaced names"
+    );
+
+    let called = message_by_id(&lines, 3);
+    assert_ne!(called["result"]["isError"].as_bool(), Some(true));
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .expect("gateway_list_tools text");
+    let catalogue: Value = serde_json::from_str(text).expect("gateway_list_tools JSON");
+    let catalogue_names = tool_names(&catalogue["tools"]);
+    assert_cut("gateway_list_tools", &catalogue_names);
+    assert!(
+        catalogue_names.contains("weather"),
+        "gateway_list_tools did not return the loaded catalogue"
+    );
+    let _ = child.wait();
 }
