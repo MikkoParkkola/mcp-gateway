@@ -63,5 +63,12 @@ mod stdio1_discover_versions;
 // #2480: a stdio idempotent replay writes its invocation record.
 mod stdio_replay_audit;
 
+// MIK-7324.COV.3: the stdio chain-nonce refusal in `prepare_signing`.
+mod stdio_chain_nonce_refusal;
+
+// MIK-7324.COV.3: the firewall `response_firewall` builds carries anomaly blocking.
+#[cfg(feature = "firewall")]
+mod response_firewall_anomaly;
+
 #[cfg(feature = "firewall")]
 mod hardened_destination;

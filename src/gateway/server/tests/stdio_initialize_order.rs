@@ -102,8 +102,11 @@ async fn serve(
     let (backend_url, seen) = spawn_backend().await;
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
+    // The task store under the test's own directory, never the default under $HOME.
     let yaml = format!(
-        "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n"
+        "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\ntasks:\n  store_dir: {}\n",
+        serde_json::to_string(&dir.path().join("tasks").display().to_string())
+            .expect("a JSON string")
     );
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("config loads");

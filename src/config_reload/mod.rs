@@ -1811,6 +1811,13 @@ impl ReloadContext {
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let evaluated = self.load_off_worker().await?;
+        // First: a posture change also changes what the posture forces (signing
+        // among it), and the posture is the cause the operator must act on.
+        if let Some(refusal) =
+            posture::reload_refusal(self.live_config.running(), &evaluated.config)
+        {
+            return Err(refusal);
+        }
         let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
         let (env, overlay): (&crate::config::EnvOverlay, &crate::config::EnvOverlay) =
             (self.env.startup(), &evaluated.overlay);
@@ -1826,10 +1833,6 @@ impl ReloadContext {
             return Err(format!(
                 "config reload refused: security.{field} requires restart"
             ));
-        }
-        let running = self.live_config.running();
-        if let Some(refusal) = posture::reload_refusal(running, &evaluated.config) {
-            return Err(refusal);
         }
         // Measured against the overlay startup captured, so a requirement stays
         // reported on every reload until the process actually restarts.

@@ -640,6 +640,22 @@ async fn backend_handler_inner(
         );
     }
 
+    // Hardened (GH1942.HARDEN.1 row 10), before the backend lookup: this
+    // route keeps no handshake state, so it serves no legacy request other
+    // than an `initialize` that declares elicitation.
+    if super::hardened_elicitation::is_hardened(&state)
+        && let Some(refusal) = super::hardened_elicitation::direct_refusal(
+            &state,
+            &inbound_headers,
+            &json_request,
+            &method,
+            params.as_ref(),
+            id.as_ref(),
+        )
+    {
+        return refusal;
+    }
+
     // Find backend
     let Some(backend) = state.backends.get(&name) else {
         return build_http_error_response(
@@ -755,6 +771,31 @@ async fn backend_handler_inner(
     let chain_nonce = crate::protocol::mrtr::take_chain_nonce_params(params.as_mut())
         .ok()
         .flatten();
+    // Hardened signs every `tools/call` here too (GH1942.HARDEN.1 row 7). Its
+    // nonce comes off the params before sanitization, checked as the meta
+    // route checks it.
+    let signing_scope = crate::gateway::meta_mcp::signing::SigningScope::of(
+        state.live_config.running().security.posture,
+    );
+    let signs = method == "tools/call"
+        && state.meta_mcp.signing_enabled()
+        && signing_scope == crate::gateway::meta_mcp::signing::SigningScope::EveryToolCall;
+    let signing_nonce = if signs {
+        match crate::gateway::meta_mcp::signing::take_direct_nonce(params.as_mut()) {
+            Ok(nonce) => nonce,
+            Err(e) => {
+                let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+                return build_http_error_response(
+                    Some(id.clone()),
+                    e.to_rpc_code(),
+                    message,
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        }
+    } else {
+        None
+    };
     // Then this dispatch's own challenge for a chained backend (ASI07 R7).
     let mut challenge = None;
     if let (Some(sent), "tools/call") = (params.as_mut(), method.as_str()) {
@@ -997,7 +1038,7 @@ async fn backend_handler_inner(
         trace_id: "",
     };
     if method == "tools/call"
-        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call)
+        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, signing_scope)
     {
         return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
     }
@@ -1030,6 +1071,37 @@ async fn backend_handler_inner(
     } else {
         None
     };
+    // Admitted once, here: after every refusal above, so a refused call
+    // consumes no nonce, and before the cache below, so a replayed result is
+    // signed against the replaying request's own nonce. The store is the one
+    // the meta route admits into.
+    if signs {
+        // The meta route's own derivation (an authenticated key, then an OAuth
+        // agent, then a certificate), so one caller has one bucket on both.
+        let authorizer = super::authorization::RouterAuthorizer {
+            state: state.as_ref(),
+            client: client.as_ref(),
+            oauth_agent_identity: oauth_agent_identity.as_ref(),
+            cert_identity: cert_identity.as_ref(),
+            principal: None,
+        };
+        let principal = crate::gateway::authz::ToolAuthorizer::quota_principal(&authorizer).map_or(
+            "anonymous",
+            crate::gateway::auth::QuotaPrincipal::as_store_key,
+        );
+        if let Err(e) = state
+            .meta_mcp
+            .admit_signing_nonce(signing_nonce.as_deref(), principal)
+        {
+            let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+            return build_http_error_response(
+                Some(id.clone()),
+                e.to_rpc_code(),
+                message,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    }
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
@@ -1044,7 +1116,11 @@ async fn backend_handler_inner(
         ) {
             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
                 crate::gateway::meta_mcp::invoke::audit::note_cached();
-                let response = JsonRpcResponse::success(id.clone(), cached);
+                let mut response = JsonRpcResponse::success(id.clone(), cached);
+                if signs {
+                    let nonce = signing_nonce.as_deref();
+                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+                }
                 return build_http_response(&response, StatusCode::OK);
             }
             Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
@@ -1099,6 +1175,10 @@ async fn backend_handler_inner(
                 settle_direct_idempotency(idem_reservation.as_mut(), &response);
                 let nonce = chain_nonce.as_deref();
                 state.meta_mcp.finish_direct(&mut response, &method, nonce);
+                if signs {
+                    let nonce = signing_nonce.as_deref();
+                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+                }
                 build_http_response(&response, StatusCode::OK)
             }
             // Settled as terminal unless raised before dispatch
@@ -1171,6 +1251,10 @@ async fn backend_handler_inner(
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
             let nonce = chain_nonce.as_deref();
             state.meta_mcp.finish_direct(&mut response, &method, nonce);
+            if signs {
+                let nonce = signing_nonce.as_deref();
+                state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+            }
             build_http_response(&response, StatusCode::OK)
         }
         // Settled, never dropped: an unsettled reservation releases the key and
@@ -1351,99 +1435,13 @@ fn scan_direct_tools_list_response(
 ) {
 }
 
-/// GET /api/costs — REST endpoint for per-key and aggregate cost views.
-///
-/// - `?key=<name>`: view cost for a single API key
-/// - `X-Cost-Session-Id: <id>` header: view cost for one session
-/// - neither: aggregate view across all sessions and keys
-pub(super) async fn costs_handler(
-    State(state): State<Arc<AppState>>,
-    request: axum::http::Request<axum::body::Body>,
-) -> impl IntoResponse {
-    use std::collections::HashMap;
-
-    // Spend per session and per API key is cross-tenant inventory, and this
-    // endpoint consulted no identity at all. `/ui/api/costs` already requires
-    // admin; the two views of the same data now agree.
-    if !request
-        .extensions()
-        .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.admin)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Admin authentication required" })),
-        )
-            .into_response();
-    }
-
-    let query: HashMap<String, String> = request
-        .uri()
-        .query()
-        .map(|q| {
-            q.split('&')
-                .filter_map(|part| {
-                    let mut kv = part.splitn(2, '=');
-                    let k = kv.next()?;
-                    let v = kv.next().unwrap_or("");
-                    Some((k.to_string(), v.to_string()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // A session id is a bearer handle, so it travels in a header, never the
-    // URI (#1529): a query value lands in access and trace logs.
-    let bad = |message: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
-    if query.contains_key("session") {
-        return bad("Pass the session id in the X-Cost-Session-Id header, not ?session=")
-            .into_response();
-    }
-    let session = match request
-        .headers()
-        .get("x-cost-session-id")
-        .map(|v| v.to_str())
-    {
-        Some(Ok(id)) if !id.trim().is_empty() => Some(id.trim().to_string()),
-        Some(_) => return bad("X-Cost-Session-Id must be a non-empty text value").into_response(),
-        None => None,
-    };
-    if session.is_some() && query.contains_key("key") {
-        return bad("Select by ?key= or by X-Cost-Session-Id, not both").into_response();
-    }
-    let tracker = state.meta_mcp.cost_tracker();
-
-    let body = if let Some(key_name) = query.get("key") {
-        match tracker.key_snapshot(key_name) {
-            Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
-            None => serde_json::json!({
-                "error": format!("No data for key '{key_name}'")
-            }),
-        }
-    } else if let Some(session_id) = session {
-        match tracker.session_snapshot(&session_id) {
-            Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
-            None => serde_json::json!({
-                "error": format!("No data for session '{session_id}'")
-            }),
-        }
-    } else {
-        // Aggregate view: all sessions, all keys, totals
-        serde_json::json!({
-            "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::json!(null)),
-            "sessions": serde_json::to_value(tracker.all_sessions()).unwrap_or(serde_json::json!([])),
-            "keys": serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
-        })
-    };
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
+mod costs;
 mod direct_audit;
 mod direct_failure;
 mod direct_list;
 mod key_check;
 mod notification_key;
+pub(super) use costs::costs_handler;
 use direct_failure::DirectFailure;
 
 #[cfg(test)]
