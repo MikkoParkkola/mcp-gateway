@@ -127,7 +127,11 @@ fn capture(handle: &str) -> UpstreamCapture {
 
 /// Move the fixture row to a terminal state through the real cancel path.
 async fn cancel(f: &Fixture) {
-    let revision = f.service.get(OWNER, &f.id).expect("row is readable").revision;
+    let revision = f
+        .service
+        .get(OWNER, &f.id)
+        .expect("row is readable")
+        .revision;
     f.executor
         .cancel(OWNER, &f.id, revision)
         .await
@@ -269,11 +273,17 @@ async fn recovery_issues_no_query_without_a_claiming_adapter() {
         claims: true,
         queries: Arc::clone(&queried),
     })));
-    assert_eq!(recover(&f, &claiming, true).await, Ok(RecoveredRead::Retained));
+    assert_eq!(
+        recover(&f, &claiming, true).await,
+        Ok(RecoveredRead::Retained)
+    );
     assert_eq!(queried.load(Ordering::SeqCst), 1);
 
     // The reader's own verdict is final: unauthorized issues no further query.
-    assert_eq!(recover(&f, &claiming, false).await, Err(RecoveryRefusal::Denied));
+    assert_eq!(
+        recover(&f, &claiming, false).await,
+        Err(RecoveryRefusal::Denied)
+    );
     assert_eq!(queried.load(Ordering::SeqCst), 1, "denied before the wire");
     assert_eq!(
         f.executor
