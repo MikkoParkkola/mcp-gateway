@@ -2341,11 +2341,13 @@ calls together.
 - With `anomaly_detection: true`, the gateway refuses to start when `anomaly_threshold` is not
   above 0.5 and at most 1.0, when `anomaly_block_threshold` is not above `anomaly_threshold` and
   at most 1.0, or when `anomaly_min_observations` is 0. With detection off nothing is checked.
-- With `anomaly_detection: true`, an HTTP start is also refused when no caller can carry a caller
-  key: `auth.enabled`, `mtls.enabled` and `agent_auth.enabled` all false and
+- With the firewall and `anomaly_detection` on, an HTTP start is also refused when no caller can
+  carry a caller key: `auth.enabled`, `mtls.enabled` and `agent_auth.enabled` all false and
   `security.caller_identity.mode: off`. Every such call would arrive with an empty key, and the
   detector refuses a call it cannot attribute, so the gateway would refuse every call that has no
-  session. The error names `anomaly_detection` and `auth.enabled`. Stdio is not checked.
+  session. The error names `anomaly_detection` and `auth.enabled`. Stdio is not checked. Any one
+  of those sources passes the check even if it is optional, such as `mtls.require_client_cert:
+  false`; a caller that then presents no key is still refused per call.
 - A caller with no caller key has no A/B projection arm of its own (it gets the control arm) and
   no prefetch hints: neither is recorded or served for it.
 - The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`

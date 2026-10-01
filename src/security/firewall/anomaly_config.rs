@@ -73,7 +73,8 @@ pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Res
         || config.agent_auth.enabled
         || config.security.caller_identity.mode
             != crate::security::caller_identity::CallerIdentityMode::Off;
-    if config.security.firewall.anomaly_detection && !keyed {
+    let firewall = &config.security.firewall;
+    if firewall.enabled && firewall.anomaly_detection && !keyed {
         return Err(KEYLESS_HTTP.to_owned());
     }
     Ok(())
