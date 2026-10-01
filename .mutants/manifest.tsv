@@ -1,0 +1,6 @@
+head_sha	d22dc08f01ded61b4b82278073e459ed0f1fee1f
+# mutants for #2612
+DIRABSENT	linux	DIRABSENT.patch	--lib gateway::task_service::store_tests::durability::open_refuses_a_store_path_it_cannot_inspect_and_creates_nothing -- --exact
+DIRVARIANT	linux	DIRVARIANT.patch	--lib gateway::task_service::store_tests::durability::open_refuses_a_store_path_it_cannot_inspect_and_creates_nothing -- --exact
+LEASEABSENT	linux	LEASEABSENT.patch	--lib gateway::task_service::store_tests::durability::open_refuses_a_lease_it_cannot_inspect_and_creates_none -- --exact
+LEASEVARIANT	linux	LEASEVARIANT.patch	--lib gateway::task_service::store_tests::durability::open_refuses_a_lease_it_cannot_inspect_and_creates_none -- --exact

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index ca9f42606..286fda7c0 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -697,7 +697,7 @@ fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
+         }
+         Err(error) => {
+             tracing::warn!(%error, path = %dir.display(), "task store directory unreadable");
+-            Err(StoreError::Uninspectable)
++            Err(StoreError::Unavailable)
+         }
+     }
+ }
