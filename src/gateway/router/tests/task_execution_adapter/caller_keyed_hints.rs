@@ -246,7 +246,7 @@ async fn a_resume_renews_its_callers_reclaim_deadline() {
     wait_input_required(&state, &task).await;
     // The idle sweep reclaims the key while the task waits for input.
     lifecycle.reap(u64::MAX);
-    assert_eq!(lifecycle.tracked_count(), 0, "the sweep reclaimed the key");
+    std::assert_eq!(lifecycle.tracked_count(), 0, "the sweep reclaimed the key");
     let acked = post(
         &state,
         "key-a",
@@ -257,7 +257,7 @@ async fn a_resume_renews_its_callers_reclaim_deadline() {
         acked.get("error").is_none(),
         "the answer is accepted: {acked}"
     );
-    assert_eq!(
+    std::assert_eq!(
         lifecycle.tracked_count(),
         1,
         "the resume did not renew its caller's deadline"
