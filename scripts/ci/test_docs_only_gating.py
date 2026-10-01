@@ -91,7 +91,9 @@ def main() -> int:
         errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
     for wf in PUSH_ONLY_WORKFLOWS:
         doc = yaml.safe_load((ROOT / ".github/workflows" / wf).read_text())
-        if "pull_request" in (doc.get(True) or doc.get("on") or {}):  # PyYAML reads `on` as True
+        on = doc.get(True) or doc.get("on") or {}  # PyYAML reads `on` as True
+        events = {on} if isinstance(on, str) else set(on)
+        if any(e.startswith("pull_request") for e in events):
             errors.append(f"{wf} gained a pull_request trigger: gate it on ci.yml's scope job")
     cases = {
         "docs-only PR": ctx("pull_request", "success", "true"),
