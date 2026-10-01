@@ -310,18 +310,19 @@ async fn standard_signing_keeps_invoke_only_scope() {
         "standard signed a non-invoke meta call: {response}"
     );
 
+    // Standard keeps G7: with signing on, the direct route serves no
+    // tools/call, since only `gateway_invoke` is signed.
     let path = format!("/mcp/{BACKEND}");
     let request = modern_call(42, TOOL, &json!({}), Some("standard-direct"));
     let wire = post(&stack, &path, &request).await;
-    let response = parse(&wire);
+    assert!(
+        wire.contains("message signing is enabled; use gateway_invoke"),
+        "standard served a direct tools/call with signing on: {wire}"
+    );
     assert_eq!(
         stack.backend.calls().len(),
-        1,
-        "direct call dispatched: {response}"
-    );
-    assert!(
-        response["result"].get("_signature").is_none(),
-        "standard signed a direct call: {response}"
+        0,
+        "a refused direct call dispatched"
     );
 
     let invoke = modern_call(

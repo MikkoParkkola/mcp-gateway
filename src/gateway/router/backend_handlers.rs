@@ -1035,7 +1035,13 @@ async fn backend_handler_inner(
         trace_id: "",
     };
     if method == "tools/call"
-        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call)
+        && let Err(e) = DirectRouteGuards::run(
+            &state.meta_mcp,
+            &call,
+            crate::gateway::meta_mcp::signing::SigningScope::of(
+                state.live_config.running().security.posture,
+            ),
+        )
     {
         return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
     }
@@ -1073,14 +1079,19 @@ async fn backend_handler_inner(
     // signed against the replaying request's own nonce. The store is the one
     // the meta route admits into.
     if signs {
-        let principal = client
-            .as_ref()
-            .filter(|client| client.authenticated)
-            .and_then(|client| client.quota_principal.as_ref())
-            .map_or(
-                "anonymous",
-                crate::gateway::auth::QuotaPrincipal::as_store_key,
-            );
+        // The meta route's own derivation (an authenticated key, then an OAuth
+        // agent, then a certificate), so one caller has one bucket on both.
+        let authorizer = super::authorization::RouterAuthorizer {
+            state: state.as_ref(),
+            client: client.as_ref(),
+            oauth_agent_identity: oauth_agent_identity.as_ref(),
+            cert_identity: cert_identity.as_ref(),
+            principal: None,
+        };
+        let principal = crate::gateway::authz::ToolAuthorizer::quota_principal(&authorizer).map_or(
+            "anonymous",
+            crate::gateway::auth::QuotaPrincipal::as_store_key,
+        );
         if let Err(e) = state
             .meta_mcp
             .admit_signing_nonce(signing_nonce.as_deref(), principal)
