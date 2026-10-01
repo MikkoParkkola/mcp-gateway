@@ -1252,10 +1252,11 @@ impl HttpTransport {
                     let data = data.trim();
 
                     if event_type.as_deref() == Some("endpoint") {
-                        debug!(
-                            endpoint = %sanitize_url_for_diagnostics(data),
-                            "Received message endpoint from SSE"
-                        );
+                        // Computed before the macro: tracing compiles its arguments
+                        // twice, and the coverage instrument reads the copy that
+                        // never runs (MIK-7324).
+                        let endpoint = sanitize_url_for_diagnostics(data);
+                        debug!(endpoint = %endpoint, "Received message endpoint from SSE");
 
                         // Extract session_id from the endpoint URL if present.
                         // The SSE handshake is connection-level (not per-caller),
@@ -1423,10 +1424,9 @@ impl HttpTransport {
             if let Ok(id) = session_id.to_str() {
                 // Presence, not value: an MCP session ID is replayable, so a log
                 // reader who sees one can resume another caller's session.
-                info!(
-                    url = %sanitize_url_for_diagnostics(message_url.as_str()),
-                    "Stored session ID from response"
-                );
+                // Computed before the macro, as above (MIK-7324).
+                let diagnostic_url = sanitize_url_for_diagnostics(message_url.as_str());
+                info!(url = %diagnostic_url, "Stored session ID from response");
                 self.sessions
                     .write()
                     .insert(bucket.to_string(), id.to_string());
@@ -1448,9 +1448,14 @@ impl HttpTransport {
             // Debug: log all headers to find session ID
             // Header NAMES only. Values are backend-controlled and routinely
             // carry `set-cookie`, `authorization` echoes and bearer material.
-            debug!(url = %sanitize_url_for_diagnostics(message_url.as_str()), "No session ID in response. Header names: {:?}",
-                response.headers().keys().map(header::HeaderName::as_str).collect::<Vec<_>>()
-            );
+            // Computed before the macro, as above (MIK-7324).
+            let diagnostic_url = sanitize_url_for_diagnostics(message_url.as_str());
+            let names: Vec<&str> = response
+                .headers()
+                .keys()
+                .map(header::HeaderName::as_str)
+                .collect();
+            debug!(url = %diagnostic_url, "No session ID in response. Header names: {:?}", names);
         }
 
         let status = response.status();
