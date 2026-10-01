@@ -155,15 +155,9 @@ impl TenantGuard {
         }
         let mut tenants = Vec::new();
         self.collect(result, &mut tenants);
-        let texts = result
-            .get("content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|block| block.get("text").and_then(Value::as_str));
-        for text in texts {
-            // ponytail: a text block over 1 MiB is not parsed (an attribution
-            // miss); response inspection already scans the same text.
+        for text in Self::texts(result) {
+            // A text block over 1 MiB is not parsed (a DoS bound): the record
+            // says so through `response_uninspected` instead of naming none.
             if text.len() > MAX_PARSED_TEXT_BYTES {
                 continue;
             }
@@ -172,6 +166,28 @@ impl TenantGuard {
             }
         }
         tenants.into_iter().collect()
+    }
+
+    /// Whether tenant attribution is configured (`arg_keys` set).
+    pub(crate) fn attributes(&self) -> bool {
+        !self.config.arg_keys.is_empty()
+    }
+
+    /// MIN.1 gap 2: whether `result` holds a `content[].text` block over the
+    /// parse bound, so [`Self::response_tenants`] could not read its tenants.
+    pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
+        !self.config.arg_keys.is_empty()
+            && Self::texts(result).any(|text| text.len() > MAX_PARSED_TEXT_BYTES)
+    }
+
+    /// The `content[].text` blocks of a tool result.
+    fn texts(result: &Value) -> impl Iterator<Item = &str> {
+        result
+            .get("content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|block| block.get("text").and_then(Value::as_str))
     }
 
     /// Gather every value under a configured tenant key, at any depth.

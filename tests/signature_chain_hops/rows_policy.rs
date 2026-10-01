@@ -303,3 +303,34 @@ async fn two_real_gateways_chain_end_to_end() {
         client_verify(&response, "n-real").unwrap_or_else(|rule| panic!("{rule}: {response}"));
     assert_eq!(links.len(), 2, "{response}");
 }
+
+/// MIN.1 gap 2 (review of #2529): a reply refused at raw receipt for its chain
+/// never reaches the gates that read tenants, so with attribution configured
+/// its record must say the tenants were not read, on both routes.
+#[tokio::test]
+async fn chain_refused_reply_is_recorded_uninspected() {
+    for route in ROUTES {
+        let log = tempfile::tempdir().expect("log directory");
+        let path = log.path().join("audit.jsonl");
+        let upstream = FakeUpstream::start(Mode::NoChain).await;
+        let mut config = d_config(&upstream.url, "require", "on_request");
+        config["security"]["transparency_log"] =
+            json!({"enabled": true, "path": path.to_string_lossy()});
+        config["security"]["firewall"] = json!({"tenant_guard": {"arg_keys": ["customer_id"]}});
+        let d = HttpGateway::start(config).await;
+        let response = call(&d, route, Some("n-uninspected")).await;
+        assert_eq!(response["error"]["code"], -32001, "{route:?}: {response}");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let records: Vec<Value> = text
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|entry| entry.get("route").is_some())
+            .collect();
+        assert_eq!(records.len(), 1, "{route:?}: {records:?}");
+        assert_eq!(
+            records[0]["attribution"], "uninspected",
+            "{route:?}: {}",
+            records[0]
+        );
+    }
+}

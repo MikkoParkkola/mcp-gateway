@@ -64,8 +64,9 @@ fn response_tenants_ignores_non_json_text() {
     assert!(g.response_tenants(&prose).is_empty());
 }
 
-/// T6. A text block over 1 MiB is not parsed, even when it is valid JSON
-/// naming a tenant.
+/// T6 (re-pinned, MIN.1 gap 2). A text block over 1 MiB is not parsed, even
+/// when it is valid JSON naming a tenant (the denial-of-service bound holds), and the
+/// result says so: its tenants were not read, which is not the same as none.
 #[test]
 fn response_tenants_skips_text_over_one_mib() {
     let g = guard(false, 1);
@@ -73,4 +74,18 @@ fn response_tenants_skips_text_over_one_mib() {
     let big = format!(r#"{{"customer_id":"cust-9","pad":"{padding}"}}"#);
     let result = json!({"content": [{"type": "text", "text": big}]});
     assert!(g.response_tenants(&result).is_empty());
+    assert!(
+        g.response_uninspected(&result),
+        "an over-bound block is uninspected"
+    );
+    let small = json!({"content": [{"type": "text", "text": "{\"customer_id\":\"cust-9\"}"}]});
+    assert!(
+        !g.response_uninspected(&small),
+        "a parsed block is inspected"
+    );
+    let off = TenantGuard::new(TenantGuardConfig::default());
+    assert!(
+        !off.response_uninspected(&result),
+        "no arg_keys, no attribution"
+    );
 }
