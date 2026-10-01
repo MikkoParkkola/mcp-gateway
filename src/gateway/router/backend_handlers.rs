@@ -519,8 +519,6 @@ async fn backend_handler_inner(
         oauth_agent_identity.as_ref(),
         cert_identity.as_ref(),
     );
-    // The passthrough slot budget's key: credential-unique, unlike `proven`,
-    // which is a display label for refusals (MIK-7689).
     let slot = slot_principal(
         client.as_ref(),
         oauth_agent_identity.as_ref(),
@@ -1197,9 +1195,9 @@ async fn backend_handler_inner(
     // so it can be filtered per caller and answered without a cursor (A3).
     let forward = if method == "tools/list" {
         let (headers, key) = (&propagated_headers, identity_key.as_deref());
-        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name)
-            .await
-            .inspect(|_| record_client_success(&state, client.as_ref()))
+        // Success is recorded after the firewall pass below: a listing it
+        // refuses is not a client success (MIK-7708).
+        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name).await
     } else {
         let warnings = if method == "tools/call" {
             match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
@@ -1240,6 +1238,9 @@ async fn backend_handler_inner(
                 // computed before it can say `within` about a document the
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
+                if response.error.is_none() {
+                    record_client_success(&state, client.as_ref());
+                }
                 normalize_tools_list_response(&backend, &mut response);
                 // List = invoke: only what this route's `tools/call` admits.
                 let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());
