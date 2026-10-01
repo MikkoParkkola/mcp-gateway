@@ -163,6 +163,7 @@ async fn an_http_restart_settles_a_stdio_task_but_cannot_read_it() {
     let mut again = world.stdio("t10-b.log").await;
     settled_after_dispatch(&again.request(&tasks_get(json!(3), &id)).await);
     world.backend.open_barrier();
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert_eq!(world.backend.rounds(), 1, "never rerun");
     again.close().await;
 }

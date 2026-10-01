@@ -48,6 +48,7 @@ async fn dispatch_on(meta: &Arc<MetaMcp>, request: Value) -> Value {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
+            modern: false,
         },
         &super::super::StdioTelemetry::default(),
     )

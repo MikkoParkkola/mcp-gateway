@@ -1085,7 +1085,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. The team preset covers context integrity only (src/config/features/security.rs:516-530); the other controls are separate opt-ins. Anomaly blocking is inert until #1756 is fixed (its transition tracker is never fed), so that conjunct cannot be met before #1756. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "note": "Pending, ungraded. Built so far under security.posture (docs/design/2026-09-28-hardened-posture.md, increments 1-5): #1756 anomaly learning and forced blocking, the posture resolver with preset floor, restart-only posture and the multi-user WARN and doctor row, per-caller identity (row 8), the destination policy (4b, #2504), and in increment 5 forced signing of every tools/call on both routes and the elicitation requirement for legacy clients (rows 6, 7, 10, 11; docs/design/2026-10-01-hardened-increment-5-signing-elicitation.md). Still open: 4c security.hardened.private_backends, which waits on operator decision 8; and T14 (the WebSocket whole-connect timeout test), which needs 4c's loopback-allowing pinned policy and moves with it. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md."
     },
     {
       "id": "GH1943.PROV.1",
@@ -1360,11 +1360,28 @@
     },
     {
       "id": "MIK-7272.OWNER.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
+      "evidence": [
+        "tests/mik_7272_owner2_stdio_tasks.rs:101",
+        "tests/mik_7272_owner2_stdio_tasks.rs:113",
+        "tests/mik_7272_owner2_stdio_tasks.rs:134",
+        "tests/mik_7272_owner2_stdio_tasks.rs:172",
+        "tests/mik_7272_owner2_stdio_tasks.rs:205",
+        "tests/mik_7272_owner2_stdio_tasks.rs:259",
+        "tests/mik_7272_owner2_stdio_tasks.rs:287",
+        "tests/mik_7272_owner2_stdio_tasks_owner.rs:79",
+        "tests/mik_7272_owner2_stdio_tasks_owner.rs:142",
+        "tests/mik_7272_owner2_stdio_tasks_owner.rs:156",
+        "src/gateway/server/tests/owner2_stdio_tasks.rs:150",
+        "src/gateway/server/tests/owner2_stdio_tasks.rs:173",
+        "src/gateway/server/tests/owner2_stdio_tasks.rs:550",
+        "src/gateway/server/stdio_tasks.rs:28",
+        "src/gateway/task_route.rs:36",
+        "src/gateway/task_service/execution/context.rs:205"
+      ],
+      "note": "Met 2026-10-01 (#2538, squash a83d94108). Clause read, VERIFIED, under design D6 rev 5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'the same protected task store reopens or relocates and its typed local operator retrieves the task': stdio keeps its tasks in <tasks.store_dir>/stdio (src/gateway/server/stdio_tasks.rs:28); the local operator creates and reads a task over the spawned binary (tests/mik_7272_owner2_stdio_tasks.rs:101), reads it after a reopen (tests/mik_7272_owner2_stdio_tasks.rs:113) and after the base directory moves, with record names unchanged (tests/mik_7272_owner2_stdio_tasks.rs:134). (2) 'another store ... cannot retrieve': a fresh store answers -32602 no such task (tests/mik_7272_owner2_stdio_tasks.rs:172). (3) 'a same-store HTTP owner cannot retrieve or alias it': HTTP pointed at the stdio store, auth off and with an API key, gets no such task for get, cancel and update, and the task stays completed (tests/mik_7272_owner2_stdio_tasks_owner.rs:79); HTTP owner text cannot name the reserved owner (src/gateway/task_route.rs:36; src/gateway/server/tests/owner2_stdio_tasks.rs:173); an HTTP restart settles an interrupted stdio task but cannot read it (tests/mik_7272_owner2_stdio_tasks_owner.rs:156). The typed owner survives the worker's context rebuild (src/gateway/task_service/execution/context.rs:205; src/gateway/server/tests/owner2_stdio_tasks.rs:150). (4) 'no global lookup and no new instance UUID': records are task-*.json under the stdio directory only, unchanged by relocation (tests/mik_7272_owner2_stdio_tasks.rs:134, :259); the owner is a digest of the reserved principal, not of a path or instance. Lifecycle: a held store degrades honestly (tests/mik_7272_owner2_stdio_tasks.rs:205), an explicitly shared store names the holder (tests/mik_7272_owner2_stdio_tasks.rs:287), interrupted tasks settle and never rerun (tests/mik_7272_owner2_stdio_tasks_owner.rs:142), and EOF drains a running task before the store closes (src/gateway/server/tests/owner2_stdio_tasks.rs:550). CI run 36816285610 and feature combinations run 36817150683 green on head e6bbd0635. Mutants: run 36810957985 (R0, N1-N5, N7-N9, N11-N13 RED) and run 36816554139 (N10 RED at U9). Two code-review seats (SHIP; SHIP-WITH-FIXES, fixes taken) plus a delta seat on U9. Independent functional gate (leg b): PASSED, 50/50 public assertions over scenarios S1-S10, no product failure. A fresh agent that read no source, tests, design or PR text drove the CI image built from release-line 47f0aade6 (a descendant of a83d94108; docker.yml run 36826609109, artifact image-arm64-47f0aade6342b5e7aa36e5334ea39ac90cf2b620), pinned by manifest digest sha256:cfa1b80ab454970c46e9fb96178f45be36b4fde521ee0e2fa80a09930fe70f77, never by tag. It covered reopen and relocation reads, another store answering -32602, auth-off and auth-on HTTP owners refused on the same store, HTTP and stdio side by side, a held store degrading, a drained slow task, legacy calls, and S10: only task-*.json under tasks/stdio plus the lease, no global index, nothing written to the config directory. The one other UUID in a task record is the stored result's per-call trace_id (gw-<uuid>, minted once per gateway_invoke, src/gateway/trace.rs:5-8, src/gateway/meta_mcp/support.rs:474), identical across reopen and relocation, so no instance UUID is minted. Notes: the first S5/S6 HTTP attempts reached an unrelated host gateway on a busy port and were discarded and re-run on a free port; the brief omitted the Mcp-Name header HTTP tools/call needs, a brief defect. \n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
     },
     {
       "id": "MIK-7272.OWNER.3",
@@ -1406,8 +1423,8 @@
     },
     {
       "id": "MIK-7272.LIFE.1",
-      "status": "met",
-      "stage": "met",
+      "status": "pending",
+      "stage": "graded",
       "blocked_on": "none",
       "evidence": [
         "src/gateway/server/tests/life1_stdio_cancel.rs:238",
@@ -1423,7 +1440,7 @@
         "src/gateway/server/stdio_dispatches.rs:28",
         "src/gateway/server/stdio_channel.rs:106"
       ],
-      "note": "Met 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
+      "note": "Reopened 2026-10-01 (GH1625.BOTREVIEW.1 sweep): an automated review on #2519 (https://github.com/MikkoParkkola/mcp-gateway/pull/2519#discussion_r4150902099, codex P1) holds at source. A client may reuse a request id once its answer is out, but the answered dispatch is mapped until the serve loop reaps it: StdioDispatches::spawn keeps the old mapping for the reused id (src/gateway/server/stdio_dispatches.rs:65-75), so a cancel aborts the finished task and the new call runs on, and a late cancel for the answered id also silences the next call that reuses it. A cancel that does not release the call it names fails clause (1), so the grade was wrong. Fix: #2557. Re-graded when it merges.\n\n--- prior note follows ---\nMet 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
     },
     {
       "id": "MIK-7324.COV.3",

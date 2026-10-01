@@ -22,6 +22,11 @@
 //!   OAuth URLs are checked before use, and proxy environment variables are
 //!   ignored. The policy is stamped by the backend registry, so a backend
 //!   used with no config at all has no posture and none is enforced;
+//! - message signing is on, so a start without a signing secret of at least
+//!   32 bytes is refused; every successful `tools/call` result on both routes
+//!   is signed;
+//! - a legacy client must declare elicitation, and an unconfirmable legacy
+//!   destructive call is refused;
 //! - startup is refused on a build without the `firewall` feature.
 //!
 //! Changing the posture needs a restart; a reload that changes it is refused.
@@ -103,6 +108,9 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
     context_integrity.non_bypassable = true;
     config.security.ssrf_protection = true;
     config.security.trust_configured_backends = false;
+    // Before `message_signing.resolve_with_env`, which every caller runs
+    // after this, so an env-only secret resolves and a missing one refuses.
+    config.security.message_signing.enabled = true;
     #[cfg(feature = "firewall")]
     force_anomaly_blocking(&mut config.security.firewall)?;
     Ok(())
@@ -180,11 +188,13 @@ pub(crate) fn log_startup(config: &Config) {
         let firewall = String::new();
         tracing::info!(
             "security.posture=hardened enforcing: context_integrity preset={} \
-             non_bypassable={} ssrf_protection={} trust_configured_backends={}{firewall}",
+             non_bypassable={} ssrf_protection={} trust_configured_backends={} \
+             message_signing.enabled={}{firewall}",
             preset.as_str().unwrap_or_default(),
             context_integrity.non_bypassable,
             config.security.ssrf_protection,
-            config.security.trust_configured_backends
+            config.security.trust_configured_backends,
+            config.security.message_signing.enabled
         );
     } else if let Some(warning) = unhardened_multi_user_warning(config) {
         tracing::warn!("{warning}");
