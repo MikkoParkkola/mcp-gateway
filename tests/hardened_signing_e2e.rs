@@ -87,10 +87,17 @@ struct Stack {
 }
 
 async fn stack() -> Stack {
+    stack_with(|_| {}).await
+}
+
+/// [`stack`], with `edit` applied to the outer config before it starts.
+async fn stack_with(edit: impl FnOnce(&mut Value)) -> Stack {
     let backend = BackendFixture::start(backend_result()).await;
     let inner = tempfile::tempdir().expect("inner directory");
     let inner_path = inner_config(inner.path(), &backend.url);
-    let gateway = HttpGateway::start(outer_config(&inner_path, inner.path())).await;
+    let mut config = outer_config(&inner_path, inner.path());
+    edit(&mut config);
+    let gateway = HttpGateway::start(config).await;
     Stack {
         backend,
         gateway,
@@ -361,5 +368,27 @@ async fn hardened_direct_cached_result_is_signed() {
     assert!(
         oracle_accepts(&second, &id, "cached-second").await,
         "the replay's MAC must verify for its own nonce: {second}"
+    );
+}
+
+/// Row 7: a passthrough backend takes the direct route's other dispatch exit,
+/// and is signed and replay-checked there too.
+#[tokio::test]
+async fn hardened_passthrough_direct_call_is_signed() {
+    let stack = stack_with(|config| config["backends"][INNER]["passthrough"] = json!(true)).await;
+    let path = format!("/mcp/{INNER}");
+    let wire = post(&stack, &path, &direct_call(61, Some("passthrough-nonce"))).await;
+    assert_eq!(
+        stack.backend.calls().len(),
+        1,
+        "passthrough dispatched: {wire}"
+    );
+    assert_signed(&wire, "passthrough-nonce", "a passthrough direct call");
+    let again = post(&stack, &path, &direct_call(62, Some("passthrough-nonce"))).await;
+    assert_refused(&again, "a replayed passthrough nonce");
+    assert_eq!(
+        stack.backend.calls().len(),
+        1,
+        "a replay reached the backend"
     );
 }
