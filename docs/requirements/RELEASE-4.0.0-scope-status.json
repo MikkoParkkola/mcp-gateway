@@ -1317,18 +1317,18 @@
     {
       "id": "MIK-7211.PARENT.1",
       "status": "pending",
-      "stage": "ungraded",
+      "stage": "graded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only. U5 ANSWERED 2026-10-01: the header contract (docs/design/RFC-0060-dual-generation-mcp.md:199-203) closes it without a prototype, and RFC-0061 Decision 1 (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:110-122) records the outcome, the gateway stays hand-rolled; the RFC-0060 open-questions table now says so. Pending on U1 only: a fresh 7-day window runs on the operator's live gateway from 2026-10-01 13:12 CEST (lead decision, HOLD)."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only. U5 ANSWERED 2026-10-01: the header contract (docs/design/RFC-0060-dual-generation-mcp.md:199-203) closes it without a prototype, and RFC-0061 Decision 1 (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:110-122) records the outcome, the gateway stays hand-rolled; the RFC-0060 open-questions table now says so. U5 met. Pending on U1 only. U1 window: started 2026-10-02 01:22:04 CEST (started_at_unix_seconds 1790896924), ends 2026-10-09 01:22:04 CEST (604,800 s), on the live gateway 4.0.0-e2c34b78 (PID 6352). Baseline: a read-only /metrics scrape at the start, kept maintainer-local as u1-baseline-20261001T232204Z.prom (22816 bytes, sha256 87133a1c713a821147c998c192b07e579fba5a52529c9c323074fa1d7bca1c05). The earlier 13:12 CEST window never existed: that process was restarted at 2026-10-01 18:05:34 CEST, cause not recorded. Restart guard: the PID is recorded every 10 minutes; a change invalidates the window. U1 is graded from the scrape at the window's end."
     },
     {
       "id": "MIK-7211.PARENT.5",
       "status": "pending",
-      "stage": "ungraded",
+      "stage": "graded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. RFC-0060 is DRAFT and its U1 window has not started, so no measured data exists yet."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Pending on U1: the compatibility-window decision cites U1's measured data, available at the window's end. U1 window: started 2026-10-02 01:22:04 CEST (started_at_unix_seconds 1790896924), ends 2026-10-09 01:22:04 CEST (604,800 s), on the live gateway 4.0.0-e2c34b78 (PID 6352). Baseline: a read-only /metrics scrape at the start, kept maintainer-local as u1-baseline-20261001T232204Z.prom (22816 bytes, sha256 87133a1c713a821147c998c192b07e579fba5a52529c9c323074fa1d7bca1c05). The earlier 13:12 CEST window never existed: that process was restarted at 2026-10-01 18:05:34 CEST, cause not recorded. Restart guard: the PID is recorded every 10 minutes; a change invalidates the window. U1 is graded from the scrape at the window's end."
     },
     {
       "id": "MIK-7211.PARENT.6",
