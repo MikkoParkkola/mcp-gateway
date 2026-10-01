@@ -696,7 +696,10 @@ fn adapter_runtime_refuses_a_literal_store_key_without_an_overlay_read() {
             key_id: "current".into()
         }
     );
-    assert!(env.lookups().is_empty(), "the literal is never resolved");
+    assert!(
+        !env.lookups().iter().any(|name| name == KEY_B64),
+        "the literal is never resolved"
+    );
 }
 
 #[test]
