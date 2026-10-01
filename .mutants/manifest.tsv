@@ -1,0 +1,6 @@
+head_sha	f3d2456e33ff981cf0944987059f404b07032a9e
+# MIK-7215.CONTROL.5 G4 task path, PR 2607
+CREATENONE	linux	createnone.patch	--lib gateway::router::tests::task_execution_adapter::caller_keyed_hints
+RESUMENONE	linux	resumenone.patch	--lib gateway::router::tests::task_execution_adapter::caller_keyed_hints
+DISPATCHNONE	linux	dispatchnone.patch	--lib gateway::router::tests::task_execution_adapter::caller_keyed_hints
+RENEWOFF	linux	renewoff.patch	--lib gateway::router::tests::task_execution_adapter::caller_keyed_hints

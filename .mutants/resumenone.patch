@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers/tasks.rs b/src/gateway/router/handlers/tasks.rs
+index ae737de40..2098075c2 100644
+--- a/src/gateway/router/handlers/tasks.rs
++++ b/src/gateway/router/handlers/tasks.rs
+@@ -456,7 +456,7 @@ fn update_caller(
+         RetryFields::from_params(params).attestation,
+     )
+     // The resuming request's own key, as everything else here (G4).
+-    .with_caller_key(Some(resume_key))
++    .with_caller_key(None)
+ }
+ 
+ pub(super) async fn tasks_cancel(

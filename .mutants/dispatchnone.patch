@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/context.rs b/src/gateway/task_service/execution/context.rs
+index af0f5592c..2a403444d 100644
+--- a/src/gateway/task_service/execution/context.rs
++++ b/src/gateway/task_service/execution/context.rs
+@@ -215,7 +215,7 @@ impl OwnedCallerContext {
+             // principal and `LocalTransport` provenance survive the rebuild
+             // (D6 rev 5 item 2). An HTTP host has none.
+             stdio_nonce: host.stdio_nonce(),
+-            caller_key: self.caller_key.as_deref(),
++            caller_key: None,
+             verified_identity: self.verified_identity.as_ref(),
+             is_admin: self.is_admin,
+             input_capabilities: self.input_capabilities,

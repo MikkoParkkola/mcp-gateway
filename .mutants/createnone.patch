@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers/tasks.rs b/src/gateway/router/handlers/tasks.rs
+index ae737de40..aa4852a9b 100644
+--- a/src/gateway/router/handlers/tasks.rs
++++ b/src/gateway/router/handlers/tasks.rs
+@@ -171,7 +171,7 @@ pub(super) fn task_intent_for_call(
+             req.protocol_revision.map(str::to_owned),
+             req.retry.attestation.clone(),
+         )
+-        .with_caller_key(Some(caller_key)),
++        .with_caller_key(None),
+         // One builder, shared with the confirmation gate's read-only committed
+         // lookup, and the SAME owner string the read arms use. Two renderings
+         // of one caller is how an accepted retry's replay misses the task it
