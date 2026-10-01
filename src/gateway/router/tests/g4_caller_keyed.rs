@@ -151,6 +151,12 @@ async fn r1_one_callers_tool_is_never_another_callers_predecessor() {
         !hints_beta(delivered(&last)),
         "u2's beta_tool was learned as open-key's successor: {last}"
     );
+    // Its own history: alpha_read after alpha_read, three times.
+    assert!(
+        last.to_string().contains("predicted_next")
+            && last.to_string().matches("alpha_read").count() > 0,
+        "open-key's own sequence is not predicted: {last}"
+    );
 }
 
 #[tokio::test]
@@ -427,5 +433,43 @@ async fn r7_a_keyed_modern_call_is_tracked_for_idle_reclaim() {
         lifecycle.tracked_count(),
         1,
         "the caller key has no reclaim deadline"
+    );
+}
+
+/// How many A/B events one `gateway_invoke` of the projected capability emits
+/// as `bearer`, read from a real tracing subscriber.
+fn ab_events(auth: Auth, bearer: Option<&'static str>) -> usize {
+    let records = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let (f, _endpoint) = arm_fixture(auth, ProjectionMode::Experimental).await;
+                let body = modern(
+                    &f.router,
+                    bearer,
+                    "gateway_invoke",
+                    invoke(PROJ_CAPS, PROJ_DAY),
+                )
+                .await;
+                delivered(&body);
+            });
+    });
+    crate::test_log_capture::count(&records, "INFO", "projection A/B invocation")
+}
+
+#[test]
+fn r4b_a_keyless_call_emits_no_ab_event() {
+    // Not vacuous: a keyed caller's call is in the experiment and is logged.
+    assert_eq!(
+        ab_events(Auth::Keys, Some("u2")),
+        1,
+        "the capture sees no A/B event"
+    );
+    assert_eq!(
+        ab_events(Auth::Off, None),
+        0,
+        "a keyless call was counted in an arm"
     );
 }
