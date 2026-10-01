@@ -15,6 +15,9 @@ use super::*;
 const RESOURCE: &str = "https://backend.example.com/mcp";
 const BACKEND: &str = "cov3-backend";
 const CLIENT_ID: &str = "cov3-client";
+/// The code the person at the browser approves: distinctive, so a log search
+/// for it cannot match anything else.
+const APPROVED_CODE: &str = "code-7f3a91e2-never-logged";
 
 /// Every form the token endpoint received, in arrival order.
 type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
@@ -147,7 +150,7 @@ async fn approve_via(
         let callback = Url::parse_with_params(
             &query["redirect_uri"],
             &[
-                ("code", "c1"),
+                ("code", APPROVED_CODE),
                 ("state", query["state"].as_str()),
                 ("iss", iss),
             ],
@@ -204,7 +207,7 @@ async fn authorize_redeems_a_code_only_after_the_callback_proves_state_and_issue
     assert_eq!(forms.len(), 1, "exactly one code redemption: {forms:?}");
     let form = &forms[0];
     assert_eq!(form["grant_type"], "authorization_code");
-    assert_eq!(form["code"], "c1");
+    assert_eq!(form["code"], APPROVED_CODE);
     assert_eq!(form["redirect_uri"], query["redirect_uri"]);
     // PKCE: the verifier redeemed is the one the challenge in the URL commits to.
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(form["code_verifier"].as_bytes()));
@@ -216,6 +219,30 @@ async fn authorize_redeems_a_code_only_after_the_callback_proves_state_and_issue
         .load(&storage_key(BACKEND, &issuer), RESOURCE)
         .expect("the token is saved under this issuer");
     assert_eq!(saved.access_token, "access-a");
+}
+
+// An authorization code is a credential: no log line may carry it, at any
+// level up to DEBUG, anywhere in the flow that receives and redeems it.
+#[tokio::test]
+async fn the_authorization_code_never_reaches_the_log() {
+    let (guard, buffer) = crate::oauth::callback::tests::capture();
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, _forms) = token_endpoint(Some("access-a")).await;
+    let mut client = client(dir.path(), Some(&issuer));
+
+    let (outcome, _query) = approve(&mut client, &issuer).await;
+    drop(guard);
+
+    assert_eq!(outcome.expect("the flow completes"), "access-a");
+    let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("oauth.callback.success"),
+        "the capture saw the flow's DEBUG events: {log}"
+    );
+    assert!(
+        !log.contains(APPROVED_CODE),
+        "the authorization code was logged: {log}"
+    );
 }
 
 #[tokio::test]
