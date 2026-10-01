@@ -3235,6 +3235,7 @@ impl Gateway {
             verified_identity: None,
             // The one client this process serves, for binding continuations.
             stdio_nonce: Some(StdioNonce::process()),
+            caller_key: None,
             // Same `RequestShape` the `initialize` arm advertises against.
             era: request_shape.era(),
             // The serve loop's own channel: a stdio client reads the same
@@ -3779,12 +3780,11 @@ fn stdio_caller_context<'a>(
         grant_subject: None,
         verified_identity: None,
         stdio_nonce: Some(StdioNonce::process()),
-        // stdio speaks to one process over two pipes and
-        // has no elicitation channel: there is no operator
-        // this transport can reach, so a destructive call
-        // it cannot confirm is refused rather than asked
-        // about. Not "found no session" -- no asker can
-        // exist here at all.
+        caller_key: None,
+        // stdio speaks to one process over two pipes and has no elicitation channel:
+        // there is no operator this transport can reach, so a destructive call it
+        // cannot confirm is refused rather than asked about. Not "found no session"
+        // -- no asker can exist here at all.
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     }
 }
