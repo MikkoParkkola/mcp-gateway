@@ -22,6 +22,7 @@ headers and the error codes. Re-check them if the draft moves.
 """
 import argparse
 import base64
+import email.message
 import hashlib
 import hmac
 import http.client
@@ -349,13 +350,19 @@ def stub_handler(stub, emit_token):
 
 def body_length(headers):
     """(bytes to read, None) for a usable Content-Length, else (0, status):
-    400 when it is not a non-negative integer, 413 when it is over MAX_BODY."""
-    try:
-        n = int(headers.get("Content-Length") or 0)
-    except ValueError:
+    400 unless there is at most one header and it is ASCII digits only (HTTP's
+    1*DIGIT), 413 when it is over MAX_BODY. No header means no body."""
+    values = headers.get_all("Content-Length") if hasattr(headers, "get_all") else (
+        [headers["Content-Length"]] if "Content-Length" in headers else [])
+    values = values or []
+    if len(values) > 1:
         return 0, 400
-    if n < 0:
+    if not values:
+        return 0, None
+    raw = values[0].strip()
+    if not (raw.isascii() and raw.isdigit()):
         return 0, 400
+    n = int(raw)
     return (0, 413) if n > MAX_BODY else (n, None)
 
 
@@ -453,8 +460,12 @@ def selftest(workdir):
     logged = open(log).read()
     assert secret not in logged and secret[6:] not in logged and "/hook" not in logged, "log leaks secret or path"
     assert os.stat(store).st_mode & 0o077 == 0 and os.stat(log).st_mode & 0o077 == 0, "store/log not owner-only"
-    for bad, status in (("x", 400), ("-1", 400), (str(MAX_BODY + 1), 413)):
+    for bad, status in (("x", 400), ("-1", 400), ("+5", 400), ("1_0", 400), ("", 400),
+                        (str(MAX_BODY + 1), 413)):
         assert body_length({"Content-Length": bad}) == (0, status), f"Content-Length {bad!r} accepted"
+    two = email.message.Message()
+    two["Content-Length"], two["Content-Length"] = "2", "999999"
+    assert body_length(two) == (0, 400), "conflicting Content-Length accepted"
     assert body_length({"Content-Length": "5"}) == (5, None) and body_length({}) == (0, None)
     srv.shutdown()
     rcv.shutdown()
