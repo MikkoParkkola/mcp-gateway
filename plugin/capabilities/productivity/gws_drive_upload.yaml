@@ -1,0 +1,81 @@
+sha256: 17f1be5d4ecb6bc84108cac16f3cd6aafb369b3ced57c1d1e8298ac72f6c022d
+fulcrum: "1.0"
+name: gws_drive_upload
+description: Upload a file to Google Drive. Supports setting the file name, parent folder, and MIME type.
+
+schema:
+  input:
+    type: object
+    properties:
+      filePath:
+        type: string
+        description: "Local file path to upload"
+      name:
+        type: string
+        description: "File name in Drive (defaults to local file name)"
+      parentId:
+        type: string
+        description: "Parent folder ID in Drive (omit for root)"
+      mimeType:
+        type: string
+        description: "MIME type of the file (auto-detected if omitted)"
+        examples:
+          - "application/pdf"
+          - "text/plain"
+          - "application/vnd.google-apps.document"
+    required:
+      - filePath
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      name:
+        type: string
+      mimeType:
+        type: string
+      webViewLink:
+        type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 60
+    config:
+      command: gws
+      args:
+        - drive
+        - files
+        - "+upload"
+        - "--file"
+        - "{filePath}"
+        - "--name"
+        - "{name}"
+        - "--parent"
+        - "{parentId}"
+        - "--mime-type"
+        - "{mimeType}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s drive"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - drive
+    - upload
+    - files
+    - workspace
+    - storage
+  cost_category: free
+  execution_time: medium
+  read_only: false
+  docs: https://developers.google.com/drive/api/reference/rest/v3/files/create

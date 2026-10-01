@@ -1,0 +1,58 @@
+sha256: ccfa50fed453ba47e78c7c5c24fcf6f50edc266cef92879f1a24dee9fc595016
+fulcrum: "1.0"
+name: gws_docs_read
+description: Read the content of a Google Docs document.
+
+schema:
+  input:
+    type: object
+    properties:
+      documentId:
+        type: string
+        description: The document ID (from the URL)
+        examples:
+          - "1rtU1fRPS0bMqd9abMG_hc6K9OAI6soUy3Kh00toAgyk"
+    required:
+      - documentId
+  output:
+    type: object
+    properties:
+      title:
+        type: string
+      body:
+        type: object
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - docs
+        - documents
+        - get
+        - "--params"
+        - '{"documentId": "{documentId}"}'
+
+cache:
+  strategy: ttl
+  ttl: 60
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s docs"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - docs
+    - documents
+    - workspace
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developers.google.com/docs/api/reference/rest/v1/documents/get

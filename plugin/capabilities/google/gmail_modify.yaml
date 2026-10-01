@@ -1,0 +1,72 @@
+sha256: f7f84c2328cf1d42c184b1646dd7688f27590153966447c26ba91a00ca363b47
+fulcrum: "1.0"
+name: gmail_modify
+description: Modify Gmail message labels (mark read/unread, archive, trash, star, add/remove labels). Use removeLabelIds ["UNREAD"] to mark as read, ["INBOX"] to archive, or addLabelIds ["STARRED"] to star.
+
+schema:
+  input:
+    type: object
+    properties:
+      message_id:
+        type: string
+        description: The ID of the message to modify
+      add_label_ids:
+        type: array
+        items:
+          type: string
+        description: Label IDs to add (e.g., STARRED, TRASH, IMPORTANT, or custom label IDs)
+        default: []
+      remove_label_ids:
+        type: array
+        items:
+          type: string
+        description: Label IDs to remove (e.g., UNREAD, INBOX, STARRED, IMPORTANT)
+        default: []
+    required: [message_id]
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      thread_id:
+        type: string
+      label_ids:
+        type: array
+        items:
+          type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/messages/{message_id}/modify
+      method: POST
+      headers:
+        Authorization: "Bearer {access_token}"
+        Content-Type: "application/json"
+        Accept: "application/json"
+      body:
+        addLabelIds: "{add_label_ids}"
+        removeLabelIds: "{remove_label_ids}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.modify
+
+metadata:
+  category: google
+  tags: [gmail, email, modify, archive, labels, productivity]
+  cost_category: free
+  execution_time: fast
+  read_only: false

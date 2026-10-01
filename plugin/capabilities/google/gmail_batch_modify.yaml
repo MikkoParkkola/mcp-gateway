@@ -1,0 +1,69 @@
+sha256: e9170e149476fe3f69f0ed075de0f2b07a4206afac758332cbed88d9b040ee91
+fulcrum: "1.0"
+name: gmail_batch_modify
+description: Batch modify multiple Gmail messages at once (mark read, archive, trash, etc.). More efficient than modifying one-by-one for bulk operations.
+
+schema:
+  input:
+    type: object
+    properties:
+      message_ids:
+        type: array
+        items:
+          type: string
+        description: List of message IDs to modify (max 1000)
+      add_label_ids:
+        type: array
+        items:
+          type: string
+        description: Label IDs to add to all messages
+        default: []
+      remove_label_ids:
+        type: array
+        items:
+          type: string
+        description: Label IDs to remove from all messages (e.g., UNREAD, INBOX)
+        default: []
+    required: [message_ids]
+  output:
+    type: object
+    properties:
+      success:
+        type: boolean
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 60
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/messages/batchModify
+      method: POST
+      headers:
+        Authorization: "Bearer {access_token}"
+        Content-Type: "application/json"
+        Accept: "application/json"
+      body:
+        ids: "{message_ids}"
+        addLabelIds: "{add_label_ids}"
+        removeLabelIds: "{remove_label_ids}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.modify
+
+metadata:
+  category: google
+  tags: [gmail, email, batch, modify, archive, labels, productivity]
+  cost_category: free
+  execution_time: medium
+  read_only: false

@@ -1,0 +1,85 @@
+fulcrum: "1.0"
+name: prh_company
+description: Search Finnish companies from PRH (Patentti- ja rekisterihallitus) - official business registry. Get company details, registration info, and business IDs (Y-tunnus). Free, no API key required.
+
+schema:
+  input:
+    type: object
+    properties:
+      business_id:
+        type: string
+        description: Finnish business ID (Y-tunnus, e.g., "0112038-9")
+        examples:
+          - "0112038-9"
+          - "2331972-7"
+      name:
+        type: string
+        description: Company name to search
+        examples:
+          - "Nokia"
+          - "Supercell"
+  output:
+    type: object
+    properties:
+      businessId:
+        type: string
+        description: Y-tunnus
+      name:
+        type: string
+      registrationDate:
+        type: string
+      companyForm:
+        type: string
+        description: Company type (OY, OYJ, etc.)
+      businessLine:
+        type: string
+        description: Industry/business description
+      registeredOffice:
+        type: string
+        description: Registered city/municipality
+      addresses:
+        type: array
+      businessLines:
+        type: array
+      liquidations:
+        type: array
+      names:
+        type: array
+        description: Current and historical names
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://avoindata.prh.fi
+      path: /opendata-ytj-api/v3/companies
+      method: GET
+      headers:
+        Accept: "application/json"
+      params:
+        businessId: "{business_id}"
+        name: "{name}"
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: finance
+  tags:
+    - finland
+    - company
+    - business-registry
+    - prh
+    - y-tunnus
+    - free
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://avoindata.prh.fi/ytj.html

@@ -1,0 +1,84 @@
+sha256: 3da49c290a4f8ec4e4e1319b4af9561ae2fbd2ba59c706456622b536c89e1b26
+fulcrum: "1.0"
+name: gmail_get_message
+description: Get full email message content by message ID
+
+schema:
+  input:
+    type: object
+    properties:
+      message_id:
+        type: string
+        description: The ID of the message to retrieve
+      format:
+        type: string
+        enum: [minimal, full, raw, metadata]
+        description: The format to return the message in
+        default: full
+      metadata_headers:
+        type: array
+        items:
+          type: string
+        description: Headers to include when format is metadata (e.g., From, To, Subject)
+    required: [message_id]
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      thread_id:
+        type: string
+      label_ids:
+        type: array
+        items:
+          type: string
+      snippet:
+        type: string
+      payload:
+        type: object
+        properties:
+          headers:
+            type: array
+          body:
+            type: object
+          parts:
+            type: array
+      size_estimate:
+        type: integer
+      internal_date:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/messages/{message_id}
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        format: "{format}"
+        metadataHeaders: "{metadata_headers}"
+
+cache:
+  strategy: exact
+  ttl: 600
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+
+metadata:
+  category: google
+  tags: [gmail, email, message, productivity]
+  cost_category: free
+  execution_time: fast
+  read_only: true

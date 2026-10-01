@@ -1,0 +1,99 @@
+sha256: 7948342ae14973331f9c12a34504c5b77557c8095ff517595d95758a7fd5b4e0
+fulcrum: "1.0"
+name: openpencil_design
+description: >
+  Open-source design file editor with 90 MCP tools for reading, writing, querying,
+  and exporting Figma .fig files. Supports node operations, components, variables,
+  boolean operations, auto-layout, and export to PNG/SVG/JSX+Tailwind.
+  [keywords: design, figma, export, layout, ui, component, svg, png]
+
+schema:
+  input:
+    type: object
+    properties:
+      operation:
+        type: string
+        description: "Design operation to perform"
+        enum:
+          - open_file
+          - create_node
+          - query_nodes
+          - export_png
+          - export_svg
+          - list_components
+          - set_auto_layout
+          - get_design_tokens
+      file_path:
+        type: string
+        description: "Path to .fig file (for open_file operation)"
+      node_type:
+        type: string
+        description: "Node type for create/query (FRAME, RECTANGLE, TEXT, ELLIPSE, etc.)"
+      query:
+        type: string
+        description: "XPath-style query for node search"
+      node_id:
+        type: string
+        description: "Target node ID for operations"
+      format:
+        type: string
+        description: "Export format"
+        enum: [png, jpg, webp, svg, jsx]
+        default: png
+      scale:
+        type: number
+        description: "Export scale factor"
+        default: 1.0
+    required:
+      - operation
+  output:
+    type: object
+    properties:
+      result:
+        type: object
+        description: "Operation-specific result data"
+      nodes:
+        type: array
+        description: "Matching nodes (for query operations)"
+      data:
+        type: string
+        description: "Base64-encoded export data (for export operations)"
+
+providers:
+  primary:
+    service: mcp
+    cost_per_call: 0
+    timeout: 30
+    config:
+      command: openpencil-mcp
+      transport: stdio
+      fallback:
+        base_url: http://localhost:3100
+        transport: http
+        path: /mcp
+
+auth:
+  required: false
+  description: >
+    Install: bun add -g @open-pencil/mcp
+    No API key required (open-source, MIT license).
+
+cache:
+  strategy: none
+
+metadata:
+  category: productivity
+  tags:
+    - design
+    - figma
+    - export
+    - layout
+    - ui
+    - component
+    - svg
+    - png
+    - openpencil
+  cost_category: free
+  execution_time: medium
+  read_only: false
+  docs: https://github.com/open-pencil/open-pencil

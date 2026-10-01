@@ -1,0 +1,99 @@
+fulcrum: "1.0"
+name: openfoodfacts_product
+description: Get food product information from Open Food Facts - nutrition facts, ingredients, allergens, and Nutri-Score. Scan barcodes or search products. Free, no API key required.
+
+schema:
+  input:
+    type: object
+    properties:
+      barcode:
+        type: string
+        description: Product barcode (EAN/UPC)
+        examples:
+          - "5000112628616"
+          - "3017620422003"
+      search:
+        type: string
+        description: Search term (use if no barcode)
+        examples:
+          - "nutella"
+          - "coca cola"
+  output:
+    type: object
+    properties:
+      product:
+        type: object
+        properties:
+          product_name:
+            type: string
+          brands:
+            type: string
+          categories:
+            type: string
+          ingredients_text:
+            type: string
+          allergens:
+            type: string
+          nutriscore_grade:
+            type: string
+            description: A to E (A is best)
+          nova_group:
+            type: integer
+            description: 1-4 food processing level
+          nutriments:
+            type: object
+            properties:
+              energy-kcal_100g:
+                type: number
+              fat_100g:
+                type: number
+              saturated-fat_100g:
+                type: number
+              carbohydrates_100g:
+                type: number
+              sugars_100g:
+                type: number
+              proteins_100g:
+                type: number
+              salt_100g:
+                type: number
+          image_url:
+            type: string
+          countries:
+            type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://world.openfoodfacts.org
+      path: /api/v2/product/{barcode}
+      method: GET
+      headers:
+        User-Agent: "MCPGateway/1.0"
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: food
+  tags:
+    - food
+    - nutrition
+    - barcode
+    - ingredients
+    - nutriscore
+    - openfoodfacts
+    - free
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://wiki.openfoodfacts.org/API

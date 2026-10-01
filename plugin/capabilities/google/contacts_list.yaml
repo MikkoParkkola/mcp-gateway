@@ -1,0 +1,143 @@
+sha256: ca26d4cb049d2d808207b31c7e98a86eae9c2b5b342f9a8c5fb0cc1e6176c774
+fulcrum: "1.0"
+name: contacts_list
+description: List contacts from Google Contacts (People API)
+
+schema:
+  input:
+    type: object
+    properties:
+      page_size:
+        type: integer
+        description: Maximum number of contacts to return
+        default: 100
+        maximum: 1000
+      page_token:
+        type: string
+        description: Token for pagination
+      person_fields:
+        type: string
+        description: Comma-separated list of person fields to include
+        default: "names,emailAddresses,phoneNumbers,organizations,addresses,photos"
+      sort_order:
+        type: string
+        enum: [LAST_MODIFIED_ASCENDING, LAST_MODIFIED_DESCENDING, FIRST_NAME_ASCENDING, LAST_NAME_ASCENDING]
+        description: Order in which results are returned
+        default: LAST_MODIFIED_DESCENDING
+      sources:
+        type: array
+        items:
+          type: string
+          enum: [READ_SOURCE_TYPE_PROFILE, READ_SOURCE_TYPE_CONTACT, READ_SOURCE_TYPE_DOMAIN_CONTACT]
+        description: Sources to query
+        default: [READ_SOURCE_TYPE_CONTACT]
+      request_sync_token:
+        type: boolean
+        description: Request a sync token for incremental syncing
+        default: false
+      sync_token:
+        type: string
+        description: Sync token from previous request for incremental sync
+    required: []
+  output:
+    type: object
+    properties:
+      connections:
+        type: array
+        items:
+          type: object
+          properties:
+            resource_name:
+              type: string
+            etag:
+              type: string
+            names:
+              type: array
+              items:
+                type: object
+                properties:
+                  display_name:
+                    type: string
+                  given_name:
+                    type: string
+                  family_name:
+                    type: string
+            email_addresses:
+              type: array
+              items:
+                type: object
+                properties:
+                  value:
+                    type: string
+                  type:
+                    type: string
+            phone_numbers:
+              type: array
+              items:
+                type: object
+                properties:
+                  value:
+                    type: string
+                  type:
+                    type: string
+            organizations:
+              type: array
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  title:
+                    type: string
+            addresses:
+              type: array
+            photos:
+              type: array
+      next_page_token:
+        type: string
+      next_sync_token:
+        type: string
+      total_people:
+        type: integer
+      total_items:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://people.googleapis.com
+      path: /v1/people/me/connections
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        pageSize: "{page_size}"
+        pageToken: "{page_token}"
+        personFields: "{person_fields}"
+        sortOrder: "{sort_order}"
+        sources: "{sources}"
+        requestSyncToken: "{request_sync_token}"
+        syncToken: "{sync_token}"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/contacts.readonly
+
+metadata:
+  category: google
+  tags: [contacts, people, address-book, productivity]
+  cost_category: free
+  execution_time: fast
+  read_only: true

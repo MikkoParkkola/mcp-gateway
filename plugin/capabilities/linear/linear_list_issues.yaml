@@ -1,0 +1,78 @@
+sha256: 1a04152b0d0ade9c6b23f1725dc6daf332e4015f40bb3e94119fb02d072e97a5
+fulcrum: "1.0"
+name: linear_list_issues
+description: "List recent issues for a team, optionally filtered by state (backlog, todo, in_progress, done, canceled)"
+
+schema:
+  input:
+    type: object
+    properties:
+      teamKey:
+        type: string
+        description: "Team key (e.g., MIK)"
+      first:
+        type: integer
+        description: "Number of issues to return (default 50, max 250)"
+        default: 50
+      after:
+        type: string
+        description: "Cursor for pagination (from pageInfo.endCursor)"
+      state:
+        type: string
+        description: "Filter by state type: backlog, unstarted, started, completed, canceled"
+    required: [teamKey]
+  output:
+    type: object
+
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          query ListIssues($teamKey: String!, $first: Int, $after: String, $stateType: String) {
+            team(id: $teamKey) {
+              issues(first: $first, after: $after, orderBy: updatedAt, filter: { state: { type: { eq: $stateType } } }) {
+                nodes {
+                  id identifier title priority priorityLabel
+                  state { name type color }
+                  assignee { displayName }
+                  labels { nodes { name color } }
+                  project { name }
+                  children { nodes { identifier title state { name type } } }
+                  createdAt updatedAt
+                  url
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        variables:
+          teamKey: "{teamKey}"
+          first: "{first}"
+          after: "{after}"
+          stateType: "{state}"
+
+cache:
+  strategy: exact
+  ttl: 30
+
+metadata:
+  category: productivity
+  tags: [linear, issues, list]
+  cost_category: free
+  execution_time: fast
+  read_only: true

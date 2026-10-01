@@ -1,0 +1,59 @@
+# Example: JSON-RPC 2.0 API capability
+#
+# Calls a hypothetical JSON-RPC service to get the current block number
+# from an Ethereum-compatible JSON-RPC endpoint.
+#
+# This demonstrates the jsonrpc service type which builds a spec-compliant
+# JSON-RPC 2.0 request:
+#   { "jsonrpc": "2.0", "id": "<uuid>", "method": "...", "params": ... }
+#
+# The same pattern works for any JSON-RPC 2.0 service, including
+# Google A2A protocol agents.
+#
+# SECURITY NOTE: Set RPC_TOKEN environment variable for authenticated endpoints.
+# NEVER put actual tokens in YAML files.
+
+fulcrum: "1.0"
+name: jsonrpc_eth_block_number
+description: Get the current block number from an Ethereum JSON-RPC endpoint
+
+schema:
+  input:
+    type: object
+    properties:
+      tag:
+        type: string
+        description: "Block tag: latest, earliest, or pending"
+  output:
+    type: object
+    properties:
+      result:
+        type: string
+        description: Hex-encoded block number
+
+providers:
+  primary:
+    service: jsonrpc
+    cost_per_call: 0
+    timeout: 10
+    config:
+      endpoint: http://localhost:8545
+      method: eth_blockNumber
+      headers:
+        Accept: "application/json"
+      static_params:
+        tag: "latest"
+
+cache:
+  strategy: exact
+  ttl: 12
+
+auth:
+  required: false
+
+metadata:
+  category: blockchain
+  tags: [ethereum, jsonrpc, rpc, blockchain, web3]
+  cost_category: free
+  execution_time: fast
+  read_only: true

@@ -1,0 +1,56 @@
+fulcrum: "1.0"
+name: number_facts
+description: Get interesting facts about numbers from Numbers API. Math, trivia, date facts.
+
+schema:
+  input:
+    type: object
+    properties:
+      number:
+        type: string
+        description: The number (or 'random', or date as month/day like '2/29')
+        examples:
+          - "42"
+          - "random"
+          - "2/29"
+      type:
+        type: string
+        description: Type of fact
+        enum: ["trivia", "math", "date", "year"]
+        default: "trivia"
+    required:
+      - number
+  output:
+    type: string
+    description: The fact about the number
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: http://numbersapi.com
+      path: /{number}/{type}
+      method: GET
+      headers:
+        Accept: "text/plain"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags:
+    - numbers
+    - facts
+    - trivia
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: http://numbersapi.com/

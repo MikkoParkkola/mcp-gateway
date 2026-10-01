@@ -1,0 +1,103 @@
+sha256: 12d7d8c1c8bb5d6ba2773f74e463069799ede9e7e432fb4d692f1fea6c1b033d
+fulcrum: "1.0"
+name: calendar_free_slots
+description: Find free/busy time slots across one or more calendars
+
+schema:
+  input:
+    type: object
+    properties:
+      time_min:
+        type: string
+        description: Start of the interval to query (RFC3339 format)
+      time_max:
+        type: string
+        description: End of the interval to query (RFC3339 format)
+      time_zone:
+        type: string
+        description: IANA timezone for the query (e.g., America/New_York)
+        default: UTC
+      calendar_ids:
+        type: array
+        items:
+          type: string
+        description: List of calendar IDs to check (use 'primary' for main calendar)
+        default: [primary]
+      group_expansion_max:
+        type: integer
+        description: Maximum number of calendars for group expansion
+        default: 50
+      calendar_expansion_max:
+        type: integer
+        description: Maximum number of calendars for which free/busy is returned
+        default: 50
+    required: [time_min, time_max]
+  output:
+    type: object
+    properties:
+      kind:
+        type: string
+      time_min:
+        type: string
+      time_max:
+        type: string
+      calendars:
+        type: object
+        description: Map of calendar ID to busy periods
+        additionalProperties:
+          type: object
+          properties:
+            busy:
+              type: array
+              items:
+                type: object
+                properties:
+                  start:
+                    type: string
+                  end:
+                    type: string
+            errors:
+              type: array
+      groups:
+        type: object
+        description: Expansion of group calendars
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /calendar/v3/freeBusy
+      method: POST
+      headers:
+        Authorization: "Bearer {access_token}"
+        Content-Type: "application/json"
+        Accept: "application/json"
+      body:
+        timeMin: "{time_min}"
+        timeMax: "{time_max}"
+        timeZone: "{time_zone}"
+        groupExpansionMax: "{group_expansion_max}"
+        calendarExpansionMax: "{calendar_expansion_max}"
+        items: "{calendar_ids}"
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/calendar.readonly
+
+metadata:
+  category: google
+  tags: [calendar, freebusy, scheduling, availability, productivity]
+  cost_category: free
+  execution_time: fast
+  read_only: true

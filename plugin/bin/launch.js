@@ -3,7 +3,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
 
-const capabilitiesDir = path.resolve(__dirname, "..", "..", "capabilities");
+const capabilitiesDir = path.resolve(__dirname, "..", "capabilities");
 const env = { ...process.env, MCP_GATEWAY_CAPABILITIES: capabilitiesDir };
 
 // Published package, pinned, as a local stdio server: serve --stdio

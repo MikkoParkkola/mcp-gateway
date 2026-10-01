@@ -1,0 +1,76 @@
+sha256: 350592689cbce9ea8c0e22110202d36817ad3e704036f4bb7eb4d8c73336db51
+fulcrum: "1.0"
+name: gws_tasks_list
+description: List tasks from a Google Tasks task list. Returns tasks with their status, due date, and notes.
+
+schema:
+  input:
+    type: object
+    properties:
+      taskListId:
+        type: string
+        description: "Task list ID (use '@default' for the default list)"
+        default: "@default"
+      maxResults:
+        type: integer
+        description: Maximum number of tasks to return
+        default: 20
+      showCompleted:
+        type: boolean
+        description: "Whether to include completed tasks"
+        default: false
+    required: []
+  output:
+    type: object
+    properties:
+      items:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            title:
+              type: string
+            status:
+              type: string
+            due:
+              type: string
+            notes:
+              type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - tasks
+        - tasks
+        - list
+        - "--params"
+        - '{"tasklist": "{taskListId}", "maxResults": {maxResults}, "showCompleted": {showCompleted}}'
+
+cache:
+  strategy: ttl
+  ttl: 30
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s tasks"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - tasks
+    - todo
+    - workspace
+    - productivity
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developers.google.com/tasks/reference/rest/v1/tasks/list

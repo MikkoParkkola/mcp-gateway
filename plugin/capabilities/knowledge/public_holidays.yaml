@@ -1,0 +1,73 @@
+fulcrum: "1.0"
+name: public_holidays
+description: Get public holidays for any country and year from Nager.Date API. Supports 100+ countries.
+
+schema:
+  input:
+    type: object
+    properties:
+      year:
+        type: integer
+        description: Year (e.g., 2025)
+        examples:
+          - 2025
+          - 2026
+      country_code:
+        type: string
+        description: ISO 3166-1 alpha-2 country code
+        examples:
+          - "FI"
+          - "NL"
+          - "US"
+          - "DE"
+    required:
+      - year
+      - country_code
+  output:
+    type: array
+    items:
+      type: object
+      properties:
+        date:
+          type: string
+        localName:
+          type: string
+        name:
+          type: string
+        countryCode:
+          type: string
+        fixed:
+          type: boolean
+        global:
+          type: boolean
+        types:
+          type: array
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://date.nager.at
+      path: /api/v3/PublicHolidays/{year}/{country_code}
+      method: GET
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: knowledge
+  tags:
+    - holidays
+    - calendar
+    - dates
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://date.nager.at/Api

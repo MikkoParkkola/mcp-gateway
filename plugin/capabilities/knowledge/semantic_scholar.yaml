@@ -1,0 +1,115 @@
+fulcrum: "1.0"
+name: semantic_scholar
+description: Search academic papers from Semantic Scholar. Find research papers, citations, authors, and influential works. Free, no API key required for basic use.
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query for papers
+        examples:
+          - "machine learning transformers"
+          - "CRISPR gene editing"
+      fields:
+        type: string
+        description: Comma-separated fields to return
+        default: "paperId,title,abstract,year,citationCount,authors,url"
+      limit:
+        type: integer
+        description: Number of results (max 100)
+        default: 10
+      year:
+        type: string
+        description: Year range filter (e.g., "2020-2024" or "2023")
+      open_access_pdf:
+        type: boolean
+        description: Only return papers with open access PDF
+        default: false
+    required:
+      - query
+  output:
+    type: object
+    properties:
+      total:
+        type: integer
+      data:
+        type: array
+        items:
+          type: object
+          properties:
+            paperId:
+              type: string
+            title:
+              type: string
+            abstract:
+              type: string
+            year:
+              type: integer
+            citationCount:
+              type: integer
+            influentialCitationCount:
+              type: integer
+            authors:
+              type: array
+              items:
+                type: object
+                properties:
+                  authorId:
+                    type: string
+                  name:
+                    type: string
+            url:
+              type: string
+            openAccessPdf:
+              type: object
+              properties:
+                url:
+                  type: string
+                status:
+                  type: string
+            venue:
+              type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.semanticscholar.org
+      path: /graph/v1/paper/search
+      method: GET
+      headers:
+        Accept: "application/json"
+      params:
+        query: "{query}"
+        fields: "{fields}"
+        limit: "{limit}"
+        year: "{year}"
+        openAccessPdf: "{open_access_pdf}"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: reference
+  tags:
+    - academic
+    - research
+    - papers
+    - citations
+    - semantic-scholar
+    - science
+    - free
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 100 req/5min (unauthenticated)
+  docs: https://api.semanticscholar.org/

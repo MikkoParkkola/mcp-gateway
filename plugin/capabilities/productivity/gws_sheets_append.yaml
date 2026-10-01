@@ -1,0 +1,94 @@
+sha256: e02c9e620e0663f4aee158cc589933c7ac3e8ca48e5ce24a7d01b7c0cc9a0d4d
+fulcrum: "1.0"
+name: gws_sheets_append
+description: Append rows to a Google Sheets spreadsheet. Adds data after the last row in the specified range.
+
+schema:
+  input:
+    type: object
+    properties:
+      spreadsheetId:
+        type: string
+        description: The spreadsheet ID (from the URL)
+        examples:
+          - "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+      range:
+        type: string
+        description: "A1 notation range to append to (e.g., 'Sheet1!A1')"
+        examples:
+          - "Sheet1!A1"
+          - "Sheet1"
+      values:
+        type: array
+        description: "Rows to append, each row is an array of cell values"
+        items:
+          type: array
+          items:
+            type: string
+        examples:
+          - [["Name", "Email", "Date"], ["Alice", "alice@co.com", "2026-03-11"]]
+      valueInputOption:
+        type: string
+        description: "How input data should be interpreted: RAW or USER_ENTERED"
+        default: "USER_ENTERED"
+    required:
+      - spreadsheetId
+      - range
+      - values
+  output:
+    type: object
+    properties:
+      spreadsheetId:
+        type: string
+      tableRange:
+        type: string
+      updates:
+        type: object
+        properties:
+          updatedRows:
+            type: integer
+          updatedColumns:
+            type: integer
+          updatedCells:
+            type: integer
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - sheets
+        - spreadsheets
+        - values
+        - append
+        - "--params"
+        - '{"spreadsheetId": "{spreadsheetId}", "range": "{range}", "valueInputOption": "{valueInputOption}"}'
+        - "--json"
+        - '{"values": {values}}'
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s sheets"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - sheets
+    - spreadsheet
+    - append
+    - write
+    - workspace
+    - data
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/append

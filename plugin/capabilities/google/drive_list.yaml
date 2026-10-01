@@ -1,0 +1,123 @@
+sha256: 83d1b9204e91efb89f8398a9a03016f3c9cfa7d52dfff646d32d2dc91b96279a
+fulcrum: "1.0"
+name: drive_list
+description: List files and folders in Google Drive
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query using Drive query syntax (e.g., "name contains 'report'", "mimeType='application/pdf'")
+      page_size:
+        type: integer
+        description: Maximum number of files to return per page
+        default: 100
+        maximum: 1000
+      page_token:
+        type: string
+        description: Token for pagination (from previous response)
+      order_by:
+        type: string
+        description: Sort order (e.g., "modifiedTime desc", "name", "folder,modifiedTime desc")
+        default: modifiedTime desc
+      fields:
+        type: string
+        description: Fields to include in response (comma-separated)
+        default: "files(id,name,mimeType,size,modifiedTime,parents,webViewLink)"
+      spaces:
+        type: string
+        enum: [drive, appDataFolder, photos]
+        description: Spaces to query
+        default: drive
+      include_items_from_all_drives:
+        type: boolean
+        description: Include items from shared drives
+        default: false
+      supports_all_drives:
+        type: boolean
+        description: Whether the client supports shared drives
+        default: true
+      corpora:
+        type: string
+        enum: [user, domain, drive, allDrives]
+        description: Scope of files to return
+        default: user
+    required: []
+  output:
+    type: object
+    properties:
+      files:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            mime_type:
+              type: string
+            size:
+              type: string
+            modified_time:
+              type: string
+            parents:
+              type: array
+              items:
+                type: string
+            web_view_link:
+              type: string
+            web_content_link:
+              type: string
+            icon_link:
+              type: string
+            thumbnail_link:
+              type: string
+      next_page_token:
+        type: string
+      incomplete_search:
+        type: boolean
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /drive/v3/files
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        q: "{query}"
+        pageSize: "{page_size}"
+        pageToken: "{page_token}"
+        orderBy: "{order_by}"
+        fields: "{fields}"
+        spaces: "{spaces}"
+        includeItemsFromAllDrives: "{include_items_from_all_drives}"
+        supportsAllDrives: "{supports_all_drives}"
+        corpora: "{corpora}"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/drive.readonly
+
+metadata:
+  category: google
+  tags: [drive, files, storage, documents, productivity]
+  cost_category: free
+  execution_time: fast
+  read_only: true

@@ -1,0 +1,97 @@
+sha256: cd5de3bc466fbbb3fcb98aa6f0822b1fd2aeb0b592c529739f0d86c459226bbe
+fulcrum: "1.0"
+name: gemini_embedding
+description: >
+  Google Gemini Embedding 2 — multimodal embedding model supporting text, images,
+  video, audio, and documents in a unified embedding space. Configurable dimensions
+  (768/1536/3072) with Matryoshka Representation Learning. 100+ languages.
+  [keywords: embedding, vector, similarity, semantic, search, multimodal]
+
+schema:
+  input:
+    type: object
+    properties:
+      content:
+        type: string
+        description: "Text content to embed"
+      task_type:
+        type: string
+        description: "Embedding task type"
+        enum:
+          - SEMANTIC_SIMILARITY
+          - CLASSIFICATION
+          - CLUSTERING
+          - RETRIEVAL_DOCUMENT
+          - RETRIEVAL_QUERY
+          - CODE_RETRIEVAL_QUERY
+          - QUESTION_ANSWERING
+          - FACT_VERIFICATION
+        default: SEMANTIC_SIMILARITY
+      output_dimensionality:
+        type: integer
+        description: "Output vector dimensions (Matryoshka)"
+        enum: [768, 1536, 3072]
+        default: 3072
+      title:
+        type: string
+        description: "Optional title for RETRIEVAL_DOCUMENT task type"
+    required:
+      - content
+  output:
+    type: object
+    properties:
+      embedding:
+        type: object
+        properties:
+          values:
+            type: array
+            items:
+              type: number
+            description: "Float32 embedding vector"
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://generativelanguage.googleapis.com
+      path: "/v1beta/models/gemini-embedding-2-preview:embedContent"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      params:
+        key: "{env.GEMINI_API_KEY}"
+      body:
+        content:
+          parts:
+            - text: "{content}"
+        taskType: "{task_type}"
+        outputDimensionality: "{output_dimensionality}"
+
+auth:
+  required: true
+  type: api_key
+  key: "env:GEMINI_API_KEY"
+  description: "Get free API key at https://ai.google.dev (1,500 requests/day free tier)"
+  param: key
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+metadata:
+  category: knowledge
+  tags:
+    - embedding
+    - vector
+    - similarity
+    - semantic
+    - search
+    - multimodal
+    - gemini
+    - google
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://ai.google.dev/gemini-api/docs/embeddings

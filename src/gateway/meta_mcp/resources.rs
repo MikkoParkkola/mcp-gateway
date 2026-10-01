@@ -147,7 +147,7 @@ Common categories and example tools:
   llm          — openrouter_generate, deepseek_generate, groq_generate
   productivity — notion_get_page, linear_get_issue, github_integration
   finance      — finnhub_quote, sec_edgar_filings, polygon_ohlcv
-  media        — screenshot_url, audio_transcribe, audio_tts
+  media        — screenshot_url, audio_transcribe, image_to_text
   security     — virustotal_scan, shodan_host, urlscan_result
 
 ## Composition chains

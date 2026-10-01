@@ -1,0 +1,74 @@
+sha256: bdf5691d7e03a85de23f56db86da778f277cffc50e3b1b4c9a6dd110c7dc1047
+fulcrum: "1.0"
+name: youtube_subscriptions
+description: List your YouTube channel subscriptions with latest videos
+
+schema:
+  input:
+    type: object
+    properties:
+      max_results:
+        type: integer
+        description: "Maximum subscriptions to return (default: 50, max: 50)"
+      page_token:
+        type: string
+        description: Token for pagination (from previous response)
+    required: []
+  output:
+    type: object
+    properties:
+      subscriptions:
+        type: array
+        items:
+          type: object
+          properties:
+            channel_id:
+              type: string
+            channel_title:
+              type: string
+            description:
+              type: string
+            thumbnail:
+              type: string
+            subscribed_at:
+              type: string
+      next_page_token:
+        type: string
+      total_results:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /youtube/v3/subscriptions
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        part: "snippet"
+        mine: "true"
+        maxResults: "{max_results}"
+        pageToken: "{page_token}"
+
+cache:
+  strategy: exact
+  ttl: 900  # Subscription lists change less often than feed/history data
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes: ["https://www.googleapis.com/auth/youtube.readonly"]
+
+metadata:
+  category: google
+  tags: [youtube, subscriptions, channels, following]
+  cost_category: free
+  execution_time: fast
+  read_only: true

@@ -1,0 +1,75 @@
+sha256: 48089754ffa13ffc03e5eb76e1a76b073b554209d1c240e3402c681e251f024c
+fulcrum: "1.0"
+name: pact_contracts
+description: >
+  PACT contract-first multi-agent framework — validate, list, and manage component
+  contracts for structured agent development. Supports budget tracking, retrospectives,
+  and contract validation gates.
+  [keywords: contract, testing, verification, agent, pact, validation]
+
+schema:
+  input:
+    type: object
+    properties:
+      operation:
+        type: string
+        description: "PACT operation to perform"
+        enum:
+          - verify_contract
+          - list_contracts
+          - get_contract
+          - check_budget
+          - get_retrospective
+          - validate_gate
+          - resume_run
+      component:
+        type: string
+        description: "Component name (for get_contract operation)"
+    required:
+      - operation
+  output:
+    type: object
+    properties:
+      status:
+        type: string
+        description: "Operation status"
+      contracts:
+        type: array
+        description: "List of contracts (for list_contracts)"
+      budget:
+        type: object
+        description: "Budget summary (for check_budget)"
+      validation:
+        type: object
+        description: "Validation result (for validate_gate)"
+
+providers:
+  primary:
+    service: mcp
+    cost_per_call: 0
+    timeout: 30
+    config:
+      command: pact-mcp
+      transport: stdio
+
+auth:
+  required: false
+  description: "Install: pip install pact-agents[mcp]. No API key required."
+
+cache:
+  strategy: none
+
+metadata:
+  category: verification
+  tags:
+    - contract
+    - testing
+    - verification
+    - agent
+    - pact
+    - validation
+    - quality
+  cost_category: free
+  execution_time: medium
+  read_only: true
+  docs: https://github.com/jmcentire/pact

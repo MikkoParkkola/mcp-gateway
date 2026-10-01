@@ -1,0 +1,77 @@
+sha256: df2bf853950e3e283538b2c628e8240e9b9d21c88e6c1616de3eb33e1ae66f56
+fulcrum: "1.0"
+name: gws_tasks_create
+description: Create a new task in Google Tasks. Supports setting title, notes, due date, and parent task for subtasks.
+
+schema:
+  input:
+    type: object
+    properties:
+      taskListId:
+        type: string
+        description: "Task list ID (use '@default' for the default list)"
+        default: "@default"
+      title:
+        type: string
+        description: "Task title"
+      notes:
+        type: string
+        description: "Task notes/description"
+      due:
+        type: string
+        description: "Due date (RFC3339, e.g., 2026-03-15T00:00:00Z)"
+      parent:
+        type: string
+        description: "Parent task ID (to create as subtask)"
+    required:
+      - title
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      title:
+        type: string
+      status:
+        type: string
+      selfLink:
+        type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - tasks
+        - tasks
+        - insert
+        - "--params"
+        - '{"tasklist": "{taskListId}"}'
+        - "--json"
+        - '{"title": "{title}", "notes": "{notes}", "due": "{due}", "parent": "{parent}"}'
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s tasks"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - tasks
+    - todo
+    - create
+    - workspace
+    - productivity
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/tasks/reference/rest/v1/tasks/insert

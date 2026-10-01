@@ -1,0 +1,123 @@
+sha256: 6b3537ef1a7bc5ebb9e121da12ee6e21d554df2675c06663175a250cdab0e21d
+fulcrum: "1.0"
+name: linear_create_issue
+description: Create a new issue in Linear. Requires teamId (use linear_get_teams to find it).
+
+schema:
+  input:
+    type: object
+    properties:
+      title:
+        type: string
+        description: Issue title
+      description:
+        type: string
+        description: Issue description (Markdown supported)
+      teamId:
+        type: string
+        description: "Team UUID (use linear_get_teams to get IDs)"
+      priority:
+        type: integer
+        description: "Priority: 0=None, 1=Urgent, 2=High, 3=Normal, 4=Low"
+      assigneeId:
+        type: string
+        description: "Assignee user UUID"
+      labelIds:
+        type: array
+        description: "Label UUIDs to apply"
+        items:
+          type: string
+      projectId:
+        type: string
+        description: "Project UUID to associate"
+      parentId:
+        type: string
+        description: "Parent issue UUID for sub-issues"
+      stateId:
+        type: string
+        description: "Workflow state UUID"
+      estimate:
+        type: integer
+        description: "Estimate points"
+      dueDate:
+        type: string
+        description: "Due date in YYYY-MM-DD format"
+      createAsUser:
+        type: string
+        description: "DEPRECATED: ignored. Linear's IssueCreateInput accepts this only for OAuth-app auth; with personal API key the mutation silent-fails (server validation error swallowed by response_path projection). See linear/SKILL.md silent-failure trap (2026-04-30 bisect)."
+      displayIconUrl:
+        type: string
+        description: "DEPRECATED: ignored. Same constraint as createAsUser."
+    required: [title, teamId]
+  output:
+    type: object
+    properties:
+      issue:
+        type: object
+        description: Created issue
+
+transform:
+  project:
+    - issue
+
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          mutation CreateIssue($input: IssueCreateInput!) {
+            issueCreate(input: $input) {
+              success
+              issue {
+                id identifier title url
+                state { name }
+                team { key }
+                priority priorityLabel
+              }
+            }
+          }
+        variables:
+          input:
+            title: "{title}"
+            description: "{description}"
+            teamId: "{teamId}"
+            priority: "{priority}"
+            assigneeId: "{assigneeId}"
+            labelIds: "{labelIds}"
+            projectId: "{projectId}"
+            parentId: "{parentId}"
+            stateId: "{stateId}"
+            estimate: "{estimate}"
+            dueDate: "{dueDate}"
+            # createAsUser + displayIconUrl intentionally omitted — Linear's
+            # IssueCreateInput accepts those fields only for OAuth-app auth.
+            # With a personal API key, including them triggers a server-side
+            # validation error which the REST provider's response_path
+            # projection silently swallows (caller sees empty {} success).
+            # Bisect: MIK-3179/3180/3181, 2026-04-30.
+      response_path: data.issueCreate
+
+cache:
+  strategy: none
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, issue, create]
+  cost_category: free
+  execution_time: fast
+  read_only: false

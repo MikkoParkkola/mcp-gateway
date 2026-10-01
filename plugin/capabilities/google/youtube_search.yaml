@@ -1,0 +1,97 @@
+sha256: 6fbee6d5fb2eff8f1e0f1862de0e1bb34ab6e2e8f2f95e2462c798fcc5f0e36b
+fulcrum: "1.0"
+name: youtube_search
+description: Search YouTube videos with filtering and sorting options
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query
+      max_results:
+        type: integer
+        description: "Number of results (default: 10, max: 50)"
+      order:
+        type: string
+        enum: [relevance, date, viewCount, rating]
+        description: "Sort order (default: relevance)"
+      type:
+        type: string
+        enum: [video, channel, playlist]
+        description: "Resource type (default: video)"
+      duration:
+        type: string
+        enum: [short, medium, long]
+        description: "Video duration filter (short<4min, medium=4-20min, long>20min)"
+      published_after:
+        type: string
+        description: Filter videos published after this date (RFC 3339 format)
+    required: [query]
+  output:
+    type: object
+    properties:
+      videos:
+        type: array
+        items:
+          type: object
+          properties:
+            video_id:
+              type: string
+            title:
+              type: string
+            description:
+              type: string
+            channel_title:
+              type: string
+            channel_id:
+              type: string
+            published_at:
+              type: string
+            thumbnail_url:
+              type: string
+            url:
+              type: string
+      total_results:
+        type: integer
+      next_page_token:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /youtube/v3/search
+      method: GET
+      headers:
+        Accept: "application/json"
+      params:
+        part: "snippet"
+        q: "{query}"
+        maxResults: "{max_results}"
+        order: "{order}"
+        type: "{type}"
+        videoDuration: "{duration}"
+        publishedAfter: "{published_after}"
+        key: "{env.GOOGLE_API_KEY}"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: api_key
+  key: GOOGLE_API_KEY
+  description: Get API key from https://console.cloud.google.com/apis/credentials
+
+metadata:
+  category: google
+  tags: [google, youtube, search, video]
+  cost_category: free
+  execution_time: fast
+  read_only: true

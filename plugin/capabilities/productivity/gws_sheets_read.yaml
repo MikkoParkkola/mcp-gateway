@@ -1,0 +1,69 @@
+sha256: 40e897c08e3027e8c690092be0f828d1961e63eef2c01fe1ca23a05ea946eb49
+fulcrum: "1.0"
+name: gws_sheets_read
+description: Read values from a Google Sheets spreadsheet range.
+
+schema:
+  input:
+    type: object
+    properties:
+      spreadsheetId:
+        type: string
+        description: The spreadsheet ID (from the URL)
+        examples:
+          - "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
+      range:
+        type: string
+        description: "A1 notation range (e.g., 'Sheet1!A1:C10')"
+        examples:
+          - "Sheet1!A1:Z100"
+          - "A1:D50"
+    required:
+      - spreadsheetId
+      - range
+  output:
+    type: object
+    properties:
+      values:
+        type: array
+        items:
+          type: array
+          items:
+            type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - sheets
+        - spreadsheets
+        - values
+        - get
+        - "--params"
+        - '{"spreadsheetId": "{spreadsheetId}", "range": "{range}"}'
+
+cache:
+  strategy: ttl
+  ttl: 30
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s sheets"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - sheets
+    - spreadsheet
+    - workspace
+    - data
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developers.google.com/sheets/api/reference/rest/v4/spreadsheets.values/get

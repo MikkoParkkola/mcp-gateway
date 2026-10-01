@@ -1,0 +1,73 @@
+sha256: 2df573d39cb833cfae408956e1dedeb9761b9c963a9508ab3bc217ee97a3408a
+fulcrum: "1.0"
+name: gws_drive_list
+description: List files in Google Drive. Supports search queries, pagination, and filtering by MIME type.
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: "Drive search query (e.g., \"name contains 'report'\" or \"mimeType='application/vnd.google-apps.spreadsheet'\")"
+        examples:
+          - "name contains 'budget'"
+          - "mimeType='application/vnd.google-apps.document'"
+      pageSize:
+        type: integer
+        description: Maximum number of files to return (1-1000)
+        default: 10
+      orderBy:
+        type: string
+        description: Sort order (e.g., "modifiedTime desc", "name")
+        default: "modifiedTime desc"
+    required: []
+  output:
+    type: object
+    properties:
+      files:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            mimeType:
+              type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - drive
+        - files
+        - list
+        - "--params"
+        - '{"pageSize": {pageSize}, "orderBy": "{orderBy}", "q": "{query}"}'
+
+cache:
+  strategy: ttl
+  ttl: 60
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s drive"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - drive
+    - files
+    - workspace
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developers.google.com/drive/api/reference/rest/v3/files/list

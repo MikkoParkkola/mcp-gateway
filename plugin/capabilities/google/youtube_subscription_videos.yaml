@@ -1,0 +1,76 @@
+sha256: a2f035db00684665b31228fe2ad95e7928cabc342d67bfd6fa2cf4e77596efad
+fulcrum: "1.0"
+name: youtube_subscription_videos
+description: Get recent videos from your subscribed channels (new content feed)
+
+schema:
+  input:
+    type: object
+    properties:
+      max_results:
+        type: integer
+        description: "Maximum videos to return (default: 25, max: 50)"
+      published_after:
+        type: string
+        description: "Only videos published after this date (RFC 3339, e.g., 2025-01-20T00:00:00Z)"
+    required: []
+  output:
+    type: object
+    properties:
+      videos:
+        type: array
+        items:
+          type: object
+          properties:
+            video_id:
+              type: string
+            title:
+              type: string
+            channel_title:
+              type: string
+            channel_id:
+              type: string
+            description:
+              type: string
+            thumbnail:
+              type: string
+            published_at:
+              type: string
+      next_page_token:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /youtube/v3/activities
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        part: "snippet,contentDetails"
+        home: "true"
+        maxResults: "{max_results}"
+        publishedAfter: "{published_after}"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes: ["https://www.googleapis.com/auth/youtube.readonly"]
+
+metadata:
+  category: google
+  tags: [youtube, subscriptions, feed, new, videos]
+  cost_category: free
+  execution_time: fast
+  read_only: true

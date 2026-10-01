@@ -1,0 +1,129 @@
+sha256: de90646e6f1adc1ad999912c722bb78009440d3ff54126aec931e66b171a8b40
+fulcrum: "1.0"
+name: tasks_list
+description: List tasks from Google Tasks
+
+schema:
+  input:
+    type: object
+    properties:
+      tasklist_id:
+        type: string
+        description: Task list identifier (use '@default' for the default task list)
+        default: "@default"
+      completed_max:
+        type: string
+        description: Upper bound for task completion date (RFC3339)
+      completed_min:
+        type: string
+        description: Lower bound for task completion date (RFC3339)
+      due_max:
+        type: string
+        description: Upper bound for task due date (RFC3339)
+      due_min:
+        type: string
+        description: Lower bound for task due date (RFC3339)
+      max_results:
+        type: integer
+        description: Maximum number of tasks to return
+        default: 100
+        maximum: 100
+      page_token:
+        type: string
+        description: Token for pagination
+      show_completed:
+        type: boolean
+        description: Include completed tasks
+        default: true
+      show_deleted:
+        type: boolean
+        description: Include deleted tasks
+        default: false
+      show_hidden:
+        type: boolean
+        description: Include hidden tasks
+        default: false
+      updated_min:
+        type: string
+        description: Lower bound for task last modification time (RFC3339)
+    required: []
+  output:
+    type: object
+    properties:
+      kind:
+        type: string
+      etag:
+        type: string
+      items:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            title:
+              type: string
+            notes:
+              type: string
+            status:
+              type: string
+              enum: [needsAction, completed]
+            due:
+              type: string
+            completed:
+              type: string
+            parent:
+              type: string
+            position:
+              type: string
+            links:
+              type: array
+            updated:
+              type: string
+            self_link:
+              type: string
+      next_page_token:
+        type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://tasks.googleapis.com
+      path: /tasks/v1/lists/{tasklist_id}/tasks
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        completedMax: "{completed_max}"
+        completedMin: "{completed_min}"
+        dueMax: "{due_max}"
+        dueMin: "{due_min}"
+        maxResults: "{max_results}"
+        pageToken: "{page_token}"
+        showCompleted: "{show_completed}"
+        showDeleted: "{show_deleted}"
+        showHidden: "{show_hidden}"
+        updatedMin: "{updated_min}"
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/tasks.readonly
+
+metadata:
+  category: google
+  tags: [tasks, todo, productivity, lists]
+  cost_category: free
+  execution_time: fast
+  read_only: true

@@ -1,0 +1,45 @@
+fulcrum: "1.0"
+name: uuid_generate
+description: Generate UUIDs using UUID Tools API. Supports v1, v4, and custom namespaces.
+
+schema:
+  input:
+    type: object
+    properties:
+      count:
+        type: integer
+        description: Number of UUIDs to generate (1-100)
+        default: 1
+  output:
+    type: array
+    items:
+      type: string
+      description: Generated UUID
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://www.uuidtools.com
+      path: /api/generate/v4/count/{count}
+      method: GET
+
+cache:
+  strategy: none
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: utility
+  tags:
+    - uuid
+    - generator
+    - developer-tools
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://www.uuidtools.com/docs

@@ -1,0 +1,69 @@
+sha256: fbf8c000299f143205b4e7a8141a8a127922dbf49b64ebadb477ec3790ed627c
+fulcrum: "1.0"
+name: gws_docs_write
+description: Create a new Google Docs document or write content to an existing one using batch update requests.
+
+schema:
+  input:
+    type: object
+    properties:
+      title:
+        type: string
+        description: "Document title (for creating new documents)"
+      documentId:
+        type: string
+        description: "Existing document ID to update (omit to create new)"
+      text:
+        type: string
+        description: "Text content to insert at the beginning of the document"
+    required:
+      - title
+  output:
+    type: object
+    properties:
+      documentId:
+        type: string
+      title:
+        type: string
+      revisionId:
+        type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - docs
+        - "+write"
+        - "--title"
+        - "{title}"
+        - "--document-id"
+        - "{documentId}"
+        - "--text"
+        - "{text}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s docs"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - docs
+    - documents
+    - write
+    - create
+    - workspace
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/docs/api/reference/rest/v1/documents/create

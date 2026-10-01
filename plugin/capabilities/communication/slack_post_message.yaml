@@ -1,0 +1,106 @@
+sha256: 145b9e24d2394ce9963803da9b2f3a518c557620fb68c4b91ac0d113bca4d4c1
+fulcrum: "1.0"
+name: slack_post_message
+description: Post a message to a Slack channel or direct message
+
+schema:
+  input:
+    type: object
+    properties:
+      channel:
+        type: string
+        description: "Channel ID or name to post to (e.g. 'C1234567890' or '#general'). Use DM by passing a user ID."
+      text:
+        type: string
+        description: "Message text (supports Slack mrkdwn formatting)"
+      blocks:
+        type: array
+        description: Slack Block Kit blocks for rich message formatting
+        items:
+          type: object
+      attachments:
+        type: array
+        description: Legacy Slack message attachments
+        items:
+          type: object
+      thread_ts:
+        type: string
+        description: "Thread timestamp to reply in a thread (e.g. '1629839400.000200')"
+      unfurl_links:
+        type: boolean
+        description: "Whether to automatically unfurl link previews (default: true)"
+        default: true
+      unfurl_media:
+        type: boolean
+        description: "Whether to automatically unfurl media (default: true)"
+        default: true
+    required:
+      - channel
+      - text
+  output:
+    type: object
+    properties:
+      ok:
+        type: boolean
+        description: Whether the API call succeeded
+      channel:
+        type: string
+        description: Channel ID where message was posted
+      ts:
+        type: string
+        description: Message timestamp (unique message ID within the channel)
+      message:
+        type: object
+        description: The posted message object
+        properties:
+          text:
+            type: string
+          ts:
+            type: string
+          type:
+            type: string
+      error:
+        type: string
+        description: Error code if ok is false
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://slack.com
+      path: /api/chat.postMessage
+      method: POST
+      headers:
+        Authorization: "Bearer {env.SLACK_BOT_TOKEN}"
+        Content-Type: "application/json; charset=utf-8"
+      body:
+        channel: "{channel}"
+        text: "{text}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: bearer
+  key: env:SLACK_BOT_TOKEN
+  description: "Create a Slack App at https://api.slack.com/apps, add 'chat:write' OAuth scope, install to workspace, and copy the Bot User OAuth Token (xoxb-...)."
+  header: Authorization
+  prefix: Bearer
+
+metadata:
+  category: productivity
+  tags:
+    - slack
+    - messaging
+    - notifications
+    - chat
+    - team-communication
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  rate_limit: "1 req/sec per channel (Tier 3)"
+  docs: https://api.slack.com/methods/chat.postMessage

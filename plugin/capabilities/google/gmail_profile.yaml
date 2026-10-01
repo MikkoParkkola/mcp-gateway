@@ -1,0 +1,57 @@
+sha256: 9014a2b611e92bedd3794704ab2e0ca75c187041be301514b51527d07ce118cb
+fulcrum: "1.0"
+name: gmail_profile
+description: Get Gmail profile information for the authenticated user
+
+schema:
+  input:
+    type: object
+    properties: {}
+    required: []
+  output:
+    type: object
+    properties:
+      email_address:
+        type: string
+        description: The user's email address
+      messages_total:
+        type: integer
+        description: Total number of messages in the mailbox
+      threads_total:
+        type: integer
+        description: Total number of threads in the mailbox
+      history_id:
+        type: string
+        description: The ID of the mailbox's current history record
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/profile
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+
+metadata:
+  category: google
+  tags: [gmail, email, profile, account]
+  cost_category: free
+  execution_time: fast
+  read_only: true

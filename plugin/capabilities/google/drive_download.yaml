@@ -1,0 +1,68 @@
+sha256: 500e7556250cdc3c159e3044a863c7d3447168cff7ab6f8ab5d66ec98212336e
+fulcrum: "1.0"
+name: drive_download
+description: Download file content from Google Drive by file ID
+
+schema:
+  input:
+    type: object
+    properties:
+      file_id:
+        type: string
+        description: Google Drive file ID
+      format:
+        type: string
+        enum: [text, json, binary, base64]
+        description: "Output format (default: text for docs, binary for others)"
+    required: [file_id]
+  output:
+    type: object
+    properties:
+      file_id:
+        type: string
+      name:
+        type: string
+        description: File name
+      mime_type:
+        type: string
+        description: MIME type of the file
+      size:
+        type: integer
+        description: File size in bytes
+      content:
+        type: string
+        description: File content (text or base64 encoded)
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 60
+    config:
+      base_url: https://www.googleapis.com
+      path: /drive/v3/files/{file_id}
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        alt: "media"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/drive.readonly
+
+metadata:
+  category: google
+  tags: [google, drive, download, files]
+  cost_category: free
+  execution_time: medium
+  read_only: true

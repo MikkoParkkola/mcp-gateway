@@ -1,0 +1,79 @@
+sha256: 101a5aef84d8d28f621fa97767fae2ffbdcf0f6e7687688fa4231c41a40ca946
+fulcrum: "1.0"
+name: contacts_search
+description: Search Google Contacts by name, email, or phone number
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query (name, email, or phone)
+      page_size:
+        type: integer
+        description: "Number of results (default: 20, max: 100)"
+    required: [query]
+  output:
+    type: object
+    properties:
+      contacts:
+        type: array
+        items:
+          type: object
+          properties:
+            resource_name:
+              type: string
+            name:
+              type: string
+              description: Display name
+            emails:
+              type: array
+              items:
+                type: string
+            phones:
+              type: array
+              items:
+                type: string
+            organization:
+              type: string
+            photo_url:
+              type: string
+      total_count:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://people.googleapis.com
+      path: /v1/people:searchContacts
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        query: "{query}"
+        pageSize: "{page_size}"
+        readMask: "names,emailAddresses,phoneNumbers,organizations,photos"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/contacts.readonly
+
+metadata:
+  category: google
+  tags: [google, contacts, search, people]
+  cost_category: free
+  execution_time: fast
+  read_only: true

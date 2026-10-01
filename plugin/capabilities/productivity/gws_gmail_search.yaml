@@ -1,0 +1,71 @@
+sha256: 585823f3c69ccf98d27c434f0182cc7c9adc463ba7b1563eeabb98bb13093924
+fulcrum: "1.0"
+name: gws_gmail_search
+description: Search Gmail messages using Gmail search syntax. Returns message IDs and metadata.
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: "Gmail search query (same syntax as Gmail search bar)"
+        examples:
+          - "from:boss@company.com is:unread"
+          - "subject:invoice after:2026/03/01"
+          - "has:attachment filename:pdf"
+      maxResults:
+        type: integer
+        description: Maximum number of messages to return
+        default: 10
+    required:
+      - query
+  output:
+    type: object
+    properties:
+      messages:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            threadId:
+              type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - gmail
+        - users
+        - messages
+        - list
+        - "--params"
+        - '{"userId": "me", "q": "{query}", "maxResults": {maxResults}}'
+
+cache:
+  strategy: ttl
+  ttl: 30
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s gmail"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - gmail
+    - email
+    - workspace
+    - search
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developers.google.com/gmail/api/reference/rest/v1/users.messages/list

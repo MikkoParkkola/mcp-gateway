@@ -1,0 +1,125 @@
+sha256: 7733e5b0406a2d6912529b56422dbb7b18711daddd26b29cbdfe74c1b873ca10
+fulcrum: "1.0"
+name: image_to_text
+description: >
+  Extract text from images using OCR (Optical Character Recognition).
+  Accepts a publicly accessible image URL and returns all detected text.
+  Uses OCR.space free tier — supports JPEG, PNG, GIF, PDF, and BMP.
+
+schema:
+  input:
+    type: object
+    properties:
+      image_url:
+        type: string
+        description: Publicly accessible URL of the image to process
+        examples:
+          - "https://example.com/invoice.png"
+      language:
+        type: string
+        description: OCR language code (ISO 639-1)
+        default: eng
+        enum:
+          - ara
+          - bul
+          - chs
+          - cht
+          - cze
+          - dan
+          - dut
+          - eng
+          - fin
+          - fre
+          - ger
+          - gre
+          - hun
+          - kor
+          - ita
+          - jpn
+          - pol
+          - por
+          - rus
+          - slv
+          - spa
+          - swe
+          - tur
+      scale:
+        type: boolean
+        description: >
+          Enable auto-scaling for low-resolution images.
+          Improves accuracy for small text but increases processing time.
+        default: true
+      detect_orientation:
+        type: boolean
+        description: Detect and correct image rotation before OCR
+        default: true
+    required:
+      - image_url
+  output:
+    type: object
+    properties:
+      ParsedResults:
+        type: array
+        items:
+          type: object
+          properties:
+            ParsedText:
+              type: string
+              description: Extracted text from the image
+            ErrorMessage:
+              type: string
+            FileParseExitCode:
+              type: integer
+      OCRExitCode:
+        type: integer
+        description: "0=parsed, 1=parsed with error, 3=failed, 4=timeout"
+      IsErroredOnProcessing:
+        type: boolean
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.ocr.space
+      path: /parse/imageurl
+      method: GET
+      params:
+        apikey: "{env.OCR_SPACE_API_KEY}"
+        url: "{image_url}"
+        language: "{language}"
+        scale: "{scale}"
+        detectOrientation: "{detect_orientation}"
+        isOverlayRequired: "false"
+
+auth:
+  required: true
+  type: api_key
+  key: "env:OCR_SPACE_API_KEY"
+  description: >
+    Get a free API key at https://ocr.space/ocrapi (25000 requests/month free).
+    Set OCR_SPACE_API_KEY environment variable. Default key "helloworld" works
+    for testing with small images (up to 1MB).
+  param: apikey
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+metadata:
+  category: media
+  tags:
+    - ocr
+    - image
+    - text-extraction
+    - vision
+    - document
+  cost_category: free
+  execution_time: medium
+  read_only: true
+  produces:
+    - extractedText
+  consumes:
+    - imageUrl
+  docs: https://ocr.space/OCRAPI

@@ -1,0 +1,117 @@
+sha256: 6b312e3031525624542837d01de6c479e17a91b7a7bc7502e27a42dc458ca733
+fulcrum: "1.0"
+name: linear_get_issue
+description: "Get a single Linear issue by identifier (e.g., 'ENG-123') with full details and comments"
+
+schema:
+  input:
+    type: object
+    properties:
+      identifier:
+        type: string
+        description: "Issue identifier like 'ENG-123' or 'BOT-42'"
+        examples:
+          - "ENG-123"
+    required: [identifier]
+  output:
+    type: object
+    properties:
+      issue:
+        type: object
+        description: Full issue details
+
+transform:
+  project:
+    - nodes[0]
+  rename:
+    nodes[0]: issue
+
+# Canonical projection (MIK-5877). Maps the issue payload onto the gateway's
+# canonical schema (actor/subject/env_time/url). Paths are relative to the
+# transformed payload above ({issue: {...}}). DORMANT unless the gateway runs
+# with meta_mcp.projection_mode = on | experimental; at the default `off` this
+# block changes no response. The untouched payload is always preserved under
+# _raw. NOTE: enabling experimental projects this tool for ~50% of sessions —
+# any consumer that reads issue.* directly (e.g. a claim-verify protocol) must
+# pass _full:true or run outside the experiment window.
+projection:
+  subject:
+    id: issue.identifier
+    title: issue.title
+  actor:
+    id: issue.assignee.id
+    display_name: issue.assignee.displayName
+    email: issue.assignee.email
+    handle: issue.assignee.name
+  env_time:
+    created: issue.createdAt
+    updated: issue.updatedAt
+  url:
+    href: issue.url
+
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          query GetIssue($term: String!) {
+            searchIssues(term: $term, first: 1, includeArchived: false, includeComments: true) {
+              nodes {
+                id identifier title description priority priorityLabel estimate
+                state { id name type color }
+                team { id name key }
+                assignee { id name displayName email }
+                labels { nodes { id name color } }
+                project { id name }
+                parent { id identifier title }
+                children { nodes { id identifier title state { name } } }
+                comments {
+                  nodes {
+                    id body createdAt
+                    user { id name displayName }
+                    resolvedAt
+                  }
+                }
+                relations {
+                  nodes {
+                    type
+                    relatedIssue { id identifier title }
+                  }
+                }
+                createdAt updatedAt completedAt dueDate
+                url
+              }
+            }
+          }
+        variables:
+          term: "{identifier}"
+      response_path: data.searchIssues
+
+cache:
+  strategy: exact
+  # ttl: 0 — Symphony+ claim protocol (symphony-plus#111) re-fetches the
+  # issue immediately after posting a claim marker to verify it won.
+  # A non-zero cache returns the stale pre-post state and breaks every
+  # paired/pool dispatch with 'claim marker not visible after post'.
+  ttl: 0
+
+metadata:
+  category: productivity
+  tags: [linear, issue, detail, comments]
+  cost_category: free
+  execution_time: fast
+  read_only: true

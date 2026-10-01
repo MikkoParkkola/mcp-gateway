@@ -1,0 +1,80 @@
+sha256: 3dd1c6b9ebc8e505827ffadba959db57f7cf571c509f1ea00dc48803dcf6f8bd
+fulcrum: "1.0"
+name: gws_gmail_send
+description: Send an email via Gmail. Composes and sends a new message with optional CC/BCC recipients.
+
+schema:
+  input:
+    type: object
+    properties:
+      to:
+        type: string
+        description: "Recipient email address"
+        format: email
+      subject:
+        type: string
+        description: "Email subject line"
+      body:
+        type: string
+        description: "Email body (plain text)"
+      cc:
+        type: string
+        description: "CC recipients (comma-separated email addresses)"
+      bcc:
+        type: string
+        description: "BCC recipients (comma-separated email addresses)"
+    required:
+      - to
+      - subject
+      - body
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      threadId:
+        type: string
+      labelIds:
+        type: array
+        items:
+          type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - gmail
+        - "+send"
+        - "--to"
+        - "{to}"
+        - "--subject"
+        - "{subject}"
+        - "--body"
+        - "{body}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s gmail"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - gmail
+    - email
+    - send
+    - workspace
+    - communication
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/gmail/api/reference/rest/v1/users.messages/send

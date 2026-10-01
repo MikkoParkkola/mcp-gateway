@@ -1,0 +1,70 @@
+sha256: b4c35e4453d93191997f72c82ebf35439066b7090712c06a349fa15cd29c63df
+fulcrum: "1.0"
+name: youtube_history
+description: Get your YouTube watch history (recently watched videos)
+
+schema:
+  input:
+    type: object
+    properties:
+      max_results:
+        type: integer
+        description: "Maximum videos to return (default: 25, max: 50)"
+    required: []
+  output:
+    type: object
+    properties:
+      videos:
+        type: array
+        items:
+          type: object
+          properties:
+            video_id:
+              type: string
+            title:
+              type: string
+            channel_title:
+              type: string
+            channel_id:
+              type: string
+            thumbnail:
+              type: string
+            duration:
+              type: string
+            watched_at:
+              type: string
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /youtube/v3/activities
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        part: "snippet,contentDetails"
+        mine: "true"
+        maxResults: "{max_results}"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes: ["https://www.googleapis.com/auth/youtube.readonly"]
+
+metadata:
+  category: google
+  tags: [youtube, history, watched, videos]
+  cost_category: free
+  execution_time: fast
+  read_only: true

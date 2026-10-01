@@ -1,0 +1,76 @@
+sha256: 466c5de0d0ba903d0f030c899d71779d780ecae60a0f83b46aa13aeaba45e4fa
+fulcrum: "1.0"
+name: gws_chat_send
+description: Send a message in a Google Chat space. Posts a text message to the specified Chat space.
+
+schema:
+  input:
+    type: object
+    properties:
+      spaceName:
+        type: string
+        description: "Chat space resource name (e.g., spaces/AAAA1234)"
+        examples:
+          - "spaces/AAAA1234"
+      text:
+        type: string
+        description: "Message text to send (supports basic formatting)"
+      threadKey:
+        type: string
+        description: "Thread key to reply within a specific thread (optional)"
+    required:
+      - spaceName
+      - text
+  output:
+    type: object
+    properties:
+      name:
+        type: string
+      text:
+        type: string
+      createTime:
+        type: string
+      thread:
+        type: object
+        properties:
+          name:
+            type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - chat
+        - "+send"
+        - "--space"
+        - "{spaceName}"
+        - "--text"
+        - "{text}"
+        - "--thread-key"
+        - "{threadKey}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s chat"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - chat
+    - messaging
+    - workspace
+    - communication
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces.messages/create

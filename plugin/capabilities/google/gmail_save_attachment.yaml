@@ -1,0 +1,98 @@
+sha256: a423a0b40ee434d60c9ab17db0be76c0a6d4a00e8aaad338cdfe34e637742e9d
+fulcrum: "1.0"
+name: gmail_save_attachment
+description: Download a Gmail attachment and save it to disk. Fetches the attachment by message ID and attachment ID, base64-decodes the data, and writes it to the specified output directory.
+
+schema:
+  input:
+    type: object
+    properties:
+      message_id:
+        type: string
+        description: The ID of the message containing the attachment
+      attachment_id:
+        type: string
+        description: The ID of the attachment (from message payload part body.attachmentId)
+      filename:
+        type: string
+        description: Filename to save as (from message payload part filename field)
+      output_dir:
+        type: string
+        description: Directory to save the file to
+        default: "~/Downloads"
+    required: [message_id, attachment_id, filename]
+  output:
+    type: object
+    properties:
+      saved_path:
+        type: string
+        description: Full path where the file was saved
+      size:
+        type: integer
+        description: File size in bytes
+      filename:
+        type: string
+        description: The filename that was saved
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 60
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      response_transform: |
+        import base64
+        import os
+        raw_data = data.get("data", "")
+        # Gmail API returns URL-safe base64 (RFC 4648 section 5)
+        # Pad to multiple of 4 for Python's decoder
+        padded = raw_data + "=" * (4 - len(raw_data) % 4) if len(raw_data) % 4 else raw_data
+        file_bytes = base64.urlsafe_b64decode(padded)
+        out_dir = os.path.expanduser(output_dir or "~/Downloads")
+        os.makedirs(out_dir, exist_ok=True)
+        save_path = os.path.join(out_dir, filename)
+        # Avoid overwriting: append number if file exists
+        if os.path.exists(save_path):
+            name, ext = os.path.splitext(filename)
+            counter = 1
+            while os.path.exists(os.path.join(out_dir, f"{name}_{counter}{ext}")):
+                counter += 1
+            save_path = os.path.join(out_dir, f"{name}_{counter}{ext}")
+        with open(save_path, "wb") as f:
+            f.write(file_bytes)
+        return {
+            "saved_path": save_path,
+            "size": len(file_bytes),
+            "filename": os.path.basename(save_path)
+        }
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+
+metadata:
+  category: google
+  tags: [gmail, email, attachment, download, save, file, productivity]
+  cost_category: free
+  execution_time: medium
+  read_only: false
+  notes: |
+    Uses response_transform to base64-decode and write to disk.
+    If the fulcrum runtime does not support file I/O in response_transform,
+    use gmail_get_attachment instead and decode+save in the calling context.
+    The response_transform uses Python's base64.urlsafe_b64decode to handle
+    Gmail's URL-safe base64 encoding (RFC 4648 section 5).

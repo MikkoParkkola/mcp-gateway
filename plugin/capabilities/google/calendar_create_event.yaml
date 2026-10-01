@@ -1,0 +1,163 @@
+sha256: 963f2f66c0c0b908732707896808ea80d90e34b183390748504795afd17643e5
+fulcrum: "1.0"
+name: calendar_create_event
+description: Create a new event in Google Calendar
+
+schema:
+  input:
+    type: object
+    properties:
+      calendar_id:
+        type: string
+        description: Calendar ID (use 'primary' for main calendar)
+        default: primary
+      summary:
+        type: string
+        description: Title of the event
+      description:
+        type: string
+        description: Description/notes for the event
+      location:
+        type: string
+        description: Geographic location of the event
+      start:
+        type: object
+        properties:
+          date_time:
+            type: string
+            description: Start time in RFC3339 format (for timed events)
+          date:
+            type: string
+            description: Start date in YYYY-MM-DD format (for all-day events)
+          time_zone:
+            type: string
+            description: IANA timezone (e.g., America/New_York)
+        description: Start time of the event
+      end:
+        type: object
+        properties:
+          date_time:
+            type: string
+            description: End time in RFC3339 format (for timed events)
+          date:
+            type: string
+            description: End date in YYYY-MM-DD format (for all-day events)
+          time_zone:
+            type: string
+            description: IANA timezone (e.g., America/New_York)
+        description: End time of the event
+      attendees:
+        type: array
+        items:
+          type: object
+          properties:
+            email:
+              type: string
+            display_name:
+              type: string
+            optional:
+              type: boolean
+        description: List of attendees to invite
+      reminders:
+        type: object
+        properties:
+          use_default:
+            type: boolean
+          overrides:
+            type: array
+            items:
+              type: object
+              properties:
+                method:
+                  type: string
+                  enum: [email, popup]
+                minutes:
+                  type: integer
+        description: Reminder settings for the event
+      recurrence:
+        type: array
+        items:
+          type: string
+        description: RRULE, EXRULE, RDATE, or EXDATE lines for recurring events
+      visibility:
+        type: string
+        enum: [default, public, private, confidential]
+        description: Visibility of the event
+      conference_data:
+        type: object
+        description: Conference/meeting data (for Google Meet integration)
+      send_updates:
+        type: string
+        enum: [all, externalOnly, none]
+        description: Whether to send notifications about the event
+        default: all
+    required: [summary, start, end]
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      html_link:
+        type: string
+        description: URL to view the event in Google Calendar
+      summary:
+        type: string
+      start:
+        type: object
+      end:
+        type: object
+      status:
+        type: string
+      created:
+        type: string
+      updated:
+        type: string
+      hangout_link:
+        type: string
+        description: Google Meet link if conference was created
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /calendar/v3/calendars/{calendar_id}/events
+      method: POST
+      headers:
+        Authorization: "Bearer {access_token}"
+        Content-Type: "application/json"
+        Accept: "application/json"
+      params:
+        sendUpdates: "{send_updates}"
+      body:
+        summary: "{summary}"
+        description: "{description}"
+        location: "{location}"
+        start: "{start}"
+        end: "{end}"
+        attendees: "{attendees}"
+        reminders: "{reminders}"
+        recurrence: "{recurrence}"
+        visibility: "{visibility}"
+        conferenceData: "{conference_data}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/calendar.events
+
+metadata:
+  category: google
+  tags: [calendar, events, scheduling, productivity, create]
+  cost_category: free
+  execution_time: fast
+  read_only: false

@@ -1,0 +1,84 @@
+fulcrum: "1.0"
+name: musicbrainz_search
+description: Search music metadata from MusicBrainz - the open music encyclopedia. Find artists, albums, tracks, and recordings. Free, no API key required.
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Search query
+        examples:
+          - "radiohead"
+          - "abbey road beatles"
+      type:
+        type: string
+        description: Entity type to search
+        default: artist
+        enum: [artist, release, recording, work, label]
+      limit:
+        type: integer
+        description: Maximum results
+        default: 10
+    required:
+      - query
+  output:
+    type: object
+    properties:
+      count:
+        type: integer
+      artists:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            country:
+              type: string
+            type:
+              type: string
+            score:
+              type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://musicbrainz.org
+      path: /ws/2/{type}
+      method: GET
+      headers:
+        User-Agent: "MCPGateway/1.0"
+        Accept: "application/json"
+      params:
+        query: "{query}"
+        limit: "{limit}"
+        fmt: "json"
+
+cache:
+  strategy: exact
+  ttl: 86400
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: entertainment
+  tags:
+    - music
+    - artists
+    - albums
+    - musicbrainz
+    - free
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 1 req/sec
+  docs: https://musicbrainz.org/doc/MusicBrainz_API

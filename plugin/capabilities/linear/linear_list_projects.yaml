@@ -1,0 +1,67 @@
+sha256: 410bd7a0e856ecbfa14d3199d246edf62575d1541eabec7505bfc5ce99d6e134
+fulcrum: "1.0"
+name: linear_list_projects
+description: List all Linear projects with status, progress, teams, and milestones
+
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+    properties:
+      projects:
+        type: array
+
+transform:
+  project:
+    - nodes
+  rename:
+    nodes: projects
+
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          {
+            projects(first: 50) {
+              nodes {
+                id name description state
+                progress completedAt startDate targetDate
+                teams { nodes { id name key } }
+                lead { id name displayName }
+                projectMilestones {
+                  nodes { id name targetDate sortOrder }
+                }
+                url
+              }
+            }
+          }
+        variables: {}
+      response_path: data.projects
+
+cache:
+  strategy: exact
+  ttl: 60
+
+metadata:
+  category: productivity
+  tags: [linear, projects, list]
+  cost_category: free
+  execution_time: fast
+  read_only: true

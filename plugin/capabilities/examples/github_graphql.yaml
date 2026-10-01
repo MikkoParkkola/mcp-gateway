@@ -1,0 +1,76 @@
+# Example: GitHub GraphQL API capability
+#
+# Queries the authenticated user's profile and top repositories
+# using the GitHub GraphQL API (api.github.com/graphql).
+#
+# SECURITY NOTE: This uses environment variable for authentication.
+# Set GITHUB_TOKEN before using:
+#   export GITHUB_TOKEN="ghp_your_token_here"
+#
+# NEVER put actual tokens in YAML files.
+
+fulcrum: "1.0"
+name: github_graphql_viewer
+description: Query the GitHub GraphQL API for the authenticated user's profile and top repositories
+
+schema:
+  input:
+    type: object
+    properties:
+      first:
+        type: integer
+        description: Number of repositories to return (default 5)
+  output:
+    type: object
+    properties:
+      viewer:
+        type: object
+        properties:
+          login:
+            type: string
+          name:
+            type: string
+          bio:
+            type: string
+          repositories:
+            type: object
+            properties:
+              nodes:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    stargazerCount:
+                      type: integer
+
+providers:
+  primary:
+    service: graphql
+    cost_per_call: 0
+    timeout: 30
+    config:
+      endpoint: https://api.github.com/graphql
+      headers:
+        Accept: "application/json"
+        User-Agent: "mcp-gateway"
+      body:
+        query: "query { viewer { login name bio repositories(first: 5) { nodes { name stargazerCount } } } }"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: bearer
+  key: env:GITHUB_TOKEN
+  description: "GitHub personal access token (set GITHUB_TOKEN env var)"
+
+metadata:
+  category: developer
+  tags: [github, graphql, api, user, repositories]
+  cost_category: free
+  execution_time: fast
+  read_only: true

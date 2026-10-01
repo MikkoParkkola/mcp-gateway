@@ -1,0 +1,76 @@
+fulcrum: "1.0"
+name: yahoo_stock_quote
+description: Get real-time stock quotes from Yahoo Finance. Free API with no key required. Returns price, change, volume, and market cap.
+
+schema:
+  input:
+    type: object
+    properties:
+      symbol:
+        type: string
+        description: Stock ticker symbol (e.g., AAPL, TSLA, ^GSPC for indices)
+        examples:
+          - "AAPL"
+          - "TSLA"
+          - "^GSPC"
+    required:
+      - symbol
+  output:
+    type: object
+    properties:
+      symbol:
+        type: string
+        description: Stock symbol
+      regularMarketPrice:
+        type: number
+        description: Current price
+      regularMarketChange:
+        type: number
+        description: Price change
+      regularMarketChangePercent:
+        type: number
+        description: Percent change
+      regularMarketVolume:
+        type: integer
+        description: Trading volume
+      marketCap:
+        type: integer
+        description: Market capitalization
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 10
+    config:
+      base_url: https://query1.finance.yahoo.com
+      path: /v8/finance/chart/{symbol}
+      method: GET
+      headers:
+        Accept: "application/json"
+        User-Agent: "Mozilla/5.0"
+      params:
+        interval: "1d"
+        range: "1d"
+      response_path: chart.result[0].meta
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: false
+  type: none
+
+metadata:
+  category: finance
+  tags:
+    - finance
+    - stocks
+    - market-data
+    - free
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  rate_limit: 2000 req/hour
+  docs: https://finance.yahoo.com/

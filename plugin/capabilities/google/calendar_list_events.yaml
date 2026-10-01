@@ -1,0 +1,94 @@
+sha256: 98ebd2346bb4ac2617135d44198416c6e512a8acfdb044506a62ae9c956f5498
+fulcrum: "1.0"
+name: calendar_list_events
+description: List upcoming calendar events from Google Calendar
+
+schema:
+  input:
+    type: object
+    properties:
+      calendar_id:
+        type: string
+        description: Calendar ID (use 'primary' for main calendar)
+        default: primary
+      time_min:
+        type: string
+        description: Lower bound for event start time (RFC3339)
+      time_max:
+        type: string
+        description: Upper bound for event start time (RFC3339)
+      max_results:
+        type: integer
+        description: Maximum number of events
+        default: 10
+      single_events:
+        type: boolean
+        description: Expand recurring events into instances
+        default: true
+      order_by:
+        type: string
+        enum: [startTime, updated]
+        default: startTime
+    required: []
+  output:
+    type: object
+    properties:
+      events:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            summary:
+              type: string
+            start:
+              type: object
+            end:
+              type: object
+            location:
+              type: string
+            description:
+              type: string
+            attendees:
+              type: array
+      count:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://www.googleapis.com
+      path: /calendar/v3/calendars/{calendar_id}/events
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        maxResults: "{max_results}"
+        timeMin: "{time_min}"
+        timeMax: "{time_max}"
+        singleEvents: "{single_events}"
+        orderBy: "{order_by}"
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/calendar.readonly
+
+metadata:
+  category: google
+  tags: [calendar, events, scheduling, productivity]
+  cost_category: free
+  execution_time: fast
+  read_only: true

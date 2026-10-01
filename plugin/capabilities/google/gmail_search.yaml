@@ -1,0 +1,85 @@
+sha256: 725d75c29732856d4cb1093b9626b89d741fe0a5a79a1676775082ab183606c0
+fulcrum: "1.0"
+name: gmail_search
+description: Search Gmail messages with advanced query syntax
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: Gmail search query (supports from:, to:, subject:, has:attachment, etc.)
+      max_results:
+        type: integer
+        description: Maximum number of results to return
+        default: 10
+      include_spam_trash:
+        type: boolean
+        description: Include spam and trash in results
+        default: false
+      label_ids:
+        type: array
+        items:
+          type: string
+        description: Filter by label IDs (INBOX, SENT, DRAFT, etc.)
+    required: [query]
+  output:
+    type: object
+    properties:
+      messages:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            thread_id:
+              type: string
+            snippet:
+              type: string
+            subject:
+              type: string
+            from:
+              type: string
+            date:
+              type: string
+      result_count:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/messages
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+      params:
+        q: "{query}"
+        maxResults: "{max_results}"
+        includeSpamTrash: "{include_spam_trash}"
+        labelIds: "{label_ids}"
+
+cache:
+  strategy: exact
+  ttl: 300
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+
+metadata:
+  category: google
+  tags: [gmail, email, search, productivity]
+  cost_category: free
+  execution_time: fast
+  read_only: true

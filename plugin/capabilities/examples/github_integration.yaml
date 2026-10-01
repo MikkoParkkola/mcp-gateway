@@ -1,0 +1,73 @@
+# Example: GitHub webhook receiver
+#
+# Receives webhook events from GitHub and converts them to MCP notifications.
+#
+# Setup in GitHub:
+#   1. Go to Repository → Settings → Webhooks → Add webhook
+#   2. Payload URL: http://your-gateway:port/webhooks/github/events
+#   3. Content type: application/json
+#   4. Secret: Set in environment as GITHUB_WEBHOOK_SECRET
+#   5. Select events: Issues, Pull requests, Push, etc.
+#
+# GitHub uses HMAC-SHA256 with X-Hub-Signature-256 header.
+
+fulcrum: "1.0"
+name: github_integration
+description: GitHub webhook integration for repository events
+
+schema:
+  input:
+    type: object
+    properties: {}
+  output:
+    type: object
+
+providers: {}
+
+webhooks:
+  repository_events:
+    path: /github/events
+    method: POST
+
+    # GitHub webhook secret
+    secret: "{env.GITHUB_WEBHOOK_SECRET}"
+
+    # GitHub sends signature as "sha256=<hex>"
+    signature_header: "X-Hub-Signature-256"
+
+    transform:
+      # GitHub sends action in different places depending on event type
+      # This extracts from the "action" field (for issues, PRs, etc.)
+      event_type: "github.{action}"
+
+      # Extract common fields
+      data:
+        repository: "{repository.full_name}"
+        sender: "{sender.login}"
+        action: "{action}"
+
+    notify: true
+
+  # Separate webhook for push events (different payload structure)
+  push_events:
+    path: /github/push
+    method: POST
+    secret: "{env.GITHUB_WEBHOOK_SECRET}"
+    signature_header: "X-Hub-Signature-256"
+
+    transform:
+      event_type: "github.push"
+      data:
+        repository: "{repository.full_name}"
+        ref: "{ref}"
+        pusher: "{pusher.name}"
+        commits: "{commits}"
+
+    notify: true
+
+metadata:
+  category: integration
+  tags: [github, webhook, notifications, repository]
+  cost_category: free
+  execution_time: instant
+  read_only: false

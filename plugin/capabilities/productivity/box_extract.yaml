@@ -1,0 +1,91 @@
+sha256: 3ec22851f927d0779156c13eb3038cc4984dbce4fa2bc0082bf7d69ebf315e4c
+fulcrum: "1.0"
+name: box_extract
+description: >
+  Box AI Extract API — extract structured data from documents using Box's AI
+  document processing. Supports invoices, receipts, contracts, and custom schemas.
+  [keywords: document, extraction, ocr, pdf, box, ai, structured-data]
+
+schema:
+  input:
+    type: object
+    properties:
+      operation:
+        type: string
+        description: "Extraction operation"
+        enum:
+          - extract_document
+          - extract_structured
+          - list_extractions
+          - get_status
+      file_id:
+        type: string
+        description: "Box file ID to extract from"
+      fields:
+        type: array
+        description: "Fields to extract (for extract_structured)"
+        items:
+          type: object
+          properties:
+            key:
+              type: string
+            description:
+              type: string
+            type:
+              type: string
+              enum: [string, number, date, enum]
+      extraction_id:
+        type: string
+        description: "Extraction ID (for get_status)"
+    required:
+      - operation
+  output:
+    type: object
+    properties:
+      extraction_id:
+        type: string
+      status:
+        type: string
+        enum: [pending, completed, failed]
+      data:
+        type: object
+        description: "Extracted key-value pairs"
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0.01
+    timeout: 60
+    config:
+      base_url: https://api.box.com
+      path: "/2.0/ai/extract"
+      method: POST
+      headers:
+        Authorization: "Bearer {env.BOX_ACCESS_TOKEN}"
+        Content-Type: "application/json"
+
+auth:
+  required: true
+  type: bearer
+  key: "env:BOX_ACCESS_TOKEN"
+  description: "Box Developer Token from https://developer.box.com/guides/authentication/"
+  header: Authorization
+  prefix: Bearer
+
+cache:
+  strategy: none
+
+metadata:
+  category: productivity
+  tags:
+    - document
+    - extraction
+    - ocr
+    - pdf
+    - box
+    - ai
+    - structured-data
+  cost_category: paid
+  execution_time: slow
+  read_only: true
+  docs: https://developer.box.com/guides/box-ai/extract-metadata-structured/

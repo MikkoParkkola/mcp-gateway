@@ -1,0 +1,71 @@
+sha256: ca0ad0089d80d24f2e488fc95a85955103ee9b0355ac2bd01fd9d13e58232e3e
+fulcrum: "1.0"
+name: gmail_labels
+description: List all Gmail labels for the authenticated user
+
+schema:
+  input:
+    type: object
+    properties: {}
+    required: []
+  output:
+    type: object
+    properties:
+      labels:
+        type: array
+        items:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            type:
+              type: string
+              description: "Label type: system or user"
+            message_list_visibility:
+              type: string
+            label_list_visibility:
+              type: string
+            messages_total:
+              type: integer
+            messages_unread:
+              type: integer
+            threads_total:
+              type: integer
+            threads_unread:
+              type: integer
+      count:
+        type: integer
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/labels
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.labels
+
+metadata:
+  category: google
+  tags: [gmail, email, labels, organization]
+  cost_category: free
+  execution_time: fast
+  read_only: true

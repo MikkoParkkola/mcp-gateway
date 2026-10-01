@@ -1,0 +1,69 @@
+sha256: a57e3d55921878d0183d2c58561ac9864ca57aa16f33ae9c35923bfd0a2cbea2
+fulcrum: "1.0"
+name: gws_gmail_reply
+description: Reply to a Gmail message within its existing thread. Sends a reply to the specified message.
+
+schema:
+  input:
+    type: object
+    properties:
+      messageId:
+        type: string
+        description: "Gmail message ID to reply to"
+      threadId:
+        type: string
+        description: "Thread ID of the conversation"
+      body:
+        type: string
+        description: "Reply body (plain text)"
+    required:
+      - messageId
+      - threadId
+      - body
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      threadId:
+        type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - gmail
+        - "+reply"
+        - "--message-id"
+        - "{messageId}"
+        - "--thread-id"
+        - "{threadId}"
+        - "--body"
+        - "{body}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s gmail"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - gmail
+    - email
+    - reply
+    - workspace
+    - communication
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/gmail/api/reference/rest/v1/users.messages/send

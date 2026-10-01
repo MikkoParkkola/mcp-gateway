@@ -1,0 +1,57 @@
+sha256: a104dc04e2ede056f8396f90fbdb0724ed8455a02e2ea63a7701d9e9a0dff6d5
+fulcrum: "1.0"
+name: gmail_get_attachment
+description: Download a Gmail attachment by message ID and attachment ID. Returns base64url-encoded attachment data and size. Use gmail_get_message first to find attachment IDs from the message payload parts.
+
+schema:
+  input:
+    type: object
+    properties:
+      message_id:
+        type: string
+        description: The ID of the message containing the attachment
+      attachment_id:
+        type: string
+        description: The ID of the attachment (from message payload part body.attachmentId)
+    required: [message_id, attachment_id]
+  output:
+    type: object
+    properties:
+      data:
+        type: string
+        description: Base64url-encoded attachment data (use base64.urlsafe_b64decode to decode)
+      size:
+        type: integer
+        description: Attachment size in bytes
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 60
+    config:
+      base_url: https://gmail.googleapis.com
+      path: /gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}
+      method: GET
+      headers:
+        Authorization: "Bearer {access_token}"
+        Accept: "application/json"
+
+cache:
+  strategy: exact
+  ttl: 3600
+
+auth:
+  required: true
+  type: oauth
+  key: "oauth:google"
+  token_endpoint: "https://oauth2.googleapis.com/token"
+  scopes:
+    - https://www.googleapis.com/auth/gmail.readonly
+
+metadata:
+  category: google
+  tags: [gmail, email, attachment, download, productivity]
+  cost_category: free
+  execution_time: medium
+  read_only: true

@@ -1,0 +1,69 @@
+sha256: 5b3b0ea5a74480d4cd98f38e60b7438507bdecb53b16b704799efd0adcd6b789
+fulcrum: "1.0"
+name: gws_gmail_watch
+description: Set up Gmail push notifications via Cloud Pub/Sub. Watches for changes to the mailbox and sends notifications to the specified topic.
+
+schema:
+  input:
+    type: object
+    properties:
+      topicName:
+        type: string
+        description: "Cloud Pub/Sub topic name (e.g., projects/myproject/topics/gmail-notifications)"
+        examples:
+          - "projects/my-project/topics/gmail-watch"
+      labelIds:
+        type: string
+        description: "Comma-separated label IDs to watch (e.g., INBOX). If empty, watches all labels."
+        examples:
+          - "INBOX"
+          - "INBOX,IMPORTANT"
+    required:
+      - topicName
+  output:
+    type: object
+    properties:
+      historyId:
+        type: string
+      expiration:
+        type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - gmail
+        - users
+        - watch
+        - "--params"
+        - '{"userId": "me"}'
+        - "--json"
+        - '{"topicName": "{topicName}", "labelIds": ["{labelIds}"]}'
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s gmail"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - gmail
+    - email
+    - watch
+    - notifications
+    - pubsub
+    - workspace
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/gmail/api/reference/rest/v1/users/watch

@@ -1,0 +1,69 @@
+sha256: 49d99575a027850ab111f4b643f24470daeaa5c15d66005f697cec47402f3907
+fulcrum: "1.0"
+name: gws_gmail_forward
+description: Forward a Gmail message to another recipient. Forwards the specified message with optional additional body text.
+
+schema:
+  input:
+    type: object
+    properties:
+      messageId:
+        type: string
+        description: "Gmail message ID to forward"
+      to:
+        type: string
+        description: "Recipient email address to forward to"
+        format: email
+      body:
+        type: string
+        description: "Optional additional text to prepend to forwarded message"
+    required:
+      - messageId
+      - to
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      threadId:
+        type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - gmail
+        - "+forward"
+        - "--message-id"
+        - "{messageId}"
+        - "--to"
+        - "{to}"
+        - "--body"
+        - "{body}"
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s gmail"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - gmail
+    - email
+    - forward
+    - workspace
+    - communication
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/gmail/api/reference/rest/v1/users.messages/send

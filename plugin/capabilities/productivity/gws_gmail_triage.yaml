@@ -1,0 +1,75 @@
+sha256: e8361afed5b84454241d9ad594d88b838aedd680f6b8ce82293d071243df09ca
+fulcrum: "1.0"
+name: gws_gmail_triage
+description: Triage Gmail messages by modifying labels. Add or remove labels such as INBOX, UNREAD, STARRED, IMPORTANT, SPAM, TRASH.
+
+schema:
+  input:
+    type: object
+    properties:
+      messageId:
+        type: string
+        description: "Gmail message ID to modify"
+      addLabels:
+        type: string
+        description: "Comma-separated label IDs to add (e.g., STARRED, IMPORTANT)"
+        examples:
+          - "STARRED"
+          - "IMPORTANT,STARRED"
+      removeLabels:
+        type: string
+        description: "Comma-separated label IDs to remove (e.g., UNREAD, INBOX)"
+        examples:
+          - "UNREAD"
+          - "INBOX,UNREAD"
+    required:
+      - messageId
+  output:
+    type: object
+    properties:
+      id:
+        type: string
+      labelIds:
+        type: array
+        items:
+          type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+        - gmail
+        - users
+        - messages
+        - modify
+        - "--params"
+        - '{"userId": "me", "id": "{messageId}"}'
+        - "--json"
+        - '{"addLabelIds": ["{addLabels}"], "removeLabelIds": ["{removeLabels}"]}'
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth2
+  description: "Authenticate via: gws auth login -s gmail"
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - gmail
+    - email
+    - triage
+    - labels
+    - workspace
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/gmail/api/reference/rest/v1/users.messages/modify

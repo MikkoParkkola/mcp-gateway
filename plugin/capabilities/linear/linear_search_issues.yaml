@@ -1,0 +1,83 @@
+sha256: d0f7d0a02c629015258cd45eb3cc940842993f0e99a74c88fc2f3fd2e3303452
+fulcrum: "1.0"
+name: linear_search_issues
+description: Search Linear issues by query string with optional filters (team, state, assignee, priority)
+
+schema:
+  input:
+    type: object
+    properties:
+      query:
+        type: string
+        description: "Search query string (searches title, description, comments)"
+      first:
+        type: integer
+        description: "Number of results to return (default 50, max 250)"
+        default: 50
+      after:
+        type: string
+        description: "Cursor for pagination (from pageInfo.endCursor)"
+    required: [query]
+  output:
+    type: object
+    properties:
+      issues:
+        type: array
+        description: Matching issues
+
+transform:
+  project:
+    - nodes
+  rename:
+    nodes: issues
+
+auth:
+  required: true
+  type: api_key
+  key: "env:LINEAR_API_KEY"
+  header: Authorization
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 15
+    config:
+      base_url: https://api.linear.app
+      path: /graphql
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        query: >
+          query SearchIssues($term: String!, $first: Int, $after: String) {
+            searchIssues(term: $term, first: $first, after: $after, includeArchived: false) {
+              nodes {
+                id identifier title description priority priorityLabel
+                state { id name type color }
+                team { id name key }
+                assignee { id name displayName }
+                labels { nodes { id name color } }
+                project { id name }
+                createdAt updatedAt completedAt
+                url
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        variables:
+          term: "{query}"
+          first: "{first|50}"
+          after: "{after|}"
+      response_path: data.searchIssues
+
+cache:
+  strategy: exact
+  ttl: 30
+
+metadata:
+  category: productivity
+  tags: [linear, issues, search]
+  cost_category: free
+  execution_time: fast
+  read_only: true
