@@ -95,6 +95,9 @@ mod e5_dashboard_session_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+/// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
+#[cfg(test)]
+mod hardened_elicitation_tests;
 /// GH1942.HARDEN.1 rows 8 and 16: hardened requires a per-caller identity.
 #[cfg(test)]
 mod hardened_identity_tests;

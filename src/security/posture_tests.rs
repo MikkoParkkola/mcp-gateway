@@ -101,8 +101,49 @@ fn standard_posture_applies_no_override() {
         "standard keeps the file's value"
     );
     assert!(config.security.trust_configured_backends);
+    assert!(
+        !config.security.message_signing.enabled,
+        "standard leaves signing off"
+    );
     let mut config = config;
     resolve(&mut config, FirewallBuild::Absent).expect("standard never refuses");
+}
+
+/// A 32-byte signing secret for hardened fixtures.
+pub(crate) const SIGNING_SECRET: &str = "hardened-signing-secret-0123456789abcdef";
+
+/// Row 6: hardened forces signing before the secret is resolved, so a secret
+/// set only in an env file resolves, whatever `enabled` the file says.
+#[test]
+fn hardened_resolves_env_secret_before_signing_check() {
+    for enabled in ["", "    enabled: false\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join("gateway.env");
+        crate::gateway::test_helpers::write_owner_only(
+            &env,
+            &format!("HARDENED_SIGNING_SECRET={SIGNING_SECRET}\n"),
+        )
+        .unwrap();
+        let body = format!(
+            "env_files:\n  - '{}'\nsecurity:\n  posture: hardened\n  message_signing:\n{enabled}    \
+             shared_secret: \"${{HARDENED_SIGNING_SECRET}}\"\n",
+            env.display()
+        );
+        let config = Config::load(Some(&write_yaml(&dir, &body))).expect("the env secret resolves");
+        let signing = &config.security.message_signing;
+        assert!(signing.enabled, "hardened forces signing ({enabled:?})");
+        assert_eq!(signing.shared_secret, SIGNING_SECRET, "({enabled:?})");
+    }
+}
+
+/// Row 6: hardened with no signing secret refuses to start.
+#[test]
+fn hardened_without_signing_secret_refuses() {
+    let err = load_err("security:\n  posture: hardened\n");
+    assert!(
+        err.contains("security.message_signing.shared_secret"),
+        "{err}"
+    );
 }
 
 /// Appended under a `security:` block: the two SSRF switches at their weakest.
