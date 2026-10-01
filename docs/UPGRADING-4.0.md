@@ -3153,7 +3153,7 @@ lower bound, not a complete list.
 
 ## 111. A stdio gateway keeps durable tasks in its own store
 
-**Startup:** prints a notice, a stdio gateway that cannot open its store warns with the path and the cause; refuses to start, only an HTTP gateway whose `tasks.store_dir` is a running stdio gateway's `stdio` directory
+**Startup:** no notice; refuses to start, only an HTTP gateway whose `tasks.store_dir` is a running stdio gateway's `stdio` directory
 
 A stdio gateway (`serve --stdio`) now serves the tasks extension for the client that spawned it.
 A task-augmented `tools/call` with an idempotency key becomes a durable task, and `tasks/get`,
