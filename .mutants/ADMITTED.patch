@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_confirmation.rs b/src/gateway/meta_mcp/task_confirmation.rs
+index f8ae3dcad..32ad534c5 100644
+--- a/src/gateway/meta_mcp/task_confirmation.rs
++++ b/src/gateway/meta_mcp/task_confirmation.rs
+@@ -536,7 +536,7 @@ impl MetaMcp {
+     /// task-augmented call and is not relaxed for this one.
+     fn already_admitted(request: &TaskConfirmationRequest<'_>, key: &str) -> bool {
+         let Some(identity) = request.verified_identity else {
+-            return false;
++            return true;
+         };
+         let admission_request = task_admission_request(
+             identity.stable_actor_id(),

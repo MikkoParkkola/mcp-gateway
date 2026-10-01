@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/task_confirmation.rs b/src/gateway/meta_mcp/task_confirmation.rs
+index f8ae3dcad..51d896544 100644
+--- a/src/gateway/meta_mcp/task_confirmation.rs
++++ b/src/gateway/meta_mcp/task_confirmation.rs
+@@ -495,6 +495,7 @@ impl MetaMcp {
+             .route(&payload.hold_key, now)
+             .await
+             == crate::protocol::continuation::Routing::Gone
++            && false
+         {
+             warn!(
+                 tool = request.tool_name,

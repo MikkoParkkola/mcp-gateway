@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_confirmation.rs b/src/gateway/meta_mcp/task_confirmation.rs
+index f8ae3dcad..007c172b5 100644
+--- a/src/gateway/meta_mcp/task_confirmation.rs
++++ b/src/gateway/meta_mcp/task_confirmation.rs
+@@ -331,7 +331,7 @@ impl MetaMcp {
+                     if unclassified {
+                         "is destructive or could not be classified"
+                     } else {
+-                        "is destructive"
++                        "is dangerous"
+                     }
+                 ),
+                 json!({ "requiredCapabilities": [capability] }),

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 8e0dcac10..9e349e81d 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -431,7 +431,7 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
+     let _handoff = handoff;
+     let _slot = slot;
+     let Some(state) = owned.host().upgrade() else {
+-        let event = TaskTransition::Complete(interrupted_before_dispatch());
++        let event = TaskTransition::Complete(abandoned_input_round());
+         executor.settle_cas(&principal, &id, revision, event).await;
+         return;
+     };
