@@ -10,9 +10,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64::Engine as _;
-use sha2::Digest as _;
-
 use super::*;
 
 const RESOURCE: &str = "https://backend.example.com/mcp";

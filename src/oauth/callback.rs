@@ -569,20 +569,28 @@ mod tests {
             .unwrap();
         let url = forged.callback_url.replace("localhost", "127.0.0.1");
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
-        let (outcome, _) = tokio::join!(
-            forged.wait_for_callback(),
-            client.get(format!("{url}?code=c&state=forged")).send()
-        );
+        let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(
+                forged.wait_for_callback(),
+                client.get(format!("{url}?code=c&state=forged")).send()
+            )
+        })
+        .await
+        .expect("the forged callback is answered");
         assert!(outcome.is_err(), "a forged state yields no code");
 
         let good = start_callback_server("expected".to_string(), Some("127.0.0.1"), None, None)
             .await
             .unwrap();
         let url = good.callback_url.replace("localhost", "127.0.0.1");
-        let (outcome, _) = tokio::join!(
-            good.wait_for_callback(),
-            client.get(format!("{url}?code=c&state=expected")).send()
-        );
+        let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(
+                good.wait_for_callback(),
+                client.get(format!("{url}?code=c&state=expected")).send()
+            )
+        })
+        .await
+        .expect("the good callback is answered");
         assert_eq!(
             outcome.expect("a matching state yields the code").1.code,
             "c"
