@@ -285,14 +285,9 @@ impl Store {
         state.verified.insert(key.clone(), record);
         let name = format!("{}.json", sub.id);
         if let Err(error) = write_record(&self.subs_dir, &name, &sub) {
-            if self.subs_dir.join(&name).exists() {
-                // Renamed into place, durability uncertain: the row is
-                // installed, so its verification stays with it.
-                state.subs.insert(sub.id.clone(), sub);
-                return Err(error);
-            }
-            // Never installed: put the verification back as it was, so a
-            // failed commit neither leaves an extra record nor resets a tail.
+            // Not put in place (the previous row, if any, is intact): put
+            // the verification back as it was, so a failed commit neither
+            // leaves an extra record nor resets a tail.
             let restored = match prior {
                 Some(prior) => {
                     let restored = write_record(&self.verified_dir, &key, &prior);

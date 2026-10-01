@@ -121,7 +121,8 @@ pub(crate) fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Write `value` to `dir/name` durably and owner-only.
+/// Write `value` to `dir/name` durably and owner-only. `Err` means the
+/// record was not put in place; the previous file, if any, is untouched.
 pub(crate) fn write_record<T: Serialize>(dir: &Path, name: &str, value: &T) -> std::io::Result<()> {
     let bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
     let temp = dir.join(format!(".{name}.{}.tmp", rand::random::<u64>()));
@@ -134,7 +135,12 @@ pub(crate) fn write_record<T: Serialize>(dir: &Path, name: &str, value: &T) -> s
         let _ = std::fs::remove_file(&temp);
     }
     staged?;
-    sync_dir(dir)
+    // Past the rename the record is in place: an error from here on would
+    // tell the caller it was not, so a failed directory sync is logged.
+    if let Err(error) = sync_dir(dir) {
+        tracing::warn!(%error, dir = %dir.display(), "events store: directory sync failed after rename");
+    }
+    Ok(())
 }
 
 /// Remove `dir/name`; a missing file is already removed.
