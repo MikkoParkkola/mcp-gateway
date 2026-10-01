@@ -195,8 +195,9 @@ impl TenantGuard {
                         && let Some(tenant) = Self::tenant_name(child)
                     {
                         scan.tenants.push(tenant);
-                        continue;
                     }
+                    // A keyed string is the tenant id and may also carry JSON:
+                    // read it too, or report it unread.
                     self.walk_response(child, decoded, scan);
                 }
             }
@@ -215,22 +216,22 @@ impl TenantGuard {
     /// must parse, or it is unread: fail closed, even for bracket-led prose. A
     /// quoted text is decoded when it is exactly one JSON string.
     fn decode_response(&self, text: &str, decoded: usize, scan: &mut ResponseScan) {
+        // A byte-order mark is not whitespace to `trim_start`, nor JSON to the
+        // parser: strip it so it cannot hide a document.
+        let text = text.trim_start_matches('\u{feff}');
         let opens = text.trim_start().as_bytes().first().copied();
         let document = matches!(opens, Some(b'{' | b'['));
         let quoted = opens == Some(b'"');
         if !document && !quoted {
             return;
         }
-        if text.len() > MAX_PARSED_TEXT_BYTES {
+        // Past the parse bound or the decode bound: unread, without parsing,
+        // so both bounds also cap the work.
+        if text.len() > MAX_PARSED_TEXT_BYTES || decoded > MAX_DECODE_DEPTH {
             scan.uninspected = true;
             return;
         }
-        let parsed = serde_json::from_str::<Value>(text);
-        if decoded >= MAX_DECODE_DEPTH {
-            scan.uninspected |= document || matches!(parsed, Ok(Value::String(_)));
-            return;
-        }
-        match parsed {
+        match serde_json::from_str::<Value>(text) {
             Ok(value) => self.walk_response(&value, decoded + 1, scan),
             Err(_) => scan.uninspected |= document,
         }
