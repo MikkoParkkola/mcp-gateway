@@ -29,11 +29,16 @@ SKIPPED = {
     "helm-chart-smoke", "helm-oci-roundtrip", "helm-supply-chain", "helm-airgap",
     "k8s-kind-rollback", "upgrade-rehearsal", "service-template-smoke",
     "usability-smoke",
+    # One SDK journey test (tests/task_upstream_recovery_sdk.rs); it reads no docs file.
+    "task-sdk-recovery",
 }
+# Workflows with no pull_request trigger: they cannot run on a docs-only PR, so
+# they need no gate. Gaining a pull_request trigger fails main() until gated.
+PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "packaged-suite.yml")
 # Every job that runs tests stays on docs-only PRs: tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
-    "scope", "public-repo-hygiene", "test", "windows-check", "macos-check", "task-sdk-recovery",
+    "scope", "public-repo-hygiene", "test", "windows-check", "macos-check",
     "orphan-test-modules",
     # Compiles every test target from the packaged crate: a test that reads a
     # repository file (docs included) the package leaves out only fails here.
@@ -84,6 +89,10 @@ def main() -> int:
     unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS
     if unclassified:
         errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
+    for wf in PUSH_ONLY_WORKFLOWS:
+        doc = yaml.safe_load((ROOT / ".github/workflows" / wf).read_text())
+        if "pull_request" in (doc.get(True) or doc.get("on") or {}):  # PyYAML reads `on` as True
+            errors.append(f"{wf} gained a pull_request trigger: gate it on ci.yml's scope job")
     cases = {
         "docs-only PR": ctx("pull_request", "success", "true"),
         "code PR": ctx("pull_request", "success", "false"),
