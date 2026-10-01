@@ -577,7 +577,7 @@ async fn r5_an_oversize_result_is_recorded_and_delivered_bounded() {
     }
 }
 
-/// R6, both paths: under FailClosed a failed settlement write commits `-32005`,
+/// R6, both paths: under `FailClosed` a failed settlement write commits `-32005`,
 /// and none of the recovered content is stored or delivered.
 #[tokio::test]
 async fn r6_a_failed_write_under_fail_closed_withholds_the_result() {
@@ -602,7 +602,7 @@ async fn r6_a_failed_write_under_fail_closed_withholds_the_result() {
     }
 }
 
-/// R7, both paths: under BestEffort an unwritable log still commits the
+/// R7, both paths: under `BestEffort` an unwritable log still commits the
 /// recovered result, and the failed write is counted.
 #[tokio::test]
 async fn r7_a_failed_write_under_best_effort_commits_the_result() {
