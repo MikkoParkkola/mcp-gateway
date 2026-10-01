@@ -2347,7 +2347,8 @@ calls together.
   detector refuses a call it cannot attribute, so the gateway would refuse every call that has no
   session. The error names `anomaly_detection` and `auth.enabled`. Stdio is not checked. Any one
   of those sources passes the check even if it is optional, such as `mtls.require_client_cert:
-  false`; a caller that then presents no key is still refused per call.
+  false`; a caller that then presents no key is still refused per call, unless it holds a legacy
+  session, whose id stands in for the key.
 - A caller with no caller key has no A/B projection arm of its own (it gets the control arm) and
   no prefetch hints: neither is recorded or served for it.
 - The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
