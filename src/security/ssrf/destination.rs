@@ -22,7 +22,7 @@ use crate::security::posture::SecurityPosture;
 use crate::{Error, Result};
 
 /// Never reachable, even inside a range `Private` allows: the AWS IPv6
-/// instance-metadata service, inside fc00::/7 (operator decision 8).
+/// instance-metadata service, inside `fc00::/7` (operator decision 8).
 pub(crate) const ALWAYS_DENIED: [IpAddr; 1] = [IpAddr::V6(Ipv6Addr::new(
     0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254,
 ))];

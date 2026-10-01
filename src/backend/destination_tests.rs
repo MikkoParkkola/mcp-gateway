@@ -222,7 +222,7 @@ async fn start_listed(template: &str, name: &str, listed: &[&str]) -> (crate::Re
 
 /// Row 13: a listed backend reaches loopback, by literal and by name, and an
 /// RFC 1918 literal is not refused by the policy; link-local, the IPv4 metadata
-/// address and the IPv6 metadata address inside fc00::/7 never are. An
+/// address and the IPv6 metadata address inside `fc00::/7` never are. An
 /// unlisted backend in the same registry is still held to `Public`.
 #[tokio::test]
 async fn listed_private_backend_policy() {
