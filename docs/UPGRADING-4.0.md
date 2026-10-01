@@ -1551,6 +1551,13 @@ verify can report such a gap for records that never reached disk. To verify a co
 has no `.hwm`, run `audit verify --archive <path>`, which reports tail completeness as unchecked.
 On a signed log, `.hwm` is signed too.
 
+Limitation: this detects a partial deletion, not a total one. Anyone with write access to the
+whole audit directory (a compromised gateway service account, a shared volume, a log-shipping
+agent's credentials, not only full host control) can delete every segment and the `.hwm`
+together, and `audit verify` then passes. A log stored only in that directory cannot prove it
+existed. Forward audit records off-host (for example through `control_plane.export` to a SIEM
+the gateway account cannot write to). An off-host anchor is not built in 4.0.
+
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
 ## 50. A stalled audit disk answers 503 within seconds instead of hanging
