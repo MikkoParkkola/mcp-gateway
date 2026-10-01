@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/response_security.rs b/src/gateway/meta_mcp/response_security.rs
+index 4c3c75218..291e9c653 100644
+--- a/src/gateway/meta_mcp/response_security.rs
++++ b/src/gateway/meta_mcp/response_security.rs
+@@ -211,9 +211,6 @@ impl super::MetaMcp {
+         // MIK-7211.PARENT.6: the scope is settled before the chain link and the
+         // MAC, which authenticate this in-memory result; a clamp left to the
+         // serializer would change bytes they already cover.
+-        if let Some(result) = response.result.as_mut() {
+-            crate::protocol::cacheable::clamp_delivered_scope(result);
+-        }
+         // After the firewall, before the v2 HMAC: the link covers the final
+         // content and the MAC covers the link.
+         // Egress: no result leaves with a chain this gateway did not just sign.

@@ -1,0 +1,16 @@
+diff --git a/src/protocol/tasks.rs b/src/protocol/tasks.rs
+index 297f34af6..b5ededecb 100644
+--- a/src/protocol/tasks.rs
++++ b/src/protocol/tasks.rs
+@@ -105,10 +105,7 @@ struct TaskWire {
+     status: TaskStatus,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     status_message: Option<String>,
+-    #[serde(
+-        skip_serializing_if = "Option::is_none",
+-        serialize_with = "crate::protocol::cacheable::serialize_delivered_result"
+-    )]
++    #[serde(skip_serializing_if = "Option::is_none")]
+     result: Option<Value>,
+     #[serde(
+         default,

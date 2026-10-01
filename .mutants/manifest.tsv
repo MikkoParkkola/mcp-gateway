@@ -1,0 +1,11 @@
+head_sha	b78b4eb2466b971722378eca88f31fa41d462402
+# PARENT.6 FULL tier: each clamp site, one mutant; the killing test is named per row.
+m1-response-result	linux	m1-response-result.patch	--lib protocol::cacheable::clamp_tests
+m2-task-result	linux	m2-task-result.patch	--lib protocol::tasks::scope_clamp_tests
+m3-webhook-message	linux	m3-webhook-message.patch	--lib message_clamp_tests
+m4-presign-clamp	linux	m4-presign-clamp.patch	--lib signing::delivery_tests::scope_tests
+m5-prelink-clamp	linux	m5-prelink-clamp.patch	--lib chain_emission_tests::origin_link_covers_the_clamped_scope
+m6-direct-link-clamp	linux	m6-direct-link-clamp.patch	--lib chain_emission_tests::direct_origin_link_covers_the_clamped_scope
+m7-batch-arm	linux	m7-batch-arm.patch	--lib protocol::cacheable::clamp_tests
+m8-task-slot	linux	m8-task-slot.patch	--lib protocol::cacheable::clamp_tests
+m9-public-only	linux	m9-public-only.patch	--lib protocol::cacheable::clamp_tests

@@ -1,0 +1,16 @@
+diff --git a/src/protocol/messages.rs b/src/protocol/messages.rs
+index 7fac861de..9642c2091 100644
+--- a/src/protocol/messages.rs
++++ b/src/protocol/messages.rs
+@@ -53,10 +53,7 @@ pub struct JsonRpcResponse {
+     pub id: Option<RequestId>,
+     /// Result (on success). Serialized through the `cacheScope` clamp: no
+     /// delivered result claims a scope other than `private` (MIK-7211.PARENT.6).
+-    #[serde(
+-        skip_serializing_if = "Option::is_none",
+-        serialize_with = "crate::protocol::cacheable::serialize_delivered_result"
+-    )]
++    #[serde(skip_serializing_if = "Option::is_none")]
+     pub result: Option<Value>,
+     /// Error (on failure)
+     #[serde(skip_serializing_if = "Option::is_none")]

@@ -1,0 +1,13 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+index 358084986..b9d733488 100644
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -164,7 +164,7 @@ fn clamp_response_envelope(payload: &mut Value) {
+ pub(crate) fn message_event_data(payload: &Value) -> String {
+     let mut clamped = payload.clone();
+     match &mut clamped {
+-        Value::Array(batch) => batch.iter_mut().for_each(clamp_response_envelope),
++        Value::Array(_) => {}
+         single => clamp_response_envelope(single),
+     }
+     clamped.to_string()

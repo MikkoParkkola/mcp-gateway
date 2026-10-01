@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index 8cbab1da7..2400a44bf 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -388,9 +388,6 @@ impl super::MetaMcp {
+         }
+         // PARENT.6: every signing exit, replays included, signs the scope the
+         // client will receive.
+-        if let Some(result) = response.result.as_mut() {
+-            crate::protocol::cacheable::clamp_delivered_scope(result);
+-        }
+         let Some(signer) = &self.message_signer else {
+             return Ok(());
+         };

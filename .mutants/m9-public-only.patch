@@ -1,0 +1,13 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+index 358084986..ffd399eca 100644
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -89,7 +89,7 @@ pub fn scope_for_method(method: &str) -> CacheScope {
+ fn scope_off(object: &Value) -> bool {
+     object
+         .get("cacheScope")
+-        .is_some_and(|scope| scope.as_str() != Some("private"))
++        .is_some_and(|scope| scope.as_str() == Some("public"))
+ }
+ 
+ /// The retained-result slot of a raw task envelope: an object with a string

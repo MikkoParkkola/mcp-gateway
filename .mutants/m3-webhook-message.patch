@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 312faf326..f8a5a54b0 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -486,7 +486,7 @@ pub fn create_sse_response(
+                     let event = if notification.event_type == "message" {
+                         Event::default()
+                             .event("message")
+-                            .data(crate::protocol::cacheable::message_event_data(&notification.data))
++                            .data(notification.data.to_string())
+                     } else {
+                         Event::default()
+                             .event(&notification.event_type)

@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/response_security.rs b/src/gateway/meta_mcp/response_security.rs
+index 4c3c75218..7c6c86f14 100644
+--- a/src/gateway/meta_mcp/response_security.rs
++++ b/src/gateway/meta_mcp/response_security.rs
+@@ -519,7 +519,6 @@ impl super::MetaMcp {
+     ) {
+         if let Some(result) = response.result.as_mut() {
+             // PARENT.6: settle the scope before the link covers the content.
+-            crate::protocol::cacheable::clamp_delivered_scope(result);
+             crate::security::signature_chain::strip_chain(result);
+         }
+         if method == "tools/call" && !response.delivery_refusal {
