@@ -335,6 +335,10 @@ pub(super) async fn mcp_delete_handler(
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
             info!(session_id = %session_fp(id), "Session terminated by client");
+            // The id is dead from here; what was keyed by it goes too.
+            if let Some(ref lifecycle) = state.session_lifecycle {
+                lifecycle.on_disconnect(id);
+            }
             StatusCode::NO_CONTENT
         }
         Some(id) => {
