@@ -185,6 +185,9 @@ pub struct BackendRegistry {
     /// so a slot on the context would bound only one of them. A read outlives
     /// a cancelled reload (#1808), so this is held by the read, not the lock.
     reload_read: Arc<tokio::sync::Semaphore>,
+    /// Where registered backends may connect; set once. See
+    /// [`BackendRegistry::enforce_destination`].
+    destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
 }
 
 impl BackendRegistry {
@@ -197,6 +200,7 @@ impl BackendRegistry {
             stopping: parking_lot::Mutex::new(false),
             reload: tokio::sync::Mutex::new(()),
             reload_read: Arc::new(tokio::sync::Semaphore::new(1)),
+            destination: std::sync::OnceLock::new(),
         }
     }
 
@@ -262,11 +266,34 @@ impl BackendRegistry {
             );
             return false;
         }
+        if let Some(policy) = self.destination.get() {
+            backend.stamp_destination(*policy);
+        }
         let name = backend.name.clone();
         self.backends.insert(name.clone(), backend);
         drop(stopping);
         self.announce_change(&name);
         true
+    }
+
+    /// Put `policy` on every backend this registry holds or will hold.
+    ///
+    /// Only `Public` is recorded, and once, by whoever pairs this registry with a
+    /// config: the gateway at startup, and [`crate::config_reload::ReloadContext::new`]
+    /// when the running posture is `hardened`, so a caller-built registry
+    /// cannot serve a hardened config unpinned. Taken under the lock
+    /// [`Self::register`] inserts under, so no registration slips between.
+    pub(crate) fn enforce_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
+        // Unset already means `Configured`; recording anything but `Public`
+        // would let a standard pairing block a later hardened one.
+        if policy != crate::security::ssrf::DestinationPolicy::Public {
+            return;
+        }
+        let _stopping = self.stopping.lock();
+        let policy = *self.destination.get_or_init(|| policy);
+        for backend in &self.backends {
+            backend.stamp_destination(policy);
+        }
     }
 
     /// Route every membership change to one consumer (F24). Set once, by the HTTP server.

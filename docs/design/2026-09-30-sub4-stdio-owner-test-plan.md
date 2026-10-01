@@ -293,3 +293,119 @@ row.
   Recorded here so it is not reopened: "its waiter gets a terminal answer" (the joined
   `Cancelled` outcome) is not observable from outside the loop. It is covered through L1 (a late
   answer resolves nothing) and L2 (the call is joined, and no frame appears).
+
+# Test plan — I4: MIK-7272.OWNER.2
+
+Design: D6 rev 5 (the task host, the carried mark, the typed owner) on top of D6 items 4–5.
+Written 2026-10-01 at `bf5c901e3`. The red commit comes after rev 5's review.
+
+## Row under test (verbatim, `RELEASE-4.0.0-scope-update.md:142`)
+
+- **MIK-7272.OWNER.2**: The same protected task store reopens or relocates and its typed local
+  operator retrieves the task; another store and a same-store HTTP owner cannot retrieve or alias
+  it; exercised through store integration and the independent functional gate, with no global
+  lookup and no new instance UUID (MIK-7272 SUB4.STDIO.OWNER.2).
+
+## Harness
+
+- **Binary over stdio.** A new integration file, `tests/mik_7272_owner2_stdio_tasks.rs`, spawns
+  `CARGO_BIN_EXE_mcp-gateway serve --stdio` with an explicit `--config`. Its own helper is a small
+  variant of `tests/common/stdio_session.rs`'s spawn that passes the config path; the shared
+  helper is left as it is.
+- **Config.**
+  - `server.modern_protocol: true`;
+  - `tasks.store_dir` = `<root>/tasks`. Stdio derives `<root>/tasks/stdio` (D6 rev 5 item 7);
+  - one HTTP fixture backend, run in the test process, that counts `tools/call` rounds. Its `held`
+    tool reports arrival and then waits on a barrier the test controls, so a kill lands
+    mid-call by construction and never by timing. Its `ask` tool answers `input_required` once.
+- **HTTP side.** I-OWN rows start an HTTP gateway on the same config from a second process, once
+  the stdio child has exited. They reuse the start pattern in
+  `tests/task_upstream_recovery/helper.rs:424-440`, copied into the new file's helper module and
+  not shared.
+- **Client sequence.**
+  - `initialize` at the modern revision, declaring the Tasks extension.
+  - A task-augmented `tools/call`: a `task` member, plus an idempotency key in `_meta`.
+  - Then `tasks/get` until the task is terminal.
+
+  Every wait is bounded (10 s, matching `READ_TIMEOUT`).
+
+Red proof: every integration row drives only seams that exist before the fix (the binary, its
+config, and JSON-RPC over pipes), so the red commit compiles and fails on assertions. The
+in-crate rows (U1–U3) name new items (`TaskHost`, `TaskOwnerText`), so they land with the fix.
+They are green on arrival, and the mutant batch is their proof.
+
+## Integration rows (`tests/mik_7272_owner2_stdio_tasks.rs`)
+
+| # | Test | Action | Assertion | Today |
+|---|---|---|---|---|
+| T1 | `stdio_serves_tasks_get_and_says_no_such_task` | After `initialize`, `tasks/get` for a random id. | -32602 "no such task", the HTTP text (`router/handlers.rs:112-114`). | RED: -32601 "Method not found" |
+| T2 | `the_local_operator_creates_and_retrieves_a_task` | A task-augmented `tools/call` of the fixture tool with key K, then `tasks/get` until terminal. | The first answer is a create-task result carrying a `taskId`. The terminal task carries the fixture's result. Backend rounds = 1. | RED: answered synchronously, with no `taskId` |
+| T3 | `the_task_survives_a_reopen` | T2, then close stdin, wait for exit, and respawn on the same config. `tasks/get` the id. | The respawn opens the store at once, because EOF released the lease (D6 rev 5 item 6), and Tasks is declared. The same terminal result. Backend rounds still 1. | RED (no task) |
+| T4 | `the_task_survives_a_relocation` | T2, then exit. Rename the base directory `<root>/tasks` to a new path, rewrite `tasks.store_dir` in the config, and respawn. `tasks/get` the id. | The same terminal result. No file in the store names a gateway instance id (the store files' names and fields are compared before and after: unchanged apart from the path). An HTTP gateway then started on the relocated base directory starts cleanly and lists no stdio task (the loader ignores the `stdio` subdirectory). | RED |
+| T5 | `another_store_does_not_have_it` | T2, then exit. Respawn with `tasks.store_dir` pointing at a fresh empty directory. `tasks/get` the id. | -32602 "no such task". | RED: -32601 |
+| T6 | `i_own_a_same_store_http_owner_cannot_reach_it` (invariant I-OWN) | T2, then exit. Start HTTP with `tasks.store_dir` set explicitly to stdio's directory `<root>/tasks/stdio`, with auth off (owner `local:auth-disabled:tasks:v1`) and run `tasks/get`, `tasks/cancel` and `tasks/update` for the id. Repeat with auth on and an API-key client (owner `credential:…`). Stop HTTP, respawn stdio, and run `tasks/get`. | Every HTTP call answers -32602 "no such task". The stdio read afterwards still returns the result, so the cancel did not land. | RED (no task to protect) |
+| T7 | `a_held_store_degrades_stdio_and_stops_advertising_tasks` | Spawn stdio A and keep it running. Spawn stdio B on the same config. | B serves `gateway_list_servers`. `tasks/get` answers -32601. A task-augmented `tools/call` on B is answered synchronously with the tool result and no `taskId` (D6 rev 5 item 6). Neither the modern `initialize` answer nor `server/discover` contains the Tasks extension. | RED: both advertise Tasks today |
+| T8 | `discover_declares_tasks_when_stdio_serves_them` | Stdio with its store open: `server/discover`, then `tasks/get` for a random id. | Tasks is declared, and the `tasks/get` answer is -32602, not -32601 (D6 item 5: every declared extension is served). | RED: -32601 |
+| T9 | `an_interrupted_stdio_task_is_settled_not_rerun` | A task on the `held` tool. Wait until the fixture reports arrival (rounds = 1), kill the child (SIGKILL) with the barrier still closed, then respawn. `tasks/get` the id. | Terminal and an error, with the restart result `unknown` / `gateway_restart_after_dispatch` (`recovery.rs:123-137`). Rounds stay 1 after the barrier opens. | RED (no task) |
+| T10 | `an_http_restart_settles_a_stdio_task_but_cannot_read_it` | As T9 (arrival observed, barrier closed), but after the kill HTTP is started with `tasks.store_dir` set explicitly to `<root>/tasks/stdio`. Then stop HTTP and respawn stdio. | HTTP `tasks/get` answers -32602. Stdio afterwards reads the settled restart result. Backend rounds = 1. | RED (no task) |
+| T11 | `stdio_task_creation_ignores_the_http_auth_gate` | Config with `auth.enabled: true` and one API key. Stdio creates a task as in T2. | The task is created and completes (D6 rev 5 item 5). | RED (no task) |
+| T12 | `http_and_stdio_share_a_config_without_contention` | With stdio A running on the default config, start HTTP on the same config. Run a task over each. | HTTP starts. Both create and read their own tasks. `<root>/tasks/stdio` exists and holds only stdio's records. Neither transport reads the other's task. | RED: stdio has no store today, so it creates no `stdio` subdirectory and no task |
+| T13 | `an_explicitly_shared_store_names_the_holder` | Stdio A running. Start HTTP with `tasks.store_dir` = `<root>/tasks/stdio`. | HTTP exits non-zero, and its error names the path and "possibly a stdio gateway". Stdio A then still reads its own task, so the loser's failed open did not disturb the holder. | RED: stdio holds no lease today, so HTTP starts |
+| T14 | `the_local_operator_cancels_a_working_task` | A task on `held` (arrival observed), then `tasks/cancel` the id, then open the barrier. | The cancel answer and a later `tasks/get` both show the task cancelled. No result is delivered for it. | RED (no task) |
+| T15 | `the_local_operator_answers_an_input_round` | A task on `ask`. `tasks/get` until `input_required`, then `tasks/update` with the answer. | The task completes with the fixture's final result, and the fixture saw the answer. | RED (no task) |
+| T16 | `a_task_and_a_sync_call_share_one_admission` | T2 with key K, then a synchronous stdio `tools/call` of the same tool, arguments and key K. | No second backend round. The synchronous answer is the admission's answer for a key held by a task, the same as HTTP gives (the row captures HTTP's answer from a parallel HTTP gateway on its own store and compares). | RED (no task) |
+| T17 | `stdio_creation_rules_match_http` | Each case sent to stdio and, on its own store, to HTTP with auth off, and the answers compared: a legacy request with a `task` member; a task-augmented call with no key; one from a client that did not declare Tasks; one naming a tool that is not dispatchable; one carrying a retry continuation. | Each pair answers alike, by code and text, or both on the synchronous path. | RED: stdio ignores `task` today, so the no-key and undeclared cases differ |
+
+T3, T4 and T5 together are the row's "reopens or relocates … another store". T6 and T10 are its
+"same-store HTTP owner cannot retrieve or alias". T4's file comparison and the absence of any
+global index are its "no global lookup and no new instance UUID".
+
+## In-crate rows (land with the fix)
+
+| # | Test | Assertion |
+|---|---|---|
+| U1 | `a_stdio_task_dispatch_keeps_its_owner_mark` (`task_service/host_tests.rs`) | An `OwnedCallerContext` built through the stdio intent path, rebuilt by the worker's own `dispatch_context`: `owner_principal() == Some(LOCAL_OPERATOR_PRINCIPAL)`, `provenance()` is `LocalTransport`, and `caller_cache_principal(..)` is `Caller(_)`, not `Unresolved`. |
+| U2 | `a_stdio_task_s_inner_call_is_cached_under_the_operator` | With the response cache on for a cacheable fixture tool: a stdio task (built through the stdio creation path, run by `TaskExecutor` under `TaskHost::Stdio`) calls it, then a synchronous stdio call repeats it. The repeat is a cache hit, so backend rounds = 1. This is the lead's pinned path: without the mark the task's cache principal is `Unresolved`, nothing is stored, and rounds = 2. |
+| U3 | `http_owner_text_cannot_name_the_local_operator` (`task_route_tests.rs`) | `TaskOwnerText::Http` with each of `"\0local-operator.v1"`, `"\0"`, and `"\0local-operator.v1x"` resolves to not found against a store holding a task created through the stdio intent path (not a hand-seeded record). `"stdio"`, `local:auth-disabled:tasks:v1` and a `credential:` digest also miss it. |
+| U4 | `a_stdio_worker_outliving_its_session_settles_before_dispatch` | Drop the `StdioTaskHost` before the worker upgrades it. The task settles `not_executed` / `gateway_interrupted_before_dispatch`, with backend rounds = 0. |
+| U5 | `a_stdio_task_runs_under_the_current_tool_policy` | A stdio task whose target `ToolPolicy` denies is refused by the worker's authorizer: terminal with an error, backend rounds = 0. A permitted neighbour task completes. |
+| U6 | `stdio_eof_releases_the_store_lease_before_returning` (in-process, `server/tests/`) | `run_stdio_on` over duplex pipes with a task created and completed. After it returns, still inside the same runtime and process, `open_runtime` on the stdio store directory succeeds at once. |
+
+## Mutant batch
+
+| M | Mutation | Must kill |
+|---|---|---|
+| N1 | the rebuilt context drops the carried mark (`stdio_nonce: None` again) | U1, U2 |
+| N2 | `TaskOwnerText::Http` stops refusing NUL-prefixed text | U3 |
+| N3 | stdio's owner is the text `"stdio"` instead of `LocalOperator` | U3, T6 (auth-off HTTP owner differs, so T6 alone may not kill it; U3's `"stdio"` probe does) |
+| N4 | the degradation flag is ignored by discover and initialize | T7 |
+| N5 | stdio opens a fresh temp store instead of `tasks.store_dir` | T3, T4 |
+| N8 | stdio opens `tasks.store_dir` itself, not its `stdio` subdirectory | T12 (HTTP fails to start on the held lease) |
+| N6 | the stdio creation path keeps HTTP's auth gate | T11 |
+| N7 | the `Stdio` host's authorizer allows every target, skipping `ToolPolicy` | U5 |
+| N9 | the stdio creation path drops the idempotency-key requirement | T17 |
+| N10 | stdio's EOF skips closing the store | U6. If dropping the last store reference releases the lease anyway, N10 is recorded as an equivalent mutant (same observable end state), not as a gap. T3 cannot kill it: process exit frees the OS lock. |
+
+## Out of this increment
+
+- Leg (b), the independent functional drive of the digest-pinned image (D6 item 4), runs after
+  merge and before grading.
+- Structural, no red proof by design: D6 rev 5 items 4 (shared `task_route` bodies), 8 (placement) and 9 (size). They are checked by review and by the HTTP suites staying green, not by mutants.
+- The lease direction is decided (D6 rev 5 item 7, option (d)). It is covered by T7, T12 and T13 and mutant N8.
+
+### I4 review log
+
+- Design-delta review, two seats, both SHIP-WITH-FIXES: seat A on `c4f9c5405`, seat B on
+  `2567148cb` (seat B's first attempt returned no verdict). Taken:
+  - U2 is re-aimed at the response cache, because the worker's key is cleared for every task;
+  - positive `tasks/cancel` and `tasks/update` rows (T14, T15);
+  - a barrier-held `held` tool for T9 and T10, killing only after arrival is observed;
+  - the shared-admission row (T16) and the creation-rule parity row (T17);
+  - the degraded synchronous answer in T7;
+  - the holder-undisturbed check in T13 and the HTTP-on-relocated-base check in T4;
+  - the immediate respawn in T3;
+  - U3 built through the stdio intent path;
+  - mutants N9 and N10, with N10 proven in-process by U6 (round 2);
+  - the structural traceability line.
+- Not taken: the managed-upstream restart row. Stdio installs no upstream adapter (D6 rev 5
+  item 4), so the path it would test does not exist on stdio.

@@ -67,3 +67,6 @@ mod stdio_chain_nonce_refusal;
 // MIK-7324.COV.3: the firewall `response_firewall` builds carries anomaly blocking.
 #[cfg(feature = "firewall")]
 mod response_firewall_anomaly;
+
+#[cfg(feature = "firewall")]
+mod hardened_destination;

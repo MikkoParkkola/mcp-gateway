@@ -43,6 +43,7 @@ use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
 };
+use crate::security::ssrf::{DestinationPolicy, SystemResolver};
 use crate::{Error, Result};
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -251,6 +252,8 @@ pub struct WebSocketTransport {
     protocol_version: Option<String>,
     /// Shared inner state (also held by the I/O task).
     inner: Arc<Inner>,
+    /// Where the upgrade may connect (`hardened` pins it; see `websocket_pinned.rs`).
+    destination: DestinationPolicy,
 }
 
 impl WebSocketTransport {
@@ -266,13 +269,13 @@ impl WebSocketTransport {
         timeout: Duration,
         protocol_version: Option<String>,
     ) -> Arc<Self> {
-        Arc::new(Self {
-            url: url.to_string(),
+        Self::build(
+            url,
             headers,
             timeout,
             protocol_version,
-            inner: Inner::new(),
-        })
+            DestinationPolicy::Configured,
+        )
     }
 
     /// Build and connect a backend transport (the `ws_url` arm of
@@ -287,11 +290,14 @@ impl WebSocketTransport {
         timeout: Duration,
         protocol_version: Option<String>,
     ) -> Result<Arc<dyn Transport>> {
-        let transport = Self::new(url, headers.clone(), timeout, protocol_version);
-        // Boxed: the TLS upgrade future is large, and inlining it would grow
-        // every future that can start a backend (clippy::large_futures).
-        Box::pin(transport.connect()).await?;
-        Ok(transport)
+        Self::start_with_destination(
+            url,
+            headers,
+            timeout,
+            protocol_version,
+            DestinationPolicy::Configured,
+        )
+        .await
     }
 
     /// Connect to the WebSocket server and initialise the MCP session.
@@ -319,7 +325,6 @@ impl WebSocketTransport {
     /// bounded by the configured timeout. No log line or error carries more
     /// of the URL than its origin: it may hold userinfo or a query token.
     async fn do_connect(self: &Arc<Self>) -> Result<()> {
-        use tokio_tungstenite::connect_async;
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
         use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
 
@@ -344,7 +349,9 @@ impl WebSocketTransport {
             request.headers_mut().insert(name, value);
         }
 
-        let (ws_stream, _response) = tokio::time::timeout(self.timeout, connect_async(request))
+        // The timeout bounds the whole connect: lookup, TCP, TLS and upgrade.
+        let connecting = pinned::connect(request, self.destination, &SystemResolver);
+        let (ws_stream, _response) = tokio::time::timeout(self.timeout, connecting)
             .await
             .map_err(|_| {
                 // The configured value, not the measured one: this text is
@@ -353,10 +360,7 @@ impl WebSocketTransport {
                     "WebSocket connect timed out after {:?}",
                     self.timeout
                 ))
-            })?
-            .map_err(|e| {
-                Error::Transport(format!("WebSocket connect failed: {}", connect_error(&e)))
-            })?;
+            })??;
 
         debug!(url = %origin, "WebSocket handshake complete");
 
@@ -761,6 +765,9 @@ fn connect_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
 mod tests;
+
+#[path = "websocket_pinned.rs"]
+mod pinned;
 
 #[cfg(test)]
 #[path = "websocket_backend_tests.rs"]

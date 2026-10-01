@@ -132,6 +132,9 @@ backend" and "fails a capability file" first.**
 | 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record. Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 | 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
+| 108 | Reserved: lands with a pending change | None yet |
+| 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
+| 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3092,6 +3095,61 @@ chain nonce. Tasks, Code Mode, playbooks and capability backends are not chained
 **Action:** none unless you chain gateways. The three backend settings are refused at startup,
 naming the field, when `chain_origins` or `chain_signer` is missing or names a key absent from
 `trusted_keys`, or when this gateway has no `security.signature_chain`.
+## 109. SSRF refusals are typed, and hardened pins backend destinations
+
+**Startup:** no notice; fails a backend, only under `security.posture: hardened` and only a backend at a loopback or private-network address
+
+**Every posture.** When the SSRF guard resolves a destination's name and refuses the address it
+gets (a capability endpoint, or a backend under `hardened`), the call now answers JSON-RPC
+`-32600` with a message starting `SSRF blocked:`, after one attempt. Before, the refusal looked
+like a connection failure: it was tried three times, counted against the capability backend's
+health and answered `-32000 "<label> failed: error sending request"`. Ordinary connection failures keep
+their retries.
+
+**Under `security.posture: hardened`**, which is new in 4.0:
+
+- `security.ssrf_protection` is forced on and `security.trust_configured_backends` off, whatever
+  the file says, so the proxy-time check covers configured backends too.
+- HTTP and WebSocket backends connect only to public addresses. A name is resolved once, every
+  address it resolves to is checked, and the connection goes to a checked address; a WebSocket
+  keeps the configured name for TLS SNI and `Host`. An IP literal is refused before anything
+  connects. `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` are ignored for backend traffic, since
+  a proxy would resolve the name instead.
+- An OAuth backend's authorization server, token endpoint, registration endpoint and every
+  redirect hop are held to the same rule.
+- So a backend at `localhost`, `127.0.0.1`, an RFC 1918 or unique-local address, or a
+  link-local address is refused on its first connect with `-32600 "SSRF blocked: ..."`.
+  stdio backends are unaffected.
+
+The policy is applied by the gateway's backend registry. An embedder that builds its own
+`BackendRegistry` gets it when it passes the registry to `ReloadContext::new` with a hardened
+config; a backend it started before that keeps its connection until it restarts.
+
+**Action:** where a client matched `-32000` for a refused capability destination, match `-32600`.
+Before adopting `hardened`, move local backends to stdio, or keep the deployment on `standard`.
+
+## 110. Invocation records name the tenants a call reached
+
+**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
+
+With `arg_keys` configured, the guard does not need to be enabled for this. Every transparency-log
+invocation record then names the tenants the call reached, request and response, as sorted
+16-hex SHA-256 hashes in `tenants`, next to the kernel's `data_classes`. Raw tenant ids are
+never written. At most 1024 hashes are kept; past that the record adds `tenants_total`.
+
+The `attribution` field says how far that list reaches:
+
+- absent: the response was attributed as the backend returned it, before the gates;
+- `cached_delivery`: the value was served past the gates, from a cache or an idempotent replay,
+  so it is attributed from what was delivered, and carries no `data_classes`;
+- `uninspected`: some of the response was not read for tenants, because a `content[].text` block
+  was over the 1 MiB parse bound or the reply was refused for its signature chain before it was
+  read. `tenants` still lists what was read. The record carries this even when `tenants` is empty;
+- `cached_delivery_uninspected`: both.
+
+**Action:** none unless you consume these records. Under `uninspected`, treat `tenants` as a
+lower bound, not a complete list.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`

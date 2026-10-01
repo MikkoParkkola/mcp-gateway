@@ -105,9 +105,18 @@ guard may refuse. Nothing is refused that was not before.
 - **Alongside `ContextDataClass`** = in the same D1 record: `data_classes`
   (snake_case, sorted) next to `tenants`. Kernel public types are unchanged.
 - **Emission rule:** `tenants`, `data_classes` and the MIN.2 field are written
-  only when the tenant set is non-empty, so default-config records keep their
-  schema (`data_classes` is never empty and would otherwise appear on every
-  record).
+  only when the tenant set is non-empty, or when the response could not be
+  inspected (below), so default-config records keep their schema
+  (`data_classes` is never empty and would otherwise appear on every record).
+- **`attribution` marker (gap 2, lead ruling 2026-10-01):** one value states how
+  far the record's attribution reaches. `cached_delivery` means the value was
+  delivered past the gates (a cache hit or a replay), so it is attributed from
+  the delivered value. `uninspected` means part of the response was not read
+  for tenants: a `content[].text` block exceeded the 1 MiB parse bound, or the
+  reply was refused at raw receipt for its signature chain (unverified content
+  is not read). The record says so even when it names no tenant; `tenants` is
+  then a lower bound. `cached_delivery_uninspected` means both. The parse
+  bound stays, as a DoS limit.
 - **Cap (H3):** one crate-private writer,
   `TransparencyLogger::log_invocation_attributed(.., extra: serde_json::Map)`,
   used by all three D1 writers; `pub fn log_invocation_correlated` keeps its
@@ -141,7 +150,9 @@ log_request` keeps its signature.
 
 ### 4. Known gaps, not fixed here
 
-- Upstream task recovery runs outside a scope: request-side tenants only.
+- Upstream task recovery runs outside a scope and writes no record of its own,
+  so the recovered response is not attributed. Closed in a separate design
+  increment: a settlement record per recovered task (lead ruling 2026-10-01).
 - **Meta secured-execution replay writes no D1 record at the base** (v4 seat 2
   H-b): `SyncAdmission::Replay` (`meta_mcp/admission.rs:210`) is served from
   the router (`handlers.rs:1673,1699`) without `invoke_tool`, so
@@ -152,7 +163,8 @@ log_request` keeps its signature.
   met until that record exists.
 - Attribution needs the `firewall` feature (default-on) and `arg_keys`;
   records need the transparency log.
-- Text blocks over 1 MiB are not parsed for tenants.
+- Text blocks over 1 MiB are not parsed for tenants. Closed as a gap: the
+  record is marked `attribution: "uninspected"` (§3), not left silent.
 - The kernel classifies only the first and last 32 KiB of a larger text, so
   sensitive data only in the middle is classed `Public` and MIN.2 misses it.
   Pre-existing classifier bound, not changed here; MIN.4 measures it (§8).
