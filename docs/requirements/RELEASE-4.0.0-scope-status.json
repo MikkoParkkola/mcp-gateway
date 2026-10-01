@@ -1069,11 +1069,15 @@
     },
     {
       "id": "GH1941.SIGN.1",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "PENDING 2026-09-29, one conjunct unmet. #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles for every binary, SBOM and SHA256SUMS.txt, verifies the downloaded DRAFT assets (.github/workflows/release.yml:432-434) and refuses uploads onto a published release (:357-361). The criterion also requires the job to re-check the PUBLISHED release afterwards; release.yml ends at `gh release edit --draft=false` (:440) with no post-publication download and verify, and no wiring test for one. Returns to met when that step and its wiring check land (#2402). #1941 was closed before this was noticed.\n\n--- prior note follows ---\nPending. Release binaries carry SHA-256 checksums only (.github/workflows/release.yml:277-281); docs/OWASP_AGENTIC_AI_COMPLIANCE.md:19 records the ASI04 gap. Tracked in #1941. Decision row 23 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        ".github/workflows/release.yml",
+        "scripts/release/test_check_tag_manifest.py",
+        "scripts/release/test_workflow_wiring_mutations.py"
+      ],
+      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-442, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
     },
     {
       "id": "GH1942.HARDEN.1",
