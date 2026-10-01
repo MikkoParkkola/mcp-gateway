@@ -508,3 +508,80 @@ fn a_genesis_only_log_is_not_marked() {
     let r = verify(&path, false);
     assert!(r.ok, "{:?}", r.error_message);
 }
+
+/// MIK-7712 (#2340) AC1: the committed marker is cut whole, at a newline, with
+/// `.hwm` kept. No line is torn, but the tail now ends below the mark, so the
+/// restart records the loss again and the finding outlives retention.
+#[test]
+fn a_whole_line_cut_of_a_committed_marker_is_not_forgotten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    drop(TransparencyLogger::open(cfg(&path, 1, true)).unwrap());
+    assert_eq!(event(lines(&path).last().unwrap()), Some(MARK));
+    cut_tail(&path, 1);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_retained(&l, &path, 5);
+    drop(l);
+    let r = verify_segments(&path, &cfg(&path, 1, true), VerifyMode::Live).unwrap();
+    assert!(!r.ok, "a whole-line cut laundered the finding");
+    assert!(r.error_message.unwrap().contains(MARK));
+}
+
+/// MIK-7712 (#2340) AC2: a crash between the torn-tail record and the marker.
+/// The repair record at the committed counter is written, the marker is not,
+/// and `.hwm` still names that counter: the state a full restart leaves once
+/// its marker line is removed. The repair record itself carries the loss.
+#[test]
+fn a_crash_before_the_marker_keeps_a_committed_torn_drop() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    delete_hwm(&path);
+    drop(TransparencyLogger::open(cfg(&path, 1, true)).unwrap());
+    let raw = std::fs::read(&path).unwrap();
+    std::fs::write(&path, &raw[..raw.len() - 5]).unwrap();
+    drop(TransparencyLogger::open(cfg(&path, 1, true)).unwrap());
+    let tail: Vec<_> = lines(&path).iter().rev().take(2).cloned().collect();
+    assert_eq!(event(&tail[0]), Some(MARK), "the restart marked the drop");
+    assert_eq!(
+        event(&tail[1]),
+        Some("audit_segment_torn_tail_dropped"),
+        "{tail:?}"
+    );
+    // The crash: the marker never reached the disk.
+    cut_tail(&path, 1);
+    let l = TransparencyLogger::open(cfg(&path, 1, true)).unwrap();
+    rotate_retained(&l, &path, 5);
+    drop(l);
+    let r = verify_segments(&path, &cfg(&path, 1, true), VerifyMode::Live).unwrap();
+    assert!(!r.ok, "an interrupted recovery lost the committed drop");
+    assert!(r.error_message.unwrap().contains(MARK));
+}
+
+/// MIK-7712 (#2340) AC3: the record at `.hwm`'s counter is replaced by another
+/// that chains (an unsigned log, re-hashed). The counter still matches, but
+/// the hash the mark recorded does not, and Live verify says so.
+#[test]
+fn verify_compares_the_hash_at_the_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    (0..5).for_each(|i| append(&l, i));
+    drop(l);
+    assert!(verify(&path, false).ok, "positive control");
+    let last = lines(&path).len() - 1;
+    rewrite_line(&path, last, |v| v["tool"] = "replaced".into());
+    let r = verify(&path, false);
+    assert!(!r.ok, "a replaced record at the mark passed");
+    let msg = r.error_message.unwrap();
+    assert!(
+        msg.contains("high-water mark") && msg.contains("hash"),
+        "{msg}"
+    );
+}
