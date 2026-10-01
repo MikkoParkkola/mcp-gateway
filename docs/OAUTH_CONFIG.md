@@ -30,6 +30,9 @@ The redirect URI sent to the provider is built from the three `callback_*` field
 http://<callback_host>:<callback_port><callback_path>
 ```
 
+`<callback_host>` is `localhost` or the configured loopback IP (an IPv6 one in
+brackets); any other host is advertised as `localhost` (see Dual-Bind below).
+
 **Default** (no overrides):
 
 ```
@@ -55,6 +58,13 @@ If your system has no IPv6 loopback, the `[::1]` bind is silently skipped and
 the server continues on IPv4 alone.
 
 To opt out of dual-bind set `callback_host: "127.0.0.1"` explicitly.
+
+A loopback IP host is bound exactly as written and named that way in the
+redirect URI: `127.0.0.1` gives `http://127.0.0.1:<port>/...`, and `::1` (or
+`[::1]`) gives `http://[::1]:<port>/...`. Any other host keeps the callback on
+`127.0.0.1` with a `localhost` redirect URI, as before, and the gateway logs a
+warning at startup. A provider that accepts only `localhost` for a local
+redirect works with `callback_host` left unset.
 
 ---
 
