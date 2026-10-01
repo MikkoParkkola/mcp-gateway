@@ -1294,11 +1294,19 @@
     },
     {
       "id": "MIK-7211.PARENT.6",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL for the gateway: src/protocol/cacheable.rs:23-73 defines CacheScope with a SCOPE_TABLE whose list entries are all Private and a Private default. That is a table, not a type or lint that makes a public scope from session state unrepresentable; the mechanism is not yet named."
+      "evidence": [
+        "src/protocol/cacheable.rs:28",
+        "src/protocol/cacheable.rs:116",
+        "src/protocol/messages.rs:58",
+        "src/protocol/tasks.rs:110",
+        "src/protocol/cacheable.rs:164",
+        "src/protocol/tasks/scope_clamp_tests.rs:30",
+        "src/gateway/webhooks/message_clamp_tests.rs:85"
+      ],
+      "note": "Met 2026-10-01 by #2474 (merge a2359c9ba). Named mechanism, a type plus one delivery clamp: CacheScope::Public carries std::convert::Infallible (src/protocol/cacheable.rs:28), so no public scope can be built in gateway code, and CacheScope::for_list is removed; clamp_delivered_scope (:116) rewrites any cacheScope that is not private to private on every delivered result, through serialize_with on JsonRpcResponse.result (src/protocol/messages.rs:58) and the task snapshot result (src/protocol/tasks.rs:110), SSE message events and batches (src/protocol/cacheable.rs:164), and before the chain link and MAC on the meta, direct and replay routes. A task result stored before 4.0 with public is served private (src/protocol/tasks/scope_clamp_tests.rs:30); the webhook path through the real handler is covered at src/gateway/webhooks/message_clamp_tests.rs:85 (#2471). Red proof: CI on 0da2f9b05 failed in all 21 new tests. Mutants: nine clamp-site mutants, all RED (runs 36840214246 and 36859661047). Reviews: two seats (SHIP-WITH-FIXES, fixes applied; delta SHIP). Lead decision 2026-10-01: a restriction of the public API, not a widening; operator approval not required (kimi-20261001T162242Z-89340). UPGRADING-4.0 item 108. Residuals filed for 4.0.1 as #2561, both outside a schema-cacheable result: a backend error's data, and a task envelope with no string taskId; neither is a response a cache is told to reuse. Earlier note: Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL for the gateway: src/protocol/cacheable.rs:23-73 defines CacheScope with a SCOPE_TABLE whose list entries are all Private and a Private default. That is a table, not a type or lint that makes a public scope from session state unrepresentable; the mechanism is not yet named."
     },
     {
       "id": "MIK-7211.PARENT.7",
