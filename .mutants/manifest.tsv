@@ -1,0 +1,5 @@
+head_sha	1359a3e233146e590b508610270ea73babc3f06b
+# skip nonce admission for a confirmation follow-up
+b1-admit	linux	b1.patch	--test hardened_signing_e2e confirmation_follow_up_needs_a_fresh_nonce
+# leave the in-band challenge unsigned
+b2-sign	linux	b2.patch	--test hardened_signing_e2e confirmation_follow_up_needs_a_fresh_nonce

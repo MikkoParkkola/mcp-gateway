@@ -1,0 +1,12 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index 378f61bc3..3a76b0281 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -1547,6 +1547,7 @@ async fn meta_mcp_dispatch(
+                 },
+             };
+             if let Some(context) = signing_context.as_mut()
++                && caller.retry.request_state.is_none()
+                 && let Err(error) = state.meta_mcp.prepare_signing_invocation(
+                     context,
+                     &arguments,

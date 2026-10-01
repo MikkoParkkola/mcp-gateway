@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/response_security.rs b/src/gateway/meta_mcp/response_security.rs
+index 4c3c75218..5fe70b58e 100644
+--- a/src/gateway/meta_mcp/response_security.rs
++++ b/src/gateway/meta_mcp/response_security.rs
+@@ -232,6 +232,7 @@ impl super::MetaMcp {
+         // A disabled signer and ordinary/admission/refusal errors must never
+         // validate captured nonce state or increment finalization failures.
+         if self.message_signer.is_some()
++            && !response.confirmation_refusal
+             && response.error.is_none()
+             && response.result.is_some()
+             && let Some(signing) = context.signing
