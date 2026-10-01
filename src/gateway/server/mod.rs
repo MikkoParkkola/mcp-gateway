@@ -10,8 +10,6 @@ pub(crate) mod account_bindings;
 mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
-#[cfg(all(test, feature = "firewall"))]
-mod keyless_anomaly_tests;
 mod cleartext;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
@@ -19,6 +17,8 @@ mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+#[cfg(all(test, feature = "firewall"))]
+mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
 #[cfg(test)]
