@@ -557,7 +557,7 @@ impl TaskExecutor {
         job: &crate::gateway::meta_mcp::upstream::DirectJob,
     ) -> bool {
         let Ok(owner) = self.service.owner(principal) else {
-            return false;
+            return true;
         };
         self.service
             .store

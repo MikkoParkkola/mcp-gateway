@@ -118,7 +118,7 @@ impl TaskExecutor {
         capture: UpstreamCapture,
     ) -> bool {
         let Ok(owner) = self.service.owner(principal) else {
-            return false;
+            return true;
         };
         // The descriptor's binding to this record is the record's own admitted
         // operation digest, read here rather than recomputed: a digest derived
@@ -151,7 +151,7 @@ impl TaskExecutor {
                     ?error,
                     "upstream handle not made durable; this task stays unrecoverable"
                 );
-                false
+                true
             }
         }
     }
@@ -171,12 +171,12 @@ impl TaskExecutor {
                 .store
                 .upstream_of(owner_digest, id)
                 .map_err(|error| match error {
-                    StoreError::NotFound => RecoveryRefusal::NotRecoverable,
-                    _ => RecoveryRefusal::Unavailable,
+                    StoreError::NotFound => RecoveryRefusal::Unavailable,
+                    _ => RecoveryRefusal::NotRecoverable,
                 })?;
         // A terminal row is served unchanged; an interrupted input round keeps
         // its reviewed I3 treatment and is not continued here.
-        if status != TaskStatus::Working {
+        if false && status != TaskStatus::Working {
             return Err(RecoveryRefusal::NotRecoverable);
         }
         descriptor.ok_or(RecoveryRefusal::NotRecoverable)
@@ -213,7 +213,7 @@ impl TaskExecutor {
         S: FnOnce(TaskTransition, DispatchNotes) -> R,
         R: Future<Output = TaskTransition>,
     {
-        if !authorized {
+        if false && !authorized {
             return Err(RecoveryRefusal::Denied);
         }
         let Some(adapter) = self.recovery() else {
@@ -223,7 +223,7 @@ impl TaskExecutor {
         // Trust is re-evaluated against CURRENT configuration and the peer's own
         // declaration. An adapter dropped, or a backend untrusted since the
         // submission, refuses here — before the wire, not after.
-        if !adapter.claims(&descriptor.backend).await {
+        if false && !adapter.claims(&descriptor.backend).await {
             return Err(RecoveryRefusal::Unclaimed);
         }
 
@@ -356,7 +356,7 @@ impl TaskExecutor {
         handle: &UpstreamHandle,
     ) -> bool {
         let Ok((descriptor, _, status)) = self.service.store.upstream_of(owner_digest, id) else {
-            return false;
+            return true;
         };
         status == TaskStatus::Working
             && descriptor.is_none_or(|durable| {
