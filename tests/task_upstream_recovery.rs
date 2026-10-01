@@ -19,8 +19,8 @@ mod helper;
 use serde_json::{Value, json};
 
 use helper::{
-    BACKEND, Fixture, Gateway, HANDLE, MARKER, Upstream, durable_record, free_port, modern,
-    serve_peer, status_of, task_id_of, task_invoke, tasks_get, write_config,
+    BACKEND, Fixture, Gateway, HANDLE, MARKER, Upstream, durable_record, modern, serve_peer,
+    status_of, task_id_of, task_invoke, tasks_get, write_config,
 };
 
 fn temp_root(name: &str) -> tempfile::TempDir {
@@ -34,11 +34,10 @@ fn temp_root(name: &str) -> tempfile::TempDir {
 async fn start_live_task(
     root: &std::path::Path,
     config: &std::path::Path,
-    port: u16,
     log: &str,
     client: &reqwest::Client,
 ) -> (Gateway, String) {
-    let mut gateway = Gateway::start(root, config, port, log);
+    let mut gateway = Gateway::start(root, config, log);
     gateway.wait_until_ready(client).await;
     let created = gateway
         .post(client, &task_invoke(1, "upstream-recovery-key"))
@@ -54,12 +53,10 @@ async fn start_live_task(
 async fn a_captured_handle_is_recorded_at_version_three_with_its_descriptor() {
     let root = temp_root("upstream-handle-table");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -70,7 +67,7 @@ async fn a_captured_handle_is_recorded_at_version_three_with_its_descriptor() {
         .build()
         .expect("bounded fixture HTTP client");
     let (mut gateway, task_id) =
-        start_live_task(root.path(), &config, port, "gateway.log", &client).await;
+        start_live_task(root.path(), &config, "gateway.log", &client).await;
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
@@ -124,12 +121,10 @@ async fn a_captured_handle_is_recorded_at_version_three_with_its_descriptor() {
 async fn the_original_operation_is_submitted_once_and_never_resubmitted() {
     let root = temp_root("upstream-one-submission");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -139,12 +134,11 @@ async fn the_original_operation_is_submitted_once_and_never_resubmitted() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let (mut gateway, task_id) =
-        start_live_task(root.path(), &config, port, "first.log", &client).await;
+    let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
-    let mut restarted = Gateway::start(root.path(), &config, port, "second.log");
+    let mut restarted = Gateway::start(root.path(), &config, "second.log");
     restarted.wait_until_ready(&client).await;
     let before = peer.peer.queries();
     for id in 10..13 {
@@ -178,12 +172,10 @@ async fn the_original_operation_is_submitted_once_and_never_resubmitted() {
 async fn a_durable_handle_survives_reopen_and_only_its_owner_reads_it() {
     let root = temp_root("upstream-survives-reopen");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -193,12 +185,11 @@ async fn a_durable_handle_survives_reopen_and_only_its_owner_reads_it() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let (mut gateway, task_id) =
-        start_live_task(root.path(), &config, port, "first.log", &client).await;
+    let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
-    let mut restarted = Gateway::start(root.path(), &config, port, "second.log");
+    let mut restarted = Gateway::start(root.path(), &config, "second.log");
     let queries_at_start = peer.peer.queries();
     restarted.wait_until_ready(&client).await;
     assert_eq!(
@@ -238,12 +229,10 @@ async fn a_durable_handle_survives_reopen_and_only_its_owner_reads_it() {
 async fn unavailable_then_live_then_complete_reuses_the_one_handle() {
     let root = temp_root("upstream-pending-then-complete");
     let peer = serve_peer(Upstream::Unavailable).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -253,12 +242,11 @@ async fn unavailable_then_live_then_complete_reuses_the_one_handle() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let (mut gateway, task_id) =
-        start_live_task(root.path(), &config, port, "first.log", &client).await;
+    let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
-    let mut restarted = Gateway::start(root.path(), &config, port, "second.log");
+    let mut restarted = Gateway::start(root.path(), &config, "second.log");
     restarted.wait_until_ready(&client).await;
 
     let unavailable = restarted.post(&client, &tasks_get(30, &task_id)).await;
@@ -315,12 +303,10 @@ async fn unavailable_then_live_then_complete_reuses_the_one_handle() {
 async fn the_configured_output_policy_applies_to_a_recovered_result() {
     let root = temp_root("upstream-output-policy");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: true,
@@ -330,12 +316,11 @@ async fn the_configured_output_policy_applies_to_a_recovered_result() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let (mut gateway, task_id) =
-        start_live_task(root.path(), &config, port, "first.log", &client).await;
+    let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
-    let mut restarted = Gateway::start(root.path(), &config, port, "second.log");
+    let mut restarted = Gateway::start(root.path(), &config, "second.log");
     restarted.wait_until_ready(&client).await;
     peer.peer.set(Upstream::Completed);
     let answered = restarted.post(&client, &tasks_get(40, &task_id)).await;
@@ -360,12 +345,10 @@ async fn the_configured_output_policy_applies_to_a_recovered_result() {
 async fn with_no_configured_adapter_the_conservative_branch_is_unchanged() {
     let root = temp_root("upstream-no-adapter");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: Vec::new(),
             forbid_marker: false,
@@ -375,12 +358,11 @@ async fn with_no_configured_adapter_the_conservative_branch_is_unchanged() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let (mut gateway, task_id) =
-        start_live_task(root.path(), &config, port, "first.log", &client).await;
+    let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
     gateway.kill().await;
 
     let queries_before = peer.peer.queries();
-    let mut restarted = Gateway::start(root.path(), &config, port, "second.log");
+    let mut restarted = Gateway::start(root.path(), &config, "second.log");
     restarted.wait_until_ready(&client).await;
     let answered = restarted.post(&client, &tasks_get(50, &task_id)).await;
     restarted.terminate().await;
@@ -414,12 +396,10 @@ async fn with_no_configured_adapter_the_conservative_branch_is_unchanged() {
 async fn an_adapter_untrusted_at_restart_causes_zero_queries() {
     let root = temp_root("upstream-trust-lost");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let trusted = write_config(
         root.path(),
         &Fixture {
             name: "trusted.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -429,8 +409,7 @@ async fn an_adapter_untrusted_at_restart_causes_zero_queries() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let (mut gateway, task_id) =
-        start_live_task(root.path(), &trusted, port, "first.log", &client).await;
+    let (mut gateway, task_id) = start_live_task(root.path(), &trusted, "first.log", &client).await;
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
@@ -439,14 +418,13 @@ async fn an_adapter_untrusted_at_restart_causes_zero_queries() {
         root.path(),
         &Fixture {
             name: "untrusted.yaml",
-            port,
             backend_url: &peer.url,
             adapters: Vec::new(),
             forbid_marker: false,
         },
     );
     let queries_before = peer.peer.queries();
-    let mut restarted = Gateway::start(root.path(), &untrusted, port, "second.log");
+    let mut restarted = Gateway::start(root.path(), &untrusted, "second.log");
     restarted.wait_until_ready(&client).await;
     let answered = restarted.post(&client, &tasks_get(60, &task_id)).await;
     restarted.terminate().await;
@@ -474,12 +452,10 @@ async fn an_adapter_untrusted_at_restart_causes_zero_queries() {
 async fn the_task_extension_optin_reaches_the_backend() {
     let root = temp_root("upstream-optin");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -490,7 +466,7 @@ async fn the_task_extension_optin_reaches_the_backend() {
         .build()
         .expect("bounded fixture HTTP client");
     let (mut gateway, _task_id) =
-        start_live_task(root.path(), &config, port, "gateway.log", &client).await;
+        start_live_task(root.path(), &config, "gateway.log", &client).await;
     gateway.terminate().await;
 
     assert_eq!(
@@ -513,12 +489,10 @@ async fn the_task_extension_optin_reaches_the_backend() {
 async fn a_gateway_envelope_is_never_mistaken_for_an_upstream_job() {
     let root = temp_root("upstream-envelope");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -528,7 +502,7 @@ async fn a_gateway_envelope_is_never_mistaken_for_an_upstream_job() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let mut gateway = Gateway::start(root.path(), &config, port, "gateway.log");
+    let mut gateway = Gateway::start(root.path(), &config, "gateway.log");
     gateway.wait_until_ready(&client).await;
     // The gateway's OWN answer to a task-augmented call also carries
     // `resultType: "task"` and a `taskId`; it names a gateway record, not an
@@ -558,12 +532,10 @@ async fn a_gateway_envelope_is_never_mistaken_for_an_upstream_job() {
 async fn a_read_without_a_task_id_is_refused_before_anything_else() {
     let root = temp_root("upstream-no-task-id");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let config = write_config(
         root.path(),
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -573,7 +545,7 @@ async fn a_read_without_a_task_id_is_refused_before_anything_else() {
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("bounded fixture HTTP client");
-    let mut gateway = Gateway::start(root.path(), &config, port, "gateway.log");
+    let mut gateway = Gateway::start(root.path(), &config, "gateway.log");
     gateway.wait_until_ready(&client).await;
     let before = peer.peer.queries();
     let refused = gateway

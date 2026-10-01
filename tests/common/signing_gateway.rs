@@ -171,42 +171,17 @@ impl HttpGateway {
     /// Run the production CLI with explicit child-local fixture environment.
     /// Overrides follow `env_clear`; they never change the test runner's process.
     pub async fn start_with_env(config: Value, env: &[(&str, &std::ffi::OsStr)]) -> Self {
-        const MAX_ATTEMPTS: u32 = 5;
         // Every child gets its own task store (relative to its cwd): HOME cannot
         // isolate it on Windows, and the runner's shared store is single-owner.
         let mut config = config;
         if config["tasks"].get("store_dir").is_none() {
             config["tasks"]["store_dir"] = json!("tasks");
         }
-        for attempt in 1..=MAX_ATTEMPTS {
-            match Self::try_start(config.clone(), env).await {
-                Ok(gateway) => return gateway,
-                // The freed port between reservation-drop and child-rebind is a
-                // known, narrow race (#557): something else on the host can grab
-                // it first, and the child then fails to bind. Rather than
-                // eliminate the window -- which would need the production binary
-                // to accept an inherited socket or self-report a chosen port --
-                // retry with a fresh reservation. A genuine startup defect does
-                // not carry this specific signature and is never silently
-                // retried away.
-                Err(message)
-                    if attempt < MAX_ATTEMPTS && message.contains("Address already in use") => {}
-                Err(message) => panic!("{message}"),
-            }
-        }
-        unreachable!("loop always returns or panics")
-    }
-
-    async fn try_start(
-        mut config: Value,
-        env: &[(&str, &std::ffi::OsStr)],
-    ) -> Result<Self, String> {
+        // Port 0: the child binds a port of the OS's choosing and its banner
+        // names it. A port reserved here and released for the child to bind
+        // could be taken by another process first (#557, #2513).
+        config["server"]["port"] = json!(0);
         let directory = tempfile::tempdir().expect("gateway directory");
-        let reservation = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("reserve port");
-        let port = reservation.local_addr().expect("reserved address").port();
-        config["server"]["port"] = json!(port);
         let config_path = directory.path().join("gateway.yaml");
         mcp_gateway::gateway::test_helpers::write_owner_only(
             &config_path,
@@ -220,12 +195,12 @@ impl HttpGateway {
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone().expect("clone gateway log")))
             .stderr(Stdio::from(log));
-        drop(reservation);
         let child = command.spawn().expect("spawn real HTTP gateway");
         let mut gateway = Self {
             child,
             directory,
-            url: format!("http://127.0.0.1:{port}"),
+            // Learned from the child's banner below.
+            url: String::new(),
             client: reqwest::Client::builder()
                 .timeout(IO_TIMEOUT)
                 .build()
@@ -234,28 +209,40 @@ impl HttpGateway {
         let deadline = tokio::time::Instant::now() + IO_TIMEOUT;
         loop {
             if let Some(status) = gateway.child.try_wait().expect("gateway process status") {
-                return Err(format!(
+                panic!(
                     "gateway startup fixture exited {status}: {}",
                     gateway.logs()
-                ));
+                );
             }
-            if gateway
-                .client
-                .get(format!("{}/health", gateway.url))
-                .send()
-                .await
-                .is_ok_and(|response| response.status().is_success())
+            if gateway.url.is_empty()
+                && let Some(port) = bound_port(&gateway.logs())
             {
-                return Ok(gateway);
+                gateway.url = format!("http://127.0.0.1:{port}");
             }
-            if tokio::time::Instant::now() >= deadline {
-                return Err(format!(
-                    "gateway readiness fixture timed out: {}",
-                    gateway.logs()
-                ));
+            if !gateway.url.is_empty()
+                && gateway
+                    .client
+                    .get(format!("{}/health", gateway.url))
+                    .send()
+                    .await
+                    .is_ok_and(|response| response.status().is_success())
+            {
+                break;
             }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "gateway readiness fixture timed out: {}",
+                gateway.logs()
+            );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+        if let Some(status) = gateway.child.try_wait().expect("gateway process status") {
+            panic!(
+                "gateway answered /health but had exited {status}: {}",
+                gateway.logs()
+            );
+        }
+        gateway
     }
 
     /// The config file the child was started with; rewriting it drives a reload.
@@ -284,7 +271,7 @@ impl HttpGateway {
             }))
             .send()
             .await
-            .expect("initialize HTTP");
+            .unwrap_or_else(|error| panic!("initialize HTTP: {error}; logs={}", self.logs()));
         let session = response
             .headers()
             .get("mcp-session-id")
@@ -308,7 +295,7 @@ impl HttpGateway {
             .json(request)
             .send()
             .await
-            .expect("gateway HTTP response");
+            .unwrap_or_else(|error| panic!("gateway HTTP response: {error}; logs={}", self.logs()));
         let status = response.status();
         let body = response.text().await.expect("gateway response body");
         serde_json::from_str(&body).unwrap_or_else(|error| {
@@ -318,6 +305,40 @@ impl HttpGateway {
             )
         })
     }
+}
+
+/// The port a gateway child bound, from the last complete `Listening` banner
+/// line (`src/gateway/server/support.rs`) in its log. Only complete lines
+/// count, so a banner caught mid-write never reads as a shorter port. The
+/// fmt layer may colour field names, so escape sequences are dropped first.
+/// `tests/task_upstream_recovery/helper.rs` carries the same reader.
+fn bound_port(log: &str) -> Option<u16> {
+    let complete = &log[..=log.rfind('\n')?];
+    complete.lines().rev().find_map(|line| {
+        let plain = without_ansi(line);
+        let (_, fields) = plain.split_once("server::support: Listening ")?;
+        fields
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("port=")?.parse().ok())
+    })
+}
+
+fn without_ansi(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // An SGR sequence, `ESC [ ... m`: skip through its final `m`.
+            for c in chars.by_ref() {
+                if c == 'm' {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
 }
 
 #[expect(

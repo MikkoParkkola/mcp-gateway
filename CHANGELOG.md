@@ -19,9 +19,11 @@ and cached results, notifications and subscriptions stay per caller. SSO `role_m
 rules grant full gateway admin, key-server OIDC rules need an issuer and a verified email, and
 with auth on the tool-call audit log is required and fails closed. API keys are SHA-256 digests
 with an optional expiry that is enforced, and `/metrics` has its own token. The gateway refuses to start on an
-unrecognised config key, a config file other users can read (Unix only), an unresolved secret
+unrecognised config key, a config file other users can read (Unix by file mode, Windows by the file's access list), an unresolved secret
 (except `server.metrics_token`, which warns and keeps `/metrics` closed, and a personal-account `client_secret_ref`, which is read only when a token is requested) or, with auth on, cleartext
-HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+HTTP on a network bind. The Helm chart now installs with its defaults and serves once the `mcp-gateway-auth` Secret exists. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
+
+Evidence for each highlight, file and test: `src/config/mod.rs` and `tests/mik_7214_acs.rs` (MCP 2026-07-28); `src/gateway/router/authorization.rs` and `tests/a0_per_caller_cache.rs` (per-caller access); `src/control_plane/role_mapping.rs` and `src/gateway/router/sso_admin_tests.rs` (SSO admins); `tests/d1_audit_required.rs` (audit); `src/config/features/api_key.rs` and `tests/e4_hash_key_cli.rs` (keys); `tests/c1_unrecognised_config_keys.rs`, `src/config/secret_file_windows_tests.rs` and `src/gateway/server/cleartext_tests.rs` (refusing to start); `deploy/helm/mcp-gateway/values.yaml` (Helm chart).
 
 ### Added
 

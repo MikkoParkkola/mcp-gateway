@@ -92,7 +92,7 @@ pub async fn post(gateway: &HttpGateway, path: &str, body: &Value) -> Value {
         .json(body)
         .send()
         .await
-        .expect("gateway response");
+        .unwrap_or_else(|e| panic!("gateway response: {e}; {}", gateway.logs()));
     let text = response.text().await.expect("gateway body");
     serde_json::from_str(&text)
         .unwrap_or_else(|e| panic!("gateway JSON: {e}; {text}; {}", gateway.logs()))
