@@ -329,3 +329,19 @@ async fn pinned_websocket_connect_times_out_whole() {
         );
     }
 }
+
+/// Row 16: under `standard` the list is inert. Nothing is recorded, so a
+/// listed backend stays `Configured`.
+#[test]
+fn standard_does_not_stamp_listed_backends() {
+    let registry = BackendRegistry::new();
+    registry.enforce_destinations(DestinationPolicy::Configured, &["listed".to_string()]);
+    let backend = Arc::new(Backend::new(
+        "listed",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    assert_eq!(backend.destination(), DestinationPolicy::Configured);
+}
