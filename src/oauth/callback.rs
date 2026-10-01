@@ -9,7 +9,7 @@
 //! 127.0.0.1 **and** `[::1]` on the same port so that browsers which resolve
 //! `localhost` to either address family work without extra configuration.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use axum::{
@@ -116,15 +116,27 @@ pub async fn start_callback_server(
     let effective_host = host.unwrap_or("localhost");
     let callback_path = path.unwrap_or("/oauth/callback");
     let dual_bind = effective_host == "localhost";
+    // A loopback IP literal is bound exactly as configured, so the address the
+    // redirect URI names is the address that answers (#2578). Anything else
+    // keeps the IPv4 loopback bind: the callback never listens beyond it.
+    let loopback_ip = effective_host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .ok()
+        .filter(IpAddr::is_loopback);
 
-    // Always bind the primary IPv4 loopback address first so we can
-    // learn the kernel-assigned port when `port` is `None`.
-    let ipv4_addr: SocketAddr = format!("127.0.0.1:{}", port.unwrap_or(0)).parse().unwrap();
-    let ipv4_listener = TcpListener::bind(ipv4_addr)
+    // Bind the primary address first so we can learn the kernel-assigned
+    // port when `port` is `None`.
+    let primary_addr = SocketAddr::new(
+        loopback_ip.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        port.unwrap_or(0),
+    );
+    let primary_listener = TcpListener::bind(primary_addr)
         .await
         .map_err(|e| Error::OAuth(format!("Failed to bind callback server: {e}")))?;
 
-    let actual_port = ipv4_listener
+    let actual_port = primary_listener
         .local_addr()
         .map_err(|e| Error::OAuth(format!("Failed to get callback server address: {e}")))?
         .port();
@@ -157,7 +169,14 @@ pub async fn start_callback_server(
         None
     };
 
-    let callback_url = format!("http://localhost:{actual_port}{callback_path}");
+    // The redirect URI names the configured host (docs/OAUTH_CONFIG.md):
+    // an IPv6 literal in brackets, as a URI authority requires.
+    let url_host = match loopback_ip {
+        Some(IpAddr::V6(v6)) => format!("[{v6}]"),
+        Some(IpAddr::V4(v4)) => v4.to_string(),
+        None => effective_host.to_string(),
+    };
+    let callback_url = format!("http://{url_host}:{actual_port}{callback_path}");
 
     // #143 — structured telemetry: server bind event.
     info!(
@@ -189,7 +208,7 @@ pub async fn start_callback_server(
     handles.push(tokio::spawn({
         let app = app.clone();
         async move {
-            axum::serve(ipv4_listener, app)
+            axum::serve(primary_listener, app)
                 .await
                 .map_err(|e| Error::OAuth(format!("Callback server error: {e}")))
         }

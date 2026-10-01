@@ -56,6 +56,11 @@ the server continues on IPv4 alone.
 
 To opt out of dual-bind set `callback_host: "127.0.0.1"` explicitly.
 
+A loopback IP host is bound exactly as written and named that way in the
+redirect URI: `127.0.0.1` gives `http://127.0.0.1:<port>/...`, and `::1` (or
+`[::1]`) gives `http://[::1]:<port>/...`. Any other host keeps the callback on
+`127.0.0.1` and is used as written in the redirect URI.
+
 ---
 
 ## Structured Telemetry
