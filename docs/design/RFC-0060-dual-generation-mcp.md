@@ -200,7 +200,7 @@ This is not a gap in the design. It is a defect the design would have shipped.
 
 Grok's sharpest point, and it inverts the plan. 2026 Streamable HTTP **requires `Mcp-Method` and `Mcp-Name` on every POST** and rejects disagreement as `HeaderMismatch` (-32020) — SEP-2243, which this RFC filed under "minor changes" and never mentioned again.
 
-**Those headers exist so a gateway can route without parsing the body.** U5 asked whether rmcp's types can carry a proxy pass-through without deserialise-reserialise per hop; the specification already answered it by putting the routing key in the headers. Dispatch from `Mcp-Method`/`Mcp-Name`, keep the JSON body opaque except at the Meta-MCP chokepoint, and the question closes without building anything.
+**Those headers exist so a gateway can route without parsing the body.** U5 asked whether rmcp's types can carry a proxy pass-through without deserialise-reserialise per hop; the specification already answered it by putting the routing key in the headers. Dispatch from `Mcp-Method`/`Mcp-Name`, keep the JSON body opaque except at the Meta-MCP chokepoint, and the question closes without building anything. This answers routing only: the header is still checked against the body before authorization or execution (RFC-0061 `:99`, `:364`).
 
 ### `tools/list` already varies per connection, five ways
 
