@@ -138,6 +138,7 @@ backend" and "fails a capability file" first.**
 | 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
 | 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result on `/mcp` and `/mcp/{backend}` is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]`; a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
+| 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3249,6 +3250,27 @@ a commit that then loses (to a cancel that lands first, or a store failure) leav
 a recovery that did not land. A live call has the same window: its record is written
 (`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
 (`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
+
+## 114. Hardened can name backends that may reach private networks
+
+**Startup:** refuses to start, only under `security.posture: hardened` and only when `security.hardened.private_backends` names a backend that is not configured
+
+New key `security.hardened.private_backends: [backend names]`, default empty, read only under
+`security.posture: hardened` (under `standard` it is accepted and has no effect).
+
+- A listed backend may reach loopback (127.0.0.0/8, ::1), RFC 1918 (10/8, 172.16/12,
+  192.168/16) and unique-local (fc00::/7) addresses, by literal or by name: names are still
+  resolved once and pinned, and redirects and OAuth endpoints are held to the same rule. It
+  never reaches link-local (169.254.0.0/16, fe80::/10, which includes 169.254.169.254) or the
+  AWS IPv6 metadata address `fd00:ec2::254`, and every other special-use range item 109 refuses
+  stays refused.
+- Every backend not listed keeps item 109's public-only rule.
+- A listed name that is not under `backends` refuses start, naming it.
+- `security.hardened` is restart-only: a reload that changes it is refused with
+  `config reload refused: security.hardened requires restart`.
+
+**Action:** to adopt `hardened` with a local or in-cluster HTTP backend, add its name to
+`security.hardened.private_backends`. List only the backends that need it.
 
 ## Upgrading from 3.5.x: a walkthrough
 

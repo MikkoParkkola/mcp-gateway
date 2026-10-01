@@ -58,7 +58,10 @@ struct ClientSession {
     /// Subscribed backends
     subscribed_backends: RwLock<Vec<String>>,
     /// Timestamp of session creation (for TTL-based reaping)
-    created_at: Instant,
+    /// Last time a request resumed this session. The reaper goes by this, not
+    /// by creation: a session that only POSTs holds no stream, so age alone
+    /// would reap it mid-use and the next request would start a fresh one.
+    last_active: RwLock<Instant>,
     /// The identity that created this session.
     ///
     /// A session id arrives in a header the caller controls, so without this a
@@ -116,7 +119,7 @@ impl NotificationMultiplexer {
     /// Create a new notification multiplexer.
     ///
     /// Spawns a background session-reaper task that periodically removes
-    /// sessions older than `config.session_ttl` that have no active receivers,
+    /// sessions idle for `config.session_ttl` that have no active receivers,
     /// preventing FD exhaustion from dropped SSE connections.
     #[must_use]
     pub fn new(backends: Arc<BackendRegistry>, config: StreamingConfig) -> Self {
@@ -162,7 +165,10 @@ impl NotificationMultiplexer {
                     break;
                 };
 
-                mux.reap_expired_sessions(ttl);
+                for id in mux.reap_expired_sessions(ttl) {
+                    // A reaped id is dead; state keyed by it goes with it.
+                    lifecycle.on_disconnect(&id);
+                }
 
                 let reclaimed = lifecycle.reap(now_unix());
                 if reclaimed > 0 {
@@ -180,24 +186,27 @@ impl NotificationMultiplexer {
     }
 
     /// Remove all sessions that are both expired and have no active receivers.
-    fn reap_expired_sessions(&self, ttl: Duration) {
+    ///
+    /// Returns the ids it removed, so the caller can announce their end.
+    fn reap_expired_sessions(&self, ttl: Duration) -> Vec<String> {
         let now = Instant::now();
         let mut sessions = self.sessions.write();
 
-        let before = sessions.len();
+        let mut reaped_ids = Vec::new();
         sessions.retain(|id, session| {
-            let expired = now.duration_since(session.created_at) >= ttl;
+            let expired = now.duration_since(*session.last_active.read()) >= ttl;
             let abandoned = session.tx.receiver_count() == 0;
 
             if expired && abandoned {
                 info!(session_id = %id, "Reaping expired streaming session (no active receivers)");
+                reaped_ids.push(id.expose_secret().to_string());
                 false
             } else {
                 true
             }
         });
 
-        let reaped = before.saturating_sub(sessions.len());
+        let reaped = reaped_ids.len();
         if reaped > 0 {
             info!(
                 reaped,
@@ -205,6 +214,7 @@ impl NotificationMultiplexer {
                 "Session reaper completed"
             );
         }
+        reaped_ids
     }
 
     /// Create or get a session
@@ -232,6 +242,7 @@ impl NotificationMultiplexer {
         if let Some(session) = session_id.and_then(|id| sessions.get(id))
             && session.owner == *owner
         {
+            *session.last_active.write() = Instant::now();
             return (
                 session.id.expose_secret().to_string(),
                 session.tx.subscribe(),
@@ -257,7 +268,7 @@ impl NotificationMultiplexer {
             tx,
             last_event_id: RwLock::new(None),
             subscribed_backends: RwLock::new(Vec::new()),
-            created_at: Instant::now(),
+            last_active: RwLock::new(Instant::now()),
             owner,
             credential: RwLock::new(None),
         };
@@ -863,272 +874,8 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_session_creation() {
-        let backends = Arc::new(BackendRegistry::new());
-        let config = StreamingConfig::default();
-        let multiplexer = NotificationMultiplexer::new(backends, config);
-
-        let (session_id, _rx) = multiplexer.get_or_create_session(None);
-        assert!(session_id.starts_with("gw-"));
-        assert!(multiplexer.has_session(&session_id));
-        assert_eq!(multiplexer.session_count(), 1);
-
-        multiplexer.remove_session(&session_id);
-        assert!(!multiplexer.has_session(&session_id));
-        assert_eq!(multiplexer.session_count(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_notification_send() {
-        let backends = Arc::new(BackendRegistry::new());
-        let config = StreamingConfig::default();
-        let multiplexer = NotificationMultiplexer::new(backends, config);
-
-        let (session_id, mut rx) = multiplexer.get_or_create_session(Some("test-session"));
-
-        let notification = TaggedNotification {
-            source: "test-backend".to_string(),
-            event_type: "notification".to_string(),
-            data: json!({"message": "hello"}),
-            event_id: Some("evt-1".to_string()),
-        };
-
-        assert!(multiplexer.send_to_session(&session_id, notification.clone()));
-
-        let received = rx.recv().await.unwrap();
-        assert_eq!(received.source, "test-backend");
-        assert_eq!(received.event_type, "notification");
-    }
-
-    #[tokio::test]
-    async fn test_broadcast() {
-        let backends = Arc::new(BackendRegistry::new());
-        let config = StreamingConfig::default();
-        let multiplexer = NotificationMultiplexer::new(backends, config);
-
-        let (_id1, mut rx1) = multiplexer.get_or_create_session(Some("session-1"));
-        let (_id2, mut rx2) = multiplexer.get_or_create_session(Some("session-2"));
-
-        let notification = TaggedNotification {
-            source: "global".to_string(),
-            event_type: "broadcast".to_string(),
-            data: json!({"alert": "system"}),
-            event_id: None,
-        };
-
-        multiplexer.broadcast(notification);
-
-        let r1 = rx1.recv().await.unwrap();
-        let r2 = rx2.recv().await.unwrap();
-        assert_eq!(r1.source, "global");
-        assert_eq!(r2.source, "global");
-    }
-
-    // ── Session reaper tests ─────────────────────────────────────────────
-
-    /// GIVEN a session with no active receivers and an elapsed TTL
-    /// WHEN `reap_expired_sessions` runs
-    /// THEN the session is removed
-    #[test]
-    fn reap_expired_sessions_removes_abandoned_sessions_past_ttl() {
-        // GIVEN
-        let backends = Arc::new(BackendRegistry::new());
-        let multiplexer = NotificationMultiplexer::new(backends, StreamingConfig::default());
-
-        let (id, rx) = multiplexer.get_or_create_session(Some("expired-session"));
-        assert_eq!(multiplexer.session_count(), 1);
-
-        // Drop the receiver so receiver_count() == 0
-        drop(rx);
-
-        // WHEN: reap with zero TTL (everything is expired)
-        let (captured, guard) = crate::gateway::session_id::log_capture::capture_debug();
-        multiplexer.reap_expired_sessions(Duration::ZERO);
-        drop(guard);
-
-        // THEN
-        assert_eq!(
-            multiplexer.session_count(),
-            0,
-            "expired abandoned session must be reaped"
-        );
-        assert!(!multiplexer.has_session(&id));
-        // F9-T7c: the reaper names the session by fingerprint only.
-        crate::gateway::session_id::log_capture::assert_fingerprinted(
-            &captured.text(),
-            "Reaping expired streaming session",
-            &id,
-        );
-    }
-
-    /// GIVEN a session with an active receiver (SSE client still connected)
-    /// WHEN `reap_expired_sessions` runs with zero TTL
-    /// THEN the session is preserved because a client is still attached
-    #[test]
-    fn reap_expired_sessions_preserves_sessions_with_active_receivers() {
-        // GIVEN
-        let backends = Arc::new(BackendRegistry::new());
-        let multiplexer = NotificationMultiplexer::new(backends, StreamingConfig::default());
-
-        let (id, _rx) = multiplexer.get_or_create_session(Some("active-session"));
-        // `_rx` is still alive → receiver_count() == 1
-
-        // WHEN: reap with zero TTL
-        multiplexer.reap_expired_sessions(Duration::ZERO);
-
-        // THEN: session survives because client is still connected
-        assert_eq!(
-            multiplexer.session_count(),
-            1,
-            "session with active receiver must be preserved"
-        );
-        assert!(multiplexer.has_session(&id));
-    }
-
-    /// GIVEN two sessions — one abandoned/expired, one with an active receiver
-    /// WHEN `reap_expired_sessions` runs
-    /// THEN only the abandoned session is removed
-    #[test]
-    fn reap_expired_sessions_selectively_removes_only_abandoned_sessions() {
-        // GIVEN
-        let backends = Arc::new(BackendRegistry::new());
-        let multiplexer = NotificationMultiplexer::new(backends, StreamingConfig::default());
-
-        let (abandoned_id, rx_abandoned) = multiplexer.get_or_create_session(Some("abandoned"));
-        let (active_id, _rx_active) = multiplexer.get_or_create_session(Some("active"));
-        assert_eq!(multiplexer.session_count(), 2);
-
-        drop(rx_abandoned); // No more receivers on abandoned session
-
-        // WHEN
-        multiplexer.reap_expired_sessions(Duration::ZERO);
-
-        // THEN
-        assert_eq!(multiplexer.session_count(), 1);
-        assert!(
-            !multiplexer.has_session(&abandoned_id),
-            "abandoned session must be reaped"
-        );
-        assert!(
-            multiplexer.has_session(&active_id),
-            "active session must survive"
-        );
-    }
-
-    /// GIVEN a session with no active receivers but within its TTL
-    /// WHEN `reap_expired_sessions` runs with a long TTL
-    /// THEN the session is NOT removed (TTL not yet elapsed)
-    #[test]
-    fn reap_expired_sessions_respects_ttl_for_recently_created_sessions() {
-        // GIVEN
-        let backends = Arc::new(BackendRegistry::new());
-        let multiplexer = NotificationMultiplexer::new(backends, StreamingConfig::default());
-
-        let (id, rx) = multiplexer.get_or_create_session(Some("young-session"));
-        drop(rx); // No receivers, but session was just created
-
-        // WHEN: reap with a 30-minute TTL — session is seconds old
-        multiplexer.reap_expired_sessions(Duration::from_secs(1800));
-
-        // THEN: session is preserved because it hasn't exceeded the TTL
-        assert_eq!(multiplexer.session_count(), 1);
-        assert!(multiplexer.has_session(&id));
-    }
-
-    /// GIVEN the multiplexer wrapped in Arc
-    /// WHEN `spawn_reaper_on` is called and sufficient time passes
-    /// THEN expired abandoned sessions are cleaned up automatically
-    #[tokio::test]
-    async fn spawn_reaper_on_reaps_sessions_automatically() {
-        // GIVEN
-        let backends = Arc::new(BackendRegistry::new());
-        let config = StreamingConfig {
-            // Very short TTL and interval for the test
-            session_ttl: Duration::from_millis(50),
-            session_reaper_interval: Duration::from_millis(20),
-            ..StreamingConfig::default()
-        };
-
-        let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on(Arc::new(SessionLifecycle::new()));
-
-        let (id, rx) = multiplexer.get_or_create_session(Some("auto-reap-session"));
-        drop(rx); // Drop receiver immediately
-
-        assert_eq!(multiplexer.session_count(), 1);
-
-        // WHEN: wait for the reaper to fire (TTL=50ms, interval=20ms)
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        // THEN
-        assert_eq!(
-            multiplexer.session_count(),
-            0,
-            "reaper must have cleaned up expired session"
-        );
-        assert!(!multiplexer.has_session(&id));
-    }
-
-    /// T8 of the `MIK-7215.CONTROL.4` test plan.
-    ///
-    /// GIVEN a lifecycle holding a key whose deadline has already passed
-    /// WHEN the host reaper tick runs
-    /// THEN the key is reclaimed — the tick sweeps the lifecycle, not just the
-    /// session map. Reaping is unconditional (D5): nothing here tells the tick
-    /// whether a request for that key is still in flight.
-    #[tokio::test]
-    async fn spawn_reaper_on_sweeps_the_session_lifecycle() {
-        // GIVEN: a key whose deadline is the Unix epoch, i.e. long past.
-        let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
-        lifecycle.track("stale-identity", 0);
-        assert_eq!(lifecycle.tracked_count(), 1);
-
-        let backends = Arc::new(BackendRegistry::new());
-        let config = StreamingConfig {
-            session_reaper_interval: Duration::from_millis(20),
-            ..StreamingConfig::default()
-        };
-        let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-
-        // WHEN: the host tick runs.
-        multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        // THEN: the tick reclaimed it.
-        assert_eq!(
-            lifecycle.tracked_count(),
-            0,
-            "the reaper tick must sweep the lifecycle, not only the session map"
-        );
-    }
-
-    /// GIVEN the multiplexer dropped while reaper task is running
-    /// WHEN the Arc is dropped
-    /// THEN the reaper task exits cleanly (no panic, no leak)
-    #[tokio::test]
-    async fn spawn_reaper_on_exits_when_multiplexer_is_dropped() {
-        // GIVEN
-        let backends = Arc::new(BackendRegistry::new());
-        let config = StreamingConfig {
-            session_reaper_interval: Duration::from_millis(10),
-            ..StreamingConfig::default()
-        };
-
-        let multiplexer = Arc::new(NotificationMultiplexer::new(backends, config));
-        multiplexer.spawn_reaper_on(Arc::new(SessionLifecycle::new()));
-
-        // WHEN: drop the only strong reference
-        drop(multiplexer);
-
-        // THEN: give the task a tick to observe the weak ref is gone — no panic
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        // If we reach here without a panic, the reaper exited cleanly.
-    }
-}
+#[path = "streaming_tests.rs"]
+mod tests;
 
 #[path = "streaming_ownership.rs"]
 mod ownership;

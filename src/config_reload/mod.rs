@@ -1478,8 +1478,11 @@ impl ReloadContext {
         cache_ttl: Duration,
     ) -> Self {
         // A registry built by the caller still serves this config's posture.
-        let posture = live_config.running().security.posture;
-        registry.enforce_destination(DestinationPolicy::for_posture(posture));
+        let running = live_config.running();
+        registry.enforce_destinations(
+            DestinationPolicy::for_posture(running.security.posture),
+            &running.security.hardened.private_backends,
+        );
         Self {
             config_path,
             live_config,

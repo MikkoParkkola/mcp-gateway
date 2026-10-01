@@ -16,7 +16,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::handshake::client::{Request, Response};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_tls, connect_async};
 
-use crate::security::ssrf::{DestinationPolicy, HostResolver, is_private_or_reserved};
+use crate::security::ssrf::{DestinationPolicy, HostResolver};
 use crate::{Error, Result};
 
 impl super::WebSocketTransport {
@@ -64,7 +64,9 @@ pub(super) async fn connect(
 ) -> Result<Upgraded> {
     match destination {
         DestinationPolicy::Configured => connect_async(request).await.map_err(|e| failed(&e)),
-        DestinationPolicy::Public => connect_pinned(request, destination, resolver).await,
+        DestinationPolicy::Public | DestinationPolicy::Private => {
+            connect_pinned(request, destination, resolver).await
+        }
     }
 }
 
@@ -96,9 +98,7 @@ pub(super) async fn connect_pinned(
             .await
             .map_err(|e| Error::Transport(format!("WebSocket connect failed: {e}")))?,
     };
-    if check == DestinationPolicy::Public
-        && let Some(denied) = addresses.iter().find(|ip| is_private_or_reserved(**ip))
-    {
+    if let Some(denied) = addresses.iter().find(|ip| check.denies(**ip)) {
         // As the HTTP pin: the address is logged, never sent to the caller.
         tracing::warn!(host = %host, address = %denied, "SSRF pin refused a resolved address");
         return Err(Error::Protocol(format!(
