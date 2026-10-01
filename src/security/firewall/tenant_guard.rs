@@ -174,6 +174,14 @@ impl TenantGuard {
         tenants.into_iter().collect()
     }
 
+    /// MIN.1 gap 2: whether `result` holds a `content[].text` block over the
+    /// parse bound, so [`Self::response_tenants`] could not read its tenants.
+    pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
+        // Red stub (tests first): never reports an uninspected block.
+        let _ = (self, result);
+        false
+    }
+
     /// Gather every value under a configured tenant key, at any depth.
     ///
     /// Recursive because tenant identifiers arrive nested — a `customer_id`

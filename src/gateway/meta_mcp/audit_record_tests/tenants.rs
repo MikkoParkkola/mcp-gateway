@@ -176,3 +176,52 @@ async fn cache_hit_record_carries_delivered_tenants() {
     assert_eq!(hit["tenants"], sorted(&["cust-1", "cust-9"]), "{hit}");
     assert!(hit.get("data_classes").is_none(), "{hit}");
 }
+
+/// A tool result whose one text block is valid JSON naming `tenant`, padded
+/// past the 1 MiB attribution parse bound.
+fn oversize_reply_naming(tenant: &str) -> Value {
+    let pad = "x".repeat(1024 * 1024);
+    let rows = json!({"rows": [{"customer_id": tenant}], "pad": pad});
+    json!({"content": [{"type": "text", "text": rows.to_string()}], "isError": false})
+}
+
+/// MIN.1 gap 2. A response too large to inspect is recorded as such: the
+/// record carries `attribution: "uninspected"` and no tenant it could not read.
+#[tokio::test]
+async fn oversize_response_record_says_uninspected() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = attributing(meta(Ok(oversize_reply_naming("cust-9")), &dir));
+    let who = api_key_caller();
+    meta.invoke_tool(&args_for(None), None, &context(&AllowAll, &who))
+        .await
+        .expect("allowed call");
+    let record = only_record(&dir);
+    assert_eq!(record["attribution"], json!("uninspected"), "{record}");
+    assert!(record.get("tenants").is_none(), "{record}");
+}
+
+/// MIN.1 gap 2. A cache hit of that response says both: no gate ran, and
+/// the value was too large to inspect.
+#[tokio::test]
+async fn oversize_cache_hit_record_says_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cached = meta(Ok(oversize_reply_naming("cust-9")), &dir);
+    cached.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
+    cached.default_cache_ttl = Duration::from_secs(300);
+    let meta = attributing(cached);
+    let who = api_key_caller();
+    for _ in 0..2 {
+        meta.invoke_tool(&args_for(None), None, &context(&AllowAll, &who))
+            .await
+            .expect("allowed call");
+    }
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    assert_eq!(all[0]["attribution"], json!("uninspected"), "{}", all[0]);
+    assert_eq!(
+        all[1]["attribution"],
+        json!("cached_delivery_uninspected"),
+        "{}",
+        all[1]
+    );
+}
