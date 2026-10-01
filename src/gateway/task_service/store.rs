@@ -59,6 +59,11 @@ pub(crate) enum StoreError {
     Unavailable,
     #[error("unsafe task store")]
     UnsafeStore,
+    /// The store directory or its lease could not be inspected (not absent, not
+    /// unsafe): distinct from `Unavailable` so a failure to look is never
+    /// confused with a failure after looking.
+    #[error("task store path could not be inspected")]
+    Uninspectable,
     #[error("corrupt task record")]
     CorruptRecord,
     #[error("task store is already owned")]
