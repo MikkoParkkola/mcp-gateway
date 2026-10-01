@@ -192,7 +192,7 @@ async fn run_dispatched(
 
     let submission = job
         .as_ref()
-        .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool)));
+        .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool, &id)));
 
     // The same tail the request thread takes, asked for the backend's own
     // result rather than the synchronous wrapper: design §4 settles a task on
@@ -347,11 +347,12 @@ async fn follow_upstream_job(
             return;
         }
     };
-    match answer {
-        UpstreamAnswer::Completed(result) => {
-            // The identical post-dispatch processing a live dispatch applies,
-            // from the same implementation, before the durable settlement.
-            let event =
+    // The identical post-dispatch processing a live dispatch applies, from the
+    // same implementation, in the dispatch scope so the gates' attribution
+    // notes travel with the transition (MIN.1 gap 1).
+    let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
+        match answer {
+            UpstreamAnswer::Completed(result) => Some(
                 match state
                     .meta_mcp()
                     .recover_task_result(&job.server, &job.tool, None, id, result)
@@ -362,25 +363,37 @@ async fn follow_upstream_job(
                         message: error.to_string(),
                         data: None,
                     }),
-                };
-            executor.settle_cas(principal, id, revision, event).await;
-        }
-        UpstreamAnswer::Failed(error) => {
+                },
+            ),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            let screened = state.meta_mcp().recover_task_error(
-                &job.server,
-                &job.tool,
-                None,
-                id,
-                strip_http_status(error),
-            );
-            executor
-                .settle_cas(principal, id, revision, TaskTransition::Fail(screened))
-                .await;
+            UpstreamAnswer::Failed(error) => {
+                Some(TaskTransition::Fail(state.meta_mcp().recover_task_error(
+                    &job.server,
+                    &job.tool,
+                    None,
+                    id,
+                    strip_http_status(error),
+                )))
+            }
+            // [`poll_to_terminal`] hands back a lease only with a terminal answer.
+            UpstreamAnswer::Live | UpstreamAnswer::Unavailable => None,
         }
-        // [`poll_to_terminal`] hands back a lease only with a terminal answer.
-        UpstreamAnswer::Live | UpstreamAnswer::Unavailable => {}
+    })
+    .await;
+    if let (Some(event), notes) = processed {
+        // Recorded before the commit, still under the lease, as a live call is
+        // recorded before its result is stored.
+        let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
+            server: &job.server,
+            tool: &job.tool,
+            id,
+        };
+        let event = state
+            .meta_mcp()
+            .audit_settlement(task, event, &notes, principal)
+            .await;
+        executor.settle_cas(principal, id, revision, event).await;
     }
     lease.release(executor, id).await;
 }
