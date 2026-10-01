@@ -16,7 +16,7 @@ use tracing::{debug, error, warn};
 
 use super::AppState;
 use super::authorization::{
-    ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
+    ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level, slot_principal,
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
 use super::hardened_identity::hardened_identity_refusal;
@@ -519,6 +519,13 @@ async fn backend_handler_inner(
         oauth_agent_identity.as_ref(),
         cert_identity.as_ref(),
     );
+    // The passthrough slot budget's key: credential-unique, unlike `proven`,
+    // which is a display label for refusals (MIK-7689).
+    let slot = slot_principal(
+        client.as_ref(),
+        oauth_agent_identity.as_ref(),
+        cert_identity.as_ref(),
+    );
     // End-user identity for propagation (MIK-6704): the auth middleware may
     // attach a VerifiedIdentity for temporary/delegated OIDC tokens. Extracted
     // before the body is consumed so the direct route can propagate it too.
@@ -879,8 +886,7 @@ async fn backend_handler_inner(
                     // credential, so distinct callers never share a stateful
                     // upstream's session-bound data. `None` on the no-credential
                     // path keeps the shared default bucket (behavior unchanged).
-                    identity_key =
-                        charged_binding(&state, &name, caller, proven.as_deref(), binding);
+                    identity_key = charged_binding(&state, &name, caller, slot.as_deref(), binding);
                     Ok(headers)
                 }
                 Err(e) => Err(e),

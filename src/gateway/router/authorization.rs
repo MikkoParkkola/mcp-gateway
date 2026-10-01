@@ -501,6 +501,19 @@ pub(super) fn refusal_principal(
     None
 }
 
+/// The principal a passthrough slot budget is charged to (MIK-7689).
+pub(super) fn slot_principal(
+    client: Option<&AuthenticatedClient>,
+    oauth_agent_identity: Option<&OAuthAgentIdentity>,
+    cert_identity: Option<&CertIdentity>,
+) -> Option<String> {
+    refusal_principal(client, oauth_agent_identity, cert_identity)
+}
+
+#[cfg(test)]
+#[path = "slot_principal_tests.rs"]
+mod slot_principal_tests;
+
 /// The HTTP authorizer: the full policy set, against the caller's real identity.
 ///
 /// Borrows everything. It is built per request and handed to the meta layer
