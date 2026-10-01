@@ -257,7 +257,7 @@ impl MetaMcp {
                     continue;
                 }
                 collect_tool_tags(&tool, all_tags);
-                if tool_matches_query(&cap.name, &tool, query) {
+                if tool_matches_query("", &tool, query) {
                     // A chain target is a name too: only admitted ones (A3).
                     let chains: Vec<String> = capability
                         .metadata
