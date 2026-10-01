@@ -81,6 +81,7 @@ async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
     config.backends.insert(
         BACKEND.to_string(),
         BackendConfig {
+            enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
                 streamable_http: true,
@@ -347,6 +348,7 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
     config.backends.insert(
         BACKEND.to_string(),
         BackendConfig {
+            enabled: true,
             transport: TransportConfig::Http {
                 http_url: url,
                 streamable_http: true,
