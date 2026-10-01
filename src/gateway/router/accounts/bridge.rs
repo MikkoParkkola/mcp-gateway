@@ -157,3 +157,7 @@ fn unix_now() -> i64 {
             i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
         })
 }
+
+#[cfg(test)]
+#[path = "bridge_tests.rs"]
+mod bridge_tests;

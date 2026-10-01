@@ -33,6 +33,7 @@ src/gateway/router/accounts/bridge.rs	identity	1	critical	a	OwuiSessionBridge::i
 src/gateway/router/accounts/bridge.rs	principal	1	critical	a,b	OwuiSessionBridge::principal	Turns the Open WebUI session cookie into an authenticated (authority, subject) principal.
 src/gateway/router/accounts/bridge.rs	session_user	1	critical	b	OwuiSessionBridge::session_user	Checks the session token with the upstream, caps the body size, rejects expired sessions.
 src/gateway/router/accounts/bridge.rs	sole_cookie	1	critical	b,d	sole_cookie	Refuses a session cookie that is missing, empty or duplicated.
+src/gateway/router/accounts/bridge.rs	presents_session	1	critical	a	presents_session	Classifies a request as carrying a browser session credential, so it is refused as one and not as no credential.
 src/gateway/router/accounts/bridge.rs	new	1	standard	borderline	OwuiSessionBridge::new	Client with no redirects and no proxy; a default client could leak the bearer.
 src/gateway/router/accounts/complete.rs	complete	1	critical	a	complete	Answers 403 unless the bridged browser session proves an identity.
 src/gateway/router/accounts/complete.rs	connections	1	critical	c	connections	Lists account connection state keyed to the caller's own identity only.
