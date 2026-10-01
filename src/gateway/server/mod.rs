@@ -28,6 +28,7 @@ mod replica_state_tests;
 mod signing_allocation_tests;
 mod stdio_catalogue;
 mod stdio_channel;
+mod stdio_dispatches;
 mod stdio_nonce;
 mod stdio_writer;
 pub(crate) use stdio_nonce::StdioNonce;
@@ -2435,12 +2436,13 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+        let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
         let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.clone()));
-        let mut dispatches: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+        let mut dispatches = stdio_dispatches::StdioDispatches::default();
+        let cancelled = dispatches.cancelled();
         // Admission, not just concurrency: a client that writes faster than the
         // backends answer would otherwise pile one task per line onto the
         // JoinSet. The permit is released when the dispatch task ends.
@@ -2482,6 +2484,16 @@ impl Gateway {
                     stdout_died = true;
                     break;
                 }
+                // Reaped as each ends, so an aborted dispatch is joined at once
+                // and a long session does not accumulate task records.
+                Some(joined) = dispatches.join_next(), if !dispatches.is_empty() => {
+                    if let Err(error) = joined
+                        && !error.is_cancelled()
+                    {
+                        warn!(%error, "stdio: a dispatch task did not finish cleanly");
+                    }
+                    continue;
+                }
                 read = reader.next_line() => match read {
                     Ok(Some(line)) => line,
                     _ => break,
@@ -2494,14 +2506,6 @@ impl Gateway {
             }
 
             debug!(line_len = line.len(), "stdio: received line");
-
-            // Reap what has finished, so a long session does not accumulate
-            // task records and a panicking dispatch is visible before EOF.
-            while let Some(joined) = dispatches.try_join_next() {
-                if let Err(error) = joined {
-                    warn!(%error, "stdio: a dispatch task did not finish cleanly");
-                }
-            }
 
             let request: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
@@ -2526,6 +2530,21 @@ impl Gateway {
             if let Some(reply_id) = stdio_channel::StdioClientChannel::reply_id(&request) {
                 if !channel.resolve(&reply_id, request) {
                     debug!(id = %reply_id, "stdio: reply matched no outstanding request");
+                }
+                continue;
+            }
+
+            // Routed here, never dispatched (MIK-7272.LIFE.1). No frame answers
+            // it; `initialize` runs inline and is never tracked, so it cannot
+            // be cancelled.
+            if request.get("method").and_then(serde_json::Value::as_str)
+                == Some("notifications/cancelled")
+            {
+                if let Some(id) = request
+                    .pointer("/params/requestId")
+                    .and_then(|id| serde_json::from_value(id.clone()).ok())
+                {
+                    dispatches.cancel(&id);
                 }
                 continue;
             }
@@ -2591,6 +2610,9 @@ impl Gateway {
             } else {
                 None
             };
+            let request_id: Option<crate::protocol::RequestId> = request
+                .get("id")
+                .and_then(|id| serde_json::from_value(id.clone()).ok());
             let task = {
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
@@ -2600,6 +2622,8 @@ impl Gateway {
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
                 let channel = Arc::clone(&channel);
                 let writer = writer.clone();
+                let cancelled = cancelled.clone();
+                let answers = request_id.clone();
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
                 async move {
@@ -2624,8 +2648,13 @@ impl Gateway {
                     if let Some(gate) = gate {
                         drop(gate.acquire().await);
                     }
-                    if let Some(response) = response {
-                        send_frame(&writer, response).await;
+                    // Room first, then the cancel check and the enqueue under
+                    // one lock: no frame for the id is queued after its cancel
+                    // was processed, however long the queue was full.
+                    if let Some(response) = response
+                        && let Ok(permit) = writer.reserve().await
+                    {
+                        cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                     }
                 }
             };
@@ -2645,7 +2674,7 @@ impl Gateway {
                 // guaranteed position, and it keeps it by being inline.
                 let admission = Arc::clone(&admission);
                 let closed_probe = writer.clone();
-                dispatches.spawn(async move {
+                dispatches.spawn(request_id, async move {
                     // The wait that used to be here, moved off the reader. It
                     // is unbounded, so stdout can die inside it: admission was
                     // checked against a queue that may no longer exist, and
@@ -2682,9 +2711,16 @@ impl Gateway {
         // and `close` is terminal, so a question raised inside the drain window
         // is refused rather than left waiting out the bridge's own timeout.
         channel.close();
-        if tokio::time::timeout(STDIO_DRAIN_TIMEOUT, async {
+        // One deadline for the drain and the writer join (MIK-7272.LIFE.1):
+        // a client that stops reading stdout blocks the writer, and the two
+        // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. The
+        // teardown after the join is not bounded here.
+        let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
+        if tokio::time::timeout_at(deadline, async {
             while let Some(joined) = dispatches.join_next().await {
-                if let Err(e) = joined {
+                if let Err(e) = joined
+                    && !e.is_cancelled()
+                {
                     warn!("stdio: dispatch task failed during drain: {e}");
                 }
             }
@@ -2712,8 +2748,13 @@ impl Gateway {
         // and returns, which is what flushes the responses the drain produced.
         drop(writer);
         drop(channel);
-        if let Err(error) = writer_task.await {
-            warn!(%error, "stdio: the stdout writer did not finish cleanly");
+        match tokio::time::timeout_at(deadline, &mut writer_task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
+            Err(_) => {
+                writer_task.abort();
+                warn!("stdio: stdout is not being read; unwritten frames are dropped");
+            }
         }
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
