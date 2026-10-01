@@ -269,8 +269,8 @@ impl BackendRegistry {
         if let Some(destinations) = self.destination.get() {
             // Check and stamp under the lock `Backend::publish` takes, so no
             // start publishes between them.
-            let _publishing = backend.replaced_transport_cleanups.lock();
-            if backend.started_unpinned() {
+            let publishing = backend.replaced_transport_cleanups.lock();
+            if backend.started_unpinned(&publishing) {
                 warn!(
                     backend = %backend.name,
                     "Refusing to register a backend that connected before this registry's \
@@ -320,21 +320,28 @@ impl BackendRegistry {
             return Ok(());
         }
         let _stopping = self.stopping.lock();
-        let members: Vec<Arc<Backend>> = self
+        let mut members: Vec<Arc<Backend>> = self
             .backends
             .iter()
             .map(|b| Arc::clone(b.value()))
             .collect();
+        // One global lock order (by address): a backend shared by two
+        // registries paired at once cannot have its lock taken in two orders.
+        members.sort_by_key(|b| Arc::as_ptr(b));
         // Every member's publish lock is held from the check until its stamp
         // lands: a start that publishes first is seen by the check, and one
         // that publishes after finds the stamp and is refused (`publish`).
-        let _publishing: Vec<_> = members
+        let publishing: Vec<_> = members
             .iter()
             .map(|b| b.replaced_transport_cleanups.lock())
             .collect();
         // Only an unstamped backend can qualify, so once the snapshot is
         // recorded (every member stamped) this never refuses again.
-        if let Some(started) = members.iter().find(|b| b.started_unpinned()) {
+        if let Some((started, _)) = members
+            .iter()
+            .zip(&publishing)
+            .find(|(b, cleanups)| b.started_unpinned(cleanups))
+        {
             return Err(crate::Error::ConfigValidation(format!(
                 "backend '{}' connected before the hardened destination policy was set, so \
                  its connection is not pinned; pair the registry with the config before \

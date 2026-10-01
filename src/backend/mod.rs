@@ -223,13 +223,18 @@ impl Backend {
     /// built under the unstamped `Configured` policy (MIK-7700). Such a
     /// transport cannot be re-pinned in place; closing it would itself send
     /// to the unpinned address, so pairing refuses instead.
-    pub(crate) fn started_unpinned(&self) -> bool {
+    ///
+    /// `cleanups` is this backend's cleanup state, locked by the caller: a
+    /// replaced or evicted transport still closing (one a request holds) is
+    /// as live as a pooled one.
+    pub(crate) fn started_unpinned(&self, cleanups: &CleanupState) -> bool {
         self.destination_bound()
             && self.destination.get().is_none()
             && (self
                 .starts_in_flight
                 .load(std::sync::atomic::Ordering::SeqCst)
                 > 0
+                || cleanups.handles.iter().any(|close| !close.is_finished())
                 || self
                     .pool
                     .iter()

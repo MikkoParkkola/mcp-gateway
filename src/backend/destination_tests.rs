@@ -537,3 +537,19 @@ fn a_start_built_before_the_stamp_is_not_published() {
             .is_ok()
     );
 }
+
+// A transport replaced or evicted while a request held it stays open until
+// that request lets go: as live and as unpinned as a pooled one.
+#[tokio::test]
+async fn hardened_pairing_refuses_while_a_replaced_transport_is_closing() {
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = backend_at(http());
+    assert!(registry.register(Arc::clone(&backend)));
+    let closing = tokio::spawn(std::future::pending::<()>());
+    backend
+        .replaced_transport_cleanups
+        .lock()
+        .handles
+        .push(closing);
+    assert!(pair_hardened(registry).is_err());
+}
