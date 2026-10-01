@@ -441,3 +441,6 @@ pub(super) async fn tasks_cancel(
     let owner_text = TaskOwnerText::Http(owner.to_owned());
     route(state, &owner_text).cancel(id, params).await
 }
+
+#[cfg(test)]
+mod scope_tests;

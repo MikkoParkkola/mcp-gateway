@@ -254,6 +254,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ## Why use MCP Gateway?
 
+- **MCP compatibility layer.** Clients and servers on different MCP revisions work together through the gateway: it negotiates the revision with each side separately, from 2024-11-05 to 2026-07-28. See [MCP compatibility](#mcp-compatibility).
 - **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in live run, both paths completed every task, but the meta path used 1.2–16.1% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
 - **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
@@ -262,6 +263,15 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
 - **Dual protocol.** MCP plus an A2A (agent-to-agent) transport adapter, so the same gateway routes tool calls and cross-provider agent messages.
+
+### MCP compatibility
+
+The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 (through the `initialize` handshake). It negotiates the revision with the client and with each backend on its own, so a client and a backend on different revisions still work together:
+
+- **Ordinary calls** work across legacy and 2026 clients and backends. An HTTP or stdio backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak. A 2026-only backend that refuses the `initialize` handshake must be reached over HTTP.
+- **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying (over HTTP it needs a verified caller identity).
+
+Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
 
 ### What MCP Gateway is, and what it is not
 
@@ -387,7 +397,7 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 ### Protocol and transport
 
-- **MCP versions**: 2025-11-25 and earlier through the `initialize` handshake, and 2026-07-28 without one (see [What's new in 4.0](#whats-new-in-40)). The handshake negotiates up to 2025-11-25 only, because 2026-07-28 removed it. The 2026-07-28 revision is served on the stateless `POST /mcp` path, where a client names it per request with the `MCP-Protocol-Version` header; it is on by default and switched off with `server.modern_protocol: false`. On stdio, `server/discover` also lists 2026-07-28 while `server.modern_protocol` is on, and a stdio request that declares its capabilities in its own 2026-style `_meta` gets a 2026 continuation when its backend asks for input mid-call
+- **MCP versions**: 2025-11-25 and earlier through the `initialize` handshake, and 2026-07-28 without one (see [What's new in 4.0](#whats-new-in-40)). The handshake negotiates up to 2025-11-25 only, because 2026-07-28 removed it. The 2026-07-28 revision is served on the stateless `POST /mcp` path, where a client names it per request with the `MCP-Protocol-Version` header; it is on by default and switched off with `server.modern_protocol: false`. On stdio, `server/discover` also lists 2026-07-28 while `server.modern_protocol` is on, and a stdio request that declares its capabilities in its own 2026-style `_meta` gets a 2026 continuation when its backend asks for input mid-call. How mixed client and backend revisions interoperate: [MCP compatibility](#mcp-compatibility)
 - **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), WebSocket (`ws_url`, legacy `initialize` handshake, one shared socket per backend), and A2A (`a2a` feature, on by default)
 - **Client transports**: clients connect via stdio or HTTP (`POST /mcp`); there is no inbound WebSocket listener
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
@@ -523,6 +533,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
+| [MCP compatibility](docs/PROTOCOL_COMPATIBILITY.md) | Client and backend revision pairings: what works, what is translated, what is refused |
 | [Windows limits](CONTRIBUTING.md#windows-test-coverage) | Unix-only behaviors and what the Windows CI job runs |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |

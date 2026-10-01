@@ -88,3 +88,23 @@ over that transcript, so they are paraphrased here until it is.
 | C3 | 2026-09-30 | MIK-7116 parts 3, 5 and 6 come after 4.0, only if the post-release one-week measurement (MIN.KILL) shows they are needed. (Answered through the question tool about 00:08; relayed by the release coordinator; not yet in the extractor's table.) | MIN.3/5/6 leave the 4.0.0 criteria for MIK-7627; MIN.1, MIN.2 (observe mode) and MIN.4 stay. Ledger decision `mik_7116_min_kill_gate`. |
 | C4 | 2026-09-30 | Keyless data-changing stdio calls keep running, as the sub-4-idempotency-wiring Axis 3 design says; keyed calls stay protected. (Answered through the question tool about 00:55; relayed by the release coordinator; not yet in the extractor's table.) | MIK-7272 SUB4.STDIO.OWNER.1 amended: keyed writes execute once, a missing key executes (no refusal), unkeyed legacy repeats, six management branches tested. Ledger row MIK-7272.OWNER.1. |
 | C5 | 2026-09-30 | The other-repository work (hebb, nab, trvl, metacognition, throttla answering server/discover; the other-repository halves of MIK-7211 AC.2-4; the hebb de-fork spike MIK-7219) goes to separate follow-ups; mcp-gateway 4.0 does not wait for it. (Answered through the question tool about 01:12; relayed by the release coordinator; not yet in the extractor's table.) | Ledger decision `portfolio_halves_outside_4_0`; follow-ups MIK-7628 and MIK-7629. |
+
+## Security dispositions under the 2026-10-01 policy (lead-recorded)
+
+These are lead-recorded dispositions, not operator approvals. Policy given by the operator on 2026-10-01: every security issue is fixed in 4.0.0, or carries a written reason recorded here. "4.0.1" is not a reason. Each disposition was reviewed by two independent reviewers (verdict SHIP-WITH-FIXES, fixes folded in).
+
+| # | GitHub | Linear | Disposition | Reason |
+|---|---|---|---|---|
+| R1 | #2554 | MIK-7700 | fix in 4.0 | The triage proposed deferral; the lead overruled it. The crate is published, embedders are supported users, and the doc comment at `src/backend/registry.rs:282-283` makes a security claim that is false. |
+| R2 | #2276 | MIK-7713 | documented limitation in 4.0 | Anyone with write access to the whole audit directory (a compromised gateway service account, a shared volume, a log-shipping agent's credentials, not only full host control) can delete every segment and the `.hwm` together. A log stored only in that directory cannot prove it existed. Mitigation, documented in `docs/UPGRADING-4.0.md`: forward audit records off-host. The off-host anchor stays open in Linear (MIK-7713, v4.0.1). |
+| R3 | #2478 | MIK-7692 | fix in 4.0 (availability) | Suppress a decision record only when it is identical to the previous record for the same task, caller and target in every recorded field, within a documented window. Any change, such as a revoked grant, is recorded at once. Polling stays visible in the task and poll logs. Rule amendment: the "one record per decision per call" rule in `src/gateway/grant_audit.rs` is amended in writing to this. Rejected alternative, record once at finish: a grant can be revoked after the task finishes, and re-checking it is the point of #2461. |
+| R4 | #2516 | MIK-7686 | fix in 4.0 | Fail closed. |
+| R5 | #2159 | MIK-7704 | fix in 4.0, priority High | Refuse a non-https OIDC issuer and a non-https discovered `jwks_uri`; loopback is allowed for both. Regression tests: http issuer refused, http `jwks_uri` from an https issuer refused, loopback allowed, forged-token path refused. |
+| R6a | #2311 | MIK-7709 | deferred | A FAT or exFAT volume is refused: `create_file_private` returns an error before any private file is created there (`src/win_acl.rs:449-456`), and every state store takes a lock sidecar through it (`src/fs_lock.rs:94`). The race needs that volume, so it is not reachable in a supported configuration. |
+| R6b | #2531, #2532 | MIK-7684, MIK-7683 | deferred | Triggered only by the operator's own stdio parent process. The effect is a hang of that process; no data or privilege crosses a boundary. |
+| R6c | #2148 | MIK-7693 | deferred | Only the operator's own stalling-mount configuration. |
+| R6d | #2377 | MIK-7714 | deferred | The operator's own config file; no cross-principal read. |
+| R6e | #2185 | MIK-7715 | deferred | The operator's own two path spellings; nothing goes unrecorded. |
+| R6f | #2186 | MIK-7705 | deferred | Decision row 23 already rules that 4.0 changes no default. |
+
+Not security, because they fail safe: #2578 (MIK-7719) gates 4.0 and is fixed by PR #2582; #2102 (MIK-7716) and #1558 (MIK-7717) move to 4.0.1.
