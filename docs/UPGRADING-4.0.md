@@ -137,6 +137,7 @@ backend" and "fails a capability file" first.**
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 | 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
 | 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result on `/mcp` and `/mcp/{backend}` is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]`; a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
+| 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3222,6 +3223,37 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
 
 **Action:** before adopting `hardened`, set the signing secret, send one fresh nonce per
 `tools/call`, and make legacy clients declare elicitation or move them to 2026-07-28.
+
+## 113. A recovered upstream task writes a settlement record
+
+**Startup:** no notice, applies only with a transparency log
+
+A task-augmented call can be answered by the backend with a task of its own. The gateway settles
+it later, from the worker that follows the upstream task or from the owner's `tasks/get`. That
+settlement now writes its own invocation record, before the result is committed:
+
+- `route: "task_recovery"`, with `server`, `tool` and the gateway `task_id`;
+- `correlation_source: "task_id"`, and `session_id` holds the task id;
+- `request_hash` is the hash of `{"task_id": <id>}`, since the recovering path does not hold the
+  original request; the call's own request hash is on the submission record;
+- `response_hash`, `outcome`, `error_code`, `tenants` and `data_classes` as on a live call. A
+  recovered result a gate refuses settles as a `-32603` failure; its `outcome` keeps the class a
+  live call's record gives that refusal (`denied` for a response-firewall refusal), and
+  `error_code` is the code the task committed;
+- `who` names only the principal the task was admitted under, with no credential kind.
+
+The submission record carries the same `task_id` whenever the backend's task handle was captured.
+Under `FailClosed`, a failed settlement write settles the task `-32005 "audit log unavailable"`
+with no backend content. Under `BestEffort`, it is logged and counted in
+`mcp_audit_settlement_write_failures_total`, and the task settles as before.
+
+**Action:** none unless you consume these records. Join a settlement record to its submission by
+`task_id`. A crash between the record and the commit can leave two settlement records for one
+task; it never leaves delivered content unrecorded. The record is written before the commit, so
+a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
+a recovery that did not land. A live call has the same window: its record is written
+(`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
+(`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
 
 ## Upgrading from 3.5.x: a walkthrough
 

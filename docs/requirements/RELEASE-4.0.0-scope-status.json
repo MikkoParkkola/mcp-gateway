@@ -1077,7 +1077,7 @@
         "scripts/release/test_check_tag_manifest.py",
         "scripts/release/test_workflow_wiring_mutations.py"
       ],
-      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-442, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
+      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-443, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
     },
     {
       "id": "GH1942.HARDEN.1",
@@ -1239,7 +1239,7 @@
         "docs/release/4.0.0-beta.2-notes.md",
         "docs/release/v4.0.0-release-notes-DRAFT.md"
       ],
-      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file and test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
+      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file or test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
     },
     {
       "id": "GH2294.AUDIT.1",
@@ -1302,11 +1302,15 @@
     },
     {
       "id": "MIK-7211.PARENT.7",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. MIK-7215.STATELESS.* rows are MET, and docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:433 counts 32 files, but no standalone inventory names each session-keyed behaviour and its replacement."
+      "evidence": [
+        "docs/design/2026-09-30-session-keyed-inventory.md:52",
+        "docs/design/2026-09-30-session-keyed-inventory.md:132",
+        "docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:273"
+      ],
+      "note": "Met 2026-10-01 by #2467 (merge 598b3650e). The standalone inventory is docs/design/2026-09-30-session-keyed-inventory.md: 28 rows (:52-83), each naming a replacement or stating that none is needed, each with a Built? citation, re-surveyed at e689b7a7c with every file:line re-read at that revision. RFC-0061 points to it as the governing list (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:273). Gaps it found are listed at :132 and held under MIK-7215.CONTROL.5, not this criterion. The criterion asks for the inventory and the names, not for the replacements to be built; unbuilt replacements are marked in the Built? column. Reviewed by one independent seat (SHIP, two small wording fixes applied). The 63 non-test files of the discovery set were not each read in full: files changed since the first survey were, the rest rely on the first survey. Earlier note: Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. MIK-7215.STATELESS.* rows are MET, and docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:433 counts 32 files, but no standalone inventory names each session-keyed behaviour and its replacement."
     },
     {
       "id": "MIK-7217.SEARCH.1",
@@ -1330,11 +1334,16 @@
     },
     {
       "id": "MIK-7217.STDIO.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). CAVEAT on MET baseline rows DISCOVER.1a/1b: the stdio arm calls discover_document(false) unconditionally (src/gateway/server/mod.rs:2946). README states stdio discover lists only the handshake revisions; documentation alone does not close this row."
+      "evidence": [
+        "src/gateway/server/tests/stdio1_discover_versions.rs:68",
+        "src/gateway/server/tests/stdio1_discover_versions.rs:76",
+        "src/gateway/server/mod.rs:2315",
+        "src/gateway/server/mod.rs:2993"
+      ],
+      "note": "Met 2026-10-01 (#2549, squash d09c3d0db). The stdio arm now passes server.modern_protocol, read once at stdio start (src/gateway/server/mod.rs:2315), to discover_document (:2993), so the caveat below is closed. Exact-version tests over run_stdio_on: modern on lists the legacy revisions then 2026-07-28 (src/gateway/server/tests/stdio1_discover_versions.rs:68), modern off lists exactly the legacy revisions (src/gateway/server/tests/stdio1_discover_versions.rs:76). S1 was red on the pre-fix code (CI run 36818921264: the four legacy versions, no 2026-07-28), the only failure in that run. Mutants D1 (the arm passes false) and D2 (passes true) RED on the final head (run 36831018875). Two code-review seats SHIP. CI green on 5617bdd69, Windows included; feature combinations run 36831057212. The README, the release-notes draft and the CHANGELOG highlights no longer state the limitation.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). CAVEAT on MET baseline rows DISCOVER.1a/1b: the stdio arm calls discover_document(false) unconditionally (src/gateway/server/mod.rs:2946). README states stdio discover lists only the handshake revisions; documentation alone does not close this row."
     },
     {
       "id": "MIK-7272.OWNER.1",
@@ -1360,11 +1369,28 @@
     },
     {
       "id": "MIK-7272.OWNER.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
+      "evidence": [
+        "tests/mik_7272_owner2_stdio_tasks.rs:101",
+        "tests/mik_7272_owner2_stdio_tasks.rs:113",
+        "tests/mik_7272_owner2_stdio_tasks.rs:134",
+        "tests/mik_7272_owner2_stdio_tasks.rs:172",
+        "tests/mik_7272_owner2_stdio_tasks.rs:205",
+        "tests/mik_7272_owner2_stdio_tasks.rs:259",
+        "tests/mik_7272_owner2_stdio_tasks.rs:287",
+        "tests/mik_7272_owner2_stdio_tasks_owner.rs:79",
+        "tests/mik_7272_owner2_stdio_tasks_owner.rs:142",
+        "tests/mik_7272_owner2_stdio_tasks_owner.rs:156",
+        "src/gateway/server/tests/owner2_stdio_tasks.rs:150",
+        "src/gateway/server/tests/owner2_stdio_tasks.rs:173",
+        "src/gateway/server/tests/owner2_stdio_tasks.rs:550",
+        "src/gateway/server/stdio_tasks.rs:28",
+        "src/gateway/task_route.rs:36",
+        "src/gateway/task_service/execution/context.rs:205"
+      ],
+      "note": "Met 2026-10-01 (#2538, squash a83d94108). Clause read, VERIFIED, under design D6 rev 5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'the same protected task store reopens or relocates and its typed local operator retrieves the task': stdio keeps its tasks in <tasks.store_dir>/stdio (src/gateway/server/stdio_tasks.rs:28); the local operator creates and reads a task over the spawned binary (tests/mik_7272_owner2_stdio_tasks.rs:101), reads it after a reopen (tests/mik_7272_owner2_stdio_tasks.rs:113) and after the base directory moves, with record names unchanged (tests/mik_7272_owner2_stdio_tasks.rs:134). (2) 'another store ... cannot retrieve': a fresh store answers -32602 no such task (tests/mik_7272_owner2_stdio_tasks.rs:172). (3) 'a same-store HTTP owner cannot retrieve or alias it': HTTP pointed at the stdio store, auth off and with an API key, gets no such task for get, cancel and update, and the task stays completed (tests/mik_7272_owner2_stdio_tasks_owner.rs:79); HTTP owner text cannot name the reserved owner (src/gateway/task_route.rs:36; src/gateway/server/tests/owner2_stdio_tasks.rs:173); an HTTP restart settles an interrupted stdio task but cannot read it (tests/mik_7272_owner2_stdio_tasks_owner.rs:156). The typed owner survives the worker's context rebuild (src/gateway/task_service/execution/context.rs:205; src/gateway/server/tests/owner2_stdio_tasks.rs:150). (4) 'no global lookup and no new instance UUID': records are task-*.json under the stdio directory only, unchanged by relocation (tests/mik_7272_owner2_stdio_tasks.rs:134, :259); the owner is a digest of the reserved principal, not of a path or instance. Lifecycle: a held store degrades honestly (tests/mik_7272_owner2_stdio_tasks.rs:205), an explicitly shared store names the holder (tests/mik_7272_owner2_stdio_tasks.rs:287), interrupted tasks settle and never rerun (tests/mik_7272_owner2_stdio_tasks_owner.rs:142), and EOF drains a running task before the store closes (src/gateway/server/tests/owner2_stdio_tasks.rs:550). CI run 36816285610 and feature combinations run 36817150683 green on head e6bbd0635. Mutants: run 36810957985 (R0, N1-N5, N7-N9, N11-N13 RED) and run 36816554139 (N10 RED at U9). Two code-review seats (SHIP; SHIP-WITH-FIXES, fixes taken) plus a delta seat on U9. Independent functional gate (leg b): PASSED, 50/50 public assertions over scenarios S1-S10, no product failure. A fresh agent that read no source, tests, design or PR text drove the CI image built from release-line 47f0aade6 (a descendant of a83d94108; docker.yml run 36826609109, artifact image-arm64-47f0aade6342b5e7aa36e5334ea39ac90cf2b620), pinned by manifest digest sha256:cfa1b80ab454970c46e9fb96178f45be36b4fde521ee0e2fa80a09930fe70f77, never by tag. It covered reopen and relocation reads, another store answering -32602, auth-off and auth-on HTTP owners refused on the same store, HTTP and stdio side by side, a held store degrading, a drained slow task, legacy calls, and S10: only task-*.json under tasks/stdio plus the lease, no global index, nothing written to the config directory. The one other UUID in a task record is the stored result's per-call trace_id (gw-<uuid>, minted once per gateway_invoke, src/gateway/trace.rs:5-8, src/gateway/meta_mcp/support.rs:474), identical across reopen and relocation, so no instance UUID is minted. Notes: the first S5/S6 HTTP attempts reached an unrelated host gateway on a busy port and were discarded and re-run on a free port; the brief omitted the Mcp-Name header HTTP tools/call needs, a brief defect. \n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; no test found."
     },
     {
       "id": "MIK-7272.OWNER.3",
@@ -1410,28 +1436,34 @@
       "stage": "met",
       "blocked_on": "none",
       "evidence": [
-        "src/gateway/server/tests/life1_stdio_cancel.rs:238",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:257",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:290",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:304",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:367",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:411",
-        "src/gateway/server/tests/life1_stdio_cancel.rs:431",
-        "src/gateway/server/mod.rs:2543",
-        "src/gateway/server/mod.rs:2491",
-        "src/gateway/server/mod.rs:2659",
-        "src/gateway/server/stdio_dispatches.rs:28",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:241",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:260",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:293",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:307",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:370",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:414",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:434",
+        "src/gateway/server/tests/stdio_reused_id.rs:44",
+        "src/gateway/server/tests/stdio_reused_id.rs:69",
+        "src/gateway/server/tests/stdio_reused_id.rs:96",
+        "src/gateway/server/tests/stdio_reused_id.rs:130",
+        "src/gateway/server/tests/stdio_reused_id.rs:151",
+        "src/gateway/server/mod.rs:2528",
+        "src/gateway/server/mod.rs:2534",
+        "src/gateway/server/mod.rs:2667",
+        "src/gateway/server/stdio_dispatches.rs:39",
+        "src/gateway/server/stdio_dispatches.rs:78",
         "src/gateway/server/stdio_channel.rs:106"
       ],
-      "note": "Met 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
+      "note": "Met again 2026-10-01 (#2557, squash f51c8de54). The defect the reopen names is fixed at source: dispatch marks (cancelled, answered) are keyed by task, not request id (src/gateway/server/stdio_dispatches.rs:23-50); spawn remaps an id whose dispatch has answered or was cancelled (:78-100), so a cancel for a reused id reaches the call it names; join_next clears only the reaped task's marks and keeps a remapped id mapped (:116-140). Five tests drive the window directly (src/gateway/server/tests/stdio_reused_id.rs:44, :69, :96, :130, :151); the first two were red on the pre-fix code for the stated reasons and were the only failures. Mutants A1-A6 RED on the final head (run 36834861091): no remap, answered never marked, every mark cleared on join, remap only on answered, no task id, and the reap's ownership check dropped. Two code-review seats (SHIP; SHIP-WITH-FIXES, its test suggestion taken). CI and feature combinations (run 36834861320) green on 0bd8a1047, Windows included. Clauses (1)-(3) as graded before, now on the current lines: the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2528-2534) and the original rows stand at src/gateway/server/tests/life1_stdio_cancel.rs:241, :260, :293, :307, :370, :414 and :434.\n\n--- prior note follows ---\nReopened 2026-10-01 (GH1625.BOTREVIEW.1 sweep): an automated review on #2519 (https://github.com/MikkoParkkola/mcp-gateway/pull/2519#discussion_r4150902099, codex P1) holds at source. A client may reuse a request id once its answer is out, but the answered dispatch is mapped until the serve loop reaps it: StdioDispatches::spawn keeps the old mapping for the reused id (src/gateway/server/stdio_dispatches.rs:65-75), so a cancel aborts the finished task and the new call runs on, and a late cancel for the answered id also silences the next call that reuses it. A cancel that does not release the call it names fails clause (1), so the grade was wrong. Fix: #2557. Re-graded when it merges.\n\n--- prior note follows ---\nMet 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
     },
     {
       "id": "MIK-7324.COV.3",
       "status": "pending",
       "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "src/gateway/server/support_tests.rs:105"],
-      "note": "Tiers ruled 2026-10-01 and written into docs/release/v4.0.0-critical-path-coverage.md:38-70: startup and bridge are Standard (>=80%); four security-enforcing functions inside them are Critical (>=95%): serve_tls, PeerCertIdentityAcceptor::accept, Gateway::prepare_signing, Gateway::response_firewall. Measured 2026-10-01 (CI run 36802315128 at 141b7ec05, --all-features, lib plus --tests): startup 91.59% (4772/5210), bridge 90.61% (222/245), both clear Standard; only failures: two task-SDK tests (a_real_sdk_job_outlives_the_gateway_*) that need the Python SDK only the task-sdk-recovery job installs; the 2026-09-17 misses (68.78%, 69.44%) were --lib only on a dirty tree. The four Critical functions were below 95% (serve_tls and accept uncovered); closing tests: src/gateway/server/support_tests.rs (mtls_listener), src/gateway/server/tests/stdio_chain_nonce_refusal.rs, src/gateway/server/tests/response_firewall_anomaly.rs. After them (CI probe run 36806330639 on the #2540 head ea1bff9a8, same command): serve_tls 19/19, accept 9/9, prepare_signing 25/25, response_firewall 16/16 lines (100% each, from the lcov DA lines in each body); startup 92.32% (4810/5210), bridge 90.61% (222/245); the only failures were the two task-SDK tests above. Pending: graded with NFR.BUILD.1 C5 and C6 on the final revision. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md)."
+      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "docs/release/v4.0.0-critical-path-coverage.md:177", "docs/release/v4.0.0-critical-functions.tsv:4", "scripts/release/critical_function_coverage.py:70", "src/gateway/server/support_tests.rs:105"],
+      "note": "Five-path ruling 2026-10-01: OAuth, HTTP dispatch, stdio dispatch, tasks and account paths are Standard; every security-enforcing function in all seven paths is Critical, inventoried in docs/release/v4.0.0-critical-functions.tsv (291 Critical rows; one review for omissions plus a helper sweep; 7 added after the measured run) and graded by scripts/release/critical_function_coverage.py. --tests baselines at 8b9929924 (CI run 36824032904): OAuth 79.23% misses 80%; HTTP 94.40%, stdio 88.76%, tasks 94.73%, accounts 95.52%, startup 92.45%, bridge 90.61% clear. Per function: 189 clear 95%, 90 below, 5 Windows-only unmeasured; closing them is test work, no waivers. Earlier: Tiers ruled 2026-10-01 and written into docs/release/v4.0.0-critical-path-coverage.md:38-70: startup and bridge are Standard (>=80%); four security-enforcing functions inside them are Critical (>=95%): serve_tls, PeerCertIdentityAcceptor::accept, Gateway::prepare_signing, Gateway::response_firewall. Measured 2026-10-01 (CI run 36802315128 at 141b7ec05, --all-features, lib plus --tests): startup 91.59% (4772/5210), bridge 90.61% (222/245), both clear Standard; only failures: two task-SDK tests (a_real_sdk_job_outlives_the_gateway_*) that need the Python SDK only the task-sdk-recovery job installs; the 2026-09-17 misses (68.78%, 69.44%) were --lib only on a dirty tree. The four Critical functions were below 95% (serve_tls and accept uncovered); closing tests: src/gateway/server/support_tests.rs (mtls_listener), src/gateway/server/tests/stdio_chain_nonce_refusal.rs, src/gateway/server/tests/response_firewall_anomaly.rs. After them (CI probe run 36806330639 on the #2540 head ea1bff9a8, same command): serve_tls 19/19, accept 9/9, prepare_signing 25/25, response_firewall 16/16 lines (100% each, from the lcov DA lines in each body); startup 92.32% (4810/5210), bridge 90.61% (222/245); the only failures were the two task-SDK tests above. Pending: graded with NFR.BUILD.1 C5 and C6 on the final revision. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md)."
     },
     {
       "id": "MIK-7216.IDEM.1",

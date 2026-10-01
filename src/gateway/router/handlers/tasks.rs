@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, SettledTask};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::router::OwnedRouterAuthorizer;
 use crate::gateway::task_route::{TaskOwnerText, TaskRoute, is_task_dispatchable};
@@ -16,7 +17,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
-use crate::protocol::tasks::TaskOptions;
+use crate::protocol::tasks::{TaskOptions, TaskTransition};
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// Admission principal: verified identity when present, else the session key.
@@ -341,6 +342,20 @@ async fn recover_from_upstream(
             meta_mcp.recover_task_error(&server, &tool, api_key_name.as_deref(), &trace, error)
         }
     };
+    // MIN.1 gap 1: the settlement record, written before the commit and
+    // attributed to the principal the task was admitted under.
+    let settle = {
+        let (meta_mcp, server, tool) = (Arc::clone(&state.meta_mcp), server.clone(), tool.clone());
+        let (task_id, owner) = (task_id.to_owned(), owner.to_owned());
+        move |event: TaskTransition, notes: DispatchNotes| async move {
+            let task = SettledTask {
+                server: &server,
+                tool: &tool,
+                id: &task_id,
+            };
+            meta_mcp.audit_settlement(task, event, &notes, &owner).await
+        }
+    };
     let _ = executor
         .recover_upstream_read(
             task_owner.as_digest(),
@@ -358,6 +373,7 @@ async fn recover_from_upstream(
                     })
             },
             error_policy,
+            settle,
             crate::gateway::meta_mcp::upstream::QUERY_DEADLINE,
         )
         .await;

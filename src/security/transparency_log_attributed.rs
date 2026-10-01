@@ -20,6 +20,20 @@ use crate::security::audit::{AuditEnvelope, InvocationTarget};
 /// so a wide tenant set cannot push a record past the append limit.
 pub(crate) const MAX_RECORDED_TENANTS: usize = 1024;
 
+/// The `route` of a settlement record ([`TransparencyLogger::log_task_settlement`]).
+const TASK_RECOVERY_ROUTE: &str = "task_recovery";
+/// Its `correlation_source`: the `session_id` field holds the gateway task id.
+const TASK_ID_CORRELATION: &str = "task_id";
+
+/// What an invocation entry says about the call, beside the hashes.
+struct Record<'a> {
+    route: &'a str,
+    correlation_source: &'a str,
+    session_id: String,
+    server: &'a str,
+    tool: Option<&'a str>,
+}
+
 /// The invocation fields an `extra` key may not name, whether or not this
 /// call's record carries them.
 const INVOCATION_FIELDS: [&str; 9] = [
@@ -50,6 +64,55 @@ impl TransparencyLogger {
         target: InvocationTarget<'_>,
         request_hash: &str,
         response_hash: Option<&str>,
+        extra: Map<String, Value>,
+    ) -> io::Result<()> {
+        let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
+        let record = Record {
+            route: target.route.as_str(),
+            correlation_source: key.source.as_str(),
+            session_id: fp.unwrap_or_else(|| key.id.into()),
+            server: target.server,
+            tool: target.tool,
+        };
+        self.append_record(record, envelope, request_hash, response_hash, extra)
+    }
+
+    /// MIN.1 gap 1: the settlement record of a recovered upstream task.
+    /// Route `task_recovery`, joined to its submission record by `task_id`,
+    /// which is also its correlation key. Crate-private record strings: the
+    /// public `InvocationRoute` and `CorrelationSource` stay as they are.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::log_invocation_attributed`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn log_task_settlement(
+        &self,
+        task_id: &str,
+        envelope: &AuditEnvelope,
+        server: &str,
+        tool: &str,
+        request_hash: &str,
+        response_hash: Option<&str>,
+        mut extra: Map<String, Value>,
+    ) -> io::Result<()> {
+        extra.insert("task_id".into(), task_id.into());
+        let record = Record {
+            route: TASK_RECOVERY_ROUTE,
+            correlation_source: TASK_ID_CORRELATION,
+            session_id: task_id.into(),
+            server,
+            tool: Some(tool),
+        };
+        self.append_record(record, envelope, request_hash, response_hash, extra)
+    }
+
+    fn append_record(
+        &self,
+        record: Record<'_>,
+        envelope: &AuditEnvelope,
+        request_hash: &str,
+        response_hash: Option<&str>,
         mut extra: Map<String, Value>,
     ) -> io::Result<()> {
         Self::reject_reserved_keys(&extra)?;
@@ -60,19 +123,20 @@ impl TransparencyLogger {
         let mut fields = Map::new();
         // `caller` is kept for one major version as a copy of `who.account`.
         fields.insert("caller".into(), envelope.who.account().into());
-        fields.insert("correlation_source".into(), key.source.as_str().into());
+        fields.insert(
+            "correlation_source".into(),
+            record.correlation_source.into(),
+        );
         fields.insert("request_hash".into(), request_hash.into());
         // A failed call has no response to hash.
         if let Some(response_hash) = response_hash {
             fields.insert("response_hash".into(), response_hash.into());
         }
-        fields.insert("route".into(), target.route.as_str().into());
-        fields.insert("server".into(), target.server.into());
-        let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
-        let session_id: String = fp.unwrap_or_else(|| key.id.into());
-        fields.insert("session_id".into(), session_id.into());
+        fields.insert("route".into(), record.route.into());
+        fields.insert("server".into(), record.server.into());
+        fields.insert("session_id".into(), record.session_id.into());
         fields.insert("timestamp".into(), Utc::now().to_rfc3339().into());
-        if let Some(tool) = target.tool {
+        if let Some(tool) = record.tool {
             fields.insert("tool".into(), tool.into());
         }
         if let Some(name) = extra

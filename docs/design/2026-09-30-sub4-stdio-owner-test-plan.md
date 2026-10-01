@@ -323,7 +323,8 @@ Written 2026-10-01 at `bf5c901e3`. The red commit comes after rev 5's review.
   `tests/task_upstream_recovery/helper.rs:424-440`, copied into the new file's helper module and
   not shared.
 - **Client sequence.**
-  - `initialize` at the modern revision, declaring the Tasks extension.
+  - `initialize` at the modern revision, then every modern request declaring the Tasks
+    extension in its own `_meta`, as HTTP requires.
   - A task-augmented `tools/call`: a `task` member, plus an idempotency key in `_meta`.
   - Then `tasks/get` until the task is terminal.
 
@@ -331,7 +332,7 @@ Written 2026-10-01 at `bf5c901e3`. The red commit comes after rev 5's review.
 
 Red proof: every integration row drives only seams that exist before the fix (the binary, its
 config, and JSON-RPC over pipes), so the red commit compiles and fails on assertions. The
-in-crate rows (U1–U3) name new items (`TaskHost`, `TaskOwnerText`), so they land with the fix.
+in-crate rows (U1–U9) name new items (`TaskHost`, `TaskOwnerText`), so they land with the fix.
 They are green on arrival, and the mutant batch is their proof.
 
 ## Integration rows (`tests/mik_7272_owner2_stdio_tasks.rs`)
@@ -409,3 +410,34 @@ global index are its "no global lookup and no new instance UUID".
   - the structural traceability line.
 - Not taken: the managed-upstream restart row. Stdio installs no upstream adapter (D6 rev 5
   item 4), so the path it would test does not exist on stdio.
+
+# Test plan — I5: MIK-7217.STDIO.1
+
+Design: D7. Written 2026-10-01 at `a83d94108`, after I4 (#2538) made stdio serve the Tasks
+extension it advertises.
+
+## Row under test (verbatim, `RELEASE-4.0.0-scope-update.md:140`)
+
+- **MIK-7217.STDIO.1**: The stdio server/discover answer advertises 2026-07-28 when the modern
+  protocol is on, asserted by an exact-version test (MIK-7217 AC DISCOVER.1 caveat).
+
+## Tests (new file `src/gateway/server/tests/stdio1_discover_versions.rs`)
+
+Driven through `Gateway::run_stdio_on` over in-memory pipes, with `server.modern_protocol` set in
+the config and `tasks.store_dir` under a temp root. Both rows compare the whole
+`supportedVersions` list for equality, never `contains`.
+
+| # | Test | Config | Assertion | Today |
+|---|---|---|---|---|
+| S1 | `stdio_discover_advertises_2026_when_modern_is_on` | `modern_protocol: true` | `supportedVersions` equals `SUPPORTED_VERSIONS` followed by `MODERN_VERSIONS` (the order `discover_document` builds) | RED: stdio hardcodes `discover_document(false)` (`server/mod.rs`, the `server/discover` arm) |
+| S2 | `stdio_discover_hides_2026_when_modern_is_off` | `modern_protocol: false` | `supportedVersions` equals `SUPPORTED_VERSIONS` | green (pin) |
+
+The flag is read once, at stdio start, as D7 decides. A live reload of `server.modern_protocol`
+is not followed on stdio, and no row claims it.
+
+## Mutant batch
+
+| M | Mutation | Must kill |
+|---|---|---|
+| D1 | the stdio discover arm passes `false` again | S1 |
+| D2 | the stdio discover arm passes `true` | S2 |
