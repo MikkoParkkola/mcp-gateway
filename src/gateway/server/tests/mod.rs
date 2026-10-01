@@ -61,3 +61,6 @@ mod owner2_stdio_tasks;
 
 // #2480: a stdio idempotent replay writes its invocation record.
 mod stdio_replay_audit;
+
+#[cfg(feature = "firewall")]
+mod hardened_destination;

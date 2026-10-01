@@ -73,7 +73,7 @@ use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
-use crate::security::{ToolPolicy, posture};
+use crate::security::{ToolPolicy, posture, ssrf::DestinationPolicy};
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
@@ -596,6 +596,7 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
+        backends.enforce_destination(DestinationPolicy::for_posture(config.security.posture));
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding
@@ -1689,20 +1690,17 @@ impl Gateway {
         // (audience, token-exchange endpoint/scope) arrive via the
         // `BackendDescriptor` at `propagate()` time, not from this instance.
         //
-        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING: the caller
-        // attaches its own backend credential and the direct route forwards it
-        // verbatim. So a Passthrough-only deployment must NOT install a minting
-        // strategy. Doing so would let the meta route (`gateway_invoke`), whose
-        // resolver keys off the globally-installed strategy rather than the
-        // per-backend `strategy` enum, mint a credential for a Passthrough
-        // backend and violate INV-4 (GPT review F1). With the strategy unset the
-        // meta route fails closed (required) or falls back to static creds
-        // (optional) instead of minting. Mixed deployments (>=1 minting backend
-        // plus >=1 passthrough backend) still install the strategy for the
-        // minting backend; honoring passthrough on the meta route for that
-        // residual case needs the per-backend strategy check in the (currently
-        // locked) resolver, tracked on MIK-6746. Interim contract: passthrough is
-        // direct-route-only.
+        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING: the caller attaches its own backend
+        // credential and the direct route forwards it verbatim. So a Passthrough-only deployment
+        // must NOT install a minting strategy. Doing so would let the meta route
+        // (`gateway_invoke`), whose resolver keys off the globally-installed strategy rather than
+        // the per-backend `strategy` enum, mint a credential for a Passthrough backend and violate
+        // INV-4 (GPT review F1). With the strategy unset the meta route fails closed (required) or
+        // falls back to static creds (optional) instead of minting. Mixed deployments (>=1 minting
+        // backend plus >=1 passthrough backend) still install the strategy for the minting backend;
+        // honoring passthrough on the meta route for that residual case needs the per-backend
+        // strategy check in the (currently locked) resolver, tracked on MIK-6746. Interim contract:
+        // passthrough is direct-route-only.
         match configured_minting_strategy_kind(&self.config) {
             Some(crate::identity_propagation::PropagationStrategyKind::SignedAssertion) => {
                 use crate::identity_propagation::SignedAssertionStrategy;
