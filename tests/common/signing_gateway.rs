@@ -141,6 +141,9 @@ pub fn child_command(directory: &Path, config_path: &Path) -> Command {
     command
         .env_clear()
         .env("HOME", directory)
+        // Windows resolves home through the Known Folder API, not HOME: the
+        // debug build's override isolates the child's default task store too.
+        .env("MCP_GATEWAY_TEST_HOME_DIR", directory)
         .env("XDG_CONFIG_HOME", directory.join(".config"))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         // Winsock cannot initialise without SystemRoot (os error 10106); unset off Windows.

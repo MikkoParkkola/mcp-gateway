@@ -373,6 +373,7 @@ impl StdioGateway {
         let mut child = command
             .current_dir(root)
             .env("HOME", root)
+            .env("MCP_GATEWAY_TEST_HOME_DIR", root)
             .env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"))
             .arg("--config")
             .arg(config)
@@ -502,6 +503,7 @@ impl HttpGateway {
         let child = command
             .current_dir(root)
             .env("HOME", root)
+            .env("MCP_GATEWAY_TEST_HOME_DIR", root)
             .arg("--config")
             .arg(config)
             .stdin(Stdio::null())
