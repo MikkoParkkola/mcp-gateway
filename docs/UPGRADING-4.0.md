@@ -3358,6 +3358,36 @@ issuer check only logged a warning; it now refuses.
 
 **Action:** use `https://` for every `key_server.oidc` URL, or a loopback host for local testing.
 
+## 117. An unchanged grant decision on a polled finished task is written once per window
+
+**Audit:** fewer `identity_grant_decision` records, only for repeated reads of a finished task
+
+A read of a finished task (`tasks/get`, or a repeat of a task-augmented call) re-checks the
+grants of the calls that produced it (item 105). Each read used to write a decision record, so a
+client polling once a second wrote about 86,400 identical records a day for one task.
+
+- A re-check writes no record when the last record written for the same task, caller and
+  target is identical in every field but its timestamp and is less than 10 minutes old.
+- Any change is written at once: a revoked grant, another reason, another grant id.
+- An unchanged decision is written again once 10 minutes have passed, so polling stays visible.
+- Decisions made while dispatching a call are never suppressed.
+
+**Action:** a SIEM rule that counted one decision record per poll should count decision changes.
+
+## 118. The audit log keeps a cut or interrupted high-water finding
+
+**Startup and verify:** a new `audit_segment_hwm_missing` finding where a tail was lost below `.hwm`
+
+- A restart that finds the newest surviving record below the signed `.hwm` writes
+  `audit_segment_hwm_missing`, whether the active file was torn, cut at a line, emptied or
+  deleted. The replacement open record carries the finding too, so a crash before the marker
+  cannot lose it.
+- A torn-tail repair record (`audit_segment_torn_tail_dropped`) whose dropped line `.hwm` had
+  already counted carries `committed: true` and is a finding in its own right.
+- Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded.
+
+**Action:** none for a healthy log. Investigate a new finding as tail loss or an edit.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
