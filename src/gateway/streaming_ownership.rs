@@ -10,8 +10,9 @@ use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::SessionOwner;
 
 impl NotificationMultiplexer {
-    /// Whether `session_id` names a live session `owner` holds.
-    pub(crate) fn is_owned_by(&self, session_id: &str, owner: &SessionOwner) -> bool {
+    /// Whether `session_id` names a live session `owner` holds. A request that
+    /// acts under it counts as activity, so the reaper leaves it alone.
+    pub(crate) fn touch_if_owned(&self, session_id: &str, owner: &SessionOwner) -> bool {
         self.sessions
             .read()
             .get(session_id)

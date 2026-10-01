@@ -292,3 +292,45 @@ async fn spawn_reaper_on_exits_when_multiplexer_is_dropped() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     // If we reach here without a panic, the reaper exited cleanly.
 }
+
+/// MIK-7215.CONTROL.5, gap G2 (#2567): a hardened resume is activity. A session
+/// resumed after its TTL from creation, and reaped at once, survives.
+#[tokio::test]
+async fn a_hardened_resume_keeps_a_busy_session_from_the_reaper() {
+    let m = NotificationMultiplexer::new(
+        Arc::new(BackendRegistry::new()),
+        StreamingConfig::default(),
+    );
+    let owner = SessionOwner::Credential("alice".to_owned());
+    let (id, receiver) = m.get_or_create_session_for(None, &owner);
+    drop(receiver);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    assert!(m.resume_session_scoped(Some(&id), &owner, None).is_some());
+
+    assert!(
+        m.reap_expired_sessions(Duration::from_millis(50)).is_empty(),
+        "a session resumed just now is not idle"
+    );
+}
+
+/// The direct backend route acts under a presented session without resuming
+/// its stream; that use is activity too.
+#[tokio::test]
+async fn a_direct_backend_request_keeps_a_busy_session_from_the_reaper() {
+    let m = NotificationMultiplexer::new(
+        Arc::new(BackendRegistry::new()),
+        StreamingConfig::default(),
+    );
+    let owner = SessionOwner::Credential("alice".to_owned());
+    let (id, receiver) = m.get_or_create_session_for(None, &owner);
+    drop(receiver);
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    assert!(m.touch_if_owned(&id, &owner));
+
+    assert!(
+        m.reap_expired_sessions(Duration::from_millis(50)).is_empty(),
+        "a session used just now is not idle"
+    );
+}
