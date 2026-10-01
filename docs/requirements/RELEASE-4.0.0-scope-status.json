@@ -1085,7 +1085,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending. The team preset covers context integrity only (src/config/features/security.rs:516-530); the other controls are separate opt-ins. Anomaly blocking is inert until #1756 is fixed (its transition tracker is never fed), so that conjunct cannot be met before #1756. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "note": "Pending, ungraded. Built so far under security.posture (docs/design/2026-09-28-hardened-posture.md, increments 1-5): #1756 anomaly learning and forced blocking, the posture resolver with preset floor, restart-only posture and the multi-user WARN and doctor row, per-caller identity (row 8), the destination policy (4b, #2504), and in increment 5 forced signing of every tools/call on both routes and the elicitation requirement for legacy clients (rows 6, 7, 10, 11; docs/design/2026-10-01-hardened-increment-5-signing-elicitation.md). Still open: 4c security.hardened.private_backends, which waits on operator decision 8; and T14 (the WebSocket whole-connect timeout test), which needs 4c's loopback-allowing pinned policy and moves with it. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md."
     },
     {
       "id": "GH1943.PROV.1",
