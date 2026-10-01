@@ -1101,19 +1101,18 @@ async fn meta_mcp_dispatch(
             if state.meta_mcp.events().is_some() =>
         {
             let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));
-            let sees = |backend: &str| {
-                let session = Some(session_id.as_str());
-                state
-                    .meta_mcp
-                    .admits_backend(backend, invoke_scope, session)
-            };
+            let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
                 principal: events::principal(&owner, state.auth_config.enabled),
                 api_key_name: client
                     .as_ref()
                     .filter(|c| c.authenticated)
                     .map(|c| c.name.clone()),
-                sees_backend: &sees,
+                visible_backends: hub
+                    .scope_backends()
+                    .into_iter()
+                    .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
+                    .collect(),
             };
             events::answer(&hub, id, &method, params.as_ref(), &caller).await
         }

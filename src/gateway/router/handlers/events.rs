@@ -23,7 +23,7 @@ pub(super) async fn answer(
     id: RequestId,
     method: &str,
     params: Option<&Value>,
-    caller: &Caller<'_>,
+    caller: &Caller,
 ) -> JsonRpcResponse {
     let result = match method {
         "events/list" => hub.list(caller, params),

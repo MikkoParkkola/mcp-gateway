@@ -12,21 +12,23 @@ use super::records::Subscription;
 use super::store::{CapHit, Caps};
 use super::types::{EventDescriptor, RpcError, Visibility};
 
-/// Who is calling, as the transport resolved it.
-pub(crate) struct Caller<'a> {
+/// Who is calling, as the transport resolved it. Owned, so it can be held
+/// across the verification POST.
+pub(crate) struct Caller {
     /// The canonical principal; `None` when the call is not authenticated
     /// (or authentication is off).
     pub principal: Option<String>,
     /// The API key the caller presented, if any.
     pub api_key_name: Option<String>,
-    /// The visibility predicate `tools/list` filters with.
-    pub sees_backend: &'a dyn Fn(&str) -> bool,
+    /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
+    /// the ones the caller may see: the predicate `tools/list` filters with.
+    pub visible_backends: std::collections::HashSet<String>,
 }
 
-impl Caller<'_> {
+impl Caller {
     fn sees(&self, descriptor: &EventDescriptor) -> bool {
         match &descriptor.scope {
-            Visibility::Backend(backend) => (self.sees_backend)(backend),
+            Visibility::Backend(backend) => self.visible_backends.contains(backend),
             // Owner-scoped types (task events, I4) are listed to anyone who
             // can own a record; operator types land in 4.0.1.
             Visibility::Owner => self.principal.is_some(),
@@ -36,12 +38,24 @@ impl Caller<'_> {
 }
 
 impl EventsHub {
+    /// The backends the current catalogue scopes event types to; the
+    /// transport resolves which of them a caller may see.
+    pub(crate) fn scope_backends(&self) -> Vec<String> {
+        let mut backends: Vec<String> = self
+            .catalogue()
+            .into_iter()
+            .filter_map(|d| match d.scope {
+                Visibility::Backend(backend) => Some(backend),
+                _ => None,
+            })
+            .collect();
+        backends.sort();
+        backends.dedup();
+        backends
+    }
+
     /// `events/list`: the caller's visible catalogue, one page.
-    pub(crate) fn list(
-        &self,
-        caller: &Caller<'_>,
-        params: Option<&Value>,
-    ) -> Result<Value, RpcError> {
+    pub(crate) fn list(&self, caller: &Caller, params: Option<&Value>) -> Result<Value, RpcError> {
         if params
             .and_then(|p| p.get("cursor"))
             .is_some_and(|c| !c.is_null())
@@ -60,7 +74,7 @@ impl EventsHub {
 
     /// The visible descriptor called `name`; invisible and missing are one
     /// answer, so the catalogue cannot be probed (design §7.4).
-    fn visible(&self, caller: &Caller<'_>, name: &str) -> Result<EventDescriptor, RpcError> {
+    fn visible(&self, caller: &Caller, name: &str) -> Result<EventDescriptor, RpcError> {
         self.catalogue()
             .into_iter()
             .find(|d| d.name == name && caller.sees(d))
@@ -186,7 +200,7 @@ impl EventsHub {
     /// `events/subscribe`, refusals cheapest first (design §6.3).
     pub(crate) async fn subscribe(
         self: &Arc<Self>,
-        caller: &Caller<'_>,
+        caller: &Caller,
         params: Option<&Value>,
     ) -> Result<Value, RpcError> {
         let principal = caller.principal.clone().ok_or_else(RpcError::forbidden)?;
@@ -289,7 +303,7 @@ impl EventsHub {
     /// can address another's row, and an `id` field is never read.
     pub(crate) async fn unsubscribe(
         self: &Arc<Self>,
-        caller: &Caller<'_>,
+        caller: &Caller,
         params: Option<&Value>,
     ) -> Result<Value, RpcError> {
         let principal = caller.principal.clone().ok_or_else(RpcError::forbidden)?;
