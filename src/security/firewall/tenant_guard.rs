@@ -168,6 +168,11 @@ impl TenantGuard {
         tenants.into_iter().collect()
     }
 
+    /// Whether tenant attribution is configured (`arg_keys` set).
+    pub(crate) fn attributes(&self) -> bool {
+        !self.config.arg_keys.is_empty()
+    }
+
     /// MIN.1 gap 2: whether `result` holds a `content[].text` block over the
     /// parse bound, so [`Self::response_tenants`] could not read its tenants.
     pub(crate) fn response_uninspected(&self, result: &Value) -> bool {

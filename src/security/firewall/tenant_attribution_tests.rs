@@ -65,7 +65,7 @@ fn response_tenants_ignores_non_json_text() {
 }
 
 /// T6 (re-pinned, MIN.1 gap 2). A text block over 1 MiB is not parsed, even
-/// when it is valid JSON naming a tenant (the DoS bound holds), and the
+/// when it is valid JSON naming a tenant (the denial-of-service bound holds), and the
 /// result says so: its tenants were not read, which is not the same as none.
 #[test]
 fn response_tenants_skips_text_over_one_mib() {

@@ -111,9 +111,11 @@ guard may refuse. Nothing is refused that was not before.
 - **`attribution` marker (gap 2, lead ruling 2026-10-01):** one value states how
   far the record's attribution reaches. `cached_delivery` means the value was
   delivered past the gates (a cache hit or a replay), so it is attributed from
-  the delivered value. `uninspected` means a `content[].text` block exceeded
-  the 1 MiB parse bound, so its tenants were not read: the record says so even
-  when it names no tenant. `cached_delivery_uninspected` means both. The parse
+  the delivered value. `uninspected` means part of the response was not read
+  for tenants: a `content[].text` block exceeded the 1 MiB parse bound, or the
+  reply was refused at raw receipt for its signature chain (unverified content
+  is not read). The record says so even when it names no tenant; `tenants` is
+  then a lower bound. `cached_delivery_uninspected` means both. The parse
   bound stays, as a DoS limit.
 - **Cap (H3):** one crate-private writer,
   `TransparencyLogger::log_invocation_attributed(.., extra: serde_json::Map)`,

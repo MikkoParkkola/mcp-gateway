@@ -132,7 +132,7 @@ backend" and "fails a capability file" first.**
 | 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record. Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 | 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
-| 108 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (a text block over 1 MiB was not read) or `cached_delivery_uninspected` | A SIEM rule reading `tenants` should treat `uninspected` as "tenants not read", not "no tenants". None for deployments without `arg_keys` |
+| 108 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3095,7 +3095,7 @@ naming the field, when `chain_origins` or `chain_signer` is missing or names a k
 `trusted_keys`, or when this gateway has no `security.signature_chain`.
 ## 108. Invocation records name the tenants a call reached
 
-**Startup:** no notice; applies only with `security.firewall.tenant_guard.arg_keys` set
+**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
 
 With `arg_keys` configured, the guard does not need to be enabled for this. Every transparency-log
 invocation record then names the tenants the call reached, request and response, as sorted
@@ -3107,12 +3107,13 @@ The `attribution` field says how far that list reaches:
 - absent: the response was attributed as the backend returned it, before the gates;
 - `cached_delivery`: the value was served past the gates, from a cache or an idempotent replay,
   so it is attributed from what was delivered, and carries no `data_classes`;
-- `uninspected`: a `content[].text` block was over the 1 MiB parse bound, so its tenants were
-  not read. The record carries this even when `tenants` is empty;
+- `uninspected`: some of the response was not read for tenants, because a `content[].text` block
+  was over the 1 MiB parse bound or the reply was refused for its signature chain before it was
+  read. `tenants` still lists what was read. The record carries this even when `tenants` is empty;
 - `cached_delivery_uninspected`: both.
 
-**Action:** none unless you consume these records. A rule that reads `tenants` should treat
-`uninspected` as "not read", not "no tenant".
+**Action:** none unless you consume these records. Under `uninspected`, treat `tenants` as a
+lower bound, not a complete list.
 
 ## Upgrading from 3.5.x: a walkthrough
 

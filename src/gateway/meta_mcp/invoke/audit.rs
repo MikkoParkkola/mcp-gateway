@@ -80,6 +80,14 @@ pub(super) fn noted_response(meta: &MetaMcp, result: Value) -> Value {
     result
 }
 
+/// MIN.1: this call's response was refused before its tenants could be read
+/// (a signature-chain refusal at raw receipt). Only when attribution is on.
+pub(crate) fn note_uninspected(meta: &MetaMcp) {
+    if meta.attributes_tenants() {
+        note(|notes| notes.uninspected = true);
+    }
+}
+
 /// MIK-7116.MIN.1: note the kernel's data classes, and hand the evaluation on.
 pub(super) fn noted_classes(evaluation: ContextIntegrityEvaluation) -> ContextIntegrityEvaluation {
     let classes = &evaluation.classification.data_classes;
@@ -206,6 +214,20 @@ impl MetaMcp {
         }
         let _ = result;
         BTreeSet::new()
+    }
+
+    /// MIN.1: whether tenant attribution is configured (a firewall with
+    /// `arg_keys`). False without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn attributes_tenants(&self) -> bool {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.attributes_tenants();
+        }
+        false
     }
 
     /// MIN.1: whether `result` holds text the attribution could not read.
