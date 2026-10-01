@@ -18,6 +18,13 @@ event was emitted. Those argument lines are excluded, but only when the
 macro's head line has a non-zero count (the call was reached); every excluded
 line is printed with its head count so the exclusion can be audited.
 
+A call in a macro's arguments on its head line (`debug!(url = %clean(x), ..)`)
+is the reverse case: it shares the head line, so the head's count says the
+macro was reached, not that the call ran. Such a head line is graded as missed
+whatever its count and listed as unverifiable (MIK-7725), so the rule can fail
+spuriously but never pass an unrun call. Compute the value into a local before
+the macro and pass the local.
+
 Exit status: 0 when every Critical row clears the floor, 1 otherwise. A row
 whose function is gone, or that no given report measured, fails.
 """
@@ -66,6 +73,18 @@ _VALUE = r"(?:" + _PATH + r'|""|\'\'|-?\d[\w.]*)'
 PLAIN_FIELD = re.compile(
     r"^(?:[A-Za-z_][\w.]*\s*=\s*)?[%?]?" + _VALUE + r"\s*,$"
 )
+
+
+# A call or a macro: an identifier or path followed by `(` (optionally with a
+# turbofish), or a macro bang. Literals are already blanked.
+CALL = re.compile(r"[A-Za-z_]\w*\s*(?:::<[^>]*>\s*)?\(|!\s*[(\[{]")
+
+
+def head_has_call(code):
+    """True when a tracing macro on this (literal-stripped) line has a call in
+    the arguments that sit on the line itself."""
+    match = TRACING_MACRO.search(code)
+    return bool(match and CALL.search(code[match.end():]))
 
 
 def is_plain_field(code):
@@ -170,9 +189,14 @@ def grade(root, inventory, lcovs):
         if not counts:
             results.append(("UNMEASURED", row, lo, hi, []))
             continue
+        unverifiable = []
+        for n in range(lo, hi + 1):
+            if n in counts and head_has_call(strip_literals(lines[n - 1])):
+                unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
+                counts[n] = 0
         excluded = []
         for head, arguments in macro_argument_lines(lines, lo, hi):
-            if counts.get(head, 0) > 0:
+            if hits[row["path"]].get(head, 0) > 0:
                 for n in arguments:
                     if n in counts and counts[n] == 0:
                         del counts[n]
@@ -181,7 +205,7 @@ def grade(root, inventory, lcovs):
         missed = sorted(n for n, c in counts.items() if c == 0)
         pct = 100.0 * covered / len(counts)
         status = "ok" if pct >= FLOOR else "BELOW"
-        results.append((status, row, lo, hi, missed, covered, len(counts), pct, excluded))
+        results.append((status, row, lo, hi, missed, covered, len(counts), pct, excluded, unverifiable))
     return results
 
 
@@ -197,10 +221,12 @@ def main(argv=None):
         status, row = result[0], result[1]
         where = f"{row['path']}:{row['fn']}#{row['occurrence']}"
         if status in ("ok", "BELOW"):
-            _, _, lo, hi, missed, covered, total, pct, excluded = result
+            _, _, lo, hi, missed, covered, total, pct, excluded, unverifiable = result
             print(f"{status}\t{pct:6.2f}%\t{covered}/{total}\t{where}\tlines {lo}-{hi}\tmissed={missed}")
             for line in excluded:
                 print(f"  excluded tracing argument line {line}")
+            for line in unverifiable:
+                print(f"  unverifiable tracing head line {line}: graded missed")
             failed += status == "BELOW"
         else:
             print(f"{status}\t-\t-\t{where}")
