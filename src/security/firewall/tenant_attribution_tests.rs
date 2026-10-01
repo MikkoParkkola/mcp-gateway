@@ -177,6 +177,8 @@ fn bom_led_json_text_is_read() {
     assert_eq!(g.response_tenants(&result), set(&["cust-9"]));
     assert!(!g.response_uninspected(&result));
     assert!(g.response_uninspected(&text_block("\u{feff}{\"customer_id\":")));
+    let spaced = text_block(" \u{feff} {\"customer_id\":\"cust-9\"}");
+    assert_eq!(g.response_tenants(&spaced), set(&["cust-9"]), "whitespace around a mark");
 }
 
 /// Review (gap 3): a JSON document under a tenant key is also read, and an
@@ -185,7 +187,12 @@ fn bom_led_json_text_is_read() {
 fn json_under_a_tenant_key_is_read() {
     let g = guard(false, 1);
     let keyed = json!({"structuredContent": {"customer_id": "{\"customer_id\":\"cust-7\"}"}});
-    assert!(g.response_tenants(&keyed).contains("cust-7"));
+    // The keyed value is the tenant id as given, and the document it carries
+    // is read too.
+    assert_eq!(
+        g.response_tenants(&keyed),
+        set(&["{\"customer_id\":\"cust-7\"}", "cust-7"])
+    );
     assert!(!g.response_uninspected(&keyed));
     let broken = json!({"structuredContent": {"customer_id": "{"}});
     assert!(g.response_uninspected(&broken));

@@ -217,9 +217,10 @@ impl TenantGuard {
     /// quoted text is decoded when it is exactly one JSON string.
     fn decode_response(&self, text: &str, decoded: usize, scan: &mut ResponseScan) {
         // A byte-order mark is not whitespace to `trim_start`, nor JSON to the
-        // parser: strip it so it cannot hide a document.
-        let text = text.trim_start_matches('\u{feff}');
-        let opens = text.trim_start().as_bytes().first().copied();
+        // parser: strip marks and whitespace in any order so neither hides a
+        // document.
+        let text = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+        let opens = text.as_bytes().first().copied();
         let document = matches!(opens, Some(b'{' | b'['));
         let quoted = opens == Some(b'"');
         if !document && !quoted {
