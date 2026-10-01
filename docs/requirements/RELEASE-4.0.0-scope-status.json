@@ -1303,8 +1303,8 @@
       "status": "pending",
       "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. The breaker half is tested (src/backend/tests.rs:1179, :1202, :1458, :1482); no test asserts gateway_search visibility of a modern-era backend. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
+      "evidence": ["tests/mik_7217_search_modern_visible.rs:247"],
+      "note": "Test added: a_2026_speaking_backend_is_visible_to_gateway_search_and_leaves_the_breaker_closed; graded after CI and mutant proof. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. The breaker half is tested (src/backend/tests.rs:1179, :1202, :1458, :1482); no test asserts gateway_search visibility of a modern-era backend. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
     },
     {
       "id": "MIK-7217.CLAIMS.1",
