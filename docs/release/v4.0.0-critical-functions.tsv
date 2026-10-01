@@ -61,7 +61,6 @@ src/gateway/router/authorization.rs	of_client	1	standard	borderline	CallerStandi
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
 src/gateway/router/backend_handlers.rs	backend_handler	1	critical	d	backend_handler	Refuses the direct route with 503 while the audit log is down (D1-f).
 src/gateway/router/backend_handlers.rs	backend_handler_inner	1	critical	a,b,c,d	backend_handler_inner	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
-src/gateway/router/backend_handlers.rs	costs_handler	1	critical	a	costs_handler	/api/costs answers 403 unless the client is admin.
 src/gateway/router/backend_handlers.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
 src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
@@ -72,6 +71,7 @@ src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard
 src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
 src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
 src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borderline	passthrough_identity_key	Session bucket key from the credential digest; a collision would mix callers.
+src/gateway/router/backend_handlers/costs.rs	costs_handler	1	critical	a	costs_handler	/api/costs answers 403 unless the client is admin.
 src/gateway/router/backend_handlers/direct_audit.rs	record	1	critical	borderline	record	Withholds the answer with 503 when the audit write fails under FailClosed.
 src/gateway/router/backend_handlers/direct_list.rs	drain	1	critical	c,d	drain	Drops withheld (blocked) tools and drops a result that arrives beside an error (#1441).
 src/gateway/router/backend_handlers/direct_list.rs	retain_invocable	1	critical	a	retain_invocable	Filters tools/list down to the tools the caller may invoke.
