@@ -60,6 +60,8 @@ fn config(dir: &Path, auth: bool) -> Config {
     config.security.transparency_log.enabled = true;
     config.security.transparency_log.path = dir.join("audit.jsonl").to_string_lossy().into_owned();
     config.control_plane.store_dir = Some(store_dir(dir).to_string_lossy().into_owned());
+    // The task store under the test's own directory, never the default under $HOME.
+    config.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
     config.security.identity_grants.enabled = true;
     config.security.identity_grants.path = grants_path(dir).to_string_lossy().into_owned();
     config

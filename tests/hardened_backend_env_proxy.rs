@@ -79,7 +79,10 @@ async fn start_probe(posture: &str) -> mcp_gateway::Result<()> {
             "enabled": true,
             "timeout": "2s"
         }},
-        "security": {"posture": posture}
+        // Hardened forces signing, which needs a secret (row 6).
+        "security": {"posture": posture, "message_signing": {
+            "shared_secret": "hardened-signing-secret-0123456789abcdef"
+        }}
     });
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &path,

@@ -51,6 +51,8 @@ async fn stdio_admission_refusal_writes_one_record() {
             session_id: "d3a-stdio",
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
+            tasks: None,
+            modern: false,
         },
         &super::super::StdioTelemetry::default(),
     )

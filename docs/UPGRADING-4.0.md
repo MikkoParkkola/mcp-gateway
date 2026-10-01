@@ -135,8 +135,8 @@ backend" and "fails a capability file" first.**
 | 108 | Reserved: lands with a pending change | None yet |
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
-| 111 | Reserved: lands with #2538 | None yet |
-| 112 | Reserved: lands with a pending change | None yet |
+| 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
+| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result on `/mcp` and `/mcp/{backend}` is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]`; a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 
 
@@ -3153,6 +3153,61 @@ The `attribution` field says how far that list reaches:
 **Action:** none unless you consume these records. Under `uninspected`, treat `tenants` as a
 lower bound, not a complete list.
 
+## 111. A stdio gateway keeps durable tasks in its own store
+
+**Startup:** no notice; refuses to start, only an HTTP gateway whose `tasks.store_dir` is a running stdio gateway's `stdio` directory
+
+A stdio gateway (`serve --stdio`) now serves the tasks extension for the client that spawned it.
+A task-augmented `tools/call` with an idempotency key becomes a durable task, and `tasks/get`,
+`tasks/update` and `tasks/cancel` answer on stdio. Before, stdio answered every such call
+synchronously and `tasks/*` answered `-32601`.
+
+The store is `<tasks.store_dir>/stdio`, its own directory beside the HTTP gateway's
+`tasks.store_dir`, so an HTTP gateway and a stdio gateway on one config never contend for one lease. A
+task survives a restart and a moved base directory, and no HTTP caller can read, cancel or update
+it: the store keys it under the local operator, a principal no HTTP credential can name.
+
+- A second stdio gateway on the same config finds the store held. It serves as before, answers
+  task-augmented calls synchronously, and advertises no tasks extension in `initialize` or
+  `server/discover`.
+- An HTTP gateway whose `tasks.store_dir` is set to another gateway's `stdio` directory fails to
+  start while that gateway holds it. The error names the likely holder.
+- `tasks.recovery_adapters` stays an HTTP feature: stdio settles every interrupted task on start.
+
+**Action:** none for separate stores. Give each gateway its own `tasks.store_dir` if two configs
+point HTTP at a stdio directory. Back up `tasks.store_dir` with every gateway that writes under it
+stopped; the `stdio` subdirectory is inside it.
+
+## 112. Hardened signs every tool call and requires elicitation
+
+**Startup:** refuses to start, only under `security.posture: hardened` and only without a signing secret of at least 32 bytes
+
+Everything here applies only under `security.posture: hardened`; `standard` is unchanged.
+
+- **Signing.** `security.message_signing.enabled` is forced on, whatever the file says, so
+  `security.message_signing.shared_secret` must resolve to at least 32 bytes (an env-only
+  `${VAR}` reference resolves) or the gateway refuses to start. Every successful `tools/call`
+  result, on `/mcp` and on `/mcp/{backend}`, carries the v2 `_signature`. Its nonce is
+  `params._meta["io.mcp-gateway/nonce"]` (`gateway_invoke` keeps `arguments.nonce`; sending both
+  is refused `-32602`). A nonce is admitted once, before dispatch, in one replay store for both
+  routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
+  dispatch, is refused, so send a new one per request. `require_nonce` stays your choice. A
+  task-augmented destructive call's confirmation challenge is delivered unsigned, since its
+  nonce has not been admitted yet. A result that cannot be signed is refused `-32603`.
+- **Elicitation.** A legacy (2025-era) client must declare `elicitation` in `initialize`.
+  Without it, `initialize` is refused with 403 and `-32600 "client must declare elicitation
+  (security.posture=hardened)"` and no session is created. Every other legacy request, and
+  `GET /mcp`, is served only inside a session such an `initialize` opened. The direct route
+  keeps no session, so it refuses every legacy request except a declaring `initialize`, and
+  classifies a request the way `/mcp` does: a modern header over a legacy body is refused.
+- **Destructive calls.** A legacy destructive call that nobody can confirm is refused
+  (`-32001`) instead of proceeding with a warning.
+- **Reload.** A reload that changes the posture is refused with the posture's reason first,
+  since changing it also changes what it forces.
+
+**Action:** before adopting `hardened`, set the signing secret, send one fresh nonce per
+`tools/call`, and make legacy clients declare elicitation or move them to 2026-07-28.
+
 ## 113. A recovered upstream task writes a settlement record
 
 **Startup:** no notice, applies only with a transparency log
@@ -3182,7 +3237,7 @@ task; it never leaves delivered content unrecorded. The record is written before
 a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
 a recovery that did not land. A live call has the same window: its record is written
 (`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
-(`src/gateway/router/handlers.rs:1897`), and stands if that delivery then fails.
+(`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
 
 ## Upgrading from 3.5.x: a walkthrough
 
