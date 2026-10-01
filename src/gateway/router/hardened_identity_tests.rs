@@ -72,8 +72,17 @@ fn request(method: &str, uri: &str, bearer: Option<&str>) -> Request<Body> {
     if let Some(bearer) = bearer {
         builder = builder.header("authorization", format!("Bearer {bearer}"));
     }
+    // A legacy `initialize` that declares elicitation: the one legacy request
+    // row 10 serves without a session, so a refusal here is row 8's.
     let body = if method == "POST" {
-        Body::from(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string())
+        Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"elicitation": {}},
+                "clientInfo": {"name": "hardened-identity-test", "version": "1"}
+            }})
+            .to_string(),
+        )
     } else {
         Body::empty()
     };

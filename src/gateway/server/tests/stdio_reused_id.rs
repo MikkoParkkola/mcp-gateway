@@ -106,7 +106,10 @@ async fn joining_a_predecessor_keeps_its_successors_marks() {
     // Only the first dispatch can finish, so this joins exactly it.
     drop(first);
     let joined = tokio::time::timeout(BOUND, dispatches.join_next()).await;
-    assert!(matches!(joined, Ok(Some(Ok(())))), "the first dispatch joined");
+    assert!(
+        matches!(joined, Ok(Some(Ok(())))),
+        "the first dispatch joined"
+    );
 
     let (alive, dropped) = oneshot::channel::<()>();
     dispatches.spawn(Some(id()), async move {
@@ -159,7 +162,10 @@ async fn joining_a_predecessor_keeps_the_reused_ids_mapping() {
     });
     drop(first);
     let joined = tokio::time::timeout(BOUND, dispatches.join_next()).await;
-    assert!(matches!(joined, Ok(Some(Ok(())))), "the first dispatch joined");
+    assert!(
+        matches!(joined, Ok(Some(Ok(())))),
+        "the first dispatch joined"
+    );
 
     dispatches.cancel(&id());
     let outcome = tokio::time::timeout(BOUND, dropped).await;

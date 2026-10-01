@@ -232,7 +232,7 @@ impl super::MetaMcp {
         {
             let signed = match signing.delivery() {
                 Ok(super::signing::SigningDelivery::Unsigned) => Ok(()),
-                Ok(super::signing::SigningDelivery::GatewayInvoke { nonce }) => {
+                Ok(super::signing::SigningDelivery::Signed { nonce }) => {
                     // Primitive failures count themselves; do not count twice.
                     self.finalize_gateway_invoke_response(&mut response, nonce)
                 }

@@ -34,6 +34,9 @@ async fn start_under(posture: SecurityPosture) -> (crate::Result<()>, usize) {
     let (port, accepted) = counting_listener().await;
     let mut config = Config::default();
     config.security.posture = posture;
+    // Hardened forces signing, which needs a secret (row 6).
+    config.security.message_signing.shared_secret =
+        crate::security::posture::tests::SIGNING_SECRET.to_string();
     config.backends.insert(
         "local".to_string(),
         BackendConfig {
