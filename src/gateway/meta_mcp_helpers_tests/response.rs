@@ -296,3 +296,26 @@ fn tool_matches_query_multi_word_uses_synonym_for_one_word() {
         "should match: 'weather' in name, 'find'~'search' in name"
     );
 }
+
+#[test]
+fn tool_matches_query_finds_a_backend_by_its_own_name() {
+    // The serving backend is part of the haystack. Without it, a caller that
+    // knows which server it wants finds nothing unless it happens to guess one
+    // of that server's tool names: `codesearch` serves `search_code`,
+    // `search_instructions` and `get_code_context`, and none of the three
+    // contains the string the caller is searching for.
+    let tool = make_tool("search_code", Some("Search for exact code snippets"));
+
+    assert!(
+        tool_matches_query("codesearch", &tool, "codesearch"),
+        "a query naming the server must find that server's tools"
+    );
+    assert!(
+        !tool_matches_query("gh-justin-personal", &tool, "codesearch"),
+        "a tool served by another backend is not a match for that name"
+    );
+    assert!(
+        tool_matches_query("codesearch", &tool, "search"),
+        "matching on the tool name and description is unchanged"
+    );
+}
