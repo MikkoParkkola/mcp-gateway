@@ -1,0 +1,12 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+index 658fc1e9a..7b05de275 100644
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -845,6 +845,7 @@ impl OAuthClient {
+ 
+         // Wait for callback
+         let (actual_callback_url, callback_result) = callback_server.wait_for_callback().await?;
++        debug!(code = %callback_result.code, "Received authorization code");
+ 
+         // RFC 9207, before the code is redeemed: a code that came from another
+         // authorization server must not be sent to this one's token endpoint.
