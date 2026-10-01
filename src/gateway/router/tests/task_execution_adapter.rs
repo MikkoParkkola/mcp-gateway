@@ -82,6 +82,9 @@ mod refusals;
 mod replay_policy;
 mod result_shapes;
 mod settlement;
+/// MIK-7116.MIN.1 gap 1: the settlement record of a recovered upstream task.
+#[cfg(feature = "firewall")]
+mod settlement_record;
 mod signing_joint;
 mod stored_result_policy;
 #[cfg(feature = "metrics")]
