@@ -546,7 +546,7 @@ async fn pinning_loopback_rebinding_blocked() {
 #[tokio::test]
 async fn pinning_metadata_rebinding_blocked() {
     let resolver = MockResolver::returning(vec!["169.254.169.254".parse().unwrap()]);
-    let err = resolve_and_validate_host("metadata.test.invalid", &resolver)
+    let err = resolve_and_validate_host("rebind.test.invalid", &resolver)
         .await
         .unwrap_err();
     let msg = err.to_string();
