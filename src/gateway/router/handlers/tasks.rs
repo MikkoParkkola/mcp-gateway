@@ -140,6 +140,11 @@ pub(super) fn task_intent_for_call(
         poll_interval_ms: (tasks.tasks.poll_interval_ms > 0)
             .then_some(tasks.tasks.poll_interval_ms),
     };
+    let caller_key = super::super::identity::caller_key(
+        req.grant_subject.as_ref(),
+        req.cert_identity,
+        req.client,
+    );
     Ok(Some(TaskIntent {
         executor: Arc::clone(&state.task_executor),
         owned: OwnedCallerContext::new(
@@ -165,7 +170,8 @@ pub(super) fn task_intent_for_call(
                 .map(str::to_owned),
             req.protocol_revision.map(str::to_owned),
             req.retry.attestation.clone(),
-        ),
+        )
+        .with_caller_key(Some(caller_key)),
         // One builder, shared with the confirmation gate's read-only committed
         // lookup, and the SAME owner string the read arms use. Two renderings
         // of one caller is how an accepted retry's replay misses the task it
@@ -219,6 +225,11 @@ fn with_policy_caller<R>(
     );
     let borrowed = router_authorizer.borrow(state);
     let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
+    let caller_key = super::super::identity::caller_key(
+        caller.grant_subject.as_ref(),
+        caller.cert_identity,
+        caller.client,
+    );
     let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         is_modern: true,
         // This context checks authorization only; it never accesses a cache.
@@ -234,7 +245,7 @@ fn with_policy_caller<R>(
         agent_declared: None,
         grant_subject: caller.grant_subject.clone(),
         stdio_nonce: None,
-        caller_key: None,
+        caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
         verified_identity: caller.verified_identity,
         is_admin: caller.is_admin,
         input_capabilities: caller.input_capabilities,
@@ -430,6 +441,12 @@ fn update_caller(
         None,
         RetryFields::from_params(params).attestation,
     )
+    // The resuming request's own key, as everything else here (G4).
+    .with_caller_key(Some(super::super::identity::caller_key(
+        caller.grant_subject.as_ref(),
+        caller.cert_identity,
+        caller.client,
+    )))
 }
 
 pub(super) async fn tasks_cancel(
