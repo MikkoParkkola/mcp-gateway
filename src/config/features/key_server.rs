@@ -176,7 +176,7 @@ impl KeyServerConfig {
             }
             // MIK-7704: discovery and keys come from these URLs; over cleartext
             // anyone on the path can swap the keys and mint accepted tokens.
-            if crate::key_server::oidc::issuer_is_cleartext(&provider.issuer) {
+            if crate::key_server::oidc::is_cleartext_url(&provider.issuer) {
                 return Err(Error::ConfigValidation(format!(
                     "key_server.oidc[{idx}] issuer '{}' is non-HTTPS and off this machine; \
                      use https://, or http:// only to a loopback host",
@@ -190,7 +190,7 @@ impl KeyServerConfig {
                 // The URL is not echoed: an operator-written one may carry a query.
                 if url
                     .as_deref()
-                    .is_some_and(|u| !crate::key_server::oidc::is_secure_fetch_url(u))
+                    .is_some_and(crate::key_server::oidc::is_cleartext_url)
                 {
                     return Err(Error::ConfigValidation(format!(
                         "key_server.oidc[{idx}].{field} is non-HTTPS and off this machine; \

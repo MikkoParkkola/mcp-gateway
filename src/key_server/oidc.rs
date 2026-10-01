@@ -481,7 +481,7 @@ impl OidcVerifier {
 
         // Refused here as well as at load: a verifier built without config
         // validation must not trust keys fetched over cleartext.
-        if issuer_is_cleartext(&provider.issuer) {
+        if is_cleartext_url(&provider.issuer) {
             return Err(OidcError::InsecureIssuer(provider.issuer.clone()));
         }
 
@@ -734,15 +734,16 @@ fn is_loopback_http_url(url: &str) -> bool {
 
 /// A URL the gateway may fetch OIDC material from: `https://`, or `http://`
 /// to a loopback host (the carve-out `allow_cleartext_credentials` makes).
-pub(crate) fn is_secure_fetch_url(url: &str) -> bool {
+fn is_secure_fetch_url(url: &str) -> bool {
     crate::gateway::auth::is_https_url(url) || is_loopback_http_url(url)
 }
 
-/// An issuer that is a URL but not a secure one. An issuer that is not a URL
+/// A value that is a URL but not a secure one. An issuer that is not a URL
 /// at all (the gateway's own `mcp-gateway` assertions) is never fetched; only
-/// its explicit `jwks_uri` is, and that is checked on its own.
-pub(crate) fn issuer_is_cleartext(issuer: &str) -> bool {
-    url::Url::parse(issuer).is_ok() && !is_secure_fetch_url(issuer)
+/// its explicit `jwks_uri` is, and that is checked on its own. A malformed
+/// fetch URL is left to `client_for`, which refuses it at fetch time.
+pub(crate) fn is_cleartext_url(value: &str) -> bool {
+    url::Url::parse(value).is_ok() && !is_secure_fetch_url(value)
 }
 
 /// Validate a fetched OIDC discovery document and extract a trusted `jwks_uri`.
