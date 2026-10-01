@@ -23,8 +23,6 @@ unrecognised config key, a config file other users can read (Unix only), an unre
 (except `server.metrics_token`, which warns and keeps `/metrics` closed, and a personal-account `client_secret_ref`, which is read only when a token is requested) or, with auth on, cleartext
 HTTP on a network bind. The Helm chart now installs and serves with its defaults. What is still open for 4.0.0 is under *Known gaps* in the beta.2 notes.
 
-Evidence for each highlight, file and test: `src/config/mod.rs` and `tests/mik_7214_acs.rs` (MCP 2026-07-28); `src/gateway/router/authorization.rs` and `tests/a0_per_caller_cache.rs` (per-caller access); `src/control_plane/role_mapping.rs` and `src/gateway/router/sso_admin_tests.rs` (SSO admins); `tests/d1_audit_required.rs` (audit); `src/config/features/api_key.rs` and `tests/e4_hash_key_cli.rs` (keys); `tests/c1_unrecognised_config_keys.rs` and `src/gateway/server/cleartext_tests.rs` (refusing to start); `deploy/helm/mcp-gateway/values.yaml` (Helm chart).
-
 ### Added
 
 - **The task store and the personal-account store run on Windows.** Directories and files are
