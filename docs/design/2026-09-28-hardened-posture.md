@@ -25,9 +25,12 @@ line listing the five forced controls and their effective values. When `hardened
 1. **Preset floor.** `monitor_only`/`local_developer`/`audit_only` become `team_shared`;
    `team_shared`/`enterprise_strict` are kept; `non_bypassable=true`.
 2. **Signing.** `message_signing.enabled` is forced; no secret refuses start. Every successful
-   `tools/call` result on both routes is signed with the v2 MAC (`sign_json_rpc_response_at`);
-   its nonce comes from `params._meta["io.mcp-gateway/nonce"]` and is checked before dispatch,
-   like `gateway_invoke`'s (`meta_mcp/signing.rs:48-60`). `require_nonce` stays operator choice.
+   `tools/call` result on both routes whose nonce was admitted is signed with the v2 MAC
+   (`sign_json_rpc_response_at`); its nonce comes from `params._meta["io.mcp-gateway/nonce"]` and
+   is checked before dispatch, like `gateway_invoke`'s (`meta_mcp/signing.rs:48-60`);
+   an answer given before admission (the task-augmented gate's challenge or refusal and, on the
+   direct route, a tool-policy or undeclared-key refusal) is delivered unsigned and leaves the
+   nonce unspent (increment 5, row 7). `require_nonce` stays operator choice.
 3. **Anomaly blocking.** `firewall.enabled` and `anomaly_detection` are forced; the block
    threshold is 1.0 unless set within `[0.9, 1.0]`. At 1.0 only a transition never seen after a
    warmed predecessor blocks; at 0.95 all 20 distinct successors of a diverse predecessor would.
