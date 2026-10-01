@@ -96,9 +96,10 @@ impl CallbackServer {
 }
 
 /// The configured host as a loopback IP literal, if it is one (brackets
-/// allowed). Such a host is bound exactly as configured, so the address the
-/// redirect URI names is the address that answers (#2578); anything else
-/// keeps the IPv4 loopback bind, and the callback never listens beyond it.
+/// allowed). Such a host is bound and named exactly as configured, so the
+/// address the redirect URI names is the address that answers (#2578).
+/// Anything else keeps today's behaviour: bound on 127.0.0.1, named
+/// `localhost`, and the callback never listens beyond loopback.
 fn loopback_literal(host: &str, dual_bind: bool) -> Option<IpAddr> {
     let ip = host
         .trim_start_matches('[')
@@ -110,21 +111,21 @@ fn loopback_literal(host: &str, dual_bind: bool) -> Option<IpAddr> {
         warn!(
             event = "oauth.callback_server.host_not_loopback",
             host,
-            "callback_host is neither localhost nor a loopback IP: the redirect URI names it, \
-             but the callback only listens on 127.0.0.1, so it must resolve there"
+            "callback_host is neither localhost nor a loopback IP: the callback listens on \
+             127.0.0.1 and the redirect URI names localhost"
         );
     }
     ip
 }
 
-/// The host as the redirect URI names it (`docs/OAUTH_CONFIG.md`): the
-/// configured host, with an IPv6 literal in brackets as a URI authority
-/// requires.
-fn url_host(host: &str, loopback_ip: Option<IpAddr>) -> String {
+/// The host as the redirect URI names it: a loopback IP literal as
+/// configured, IPv6 in brackets as a URI authority requires; otherwise
+/// `localhost`, where the callback listens.
+fn url_host(loopback_ip: Option<IpAddr>) -> String {
     match loopback_ip {
         Some(IpAddr::V6(v6)) => format!("[{v6}]"),
         Some(IpAddr::V4(v4)) => v4.to_string(),
-        None => host.to_string(),
+        None => "localhost".to_string(),
     }
 }
 
@@ -198,7 +199,7 @@ pub async fn start_callback_server(
 
     let callback_url = format!(
         "http://{}:{actual_port}{callback_path}",
-        url_host(effective_host, loopback_ip)
+        url_host(loopback_ip)
     );
 
     // #143 — structured telemetry: server bind event.
@@ -505,15 +506,15 @@ mod tests {
         served_where_advertised("[::1]", "[::1]").await;
     }
 
-    /// Any other host is named as written but never bound beyond loopback:
-    /// the server still answers on 127.0.0.1 at the advertised port and path.
+    /// Any other host keeps today's behaviour: the redirect URI names
+    /// `localhost`, and the server answers on 127.0.0.1, never beyond loopback.
     #[tokio::test]
-    async fn a_non_loopback_host_is_named_as_written_and_stays_on_loopback() {
+    async fn a_non_loopback_host_keeps_the_localhost_redirect_on_loopback() {
         let server = start_callback_server("s".to_string(), Some("callback.example"), None, None)
             .await
             .unwrap();
         let advertised = reqwest::Url::parse(&server.callback_url).unwrap();
-        assert_eq!(advertised.host_str(), Some("callback.example"));
+        assert_eq!(advertised.host_str(), Some("localhost"));
         let port = advertised.port().unwrap();
         let url = format!("http://127.0.0.1:{port}/oauth/callback?code=c&state=s");
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
