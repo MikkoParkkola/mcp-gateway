@@ -503,6 +503,11 @@ impl Firewall {
         self.tenant_guard.response_tenants(result)
     }
 
+    /// Whether `result` holds text too large for tenant attribution to read.
+    pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
+        self.tenant_guard.response_uninspected(result)
+    }
+
     /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Pushes a
     /// finding into `findings` for a refused or unattributable call and
     /// returns whether the caller must be force-blocked (unattributable —
