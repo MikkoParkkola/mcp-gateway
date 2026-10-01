@@ -1,0 +1,12 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 0c587f17b..dcf5e8832 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -206,7 +206,6 @@ impl TenantGuard {
+                     self.walk_response(item, decoded, scan);
+                 }
+             }
+-            Value::String(text) => self.decode_response(text, decoded, scan),
+             _ => {}
+         }
+     }

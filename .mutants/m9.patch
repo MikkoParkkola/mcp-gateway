@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 0c587f17b..86e2cebd1 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -219,7 +219,7 @@ impl TenantGuard {
+         // A byte-order mark is not whitespace to `trim_start`, nor JSON to the
+         // parser: strip marks and whitespace in any order so neither hides a
+         // document.
+-        let text = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
++        let text = text.trim_start_matches(|c: char| c.is_whitespace());
+         let opens = text.as_bytes().first().copied();
+         let document = matches!(opens, Some(b'{' | b'['));
+         let quoted = opens == Some(b'"');

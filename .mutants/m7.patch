@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 0c587f17b..e11a9e60c 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -221,7 +221,7 @@ impl TenantGuard {
+         // document.
+         let text = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+         let opens = text.as_bytes().first().copied();
+-        let document = matches!(opens, Some(b'{' | b'['));
++        let document = matches!(opens, Some(b'{'));
+         let quoted = opens == Some(b'"');
+         if !document && !quoted {
+             return;

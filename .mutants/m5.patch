@@ -1,0 +1,12 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 0c587f17b..fd92054a2 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -229,7 +229,6 @@ impl TenantGuard {
+         // Past the parse bound or the decode bound: unread, without parsing,
+         // so both bounds also cap the work.
+         if text.len() > MAX_PARSED_TEXT_BYTES || decoded > MAX_DECODE_DEPTH {
+-            scan.uninspected = true;
+             return;
+         }
+         match serde_json::from_str::<Value>(text) {

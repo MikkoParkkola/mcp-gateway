@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 0c587f17b..64aa9beba 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -234,7 +234,7 @@ impl TenantGuard {
+         }
+         match serde_json::from_str::<Value>(text) {
+             Ok(value) => self.walk_response(&value, decoded + 1, scan),
+-            Err(_) => scan.uninspected |= document,
++            Err(_) => {}
+         }
+     }
+ 

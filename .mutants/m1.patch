@@ -1,0 +1,12 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 0c587f17b..2e4edc41d 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -195,6 +195,7 @@ impl TenantGuard {
+                         && let Some(tenant) = Self::tenant_name(child)
+                     {
+                         scan.tenants.push(tenant);
++                        continue;
+                     }
+                     // A keyed string is the tenant id and may also carry JSON:
+                     // read it too, or report it unread.

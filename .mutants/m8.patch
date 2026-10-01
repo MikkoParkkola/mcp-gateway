@@ -1,0 +1,14 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 0c587f17b..edae6d671 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -173,7 +173,8 @@ impl TenantGuard {
+     /// tenants: a document over the parse bound, one that fails to parse (depth
+     /// limit included), or encoding nested past [`MAX_DECODE_DEPTH`].
+     pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
+-        self.scan_response(result).1
++        let _ = self.scan_response(result).1;
++        false
+     }
+ 
+     /// One walk: the tenants read, and whether anything was left unread.

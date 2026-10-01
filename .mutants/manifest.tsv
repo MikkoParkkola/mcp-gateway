@@ -1,0 +1,11 @@
+head_sha	bd8fcd3fe088d6468f4763735681a6ac3c2aafd8
+# batch 1 for #2593 on the head above (MIN.1 gap 3, fail-closed response scan)
+M1	linux	m1.patch	--lib -- tenant_guard::attribution_tests::json_under_a_tenant_key_is_read
+M2	linux	m2.patch	--lib -- tenant_guard::attribution_tests::bom_led_json_text_is_read
+M3	linux	m3.patch	--lib -- tenant_guard::attribution_tests::three_encoding_layers_are_read_and_four_are_not
+M4	linux	m4.patch	--lib -- tenant_guard::attribution_tests::malformed_json_text_is_uninspected
+M5	linux	m5.patch	--lib -- tenant_guard::attribution_tests::response_tenants_skips_text_over_one_mib
+M6	linux	m6.patch	--lib -- tenant_guard::attribution_tests::json_string_field_is_read
+M7	linux	m7.patch	--lib -- tenant_guard::attribution_tests::deep_nested_json_text_is_uninspected
+M8	linux	m8.patch	--lib -- audit_record_tests::tenants::deep_nested_response_record_says_uninspected
+M9	linux	m9.patch	--lib -- tenant_guard::attribution_tests::bom_led_json_text_is_read
