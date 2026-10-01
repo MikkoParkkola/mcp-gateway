@@ -67,3 +67,161 @@ fn posture_selects_the_policy() {
         DestinationPolicy::Configured
     );
 }
+
+/// Row 13: what each policy denies. `Private` reaches exactly what `Public`
+/// reaches plus loopback, RFC 1918 and unique-local; only an IPv4-mapped
+/// address gets that allowance by its embedded IPv4.
+#[test]
+fn private_policy_denies() {
+    use std::net::IpAddr;
+    // (address, Public denies, Private denies)
+    let table: &[(&str, bool, bool)] = &[
+        ("8.8.8.8", false, false),
+        ("127.0.0.1", true, false),
+        ("10.0.0.1", true, false),
+        ("172.16.0.1", true, false),
+        ("172.31.255.255", true, false),
+        ("172.32.0.1", false, false),
+        ("192.168.1.1", true, false),
+        ("169.254.169.254", true, true),
+        ("169.254.0.1", true, true),
+        ("100.64.0.1", true, true),
+        ("0.0.0.0", true, true),
+        ("::1", true, false),
+        ("fd12:3456::1", true, false),
+        ("fc00::1", true, false),
+        ("fd00:ec2::254", true, true),
+        ("fe80::1", true, true),
+        ("::ffff:10.0.0.1", true, false),
+        ("::ffff:169.254.169.254", true, true),
+        ("::10.0.0.1", true, true),
+        ("::8.8.8.8", false, false),
+        ("64:ff9b::a00:1", true, true),
+        ("2002:a00:1::", true, true),
+        ("2001:0:a00:1::", true, true),
+        ("2606:4700::1111", false, false),
+        ("168.63.129.16", true, true),
+    ];
+    for (text, public, private) in table {
+        let addr: IpAddr = text.parse().unwrap();
+        assert!(
+            !DestinationPolicy::Configured.denies(addr),
+            "Configured denies {text}"
+        );
+        assert_eq!(
+            DestinationPolicy::Public.denies(addr),
+            *public,
+            "Public, {text}"
+        );
+        assert_eq!(
+            DestinationPolicy::Private.denies(addr),
+            *private,
+            "Private, {text}"
+        );
+    }
+    let literal = |text: &str| DestinationPolicy::Private.check_literal(&url(text));
+    assert!(literal("http://10.0.0.1/").is_ok());
+    assert!(literal("http://[fd00:ec2::254]/").is_err());
+    assert!(literal("http://169.254.169.254/").is_err());
+}
+
+/// Row 13: the pinning resolver of a listed backend refuses a name that
+/// resolves to the metadata address, and admits one that resolves to loopback.
+#[tokio::test]
+async fn private_pin_refuses_metadata_names() {
+    use std::net::IpAddr;
+    use std::pin::Pin;
+
+    use reqwest::dns::Resolve as _;
+
+    use crate::security::ssrf::{HostResolver, PinningResolver};
+
+    struct Fixed(IpAddr);
+    impl HostResolver for Fixed {
+        fn lookup(
+            &self,
+            _host: &str,
+        ) -> Pin<Box<dyn Future<Output = crate::Result<Vec<IpAddr>>> + Send + '_>> {
+            let ip = self.0;
+            Box::pin(async move { Ok(vec![ip]) })
+        }
+    }
+    let resolve = |ip: &str| {
+        let resolver = PinningResolver::new(Fixed(ip.parse().unwrap()))
+            .with_policy(DestinationPolicy::Private);
+        resolver.resolve("backend.internal".parse().unwrap())
+    };
+    let named = resolve("fd00:ec2::254")
+        .await
+        .err()
+        .expect("metadata by name")
+        .to_string();
+    // A name's refusal never says what it resolved to: that would answer
+    // internal DNS for the caller (MIK-7633 AC7 keeps it generic).
+    assert!(
+        !named.contains("metadata") && !named.contains("fd00"),
+        "{named}"
+    );
+    assert!(
+        resolve("169.254.169.254").await.is_err(),
+        "link-local by name"
+    );
+    assert!(resolve("127.0.0.1").await.is_ok(), "loopback by name");
+}
+
+/// Row 13: at proxy time a listed backend's loopback URL passes and its
+/// link-local one does not; every other backend keeps the full validation.
+#[test]
+fn listed_private_backend_tool_call_passes_proxy_check() {
+    let check = |policy: DestinationPolicy, text: &str| policy.check_configured_url(text);
+    assert!(check(DestinationPolicy::Private, "http://127.0.0.1:9/mcp").is_ok());
+    assert!(check(DestinationPolicy::Private, "http://10.1.2.3/mcp").is_ok());
+    assert!(check(DestinationPolicy::Private, "http://169.254.169.254/").is_err());
+    assert!(check(DestinationPolicy::Private, "http://[fd00:ec2::254]/").is_err());
+    assert!(check(DestinationPolicy::Public, "http://127.0.0.1:9/mcp").is_err());
+    assert!(check(DestinationPolicy::Configured, "http://127.0.0.1:9/mcp").is_err());
+    // A URL without a host is refused under `Private` too, as the full
+    // validation refuses it.
+    for hostless in ["file:///tmp/example", "localhost:8080/mcp"] {
+        assert!(
+            check(DestinationPolicy::Private, hostless).is_err(),
+            "{hostless}"
+        );
+        assert!(
+            check(DestinationPolicy::Public, hostless).is_err(),
+            "{hostless}"
+        );
+    }
+}
+
+/// MIK-7633 AC7: a refused cloud metadata literal is named as one, under both
+/// hardened policies, rather than as an ordinary private address. Another
+/// private literal keeps the generic text.
+#[test]
+fn metadata_literal_refusal_names_the_metadata_service() {
+    use DestinationPolicy::{Private, Public};
+    for (policy, literal) in [
+        (Public, "http://169.254.169.254/latest"),
+        (Public, "http://[::ffff:169.254.169.254]/"),
+        (Public, "http://[fd00:ec2::254]/"),
+        (Private, "http://169.254.169.254/"),
+        (Private, "http://[fd00:ec2::254]/"),
+    ] {
+        let error = policy
+            .check_literal(&url(literal))
+            .expect_err(literal)
+            .to_string();
+        assert!(
+            error.contains("SSRF blocked") && error.contains("cloud metadata address"),
+            "{policy:?} {literal}: {error}"
+        );
+    }
+    let error = Public
+        .check_literal(&url("http://10.0.0.5/"))
+        .expect_err("a private literal")
+        .to_string();
+    assert!(
+        error.contains("private/reserved address 10.0.0.5") && !error.contains("metadata"),
+        "{error}"
+    );
+}

@@ -88,9 +88,11 @@ fn ac_result_2_an_explicit_result_type_is_honoured() {
 #[test]
 fn ac_cache_3_a_filtered_list_is_never_public() {
     // The ticket's stop-the-line, as a rule the code holds: no `public` from a
-    // scoped assembly, anywhere. `filtered` here means the response depended on
-    // who asked.
-    assert_eq!(CacheScope::for_list(true), CacheScope::Private);
+    // scoped assembly, anywhere. Every assessed method depends on who asked, so
+    // every row of the table is private.
+    for (method, scope) in mcp_gateway::protocol::cacheable::assessed_methods() {
+        assert_eq!(*scope, CacheScope::Private, "{method}");
+    }
 }
 
 #[test]
@@ -108,11 +110,17 @@ fn ac_cache_2_this_gateways_list_is_private() {
 #[test]
 fn ac_cache_3_public_requires_proof_not_a_default() {
     // The burden runs the other way round: `public` says any intermediary may
-    // serve this to a caller the server has never seen. It is available only
-    // where the response provably does not depend on who asked.
-    assert_eq!(CacheScope::for_list(false), CacheScope::Public);
+    // serve this to a caller the server has never seen. The variant's payload is
+    // uninhabited, so the gateway cannot build one. Coercing the constructor to
+    // this exact signature compiles only while the payload is `Infallible`: a
+    // proof type replacing it is a design change that has to edit this line.
+    let public: fn(std::convert::Infallible) -> CacheScope = CacheScope::Public;
+    let _ = public;
     assert_eq!(CacheScope::Private.as_str(), "private");
-    assert_eq!(CacheScope::Public.as_str(), "public");
+    assert_eq!(
+        mcp_gateway::protocol::cacheable::scope_for_method("not/assessed"),
+        CacheScope::Private
+    );
 }
 
 // ===========================================================================
@@ -313,27 +321,43 @@ mod http {
         assert_eq!(body["result"]["cacheScope"], "private", "{body}");
     }
 
+    /// `resources/read` for a gateway-owned guide: the one URI the fixture can
+    /// answer successfully, because the gateway serves it without a backend.
+    async fn post_guide_read(id: i64) -> (StatusCode, Value) {
+        let uri = "gateway://guides/quickstart";
+        let mut body = modern("resources/read", id);
+        body["params"]["uri"] = json!(uri);
+        let mut owned = modern_headers("resources/read");
+        owned.push(("mcp-name", uri.to_string()));
+        let borrowed: Vec<(&str, &str)> = owned.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        post(body, &borrowed).await
+    }
+
     #[tokio::test]
     async fn ac_cache_3_no_response_from_this_gateway_claims_public() {
-        // The stop-the-line, asserted across every cacheable method rather than
-        // the one that was convenient to write.
+        // The stop-the-line, asserted across every cacheable method, each a
+        // SUCCESSFUL response carrying exactly "private". `!= "public"` passed
+        // on errors and on a missing key, which is why it was replaced.
+        let mut answers = Vec::new();
         for (i, method) in [
             "tools/list",
             "prompts/list",
             "resources/list",
-            "resources/read",
             "resources/templates/list",
         ]
         .iter()
         .enumerate()
         {
-            let id = 100 + i64::try_from(i).expect("a five-element index fits");
-            let (_, body) = post_modern(method, id).await;
-            let scope = &body["result"]["cacheScope"];
-            assert_ne!(
-                scope, "public",
-                "{method} must not tell a shared cache it may serve this across \
-                 authorization contexts: {body}"
+            let id = 100 + i64::try_from(i).expect("a four-element index fits");
+            answers.push((*method, post_modern(method, id).await));
+        }
+        answers.push(("resources/read", post_guide_read(104).await));
+        for (method, (status, body)) in answers {
+            assert_eq!(status, StatusCode::OK, "{method}: {body}");
+            assert!(body.get("error").is_none(), "{method} must succeed: {body}");
+            assert_eq!(
+                body["result"]["cacheScope"], "private",
+                "{method} must claim exactly private: {body}"
             );
         }
     }
@@ -452,8 +476,7 @@ mod http {
 // ===========================================================================
 // MIK-7213.CACHE.3 — the decision table itself.
 //
-// The rules above prove `for_list` decides correctly once someone has answered
-// "did this depend on the caller?". The criterion asks for the artifact that
+// The rows above prove the scope is private; the criterion asks for the artifact that
 // answers it per method, and for that artifact to be what the emitting code
 // consults — not a document beside code that decides on its own.
 // ===========================================================================
@@ -563,21 +586,17 @@ fn source(relative: &str) -> String {
 #[test]
 fn ac_cache_3_the_deciding_function_names_the_table() {
     let text = source("src/protocol/cacheable.rs");
-    let signature = "pub const fn for_list(";
-    let doc = text
+    let signature = "pub fn scope_for_method(";
+    let body = text
         .split(signature)
-        .next()
-        .expect("a split always yields a first part");
-    // The contiguous run, not a line count: a neighbour's doc satisfying this
-    // assertion is the failure mode it exists to catch.
-    let block = doc
-        .rsplit("\n\n")
-        .next()
-        .expect("a split always yields a first part");
+        .nth(1)
+        .expect("the deciding function exists");
+    // The body up to the next item, so a neighbour's mention cannot satisfy it.
+    let body = body.split("\n}\n").next().unwrap_or_default();
     assert!(
-        block.contains("scope_for_method"),
-        "the doc above `{signature}` must send a reader to the table that \
-         decides per method, or the table is a document beside the code"
+        body.contains("assessed_methods()"),
+        "`{signature}` must read the table, or the table is a document beside \
+         the code"
     );
 }
 

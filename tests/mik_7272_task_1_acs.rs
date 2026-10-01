@@ -599,7 +599,9 @@ mod http {
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             session_lifecycle: None,
             env: None,
-            meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
+            meta_mcp: Arc::new(
+                MetaMcp::new(Arc::clone(&backends)).with_surfaced_tools(backend.surfaced_tools()),
+            ),
             backends,
             meta_mcp_enabled: true,
             multiplexer,
@@ -1157,6 +1159,8 @@ mod wire {
 
 #[path = "mik_7272_task_1_acs/dispatch.rs"]
 mod dispatch;
+#[path = "mik_7272_task_1_acs/scope.rs"]
+mod scope;
 
 mod ownership {
     use std::sync::Arc;

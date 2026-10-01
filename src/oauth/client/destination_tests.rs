@@ -248,3 +248,77 @@ async fn hardened_oauth_client_refuses_a_literal_redirect() {
         }
     }
 }
+
+/// Row 13 through OAuth: a listed backend's production client (pinned, under
+/// `Private`) reaches a loopback authorization server, and still refuses a
+/// link-local or IPv6 metadata endpoint it is sent to, by advertisement or by a
+/// redirect hop.
+#[tokio::test]
+async fn listed_private_backend_oauth_policy() {
+    let initialize = |advertised: Advertised| async move {
+        let port = serve(&advertised).await;
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+        let mut client = OAuthClient::with_destination(
+            DestinationPolicy::Private,
+            super::http_client(DestinationPolicy::Private).unwrap(),
+            "listed-backend".to_string(),
+            format!("http://localhost:{port}/mcp"),
+            vec![],
+            storage,
+            OAuthClientConfig::default(),
+        );
+        client.initialize().await
+    };
+    initialize(Advertised {
+        authorization_server: "http://localhost:{port}",
+        token: "http://localhost:{port}/token",
+        registration: "http://localhost:{port}/register",
+    })
+    .await
+    .expect("a listed backend reaches its loopback authorization server");
+    for (token, registration, which) in [
+        (
+            "http://169.254.169.254/token",
+            "http://localhost:{port}/register",
+            "link-local token endpoint",
+        ),
+        (
+            "http://localhost:{port}/token",
+            "http://[fd00:ec2::254]/register",
+            "IPv6 metadata registration endpoint",
+        ),
+    ] {
+        let error = initialize(Advertised {
+            authorization_server: REACHABLE,
+            token,
+            registration,
+        })
+        .await
+        .expect_err(which);
+        assert!(
+            error.to_string().contains("SSRF blocked"),
+            "{which}: {error}"
+        );
+    }
+
+    // A redirect hop: to loopback it is followed, to the metadata address not.
+    let client = super::http_client(DestinationPolicy::Private).unwrap();
+    let (target, accepted) = counting_listener().await;
+    let origin = redirecting_listener(format!("http://127.0.0.1:{target}/next")).await;
+    let _ = client
+        .get(format!("http://127.0.0.1:{origin}/start"))
+        .send()
+        .await;
+    assert!(
+        accepted.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "a listed backend follows a loopback hop"
+    );
+    let origin = redirecting_listener("http://[fd00:ec2::254]/next".to_string()).await;
+    let error = client
+        .get(format!("http://127.0.0.1:{origin}/start"))
+        .send()
+        .await
+        .expect_err("the metadata hop is refused");
+    assert!(error.is_redirect(), "{error:?}");
+}

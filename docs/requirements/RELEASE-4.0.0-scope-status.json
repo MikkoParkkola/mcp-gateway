@@ -1085,7 +1085,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending, ungraded. Built so far under security.posture (docs/design/2026-09-28-hardened-posture.md, increments 1-5): #1756 anomaly learning and forced blocking, the posture resolver with preset floor, restart-only posture and the multi-user WARN and doctor row, per-caller identity (row 8), the destination policy (4b, #2504), and in increment 5 forced signing of every tools/call on both routes and the elicitation requirement for legacy clients (rows 6, 7, 10, 11; docs/design/2026-10-01-hardened-increment-5-signing-elicitation.md). Still open: 4c security.hardened.private_backends, which waits on operator decision 8; and T14 (the WebSocket whole-connect timeout test), which needs 4c's loopback-allowing pinned policy and moves with it. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md."
+      "note": "Pending, ungraded. Built so far under security.posture (docs/design/2026-09-28-hardened-posture.md, increments 1-5): #1756 anomaly learning and forced blocking, the posture resolver with preset floor, restart-only posture and the multi-user WARN and doctor row, per-caller identity (row 8), the destination policy (4b, #2504), and in increment 5 forced signing of every tools/call on both routes and the elicitation requirement for legacy clients (rows 6, 7, 10, 11; docs/design/2026-10-01-hardened-increment-5-signing-elicitation.md). Still open: 4c security.hardened.private_backends, approved as operator decision 8 (decision row 26) and built in #2559; and T14 (the WebSocket whole-connect timeout test), which needs 4c's loopback-allowing pinned policy and moves with it. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md."
     },
     {
       "id": "GH1943.PROV.1",
@@ -1282,7 +1282,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only. U5 ANSWERED 2026-10-01: the header contract (docs/design/RFC-0060-dual-generation-mcp.md:199-203) closes it without a prototype, and RFC-0061 Decision 1 (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:110-122) records the outcome, the gateway stays hand-rolled; the RFC-0060 open-questions table now says so. Pending on U1 only: a fresh 7-day window runs on the operator's live gateway from 2026-10-01 13:12 CEST (lead decision, HOLD)."
     },
     {
       "id": "MIK-7211.PARENT.5",
@@ -1294,11 +1294,19 @@
     },
     {
       "id": "MIK-7211.PARENT.6",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL for the gateway: src/protocol/cacheable.rs:23-73 defines CacheScope with a SCOPE_TABLE whose list entries are all Private and a Private default. That is a table, not a type or lint that makes a public scope from session state unrepresentable; the mechanism is not yet named."
+      "evidence": [
+        "src/protocol/cacheable.rs:28",
+        "src/protocol/cacheable.rs:116",
+        "src/protocol/messages.rs:58",
+        "src/protocol/tasks.rs:110",
+        "src/protocol/cacheable.rs:164",
+        "src/protocol/tasks/scope_clamp_tests.rs:30",
+        "src/gateway/webhooks/message_clamp_tests.rs:85"
+      ],
+      "note": "Met 2026-10-01 by #2474 (merge a2359c9ba). Named mechanism, a type plus one delivery clamp: CacheScope::Public carries std::convert::Infallible (src/protocol/cacheable.rs:28), so no public scope can be built in gateway code, and CacheScope::for_list is removed; clamp_delivered_scope (:116) rewrites any cacheScope that is not private to private on every delivered result, through serialize_with on JsonRpcResponse.result (src/protocol/messages.rs:58) and the task snapshot result (src/protocol/tasks.rs:110), SSE message events and batches (src/protocol/cacheable.rs:164), and before the chain link and MAC on the meta, direct and replay routes. A task result stored before 4.0 with public is served private (src/protocol/tasks/scope_clamp_tests.rs:30); the webhook path through the real handler is covered at src/gateway/webhooks/message_clamp_tests.rs:85 (#2471). Red proof: CI on 0da2f9b05 failed in all 21 new tests. Mutants: nine clamp-site mutants, all RED (runs 36840214246 and 36859661047). Reviews: two seats (SHIP-WITH-FIXES, fixes applied; delta SHIP). Lead decision 2026-10-01: a restriction of the public API, not a widening; operator approval not required (kimi-20261001T162242Z-89340). UPGRADING-4.0 item 108. Residuals filed for 4.0.1 as #2561, both outside a schema-cacheable result: a backend error's data, and a task envelope with no string taskId; neither is a response a cache is told to reuse. Earlier note: Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL for the gateway: src/protocol/cacheable.rs:23-73 defines CacheScope with a SCOPE_TABLE whose list entries are all Private and a Private default. That is a table, not a type or lint that makes a public scope from session state unrepresentable; the mechanism is not yet named."
     },
     {
       "id": "MIK-7211.PARENT.7",
@@ -1462,7 +1470,7 @@
       "status": "pending",
       "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "docs/release/v4.0.0-critical-path-coverage.md:177", "docs/release/v4.0.0-critical-functions.tsv:4", "scripts/release/critical_function_coverage.py:70", "src/gateway/server/support_tests.rs:105"],
+      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "docs/release/v4.0.0-critical-path-coverage.md:191", "docs/release/v4.0.0-critical-functions.tsv:4", "scripts/release/critical_function_coverage.py:156", "src/gateway/server/support_tests.rs:105"],
       "note": "Five-path ruling 2026-10-01: OAuth, HTTP dispatch, stdio dispatch, tasks and account paths are Standard; every security-enforcing function in all seven paths is Critical, inventoried in docs/release/v4.0.0-critical-functions.tsv (291 Critical rows; one review for omissions plus a helper sweep; 7 added after the measured run) and graded by scripts/release/critical_function_coverage.py. --tests baselines at 8b9929924 (CI run 36824032904): OAuth 79.23% misses 80%; HTTP 94.40%, stdio 88.76%, tasks 94.73%, accounts 95.52%, startup 92.45%, bridge 90.61% clear. Per function: 189 clear 95%, 90 below, 5 Windows-only unmeasured; closing them is test work, no waivers. Earlier: Tiers ruled 2026-10-01 and written into docs/release/v4.0.0-critical-path-coverage.md:38-70: startup and bridge are Standard (>=80%); four security-enforcing functions inside them are Critical (>=95%): serve_tls, PeerCertIdentityAcceptor::accept, Gateway::prepare_signing, Gateway::response_firewall. Measured 2026-10-01 (CI run 36802315128 at 141b7ec05, --all-features, lib plus --tests): startup 91.59% (4772/5210), bridge 90.61% (222/245), both clear Standard; only failures: two task-SDK tests (a_real_sdk_job_outlives_the_gateway_*) that need the Python SDK only the task-sdk-recovery job installs; the 2026-09-17 misses (68.78%, 69.44%) were --lib only on a dirty tree. The four Critical functions were below 95% (serve_tls and accept uncovered); closing tests: src/gateway/server/support_tests.rs (mtls_listener), src/gateway/server/tests/stdio_chain_nonce_refusal.rs, src/gateway/server/tests/response_firewall_anomaly.rs. After them (CI probe run 36806330639 on the #2540 head ea1bff9a8, same command): serve_tls 19/19, accept 9/9, prepare_signing 25/25, response_firewall 16/16 lines (100% each, from the lcov DA lines in each body); startup 92.32% (4810/5210), bridge 90.61% (222/245); the only failures were the two task-SDK tests above. Pending: graded with NFR.BUILD.1 C5 and C6 on the final revision. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md)."
     },
     {
@@ -1537,6 +1545,174 @@
         "src/backend/era_stale_probe_tests.rs"
       ],
       "note": "MET: without a replacement a re-probe answer is committed and no record is emitted (without_a_restart_the_reprobe_answer_is_committed); a_contradiction_reprobes_and_the_whole_read_moves_with_it and a_reprobe_that_gets_no_answer_returns_the_era_to_assumed are unchanged and green in CI run 36681893146 on b929b2ad9 (Tests, Windows, macOS, clippy, fmt green)."
+    },
+    {
+      "id": "MIK-7630.EVENTS.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.4",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.6",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.7",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.8",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SOURCE.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SOURCE.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SOURCE.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.4",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.6",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.RELIABLE.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.RELIABLE.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.RELIABLE.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.DISCOVER.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
     }
   ],
   "decisions": [
@@ -1678,6 +1854,20 @@
       "evidence": [
         "docs/design/RFC-0061-protocol-2026-07-28-release-scope.md",
         "docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md",
+        "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
+      ]
+    },
+    {
+      "id": "mik_7630_events_scope",
+      "status": "resolved",
+      "resolved": "2026-10-01",
+      "authority": "operator chat approval 2026-10-01, relayed by the release coordinator (operator-decisions row C6), of the scope split the release coordinator proposed; recorded here as a maintainer decision under that delegated authority",
+      "selection": "MIK-7630 ships in 4.0.0 with the ticket's acceptance criteria plus backend MCP notifications and task settlement as event sources, the safety controls (response firewall scan, MIN.1 audit per delivery, visibility and tenant guard, rate limit and budget, SSRF destination policy, provenance), a durable store with dedupe, retry, dead letters and admin replay, and gateway_search discovery: criteria MIK-7630.EVENTS.1-8, SOURCE.1-3, SAFETY.1-6, RELIABLE.1-3, DISCOVER.1. REST capability watch, gateway operational events and scheduler time events go to 4.0.1 on the follow-up ticket.",
+      "rationale": "The ticket's own criteria cover inbound webhooks only; the extended sources reuse taps the gateway already has (SubscriptionRegistry, the task executor) and the safety controls reuse existing machinery, so they belong in the same increment train. The 4.0.1 sources plug into the adapter interface criterion SOURCE.3 delivers, so deferring them causes no rework.",
+      "consequence": "21 pending MIK-7630 criteria join the 4.0.0 tag gate. The 4.0.1 sources carry no 4.0.0 criterion.",
+      "evidence": [
+        "docs/design/2026-10-01-mik-7630-mcp-events.md",
+        "docs/design/2026-10-01-mik-7630-event-sources-4.0.1.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
       ]
     }

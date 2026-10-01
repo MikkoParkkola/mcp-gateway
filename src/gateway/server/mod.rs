@@ -17,6 +17,8 @@ mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+#[cfg(all(test, feature = "firewall"))]
+mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
 #[cfg(test)]
@@ -26,6 +28,7 @@ mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
+mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_dispatches;
@@ -599,7 +602,10 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
-        backends.enforce_destination(DestinationPolicy::for_posture(config.security.posture));
+        backends.enforce_destinations(
+            DestinationPolicy::for_posture(config.security.posture),
+            &config.security.hardened.private_backends,
+        );
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding
@@ -1280,6 +1286,7 @@ impl Gateway {
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
+        start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
                 .server
@@ -1804,6 +1811,9 @@ impl Gateway {
         if let Some(ref firewall) = firewall_arc {
             crate::gateway::session_lifecycle::wire_session_lifecycle(&session_lifecycle, firewall);
         }
+
+        // The per-session stores `meta_mcp` owns are reclaimed the same way.
+        crate::gateway::session_lifecycle::wire_meta_session_cleanup(&session_lifecycle, &meta_mcp);
 
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
@@ -3229,6 +3239,7 @@ impl Gateway {
             verified_identity: None,
             // The one client this process serves, for binding continuations.
             stdio_nonce: Some(StdioNonce::process()),
+            caller_key: None,
             // Same `RequestShape` the `initialize` arm advertises against.
             era: request_shape.era(),
             // The serve loop's own channel: a stdio client reads the same
@@ -3773,12 +3784,11 @@ fn stdio_caller_context<'a>(
         grant_subject: None,
         verified_identity: None,
         stdio_nonce: Some(StdioNonce::process()),
-        // stdio speaks to one process over two pipes and
-        // has no elicitation channel: there is no operator
-        // this transport can reach, so a destructive call
-        // it cannot confirm is refused rather than asked
-        // about. Not "found no session" -- no asker can
-        // exist here at all.
+        caller_key: None,
+        // stdio speaks to one process over two pipes and has no elicitation channel:
+        // there is no operator this transport can reach, so a destructive call it
+        // cannot confirm is refused rather than asked about. Not "found no session"
+        // -- no asker can exist here at all.
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     }
 }

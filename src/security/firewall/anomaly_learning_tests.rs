@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
+use crate::security::posture::SecurityPosture;
 use crate::transition::TransitionTracker;
 
 fn learning_firewall(threshold: f64, block: Option<f64>, rules: Vec<FirewallRule>) -> Firewall {
@@ -78,17 +79,31 @@ fn blocked_call_is_not_learned() {
     assert_eq!(retry.anomaly_score, Some(1.0));
 }
 
-#[test]
-fn anomaly_block_survives_allow_rule() {
-    // A rule may soften an ordinary finding. It may not soften a score at or
-    // above the operator's block threshold: that operator asked for blocks.
-    let allow_all = FirewallRule {
+fn allow_all() -> FirewallRule {
+    FirewallRule {
         tool_match: "*".to_string(),
         action: FirewallAction::Allow,
         reason: Some("allow everything".to_string()),
         scan: Vec::new(),
-    };
-    let fw = learning_firewall(0.7, Some(0.95), vec![allow_all]);
+    }
+}
+
+/// The firewall a `hardened` start builds: its config comes from a hardened
+/// YAML through `Config::load` (block threshold, detection and warm-up all as
+/// the posture leaves them), wired as `gateway/server/mod.rs` wires it.
+fn hardened_firewall(rules: Vec<FirewallRule>) -> Firewall {
+    use crate::security::posture::tests::{firewall_yaml, load};
+    let mut cfg = load(&firewall_yaml("hardened", None)).security.firewall;
+    cfg.rules = rules;
+    Firewall::from_config(cfg, Some(Arc::new(TransitionTracker::new())))
+        .with_posture(SecurityPosture::Hardened)
+}
+
+#[test]
+fn anomaly_block_survives_allow_rule_standard() {
+    // A rule may soften an ordinary finding. It may not soften a score at or
+    // above the operator's block threshold: that operator asked for blocks.
+    let fw = learning_firewall(0.7, Some(0.95), vec![allow_all()]);
     teach(&fw, "caller-1", 25);
     assert!(call(&fw, "caller-1", "tool_a").allowed);
     let verdict = call(&fw, "caller-1", "tool_c");
@@ -97,6 +112,53 @@ fn anomaly_block_survives_allow_rule() {
         "an allow rule must not downgrade an anomaly block"
     );
     assert!(verdict.is_anomaly_block());
+}
+
+/// Design row 4c, hardened half: the block the posture forces at its default
+/// threshold is not softened by an Allow rule either.
+#[test]
+fn anomaly_block_survives_allow_rule_hardened() {
+    let fw = hardened_firewall(vec![allow_all()]);
+    teach(&fw, "caller-1", 25);
+    assert!(call(&fw, "caller-1", "tool_a").allowed);
+    let verdict = call(&fw, "caller-1", "tool_c");
+    assert_eq!(verdict.anomaly_score, Some(1.0), "a->c was never seen");
+    assert!(
+        !verdict.allowed,
+        "an allow rule must not downgrade a hardened anomaly block"
+    );
+    assert!(verdict.is_anomaly_block());
+}
+
+/// Design row 3c: a warmed predecessor with 20 equally likely successors
+/// scores each about 0.95. At the hardened default (1.0) none blocks; a 0.95
+/// default would block every one.
+#[test]
+fn diverse_warm_predecessor_not_blocked_at_default() {
+    let fw = hardened_firewall(Vec::new());
+    let successors: Vec<String> = (0..20).map(|n| format!("tool_s{n}")).collect();
+    // Round 1 warms `srv:tool_a`: its 20 transitions are learned while it has
+    // fewer than the 20 observations scoring needs.
+    for successor in &successors {
+        assert!(call(&fw, "caller-1", "tool_a").allowed, "warm-up");
+        assert!(call(&fw, "caller-1", successor).allowed, "warm-up");
+    }
+    // Round 2: every a->successor is scored, and none blocks.
+    for successor in &successors {
+        assert!(call(&fw, "caller-1", "tool_a").allowed);
+        let verdict = call(&fw, "caller-1", successor);
+        let score = verdict
+            .anomaly_score
+            .unwrap_or_else(|| panic!("a->{successor} must be scored, not warming up"));
+        assert!(
+            (0.95 - 1e-9..1.0).contains(&score),
+            "a->{successor} is one of 20 equally likely successors: {score}"
+        );
+        assert!(
+            verdict.allowed && !verdict.is_anomaly_block(),
+            "a->{successor} (score {score}) blocked at the hardened default"
+        );
+    }
 }
 
 #[test]
