@@ -1,0 +1,6 @@
+head_sha	43290cad1798444701a0110ddaeeb169f57da287
+# batch 1 for #2570 on the head above (OAuth security assertions)
+M1	linux	m1.patch	--lib -- oauth::
+M2	linux	m2.patch	--lib -- oauth::
+M3	linux	m3.patch	--lib -- oauth::
+M4	linux	m4.patch	--lib -- oauth::

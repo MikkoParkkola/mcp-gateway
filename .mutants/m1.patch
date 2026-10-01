@@ -1,0 +1,13 @@
+diff --git a/src/oauth/callback.rs b/src/oauth/callback.rs
+index 11fdc1a8f..dcaf18b29 100644
+--- a/src/oauth/callback.rs
++++ b/src/oauth/callback.rs
+@@ -251,7 +251,7 @@ async fn handle_callback(
+     }
+ 
+     // Validate state
+-    if params.state.as_deref() != Some(&state.expected_state) {
++    if false && params.state.as_deref() != Some(&state.expected_state) {
+         // #143 — structured telemetry: CSRF / state-mismatch event.
+         warn!(
+             event = "oauth.callback.state_mismatch",

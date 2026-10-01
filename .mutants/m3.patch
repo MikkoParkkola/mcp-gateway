@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+index 670edcd21..4cc3afa94 100644
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -860,7 +860,7 @@ impl OAuthClient {
+ 
+         // Exchange code for token
+         let token = self
+-            .exchange_code(&callback_result.code, &actual_callback_url, &code_verifier)
++            .exchange_code(&callback_result.code, &actual_callback_url, &{ let _ = &code_verifier; code_challenge.clone() })
+             .await?;
+ 
+         // Store and cache the token
