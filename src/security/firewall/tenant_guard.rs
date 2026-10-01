@@ -171,9 +171,8 @@ impl TenantGuard {
     /// MIN.1 gap 2: whether `result` holds a `content[].text` block over the
     /// parse bound, so [`Self::response_tenants`] could not read its tenants.
     pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
-        // Red stub (tests first): plumbing in place, never reports a block.
-        let _ = (self, result);
-        false
+        !self.config.arg_keys.is_empty()
+            && Self::texts(result).any(|text| text.len() > MAX_PARSED_TEXT_BYTES)
     }
 
     /// The `content[].text` blocks of a tool result.
