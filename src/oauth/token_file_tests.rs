@@ -153,3 +153,23 @@ fn oauth_token_group_readable_owned_not_loaded() {
         "an owned 0640 token is refused"
     );
 }
+
+/// MIK-7324.COV.3: a token path that cannot be read for a reason other than
+/// its mode (here a path beneath a regular file) reads as no token, logged as
+/// a warning rather than as the once-per-path mode refusal.
+#[test]
+fn an_unreadable_token_path_that_is_not_a_mode_refusal_reads_as_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("not-a-directory");
+    std::fs::write(&file, b"x").unwrap();
+    let path = file.join("token.json");
+
+    let (text, log) = logs(|| super::read(&path, "cov3-not-a-dir"));
+
+    assert!(text.is_none());
+    assert!(
+        log.contains("WARN") && log.contains("Failed to read token file"),
+        "{log}"
+    );
+    assert_eq!(error_lines(&log), 0, "{log}");
+}

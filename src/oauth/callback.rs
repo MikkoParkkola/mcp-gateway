@@ -521,4 +521,82 @@ mod tests {
         let result = server.wait_for_callback().await;
         assert!(result.is_err());
     }
+
+    /// A log capture for the current thread. A process-wide registry keeps
+    /// every callsite's interest open, so an event is never filtered out by an
+    /// interest cached on another thread before the scoped subscriber sees it.
+    fn capture() -> (
+        tracing::subscriber::DefaultGuard,
+        Arc<std::sync::Mutex<Vec<u8>>>,
+    ) {
+        static INTEREST: std::sync::Once = std::sync::Once::new();
+        struct W(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for W {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        INTEREST.call_once(|| {
+            use tracing_subscriber::prelude::*;
+            let _ = tracing::subscriber::set_global_default(
+                tracing_subscriber::Registry::default()
+                    .with(tracing::level_filters::LevelFilter::TRACE),
+            );
+        });
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = Arc::clone(&buffer);
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(move || W(Arc::clone(&writer)))
+            .finish();
+        (tracing::subscriber::set_default(subscriber), buffer)
+    }
+
+    /// MIK-7324.COV.3: the operator's log names a forged state as a possible
+    /// CSRF attempt, and a good callback as a success, each by its event name.
+    #[tokio::test]
+    async fn callback_outcomes_are_logged_by_event_name() {
+        let (guard, buffer) = capture();
+
+        let forged = start_callback_server("expected".to_string(), Some("127.0.0.1"), None, None)
+            .await
+            .unwrap();
+        let url = forged.callback_url.replace("localhost", "127.0.0.1");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (outcome, _) = tokio::join!(
+            forged.wait_for_callback(),
+            client.get(format!("{url}?code=c&state=forged")).send()
+        );
+        assert!(outcome.is_err(), "a forged state yields no code");
+
+        let good = start_callback_server("expected".to_string(), Some("127.0.0.1"), None, None)
+            .await
+            .unwrap();
+        let url = good.callback_url.replace("localhost", "127.0.0.1");
+        let (outcome, _) = tokio::join!(
+            good.wait_for_callback(),
+            client.get(format!("{url}?code=c&state=expected")).send()
+        );
+        assert_eq!(
+            outcome.expect("a matching state yields the code").1.code,
+            "c"
+        );
+
+        drop(guard);
+        let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        for event in [
+            "oauth.callback.received",
+            "oauth.callback.state_mismatch",
+            "oauth.callback.success",
+        ] {
+            assert!(log.contains(event), "{event} missing from:\n{log}");
+        }
+        assert!(log.contains("possible CSRF attempt"), "{log}");
+    }
 }
