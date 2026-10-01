@@ -1,0 +1,13 @@
+diff --git a/src/backend/registry.rs b/src/backend/registry.rs
+index a589a8c17..147cc8d15 100644
+--- a/src/backend/registry.rs
++++ b/src/backend/registry.rs
+@@ -337,7 +337,7 @@ impl BackendRegistry {
+             .collect();
+         // Only an unstamped backend can qualify, so once the snapshot is
+         // recorded (every member stamped) this never refuses again.
+-        if let Some(started) = members.iter().find(|b| b.started_unpinned()) {
++        if let Some(started) = members.iter().find(|b| b.started_unpinned() && false) {
+             return Err(crate::Error::ConfigValidation(format!(
+                 "backend '{}' connected before the hardened destination policy was set, so \
+                  its connection is not pinned; pair the registry with the config before \

@@ -1,0 +1,13 @@
+diff --git a/src/backend/lifecycle.rs b/src/backend/lifecycle.rs
+index 5ab23b2ff..cf81d43f1 100644
+--- a/src/backend/lifecycle.rs
++++ b/src/backend/lifecycle.rs
+@@ -362,7 +362,7 @@ impl Backend {
+         // it marks the backend so that pairing refuses it.
+         let built_under = {
+             let _pairing = self.replaced_transport_cleanups.lock();
+-            if self.destination.get().is_none() {
++            if self.destination.get().is_none() && false {
+                 self.connected_unpinned
+                     .store(true, std::sync::atomic::Ordering::SeqCst);
+             }

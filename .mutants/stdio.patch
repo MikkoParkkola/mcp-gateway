@@ -1,0 +1,14 @@
+diff --git a/src/backend/mod.rs b/src/backend/mod.rs
+index 6cb7315a7..734152316 100644
+--- a/src/backend/mod.rs
++++ b/src/backend/mod.rs
+@@ -227,8 +227,7 @@ impl Backend {
+     /// pinned and cannot be re-pinned in place (closing it would itself send
+     /// to the address), so pairing refuses instead (MIK-7700).
+     pub(crate) fn started_unpinned(&self) -> bool {
+-        self.destination_bound()
+-            && self.destination.get().is_none()
++        self.destination.get().is_none()
+             && self
+                 .connected_unpinned
+                 .load(std::sync::atomic::Ordering::SeqCst)

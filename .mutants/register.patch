@@ -1,0 +1,13 @@
+diff --git a/src/backend/registry.rs b/src/backend/registry.rs
+index a589a8c17..20b94138b 100644
+--- a/src/backend/registry.rs
++++ b/src/backend/registry.rs
+@@ -270,7 +270,7 @@ impl BackendRegistry {
+             // Check and stamp under the lock `Backend::publish` takes, so no
+             // start publishes between them.
+             let _publishing = backend.replaced_transport_cleanups.lock();
+-            if backend.started_unpinned() {
++            if backend.started_unpinned() && false {
+                 warn!(
+                     backend = %backend.name,
+                     "Refusing to register a backend that connected before this registry's \
