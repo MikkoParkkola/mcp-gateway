@@ -296,9 +296,14 @@ async fn write_records(
             continue;
         }
         let (fields, envelope) = (note.fields.clone(), note.envelope());
-        let remaining = deadline.saturating_sub(started.elapsed());
+        // Only a re-check shares its wait with the append; any other record
+        // keeps the log's own bounds unchanged.
+        let cap = note
+            .repeat
+            .as_ref()
+            .map(|_| deadline.saturating_sub(started.elapsed()));
         let written = logger
-            .append_bounded_within(Some(remaining), move |log| {
+            .append_bounded_within(cap, move |log| {
                 log.append_event(fields, &envelope).map(|_| ())
             })
             .await;
