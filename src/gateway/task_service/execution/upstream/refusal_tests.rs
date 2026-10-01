@@ -188,10 +188,7 @@ async fn recovery_target_tells_absent_from_unavailable() {
         "a foreign owner is told the row is absent"
     );
     // Control: the owner reads the captured descriptor.
-    assert_eq!(
-        target(&f.owner_digest, &f.id),
-        Ok("upstream-2".to_owned())
-    );
+    assert_eq!(target(&f.owner_digest, &f.id), Ok("upstream-2".to_owned()));
 
     f.service.shutdown().await.expect("custody is released");
     assert_eq!(
@@ -202,10 +199,7 @@ async fn recovery_target_tells_absent_from_unavailable() {
 }
 
 /// Callbacks that fail the test if recovery reaches the settlement stage.
-async fn recover(
-    f: &Fixture,
-    executor: &TaskExecutor,
-) -> Result<RecoveredRead, RecoveryRefusal> {
+async fn recover(f: &Fixture, executor: &TaskExecutor) -> Result<RecoveredRead, RecoveryRefusal> {
     executor
         .recover_upstream_read(
             &f.owner_digest,
@@ -255,13 +249,12 @@ async fn recovery_issues_no_query_without_a_claiming_adapter() {
         claims: true,
         queries: Arc::clone(&queried),
     })));
-    assert_eq!(
-        recover(&f, &claiming).await,
-        Ok(RecoveredRead::Retained)
-    );
+    assert_eq!(recover(&f, &claiming).await, Ok(RecoveredRead::Retained));
     assert_eq!(queried.load(Ordering::SeqCst), 1);
     assert_eq!(
-        f.executor.recovery_target(&f.owner_digest, &f.id).map(|r| r.handle),
+        f.executor
+            .recovery_target(&f.owner_digest, &f.id)
+            .map(|r| r.handle),
         Ok("upstream-3".to_owned()),
         "a live job keeps its handle and its working row"
     );
@@ -313,7 +306,10 @@ async fn the_descriptor_preflight_refuses_what_it_cannot_measure_or_fit() {
     let small = job(json!({"q": 1}));
 
     assert!(!f.executor.upstream_descriptor_fits("", &f.id, &small));
-    assert!(!f.executor.upstream_descriptor_fits(OWNER, "task-absent", &small));
+    assert!(
+        !f.executor
+            .upstream_descriptor_fits(OWNER, "task-absent", &small)
+    );
     // Control: the owner's row takes a small descriptor.
     assert!(f.executor.upstream_descriptor_fits(OWNER, &f.id, &small));
     let huge = job(json!({"blob": "x".repeat(StoreLimits::default().record_bytes)}));
