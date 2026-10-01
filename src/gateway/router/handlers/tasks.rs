@@ -414,6 +414,20 @@ fn update_caller(
     params: Option<&Value>,
     caller: &RecoveryCaller<'_>,
 ) -> OwnedCallerContext {
+    let resume_key = super::super::identity::caller_key(
+        caller.grant_subject.as_ref(),
+        caller.cert_identity,
+        caller.client,
+    );
+    // A resume is activity: renew the deadline that reclaims this caller's
+    // hint state, as a direct call does, so a task parked past the idle sweep
+    // does not write under a key nothing tracks.
+    if let Some(ref lifecycle) = state.session_lifecycle
+        && !resume_key.is_empty()
+    {
+        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
+        lifecycle.track(resume_key.clone(), now_unix() + IDLE_TTL.as_secs());
+    }
     OwnedCallerContext::new(
         crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),
         OwnedRouterAuthorizer::capture(
@@ -442,11 +456,7 @@ fn update_caller(
         RetryFields::from_params(params).attestation,
     )
     // The resuming request's own key, as everything else here (G4).
-    .with_caller_key(Some(super::super::identity::caller_key(
-        caller.grant_subject.as_ref(),
-        caller.cert_identity,
-        caller.client,
-    )))
+    .with_caller_key(Some(resume_key))
 }
 
 pub(super) async fn tasks_cancel(
