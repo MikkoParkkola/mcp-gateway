@@ -8,6 +8,8 @@ whose body named a defect passed the final sweep unseen (GH1625.BOTREVIEW.1).
 
 import importlib.util
 import pathlib
+import sys
+import traceback
 
 _spec = importlib.util.spec_from_file_location(
     "botreview_sweep",
@@ -43,3 +45,18 @@ def test_reviews_that_cannot_hide_a_finding_are_not_flagged():
 def test_a_linked_review_body_is_not_missing():
     ledger = "| #1 | [review](https://github.com/MikkoParkkola/mcp-gateway/pull/1#pullrequestreview-7) |"
     assert sweep.linked_reviews(ledger) == {("1", "7")}
+
+
+if __name__ == "__main__":
+    # CI runs this file as a script; without this it would define its tests
+    # and exit 0 having asserted nothing.
+    failed = []
+    names = [n for n, fn in sorted(globals().items()) if n.startswith("test_") and callable(fn)]
+    for name in names:
+        try:
+            globals()[name]()
+        except AssertionError:
+            failed.append(name)
+            traceback.print_exc()
+    print(f"{len(failed)} failed of {len(names)}")
+    sys.exit(1 if failed else 0)
