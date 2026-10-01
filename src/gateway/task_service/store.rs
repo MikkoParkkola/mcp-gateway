@@ -823,8 +823,8 @@ pub(super) fn read_bounded(file: &mut fs::File, cap: usize) -> Result<Vec<u8>, S
 /// read are the same file.
 #[cfg(unix)]
 fn open_record(path: &Path) -> Result<fs::File, StoreError> {
-    let shown_path = path.display();
     use std::os::unix::fs::OpenOptionsExt as _;
+    let shown_path = path.display();
     fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())

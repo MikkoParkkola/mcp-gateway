@@ -526,9 +526,9 @@ impl StdioTransport {
             })
             .flatten();
 
+        let method = &notification.method;
         match token.and_then(|t| self.progress_destinations.get(&t)) {
             Some(destination) => {
-                let method = &notification.method;
                 debug!(method = %method, "Delivering peer notification to its caller");
                 // Sent, not queued, and from the reader task: `deliver` uses
                 // `try_send`, because a blocking send here would park the only
@@ -536,7 +536,6 @@ impl StdioTransport {
                 destination.deliver(notification);
             }
             None => {
-                let method = &notification.method;
                 debug!(method = %method, "Ignoring peer notification");
             }
         }
