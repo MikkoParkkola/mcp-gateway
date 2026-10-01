@@ -320,7 +320,7 @@ impl MetaMcp {
                     collect_tool_tags(tool, all_tags);
                 }
                 for tool in enriched {
-                    if tool_matches_query(&backend.name, &tool, query) {
+                    if tool_matches_query("", &tool, query) {
                         let mut entry = build_match_json(&backend.name, &tool);
                         if backend_killed {
                             entry["status"] = json!("disabled");
