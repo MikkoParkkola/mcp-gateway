@@ -268,6 +268,11 @@ async fn hardened_legacy_request_without_session_refused() {
     let reply = send(&state, legacy_post("/mcp", &tools_list(), Some(&session))).await;
     assert_not_elicitation_refused(&reply, "tools/list inside a declared session");
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(
+        reply.body.contains("\"result\""),
+        "no result: {}",
+        reply.body
+    );
 }
 
 /// Row 10: a modern request mints no session, so it cannot hand a legacy
@@ -278,6 +283,11 @@ async fn modern_request_mints_no_session_for_legacy_resume() {
     let reply = send(&state, modern_post("/mcp", "tools/list", None, &json!({}))).await;
     assert!(reply.session.is_none(), "a modern request got a session");
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(
+        reply.body.contains("\"result\""),
+        "no result: {}",
+        reply.body
+    );
     let reply = send(&state, legacy_post("/mcp", &tools_list(), None)).await;
     assert_elicitation_refused(&reply, "a legacy request after a modern one");
 }
@@ -437,8 +447,17 @@ async fn hardened_legacy_confirmation_policy_refuses() {
             "{posture:?}: {}",
             reply.body
         );
+        let killed = state.meta_mcp.kill_switch().is_killed("alpha");
         if refused {
             assert!(reply.body.contains("-32001"), "{posture:?}: {}", reply.body);
+            assert!(
+                !killed,
+                "{posture:?}: a refused call still killed the server"
+            );
+        } else {
+            let body: Value = serde_json::from_str(&reply.body).expect("JSON-RPC body");
+            assert!(body.get("error").is_none(), "{posture:?}: {body}");
+            assert!(killed, "{posture:?}: the call proceeded but killed nothing");
         }
     }
 }
@@ -457,6 +476,11 @@ async fn standard_serves_legacy_without_elicitation() {
     let reply = send(&state, legacy_post("/mcp", &tools_list(), None)).await;
     assert_not_elicitation_refused(&reply, "standard tools/list with no session");
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(
+        reply.body.contains("\"result\""),
+        "no result: {}",
+        reply.body
+    );
     let reply = send(
         &state,
         legacy_post("/mcp/alpha", &tools_call("echo", &json!({})), None),

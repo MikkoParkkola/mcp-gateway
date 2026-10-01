@@ -129,6 +129,18 @@ fn direct_call(id: u64, nonce: Option<&str>) -> Value {
     )
 }
 
+/// A meta-route `gateway_invoke` carrying its nonce in `_meta`. It reaches the
+/// counting fixture through the inner gateway, so a dispatch is observable.
+fn meta_invoke(id: u64, nonce: Option<&str>) -> Value {
+    modern_call(
+        id,
+        "gateway_invoke",
+        &json!({"server": INNER, "tool": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}}}),
+        nonce,
+    )
+}
+
 /// A meta-route call to a meta tool other than `gateway_invoke`.
 fn meta_call(id: u64, nonce: Option<&str>) -> Value {
     modern_call(id, "gateway_list_servers", &json!({}), nonce)
@@ -340,6 +352,11 @@ async fn standard_signing_keeps_invoke_only_scope() {
     );
     let wire = post(&stack, "/mcp", &invoke).await;
     assert_signed(&wire, "standard-invoke", "standard gateway_invoke");
+    let id = json!({"kind": "number", "value": "43"});
+    assert!(
+        oracle_accepts(&wire, &id, "standard-invoke").await,
+        "the standard invoke MAC must verify: {wire}"
+    );
 }
 
 const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
@@ -384,11 +401,48 @@ async fn hardened_passthrough_direct_call_is_signed() {
         "passthrough dispatched: {wire}"
     );
     assert_signed(&wire, "passthrough-nonce", "a passthrough direct call");
+    let id = json!({"kind": "number", "value": "61"});
+    assert!(
+        oracle_accepts(&wire, &id, "passthrough-nonce").await,
+        "the passthrough MAC must verify: {wire}"
+    );
     let again = post(&stack, &path, &direct_call(62, Some("passthrough-nonce"))).await;
     assert_refused(&again, "a replayed passthrough nonce");
     assert_eq!(
         stack.backend.calls().len(),
         1,
         "a replay reached the backend"
+    );
+}
+
+/// Row 7: on the meta route the nonce is admitted before dispatch, so a replay
+/// or a malformed nonce never reaches the backend.
+#[tokio::test]
+async fn hardened_meta_replay_never_dispatches() {
+    let stack = stack().await;
+    let first = post(&stack, "/mcp", &meta_invoke(71, Some("meta-counted"))).await;
+    assert_eq!(
+        stack.backend.calls().len(),
+        1,
+        "the first call dispatched: {first}"
+    );
+    assert_signed(&first, "meta-counted", "the first meta gateway_invoke");
+    let id = json!({"kind": "number", "value": "71"});
+    assert!(
+        oracle_accepts(&first, &id, "meta-counted").await,
+        "the MAC must verify: {first}"
+    );
+
+    let again = post(&stack, "/mcp", &meta_invoke(72, Some("meta-counted"))).await;
+    assert_refused(&again, "a replayed meta nonce");
+    let oversized = "n".repeat(257);
+    for nonce in ["", oversized.as_str()] {
+        let wire = post(&stack, "/mcp", &meta_invoke(73, Some(nonce))).await;
+        assert_refused(&wire, "a malformed meta nonce");
+    }
+    assert_eq!(
+        stack.backend.calls().len(),
+        1,
+        "a replayed or malformed nonce reached the backend"
     );
 }
