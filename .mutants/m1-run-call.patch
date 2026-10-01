@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index 1f16f78ed..5cc286c55 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -1285,9 +1285,6 @@ impl Gateway {
+     /// Panics if RSA key pair generation fails on all retry attempts.
+     #[allow(clippy::too_many_lines)]
+     pub async fn run(mut self) -> Result<()> {
+-        #[cfg(feature = "firewall")]
+-        crate::security::firewall::anomaly_config::refuse_keyless_http_anomaly(&self.config)
+-            .map_err(Error::Config)?;
+         let addr = SocketAddr::new(
+             self.config
+                 .server

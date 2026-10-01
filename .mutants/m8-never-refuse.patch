@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/anomaly_config.rs b/src/security/firewall/anomaly_config.rs
+index 1148db4fa..f682bce32 100644
+--- a/src/security/firewall/anomaly_config.rs
++++ b/src/security/firewall/anomaly_config.rs
+@@ -75,7 +75,7 @@ pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Res
+             != crate::security::caller_identity::CallerIdentityMode::Off;
+     let firewall = &config.security.firewall;
+     if firewall.enabled && firewall.anomaly_detection && !keyed {
+-        return Err(KEYLESS_HTTP.to_owned());
++        let _ = KEYLESS_HTTP;
+     }
+     Ok(())
+ }

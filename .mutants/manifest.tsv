@@ -1,0 +1,10 @@
+head_sha	79f78e1311c084510afa572e520fb35accf9d75f
+# G5 FULL tier: the call site, each condition, each key source, the refusal.
+m1-run-call	linux	m1-run-call.patch	--lib gateway::server::keyless_anomaly_tests
+m2-firewall-enabled	linux	m2-firewall-enabled.patch	--lib security::firewall::anomaly_config::tests::any_source_of_a_caller_key_lets_it_start
+m3-detection-on	linux	m3-detection-on.patch	--lib security::firewall::anomaly_config::tests::any_source_of_a_caller_key_lets_it_start
+m4-auth-source	linux	m4-auth-source.patch	--lib security::firewall::anomaly_config::tests::any_source_of_a_caller_key_lets_it_start
+m5-mtls-source	linux	m5-mtls-source.patch	--lib security::firewall::anomaly_config::tests::any_source_of_a_caller_key_lets_it_start
+m6-agent-source	linux	m6-agent-source.patch	--lib security::firewall::anomaly_config::tests::any_source_of_a_caller_key_lets_it_start
+m7-header-source	linux	m7-header-source.patch	--lib security::firewall::anomaly_config::tests::any_source_of_a_caller_key_lets_it_start
+m8-never-refuse	linux	m8-never-refuse.patch	--lib security::firewall::anomaly_config::tests::keyless_http_anomaly_detection_is_refused_naming_both_settings

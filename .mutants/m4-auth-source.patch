@@ -1,0 +1,14 @@
+diff --git a/src/security/firewall/anomaly_config.rs b/src/security/firewall/anomaly_config.rs
+index 1148db4fa..0dc724320 100644
+--- a/src/security/firewall/anomaly_config.rs
++++ b/src/security/firewall/anomaly_config.rs
+@@ -68,8 +68,7 @@ const KEYLESS_HTTP: &str = "security.firewall.anomaly_detection is on but auth.e
+ ///
+ /// A message naming `anomaly_detection` and `auth.enabled`.
+ pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Result<(), String> {
+-    let keyed = config.auth.enabled
+-        || config.mtls.enabled
++    let keyed = config.mtls.enabled
+         || config.agent_auth.enabled
+         || config.security.caller_identity.mode
+             != crate::security::caller_identity::CallerIdentityMode::Off;
