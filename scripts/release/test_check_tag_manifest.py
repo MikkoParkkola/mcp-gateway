@@ -1670,6 +1670,9 @@ class WorkflowWiring(unittest.TestCase):
             block
             for block in steps("docker.yml", "build")
             for line in block
+            # The release-line image export is an artifact for verifiers, not
+            # a publisher: nothing reachable by name leaves the build job.
+            if "(release-line push only)" not in block[0]
             if re.search(r"\bpush\s*=\s*true\b", line)
             or re.match(r"^\s*push:\s*\$\{\{", line)
             or re.match(r"^\s*uses:\s*actions/upload-artifact@", line)
