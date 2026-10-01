@@ -1,0 +1,12 @@
+diff --git a/src/security/posture.rs b/src/security/posture.rs
+index 448c44b42..d42b2a236 100644
+--- a/src/security/posture.rs
++++ b/src/security/posture.rs
+@@ -139,7 +139,6 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
+     config.security.trust_configured_backends = false;
+     // Before `message_signing.resolve_with_env`, which every caller runs
+     // after this, so an env-only secret resolves and a missing one refuses.
+-    config.security.message_signing.enabled = true;
+     #[cfg(feature = "firewall")]
+     force_anomaly_blocking(&mut config.security.firewall)?;
+     Ok(())

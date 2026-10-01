@@ -1,0 +1,10 @@
+head_sha	b29eba6ca76145dedb453f198c08df546240d8e8
+# 3c: hardened default block threshold 1.0 -> 0.95
+m1-3c	linux	m1.patch	--lib diverse_warm_predecessor_not_blocked_at_default
+# 4c: an anomaly block no longer forced past an Allow rule
+m2-4c	linux	m2.patch	--lib anomaly_block_survives_allow_rule_hardened
+# 17: hardened stops forcing message signing on
+m3-17	linux	m3.patch	--lib hardened_startup_refusals
+# 15: the shared predicate ignores OIDC; startup test and doctor test
+m4-15-startup	linux	m4.patch	--lib startup_warn_matches_unhardened_table
+m4-15-doctor	linux	m4.patch	--bin mcp-gateway doctor_row_matches_unhardened_table

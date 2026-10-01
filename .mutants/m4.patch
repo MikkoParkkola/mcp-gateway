@@ -1,0 +1,13 @@
+diff --git a/src/security/posture.rs b/src/security/posture.rs
+index 448c44b42..38fb1b550 100644
+--- a/src/security/posture.rs
++++ b/src/security/posture.rs
+@@ -191,7 +191,7 @@ pub fn unhardened_multi_user_warning(config: &Config) -> Option<&'static str> {
+     let unhardened = config.security.posture == SecurityPosture::Standard
+         && config
+             .auth
+-            .implies_multi_user(!config.key_server.oidc.is_empty());
++            .implies_multi_user(false);
+     unhardened.then_some(
+         "multi-user deployment running security.posture=standard; set security.posture: \
+          hardened (restart required)",

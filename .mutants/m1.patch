@@ -1,0 +1,13 @@
+diff --git a/src/security/posture.rs b/src/security/posture.rs
+index 448c44b42..ae0025211 100644
+--- a/src/security/posture.rs
++++ b/src/security/posture.rs
+@@ -158,7 +158,7 @@ fn force_anomaly_blocking(firewall: &mut crate::security::firewall::FirewallConf
+     firewall.enabled = true;
+     firewall.anomaly_detection = true;
+     match firewall.anomaly_block_threshold {
+-        None => firewall.anomaly_block_threshold = Some(1.0),
++        None => firewall.anomaly_block_threshold = Some(0.95),
+         Some(block) if block < BLOCK_THRESHOLD_FLOOR => {
+             return Err(Error::ConfigValidation(format!(
+                 "security.posture=hardened needs security.firewall.anomaly_block_threshold \
