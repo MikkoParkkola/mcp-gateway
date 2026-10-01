@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index 1df4d58a7..a9809ff03 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -1286,7 +1286,6 @@ impl Gateway {
+     /// Panics if RSA key pair generation fails on all retry attempts.
+     #[allow(clippy::too_many_lines)]
+     pub async fn run(mut self) -> Result<()> {
+-        start_checks::http(&self.config)?;
+         let addr = SocketAddr::new(
+             self.config
+                 .server
