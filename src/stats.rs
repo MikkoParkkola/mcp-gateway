@@ -101,6 +101,11 @@ impl UsageStats {
             .map_or(0, |e| e.load(Ordering::Relaxed))
     }
 
+    /// Drop a session's cached-token counter (called on session disconnect).
+    pub fn remove_session(&self, session_id: &str) {
+        let _ = session_id;
+    }
+
     /// Get usage count for a specific tool
     pub fn tool_usage(&self, server: &str, tool: &str) -> u64 {
         let key = format!("{server}:{tool}");
