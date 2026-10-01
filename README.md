@@ -268,8 +268,8 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 (through the `initialize` handshake). It negotiates the revision with the client and with each backend on its own, so a client and a backend on different revisions still work together:
 
-- **Ordinary calls** work across any pairing. A backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak.
-- **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying.
+- **Ordinary calls** work across legacy and 2026 clients and backends. An HTTP or stdio backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak. A 2026-only backend that refuses the `initialize` handshake must be reached over HTTP.
+- **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying (over HTTP it needs a verified caller identity).
 
 Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
 
