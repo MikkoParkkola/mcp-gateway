@@ -134,6 +134,7 @@ src/gateway/router/origin_guard_hosted.rs	scope	1	critical	b	scope	Limits the ho
 src/gateway/router/origin_guard_hosted.rs	from_config	1	standard	borderline	HostedOrigin::from_config	Builds the hosted-origin opening.
 src/gateway/router/response_pass.rs	inspect_tools_call_response	1	critical	d	inspect_tools_call_response	Meta tools/call response firewall; fails closed with no policy target.
 src/gateway/router/well_known.rs	is_loopback_host	1	critical	borderline	is_loopback_host	Loopback classifier shared by the origin gate and the cleartext-OAuth guard.
+src/gateway/router/well_known.rs	sanitize_public_url	1	critical	b,d	sanitize_public_url	Refuses non-TLS, rewritten, userinfo-bearing or otherwise unsafe origins before publishing OAuth metadata
 src/gateway/server/account_bindings.rs	install_account_strategies	1	critical	d	install_account_strategies	Startup refusal when a bound managed or external account has no installed strategy
 src/gateway/server/account_bindings.rs	sole_operator_asserted	1	critical	a	sole_operator_asserted	Decides whether stored grants are served under the sole-operator principal (stdio, or HTTP single-user)
 src/gateway/server/account_bindings.rs	declare_account_descriptors	1	standard	borderline	declare_account_descriptors	Populates the declared registry the resolver checks against
@@ -143,6 +144,7 @@ src/gateway/server/mod.rs	response_firewall	1	critical	d	Gateway::response_firew
 src/gateway/server/stdio_channel.rs	reply_id	1	critical	b	StdioClientChannel::reply_id	Treats a frame as a reply only without `method`, so a client request is never routed as one
 src/gateway/server/stdio_channel.rs	resolve	1	critical	b	StdioClientChannel::resolve	Sends a reply only to the pending one-shot entry for that id; consumes it
 src/gateway/server/support.rs	accept	1	critical	a,b	PeerCertIdentityAcceptor::accept	Completes the handshake and hands auth the peer certificate's identity
+src/gateway/server/support.rs	client_identity_from_peer_chain	1	critical	a,b	client_identity_from_peer_chain	Selects the peer leaf, builds the authenticated CertIdentity, fails closed on malformed identity data
 src/gateway/server/support.rs	serve_tls	1	critical	a	serve_tls	The mTLS listener: decides which client certificates may connect
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
@@ -285,6 +287,7 @@ src/personal_accounts/config/adapters.rs	validate_secret_ref	1	critical	d	valida
 src/personal_accounts/config/adapters.rs	resolve_runtime_secrets	1	standard	borderline	resolve_runtime_secrets	Only path to adapter HMAC material
 src/personal_accounts/config/adapters.rs	resolve_secrets	1	standard	borderline	resolve_secrets	Wrapper over resolve_material
 src/personal_accounts/config/journey.rs	validate	1	critical	d	validate	Hosted journey rules: one session bridge, origin, paths, keys, descriptors
+src/personal_accounts/config/journey.rs	validate_key_ids	1	critical	d	validate_key_ids	Refuses hosted key ids outside the length and character rules; they become journey-record key identifiers
 src/personal_accounts/config/journey.rs	validate_managed_descriptors	1	critical	b	validate_managed_descriptors	redirect_uri must equal the hosted callback URI
 src/personal_accounts/config/journey.rs	validate_origin	1	critical	d	validate_origin	public_origin must be an exact https origin
 src/personal_accounts/config/journey.rs	validate_return_paths	1	critical	d	validate_return_paths	Open-redirect guard: single slash, no backslash, no ? # %
