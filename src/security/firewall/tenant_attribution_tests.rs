@@ -89,3 +89,82 @@ fn response_tenants_skips_text_over_one_mib() {
         "no arg_keys, no attribution"
     );
 }
+
+/// A text block holding `inner` as its JSON.
+fn text_block(inner: &str) -> serde_json::Value {
+    json!({"content": [{"type": "text", "text": inner}]})
+}
+
+/// MIN.1 gap 3. Valid JSON under 1 MiB, nested past the parser's depth
+/// limit, cannot be read: it is uninspected, never silently empty.
+#[test]
+fn deep_nested_json_text_is_uninspected() {
+    let g = guard(false, 1);
+    let deep = format!(
+        "{}{{\"customer_id\":\"cust-9\"}}{}",
+        "[".repeat(200),
+        "]".repeat(200)
+    );
+    let result = text_block(&deep);
+    assert!(g.response_uninspected(&result), "a too-deep block is uninspected");
+    assert!(g.response_tenants(&result).is_empty());
+}
+
+/// MIN.1 gap 3. Text shaped as JSON that fails to parse is uninspected.
+#[test]
+fn malformed_json_text_is_uninspected() {
+    let g = guard(false, 1);
+    let result = text_block(r#"{"customer_id":"cust-9""#);
+    assert!(g.response_uninspected(&result), "a malformed block is uninspected");
+    let field = json!({"structuredContent": {"rows": "[{\"customer_id\":"}});
+    assert!(g.response_uninspected(&field), "a malformed JSON field is uninspected");
+    // Fail closed: text that opens like JSON but is not is reported as unread,
+    // even when it was prose.
+    let prose = json!({"structuredContent": {"note": "[draft] see {notes}"}});
+    assert!(g.response_uninspected(&prose));
+}
+
+/// MIN.1 gap 3. A double-encoded text block is decoded and read.
+#[test]
+fn double_encoded_text_is_read() {
+    let g = guard(false, 1);
+    let once = r#"{"rows":[{"customer_id":"cust-9"}]}"#;
+    let twice = serde_json::to_string(once).unwrap();
+    let result = text_block(&twice);
+    assert_eq!(g.response_tenants(&result), set(&["cust-9"]));
+    assert!(!g.response_uninspected(&result), "a decoded block is inspected");
+}
+
+/// MIN.1 gap 3. A JSON document carried in a string field is read, in a text
+/// block and in `structuredContent`.
+#[test]
+fn json_string_field_is_read() {
+    let g = guard(false, 1);
+    let text = text_block(r#"{"rows":"[{\"customer_id\":\"cust-9\"}]"}"#);
+    assert_eq!(g.response_tenants(&text), set(&["cust-9"]));
+    assert!(!g.response_uninspected(&text));
+    let structured = json!({"structuredContent": {"rows": "{\"customer_id\":7}"}});
+    assert_eq!(g.response_tenants(&structured), set(&["7"]));
+    assert!(!g.response_uninspected(&structured));
+}
+
+/// MIN.1 gap 3. Encoding nested past the decode bound is uninspected.
+#[test]
+fn encoding_past_the_decode_bound_is_uninspected() {
+    let g = guard(false, 1);
+    let mut text = r#"{"customer_id":"cust-9"}"#.to_string();
+    for _ in 0..6 {
+        text = serde_json::to_string(&text).unwrap();
+    }
+    assert!(g.response_uninspected(&text_block(&text)));
+}
+
+/// Prose, quoted prose and plain values are inspected: nothing in them was
+/// skipped (green before and after the gap 3 fix, by design).
+#[test]
+fn prose_and_plain_values_are_inspected() {
+    let g = guard(false, 1);
+    for text in ["customer_id cust-9", "\"quoted\" words", "\"just a string\"", "42"] {
+        assert!(!g.response_uninspected(&text_block(text)), "{text}");
+    }
+}
