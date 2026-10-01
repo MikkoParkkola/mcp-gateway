@@ -1,0 +1,8 @@
+head_sha	9866f1805b5a30591038f37bd8ed72dc06137f48
+# batch 2 for #2557 on the head above: A1-A5 re-run after review, plus A6 (the reap removes a remapped id)
+A1	linux	a1.patch	--lib -- stdio_reused_id::a_reused_id_is_cancellable_before_its_predecessor_is_joined
+A2	linux	a2.patch	--lib -- stdio_reused_id::a_reused_id_is_cancellable_before_its_predecessor_is_joined
+A3	linux	a3.patch	--lib -- stdio_reused_id::joining_a_predecessor_keeps_its_successors_marks
+A4	linux	a4.patch	--lib -- stdio_reused_id::a_cancelled_id_is_reusable_before_its_dispatch_is_joined
+A5	linux	a5.patch	--lib -- stdio_reused_id::a_reused_id_is_cancellable_before_its_predecessor_is_joined
+A6	linux	a6.patch	--lib -- stdio_reused_id::joining_a_predecessor_keeps_the_reused_ids_mapping
