@@ -46,12 +46,54 @@ mod source_checks {
         }
     }
 
-    /// `text` without the items gated by `#[cfg(test)]`.
+    const MARKER: &str = "#[cfg(test)]";
+
+    /// `text` without the items gated by `#[cfg(test)]`: each marker and the
+    /// one item after it. A mention of the attribute anywhere but the start of
+    /// a line is prose, not a marker.
     fn production_text(text: &str) -> String {
-        text.split("#[cfg(test)]")
-            .next()
-            .unwrap_or_default()
-            .to_owned()
+        let mut out = String::new();
+        let mut rest = text;
+        while let Some(at) = marker(rest) {
+            out.push_str(&rest[..at]);
+            rest = skip_item(&rest[at + MARKER.len()..]);
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Byte offset of the first line whose trimmed start is the marker.
+    fn marker(text: &str) -> Option<usize> {
+        let mut offset = 0;
+        for line in text.split_inclusive('\n') {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with(MARKER) {
+                return Some(offset + line.len() - trimmed.len());
+            }
+            offset += line.len();
+        }
+        None
+    }
+
+    /// What follows the item at the start of `text`: past its `;`, or past the
+    /// `}` matching its first `{`. Braces inside string literals are counted
+    /// too; they balance in the test code this skips.
+    fn skip_item(text: &str) -> &str {
+        let mut depth = 0usize;
+        for (i, c) in text.char_indices() {
+            match c {
+                ';' if depth == 0 => return &text[i + 1..],
+                '{' => depth += 1,
+                '}' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return &text[i + 1..];
+                    }
+                }
+                _ => {}
+            }
+        }
+        ""
     }
 
     /// The production part of `path`, and nothing of test-only files.
