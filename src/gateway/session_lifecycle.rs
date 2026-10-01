@@ -40,6 +40,11 @@ pub struct SessionLifecycle {
     tracked: RwLock<std::collections::HashMap<String, u64>>,
 }
 
+/// How long after a session ends its in-flight calls may still write state
+/// under its id. Longer than the backend request timeout, so a call that began
+/// before the end has finished by the second cleanup pass.
+pub const END_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// How long an identity's derived state outlives its last observed request.
 ///
 /// The revision removed protocol sessions, so nothing signals a disconnect and
@@ -270,6 +275,29 @@ mod tests {
 
         lifecycle.on_disconnect("quiet-session");
         assert_eq!(ended.load(Ordering::SeqCst), 1, "a real end fires it once");
+    }
+
+    #[test]
+    fn a_session_end_is_cleaned_a_second_time_after_the_grace_period() {
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&fired);
+        lifecycle.register_session_end("count", move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.on_disconnect("ended");
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+
+        // A call in flight at the end writes after the first pass.
+        lifecycle.reap(now_unix());
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "not before the grace");
+
+        lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
+        assert_eq!(fired.load(Ordering::SeqCst), 2, "the second pass");
+
+        lifecycle.reap(now_unix() + 2 * END_GRACE.as_secs());
+        assert_eq!(fired.load(Ordering::SeqCst), 2, "and only once");
     }
 
     #[test]
