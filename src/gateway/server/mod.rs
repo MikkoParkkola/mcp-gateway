@@ -17,6 +17,8 @@ mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+#[cfg(all(test, feature = "firewall"))]
+mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
 #[cfg(test)]
@@ -26,6 +28,7 @@ mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
+mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_dispatches;
@@ -1283,6 +1286,7 @@ impl Gateway {
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
+        start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
                 .server
