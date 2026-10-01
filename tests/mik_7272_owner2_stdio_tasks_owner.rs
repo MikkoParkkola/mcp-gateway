@@ -12,9 +12,9 @@ mod helper;
 use std::path::{Path, PathBuf};
 
 use helper::{
-    API_KEY, ANSWERED, ASK, Auth, Backend, ECHO, HELD, HttpGateway, StdioGateway,
-    error_code, initialize, modern, status, sync_call, task_call, task_id, tasks_cancel,
-    tasks_get, tasks_update, write_config,
+    ANSWERED, API_KEY, ASK, Auth, Backend, ECHO, HELD, HttpGateway, StdioGateway, error_code,
+    initialize, modern, status, sync_call, task_call, task_id, tasks_cancel, tasks_get,
+    tasks_update, write_config,
 };
 use serde_json::{Value, json};
 
@@ -79,7 +79,9 @@ fn no_such_task(answer: &Value) {
 async fn i_own_a_same_store_http_owner_cannot_reach_it() {
     let world = World::new(Auth::Off).await;
     let mut stdio = world.stdio("t6-a.log").await;
-    let created = stdio.request(&task_call(json!(1), ECHO, Some("k-t6"))).await;
+    let created = stdio
+        .request(&task_call(json!(1), ECHO, Some("k-t6")))
+        .await;
     let id = task_id(&created);
     stdio.terminal(&id).await;
     stdio.close().await;
@@ -98,7 +100,11 @@ async fn i_own_a_same_store_http_owner_cannot_reach_it() {
 
     let mut again = world.stdio("t6-b.log").await;
     let task = again.request(&tasks_get(json!(5), &id)).await;
-    assert_eq!(status(&task), Some("completed"), "no HTTP cancel landed: {task}");
+    assert_eq!(
+        status(&task),
+        Some("completed"),
+        "no HTTP cancel landed: {task}"
+    );
     again.close().await;
 }
 
@@ -166,7 +172,9 @@ async fn an_http_restart_settles_a_stdio_task_but_cannot_read_it() {
 async fn stdio_task_creation_ignores_the_http_auth_gate() {
     let world = World::new(Auth::Key).await;
     let mut stdio = world.stdio("t11.log").await;
-    let created = stdio.request(&task_call(json!(1), ECHO, Some("k-t11"))).await;
+    let created = stdio
+        .request(&task_call(json!(1), ECHO, Some("k-t11")))
+        .await;
     let id = task_id(&created);
     let task = stdio.terminal(&id).await;
     assert_eq!(status(&task), Some("completed"), "{task}");
@@ -191,7 +199,10 @@ async fn the_local_operator_cancels_a_working_task() {
     world.backend.open_barrier();
     let task = stdio.terminal(&id).await;
     assert_eq!(status(&task), Some("cancelled"), "{task}");
-    assert!(task.pointer("/result/result").is_none(), "no result delivered: {task}");
+    assert!(
+        task.pointer("/result/result").is_none(),
+        "no result delivered: {task}"
+    );
     stdio.close().await;
 }
 
@@ -200,7 +211,9 @@ async fn the_local_operator_cancels_a_working_task() {
 async fn the_local_operator_answers_an_input_round() {
     let world = World::new(Auth::Off).await;
     let mut stdio = world.stdio("t15.log").await;
-    let created = stdio.request(&task_call(json!(1), ASK, Some("k-t15"))).await;
+    let created = stdio
+        .request(&task_call(json!(1), ASK, Some("k-t15")))
+        .await;
     let id = task_id(&created);
     let deadline = tokio::time::Instant::now() + helper::BOUND;
     let mut n = 0;
@@ -210,14 +223,20 @@ async fn the_local_operator_answers_an_input_round() {
         if status(&task) == Some("input_required") {
             break;
         }
-        assert!(tokio::time::Instant::now() < deadline, "no input round: {task}");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no input round: {task}"
+        );
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let updated = stdio.request(&tasks_update(json!(2), &id)).await;
     assert!(updated.get("error").is_none(), "{updated}");
     let task = stdio.terminal(&id).await;
     assert_eq!(status(&task), Some("completed"), "{task}");
-    assert!(task.to_string().contains(ANSWERED), "the backend saw the answer: {task}");
+    assert!(
+        task.to_string().contains(ANSWERED),
+        "the backend saw the answer: {task}"
+    );
     stdio.close().await;
 }
 
@@ -243,7 +262,10 @@ async fn http_twin(world: &World) -> (HttpGateway, Backend) {
         &backend.url,
         Auth::Off,
     );
-    (HttpGateway::start(world.path(), &config, "twin.log").await, backend)
+    (
+        HttpGateway::start(world.path(), &config, "twin.log").await,
+        backend,
+    )
 }
 
 /// T16.
@@ -251,16 +273,28 @@ async fn http_twin(world: &World) -> (HttpGateway, Backend) {
 async fn a_task_and_a_sync_call_share_one_admission() {
     let world = World::new(Auth::Off).await;
     let (http, http_backend) = http_twin(&world).await;
-    task_id(&http.post(&task_call(json!(1), ECHO, Some("k-t16")), None).await);
+    task_id(
+        &http
+            .post(&task_call(json!(1), ECHO, Some("k-t16")), None)
+            .await,
+    );
     let http_sync = http.post(&sync_call(json!(2), ECHO, "k-t16"), None).await;
     assert_eq!(http_backend.rounds(), 1, "HTTP: one admission, one round");
 
     let mut stdio = world.stdio("t16.log").await;
-    let id = task_id(&stdio.request(&task_call(json!(1), ECHO, Some("k-t16"))).await);
+    let id = task_id(
+        &stdio
+            .request(&task_call(json!(1), ECHO, Some("k-t16")))
+            .await,
+    );
     stdio.terminal(&id).await;
     let stdio_sync = stdio.request(&sync_call(json!(2), ECHO, "k-t16")).await;
     assert_eq!(world.backend.rounds(), 1, "stdio: one admission, one round");
-    assert_eq!(shape(&stdio_sync), shape(&http_sync), "stdio {stdio_sync} vs HTTP {http_sync}");
+    assert_eq!(
+        shape(&stdio_sync),
+        shape(&http_sync),
+        "stdio {stdio_sync} vs HTTP {http_sync}"
+    );
     http.stop().await;
     stdio.close().await;
 }

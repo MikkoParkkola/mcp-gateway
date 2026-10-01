@@ -7,7 +7,10 @@
 //! Every row drives the binary through its config and JSON-RPC, never a
 //! crate item, so the red commit compiles before the fix exists.
 
-#![allow(dead_code, reason = "shared by two test targets that each use a subset")]
+#![allow(
+    dead_code,
+    reason = "shared by two test targets that each use a subset"
+)]
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -124,9 +127,7 @@ async fn answer(
                     drop(release.wait_for(|open| *open).await);
                     done(MARKER)
                 }
-                Some(ASK) if request.pointer("/params/inputResponses").is_some() => {
-                    done(ANSWERED)
-                }
+                Some(ASK) if request.pointer("/params/inputResponses").is_some() => done(ANSWERED),
                 Some(ASK) => json!({
                     "resultType": "input_required",
                     "inputRequests": {"confirm": {
@@ -162,7 +163,13 @@ pub enum Auth {
 
 /// Write `<root>/<name>` for one gateway: port 0, modern on, the response
 /// cache off (counted effects only), and `tasks.store_dir` = `store_dir`.
-pub fn write_config(root: &Path, name: &str, store_dir: &Path, backend: &str, auth: Auth) -> PathBuf {
+pub fn write_config(
+    root: &Path,
+    name: &str,
+    store_dir: &Path,
+    backend: &str,
+    auth: Auth,
+) -> PathBuf {
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_string();
     config.server.port = 0;
@@ -294,7 +301,9 @@ pub fn discover(id: Value) -> Value {
 /// came back instead.
 pub fn task_id(created: &Value) -> String {
     assert_eq!(
-        created.pointer("/result/resultType").and_then(Value::as_str),
+        created
+            .pointer("/result/resultType")
+            .and_then(Value::as_str),
         Some("task"),
         "a task-augmented call is answered with a task handle: {created}"
     );
@@ -405,7 +414,9 @@ impl StdioGateway {
         let mut n = 0;
         loop {
             n += 1;
-            let got = self.request(&tasks_get(json!(format!("poll-{n}")), task)).await;
+            let got = self
+                .request(&tasks_get(json!(format!("poll-{n}")), task))
+                .await;
             if matches!(status(&got), Some("completed" | "failed" | "cancelled")) {
                 return got;
             }
@@ -424,7 +435,11 @@ impl StdioGateway {
             .await
             .expect("the stdio gateway exits after EOF within the bound")
             .expect("child status");
-        assert!(status.success(), "clean exit after EOF ({status})\n{}", self.logs());
+        assert!(
+            status.success(),
+            "clean exit after EOF ({status})\n{}",
+            self.logs()
+        );
     }
 
     /// SIGKILL: no drain, no store close.
@@ -488,7 +503,10 @@ impl HttpGateway {
         let deadline = tokio::time::Instant::now() + BOUND;
         loop {
             if let Some(status) = gateway.child.try_wait().expect("child status") {
-                panic!("HTTP gateway exited before readiness ({status})\n{}", gateway.logs());
+                panic!(
+                    "HTTP gateway exited before readiness ({status})\n{}",
+                    gateway.logs()
+                );
             }
             if gateway.base.is_empty()
                 && let Some(port) = bound_port(&gateway.logs())

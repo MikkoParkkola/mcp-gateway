@@ -54,13 +54,18 @@ impl World {
     async fn stdio(&self, log: &str) -> StdioGateway {
         let mut gateway = StdioGateway::spawn(self.path(), &self.config, log);
         let answer = gateway.request(&initialize(json!(0))).await;
-        assert!(answer.get("result").is_some(), "handshake answered: {answer}");
+        assert!(
+            answer.get("result").is_some(),
+            "handshake answered: {answer}"
+        );
         gateway
     }
 
     /// T2's steps: create a keyed `echo` task and read it to completion.
     async fn completed_task(&self, gateway: &mut StdioGateway) -> (String, Value) {
-        let created = gateway.request(&task_call(json!(1), ECHO, Some("k-owner2"))).await;
+        let created = gateway
+            .request(&task_call(json!(1), ECHO, Some("k-owner2")))
+            .await;
         let id = task_id(&created);
         let terminal = gateway.terminal(&id).await;
         (id, terminal)
@@ -135,9 +140,18 @@ async fn the_task_survives_a_relocation() {
 
     let moved = world.path().join("moved");
     std::fs::rename(world.path().join("tasks"), &moved).expect("relocate the base directory");
-    let config = write_config(world.path(), "moved.yaml", &moved, &world.backend.url, Auth::Off);
+    let config = write_config(
+        world.path(),
+        "moved.yaml",
+        &moved,
+        &world.backend.url,
+        Auth::Off,
+    );
     let after = record_names(&moved.join("stdio"));
-    assert!(!before.is_empty(), "stdio wrote its record under <base>/stdio");
+    assert!(
+        !before.is_empty(),
+        "stdio wrote its record under <base>/stdio"
+    );
     assert_eq!(before, after, "a relocation renames nothing in the store");
 
     let mut second = StdioGateway::spawn(world.path(), &config, "t4-b.log");
@@ -162,7 +176,13 @@ async fn another_store_does_not_have_it() {
     first.close().await;
 
     let other = world.path().join("other");
-    let config = write_config(world.path(), "other.yaml", &other, &world.backend.url, Auth::Off);
+    let config = write_config(
+        world.path(),
+        "other.yaml",
+        &other,
+        &world.backend.url,
+        Auth::Off,
+    );
     let mut second = StdioGateway::spawn(world.path(), &config, "t5-b.log");
     second.request(&initialize(json!(0))).await;
     no_such_task(&second.request(&tasks_get(json!(2), &id)).await);
@@ -190,17 +210,32 @@ async fn a_held_store_degrades_stdio_and_stops_advertising_tasks() {
 
     let mut b = StdioGateway::spawn(world.path(), &world.config, "t7-b.log");
     let handshake = b.request(&initialize(json!(0))).await;
-    assert!(!declares_tasks(&handshake), "B advertises no Tasks: {handshake}");
+    assert!(
+        !declares_tasks(&handshake),
+        "B advertises no Tasks: {handshake}"
+    );
     let found = b.request(&discover(json!(1))).await;
-    assert!(!declares_tasks(&found), "B's discover carries no Tasks: {found}");
+    assert!(
+        !declares_tasks(&found),
+        "B's discover carries no Tasks: {found}"
+    );
     let listed = b
         .request(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": {"name": "gateway_list_servers", "arguments": {}}}))
         .await;
-    assert!(listed.get("result").is_some(), "B still serves tools: {listed}");
-    assert_eq!(error_code(&b.request(&tasks_get(json!(3), "task-x")).await), Some(-32601));
+    assert!(
+        listed.get("result").is_some(),
+        "B still serves tools: {listed}"
+    );
+    assert_eq!(
+        error_code(&b.request(&tasks_get(json!(3), "task-x")).await),
+        Some(-32601)
+    );
     let sync = b.request(&task_call(json!(4), ECHO, Some("k-b"))).await;
-    assert!(sync.pointer("/result/taskId").is_none(), "answered synchronously: {sync}");
+    assert!(
+        sync.pointer("/result/taskId").is_none(),
+        "answered synchronously: {sync}"
+    );
     assert_eq!(marker_of_sync(&sync), Some(MARKER), "{sync}");
     b.close().await;
     a.close().await;
@@ -227,7 +262,9 @@ async fn http_and_stdio_share_a_config_without_contention() {
     let (stdio_task, _) = world.completed_task(&mut stdio).await;
 
     let http = HttpGateway::start(world.path(), &world.config, "t12-http.log").await;
-    let created = http.post(&task_call(json!(10), ECHO, Some("k-http")), None).await;
+    let created = http
+        .post(&task_call(json!(10), ECHO, Some("k-http")), None)
+        .await;
     let http_task = task_id(&created);
 
     assert_eq!(
@@ -266,8 +303,15 @@ async fn an_explicitly_shared_store_names_the_holder() {
         status.is_some_and(|status| !status.success()),
         "HTTP on a held store exits non-zero ({status:?})\n{log}"
     );
-    assert!(log.contains("possibly a stdio gateway"), "the error names the holder\n{log}");
+    assert!(
+        log.contains("possibly a stdio gateway"),
+        "the error names the holder\n{log}"
+    );
     let again = stdio.request(&tasks_get(json!(2), &id)).await;
-    assert_eq!(helper::status(&again), Some("completed"), "the holder is undisturbed: {again}");
+    assert_eq!(
+        helper::status(&again),
+        Some("completed"),
+        "the holder is undisturbed: {again}"
+    );
     stdio.close().await;
 }
