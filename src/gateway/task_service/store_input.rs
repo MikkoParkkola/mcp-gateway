@@ -260,9 +260,6 @@ impl Shared {
     /// The owner-scoped row, cloned under the ordering lock the caller holds.
     fn read_owned(&self, owner: &str, id: &str) -> Result<(Task, Record), StoreError> {
         let state = self.state();
-        if !state.ready {
-            return Err(StoreError::Unavailable);
-        }
         let entry = owned(&state, owner, id)?;
         Ok((entry.task.clone(), entry.record.clone()))
     }

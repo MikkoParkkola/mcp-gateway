@@ -107,12 +107,6 @@ impl Shared {
             if entry.record.revision != expected_revision {
                 return Err(StoreError::RevisionConflict);
             }
-            if matches!(
-                entry.task.status(),
-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-            ) {
-                return Err(StoreError::InvalidTransition);
-            }
             (entry.task.clone(), entry.record.clone())
         };
         for target in targets {

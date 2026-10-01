@@ -345,9 +345,6 @@ impl TaskStore {
     /// to the digest the record itself was admitted under.
     pub(crate) fn operation_digest_of(&self, owner: &str, id: &str) -> Option<String> {
         let state = self.0.state();
-        if !state.ready {
-            return None;
-        }
         owned(&state, owner, id)
             .ok()
             .map(|entry| entry.record.admission.operation_digest.clone())
@@ -509,9 +506,6 @@ impl Shared {
                 return Err(StoreError::Unavailable);
             }
             let entry = owned(&state, owner, id)?;
-            if entry.record.revision != expected_revision {
-                return Err(StoreError::RevisionConflict);
-            }
             if matches!(
                 entry.task.status(),
                 TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
@@ -521,9 +515,6 @@ impl Shared {
             (entry.task.clone(), entry.record.clone())
         };
         // The descriptor must name the operation this record was admitted for.
-        if upstream.operation_digest != record.admission.operation_digest {
-            return Err(StoreError::InvalidTransition);
-        }
         record.upstream = Some(upstream);
         record.version = record.version.max(UPSTREAM_VERSION);
         let bytes = serialize(&record)?;
