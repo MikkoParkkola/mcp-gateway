@@ -96,3 +96,27 @@ async fn polling_a_finished_task_records_an_unchanged_decision_once() {
         "the unchanged denial is not written again"
     );
 }
+
+/// The window bounds suppression: once it has passed since the last written
+/// record, the same decision is written again, so polling stays visible.
+#[test]
+fn an_unchanged_decision_is_written_again_after_the_window() {
+    use super::grant_audit::{DecisionDedupe, REPEAT_WINDOW};
+    let dedupe = DecisionDedupe::default();
+    let start = std::time::Instant::now();
+    let key = "task|alice|caps|tool".to_owned();
+    assert!(!dedupe.is_repeat(&key, "allow", start));
+    dedupe.remember(key.clone(), "allow".to_owned(), start);
+    assert!(
+        dedupe.is_repeat(&key, "allow", start),
+        "same decision inside the window"
+    );
+    assert!(
+        !dedupe.is_repeat(&key, "deny", start),
+        "a changed decision is never a repeat"
+    );
+    assert!(
+        !dedupe.is_repeat(&key, "allow", start + REPEAT_WINDOW),
+        "the window has passed"
+    );
+}

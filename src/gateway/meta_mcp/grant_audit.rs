@@ -1,16 +1,29 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! D3-a: identity grant decisions are audited, one record per decision on a
-//! personal capability per outer call (D3-amendment rev 11).
+//! personal capability per outer call (D3-amendment rev 11), with one
+//! exception (MIK-7692, operator disposition R3):
+//!
+//! A read of a finished task re-checks the grants of the calls that produced
+//! it (#2461), so a client polling it would write the same decision on every
+//! poll. Such a re-check writes no record when the last record written for
+//! the same task, caller and target is identical in every recorded field but
+//! its timestamp, and was written less than [`REPEAT_WINDOW`] ago. Any change
+//! (a revoked grant, another reason, another grant id) is written at once,
+//! and an unchanged decision is written again once the window has passed.
+//! Dispatch decisions are never suppressed; polling itself stays visible in
+//! the task and poll logs.
 //!
 //! `identity_grant_rule` with `Emit::Audit` notes each decision into a
 //! task-local slot. The outermost opener (`invoke_tool`, the dispatch tail,
 //! the HTTP `/mcp` handler, stdio `tools/call`) selects and writes the
 //! records before the answer leaves, failing closed under `FailClosed`.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::response::IntoResponse as _;
 use serde_json::{Map, Value};
@@ -29,7 +42,82 @@ type Notes = Arc<Mutex<Vec<GrantNote>>>;
 tokio::task_local! {
     /// The open slot's notes, owned by the outermost opener.
     static GRANT_SLOT: Notes;
+    /// Set while a finished task's stored delivery is re-checked: the
+    /// suppression store and the task-and-caller half of the repeat key.
+    static REPEAT_SCOPE: (Arc<DecisionDedupe>, String);
 }
+
+/// How long an unchanged re-check decision is not written again (MIK-7692).
+pub(super) const REPEAT_WINDOW: Duration = Duration::from_secs(600);
+
+/// Keys the store holds at most; a full store records every decision.
+const REPEAT_CAP: usize = 4096;
+
+/// The last written re-check decision per task, caller and target.
+#[derive(Debug, Default)]
+pub(crate) struct DecisionDedupe(Mutex<HashMap<String, (String, Instant)>>);
+
+impl DecisionDedupe {
+    /// Whether `decision` is what was last written for `key`, inside the window.
+    pub(super) fn is_repeat(&self, key: &str, decision: &str, now: Instant) -> bool {
+        self.0
+            .lock()
+            .expect("repeat store lock")
+            .get(key)
+            .is_some_and(|(last, at)| {
+                last == decision && now.saturating_duration_since(*at) < REPEAT_WINDOW
+            })
+    }
+
+    /// Record that `decision` was written for `key` at `now`.
+    pub(super) fn remember(&self, key: String, decision: String, now: Instant) {
+        let mut map = self.0.lock().expect("repeat store lock");
+        if map.len() >= REPEAT_CAP && !map.contains_key(&key) {
+            map.retain(|_, (_, at)| now.saturating_duration_since(*at) < REPEAT_WINDOW);
+            if map.len() >= REPEAT_CAP {
+                // ponytail: a full store of live keys stops suppressing new
+                // ones (fails toward recording); an LRU if that ever matters.
+                return;
+            }
+        }
+        map.insert(key, (decision, now));
+    }
+}
+
+/// Run `check` as a re-check of a finished task's delivery: decisions it
+/// notes may be suppressed as repeats (see the module docs).
+pub(super) fn in_repeat_scope<T>(
+    store: &Arc<DecisionDedupe>,
+    task_and_caller: String,
+    check: impl FnOnce() -> T,
+) -> T {
+    REPEAT_SCOPE.sync_scope((Arc::clone(store), task_and_caller), check)
+}
+
+/// A re-check note's suppression key and decision fingerprint.
+#[derive(Clone)]
+pub(super) struct RepeatMark {
+    store: Arc<DecisionDedupe>,
+    key: String,
+    decision: String,
+}
+
+impl std::fmt::Debug for RepeatMark {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepeatMark")
+            .field("key", &self.key)
+            .field("decision", &self.decision)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RepeatMark {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key && self.decision == other.decision
+    }
+}
+
+impl Eq for RepeatMark {}
 
 /// One grant decision noted inside a slot, keyed by the check's own inputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +134,8 @@ pub(super) struct GrantNote {
     pub(super) fields: Map<String, Value>,
     /// The evaluated subject id, for the envelope's `who`.
     pub(super) subject: Option<String>,
+    /// Set on a finished task's re-check: how a repeat is recognised.
+    pub(super) repeat: Option<RepeatMark>,
 }
 
 impl GrantNote {
@@ -86,7 +176,15 @@ impl GrantNote {
             allowed: event.allowed,
             fields,
             subject: event.subject.as_ref().map(|s| s.subject.clone()),
+            repeat: None,
         }
+    }
+
+    /// Every recorded field but the timestamp, and the outcome.
+    fn fingerprint(&self) -> String {
+        let mut fields = self.fields.clone();
+        fields.remove("timestamp");
+        format!("{}|{}", self.allowed, Value::Object(fields))
     }
 
     fn envelope(&self) -> AuditEnvelope {
@@ -161,12 +259,27 @@ async fn write_records(
 ) -> std::io::Result<()> {
     let mut first_failure = None;
     for note in select_records(notes) {
+        let now = Instant::now();
+        if let Some(mark) = &note.repeat
+            && mark.store.is_repeat(&mark.key, &mark.decision, now)
+        {
+            continue;
+        }
         let (fields, envelope) = (note.fields.clone(), note.envelope());
         let written = logger
             .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
             .await;
-        if let Err(error) = written {
-            first_failure.get_or_insert(error);
+        match written {
+            // Remembered only once written: a failed write suppresses nothing.
+            Ok(()) => {
+                if let Some(mark) = &note.repeat {
+                    mark.store
+                        .remember(mark.key.clone(), mark.decision.clone(), now);
+                }
+            }
+            Err(error) => {
+                first_failure.get_or_insert(error);
+            }
         }
     }
     first_failure.map_or(Ok(()), Err)
@@ -230,7 +343,14 @@ pub(super) fn note_grant_decision(
     ) {
         return Ok(());
     }
-    let note = GrantNote::project(server, tool, event);
+    let mut note = GrantNote::project(server, tool, event);
+    note.repeat = REPEAT_SCOPE
+        .try_with(|(store, task_and_caller)| RepeatMark {
+            store: Arc::clone(store),
+            key: format!("{task_and_caller}|{server}|{tool}"),
+            decision: note.fingerprint(),
+        })
+        .ok();
     #[cfg(test)]
     BOOKKEEPING.with(|b| b.borrow_mut().notes_taken += 1);
     let unslotted = GRANT_SLOT

@@ -404,6 +404,8 @@ pub struct MetaMcp {
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// MIK-7692: the last written stored-delivery re-check decisions.
+    pub(super) grant_repeats: Arc<grant_audit::DecisionDedupe>,
     /// One bounded execution owner shared by the meta and direct transports.
     ///
     /// The ledger is in-memory and owned per [`MetaMcp`]: `State.entries` is a
@@ -683,6 +685,7 @@ impl MetaMcp {
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            grant_repeats: Arc::default(),
             execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             unkeyed: admission::UnkeyedPolicy::default(),
