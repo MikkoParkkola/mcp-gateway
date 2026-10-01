@@ -334,3 +334,14 @@ async fn t8_a_restart_after_an_early_exit_is_judged_on_its_own_child() {
     let err = start_err(&t).await;
     assert!(err.contains("exit status: 3"), "{err}");
 }
+
+/// MIK-7324.COV.3: stdout that is not UTF-8 ends the reader as a read error.
+/// The child is still alive, so only the reader's end can fail `start` before
+/// the request timeout; a reader that kept waiting would hang it the full 30s.
+#[tokio::test]
+async fn non_utf8_stdout_fails_start_without_waiting_for_the_timeout() {
+    use crate::transport::Transport as _;
+    let t = transport("printf \"\\377\\n\"; sleep 30", &[]);
+    start_err(&t).await;
+    assert!(!t.is_connected());
+}
