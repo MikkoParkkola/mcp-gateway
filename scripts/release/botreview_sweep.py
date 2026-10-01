@@ -4,9 +4,10 @@
 """List automated-reviewer threads that the GH1625.BOTREVIEW.1 ledger lacks.
 
 For every PR merged into the release line after #1625 closed, read its review
-threads (all pages) and keep the bot-started ones. A PR whose bot threads
-outnumber its ledger rows is printed with the threads the ledger does not
-link. Exit 1 when anything is missing, so the final sweep is a diff.
+threads (all pages) and keep the bot-started ones. Every such thread must be
+linked by its own `#discussion_r<id>` in the ledger; a count is never enough.
+Exit 1 when any thread is unlinked or the PR list may be truncated, so the
+final sweep is a diff.
 
 Needs an authenticated `gh`. Usage:
     python3 scripts/release/botreview_sweep.py [--ledger PATH]
@@ -17,12 +18,12 @@ import json
 import re
 import subprocess
 import sys
-from collections import Counter
 
 REPO = "MikkoParkkola/mcp-gateway"
 BASE = "docs/ranking-1-release-line"
 SINCE = "2026-09-29T02:27:33Z"  # #1625 closed
 LEDGER = "docs/internal/release/v4.0.0-botreview-ledger.md"
+LIMIT = 1000
 QUERY = """query($n:Int!,$after:String){repository(owner:"MikkoParkkola",name:"mcp-gateway"){
 pullRequest(number:$n){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}
 nodes{comments(first:1){nodes{author{login __typename} url path line originalLine}}}}}}}"""
@@ -33,9 +34,12 @@ def gh(*args: str) -> str:
 
 
 def merged_prs() -> list[int]:
-    out = gh("pr", "list", "-R", REPO, "--state", "merged", "--base", BASE, "--limit", "1000",
+    out = gh("pr", "list", "-R", REPO, "--state", "merged", "--base", BASE, "--limit", str(LIMIT),
              "--search", f"merged:>={SINCE}", "--json", "number")
-    return sorted(pr["number"] for pr in json.loads(out))
+    numbers = sorted(pr["number"] for pr in json.loads(out))
+    if len(numbers) >= LIMIT:
+        sys.exit(f"{len(numbers)} merged PRs reached the --limit of {LIMIT}; the list may be truncated")
+    return numbers
 
 
 def bot_threads(number: int) -> list[dict]:
@@ -59,15 +63,11 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--ledger", default=LEDGER)
     ledger = open(parser.parse_args(argv).ledger, encoding="utf-8").read()
-    rows = Counter(int(n) for n in re.findall(r"^\| #(\d+) \|", ledger, re.M))
-    linked = set(re.findall(r"#discussion_r(\d+)", ledger))
+    linked = set(re.findall(r"/pull/(\d+)#discussion_r(\d+)", ledger))
     missing = 0
     for number in merged_prs():
-        threads = bot_threads(number)
-        if len(threads) <= rows[number]:
-            continue
-        for thread in threads:
-            if thread["url"].rsplit("_r", 1)[1] not in linked:
+        for thread in bot_threads(number):
+            if (str(number), thread["url"].rsplit("_r", 1)[1]) not in linked:
                 missing += 1
                 line = thread.get("line") or thread.get("originalLine")
                 print(f"#{number}\t{thread['author']['login']}\t{thread['path']}:{line}\t{thread['url']}")
