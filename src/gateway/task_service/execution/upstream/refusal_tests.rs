@@ -260,6 +260,11 @@ async fn recovery_issues_no_query_without_a_claiming_adapter() {
         Ok(RecoveredRead::Retained)
     );
     assert_eq!(queried.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        f.executor.recovery_target(&f.owner_digest, &f.id).map(|r| r.handle),
+        Ok("upstream-3".to_owned()),
+        "a live job keeps its handle and its working row"
+    );
 }
 
 #[tokio::test]

@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The lease's generic-failure arm (MIK-7324.COV.3). `acquire_lease` is private
-//! to the store, and the public `open` cannot reach this arm on unix: it pins
-//! the directory to 0700 first, and a lease of any other kind is refused as
-//! unsafe before `try_acquire` runs.
+//! to the store, and `open` reaches it only through an environmental failure
+//! (a vanished parent, a failing flock) that a fixture cannot force
+//! deterministically. A missing parent directory does it here.
 
 use super::{LEASE, StoreError, acquire_lease};
 
