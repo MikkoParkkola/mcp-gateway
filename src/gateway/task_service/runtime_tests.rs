@@ -245,6 +245,12 @@ async fn task_store_under_readonly_home_is_fatal() {
     }
 
     let refused = open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions()).await;
+    // MIK-7749 evidence run: what this refusal actually is on each platform.
+    eprintln!(
+        "MIK-7749 refusal seen: {:?}; store dir exists afterwards: {}",
+        refused.as_ref().err(),
+        store_dir.exists()
+    );
     assert!(
         refused.is_err(),
         "a store under an unwritable home must refuse to open"
