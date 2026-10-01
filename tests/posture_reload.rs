@@ -24,9 +24,12 @@ struct Fixture {
 fn document(posture: &str, description: &str) -> Value {
     json!({
         "backends": {"keep": {"command": "echo keep", "enabled": true, "description": description}},
-        "security": {"posture": posture}
+        "security": {"posture": posture, "message_signing": {"shared_secret": SIGNING_SECRET}}
     })
 }
+
+/// Hardened forces signing, which needs a secret (row 6); inert under standard.
+const SIGNING_SECRET: &str = "hardened-signing-secret-0123456789abcdef";
 
 impl Fixture {
     fn new(posture: &str) -> Self {
@@ -148,7 +151,10 @@ fn local(port: u16) -> Value {
 }
 
 fn with_backends(posture: &str, backends: Value) -> Value {
-    let mut document = json!({"security": {"posture": posture}});
+    let mut document = json!({"security": {
+        "posture": posture,
+        "message_signing": {"shared_secret": SIGNING_SECRET}
+    }});
     document["backends"] = backends;
     document
 }

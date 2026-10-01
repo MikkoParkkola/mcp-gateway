@@ -11,7 +11,7 @@
 //! cover), running `standard` and forwarding to the counting HTTP fixture.
 
 #[path = "common/signing_gateway.rs"]
-mod signing_gateway;
+pub mod signing_gateway;
 
 use std::process::Stdio;
 use std::time::Duration;

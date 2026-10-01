@@ -27,8 +27,15 @@ fn load(body: &str) -> Config {
 }
 
 fn preset_yaml(posture: &str, preset: &str) -> String {
-    format!("security:\n  posture: {posture}\n  context_integrity:\n    preset: {preset}\n")
+    format!(
+        "security:\n  posture: {posture}\n  context_integrity:\n    preset: {preset}\n{SIGNING_YAML}"
+    )
 }
+
+/// Under `security:`: the signing secret hardened requires (row 6). Inert
+/// under standard, where signing stays off.
+const SIGNING_YAML: &str =
+    "  message_signing:\n    shared_secret: hardened-signing-secret-0123456789abcdef\n";
 
 #[test]
 fn hardened_raises_monitor_only_to_team_shared() {
@@ -121,7 +128,7 @@ fn hardened_resolves_env_secret_before_signing_check() {
         let env = dir.path().join("gateway.env");
         crate::gateway::test_helpers::write_owner_only(
             &env,
-            &format!("HARDENED_SIGNING_SECRET={SIGNING_SECRET}\n"),
+            format!("HARDENED_SIGNING_SECRET={SIGNING_SECRET}\n"),
         )
         .unwrap();
         let body = format!(
@@ -326,6 +333,7 @@ fn gateway_startup_logs_posture_once() {
     let mut hardened = unhardened.clone();
     // Not resolved here: the constructor must apply the floor itself.
     hardened.security.posture = SecurityPosture::Hardened;
+    hardened.security.message_signing.shared_secret = SIGNING_SECRET.to_string();
     for (name, config, level) in [
         ("unhardened", unhardened, "WARN"),
         ("hardened", hardened, "INFO"),
@@ -364,6 +372,7 @@ fn gateway_constructor_validates_what_hardened_forces() {
     let mut config = Config::default();
     config.security.posture = SecurityPosture::Hardened;
     config.security.firewall.anomaly_block_threshold = Some(1.5);
+    config.security.message_signing.shared_secret = SIGNING_SECRET.to_string();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -385,7 +394,7 @@ fn firewall_yaml(posture: &str, block: Option<&str>) -> String {
     });
     format!(
         "security:\n  posture: {posture}\n  firewall:\n    enabled: false\n    \
-         anomaly_detection: false\n{block}"
+         anomaly_detection: false\n{block}{SIGNING_YAML}"
     )
 }
 
