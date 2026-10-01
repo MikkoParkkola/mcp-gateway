@@ -1,0 +1,3 @@
+head_sha	b1101b0838e261b1fc2b01a0d9f43aeb688d6f6a
+STDSTAMP	linux	stdstamp.patch	--lib backend::destination_tests::standard_does_not_stamp_listed_backends -- --exact
+STARTUP	linux	startup.patch	--lib gateway::server::tests::hardened_destination::hardened_startup_listed_backend_reaches_loopback -- --exact
