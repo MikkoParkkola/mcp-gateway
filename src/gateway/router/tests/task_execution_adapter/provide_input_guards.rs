@@ -48,7 +48,7 @@ fn live(state: &Arc<AppState>, owner: &str) -> OwnedCallerContext {
     caller(TaskHost::Http(Arc::downgrade(state)), owner)
 }
 
-fn answers(value: Value) -> serde_json::Map<String, Value> {
+fn answers(value: &Value) -> serde_json::Map<String, Value> {
     value.as_object().cloned().expect("an object")
 }
 
@@ -60,7 +60,7 @@ async fn provide_input_refuses_an_unattributable_foreign_absent_or_not_waiting_t
     let (state, _store) = state_with(&mock).await;
     let owner = alice();
     let id = parked(&state, "guards-a").await;
-    let full = || answers(json!({ "confirm": answer() }));
+    let full = || answers(&json!({ "confirm": answer() }));
     let exec = &state.task_executor;
 
     let refused = [
@@ -114,7 +114,7 @@ async fn provide_input_refuses_answers_past_the_record_cap_and_keeps_the_round()
     let id = parked(&state, "guards-b").await;
     let revision = state.tasks.get(&owner, &id).expect("parked").revision;
     let big = "x".repeat(600 * 1024);
-    let oversized = answers(json!({ "confirm": { "action": "accept", "content": { "v": big } } }));
+    let oversized = answers(&json!({ "confirm": { "action": "accept", "content": { "v": big } } }));
     let outcome = state
         .task_executor
         .provide_input(live(&state, &owner), &owner, &id, oversized)
@@ -172,7 +172,7 @@ async fn provide_input_on_a_closed_store_is_unavailable() {
             live(&state, &owner),
             &owner,
             &id,
-            answers(json!({ "confirm": answer() })),
+            answers(&json!({ "confirm": answer() })),
         )
         .await;
     assert!(matches!(outcome, InputOutcome::Unavailable));
@@ -195,7 +195,7 @@ async fn a_resume_with_no_live_host_settles_interrupted_and_calls_no_backend() {
             caller(host, &owner),
             &owner,
             &id,
-            answers(json!({ "confirm": answer() })),
+            answers(&json!({ "confirm": answer() })),
         )
         .await;
     assert!(matches!(outcome, InputOutcome::Accepted));
