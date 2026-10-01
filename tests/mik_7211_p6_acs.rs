@@ -77,7 +77,8 @@ mod source_checks {
         );
         // The two production writers, then every test file that names the key.
         // Fails closed: a new file naming it fails here until it is reviewed
-        // and listed.
+        // and listed. Not caught: a new writer inside a listed file, or a key
+        // built without the literal; the wire tests below cover delivery.
         let allowed = [
             "src/gateway/router/handlers.rs",
             "src/protocol/cacheable.rs",
@@ -92,9 +93,11 @@ mod source_checks {
             "src/protocol/tasks/scope_clamp_tests.rs",
         ];
         let mut offenders = Vec::new();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for path in files {
-            let shown = path.to_string_lossy().replace('\\', "/");
-            if allowed.iter().any(|a| shown.ends_with(a)) {
+            let relative = path.strip_prefix(root).expect("under the crate root");
+            let shown = relative.to_string_lossy().replace('\\', "/");
+            if allowed.contains(&shown.as_str()) {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source reads");
