@@ -102,7 +102,7 @@ async fn signing_meta() -> (Arc<MetaMcp>, tempfile::TempDir) {
     (built.meta_mcp, data_dir)
 }
 
-fn external_invoke(id: Value) -> Value {
+fn external_invoke(id: &Value) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -123,7 +123,7 @@ fn external_invoke(id: Value) -> Value {
 #[tokio::test]
 async fn with_signing_on_an_unrestorable_envelope_is_refused_with_no_id() {
     let (meta, _dir) = signing_meta().await;
-    let response = dispatch_on(&meta, external_invoke(json!({ "not": "an id" }))).await;
+    let response = dispatch_on(&meta, external_invoke(&json!({ "not": "an id" }))).await;
     assert_eq!(
         response.pointer("/error/code").and_then(Value::as_i64),
         Some(-32600),
@@ -142,7 +142,7 @@ async fn with_signing_on_an_unrestorable_envelope_is_refused_with_no_id() {
 #[tokio::test]
 async fn with_signing_on_a_restorable_envelope_keeps_its_id() {
     let (meta, _dir) = signing_meta().await;
-    let response = dispatch_on(&meta, external_invoke(json!("cov3-signed"))).await;
+    let response = dispatch_on(&meta, external_invoke(&json!("cov3-signed"))).await;
     assert_eq!(response["id"], json!("cov3-signed"), "{response}");
     assert_ne!(
         response.pointer("/error/message").and_then(Value::as_str),
