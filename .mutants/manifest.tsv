@@ -1,0 +1,10 @@
+head_sha	df39282f9ab1f1c77e72d67862a32fe7659b42af
+# MIK-7681/7682 bound tests: each store eviction, the reaper end, the grace pass and its deadline.
+b1-profile	linux	b1-profile.patch	--lib gateway::meta_mcp::session_bound_tests::reaped_sessions_leave_no_routing_profile
+b2-state	linux	b2-state.patch	--lib gateway::meta_mcp::session_bound_tests::reaped_sessions_leave_no_fsm_state
+b3-cost	linux	b3-cost.patch	--lib gateway::meta_mcp::session_bound_tests::reaped_sessions_leave_no_cost_bucket
+b4-last-tool	linux	b4-last-tool.patch	--lib gateway::meta_mcp::session_bound_tests::reaped_sessions_leave_no_last_tool
+b5-promoted	linux	b5-promoted.patch	--lib gateway::meta_mcp::session_bound_tests::reaped_sessions_leave_no_promoted_tools
+b6-reaper-end	linux	b6-reaper-end.patch	--lib gateway::meta_mcp::session_bound_tests::reaped_sessions_leave_no_routing_profile
+i1-grace-pass	linux	i1-grace-pass.patch	--lib gateway::meta_mcp::session_inflight_tests::a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_pass
+i2-grace-early	linux	i2-grace-early.patch	--lib gateway::meta_mcp::session_inflight_tests::a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_pass

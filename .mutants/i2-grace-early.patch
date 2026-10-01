@@ -1,0 +1,13 @@
+diff --git a/src/gateway/session_lifecycle.rs b/src/gateway/session_lifecycle.rs
+index d86b618ce..d6b0cb6b6 100644
+--- a/src/gateway/session_lifecycle.rs
++++ b/src/gateway/session_lifecycle.rs
+@@ -195,7 +195,7 @@ impl SessionLifecycle {
+         // The second pass for sessions that ended a grace period ago.
+         let due: Vec<String> = {
+             let mut pending = self.ended_pending.write();
+-            let (due, later): (Vec<_>, Vec<_>) = pending.drain(..).partition(|(_, at)| now > *at);
++            let (due, later): (Vec<_>, Vec<_>) = pending.drain(..).partition(|(_, _at)| true);
+             *pending = later;
+             due.into_iter().map(|(id, _)| id).collect()
+         };

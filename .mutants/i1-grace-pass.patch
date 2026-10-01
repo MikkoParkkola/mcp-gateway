@@ -1,0 +1,15 @@
+diff --git a/src/gateway/session_lifecycle.rs b/src/gateway/session_lifecycle.rs
+index d86b618ce..1fa4875d0 100644
+--- a/src/gateway/session_lifecycle.rs
++++ b/src/gateway/session_lifecycle.rs
+@@ -199,9 +199,7 @@ impl SessionLifecycle {
+             *pending = later;
+             due.into_iter().map(|(id, _)| id).collect()
+         };
+-        for id in due {
+-            self.fire_ended(&id);
+-        }
++        drop(due);
+         let expired: Vec<String> = {
+             let mut tracked = self.tracked.write();
+             let expired: Vec<String> = tracked
