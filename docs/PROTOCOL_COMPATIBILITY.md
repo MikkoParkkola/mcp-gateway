@@ -84,7 +84,7 @@ with a protocol error that names that revision
 | A backend asks for a request type outside `sampling/createMessage`, `elicitation/create` and `roots/list` | The call fails; nothing is sent to the client | `tests/mik_7212_mrtr7_bridge_acs.rs::ac_mrtr_7a_a_method_outside_the_closed_set_is_refused_unsent` |
 | A backend asks a legacy client for something its `initialize` did not declare (for example elicitation) | The call fails; the client is not asked | `tests/mik_7212_mrtr7_stdio_acs.rs::mik_1991_a_handshake_without_elicitation_keeps_the_question_out` |
 | A bridged exchange runs past its request or time bounds | The call fails | `tests/mik_7212_mrtr7_bridge_acs.rs::ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent`, `::ac_mrtr_7b_a_wait_bounded_by_the_aggregate_remainder_is_a_deadline` |
-| A bridged exchange runs out of rounds | The last question is handed back as a sealed continuation instead of being asked in-band | `tests/mik_7212_mrtr7_bridge_acs.rs::ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries`; hand-back in `invoke_tool` (`src/gateway/meta_mcp/invoke.rs`) |
+| A bridged exchange runs out of rounds | The last question is handed back as a sealed continuation instead of being asked in-band. A caller with no verified identity cannot be bound to a continuation, so it gets an error instead | `tests/mik_7212_mrtr7_bridge_acs.rs::ac_mrtr_7b_the_retry_bound_cuts_off_after_three_retries`; `src/gateway/meta_mcp/bridge_fallthrough_tests.rs::t3d_an_exhausted_exchange_that_cannot_be_sealed_releases_the_key`; hand-back in `invoke_tool` (`src/gateway/meta_mcp/invoke.rs`) |
 
 ## Limits
 
