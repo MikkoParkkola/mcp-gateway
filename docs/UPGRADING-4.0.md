@@ -139,6 +139,7 @@ backend" and "fails a capability file" first.**
 | 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result whose nonce was admitted, on `/mcp` and `/mcp/{backend}`, is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]` (answers given before admission are unsigned); a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 | 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
+| 115 | A legacy session now expires after `streaming.session_ttl` of inactivity, not at that age; when it ends (an owned `DELETE /mcp` or the reaper), its routing profile, workflow state, cost bucket and other per-session state are reclaimed, and its cost stays in the aggregate | None. A client that kept a session open across the 30-minute mark keeps it, and its profile, while it stays active |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3292,6 +3293,27 @@ New key `security.hardened.private_backends: [backend names]`, default empty, re
 
 **Action:** to adopt `hardened` with a local or in-cluster HTTP backend, add its name to
 `security.hardened.private_backends`. List only the backends that need it.
+
+## 115. Sessions expire when idle, and their state goes with them
+
+**Startup:** no notice
+
+`streaming.session_ttl` (default 30 minutes) used to be measured from a legacy session's
+creation. A session that only POSTs holds no stream, so a busy one was reaped at that age, and
+since 4.0 never adopts a presented id, its next request got a new session on the default routing
+profile, losing a profile narrowed by `gateway_set_profile`. The TTL is now idle time: every
+request that resumes or acts under the session, on `/mcp` and on the direct `/mcp/{name}` route,
+renews it. A session with no request and no open stream for the TTL is still reaped.
+
+When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
+is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
+and spec-preview promotions. Before, these were never removed and grew with every session. The
+ended session's calls, tokens and cost stay in the operator's aggregate totals. A second pass
+two minutes after the end removes state that a call still in flight wrote under the ended id; a
+call that runs longer than that (a backend `timeout` above two minutes) can still leave an entry.
+
+**Action:** none. A client that relied on a session being replaced after 30 minutes should send
+`DELETE /mcp` instead.
 
 ## Upgrading from 3.5.x: a walkthrough
 
