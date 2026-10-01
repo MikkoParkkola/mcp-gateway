@@ -503,6 +503,11 @@ impl Firewall {
         self.tenant_guard.response_tenants(result)
     }
 
+    /// The tenant guard, for attribution reads that record nothing (MIN.1).
+    pub(crate) const fn tenant_guard(&self) -> &tenant_guard::TenantGuard {
+        &self.tenant_guard
+    }
+
     /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Pushes a
     /// finding into `findings` for a refused or unattributable call and
     /// returns whether the caller must be force-blocked (unattributable —

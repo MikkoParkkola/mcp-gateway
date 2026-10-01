@@ -46,6 +46,9 @@ pub(crate) struct DispatchNotes {
     data_classes: BTreeSet<String>,
     /// Served from a cache: no gate ran, so the delivered value is attributed.
     cached: bool,
+    /// MIN.1: the response held text over the attribution parse bound, so its
+    /// tenants were not read.
+    uninspected: bool,
 }
 
 tokio::task_local! {
@@ -71,7 +74,18 @@ pub(super) fn noted_response(meta: &MetaMcp, result: Value) -> Value {
     if !tenants.is_empty() {
         note(|notes| notes.response_tenants.extend(tenants));
     }
+    if meta.response_uninspected(&result) {
+        note(|notes| notes.uninspected = true);
+    }
     result
+}
+
+/// MIN.1: this call's response was refused before its tenants could be read
+/// (a signature-chain refusal at raw receipt). Only when attribution is on.
+pub(crate) fn note_uninspected(meta: &MetaMcp) {
+    if meta.attributes_tenants() {
+        note(|notes| notes.uninspected = true);
+    }
 }
 
 /// MIK-7116.MIN.1: note the kernel's data classes, and hand the evaluation on.
@@ -125,25 +139,29 @@ impl DispatchNotes {
         mut tenants: BTreeSet<String>,
         delivered: Option<&Value>,
     ) -> Map<String, Value> {
+        let mut uninspected = self.uninspected;
         if self.cached {
             if let Some(value) = delivered {
                 tenants.extend(meta.response_tenants(value));
+                uninspected |= meta.response_uninspected(value);
             }
         } else {
             tenants.extend(self.response_tenants.iter().cloned());
         }
         let mut fields = Map::new();
-        if tenants.is_empty() {
+        if tenants.is_empty() && !uninspected {
             return fields;
         }
-        let hashed: BTreeSet<String> = tenants
-            .into_iter()
-            .map(|id| crate::security::hash_argument(&Value::String(id)))
-            .collect();
-        fields.insert(
-            "tenants".into(),
-            hashed.into_iter().collect::<Vec<_>>().into(),
-        );
+        if !tenants.is_empty() {
+            let hashed: BTreeSet<String> = tenants
+                .into_iter()
+                .map(|id| crate::security::hash_argument(&Value::String(id)))
+                .collect();
+            fields.insert(
+                "tenants".into(),
+                hashed.into_iter().collect::<Vec<_>>().into(),
+            );
+        }
         if !self.data_classes.is_empty() {
             let classes: Vec<Value> = self
                 .data_classes
@@ -153,8 +171,16 @@ impl DispatchNotes {
                 .collect();
             fields.insert("data_classes".into(), classes.into());
         }
-        if self.cached {
-            fields.insert("attribution".into(), "cached_delivery".into());
+        // One value names how far the attribution can be trusted: past the
+        // gates (a cache or replay), unread (text over the parse bound), or both.
+        let marker = match (self.cached, uninspected) {
+            (true, true) => Some("cached_delivery_uninspected"),
+            (true, false) => Some("cached_delivery"),
+            (false, true) => Some("uninspected"),
+            (false, false) => None,
+        };
+        if let Some(marker) = marker {
+            fields.insert("attribution".into(), marker.into());
         }
         fields
     }
@@ -188,6 +214,35 @@ impl MetaMcp {
         }
         let _ = result;
         BTreeSet::new()
+    }
+
+    /// MIN.1: whether tenant attribution is configured (a firewall with
+    /// `arg_keys`). False without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn attributes_tenants(&self) -> bool {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.tenant_guard().attributes();
+        }
+        false
+    }
+
+    /// MIN.1: whether `result` holds text the attribution could not read.
+    /// False without a firewall, like [`Self::response_tenants`].
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.tenant_guard().response_uninspected(result);
+        }
+        let _ = result;
+        false
     }
 }
 
