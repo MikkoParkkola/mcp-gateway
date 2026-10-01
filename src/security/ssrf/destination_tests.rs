@@ -170,4 +170,16 @@ fn listed_private_backend_tool_call_passes_proxy_check() {
     assert!(check(DestinationPolicy::Private, "http://[fd00:ec2::254]/").is_err());
     assert!(check(DestinationPolicy::Public, "http://127.0.0.1:9/mcp").is_err());
     assert!(check(DestinationPolicy::Configured, "http://127.0.0.1:9/mcp").is_err());
+    // A URL without a host is refused under `Private` too, as the full
+    // validation refuses it.
+    for hostless in ["file:///tmp/example", "localhost:8080/mcp"] {
+        assert!(
+            check(DestinationPolicy::Private, hostless).is_err(),
+            "{hostless}"
+        );
+        assert!(
+            check(DestinationPolicy::Public, hostless).is_err(),
+            "{hostless}"
+        );
+    }
 }
