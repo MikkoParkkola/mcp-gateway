@@ -891,6 +891,8 @@ jobs:
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the NFR.DEMO.1 recording gate
         run: python3 scripts/release/test_check_nfr_demo_1_recordings.py
+      - name: Test the bot-review sweep (review-summary findings)
+        run: python3 scripts/release/test_botreview_sweep.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the
