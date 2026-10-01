@@ -187,7 +187,7 @@ pub struct BackendRegistry {
     reload_read: Arc<tokio::sync::Semaphore>,
     /// Where registered backends may connect; set once. See
     /// [`BackendRegistry::enforce_destination`].
-    destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    destination: std::sync::OnceLock<Destinations>,
 }
 
 impl BackendRegistry {
@@ -266,8 +266,8 @@ impl BackendRegistry {
             );
             return false;
         }
-        if let Some(policy) = self.destination.get() {
-            backend.stamp_destination(*policy);
+        if let Some(destinations) = self.destination.get() {
+            backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         let name = backend.name.clone();
         self.backends.insert(name.clone(), backend);
@@ -284,15 +284,30 @@ impl BackendRegistry {
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
     pub(crate) fn enforce_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
+        self.enforce_destinations(policy, &[]);
+    }
+
+    /// [`Self::enforce_destination`], with the backends named in
+    /// `security.hardened.private_backends` stamped `Private` instead.
+    ///
+    /// The policy and the names are one snapshot, recorded once, so every
+    /// backend registered later is stamped from the same answer.
+    pub(crate) fn enforce_destinations(
+        &self,
+        policy: crate::security::ssrf::DestinationPolicy,
+        private_backends: &[String],
+    ) {
         // Unset already means `Configured`; recording anything but `Public`
         // would let a standard pairing block a later hardened one.
         if policy != crate::security::ssrf::DestinationPolicy::Public {
             return;
         }
         let _stopping = self.stopping.lock();
-        let policy = *self.destination.get_or_init(|| policy);
+        // RED STUB: the list is ignored until 4c lands.
+        let _ = private_backends;
+        let destinations = self.destination.get_or_init(|| Destinations { policy });
         for backend in &self.backends {
-            backend.stamp_destination(policy);
+            backend.stamp_destination(destinations.for_backend(backend.key()));
         }
     }
 
@@ -454,5 +469,17 @@ mod tests {
             Arc::ptr_eq(&still_there, &original),
             "the entry under this name is not the one that was registered"
         );
+    }
+}
+
+/// The destination answer a registry stamps on its backends.
+struct Destinations {
+    policy: crate::security::ssrf::DestinationPolicy,
+}
+
+impl Destinations {
+    fn for_backend(&self, name: &str) -> crate::security::ssrf::DestinationPolicy {
+        let _ = name;
+        self.policy
     }
 }

@@ -22,6 +22,10 @@
 //!   OAuth URLs are checked before use, and proxy environment variables are
 //!   ignored. The policy is stamped by the backend registry, so a backend
 //!   used with no config at all has no posture and none is enforced;
+//! - a backend named in `security.hardened.private_backends` connects under
+//!   [`crate::security::ssrf::DestinationPolicy::Private`] instead: loopback,
+//!   RFC 1918 and unique-local are reachable, link-local and the cloud metadata
+//!   addresses never; a listed name that is no configured backend refuses start;
 //! - message signing is on, so a start without a signing secret of at least
 //!   32 bytes is refused; every successful `tools/call` result on both routes
 //!   is signed;
@@ -50,6 +54,17 @@ pub enum SecurityPosture {
     Standard,
     /// Raise the controls listed in the module docs, whatever they are set to.
     Hardened,
+}
+
+/// Settings read only under `security.posture: hardened`
+/// (`security.hardened`). Restart-only.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HardenedConfig {
+    /// Backends that may reach loopback, RFC 1918 and unique-local addresses
+    /// (never link-local or the cloud metadata addresses). Every other backend
+    /// reaches public addresses only. Each name must be a configured backend.
+    pub private_backends: Vec<String>,
 }
 
 /// Whether this binary was built with the `firewall` feature.

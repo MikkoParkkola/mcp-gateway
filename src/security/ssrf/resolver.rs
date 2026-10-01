@@ -74,6 +74,9 @@ impl HostResolver for SystemResolver {
 /// configured-backend exemption.
 pub struct PinningResolver<R = SystemResolver> {
     inner: std::sync::Arc<R>,
+    /// What a resolved address is checked against: `Public` unless a listed
+    /// private backend's client asks for `Private`.
+    policy: super::DestinationPolicy,
 }
 
 impl<R: HostResolver> PinningResolver<R> {
@@ -81,7 +84,14 @@ impl<R: HostResolver> PinningResolver<R> {
     pub fn new(inner: R) -> Self {
         Self {
             inner: std::sync::Arc::new(inner),
+            policy: super::DestinationPolicy::Public,
         }
+    }
+
+    /// Check resolved addresses against `policy` instead of `Public`.
+    pub(crate) fn with_policy(mut self, policy: super::DestinationPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 }
 
@@ -90,6 +100,7 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
         let host = name.as_str().to_owned();
         // Clone the Arc so the future is 'static (no borrow of self).
         let inner = std::sync::Arc::clone(&self.inner);
+        let policy = self.policy;
         Box::pin(async move {
             type BoxErr = Box<dyn std::error::Error + Send + Sync>;
             let ips = inner
@@ -98,7 +109,7 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
                 .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as BoxErr)?;
 
             for ip in &ips {
-                if is_private_or_reserved(*ip) {
+                if policy.denies(*ip) {
                     // The address stays in the log: the refusal reaches callers,
                     // and naming it would answer internal DNS for them.
                     tracing::warn!(host = %host, address = %ip, "SSRF pin refused a resolved address");

@@ -197,3 +197,135 @@ fn configured_first_does_not_block_public() {
     assert!(registry.register(Arc::clone(&later)));
     assert_eq!(later.destination(), DestinationPolicy::Public);
 }
+
+/// Start backend `name` at `template` in a hardened registry listing `listed`.
+async fn start_listed(template: &str, name: &str, listed: &[&str]) -> (crate::Result<()>, usize) {
+    let (port, accepted) = counting_listener().await;
+    let registry = BackendRegistry::new();
+    let listed: Vec<String> = listed.iter().map(|n| (*n).to_string()).collect();
+    registry.enforce_destinations(DestinationPolicy::Public, &listed);
+    let config = BackendConfig {
+        transport: transport(template, port),
+        timeout: Duration::from_secs(10),
+        ..BackendConfig::default()
+    };
+    let backend = Arc::new(Backend::new(
+        name,
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    let started = backend.ensure_started().await;
+    (started, accepted.load(Ordering::SeqCst))
+}
+
+/// Row 13: a listed backend reaches loopback, by literal and by name, and an
+/// RFC 1918 literal is not refused by the policy; link-local, the IPv4 metadata
+/// address and the IPv6 metadata address inside fc00::/7 never are. An
+/// unlisted backend in the same registry is still held to `Public`.
+#[tokio::test]
+async fn listed_private_backend_policy() {
+    for template in [
+        "http://127.0.0.1:{port}/mcp",
+        "http://localhost:{port}/mcp",
+        "ws://127.0.0.1:{port}/ws",
+    ] {
+        let (started, accepted) = start_listed(template, "local", &["local"]).await;
+        if let Err(error) = &started {
+            assert!(
+                !error.to_string().contains("SSRF blocked"),
+                "{template}: a listed backend was refused: {error}"
+            );
+        }
+        assert!(
+            accepted >= 1,
+            "{template}: the listed backend never connected"
+        );
+    }
+    for template in [
+        "http://169.254.169.254:{port}/mcp",
+        "http://[fe80::1]:{port}/mcp",
+        "http://[fd00:ec2::254]:{port}/mcp",
+        "ws://[fd00:ec2::254]:{port}/ws",
+    ] {
+        let (started, accepted) = start_listed(template, "local", &["local"]).await;
+        assert_refused(template, &started, accepted);
+    }
+    let (started, accepted) =
+        start_listed("http://127.0.0.1:{port}/mcp", "other", &["local"]).await;
+    assert_refused("unlisted loopback", &started, accepted);
+}
+
+/// Reload stamping: a backend registered after the snapshot is stamped from
+/// it: listed names `Private`, every other `Public`.
+#[test]
+fn reload_stamps_listed_backends_private() {
+    let registry = BackendRegistry::new();
+    registry.enforce_destinations(DestinationPolicy::Public, &["listed".to_string()]);
+    let backend = |name: &str| {
+        Arc::new(Backend::new(
+            name,
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ))
+    };
+    let (listed, other) = (backend("listed"), backend("other"));
+    assert!(registry.register(Arc::clone(&listed)));
+    assert!(registry.register(Arc::clone(&other)));
+    assert_eq!(listed.destination(), DestinationPolicy::Private);
+    assert_eq!(other.destination(), DestinationPolicy::Public);
+    // A second pairing cannot replace the snapshot.
+    registry.enforce_destinations(DestinationPolicy::Public, &["later".to_string()]);
+    let later = backend("later");
+    assert!(registry.register(Arc::clone(&later)));
+    assert_eq!(later.destination(), DestinationPolicy::Public);
+}
+
+/// A loopback listener that accepts every connection and never writes: no
+/// TLS handshake, no upgrade answer.
+async fn stalling_listener() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            held.push(stream);
+        }
+    });
+    port
+}
+
+/// T14: the WebSocket connect timeout bounds the whole pinned connect. A
+/// listed backend's loopback server that stalls the upgrade (`ws`) or the TLS
+/// handshake (`wss`) fails with the timeout, not a hang.
+#[tokio::test]
+async fn pinned_websocket_connect_times_out_whole() {
+    for scheme in ["ws", "wss"] {
+        let port = stalling_listener().await;
+        let registry = BackendRegistry::new();
+        registry.enforce_destinations(DestinationPolicy::Public, &["slow".to_string()]);
+        let config = BackendConfig {
+            transport: transport(&format!("{scheme}://127.0.0.1:{{port}}/ws"), port),
+            timeout: Duration::from_secs(1),
+            ..BackendConfig::default()
+        };
+        let backend = Arc::new(Backend::new(
+            "slow",
+            config,
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        assert!(registry.register(Arc::clone(&backend)));
+        assert_eq!(backend.destination(), DestinationPolicy::Private);
+        let started = tokio::time::timeout(Duration::from_secs(20), backend.ensure_started())
+            .await
+            .unwrap_or_else(|_| panic!("{scheme}: the connect was not bounded"));
+        let error = started.expect_err(scheme);
+        assert!(
+            error.to_string().contains("WebSocket connect timed out"),
+            "{scheme}: {error}"
+        );
+    }
+}

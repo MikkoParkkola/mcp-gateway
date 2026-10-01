@@ -596,7 +596,10 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
-        backends.enforce_destination(DestinationPolicy::for_posture(config.security.posture));
+        backends.enforce_destinations(
+            DestinationPolicy::for_posture(config.security.posture),
+            &config.security.hardened.private_backends,
+        );
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding

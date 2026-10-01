@@ -127,9 +127,14 @@ pub(crate) use redirect::MAX_REDIRECT_HOPS;
 /// and pinned by [`PinningResolver`], and `HTTP(S)_PROXY` from the environment
 /// is ignored, since a proxy would resolve the name instead of the pin.
 pub(crate) fn pinned_client_builder() -> reqwest::ClientBuilder {
+    pinned_client_builder_for(DestinationPolicy::Public)
+}
+
+/// [`pinned_client_builder`], checking resolved addresses against `policy`.
+pub(crate) fn pinned_client_builder_for(policy: DestinationPolicy) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .no_proxy()
-        .dns_resolver(PinningResolver::new(SystemResolver))
+        .dns_resolver(PinningResolver::new(SystemResolver).with_policy(policy))
 }
 
 // ============================================================================
