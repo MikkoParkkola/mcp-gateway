@@ -43,10 +43,13 @@ capability's own response policy.
 **authorize.** `may_invoke(capability)` for the principal, the same predicate
 `tools/list` uses (P§3.7). Re-run at every fan-out, as for every source.
 
-**on_first_subscriber / on_last_subscriber.** Start or stop one poll task per
-canonical `(capability, arguments)`. Two principals watching the same
-canonical arguments share one poller, which is why the hook is keyed on
-arguments and not on subscriptions. Sharing applies only to credential-free
+**lifecycle_key / on_first_subscriber / on_last_subscriber.** The source
+overrides `lifecycle_key` (P§4): for a credential-free capability the key is
+JCS of `(capability, arguments)`, so two principals watching the same
+arguments share one poller; for a credentialed capability the key also
+includes the principal. The hooks start and stop one poll task per key, and
+`on_first_subscriber` receives the principal whose credential a credentialed
+poller runs under. Sharing applies only to credential-free
 capabilities. For a credentialed capability the poll key also includes the
 principal and the poll runs under that principal's credential, so one
 principal's credential never answers for another's subscription.
@@ -54,15 +57,38 @@ principal's credential never answers for another's subscription.
 **Poll.** Each poll calls the capability through the normal executor, so it
 picks up the firewall, budget and rate limits a tool call gets. It then takes
 a JCS digest of the selected `fields` (or of the whole result) and emits on a
-digest change. The first poll sets the baseline and emits nothing.
-`upstream_id` = digest_after, so a flap A→B→A→B produces distinct events but
-a repeated identical observation does not. Polls run with jitter. Each poll
-is charged to the subscribing principal's budget under `events:watch:<cap>`,
-so a watch's cost is visible and bounded by the existing governor. A poll
+digest change. The first poll sets the baseline and emits nothing. Equal
+consecutive digests emit nothing. `upstream_id` = digest_before ‖
+digest_after ‖ the poller's monotonic change counter, so every transition,
+including a flap A→B→A→B, is a distinct occurrence. Polls run with jitter. Cost: a
+credentialed (unshared) poller charges each poll to its one principal under
+`events:watch:<cap>`; an exhausted budget stops that poller. A shared,
+credential-free poller is charged to the gateway's global budget, not split
+across subscribers, because a split would let one subscriber's exhaustion
+stop polling for the others. Each subscriber still pays per delivery through
+the parent's per-attempt budget check (P§3.2 step 7), which refuses only the
+exhausted principal's deliveries. `events.watch.max_pollers` (default 100) is
+a global pool with a per-principal sub-cap
+`events.watch.max_pollers_per_principal` (default 10), counted on keys a
+principal holds alone. A poll
 failure is not an event. After 5 consecutive failures the poller backs off to
 the maximum interval and records an audit entry.
 
-**matches.** True for the poller's own key only.
+**matches.** True for the poller's own key only. The occurrence's `scope`
+is `Visibility::Backend(<capability's backend>)`, and the parent re-runs
+`authorize` (here `may_invoke`) for every recipient at every attempt, so
+sharing a poller never widens who receives its events.
+
+**Capability removed or reclassified.** If a watched capability disappears
+or stops being read-only on a reload, its descriptor leaves the catalogue
+(`catalogue_changed`), its pollers stop, and its subscriptions are deleted,
+so the next refresh answers `-32011`.
+
+**Volatile fields.** A result carrying a timestamp or request id changes on
+every poll. The descriptor's `fields` argument is the remedy and its
+description says so. With no `fields`, the source excludes top-level keys
+named `timestamp`, `requestId`, `request_id` and `generatedAt` from the
+digest by default.
 
 **Core changes needed:** none. Config gains `events.sources.rest_watch`
 (default off) and `events.watch.max_pollers` (default 100); both live in the
@@ -126,7 +152,8 @@ five fields, no seconds.
 - the parent's per-principal subscription cap;
 - a minimum period of 5 minutes, refused with `-32602` and
   `data.field = "arguments.cron"` when the expression can fire more often;
-- `events.schedule.max_timers` (default 1000).
+- `events.schedule.max_timers` (default 1000, global) with a per-principal
+  sub-cap of 20.
 
 **on_first_subscriber / on_last_subscriber.** Start or stop one timer per
 canonical `(cron, timezone, label)`. Timers share one minute-boundary ticker
@@ -148,6 +175,7 @@ while the gateway was down is not emitted late (emit-only).
 | `descriptors` | per read-only capability | 4 fixed | 1 fixed |
 | `authorize` | `may_invoke` | admin standing / own budget | authenticated + cron floor |
 | `matches` | own poll key | field equality | canonical-argument equality |
+| `lifecycle_key` | arguments, plus principal when credentialed | default | default |
 | `on_first_subscriber` | start poller | no-op | start timer |
 | `on_last_subscriber` | stop poller | no-op | stop timer |
 | descriptor `charge` | true | false for `budget.*` | true |
@@ -181,14 +209,16 @@ criterion in the follow-up ticket.
 |---|---|---|---|
 | U1 | `watch_is_offered_only_for_read_only_capabilities` | `events/list` shows `watch.<cap>.changed` for a read-only REST capability and not for a side-effecting one; subscribing to the latter → `-32011` | no watch descriptors exist |
 | U2 | `watch_emits_on_digest_change_only` | a mock REST endpoint answers A, A, B, B, A → events after the 3rd and 5th polls; first poll emits nothing; payload holds pointers and digests, no values | no watch source |
-| U3 | `watch_pollers_are_shared_per_canonical_arguments_and_credential` | two principals, credential-free capability, same arguments → one poller (mock sees one call per interval); credentialed capability → two pollers | no watch source |
+| U3 | `watch_pollers_are_shared_per_canonical_arguments_and_credential` | two principals, credential-free capability, same arguments → one poller (mock sees one call per interval), charged to the global budget; credentialed capability → two pollers, each under its own credential; a flap A→B→A→B → three events with three distinct `eventId`s | no watch source |
 | U4 | `watch_polls_are_budgeted_and_floored` | `interval: 10` → `-32602`; each poll charges `events:watch:<cap>` to the subscriber; an exhausted budget stops polling | no watch source |
 | U5 | `operational_events_are_operator_only_except_own_budget` | an admin sees all four descriptors; a non-admin sees only `gateway.budget.*` and receives only events for their own budget scope | no operational source |
 | U6 | `budget_events_are_not_charged_to_the_budget_they_report` | exhausting a principal's budget delivers `gateway.budget.exhausted` exactly once and the ledger shows no charge for that delivery | no operational source |
 | U7 | `health_and_kill_switch_transitions_become_events` | killing and reviving a backend → two `kill_switch.changed` events; tripping a breaker → one `health_changed` | no operational source |
 | U8 | `schedule_ticks_fire_on_cron_and_respect_the_floor` | a test clock crossing `*/5 * * * *` fires one tick per boundary; `* * * * *` → `-32602`; restart within the same minute does not double-fire | no schedule source |
 | U9 | `schedule_label_is_capped_and_scanned` | a 65-character label → `-32602`; a label carrying a blocked injection pattern is dead-lettered `firewall_blocked` | no schedule source |
-| U10 | `deferred_sources_need_no_core_change` | a CI check that the diff introducing each source touches no file under `src/events/` other than the source's own module and the source registry line | the check does not exist; it is added with the first 4.0.1 source and fails if the core is edited |
+| U10 | `deferred_sources_need_no_core_change` (structural guard, exempt from red-first) | a CI check that a PR adding a source touches no file under `src/events/` other than the source's own module and the registry line | lands as its own PR **before** the first 4.0.1 source and is shown to fail on a synthetic diff that edits a core file; it guards structure and has no behaviour to see red |
+| U11 | `watch_stops_when_its_capability_is_removed_or_reclassified` | reclassifying a watched capability as side-effecting on reload → poller stops (mock sees no further calls), subscription deleted, refresh answers `-32011` | no watch source |
+| U12 | `watch_ignores_default_volatile_fields` | a result whose only change is `timestamp` → no event; with `fields` naming `/timestamp` → an event | no watch source |
 
 ## 8. Increments
 
@@ -197,3 +227,10 @@ point where the trait and its hooks are public), and each defaults to off.
 Order: scheduler (smallest, exercises the timer hooks), then operational
 (always-on producers, exercises `charge: false`), then REST watch (largest,
 exercises shared pollers and budget per poll).
+
+## 9. Review record
+
+| Round | Seat | Verdict | Material findings and disposition |
+|---|---|---|---|
+| 1 | A (on the parent packet) | SHIP-WITH-FIXES | Hooks keyed without the principal could not run credentialed pollers (fixed with `lifecycle_key` in the parent trait); `digest_after` alone repeated on a flap (fixed with a change counter). |
+| 1 | B | SHIP-WITH-FIXES | Shared-poller charging rule (global budget for shared polls, per-delivery charge per subscriber); flap id; U10 relabelled as a structural guard landing first; occurrence scope, pool caps, capability removal and volatile fields specified; rows U11–U12. |
