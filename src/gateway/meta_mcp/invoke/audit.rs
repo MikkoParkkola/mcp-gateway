@@ -65,6 +65,10 @@ pub(crate) struct DispatchNotes {
     upstream_task: Option<String>,
 }
 
+#[cfg(all(test, feature = "metrics"))]
+#[path = "audit_settlement_tests.rs"]
+mod settlement_tests;
+
 tokio::task_local! {
     /// The notes of the call running in this scope, for this call only.
     static NOTES: RefCell<DispatchNotes>;
