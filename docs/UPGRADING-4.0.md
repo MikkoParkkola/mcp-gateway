@@ -3109,6 +3109,8 @@ gateway delivers (HTTP, batch, SSE, stdio, task envelopes and webhook `message` 
 `cacheScope` that is not `"private"` is delivered as `"private"`. A result with no `cacheScope` is
 unchanged, and nested tool data is never rewritten. For library users, `CacheScope::Public` now
 carries `std::convert::Infallible`, so no value can be built, and `CacheScope::for_list` is removed.
+Data persisted before 4.0 with `public` scope, such as a stored task result, keeps its stored value
+and is read and delivered as `private`; nothing needs to be flushed.
 
 **Action:** none for clients. A shared cache that relied on a backend's `public` must stop; the
 gateway will not vouch for a response it computed from one caller's state. Rust code that named
