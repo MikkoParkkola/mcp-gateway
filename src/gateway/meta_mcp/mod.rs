@@ -139,10 +139,9 @@ pub(crate) const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
 
 /// Authenticated caller context for a `tools/call` dispatch.
 ///
-/// Deliberately has **no `Default`**: the authorizer is mandatory, and a
-/// derived default would let a construction site acquire one by omission. Every
-/// site names the authorizer it means, which in tests makes a permissive one
-/// visible in the test source rather than hidden in a struct default.
+/// Deliberately has **no `Default`**: the authorizer is mandatory, and a derived default would let
+/// a construction site acquire one by omission. Every site names the authorizer it means, which in
+/// tests makes a permissive one visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
     /// Explicit request era, classified by the transport from reserved metadata.
     pub is_modern: bool,
@@ -195,23 +194,19 @@ pub struct MetaMcpCallerContext<'a> {
     /// Set by the two stdio context builders only (no constructor outside
     /// `gateway::server`); binds continuations to the stdio client.
     pub(crate) stdio_nonce: Option<&'a crate::gateway::server::StdioNonce>,
-    /// The caller's `CallerKey` (`router::identity::caller_key`), `None` when
-    /// it has none. The A/B arm and the prefetch hints key on it (gap G4);
-    /// only the HTTP route derives one.
+    /// The caller's `router::identity::caller_key`, set by HTTP only; see `experiment_key`.
     pub(crate) caller_key: Option<&'a str>,
-    /// Whether the caller holds admin. Carried here because meta-tools with
-    /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
-    /// `router::authorization`, which only knows whole tools.
+    /// Whether the caller holds admin: meta-tools with admin-only PARAMETERS cannot be gated by
+    /// the tool-name allow-list in `router::authorization`, which knows only whole tools.
     pub is_admin: bool,
     /// What this caller declared on **this** request.
     ///
-    /// A parsed set rather than a single "may be asked for input" bit, because
-    /// MRTR.9 refuses per requested method and MRTR.9a per requested *mode*: a
-    /// client that declared `elicitation` and not `sampling` may be sent one
-    /// and not the other, and one that declared elicitation in form mode alone
-    /// may not be sent a url request. On stdio a modern call reads its own
-    /// `_meta` and a legacy call the handshake; absent means absent, and a
-    /// caller that declared nothing is never sent a continuation.
+    /// A parsed set rather than a single "may be asked for input" bit, because MRTR.9 refuses per
+    /// requested method and MRTR.9a per requested *mode*: a client that declared `elicitation` and
+    /// not `sampling` may be sent one and not the other, and one that declared elicitation in form
+    /// mode alone may not be sent a url request. On stdio a modern call reads its own `_meta` and a
+    /// legacy call the handshake; absent means absent, and a caller that declared nothing is never
+    /// sent a continuation.
     pub input_capabilities: Declared,
     /// How this caller can be asked to confirm a destructive action.
     ///
@@ -279,16 +274,6 @@ impl<'a> MetaMcpCallerContext<'a> {
         }
         self.credential_principal
             .filter(|text| !text.starts_with(LOCAL_OPERATOR_PREFIX))
-    }
-
-    /// Who the A/B arm and the prefetch hints key on (MIK-7215.CONTROL.5, G4):
-    /// the caller key, else a real session id (a legacy connection or stdio,
-    /// neither shared). A keyless modern caller has neither: no arm of its
-    /// own and no hints, never the empty id every such caller shares.
-    pub(crate) fn experiment_key<'s>(&'s self, session_id: Option<&'s str>) -> Option<&'s str> {
-        self.caller_key
-            .filter(|key| !key.is_empty())
-            .or_else(|| session_key(session_id))
     }
 
     /// How this caller was established. The stdio transport's mark decides

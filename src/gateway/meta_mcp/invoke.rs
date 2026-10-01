@@ -1777,6 +1777,7 @@ impl MetaMcp {
                     )
                     .increment(1);
                     let predictions = self.record_and_predict(
+                        session_id,
                         caller.experiment_key(session_id),
                         &tool_key,
                         caller.scope(),
@@ -1896,6 +1897,7 @@ impl MetaMcp {
                 reservation.complete(&cached);
             }
             let predictions = self.record_and_predict(
+                session_id,
                 caller.experiment_key(session_id),
                 &tool_key,
                 caller.scope(),
@@ -2557,8 +2559,12 @@ impl MetaMcp {
             );
         }
 
-        let predictions =
-            self.record_and_predict(caller.experiment_key(session_id), &tool_key, caller.scope());
+        let predictions = self.record_and_predict(
+            session_id,
+            caller.experiment_key(session_id),
+            &tool_key,
+            caller.scope(),
+        );
 
         // SEP-1862 dynamic promotion: auto-surface this tool in the session's
         // tools/list after a successful invocation so the LLM can call it
@@ -2663,6 +2669,9 @@ impl MetaMcp {
     ///   top-N predicted successors (see [`crate::tool_registry::ToolRegistry::prefetch_after`]).
     pub(super) fn record_and_predict(
         &self,
+        // The session the visibility check reads (routing profile), and the
+        // key the transition is recorded under.
+        session_id: Option<&str>,
         key: Option<&str>,
         tool_key: &str,
         scope: super::InvokeScope<'_>,

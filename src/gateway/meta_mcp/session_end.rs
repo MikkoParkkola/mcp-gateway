@@ -1,8 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Reclaiming what a gateway keeps per session when that session ends.
+//! Reclaiming what a gateway keeps per session when that session ends, and
+//! the key per-caller state is kept under.
 
-use super::MetaMcp;
+use super::{MetaMcp, MetaMcpCallerContext, session_key};
+
+impl MetaMcpCallerContext<'_> {
+    /// Who the A/B arm and the prefetch hints key on (MIK-7215.CONTROL.5, G4):
+    /// the caller key, else a real session id (a legacy connection or stdio,
+    /// neither shared). A keyless modern caller has neither: no arm of its
+    /// own and no hints, never the empty id every such caller shares.
+    pub(crate) fn experiment_key<'s>(&'s self, session_id: Option<&'s str>) -> Option<&'s str> {
+        self.caller_key
+            .filter(|key| !key.is_empty())
+            .or_else(|| session_key(session_id))
+    }
+}
 
 impl MetaMcp {
     /// Drop every per-session store this gateway keeps for `session_id`
