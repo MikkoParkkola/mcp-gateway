@@ -41,6 +41,7 @@ use crate::security::{
     extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
 };
 
+mod events;
 mod owner;
 pub(super) mod request_checks;
 mod tasks;
@@ -1093,6 +1094,28 @@ async fn meta_mcp_dispatch(
                 &acknowledgement,
                 state.streaming_config.keep_alive_interval,
             );
+        }
+        // MIK-7630. Answered here, never proxied; with events off the guard
+        // fails and the method falls through to `-32601`.
+        "events/list" | "events/subscribe" | "events/unsubscribe"
+            if state.meta_mcp.events().is_some() =>
+        {
+            let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));
+            let sees = |backend: &str| {
+                let session = Some(session_id.as_str());
+                state
+                    .meta_mcp
+                    .admits_backend(backend, invoke_scope, session)
+            };
+            let caller = crate::events::Caller {
+                principal: events::principal(&owner, state.auth_config.enabled),
+                api_key_name: client
+                    .as_ref()
+                    .filter(|c| c.authenticated)
+                    .map(|c| c.name.clone()),
+                sees_backend: &sees,
+            };
+            events::answer(&hub, id, &method, params.as_ref(), &caller).await
         }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.

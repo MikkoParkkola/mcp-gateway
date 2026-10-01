@@ -45,6 +45,7 @@ pub mod control_plane;
 pub mod cost_accounting;
 pub mod discovery;
 pub mod error;
+mod events;
 pub mod failsafe;
 mod fs_lock;
 pub mod gateway;

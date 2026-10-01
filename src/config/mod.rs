@@ -64,7 +64,7 @@ pub use features::{
     TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
 pub use features::{EventsConfig, EventsRateLimit, EventsSourcesConfig};
-pub(crate) use features::{api_key_expired, parse_api_key_digest};
+pub(crate) use features::{api_key_expired, parse_api_key_digest, parse_cidr};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
