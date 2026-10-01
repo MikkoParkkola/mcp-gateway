@@ -97,7 +97,7 @@ impl Backend {
     }
 
     pub fn open_barrier(&self) {
-        self.release.send_replace(true);
+        self.release.send_modify(|open| *open = true);
     }
 }
 
@@ -114,11 +114,19 @@ async fn answer(
             "capabilities": {"tools": {}},
             "serverInfo": {"name": BACKEND, "version": "0"},
         }),
-        Some("tools/list") => json!({"tools": [ECHO, HELD, ASK].map(|name| json!({
-            "name": name,
-            "description": "owner2 fixture tool",
-            "inputSchema": {"type": "object"},
-        }))}),
+        Some("tools/list") => {
+            let tools: Vec<Value> = [ECHO, HELD, ASK]
+                .into_iter()
+                .map(|name| {
+                    json!({
+                        "name": name,
+                        "description": "owner2 fixture tool",
+                        "inputSchema": {"type": "object"},
+                    })
+                })
+                .collect();
+            json!({ "tools": tools })
+        }
         Some("tools/call") => {
             rounds.fetch_add(1, Ordering::SeqCst);
             match tool {
