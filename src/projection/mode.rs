@@ -141,22 +141,26 @@ pub struct AbRecord {
 /// Classify an invocation for A/B telemetry, or `None` when it is not part of
 /// the experiment.
 ///
-/// Only `experimental` mode with a projection-capable tool (`spec_present`) is
-/// in the experiment — `off`/`on` and spec-less tools return `None` so no event
+/// Only `experimental` mode with a projection-capable tool (`spec_present`) and
+/// a key is in the experiment — `off`/`on` and spec-less tools return `None` so no event
 /// is emitted for them. `projected` is true only for the treatment arm of a
 /// non-`_full` call (a `_full` call bypasses projection even in treatment, so it
 /// records `projected = false` while keeping its arm label).
 #[must_use]
 pub fn ab_classification(
     mode: ProjectionMode,
-    session_id: Option<&str>,
+    key: Option<&str>,
     want_full: bool,
     spec_present: bool,
 ) -> Option<AbRecord> {
+    // A call with no key is not in the experiment (G4): it is served the
+    // control shape, but counting it would pool every keyless caller into
+    // the control arm's numbers.
     if mode != ProjectionMode::Experimental || !spec_present {
         return None;
     }
-    let decision = projection_decision(mode, session_id);
+    let key = key?;
+    let decision = projection_decision(mode, Some(key));
     Some(AbRecord {
         arm: decision.arm,
         projected: decision.project && !want_full,

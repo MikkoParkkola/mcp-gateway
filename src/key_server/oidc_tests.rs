@@ -186,3 +186,117 @@ fn stable_actor_id_is_collision_safe() {
     // Length-prefixed form keeps them distinct.
     assert_ne!(a.stable_actor_id(), b.stable_actor_id());
 }
+
+// MIK-7704: a discovery document is remote input. It may point a loopback
+// issuer's keys at loopback, but an https issuer's document naming any
+// cleartext jwks_uri, loopback included, is refused.
+#[test]
+fn validate_discovery_keeps_loopback_keys_to_a_loopback_issuer() {
+    let doc = |issuer: &str| OidcDiscoveryDocument {
+        issuer: issuer.to_string(),
+        jwks_uri: "http://127.0.0.1:39400/jwks".to_string(),
+    };
+    let err = validate_discovery_document("https://idp.example", doc("https://idp.example"))
+        .expect_err("an https issuer may not hand out a cleartext jwks_uri");
+    assert!(err.to_string().contains("non-HTTPS"), "{err}");
+    let uri = validate_discovery_document("http://127.0.0.1:8080", doc("http://127.0.0.1:8080"))
+        .expect("a loopback issuer may name loopback keys");
+    assert_eq!(uri, "http://127.0.0.1:39400/jwks");
+}
+
+/// A loopback server answering `/jwks` with an empty key set and `/hop`
+/// with a redirect to `/jwks` over plain http. The counter is `/jwks` hits.
+async fn loopback_jwks_server() -> (
+    std::net::SocketAddr,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    use axum::{Router, response::Redirect, routing::get};
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let app = Router::new()
+        .route(
+            "/jwks",
+            get(move || async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                axum::Json(serde_json::json!({"keys": []}))
+            }),
+        )
+        .route(
+            "/hop",
+            get(move || async move { Redirect::temporary(&format!("http://{addr}/jwks")) }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    (addr, hits)
+}
+
+// The production client honours the loopback carve-out the config allows,
+// and never sends a loopback fetch through a proxy: an inherited proxy would
+// carry the cleartext request off this machine. The proxy here is a dead
+// port, so a loopback fetch routed through it fails.
+#[tokio::test]
+async fn production_client_fetches_loopback_jwks_without_a_proxy() {
+    let (addr, hits) = loopback_jwks_server().await;
+    let dead_proxy = reqwest::Proxy::all("http://127.0.0.1:9").expect("proxy url");
+    for cache in [
+        JwksCache::new(),
+        JwksCache::with_remote_proxy(Some(dead_proxy)),
+    ] {
+        let jwks = cache
+            .get_or_fetch("http://127.0.0.1", &format!("http://{addr}/jwks"), false)
+            .await
+            .expect("loopback http is allowed and fetched directly");
+        assert!(jwks.keys.is_empty());
+    }
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+// Every fetch is checked where it happens, so no caller can skip it, and a
+// redirect may only move to https.
+#[tokio::test]
+async fn production_client_refuses_cleartext_fetches_and_hops() {
+    let cache = JwksCache::new();
+    let err = cache
+        .get_or_fetch("https://idp.example", "http://idp.example/jwks", false)
+        .await
+        .expect_err("cleartext jwks off this machine");
+    assert!(err.to_string().contains("non-HTTPS"), "{err}");
+    let err = cache
+        .resolve_jwks_uri(
+            "https://idp.example",
+            "http://idp.example/.well-known/openid-configuration",
+        )
+        .await
+        .expect_err("cleartext discovery off this machine");
+    assert!(err.to_string().contains("non-HTTPS"), "{err}");
+
+    let (addr, hits) = loopback_jwks_server().await;
+    let err = cache
+        .get_or_fetch("http://127.0.0.1", &format!("http://{addr}/hop"), true)
+        .await
+        .expect_err("a redirect hop must be https");
+    let chain = std::iter::successors(Some(&err as &dyn std::error::Error), |e| e.source())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" / ");
+    assert!(chain.contains("redirect from a loopback fetch"), "{chain}");
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the cleartext hop target was never requested"
+    );
+}
+
+// The https client's hop rule, which no loopback test server can reach.
+#[test]
+fn remote_redirects_may_only_move_to_https() {
+    let hop = |u: &str| remote_hop_allowed(&url::Url::parse(u).expect("url"));
+    assert!(hop("https://idp.example/jwks"));
+    assert!(hop("HTTPS://idp.example/jwks"));
+    assert!(!hop("http://idp.example/jwks"));
+    assert!(!hop("http://127.0.0.1/jwks"));
+}

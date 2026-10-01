@@ -140,13 +140,20 @@ src/gateway/server/account_bindings.rs	install_account_strategies	1	critical	d	i
 src/gateway/server/account_bindings.rs	sole_operator_asserted	1	critical	a	sole_operator_asserted	Decides whether stored grants are served under the sole-operator principal (stdio, or HTTP single-user)
 src/gateway/server/account_bindings.rs	declare_account_descriptors	1	standard	borderline	declare_account_descriptors	Populates the declared registry the resolver checks against
 src/gateway/server/account_bindings.rs	install_descriptor	1	standard	borderline	install_descriptor	Wires sole_operator and strategy; a mistake mis-scopes the principal
+src/gateway/server/cleartext.rs	cleartext_credential_refusal	1	critical	d	cleartext_credential_refusal	Refuses credentials accepted over a non-TLS listener that server.cleartext_http does not cover
+src/gateway/server/cleartext.rs	reload_posture_refusal	1	critical	d	reload_posture_refusal	Refuses a reload that would itself enter a refused network posture
+src/gateway/server/cleartext.rs	serve_refusal	1	critical	d	serve_refusal	Everything that stops a configuration serving HTTP: the open-tools check, then the cleartext-credential check
+src/gateway/server/identity_grants.rs	audit_startup	1	critical	a	audit_startup	Reconciles, records and snapshots grants under the journal lock; the rows returned are the rows recorded
+src/gateway/server/identity_grants.rs	start_identity_grant_audit	1	critical	a	start_identity_grant_audit	Decides which identity grants go live; fails closed when reconciliation or its audit cannot be recorded
 src/gateway/server/mod.rs	prepare_signing	1	critical	b,d	Gateway::prepare_signing	stdio first step: refuses a malformed chain nonce or signing envelope
 src/gateway/server/mod.rs	response_firewall	1	critical	d	Gateway::response_firewall	Builds the firewall both transports enforce with; anomaly blocking depends on it
 src/gateway/server/stdio_channel.rs	reply_id	1	critical	b	StdioClientChannel::reply_id	Treats a frame as a reply only without `method`, so a client request is never routed as one
 src/gateway/server/stdio_channel.rs	resolve	1	critical	b	StdioClientChannel::resolve	Sends a reply only to the pending one-shot entry for that id; consumes it
 src/gateway/server/support.rs	accept	1	critical	a,b	PeerCertIdentityAcceptor::accept	Completes the handshake and hands auth the peer certificate's identity
 src/gateway/server/support.rs	client_identity_from_peer_chain	1	critical	a,b	client_identity_from_peer_chain	Selects the peer leaf, builds the authenticated CertIdentity, fails closed on malformed identity data
+src/gateway/server/support.rs	network_bind_refusal	1	critical	a,d	network_bind_refusal	The single definition of the unauthenticated network exposure: None means this configuration may serve
 src/gateway/server/support.rs	serve_tls	1	critical	a	serve_tls	The mTLS listener: decides which client certificates may connect
+src/gateway/server/support.rs	start_refusal	1	critical	a,d	start_refusal	Every refusal Gateway::run asks before it binds, in order; reload restart advice asks the same
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
@@ -424,7 +431,7 @@ src/transport/http/client.rs	build	1	standard	borderline	build	Installs the redi
 src/transport/http/extra_headers.rs	merge_extra_headers	1	critical	borderline	merge_extra_headers	Withholds the static credential when the caller's credential value is invalid (#2292).
 src/transport/http/mod.rs	build_mcp_headers	1	critical	c	HttpTransport::build_mcp_headers	Picks MCP-Session-Id from the caller's identity bucket only.
 src/transport/http/mod.rs	establish_sse_connection	1	critical	borderline	HttpTransport::establish_sse_connection	64 KiB handshake cap (defence-in-depth against a misbehaving backend).
-src/transport/http/mod.rs	evaluate_redirect	1	critical	b,d	evaluate_redirect	Redirect hop cap, SSRF refusal and cross-origin refusal.
+src/transport/http/redirect_policy.rs	evaluate_redirect_for	1	critical	b,d	evaluate_redirect_for	Redirect hop cap, SSRF refusal, cross-origin refusal and the private-backend same-origin exemption.
 src/transport/http/mod.rs	get_oauth_token	1	critical	d	HttpTransport::get_oauth_token	Checks the message URL is secure before releasing the OAuth token.
 src/transport/http/mod.rs	require_secure_oauth_target	1	critical	d	require_secure_oauth_target	Refuses to send an OAuth bearer over cleartext to a non-loopback host.
 src/transport/http/mod.rs	resolve_message_url	1	critical	b,d	HttpTransport::resolve_message_url	Refuses an SSE message endpoint that resolves cross-origin (credential-exfiltration guard).

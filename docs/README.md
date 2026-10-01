@@ -9,6 +9,7 @@ Start with the [README](../README.md); this directory is the depth behind it.
 | [QUICKSTART](QUICKSTART.md) | First run, first backend, first tool call |
 | [ARCHITECTURE](ARCHITECTURE.md) | How a request reaches a backend and comes back |
 | [DEPLOYMENT](DEPLOYMENT.md) | Containers, Kubernetes, and the production posture |
+| [PROTOCOL_COMPATIBILITY](PROTOCOL_COMPATIBILITY.md) | Clients and backends on different MCP revisions: what works, what is translated, what is refused |
 | [CLIENTS](CLIENTS.md) | Which AI clients are supported, where their config lives, and which were verified |
 | [TEAM_DEPLOYMENT](TEAM_DEPLOYMENT.md) | One gateway for several people: authentication, TLS, isolation, audit log, Helm chart |
 | [OAUTH_CONFIG](OAUTH_CONFIG.md) | Authorizing backends that speak OAuth |

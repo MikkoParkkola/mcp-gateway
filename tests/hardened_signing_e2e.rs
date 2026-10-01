@@ -306,6 +306,34 @@ async fn malformed_signing_nonce_refused() {
     );
 }
 
+/// A surfaced tool the inner gateway never lists: the task gate cannot read
+/// it, so it confirms it as unclassified.
+const UNLISTED: &str = "unlisted_task_tool";
+
+/// Row 7: the task-augmented destructive gate answers before admission, so a
+/// malformed nonce is refused ahead of it with `-32602`, never answered with a
+/// challenge (whose delivery would fail `-32603`) or the gate's own refusal.
+#[tokio::test]
+async fn malformed_signing_nonce_refused_before_the_task_gate() {
+    let stack = stack_with(|config| {
+        config["meta_mcp"] = json!({"surfaced_tools": [{"server": INNER, "tool": UNLISTED}]});
+    })
+    .await;
+    let mut request = modern_call(51, UNLISTED, &json!({}), Some(""));
+    request["params"]["task"] = json!({});
+    request["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({"extensions": {"io.modelcontextprotocol/tasks": {}}});
+    request["params"]["_meta"]["io.mcp-gateway/idempotency-key"] = json!("task-gate-key");
+    let wire = post(&stack, "/mcp", &request).await;
+    assert_refused(&wire, "a malformed nonce on a task-augmented call");
+    assert_eq!(parse(&wire)["error"]["code"], -32602, "{wire}");
+    assert_eq!(
+        stack.backend.calls().len(),
+        0,
+        "a malformed nonce dispatched"
+    );
+}
+
 /// Row 16: `standard` with signing explicitly on keeps today's scope: a
 /// non-invoke meta call and a direct call are delivered unsigned, and
 /// `gateway_invoke` is signed as before.
@@ -445,4 +473,113 @@ async fn hardened_meta_replay_never_dispatches() {
         1,
         "a replayed or malformed nonce reached the backend"
     );
+}
+
+/// The in-band confirmation question's key (`meta_mcp/confirmation.rs`).
+const CONFIRMATION_KEY: &str = "io.mcp-gateway.destructive-confirmation.v1";
+
+/// Increment 5, row 7: the ordinary destructive gate runs after admission, so
+/// its in-band challenge is signed over the asking nonce. The follow-up is a new
+/// request: resending the first nonce is a replay, refused before the gate (the
+/// envelope stays unspent and nothing runs), and a fresh nonce completes signed.
+#[tokio::test]
+async fn confirmation_follow_up_needs_a_fresh_nonce() {
+    // `gateway_kill_server` is the destructive meta tool, and admin-only.
+    let stack = stack_with(|config| config["auth"]["api_keys"][0]["admin"] = json!(true)).await;
+    // A name no backend has, so the action touches nothing the stack uses.
+    let arguments = json!({"server": "confirm-sentinel"});
+    let ask = post(
+        &stack,
+        "/mcp",
+        &modern_call(81, "gateway_kill_server", &arguments, Some("confirm-ask")),
+    )
+    .await;
+    let asked = parse(&ask);
+    assert_eq!(asked["result"]["resultType"], "input_required", "{ask}");
+    assert_signed(&ask, "confirm-ask", "the confirmation challenge");
+    let id = json!({"kind": "number", "value": "81"});
+    assert!(
+        oracle_accepts(&ask, &id, "confirm-ask").await,
+        "the challenge MAC must verify: {ask}"
+    );
+    let envelope = asked["result"]["requestState"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no envelope: {ask}"))
+        .to_string();
+
+    let follow_up = |id: u64, nonce: &str| {
+        let mut request = modern_call(id, "gateway_kill_server", &arguments, Some(nonce));
+        request["params"]["inputResponses"] = json!({ CONFIRMATION_KEY: true });
+        request["params"]["requestState"] = json!(envelope);
+        request
+    };
+    let replay = post(&stack, "/mcp", &follow_up(82, "confirm-ask")).await;
+    assert_refused(&replay, "a follow-up resending the asking nonce");
+
+    let done = post(&stack, "/mcp", &follow_up(83, "confirm-fresh")).await;
+    assert_signed(&done, "confirm-fresh", "the confirmed follow-up");
+    let id = json!({"kind": "number", "value": "83"});
+    assert!(
+        oracle_accepts(&done, &id, "confirm-fresh").await,
+        "the follow-up MAC must verify: {done}"
+    );
+    // The refused replay ran nothing: the confirmed call is the first kill.
+    let flat: String = parse(&done)["result"]
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '\\')
+        .collect();
+    assert!(
+        flat.contains("\"was_already_killed\":false"),
+        "the replay must not have run the action: {done}"
+    );
+}
+
+/// 4c plan row 13: under hardened, a tool call to an HTTP backend on loopback
+/// is served when the backend is listed in `security.hardened.private_backends`
+/// (the backend sees it, and the result is signed), and refused before it is
+/// reached when it is not listed.
+#[tokio::test]
+async fn listed_private_backend_tool_call_is_served() {
+    for listed in [true, false] {
+        let backend = BackendFixture::start(backend_result()).await;
+        let home = tempfile::tempdir().expect("gateway home");
+        let mut config = outer_config(home.path(), home.path());
+        config["backends"] = json!({(BACKEND): {"http_url": backend.url, "streamable_http": true}});
+        if listed {
+            config["security"]["hardened"] = json!({"private_backends": [BACKEND]});
+        }
+        let stack = Stack {
+            gateway: HttpGateway::start(config).await,
+            backend,
+            _inner: home,
+        };
+        let nonce = if listed {
+            "listed-call"
+        } else {
+            "unlisted-call"
+        };
+        let call = modern_call(
+            91,
+            "gateway_invoke",
+            &json!({"server": BACKEND, "tool": TOOL, "arguments": {}}),
+            Some(nonce),
+        );
+        let wire = post(&stack, "/mcp", &call).await;
+        if listed {
+            assert_signed(&wire, nonce, "a call to a listed loopback backend");
+            assert_eq!(stack.backend.calls().len(), 1, "not served: {wire}");
+        } else {
+            let response = parse(&wire);
+            assert!(
+                response.get("error").is_some() || response["result"]["isError"] == json!(true),
+                "an unlisted loopback backend was served: {wire}"
+            );
+            assert_eq!(
+                stack.backend.calls().len(),
+                0,
+                "an unlisted loopback backend was reached: {wire}"
+            );
+        }
+    }
 }

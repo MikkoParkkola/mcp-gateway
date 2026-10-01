@@ -1080,6 +1080,15 @@ impl ConfigWatcher {
         identity_grants: Option<Arc<IdentityGrantSink>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
+        // Pair first, so a refusal is returned before any watcher or task
+        // exists; the reload task's own context then pairs as a no-op.
+        {
+            let running = live_config.running();
+            registry.enforce_destinations(
+                DestinationPolicy::for_posture(running.security.posture),
+                &running.security.hardened.private_backends,
+            )?;
+        }
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
         let config_path = watch_chain::named_config_path(config_path);
@@ -1107,7 +1116,6 @@ impl ConfigWatcher {
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
-
         Self::spawn_reload_task(
             config_path,
             live_config,
@@ -1206,10 +1214,21 @@ impl ConfigWatcher {
             // covering the reload lock only ever exercised the other two entry
             // points: an edit that moved the lock here alone would not have
             // failed a single test.
-            let ctx =
-                ReloadContext::new(config_path, live_config, registry, failsafe_cfg, cache_ttl)
+            let ctx = match ReloadContext::new(
+                config_path,
+                live_config,
+                registry,
+                failsafe_cfg,
+                cache_ttl,
+            ) {
+                Ok(ctx) => ctx
                     .with_env(env)
-                    .with_identity_grant_sink_opt(identity_grants);
+                    .with_identity_grant_sink_opt(identity_grants),
+                Err(error) => {
+                    tracing::error!(%error, "Config watcher not started");
+                    return;
+                }
+            };
 
             loop {
                 tokio::select! {
@@ -1468,19 +1487,27 @@ fn spawn_load_thread(load: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
 }
 
 impl ReloadContext {
-    /// Create a new `ReloadContext`.
-    #[must_use]
+    /// Create a new `ReloadContext`, pairing `registry` with the running
+    /// config's destination policy.
+    ///
+    /// # Errors
+    ///
+    /// A hardened config is refused for a registry holding an HTTP or
+    /// WebSocket backend that already connected under no policy (MIK-7700).
     pub fn new(
         config_path: PathBuf,
         live_config: Arc<LiveConfig>,
         registry: Arc<BackendRegistry>,
         failsafe_config: crate::config::FailsafeConfig,
         cache_ttl: Duration,
-    ) -> Self {
+    ) -> Result<Self> {
         // A registry built by the caller still serves this config's posture.
-        let posture = live_config.running().security.posture;
-        registry.enforce_destination(DestinationPolicy::for_posture(posture));
-        Self {
+        let running = live_config.running();
+        registry.enforce_destinations(
+            DestinationPolicy::for_posture(running.security.posture),
+            &running.security.hardened.private_backends,
+        )?;
+        Ok(Self {
             config_path,
             live_config,
             registry,
@@ -1497,7 +1524,7 @@ impl ReloadContext {
             load: load_config_patch,
             spawn: spawn_load_thread,
             stop: tokio_util::sync::CancellationToken::new(),
-        }
+        })
     }
 
     /// Stop this context's reload waits when `stop` is cancelled (#1808).
