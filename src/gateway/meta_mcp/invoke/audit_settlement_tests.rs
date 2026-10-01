@@ -12,11 +12,12 @@ use crate::backend::BackendRegistry;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::tasks::TaskTransition;
 use crate::security::TransparencyLogger;
-use crate::security::audit::{AuditFailurePolicy, AuditOutcome};
+use crate::security::audit::AuditOutcome;
 use crate::security::transparency_log::TransparencyLogConfig;
 
 /// The transition commits, and the failure is counted on the metric the
 /// design names, through a recorder local to this test.
+#[cfg(feature = "metrics")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_best_effort_settlement_write_is_counted() {
     let dir = tempfile::tempdir().unwrap();
@@ -31,7 +32,7 @@ async fn a_failed_best_effort_settlement_write_is_counted() {
         ..TransparencyLogConfig::default()
     }))
     .expect("open log")
-    .with_failure_policy(AuditFailurePolicy::BestEffort);
+    .with_failure_policy(crate::security::audit::AuditFailurePolicy::BestEffort);
     let log = Arc::new(log);
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.enable_transparency_log(Arc::clone(&log));

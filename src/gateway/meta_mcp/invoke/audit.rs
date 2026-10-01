@@ -68,7 +68,7 @@ pub(crate) struct DispatchNotes {
     refusal: Option<AuditOutcome>,
 }
 
-#[cfg(all(test, feature = "metrics"))]
+#[cfg(test)]
 #[path = "audit_settlement_tests.rs"]
 mod settlement_tests;
 
