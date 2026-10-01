@@ -87,6 +87,10 @@ def macro_argument_lines(lines, lo, hi):
                 for m in range(head + 1, n + 1):
                     code = strip_literals(lines[m - 1])
                     text = code.strip()
+                    if not text:
+                        # A blank or comment-only line carries no token: it
+                        # neither starts nor ends an argument.
+                        continue
                     # Only a whole field on its own line, at the argument
                     # list's own level: it starts a fresh argument and ends
                     # with its comma. A continuation (`&& check(),`), a line

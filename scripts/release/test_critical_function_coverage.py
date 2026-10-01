@@ -238,6 +238,32 @@ fn logs(x: u8) -> bool {
         self.assertEqual(result[4], [3, 4], "both halves of the continued field stay graded")
         self.assertEqual(result[8], ["src/lib.rs:5 (head 2=1)"], "the whole field line is excluded")
 
+    def test_a_comment_between_fields_keeps_the_next_field_whole(self):
+        commented = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        event = "seen",
+        // the count is the field the instrument mis-attributes
+        count = x.count_ones(),
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(commented)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:5,0\nDA:8,1\nDA:9,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [])
+        self.assertEqual(result[8], ["src/lib.rs:5 (head 2=1)"])
+
     def test_an_unreached_macro_keeps_its_argument_lines(self):
         result = self.grade(head_count=0)
         self.assertEqual(result[0], "BELOW")
