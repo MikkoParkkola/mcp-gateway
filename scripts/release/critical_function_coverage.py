@@ -100,39 +100,64 @@ PLAIN_HEAD = re.compile(
 TRACING_NAME = re.compile(
     r"(?<!\w)(?:" + "|".join(_LEVELS) + r")\s*(?:/\*.*?\*/\s*)*!"
 )
-# The head-line rule recognises a tracing macro by its own name. Anything that
-# lets one be invoked under another name (a renaming `use` of a tracing item,
-# a re-export, or a `macro_rules!` wrapper around a level macro) would hide it,
-# so the grade refuses outright while any exists in `src/`: fail closed rather
-# than chase spellings. `as _` imports a trait anonymously and names nothing.
-_USE_STATEMENT = re.compile(r"\buse\s[^;]*;", re.S)
-_RENAMING = re.compile(r"\bas\s+(?!_(?!\w))")
-_MACRO_RULES = re.compile(r"macro_rules!\s*(?:r#)?(\w+)\s*\{")
+# The head-line rule recognises a tracing macro by its name. Two things could
+# hide one under another name, and neither is parsed (parsing is what kept
+# leaking):
+# - A renaming `use` of a tracing item: the grade fails closed (INDIRECT) on
+#   any `use` that mentions tracing and holds `as` not followed by `_`.
+# - A `macro_rules!` wrapper: every macro defined in `src/` is treated as a
+#   possible tracing macro, so a line invoking one in a Critical function is
+#   unverifiable (only a level macro can match PLAIN_HEAD).
+_GAP = r"(?:\s|/\*.*?\*/|//[^\n]*\n)*"
+_USE_STATEMENT = re.compile(r"(?<!\w)use\b[^;]*;", re.S)
+_RENAMING = re.compile(r"\bas\b(?!\s*_(?!\w))")
+_MACRO_DEF = re.compile(r"(?<!\w)macro_rules" + _GAP + r"!" + _GAP + r"(?:r#)?(\w+)", re.S)
 
 
 def tracing_indirections(root):
-    """`file: what` for each way a tracing macro could run under another name."""
+    """`file: what` for each renaming `use` of a tracing item in `src/`."""
     found = []
     for path in sorted((Path(root) / "src").rglob("*.rs")):
-        text = path.read_text()
-        where = path.relative_to(root).as_posix()
-        for use in _USE_STATEMENT.findall(text):
+        for use in _USE_STATEMENT.findall(path.read_text()):
             if "tracing" in use and _RENAMING.search(use):
-                found.append(f"{where}: renaming use of a tracing item")
-        for match in _MACRO_RULES.finditer(text):
-            depth, end = 1, match.end()
-            while depth and end < len(text):
-                depth += {"{": 1, "}": -1}.get(text[end], 0)
-                end += 1
-            if TRACING_NAME.search(text[match.end():end]):
-                found.append(f"{where}: macro_rules! {match.group(1)} wraps a tracing macro")
+                found.append(f"{path.relative_to(root).as_posix()}: renaming use of a tracing item")
     return found
 
 
-def head_has_call(raw):
-    """True when this raw source line names a tracing macro but is not, as a
-    whole, a plain head line (see above)."""
-    return bool(TRACING_NAME.search(raw)) and not PLAIN_HEAD.match(raw)
+# Macros known not to log, so a line invoking only these is graded by its count.
+# Any other macro (a level macro, a local `macro_rules!`, or one from a crate
+# that might wrap tracing) puts the line under PLAIN_HEAD. A local definition
+# that shadows one of these names takes it off the list.
+SAFE_MACROS = frozenset({
+    "assert", "assert_eq", "assert_ne", "concat", "debug_assert", "debug_assert_eq",
+    "debug_assert_ne", "env", "eprintln", "format", "format_args", "include_str",
+    "json", "matches", "panic", "print", "println", "stringify", "unimplemented",
+    "unreachable", "vec", "write", "writeln", "counter",
+})
+# `if !(..)`, `return !(..)`: a keyword before `!` is a negation, not a macro.
+_KEYWORDS = frozenset({
+    "if", "else", "while", "match", "return", "in", "let", "for", "loop", "move",
+    "break", "continue", "as", "mut", "ref", "await", "async", "unsafe", "yield",
+})
+_ANY_MACRO = re.compile(r"(?<![\w])(?:r#)?(\w+)" + _GAP + r"!" + _GAP + r"[(\[{]", re.S)
+
+
+def macro_names(root):
+    """The macro names a line may invoke and still be graded by its count:
+    SAFE_MACROS minus any name a `macro_rules!` in `src/` defines."""
+    local = set()
+    for path in (Path(root) / "src").rglob("*.rs"):
+        local.update(_MACRO_DEF.findall(path.read_text()))
+    return SAFE_MACROS - local
+
+
+def head_has_call(raw, safe=SAFE_MACROS):
+    """True when this raw source line invokes a macro outside `safe` (or names
+    a tracing level) but is not, as a whole, a plain head line (see above)."""
+    unsafe = TRACING_NAME.search(raw) or any(
+        name not in safe and name not in _KEYWORDS for name in _ANY_MACRO.findall(raw)
+    )
+    return bool(unsafe) and not PLAIN_HEAD.match(raw)
 
 
 def is_plain_field(code):
@@ -222,6 +247,7 @@ def read_inventory(path):
 
 def grade(root, inventory, lcovs):
     hits = read_lcov(lcovs, root)
+    names = macro_names(root)
     results = [
         ("INDIRECT", {"path": what.split(":", 1)[0], "fn": what.split(": ", 1)[1], "occurrence": "-"}, None, None, [])
         for what in tracing_indirections(root)
@@ -242,7 +268,7 @@ def grade(root, inventory, lcovs):
             continue
         unverifiable = []
         for n in range(lo, hi + 1):
-            if n in counts and head_has_call(lines[n - 1]):
+            if n in counts and head_has_call(lines[n - 1], names):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []

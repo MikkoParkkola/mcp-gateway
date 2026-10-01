@@ -393,12 +393,12 @@ class HeadLineCalls(unittest.TestCase):
             "use tracing::{\n    // logging\n    debug as d,\n};\n",
             "pub use ::tracing::warn as w;\n",
             "use tracing as t;\n",
-            "macro_rules! emit {\n    ($($t:tt)*) => { tracing::debug!($($t)*) };\n}\n",
         ]
         allowed = [
             "use tracing::{debug, info};\n",
             "use tracing::instrument::WithSubscriber as _;\n",
             "macro_rules! twice {\n    ($e:expr) => { $e + $e };\n}\n",
+            "macro_rules! emit {\n    ($($t:tt)*) => { tracing::debug!($($t)*) };\n}\n",
         ]
         for header, expect in [(h, True) for h in refused] + [(h, False) for h in allowed]:
             with self.subTest(header=header):
@@ -416,6 +416,42 @@ class HeadLineCalls(unittest.TestCase):
                     code = cfc.main(["--root", str(root), "--inventory", str(inventory), "--lcov", str(lcov)])
                 self.assertEqual("INDIRECT" in statuses, expect)
                 self.assertEqual(code, 1 if expect else 0)
+
+    def test_a_macro_that_is_not_known_safe_is_unverifiable(self):
+        # A local macro_rules! (whatever its delimiters or body) or a macro
+        # from a dependency may wrap tracing, so its line is unverifiable; a
+        # known-safe macro's line is graded by its count.
+        wrappers = [
+            "macro_rules! hidden ( ($($t:tt)*) => { tracing::debug!($($t)*); } );\n",
+            'macro_rules! hidden { ($($t:tt)*) => { let _ = "}}"; tracing::debug!($($t)*); } }\n',
+            "macro_rules /* c */ ! hidden { ($($t:tt)*) => { tracing::debug!($($t)*) } }\n",
+        ]
+        for header in wrappers:
+            with self.subTest(header=header):
+                line = header.count("\n") + 2
+                result = self.graded_with(header, "    hidden!(v = clean(x));\n")
+                self.assertEqual(result[9], [f"src/lib.rs:{line} (head count 1)"])
+        dependency = self.graded_with("", "    other::log!(v = clean(x));\n")
+        self.assertEqual(dependency[4], [2])
+        negation = self.graded_with("", "    if !(x > 1 || clean(x)) {}\n")
+        self.assertEqual(negation[9], [], "a negation after a keyword is not a macro")
+        safe = self.graded_with("", '    let s = format!("{}", clean(x));\n')
+        self.assertEqual((safe[0], safe[9]), ("ok", []))
+        shadowed = self.graded_with("macro_rules /* c */ ! format { ($($t:tt)*) => { tracing::debug!($($t)*) } }\n", '    let s = format!("{}", clean(x));\n')
+        self.assertEqual(len(shadowed[9]), 1)
+
+    def graded_with(self, header, body):
+        source = header + "fn logs(x: u8) -> bool {\n" + body + "    x > 0\n}\n"
+        first = header.count("\n") + 1
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(source)
+            lcov = root / "cov.lcov"
+            lcov.write_text("SF:/repo/src/lib.rs\n" + "".join(f"DA:{n},1\n" for n in range(first, first + 4)) + "end_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
 
     def test_the_cli_prints_the_unverifiable_line_and_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
