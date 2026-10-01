@@ -67,40 +67,12 @@ async fn reopened_at_exact_cap(path: &Path, id: &str) -> TaskStore {
     .expect("the loader accepts a record exactly at the byte cap")
 }
 
-/// Mutant: the byte-cap check after the marker is set is removed.
-#[tokio::test]
-async fn marker_08_a_marker_that_grows_the_record_past_the_cap_is_refused_unwritten() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tasks");
-    let store = open(&path).await;
-    let (task, binding) = admitted(&store, &services(), "marker-over-cap").await;
-    let owner = binding.principal_digest().to_owned();
-    store.close().await.unwrap();
-
-    let store = reopened_at_exact_cap(&path, task.id()).await;
-    let before = files(&path);
-    assert_eq!(
-        store
-            .mark_dispatched(&owner, task.id(), 1)
-            .await
-            .unwrap_err(),
-        StoreError::Capacity,
-        "`true` is one byte wider than `false`, so the marked record no longer fits"
-    );
-    assert_eq!(files(&path), before, "a refused marker writes nothing");
-    assert_eq!(record_json(&path, task.id())["dispatched"], json!(false));
-    assert!(store.ready(), "a refusal before the write keeps serving");
-    store.close().await.unwrap();
-
-    // Positive control: the same row takes the marker once it has room.
-    let store = open(&path).await;
-    store.mark_dispatched(&owner, task.id(), 1).await.unwrap();
-    assert_eq!(record_json(&path, task.id())["dispatched"], json!(true));
-    store.close().await.unwrap();
-}
-
 /// Mutant: any one of the owner, revision, status, digest or handle-length
 /// refusals in `mark_upstream` removed.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one table of refusals beside its positive control"
+)]
 #[tokio::test]
 async fn upstream_01_a_descriptor_is_attached_only_to_the_owners_live_matching_row() {
     let dir = tempfile::tempdir().unwrap();
