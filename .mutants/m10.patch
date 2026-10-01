@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index dc8210fde..e36fcad11 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -198,7 +198,7 @@ impl StdioTransport {
+             std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+                 Error::TransportPermanent(format!("Failed to spawn: {e}"))
+             }
+-            _ => Error::Transport(format!("Failed to spawn: {e}")),
++            _ => Error::TransportPermanent(format!("Failed to spawn: {e}")),
+         })?;
+ 
+         let stdin = child

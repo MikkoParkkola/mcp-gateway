@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/mod.rs b/src/transport/http/mod.rs
+index 07938e0ba..93df022e8 100644
+--- a/src/transport/http/mod.rs
++++ b/src/transport/http/mod.rs
+@@ -1048,7 +1048,7 @@ impl HttpTransport {
+         if let Some(token) = self.get_oauth_token().await? {
+             // A token carrying bytes illegal in an HTTP header value must fail as
+             // a clean auth error, never panic the request path (MIK-6909).
+-            headers.insert(header::AUTHORIZATION, bearer_header_value(&token)?);
++            let _ = bearer_header_value(&token)?;
+             if matches!(mode, HeaderMode::Sse) {
+                 debug!(url = %sanitize_url_for_diagnostics(&self.base_url), "SSE connection with OAuth token");
+             }

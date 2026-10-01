@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/mod.rs b/src/transport/http/mod.rs
+index 07938e0ba..453447a9a 100644
+--- a/src/transport/http/mod.rs
++++ b/src/transport/http/mod.rs
+@@ -1230,7 +1230,7 @@ impl HttpTransport {
+ 
+             buffer.push_str(&String::from_utf8_lossy(&chunk));
+ 
+-            if buffer.len() > max_sse_handshake_buffer {
++            if buffer.len() >= max_sse_handshake_buffer {
+                 return Err(Error::Transport(format!(
+                     "SSE handshake exceeded {max_sse_handshake_buffer}-byte buffer without an endpoint event"
+                 )));

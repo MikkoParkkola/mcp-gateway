@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/extra_headers.rs b/src/transport/http/extra_headers.rs
+index 0f2c0abea..34fba7b6c 100644
+--- a/src/transport/http/extra_headers.rs
++++ b/src/transport/http/extra_headers.rs
+@@ -20,7 +20,7 @@ pub(super) fn merge_extra_headers(
+ ) {
+     for (k, v) in extra_headers {
+         let Ok(name) = k.parse::<header::HeaderName>() else {
+-            continue;
++            break;
+         };
+         match v.parse::<header::HeaderValue>() {
+             Ok(value) => {

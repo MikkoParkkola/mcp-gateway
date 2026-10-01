@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index dc8210fde..59664495b 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -165,7 +165,7 @@ impl StdioTransport {
+                 crate::security::summarize_stdio_command(&self.command)
+             ))
+         })?;
+-        if parts.is_empty() {
++        if false {
+             return Err(Error::Config("Empty command".to_string()));
+         }
+ 

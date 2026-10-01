@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index dc8210fde..4a42a2ea4 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -257,7 +257,7 @@ impl StdioTransport {
+                     }
+                     Err(e) => {
+                         error!(error = %e, "Error reading from stdout");
+-                        break;
++                        continue;
+                     }
+                 }
+             }

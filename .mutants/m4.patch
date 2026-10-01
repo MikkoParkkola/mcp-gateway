@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/mod.rs b/src/transport/http/mod.rs
+index 07938e0ba..d0bc56455 100644
+--- a/src/transport/http/mod.rs
++++ b/src/transport/http/mod.rs
+@@ -1421,7 +1421,7 @@ impl HttpTransport {
+         } else if self.sessions.read().contains_key(bucket) {
+             debug!("Using existing session ID for caller bucket");
+         } else if let Some(session_id) = response.headers().get("mcp-session-id") {
+-            if let Ok(id) = session_id.to_str() {
++            if let Ok(id) = Ok::<_, ()>(String::from_utf8_lossy(session_id.as_bytes())) {
+                 // Presence, not value: an MCP session ID is replayable, so a log
+                 // reader who sees one can resume another caller's session.
+                 // Computed before the macro, as above (MIK-7324).

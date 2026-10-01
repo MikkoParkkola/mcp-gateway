@@ -1,0 +1,12 @@
+head_sha	537c81e53c42eb3c67eafb3f8a6c72a1813b8cb6
+# batch 1 for #2598 on the head above (transport slice)
+M1	linux	m1.patch	--lib -- transport::
+M2	linux	m2.patch	--lib -- transport::
+M3	linux	m3.patch	--lib -- transport::
+M4	linux	m4.patch	--lib -- transport::
+M5	linux	m5.patch	--lib -- transport::
+M6	linux	m6.patch	--lib -- transport::
+M7	linux	m7.patch	--lib -- transport::
+M8	linux	m8.patch	--lib -- transport::
+M9	linux	m9.patch	--lib -- transport::
+M10	linux	m10.patch	--lib -- transport::
