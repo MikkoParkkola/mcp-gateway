@@ -240,16 +240,22 @@ async fn the_local_operator_answers_an_input_round() {
     stdio.close().await;
 }
 
-/// The comparable part of an answer: the error's code and text, or "task"
-/// for a handle, or "sync" for a synchronous result.
+/// What the creation rules decided about a task-augmented call: a task, a
+/// creation refusal (code and text), or not a task. Anything a call does once
+/// it is not a task is the synchronous path, which HTTP and stdio authorize
+/// differently by design and which these rows do not compare.
 fn shape(answer: &Value) -> String {
-    if let Some(error) = answer.get("error") {
-        return format!("error {} {}", error["code"], error["message"]);
-    }
     if answer.pointer("/result/resultType").and_then(Value::as_str) == Some("task") {
         return "task".to_owned();
     }
-    "sync".to_owned()
+    if let Some(error) = answer.get("error")
+        && let Some(message) = error["message"].as_str()
+        && (message.contains("task creation requires")
+            || message.contains("extension to be declared"))
+    {
+        return format!("refused {} {message}", error["code"]);
+    }
+    "not a task".to_owned()
 }
 
 /// HTTP on its own store and backend, for parity rows.
@@ -268,19 +274,14 @@ async fn http_twin(world: &World) -> (HttpGateway, Backend) {
     )
 }
 
-/// T16.
+/// T16. A synchronous call carrying a task's key meets the task at the one
+/// admission index: it is refused as another execution, never run again. HTTP
+/// is not the reference here: an auth-off HTTP gateway refuses a keyed
+/// synchronous call for want of a principal (-32003) before admission, and one
+/// with credentials cannot create a task without a verified identity.
 #[tokio::test]
 async fn a_task_and_a_sync_call_share_one_admission() {
     let world = World::new(Auth::Off).await;
-    let (http, http_backend) = http_twin(&world).await;
-    task_id(
-        &http
-            .post(&task_call(json!(1), ECHO, Some("k-t16")), None)
-            .await,
-    );
-    let http_sync = http.post(&sync_call(json!(2), ECHO, "k-t16"), None).await;
-    assert_eq!(http_backend.rounds(), 1, "HTTP: one admission, one round");
-
     let mut stdio = world.stdio("t16.log").await;
     let id = task_id(
         &stdio
@@ -288,14 +289,17 @@ async fn a_task_and_a_sync_call_share_one_admission() {
             .await,
     );
     stdio.terminal(&id).await;
-    let stdio_sync = stdio.request(&sync_call(json!(2), ECHO, "k-t16")).await;
-    assert_eq!(world.backend.rounds(), 1, "stdio: one admission, one round");
+    let sync = stdio.request(&sync_call(json!(2), ECHO, "k-t16")).await;
     assert_eq!(
-        shape(&stdio_sync),
-        shape(&http_sync),
-        "stdio {stdio_sync} vs HTTP {http_sync}"
+        world.backend.rounds(),
+        1,
+        "one admission, one round: {sync}"
     );
-    http.stop().await;
+    assert!(
+        sync.to_string()
+            .contains("belongs to another execution or representation"),
+        "the key is held by the task: {sync}"
+    );
     stdio.close().await;
 }
 

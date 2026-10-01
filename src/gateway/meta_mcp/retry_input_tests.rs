@@ -161,9 +161,10 @@ fn both_refusal_sites_share_the_rule() {
             code_lines(include_str!("../../protocol/mrtr.rs")),
             "input_responses_nonempty(self.input_responses.as_ref())",
         ),
+        // The `tasks/update` body both transports share (MIK-7272.OWNER.2).
         (
-            "router/handlers/tasks.rs",
-            code_lines(include_str!("../router/handlers/tasks.rs")),
+            "task_route.rs",
+            code_lines(include_str!("../task_route.rs")),
             "mrtr::input_responses_nonempty(",
         ),
     ];

@@ -3128,6 +3128,31 @@ config; a backend it started before that keeps its connection until it restarts.
 **Action:** where a client matched `-32000` for a refused capability destination, match `-32600`.
 Before adopting `hardened`, move local backends to stdio, or keep the deployment on `standard`.
 
+## 110. A stdio gateway keeps durable tasks in its own store
+
+**Startup:** prints a notice, a stdio gateway that cannot open its store warns with the path and the cause; refuses to start, only an HTTP gateway whose `tasks.store_dir` is a running stdio gateway's `stdio` directory
+
+A stdio gateway (`serve --stdio`) now serves the tasks extension for the client that spawned it.
+A task-augmented `tools/call` with an idempotency key becomes a durable task, and `tasks/get`,
+`tasks/update` and `tasks/cancel` answer on stdio. Before, stdio answered every such call
+synchronously and `tasks/*` answered `-32601`.
+
+The store is `<tasks.store_dir>/stdio`, its own directory beside the HTTP gateway's
+`tasks.store_dir`, so an HTTP gateway and a stdio gateway on one config never contend for one lease. A
+task survives a restart and a moved base directory, and no HTTP caller can read, cancel or update
+it: the store keys it under the local operator, a principal no HTTP credential can name.
+
+- A second stdio gateway on the same config finds the store held. It serves as before, answers
+  task-augmented calls synchronously, and advertises no tasks extension in `initialize` or
+  `server/discover`.
+- An HTTP gateway whose `tasks.store_dir` is set to another gateway's `stdio` directory fails to
+  start while that gateway holds it. The error names the likely holder.
+- `tasks.recovery_adapters` stays an HTTP feature: stdio settles every interrupted task on start.
+
+**Action:** none for separate stores. Give each gateway its own `tasks.store_dir` if two configs
+point HTTP at a stdio directory. Back up `tasks.store_dir` with every gateway that writes under it
+stopped; the `stdio` subdirectory is inside it.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
