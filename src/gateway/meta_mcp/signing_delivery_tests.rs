@@ -730,5 +730,5 @@ async fn finalize_gateway_invoke_response_preserves_defensive_bypasses() {
     verify(&signed, Some(NONCE)).expect("independent MAC of enabled control");
 }
 
-#[path = "signing_scope_tests.rs"]
+#[path = "signing_delivery_scope_tests.rs"]
 mod scope_tests;

@@ -6,6 +6,7 @@
 //! After graceful exit, restart the same store and verify the expired ID stays absent.
 //! In-flight writer joining and retention exclusions are covered by owner tests.
 
+// Unix-only: stops the gateway with SIGTERM (helper.rs); Windows has no SIGTERM.
 #![cfg(unix)]
 
 #[path = "task_expiry_http_lifecycle/helper.rs"]

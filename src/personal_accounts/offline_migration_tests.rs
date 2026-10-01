@@ -114,6 +114,7 @@ impl Harness {
             format!("ACCOUNTS_KEY={key}\n"),
         )
         .expect("env file");
+        // POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -164,6 +165,7 @@ impl Harness {
     fn seed_at(&self, backend_name: &str, backend_url: &str, tag: &str) {
         let path = self.legacy.token_path(backend_name, backend_url);
         crate::gateway::test_helpers::write_owner_only(&path, legacy_json(tag)).expect("seed");
+        // POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -351,6 +353,7 @@ fn api_key(name: &str) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 

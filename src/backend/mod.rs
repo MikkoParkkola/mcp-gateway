@@ -38,6 +38,19 @@ mod pool;
 mod registry;
 mod status;
 
+impl Backend {
+    /// This backend's signature chain policy (ASI07 inc3, design D1): the
+    /// mode, the accepted origin key ids and the required last signer.
+    pub(crate) fn chain_policy(&self) -> (crate::config::ChainMode, &[String], Option<&str>) {
+        let config = &self.config;
+        (
+            config.signature_chain,
+            &config.chain_origins,
+            config.chain_signer.as_deref(),
+        )
+    }
+}
+
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]
@@ -192,7 +205,41 @@ pub struct Backend {
     /// handshake owns a live process, and shutdown returning before that
     /// resolves leaves the process running for as long as the handshake takes.
     starts_in_flight: std::sync::atomic::AtomicUsize,
+    /// Where this backend's transports may connect; stamped by its registry.
+    /// Unstamped means `Configured`: a backend no config governs.
+    destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
     pub(crate) budgets: ShutdownBudgets,
+}
+
+impl Backend {
+    /// Set by [`BackendRegistry`]; the first stamp wins.
+    pub(crate) fn stamp_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
+        let _ = self.destination.set(policy);
+    }
+
+    /// Start a WebSocket transport under this backend's policy.
+    async fn start_websocket(
+        &self,
+        ws_url: &str,
+        protocol_version: Option<String>,
+    ) -> crate::Result<Arc<dyn crate::transport::Transport>> {
+        crate::transport::websocket::WebSocketTransport::start_with_destination(
+            ws_url,
+            &self.config.headers,
+            self.config.timeout,
+            protocol_version,
+            self.destination(),
+        )
+        .await
+    }
+
+    /// The policy this backend's transports connect under.
+    pub(crate) fn destination(&self) -> crate::security::ssrf::DestinationPolicy {
+        self.destination
+            .get()
+            .copied()
+            .unwrap_or(crate::security::ssrf::DestinationPolicy::Configured)
+    }
 }
 
 /// How long each stage of [`Backend::stop`] may take before it gives up.
@@ -311,9 +358,16 @@ mod identity_slot_probe_tests;
 mod start_failure_slot_tests;
 
 #[cfg(test)]
+#[path = "era_stale_probe_tests.rs"]
+mod era_stale_probe_tests;
+
+#[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;
 
 #[cfg(test)]
 #[path = "websocket_backend_tests.rs"]
 mod websocket_backend_tests;
+
+#[cfg(test)]
+mod destination_tests;

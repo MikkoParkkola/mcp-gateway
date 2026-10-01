@@ -69,16 +69,20 @@ mod dedupe;
 mod drain;
 /// MIK-7311.LIFECYCLE.1 increment 1b: the input round on `/mcp`.
 mod input_round;
+mod input_round_deadline;
 mod input_round_races;
 mod interlock;
 mod lifecycle;
+mod pending_input_policy;
 /// I5's during-the-wire half: one query per record at a time, worker and
 /// authenticated reader alike.
 mod query_serialization;
 mod refusals;
+mod replay_policy;
 mod result_shapes;
 mod settlement;
 mod signing_joint;
+mod stored_result_policy;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided

@@ -37,6 +37,8 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+mod hardened_elicitation;
+mod hardened_identity;
 mod identity;
 mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
@@ -94,6 +96,12 @@ mod e5_dashboard_session_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+/// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
+#[cfg(test)]
+mod hardened_elicitation_tests;
+/// GH1942.HARDEN.1 rows 8 and 16: hardened requires a per-caller identity.
+#[cfg(test)]
+mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 #[cfg(test)]
@@ -111,6 +119,8 @@ mod resource_prompt_scope_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;
+#[cfg(test)]
+mod stream_kill_tests;
 /// `pub(crate)` for the A11 direct-route cells in `meta_mcp`, which need this
 /// router harness and the account fixtures together. Test-only.
 #[cfg(test)]
@@ -364,7 +374,8 @@ fn metrics_route(config: &crate::config::Config) -> Router {
 
 /// Routes on the app state that run outside authentication and the E1-f audit
 /// layer, merged after both are applied: dashboard logout (E5), which an
-/// expired session and an audit outage must never block.
+/// expired session and an audit outage must never block, and the dashboard
+/// handoff code (#2130), whose posted code is its own credential.
 fn unauthenticated_routes() -> Router<Arc<AppState>> {
     #[cfg(feature = "webui")]
     {

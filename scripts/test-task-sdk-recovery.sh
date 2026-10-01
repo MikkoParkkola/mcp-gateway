@@ -88,7 +88,7 @@ PY
 # Preserve the caller's RUSTFLAGS, including CI's -Dwarnings.
 cargo test --locked --all-features --test task_upstream_recovery_sdk --jobs 1 \
   --color never -- --nocapture --test-threads 1 2>&1 | tee "$log_dir/cargo-test.log"
-grep -q 'test result: ok. 1 passed; 0 failed; 0 ignored;' "$log_dir/cargo-test.log" || {
-  echo 'The SDK journey must execute exactly one test, with no skips.' >&2
+grep -q 'test result: ok. 2 passed; 0 failed; 0 ignored;' "$log_dir/cargo-test.log" || {
+  echo 'The SDK journey must execute exactly two tests (v5 journey, v3 row), with no skips.' >&2
   exit 1
 }

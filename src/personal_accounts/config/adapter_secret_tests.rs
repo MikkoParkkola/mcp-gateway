@@ -432,13 +432,12 @@ fn file_alias_across_slots_refused() {
 
 /// A Kubernetes Secret volume reaches each key through a `..data` symlink, so
 /// two spellings of one mounted file must still alias.
-#[cfg(unix)]
 #[test]
 fn file_alias_through_a_symlink_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
     let reference = file_ref(dir.path(), "token", &secret_32('k'));
     let link = dir.path().join("link");
-    std::os::unix::fs::symlink(dir.path().join("token"), &link).expect("symlink");
+    crate::test_symlink::symlink(dir.path().join("token"), &link).expect("symlink");
     let error = validate_no_gateway_reference_alias(
         &[file_adapter("desk", &format!("file:{}", link.display()))],
         &[GatewayCredential::BearerToken(&reference)],

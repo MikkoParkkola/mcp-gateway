@@ -675,6 +675,7 @@ mod admin_credential_tests {
     }
 
     #[test]
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     fn the_generated_config_is_not_readable_by_other_users() {
         // The starter config now carries a generated admin credential. Writing

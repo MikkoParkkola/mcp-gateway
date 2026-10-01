@@ -32,9 +32,158 @@ pub(crate) enum ProvideOutcome {
     },
     /// The set would be complete but no worker is free. Nothing written.
     PoolFull,
+    /// The round is closed: its continuation deadline or the task's TTL has
+    /// passed. Nothing written.
+    Closed(RoundClosed),
+}
+
+/// Why an open round no longer takes answers (#2429).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RoundClosed {
+    /// The stored continuation's deadline, in unix seconds, has passed.
+    Continuation(u64),
+    /// The task's own TTL has elapsed.
+    Ttl,
+}
+
+impl RoundClosed {
+    /// The sentence a refused update and the cancelled task both carry.
+    pub(crate) fn reason(self) -> String {
+        match self {
+            Self::Continuation(deadline) => {
+                let at = i64::try_from(deadline)
+                    .ok()
+                    .and_then(|secs| DateTime::<Utc>::from_timestamp(secs, 0))
+                    .map_or_else(|| deadline.to_string(), |at| at.to_rfc3339());
+                format!("the input round closed at its continuation deadline ({at})")
+            }
+            Self::Ttl => "the input round closed when the task's TTL elapsed".to_owned(),
+        }
+    }
+}
+
+/// Test-only seams on the store: the commit hook, and a frozen clock for the
+/// deadline decisions. Production has none of these fields.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct TestSeams {
+    hook: std::sync::Mutex<Option<super::CommitHook>>,
+    clock: std::sync::Mutex<Option<DateTime<Utc>>>,
+    clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,
+    /// Answer writes that have entered the store, before its ordering lock.
+    arrived: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl TestSeams {
+    pub(super) fn set_hook(&self, hook: Option<super::CommitHook>) {
+        *self
+            .hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+    }
+
+    pub(super) fn hook(&self) -> Option<super::CommitHook> {
+        self.hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Shared {
+    /// The clock every round-deadline decision reads. Wall time in production;
+    /// a test may freeze it per store.
+    #[cfg_attr(
+        not(test),
+        expect(clippy::unused_self, reason = "one shape with the cfg(test) clock")
+    )]
+    pub(super) fn now(&self) -> DateTime<Utc> {
+        #[cfg(test)]
+        if let Some(frozen) = *self
+            .seams
+            .clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            return frozen;
+        }
+        Utc::now()
+    }
 }
 
 impl TaskStore {
+    /// The store's clock (see [`Shared::now`]).
+    pub(crate) fn now(&self) -> DateTime<Utc> {
+        self.0.now()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_clock_for_test(&self, at: Option<DateTime<Utc>>) {
+        *self
+            .0
+            .seams
+            .clock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = at;
+    }
+
+    /// Freeze the clock at `at` right after the next completing write commits.
+    #[cfg(test)]
+    pub(crate) fn set_clock_after_next_resume(&self, at: DateTime<Utc>) {
+        *self
+            .0
+            .seams
+            .clock_after_resume
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
+    }
+
+    /// How many answer writes have reached the store's ordering lock.
+    #[cfg(test)]
+    pub(crate) fn arrivals_for_test(&self) -> usize {
+        self.0
+            .seams
+            .arrived
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Hold the ordering lock, as a writer would.
+    #[cfg(test)]
+    pub(crate) fn hold_order_for_test(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.0.order()
+    }
+
+    /// The stored round (if open) and the revision of task `id`, whoever owns it.
+    #[cfg(test)]
+    pub(crate) fn input_round_for_test(&self, id: &str) -> (Option<InputRound>, u64) {
+        let state = self.0.state();
+        let entry = state.entries.get(id).expect("the task exists");
+        (entry.record.input_round.clone(), entry.record.revision)
+    }
+
+    /// Settle an open round `cancelled` with `reason` as its status message,
+    /// in ONE write: the round is dropped before the record is measured.
+    ///
+    /// # Errors
+    /// `RevisionConflict` when the row moved; `InvalidTransition` when no
+    /// round is open.
+    pub(crate) async fn close_round(
+        &self,
+        owner: &str,
+        id: &str,
+        revision: u64,
+        reason: String,
+    ) -> Result<CommittedTask, StoreError> {
+        let shared = Arc::clone(&self.0);
+        let (owner, id) = (owner.to_owned(), id.to_owned());
+        tokio::task::spawn_blocking(move || {
+            shared.close_round_blocking(&owner, &id, revision, reason)
+        })
+        .await
+        .map_err(|_| StoreError::Storage)?
+    }
+
     /// Commit `input_required` together with the round's continuation.
     ///
     /// # Errors
@@ -80,10 +229,13 @@ impl TaskStore {
         .map_err(|_| StoreError::Storage)?
     }
 
-    /// Every open round past the TTL its record was created with, as
-    /// `(id, revision, owner digest)`. A compact snapshot: each settlement
-    /// re-checks the revision under the ordering lock.
-    pub(crate) fn expired_input_rounds(&self, now: DateTime<Utc>) -> Vec<(String, u64, String)> {
+    /// Every open round closed at `now`, by its continuation deadline or its
+    /// task's TTL, as `(id, revision, owner digest, why)`. A compact snapshot:
+    /// each settlement re-checks the revision under the ordering lock.
+    pub(crate) fn expired_input_rounds(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Vec<(String, u64, String, RoundClosed)> {
         let state = self.0.state();
         if !state.ready {
             return Vec::new();
@@ -91,16 +243,14 @@ impl TaskStore {
         state
             .entries
             .iter()
-            .filter(|(_, entry)| {
-                entry.task.status() == TaskStatus::InputRequired
-                    && entry.task.retention_elapsed(now)
-            })
-            .map(|(id, entry)| {
-                (
+            .filter_map(|(id, entry)| {
+                let closed = closed_at(&entry.task, &entry.record, now)?;
+                Some((
                     id.clone(),
                     entry.record.revision,
                     entry.record.admission.principal_digest.clone(),
-                )
+                    closed,
+                ))
             })
             .collect()
     }
@@ -162,6 +312,58 @@ impl Shared {
         Ok(self.publish(task, record))
     }
 
+    fn close_round_blocking(
+        &self,
+        owner: &str,
+        id: &str,
+        revision: u64,
+        reason: String,
+    ) -> Result<CommittedTask, StoreError> {
+        let _order = self.order();
+        let (mut task, mut record) = self.read_owned(owner, id)?;
+        if record.revision != revision {
+            return Err(StoreError::RevisionConflict);
+        }
+        // Terminal is absorbing: a row another writer settled is not closed twice.
+        if matches!(
+            task.status(),
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            return Err(StoreError::InvalidTransition);
+        }
+        let at = self.now();
+        for event in [
+            TaskTransition::StatusMessage(Some(reason)),
+            TaskTransition::Cancel,
+        ] {
+            task.transition(event, at)
+                .map_err(|_| StoreError::InvalidTransition)?;
+        }
+        record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
+        // Drops the round before the record is measured.
+        record.set_model(&task);
+        let bytes = self.fits_cap(&record)?;
+        self.commit(&record_name(task.id()), &bytes)?;
+        Ok(self.publish(task, record))
+    }
+
+    /// Apply the one-shot clock a test armed for the moment a resume commits.
+    #[cfg(test)]
+    fn after_resume_commit(&self) {
+        let lock = |slot: &std::sync::Mutex<Option<DateTime<Utc>>>| {
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        };
+        if let Some(at) = lock(&self.seams.clock_after_resume) {
+            *self
+                .seams
+                .clock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
+        }
+    }
+
     fn provide_input_blocking(
         &self,
         owner: &str,
@@ -170,8 +372,17 @@ impl Shared {
         reserve: impl FnOnce() -> Option<OwnedSemaphorePermit>,
         at: DateTime<Utc>,
     ) -> Result<ProvideOutcome, StoreError> {
+        #[cfg(test)]
+        self.seams
+            .arrived
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let _order = self.order();
         let (mut task, mut record) = self.read_owned(owner, id)?;
+        // Read after the lock, never before: an update queued while the round
+        // was open must not be let through once it has closed.
+        if let Some(closed) = closed_at(&task, &record, self.now()) {
+            return Ok(ProvideOutcome::Closed(closed));
+        }
         let outstanding = task.input_requests().ok_or(StoreError::InvalidTransition)?;
         // The model ignores a key that is not outstanding; here it refuses the
         // whole update before any key is accepted.
@@ -208,10 +419,30 @@ impl Shared {
             .ok_or(StoreError::InvalidTransition)?;
         let bytes = serialize(&record)?;
         self.commit(&record_name(task.id()), &bytes)?;
+        #[cfg(test)]
+        self.after_resume_commit();
         Ok(ProvideOutcome::Resumed {
             task: self.publish(task, record),
             round,
             slot,
         })
+    }
+}
+
+/// Whether an open round no longer takes answers at `now`, and why. The
+/// continuation deadline is named first: it is the one the client can act on.
+fn closed_at(task: &Task, record: &Record, now: DateTime<Utc>) -> Option<RoundClosed> {
+    if task.status() != TaskStatus::InputRequired {
+        return None;
+    }
+    let deadline = record
+        .input_round
+        .as_ref()
+        .and_then(|round| round.continuation_deadline);
+    let now_secs = u64::try_from(now.timestamp()).unwrap_or(0);
+    match deadline {
+        Some(deadline) if now_secs >= deadline => Some(RoundClosed::Continuation(deadline)),
+        _ if task.retention_elapsed(now) => Some(RoundClosed::Ttl),
+        _ => None,
     }
 }

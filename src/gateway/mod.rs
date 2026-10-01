@@ -48,15 +48,21 @@ pub(crate) mod search_disclosure;
 mod server;
 /// The one stdio admission identifier, re-exported so a consumer outside
 /// `gateway` can name it WITHOUT `server` itself becoming crate-visible.
-/// `identity_propagation::caller_proof` classifies it as a trusted transport
-/// rather than a presented secret, and must compare against this exact value.
+/// It is the stdio caller's audit and display principal only: it decides
+/// nothing, since `CallerProvenance` and the retained-result keys follow the
+/// transport's mark (`StdioNonce`) instead (MIK-7272.OWNER.3). Only tests
+/// outside `gateway` still name it.
+#[cfg(test)]
 pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
+/// The stdio transport's mark: the only proof of `CallerProvenance::LocalTransport`.
+pub(crate) use server::StdioNonce;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 pub(crate) mod session_id;
 pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
 pub mod subscription_registry;
+pub(crate) mod task_route;
 pub(crate) mod task_service;
 pub mod trace;
 #[cfg(feature = "webui")]

@@ -403,6 +403,7 @@ fn subjects_differing_only_in_label_hash_equal() {
 
 // ── F18 I3: others may read the grants file, not change it ──────────────────
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 fn grants_file(dir: &std::path::Path, mode: u32) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt as _;
@@ -416,6 +417,7 @@ fn grants_file(dir: &std::path::Path, mode: u32) -> std::path::PathBuf {
     path
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn identity_grants_group_writable_refused() {
@@ -428,6 +430,7 @@ async fn identity_grants_group_writable_refused() {
     );
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn identity_grants_readable_loads() {

@@ -22,13 +22,34 @@ impl MetaMcp {
         self.provenance_signer = Some(Arc::new(signer));
     }
 
-    /// Enable ASI07 origin-link emission.
+    /// Enable ASI07 origin-link emission, with increment-3 defaults for the
+    /// verification trust (no trusted keys, 8 links, 300 s window).
     pub(crate) fn set_chain_signer(
         &mut self,
         signer: crate::security::signature_chain::ChainSigner,
         emit: crate::config::ChainEmit,
     ) {
-        self.chain_signer = Some((Arc::new(signer), emit));
+        self.chain_signer = Some(Arc::new(ChainIdentity {
+            signer,
+            emit,
+            max_links: 8,
+            trusted_keys: std::collections::BTreeMap::new(),
+            replay_window: 300,
+        }));
+    }
+
+    /// Set what upstream chains are verified against (inc3 D3).
+    pub(crate) fn set_chain_trust(
+        &mut self,
+        max_links: usize,
+        trusted_keys: TrustedKeys,
+        replay_window: u64,
+    ) {
+        if let Some(identity) = self.chain_signer.as_mut().and_then(Arc::get_mut) {
+            identity.max_links = max_links;
+            identity.trusted_keys = trusted_keys;
+            identity.replay_window = replay_window;
+        }
     }
 
     /// Enable shadow claim capture (MIK-6908, rung 3.1).
@@ -39,6 +60,31 @@ impl MetaMcp {
     pub fn enable_claim_capture(&mut self, sink: Arc<crate::trust::ClaimCaptureSink>) {
         self.claim_capture = Some(sink);
     }
+}
+
+/// A `gateway_invoke` result with its chain eligibility and upstream outcome.
+pub(crate) type Sourced = (
+    serde_json::Value,
+    ChainSource,
+    Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
+);
+
+/// `security.remote_server_signing.trusted_keys`.
+pub(crate) type TrustedKeys = std::collections::BTreeMap<
+    String,
+    crate::security::remote_provenance::TrustedRemoteServerKeyConfig,
+>;
+
+/// This gateway's chain identity and what it verifies upstream chains
+/// against (ASI07 increments 2 and 3).
+pub(crate) struct ChainIdentity {
+    pub(crate) signer: crate::security::signature_chain::ChainSigner,
+    pub(crate) emit: crate::config::ChainEmit,
+    /// `security.signature_chain.max_links`.
+    pub(crate) max_links: usize,
+    pub(crate) trusted_keys: TrustedKeys,
+    /// `security.message_signing.replay_window`, seconds.
+    pub(crate) replay_window: u64,
 }
 
 /// Map an authenticated external operation to its response-policy targets.
@@ -91,7 +137,7 @@ pub(crate) enum DeliveryInspection {
     AlreadyInspected,
 }
 
-pub(crate) use crate::protocol::ChainSource;
+pub(crate) use crate::protocol::{ChainSource, UpstreamState};
 
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.
 pub(crate) struct ResponseDeliveryContext<'a> {
@@ -193,7 +239,7 @@ impl super::MetaMcp {
         {
             let signed = match signing.delivery() {
                 Ok(super::signing::SigningDelivery::Unsigned) => Ok(()),
-                Ok(super::signing::SigningDelivery::GatewayInvoke { nonce }) => {
+                Ok(super::signing::SigningDelivery::Signed { nonce }) => {
                     // Primitive failures count themselves; do not count twice.
                     self.finalize_gateway_invoke_response(&mut response, nonce)
                 }
@@ -391,8 +437,15 @@ impl super::MetaMcp {
         chain_nonce: Option<&str>,
         invoke_nonce: Option<&str>,
     ) {
-        use crate::security::signature_chain::{LinkSource, attach_origin_link};
-        let Some((signer, emit)) = &self.chain_signer else {
+        use crate::security::signature_chain::{Hop, LinkSource, Upstream, attach_link};
+        let upstream = response.chain_upstream.clone();
+        let Some(ChainIdentity {
+            signer,
+            emit,
+            max_links,
+            ..
+        }) = self.chain_signer.as_deref()
+        else {
             return;
         };
         let src = match source {
@@ -412,11 +465,32 @@ impl super::MetaMcp {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        if attach_origin_link(signer, result, src, nonce, ts).is_err() {
+        // No upstream outcome: an origin link. Otherwise preserve the verified
+        // upstream links and append, or declare the upstream unverified.
+        let hop = match upstream.as_deref() {
+            None => Hop {
+                prefix: &[],
+                up: Upstream::None,
+                input: None,
+            },
+            Some(u) => Hop {
+                prefix: if u.state == UpstreamState::Verified {
+                    &u.links
+                } else {
+                    &[]
+                },
+                up: match u.state {
+                    UpstreamState::Verified => Upstream::Verified,
+                    UpstreamState::Unverified => Upstream::Unverified,
+                },
+                input: Some(u.received.clone()),
+            },
+        };
+        if let Err(rule) = attach_link(signer, result, &hop, src, nonce, ts, *max_links) {
             *response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
                 response.id.take(),
                 -32001,
-                "Result cannot carry a signature chain link",
+                &format!("Result cannot carry a signature chain link: {rule:?}"),
             );
         }
     }
@@ -462,7 +536,10 @@ pub(super) fn shape_meta_result(
     result: crate::Result<serde_json::Value>,
     shape: super::ResultShape,
     declared: crate::protocol::meta::Declared,
-    source: ChainSource,
+    chain: (
+        ChainSource,
+        Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
+    ),
 ) -> crate::protocol::JsonRpcResponse {
     let mut response = match result {
         Ok(content) => match shape {
@@ -500,10 +577,29 @@ pub(super) fn shape_meta_result(
         Err(e) => super::error_response_preserving_status(id, &e),
     };
     if response.error.is_none() && response.result.is_some() {
-        response.chain_source = source;
+        (response.chain_source, response.chain_upstream) = chain;
     }
     response
 }
+
+/// The chain outcome a gated result may keep (A3 R2', inc3 D4): a result the
+/// gates replaced or transformed keeps neither eligibility nor upstream links.
+pub(crate) fn chain_after_gates(
+    effect: GateEffect,
+    source: ChainSource,
+    upstream: Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
+) -> (
+    ChainSource,
+    Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
+) {
+    match effect {
+        GateEffect::PassedThrough => (source, upstream),
+        GateEffect::Enforced => (ChainSource::NotEligible, None),
+    }
+}
+
+#[path = "chain_receipt.rs"]
+pub(crate) mod chain_receipt;
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "response_challenge_tests.rs"]

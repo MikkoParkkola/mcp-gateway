@@ -4,6 +4,8 @@ use super::*;
 use mcp_gateway::cli::{Cli, InitProfile};
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
+#[path = "main_dangling_tests.rs"]
+mod dangling;
 #[path = "main_stack_tests.rs"]
 mod stack;
 
@@ -253,7 +255,7 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
         if original.contains("bad/name") {
             assert!(matches!(error, mcp_gateway::Error::ConfigValidation(_)));
         }
-        #[cfg(unix)]
+        #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
         let identity = {
             use std::os::unix::fs::MetadataExt;
             let metadata = std::fs::metadata(&output).unwrap();
@@ -261,35 +263,13 @@ fn gh462_discovery_persistence_preserves_existing_invalid_files() {
         };
         assert!(write_discovered_to_config(std::slice::from_ref(&server), Some(&output)).is_err());
         assert_eq!(std::fs::read(&output).unwrap(), original.as_bytes());
-        #[cfg(unix)]
+        #[cfg(unix)] // Unix-only: (dev, ino) file identity via MetadataExt.
         {
             use std::os::unix::fs::MetadataExt;
             let metadata = std::fs::metadata(&output).unwrap();
             assert_eq!((metadata.dev(), metadata.ino()), identity);
         }
     }
-}
-
-// GH462.CONFIG.3 / GH462.CONFIG.5: existing symlink differs from a missing config.
-#[cfg(unix)]
-#[test]
-fn gh462_discovery_persistence_preserves_dangling_symlink() {
-    use std::os::unix::fs::MetadataExt;
-    let dir = tempfile::tempdir().unwrap();
-    let output = dir.path().join("discovered.yaml");
-    let target = dir.path().join("absent-target.yaml");
-    std::os::unix::fs::symlink(&target, &output).unwrap();
-    let identity = std::fs::symlink_metadata(&output).unwrap();
-    let result =
-        write_discovered_to_config(&[make_discovered_server("gh462-import")], Some(&output));
-    assert!(
-        result.is_err(),
-        "a dangling symlink was replaced by defaults"
-    );
-    assert_eq!(std::fs::read_link(&output).unwrap(), target);
-    let after = std::fs::symlink_metadata(&output).unwrap();
-    assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
-    assert!(!target.exists());
 }
 
 #[test]

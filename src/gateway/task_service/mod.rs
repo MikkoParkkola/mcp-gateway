@@ -24,6 +24,7 @@ mod service;
 mod service_tests;
 
 pub(crate) mod execution;
+pub(crate) mod host;
 
 #[cfg(test)]
 mod runtime_tests;
@@ -47,6 +48,7 @@ pub(crate) use execution::{
     InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall, UpstreamAnswer,
     UpstreamHandle, UpstreamRecovery,
 };
+pub(crate) use record::{CommittedTask, Target};
 /// Re-exported at crate-public visibility for the same reason as
 /// [`TaskExecutor`]: [`open_runtime`] is `pub` and returns this error, so its
 /// name has to be reachable from outside the crate.
@@ -61,6 +63,8 @@ pub use crate::protocol::tasks::{TaskOptions, TaskStatus, TaskTransition};
 pub(crate) use execution::{CommitObserver, CommitStage};
 #[cfg(test)]
 pub(crate) use service::CreateOutcome;
+#[cfg(test)]
+pub(crate) use {record::CONTINUATION_DEADLINE_MARGIN_SECS, store::TaskStore};
 
 /// Open the durable store, import restored bindings, build the executor, and
 /// settle whatever a previous process left mid-flight.

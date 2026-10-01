@@ -42,11 +42,10 @@ use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::meta::Declared;
-use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
+use crate::protocol::{ChainSource, JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
-use crate::security::signature_chain::ChainSigner;
 use crate::stats::UsageStats;
 use crate::tool_registry::ToolRegistry;
 use crate::transition::TransitionTracker;
@@ -84,7 +83,9 @@ mod confirmation;
 mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
+pub(crate) mod dispatch_log;
 mod dispatch_names;
+mod effects;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
@@ -103,6 +104,7 @@ mod spec_preview;
 mod support;
 mod surfaced;
 mod task_confirmation;
+mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
 
@@ -125,6 +127,15 @@ pub(crate) use task_confirmation::{
 /// Configurable in future; hard-coded for Phase 3 initial implementation.
 #[cfg(feature = "spec-preview")]
 const MAX_PROMOTED_PER_SESSION: usize = 10;
+
+/// Reserved prefix for principals the gateway itself assigns. A NUL cannot
+/// occur in an HTTP header value or in any principal the auth layer derives
+/// (hex digests and fixed words), so no presented credential starts with it.
+pub(crate) const LOCAL_OPERATOR_PREFIX: char = '\0';
+
+/// The principal the stdio transport's own contexts key their retained
+/// results under. See [`MetaMcpCallerContext::owner_principal`].
+pub(crate) const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
 
 /// Authenticated caller context for a `tools/call` dispatch.
 ///
@@ -249,6 +260,31 @@ impl<'a> MetaMcpCallerContext<'a> {
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
             grant_subject: self.grant_subject.as_ref(),
+        }
+    }
+
+    /// The principal text that keys this caller's retained results (MIK-7272.OWNER.3).
+    ///
+    /// The stdio transport's mark, not its principal text, names the local
+    /// operator: a context the transport built keys under
+    /// [`LOCAL_OPERATOR_PRINCIPAL`], and text from any other source can never
+    /// spell it, because text carrying the reserved prefix is dropped here.
+    pub(crate) fn owner_principal(&self) -> Option<&'a str> {
+        if self.stdio_nonce.is_some() {
+            return Some(LOCAL_OPERATOR_PRINCIPAL);
+        }
+        self.credential_principal
+            .filter(|text| !text.starts_with(LOCAL_OPERATOR_PREFIX))
+    }
+
+    /// How this caller was established. The stdio transport's mark decides
+    /// `LocalTransport`; principal text alone never does (MIK-7272.OWNER.3).
+    pub(crate) fn provenance(&self) -> crate::identity_propagation::CallerProvenance {
+        match self.stdio_nonce {
+            Some(mark) => crate::identity_propagation::CallerProvenance::local_transport(mark),
+            None => {
+                crate::identity_propagation::CallerProvenance::classify(self.credential_principal)
+            }
         }
     }
 
@@ -533,7 +569,7 @@ pub struct MetaMcp {
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
 
     /// ASI07 chain identity and emission mode; `None` = feature off.
-    pub(super) chain_signer: Option<(Arc<ChainSigner>, crate::config::ChainEmit)>,
+    pub(super) chain_signer: Option<Arc<response_security::ChainIdentity>>,
 
     /// Shadow claim-capture sink (MIK-6908, rung 3.1).
     ///
@@ -1182,12 +1218,9 @@ impl MetaMcp {
         // THREE independent ways a backend is bound to one person, enumerated
         // from `BackendConfig` (`config::BackendConfig::oauth`, `::account`,
         // `::identity_propagation`) rather than discovered one leak at a time.
-        // Any of them means the gateway-held static credential is somebody's
-        // personal login, and every caller of this function resolves no per-user
-        // credential of its own (MIK-6745.JOURNEY.3).
-        // Each arm carries its OWN remediation: a single generic fix line sent
-        // the propagation arm to "enable identity propagation", which is already
-        // enabled and required there.
+        // Any of them makes the static credential somebody's personal login,
+        // and no caller here resolves a per-user one (MIK-6745.JOURNEY.3). Each
+        // arm carries its OWN remediation.
         let (reason, fix) = if backend.oauth_requires_per_user_isolation() {
             (
                 "uses a gateway-held OAuth login that is not isolated per user",
@@ -2178,7 +2211,13 @@ impl MetaMcp {
             };
 
         if let Some(intent) = caller.task.take() {
-            return self.begin_task(id, tool_name, arguments, intent).await;
+            // A `require` backend's answer must be a checked chain (inc3 R2).
+            if let Err(error) = self.refuse_chained_task(tool_name, &arguments) {
+                return error_response_preserving_status(id, &error);
+            }
+            return self
+                .begin_task(id, tool_name, arguments, intent, (session_id, &caller))
+                .await;
         }
 
         self.dispatch_below_gate(
@@ -2198,7 +2237,10 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         intent: crate::gateway::task_service::TaskIntent,
+        (session_id, caller): (Option<&str>, &MetaMcpCallerContext<'_>),
     ) -> JsonRpcResponse {
+        use crate::gateway::task_service::execution::BeginOutcome;
+
         let task = crate::gateway::task_service::Task::create_at(
             tool_name,
             chrono::Utc::now(),
@@ -2206,11 +2248,34 @@ impl MetaMcp {
         );
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
+        // #2450: a repeat is answered from the stored task, so the policy a
+        // sync replay passes runs first. A fresh task is checked by its worker.
+        let policy_arguments = arguments.clone();
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
             arguments,
         };
         match executor.begin(intent, task, backend, call).await {
+            Ok(BeginOutcome::Existing(stored)) => {
+                // The request's own policy, then the calls that produced the
+                // stored result (R3.2): both must hold before it goes out.
+                if let Err(error) = self.check_task_admission_policy(
+                    caller,
+                    tool_name,
+                    &policy_arguments,
+                    session_id,
+                ) {
+                    return error_response_preserving_status(id, &error);
+                }
+                // The token rides where the current request's own check reads it.
+                let attestation = if tool_name == "gateway_invoke" {
+                    policy_arguments.get("attestation").and_then(Value::as_str)
+                } else {
+                    caller.retry.attestation.as_deref()
+                };
+                self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
+                    .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
+            }
             Ok(outcome) => outcome.into_response(id),
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
@@ -2321,7 +2386,7 @@ impl MetaMcp {
         }
 
         // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
-        let mut source = crate::protocol::ChainSource::NotEligible;
+        let (mut source, mut upstream) = (ChainSource::NotEligible, None);
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
@@ -2332,8 +2397,8 @@ impl MetaMcp {
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller)
                     .await;
-                sourced.map(|(value, origin)| {
-                    source = origin;
+                sourced.map(|(value, origin, chain)| {
+                    (source, upstream) = (origin, chain);
                     value
                 })
             }
@@ -2356,9 +2421,9 @@ impl MetaMcp {
         };
 
         let inspected = self.marks_discovery(tool_name, result.is_ok());
-        let declared = caller.input_capabilities;
+        let (declared, chain) = (caller.input_capabilities, (source, upstream));
         let mut response =
-            response_security::shape_meta_result(id, tool_name, result, shape, declared, source);
+            response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
         response.discovery_inspected = inspected && response.error.is_none();
         response
     }

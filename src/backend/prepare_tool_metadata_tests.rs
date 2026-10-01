@@ -127,3 +127,52 @@ fn prepare_tool_metadata_excludes_and_annotates_in_one_pass() {
         Some(true)
     );
 }
+
+// --- MIK-7216.IDEM.1 — the backend-tool classification, pinned on the real
+// function. Unannotated / `readOnlyHint:false` / a read-looking name are
+// side-effecting (ADR-012 A1 deny default); an explicit `readOnlyHint:true`
+// or `idempotentHint:true` grants resend permission. Admission never reads
+// annotations: see `idempotency_config_tests` in `config/features/idempotency.rs`.
+// Wire-level cases live in `tests/mik_7272_sub4_adr012_acs.rs`.
+
+fn annotated(name: &str, read_only: Option<bool>, idempotent: Option<bool>) -> Tool {
+    let mut tool = sample_tool(name);
+    tool.annotations = Some(crate::protocol::ToolAnnotations {
+        read_only_hint: read_only,
+        idempotent_hint: idempotent,
+        ..Default::default()
+    });
+    tool
+}
+
+#[test]
+fn prepare_tool_metadata_grants_resend_only_to_explicit_hints() {
+    // GIVEN one tool per annotation shape, including a read-looking mutation
+    let mut tools = vec![
+        sample_tool("unannotated"),
+        sample_tool("get_and_increment"),
+        annotated("read_true", Some(true), None),
+        annotated("read_false", Some(false), None),
+        annotated("idempotent_only", None, Some(true)),
+        annotated("idempotent_false", None, Some(false)),
+    ];
+
+    // WHEN the tool-metadata entry point classifies them
+    let prepared = prepare_tool_metadata(
+        "beeper",
+        &std::collections::BTreeMap::new(),
+        crate::backend::Judging::Judge,
+        &mut tools,
+    );
+
+    // THEN only an explicit true hint grants permission; idempotentHint:true
+    // without readOnlyHint is permitted for resend (the gateway does not
+    // require both), and everything else is side-effecting
+    let mut permitted: Vec<&str> = prepared
+        .resend_permitted
+        .iter()
+        .map(String::as_str)
+        .collect();
+    permitted.sort_unstable();
+    assert_eq!(permitted, ["idempotent_only", "read_true"]);
+}

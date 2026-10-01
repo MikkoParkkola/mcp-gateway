@@ -43,8 +43,10 @@ use crate::security::{
 };
 
 mod owner;
+pub(super) mod request_checks;
 mod tasks;
 
+pub(super) use owner::owner_of;
 use owner::request_session_owner;
 #[cfg(test)]
 use owner::session_owner;
@@ -95,21 +97,6 @@ fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// The `taskId` a task method names, if it names one.
-fn task_id_param(params: Option<&Value>) -> Option<&str> {
-    params?.get("taskId")?.as_str()
-}
-
-/// The one answer a caller gets for a task that is absent, or that belongs to
-/// another principal.
-///
-/// Deliberately carries no id: a message naming the task would let a caller
-/// tell "not yours" from "never existed", which is the whole disclosure the
-/// ownership rule exists to prevent.
-fn missing_task_error(id: crate::protocol::RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(Some(id), -32602, "no such task")
 }
 
 /// The owner key of a stateless task: the validated API-key credential. Only
@@ -265,11 +252,22 @@ pub(super) async fn mcp_sse_handler(
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let (session_id, _rx) = state.multiplexer.get_or_create_session_scoped(
-        existing_session_id.as_deref(),
-        &owner,
-        crate::gateway::auth::live::held_credential(&headers),
-    );
+    let held = crate::gateway::auth::live::held_credential(&headers);
+    let (session_id, _rx) = if super::hardened_elicitation::is_hardened(&state) {
+        // Hardened (row 10): a stream only resumes a session a declaring
+        // `initialize` opened; it never opens one.
+        match state
+            .multiplexer
+            .resume_session_scoped(existing_session_id.as_deref(), &owner, held)
+        {
+            Some(resumed) => resumed,
+            None => return super::hardened_elicitation::refusal().into_response(),
+        }
+    } else {
+        state
+            .multiplexer
+            .get_or_create_session_scoped(existing_session_id.as_deref(), &owner, held)
+    };
 
     info!(session_id = %session_fp(&session_id), "Client connected to SSE stream");
 
@@ -605,22 +603,45 @@ async fn meta_mcp_dispatch(
         // request every time keeps running and stops protecting.
         (String::new(), None)
     } else {
-        let (id, rx) = state.multiplexer.get_or_create_session_scoped(
-            existing_session_id.as_deref(),
-            // The identity that owns the session. A caller with neither a
-            // subject nor a credential is "anonymous", so a single-user
-            // gateway behaves exactly as before.
-            &caller_owner,
-            crate::gateway::auth::live::held_credential(&headers),
-        );
+        // The identity that owns the session. A caller with neither a subject
+        // nor a credential is "anonymous", so a single-user gateway behaves
+        // exactly as before.
+        let held = crate::gateway::auth::live::held_credential(&headers);
+        let existing = existing_session_id.as_deref();
+        let (id, rx) = if !super::hardened_elicitation::is_hardened(&state) {
+            state
+                .multiplexer
+                .get_or_create_session_scoped(existing, &caller_owner, held)
+        } else if super::hardened_elicitation::is_initialize(&request) {
+            // Hardened (row 10): refused before anything is minted.
+            if !super::hardened_elicitation::declares_elicitation(&request) {
+                return super::hardened_elicitation::refusal().into_response();
+            }
+            state
+                .multiplexer
+                .get_or_create_session_scoped(existing, &caller_owner, held)
+        } else {
+            // Hardened: only a declaring `initialize` opens a legacy session.
+            match state
+                .multiplexer
+                .resume_session_scoped(existing, &caller_owner, held)
+            {
+                Some(resumed) => resumed,
+                None => return super::hardened_elicitation::refusal().into_response(),
+            }
+        };
         (id, Some(rx))
     };
     // Not a stream reader: a held subscription fakes a deliverable prompt.
     drop(session_rx);
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
+    // Hardened signs every `tools/call` here, not only `gateway_invoke`
+    // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
-        crate::gateway::meta_mcp::signing::SigningInvocationContext::capture(&mut request)
+        use crate::gateway::meta_mcp::signing::{SigningInvocationContext, SigningScope};
+        let scope = SigningScope::of(state.live_config.running().security.posture);
+        SigningInvocationContext::capture_scoped(&mut request, scope)
     });
     // Off the request before sanitization can rewrite or reject its bytes
     // (ASI07 A3); a malformed one is refused here, with the request's own id.
@@ -792,144 +813,16 @@ async fn meta_mcp_dispatch(
 
     debug!(method = %method, session_id = %session_fp(&session_id), "Meta-MCP request");
 
-    // The same refusal, reached by a request that declared no era. The check
-    // below is inside the `Modern` arm, so a header naming a revision this
-    // build serves in neither era — `1999-01-01`, or any spelling older than
-    // the first stateless one — classified `Legacy` and took the success path
-    // with the header unexamined: the client was answered under a revision it
-    // had not named and was never told why.
-    //
-    // Only when the request is NOT modern. A modern request states its revision
-    // in the body, and the header is then evidence to compare against it, not a
-    // source to act on: pre-empting the mirrored-header check here would refuse
-    // on the header alone, which is the trust inversion that check exists to
-    // close (`protocol::headers`).
-    if !is_modern
-        && let Some(version) = declared_version
-        && crate::protocol::meta::served_revision(version).is_none()
-    {
-        return build_response(
-            unsupported_version_error(
-                id.clone(),
-                version,
-                state.live_config.running().server.modern_protocol,
-            ),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        );
-    }
-
-    if let crate::protocol::meta::RequestShape::Modern(ref fields) = shape {
-        // A version we cannot serve statelessly. The client is told which ones
-        // we can, so it can retry on a shared revision rather than guess.
-        let modern_enabled = state.live_config.running().server.modern_protocol;
-        if !modern_enabled
-            || !crate::protocol::meta::MODERN_VERSIONS.contains(&fields.protocol_version.as_str())
-        {
-            return build_response(
-                unsupported_version_error(id.clone(), &fields.protocol_version, modern_enabled),
-                &session_id,
-                StatusCode::BAD_REQUEST,
-            );
-        }
-
-        // Header against body, before anything acts on either. The
-        // specification's own rationale for this check is a load balancer
-        // routing on the header while the server executes on the body — which
-        // is this gateway with the check missing.
-        //
-        // The mirrored field is chosen by the method, never searched for: a
-        // `resources/read` executes on `uri`, and validating a `name` it happens
-        // to carry would authorise a decoy while reading something else.
-        let body_name = crate::protocol::headers::mcp_name_body_field(&method)
-            .and_then(|field| params.as_ref().and_then(|p| p.get(field)))
-            .and_then(serde_json::Value::as_str);
-
-        // Exactly one occurrence, or none. Two lines of the same header let one
-        // intermediary route on the first and another act on the second, and
-        // the disagreement between them is the bypass — the same class of
-        // defect the body/header check closes, arriving through the header
-        // list instead of past it.
-        let single_header = |name: &'static str| -> Result<Option<&str>, &'static str> {
-            let mut values = headers.get_all(name).iter();
-            match (values.next(), values.next()) {
-                (Some(only), None) => Ok(only.to_str().ok()),
-                (None, _) => Ok(None),
-                (Some(_), Some(_)) => Err(name),
-            }
-        };
-        let duplicated = |name: &'static str| {
-            build_error_response(
-                id.clone(),
-                -32020,
-                format!("{name} appears more than once"),
-                &session_id,
-                StatusCode::BAD_REQUEST,
-            )
-        };
-        // Three explicit calls rather than a collected array: the conversion
-        // back out of a collection needs a fallback, and the only fallback
-        // available here blanks the headers, which passes the check it was
-        // meant to run.
-        let header_protocol_version = match single_header("mcp-protocol-version") {
-            Ok(value) => value,
-            Err(name) => return duplicated(name),
-        };
-        let header_method = match single_header("mcp-method") {
-            Ok(value) => value,
-            Err(name) => return duplicated(name),
-        };
-        let header_name = match single_header("mcp-name") {
-            Ok(value) => value,
-            Err(name) => return duplicated(name),
-        };
-        let check = crate::protocol::headers::HeaderCheck {
-            header_protocol_version,
-            body_protocol_version: Some(fields.protocol_version.as_str()),
-            header_method,
-            body_method: method.as_str(),
-            header_name,
-            body_name,
-        };
-        if let Err(mismatch) = check.validate() {
-            return build_error_response(
-                id.clone(),
-                -32020,
-                mismatch.to_string(),
-                &session_id,
-                StatusCode::BAD_REQUEST,
-            );
-        }
-
-        // A capability the client never declared. Checked before dispatch:
-        // a handler that discovers this halfway through has already acted.
-        if let Some(capability) = crate::protocol::meta::required_capability(&method)
-            && !fields.declares_capability(capability)
-        {
-            let mut rpc = crate::protocol::JsonRpcResponse::error(
-                id.clone(),
-                -32021,
-                format!("client did not declare the '{capability}' capability"),
-            );
-            if let Some(ref mut error) = rpc.error {
-                error.data = Some(serde_json::json!({
-                    "requiredCapabilities": [capability],
-                }));
-            }
-            return build_response(rpc, &session_id, StatusCode::BAD_REQUEST);
-        }
-
-        // Methods this revision removed. Refusing them is the difference
-        // between claiming the revision and speaking it.
-        if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method.as_str()) {
-            return build_error_response(
-                id.clone(),
-                -32601,
-                format!("method '{method}' was removed in MCP 2026-07-28"),
-                &session_id,
-                StatusCode::NOT_FOUND,
-            );
-        }
+    if let Some((rpc, status)) = request_checks::request_check_refusal(
+        &state,
+        &headers,
+        &shape,
+        declared_version,
+        &method,
+        params.as_ref(),
+        id.as_ref(),
+    ) {
+        return build_response(rpc, &session_id, status);
     }
 
     // Validated first, answered second. A notification carries no id and gets no
@@ -1022,7 +915,11 @@ async fn meta_mcp_dispatch(
             "status" => "error"
         )
         .increment(1);
-        return build_response(missing_task_error(id), &session_id, StatusCode::OK);
+        return build_response(
+            crate::gateway::task_route::missing_task_error(id),
+            &session_id,
+            StatusCode::OK,
+        );
     }
 
     // A `subscriptions/listen` naming tasks and nothing else HAS said what it
@@ -1518,8 +1415,13 @@ async fn meta_mcp_dispatch(
             // for every transport. What this edge owns is the one fact the
             // dispatcher cannot see: which era the request was written
             // against, and therefore what to do when nobody can be asked.
-            // Handed over finished, so the shape is read once, here.
-            let confirmation_policy = if is_modern {
+            // Handed over finished, so the shape is read once, here. Hardened
+            // gives a legacy caller the modern answer: refuse what nobody can
+            // confirm (GH1942.HARDEN.1 row 11).
+            let confirmation_policy = if is_modern
+                || state.live_config.running().security.posture
+                    == crate::security::SecurityPosture::Hardened
+            {
                 crate::gateway::destructive_confirmation::ConfirmationPolicy::for_modern()
             } else {
                 crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
@@ -1669,8 +1571,8 @@ async fn meta_mcp_dispatch(
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => {
                     (Some(lease), None)
                 }
-                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response)) => {
-                    (None, Some(response))
+                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
+                    (None, Some((response, audit)))
                 }
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
                 Err(error) => {
@@ -1694,8 +1596,12 @@ async fn meta_mcp_dispatch(
             caller.execution = execution.as_ref();
             // `call_response` is mutated only by the firewall response scan below.
             #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-            let mut call_response = if let Some(response) = replay {
-                response
+            let mut call_response = if let Some((response, audit)) = replay {
+                // #2472: a replay is a delivered call, recorded as its first run was.
+                let session = Some(session_id.as_str());
+                (state.meta_mcp)
+                    .audit_replay(tool_name, &arguments, session, &caller, response, audit)
+                    .await
             } else {
                 Box::pin(state.meta_mcp.handle_tools_call(
                     id,
@@ -1848,6 +1754,7 @@ async fn meta_mcp_dispatch(
                 // An AUTHORIZATION context, not an attribution record: the
                 // proven principal, never the declared label.
                 agent_id: agent_identity.proven_agent_id(),
+                agent_declared: agent_identity.declared_agent_label(),
                 grant_subject: grant_subject.clone(),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|client| client.admin),

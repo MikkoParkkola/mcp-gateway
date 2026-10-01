@@ -66,6 +66,30 @@ fn token(ttl: chrono::TimeDelta) -> String {
         .to_string()
 }
 
+/// One `tasks/get`, presenting `token` as the recovery attestation if given.
+async fn get_attested(state: &Arc<AppState>, id: &str, token: Option<String>) -> Value {
+    let mut body = task_method(821, "tasks/get", json!({ "taskId": id }));
+    if let Some(token) = token {
+        body["params"]["_meta"][crate::gateway::meta_mcp::upstream::RECOVERY_META] =
+            json!({ "attestation": token });
+    }
+    post(state, "key-a", body).await
+}
+
+/// `poll_until_terminal` for an enforcing gateway: a finished task is only
+/// delivered to a read that presents a fresh recovery token.
+async fn poll_attested(state: &Arc<AppState>, id: &str) -> Value {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline {
+        let body = get_attested(state, id, Some(token(chrono::TimeDelta::minutes(5)))).await;
+        if is_terminal(&status_of(&body)) {
+            return body;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("task {id} never reached a terminal status");
+}
+
 /// A task-augmented call of the surfaced tool by its own name.
 fn surfaced_task(id: i64, key: &str, attestation: Option<&str>) -> Value {
     let mut body = keyed(
@@ -89,7 +113,7 @@ async fn refusal_code(state: &Arc<AppState>, created: &Value) -> Option<i64> {
         return Some(code);
     }
     let id = task_id(created);
-    let settled = poll_until_terminal(state, "key-a", &id).await;
+    let settled = poll_attested(state, &id).await;
     settled
         .pointer("/result/error/code")
         .and_then(Value::as_i64)
@@ -123,7 +147,7 @@ async fn surfaced_task_enforce_carries_meta_token() {
     )
     .await;
     let id = task_id(&created);
-    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    let settled = poll_attested(&state, &id).await;
     assert_eq!(status_of(&settled), "completed", "{settled}");
     assert_eq!(mock.calls(), 1, "one attested task, one dispatch");
     for params in mock.seen() {
@@ -161,7 +185,7 @@ async fn surfaced_task_enforce_rechecks_token_at_dispatch() {
         .expect("the worker reaches Dispatched");
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     hold.disarm_and_release(&observer);
-    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    let settled = poll_attested(&state, &id).await;
     assert_eq!(status_of(&settled), "failed", "{settled}");
     assert_eq!(
         settled
@@ -171,4 +195,23 @@ async fn surfaced_task_enforce_rechecks_token_at_dispatch() {
         "{settled}"
     );
     assert_eq!(mock.calls(), 0, "the expired task must not dispatch");
+}
+
+/// A finished task is read with the same recovery token a working one needs.
+#[tokio::test]
+async fn a_finished_task_read_needs_a_valid_recovery_token_under_enforce() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = surfaced_enforced(&mock).await;
+    let created = post(
+        &state,
+        "key-a",
+        surfaced_task(820, "fin-att", Some(&token(chrono::TimeDelta::minutes(5)))),
+    )
+    .await;
+    let id = task_id(&created);
+    let settled = poll_attested(&state, &id).await;
+    assert_eq!(status_of(&settled), "completed", "{settled}");
+    let bare = get_attested(&state, &id, None).await;
+    assert_eq!(bare.pointer("/error/code"), Some(&json!(-32002)), "{bare}");
+    assert!(bare.get("result").is_none(), "{bare}");
 }

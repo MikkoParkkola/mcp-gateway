@@ -20,6 +20,7 @@ fn api_key(name: &str) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 

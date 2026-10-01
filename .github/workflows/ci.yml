@@ -270,7 +270,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Pinned: the goldens are Helm 4 renders, and `latest` falls back to
+      # v3.18.4 whenever the release lookup fails, which drifts them.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Validate helm chart smoke script
         run: bash -n scripts/dev/helm-chart-smoke.sh
       - name: Lint, render, and schema-validate the chart
@@ -289,6 +293,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Package, push to OCI, pull, and render the same artifact
         run: |
           set -euo pipefail
@@ -319,6 +325,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
@@ -347,6 +355,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
@@ -380,6 +390,9 @@ jobs:
         run: deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh
       - name: Validate helm kind lifecycle script
         run: bash -n scripts/dev/helm-kind-lifecycle.sh
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Helm install, upgrade, and rollback on the real cluster
         env:
           MCP_GATEWAY_KIND_CLUSTER: mcp-gateway-rollback-smoke

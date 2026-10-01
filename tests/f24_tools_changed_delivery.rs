@@ -166,7 +166,9 @@ async fn every_tool_set_change_reaches_both_eras_once() {
     std::fs::create_dir_all(caps.path().join("audit")).expect("audit dir");
     let mut gateway = HttpGateway::start(config.clone()).await;
     gateway.client = admin_client();
-    // The harness assigned the port; keep it so a rewrite does not move it.
+    // Copy the file's port into the rewrite so a reload never sees a port
+    // change. The harness writes 0 and reads the bound port from the banner
+    // (#2513); 0 in both files keeps the live listener.
     config["server"]["port"] = serde_yaml::from_str::<Value>(
         &std::fs::read_to_string(gateway.config_path()).expect("config"),
     )
