@@ -1225,11 +1225,17 @@
     },
     {
       "id": "MIK-7581.DOCS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7581, operator 4.0 gating 2026-09-26). README.md:54 has a \"What's new in 4.0\" section; the badge, the release-notes and CHANGELOG lead, the multi-user guide lead-in and per-claim citations are not yet checked. Distinct from MIK-7570.DOCS.1 (team guide, runbook, upgrade guide, client matrix)."
+      "evidence": [
+        "README.md",
+        "CHANGELOG.md",
+        "docs/MULTI_USER.md",
+        "docs/release/4.0.0-beta.2-notes.md",
+        "docs/release/v4.0.0-release-notes-DRAFT.md"
+      ],
+      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file and test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
     },
     {
       "id": "GH2294.AUDIT.1",
