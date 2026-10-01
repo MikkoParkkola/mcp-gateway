@@ -40,10 +40,16 @@ through the existing `resolve_key` error. No new check.
   `check_invocation_policy` (it needs `server`/`tool`, which only `gateway_invoke` has) and
   runs the nonce-store admission and `require_nonce` exactly as for `gateway_invoke`, keyed on
   the same quota principal. `prepared_target` stays `None`, as it is today for these calls.
+- *One nonce, one request.* Admission consumes the nonce. A confirmation follow-up (after an
+  in-band challenge from either destructive gate) is a new request and carries a new nonce; a
+  follow-up resending the first nonce is a replay by construction and is refused `-32001`, as
+  a replayed `gateway_invoke` nonce is today. Clients already send one nonce per request.
 - *Sign only what was admitted.* A response is signed only when its context passed admission.
-  The destructive gate's `Answer` (a modern challenge or a refusal) exits before admission and
-  is delivered unsigned. Consuming the nonce there would refuse the client's own follow-up,
-  which resends the request, as a replay.
+  The task-augmented gate's `Answer` (`handlers.rs:1472-1514`) exits before admission and is
+  delivered unsigned; the ordinary gate (`meta_mcp/mod.rs:2205`) runs inside dispatch, after
+  admission, so its challenge is signed.
+- *Signing failure fails closed* on both routes: the result is replaced by `-32603 "Response
+  signing failed"`, as `response_security.rs:245-250` does on the meta route.
 - *Stored results.* `owns_signature()` becomes "this context signs", so a stored result is kept
   without `_signature` and a replay is signed fresh against the replaying request's nonce.
 - *Direct route.* `tools/call` takes the same `_meta` nonce off the params (and refuses a
@@ -61,9 +67,12 @@ that under `hardened` only an elicitation-declaring `initialize` can create a le
   such session is the same refusal, and nothing is minted;
 - the identity check (row 8) still runs first, before the body.
 
-**Row 10 (direct route).** No handshake state is added. A request whose
-`MCP-Protocol-Version` does not declare the modern era (`declares_modern_era`, as `/mcp`) is
-refused with the same 403 + `-32600`, unless it is an `initialize` declaring elicitation.
+**Row 10 (direct route).** No handshake state is added. The direct route classifies each
+request exactly as `/mcp` does: the duplicate-safe header read (`handlers.rs:589-595`) and
+`classify_and_observe` (`handlers.rs:722-741`), refusing `RequestShape::Malformed` with
+`-32602` (so a modern header over a legacy body cannot pass as modern). A request whose era is
+`Legacy` is refused with the same 403 + `-32600`, unless it is an `initialize` declaring
+elicitation. This classification runs only under `hardened`; standard keeps today's path.
 Notifications from such a client are refused too (403 with `{}`, as the identity refusal).
 
 **Row 11.** At `handlers.rs:1523-1527` the policy is `for_modern()` when the request is modern
@@ -72,30 +81,48 @@ Notifications from such a client are refused too (403 with `{}`, as the identity
 
 ## 3. Test plan (red-first; production constructors; each row names the mutant that must redden it)
 
-Harness: the production router built by `test_router_app_state_with_auth_and_config` as in
-`src/gateway/router/hardened_identity_tests.rs` (callers use a `kind: personal` key to pass
-row 8). Row 7 needs the signer installed from config by the production wiring, never set by
-hand.
+Harnesses. Rows 6 and 7: the shipped binary from its YAML and env
+(`tests/common/signing_gateway.rs`, which installs no `AppState` or signer; the production
+constructor wires the signer, nonce store and idempotency cache, `server/mod.rs:1020`). Under
+`hardened` an HTTP backend on loopback is refused by the destination policy, so the backend
+is a stdio backend, which the policy does not cover. Callers present a `kind: personal` API
+key to pass row 8. Rows 10 and 11: the production router as in
+`src/gateway/router/hardened_identity_tests.rs`; these rows need no signer.
 
 | Row | Test | Asserts | Mutant |
 |---|---|---|---|
 | 6 | `hardened_resolves_env_secret_before_signing_check` | hardened config, `shared_secret: ${VAR}` only in env, `enabled` unset: load succeeds, signing on, secret resolved | force `enabled` after `resolve_with_env` |
 | 6 | `hardened_without_signing_secret_refuses` | hardened, no secret: load fails naming `message_signing.shared_secret` | drop the forcing |
 | 7 | `hardened_signs_tools_call_on_both_routes` | a non-invoke meta `tools/call` and a direct `tools/call`, each with a `_meta` nonce: `_signature` verifies with the v2 MAC and binds the nonce | keep the `gateway_invoke`-only capture |
-| 7 | `hardened_tool_call_nonce_replay_refused` | same nonce twice, each route: second refused before dispatch, backend saw one call | admit after dispatch / skip admission on the direct route |
-| 7 | `hardened_direct_cached_result_is_signed` | idempotent replay on the direct route is signed against the replaying nonce | leave the `CachedResult` exit unsigned |
-| 7 | `destructive_challenge_does_not_consume_nonce` | a challenged call answered unsigned; the follow-up with the same nonce is admitted and signed | admit before the destructive gate |
+| 7 | `hardened_tool_call_nonce_replay_refused` | same nonce twice on each route, and once on each route: every second use refused before dispatch, backend saw one call | admit after dispatch / skip admission on the direct route / a per-route store |
+| 7 | `hardened_direct_cached_result_is_signed` | an idempotent replay on the direct route is served from the cache (backend still at one call) and signed against the replaying nonce | leave the `CachedResult` exit unsigned |
+| 7 | `confirmation_follow_up_needs_a_fresh_nonce` | a destructive meta tool's in-band challenge is signed; the follow-up with a new nonce completes signed; with the first nonce it is refused | skip admission for the follow-up |
+| 7 | `hardened_direct_signing_failure_fails_closed` | a backend result the v2 primitive rejects (non-object result) is answered `-32603`, never delivered unsigned | deliver unsigned on signing error |
 | 7 | `gateway_invoke_with_two_nonces_refused` | `-32602`, nothing dispatched | accept either nonce |
 | 10 | `hardened_refuses_legacy_without_elicitation_no_session` | legacy `initialize` without elicitation: 403, the text, no `mcp-session-id`, session count unchanged | check after the mint |
 | 10 | `hardened_refuses_legacy_without_elicitation_get` | GET with no live session: refused, nothing minted | skip GET |
 | 10 | `hardened_legacy_request_without_session_refused` | legacy `tools/list` with no session: refused, nothing minted; after an elicitation-declaring `initialize` the same request is served | mint on non-initialize |
-| 10 | `hardened_direct_legacy_refused` | direct legacy `tools/call` refused with backend at 0 calls; elicitation `initialize` and a modern-header request pass | skip the direct route |
+| 10 | `hardened_direct_legacy_refused` | direct legacy `tools/call` refused with backend at 0 calls; an elicitation `initialize` and a well-formed modern request pass; a modern header over a legacy body, a doubled header, and an unsupported revision are each refused, backend still at 0 calls | skip the direct route / trust the header alone |
 | 11 | `hardened_legacy_confirmation_policy_refuses` | legacy session, unconfirmable destructive call: `-32001` under hardened, WARN-and-proceed under standard | keep `for_legacy()` under hardened |
-| 16 | `standard_posture_applies_no_override` (extended) | standard: signing not forced, non-invoke results unsigned, legacy without elicitation served | apply any override under standard |
+| 16 | `standard_posture_applies_no_override` (extended) | standard: signing not forced, legacy without elicitation served | apply any override under standard |
+| 16 | `standard_signing_keeps_invoke_only_scope` | standard with signing explicitly enabled: non-invoke meta and direct results unsigned, `gateway_invoke` signed as before | widen capture without the posture check |
 
 ## 4. Upgrade guide and ledger
 
-UPGRADING-4.0 item 111 (110 reserved for #2538): adopting `hardened` now needs a signing
+UPGRADING-4.0 item 112 at time of writing (110 is #2529, 111 is #2538); re-read at merge and take the next free number, with "Reserved: lands with #N" placeholders keeping rows contiguous: adopting `hardened` now needs a signing
 secret; `tools/call` results carry `_signature`; legacy clients must declare elicitation, and
 on the direct route legacy clients are refused. The HARDEN.1 ledger note records increment 5
 and that T14 waits on 4c (decision 8).
+
+## 5. Review dispositions (seat A, design round 1; each verified at source)
+
+- HIGH, ordinary destructive gate runs after nonce admission: ACCEPTED as a semantics
+  statement, not a reordering. The gate is inside dispatch (`meta_mcp/mod.rs:2205`); the
+  follow-up is a new request with a new nonce, and resending the first nonce is a replay.
+  Test `confirmation_follow_up_needs_a_fresh_nonce`.
+- HIGH, a modern header alone passes the direct route: ACCEPTED. Direct route uses the `/mcp`
+  classifier and refuses `Malformed`; negative tests added.
+- MEDIUM, the router fixture installs no signer (`router/tests.rs:553-558`): ACCEPTED. Rows 6
+  and 7 drive the shipped binary; stdio backend, since loopback HTTP is refused under hardened.
+- MEDIUM, standard with signing on is untested: ACCEPTED. `standard_signing_keeps_invoke_only_scope`.
+- Improvements taken: fail-closed direct signing, cross-route replay, cache-hit assertion.
