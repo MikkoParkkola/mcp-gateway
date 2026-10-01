@@ -788,6 +788,10 @@ mod tests;
 mod cache_tests;
 
 #[cfg(test)]
+#[path = "stdio_start_refusal_tests.rs"]
+mod start_refusal_tests;
+
+#[cfg(test)]
 mod spawn_classification_tests {
     use super::StdioTransport;
     use crate::Error;
