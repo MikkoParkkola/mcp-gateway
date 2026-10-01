@@ -136,7 +136,9 @@ backend" and "fails a capability file" first.**
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 | 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
-| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result on `/mcp` and `/mcp/{backend}` is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]`; a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
+| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result whose nonce was admitted, on `/mcp` and `/mcp/{backend}`, is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]` (answers given before admission are unsigned); a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
+| 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
+| 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3186,13 +3188,17 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
 - **Signing.** `security.message_signing.enabled` is forced on, whatever the file says, so
   `security.message_signing.shared_secret` must resolve to at least 32 bytes (an env-only
   `${VAR}` reference resolves) or the gateway refuses to start. Every successful `tools/call`
-  result, on `/mcp` and on `/mcp/{backend}`, carries the v2 `_signature`. Its nonce is
+  result whose nonce was admitted, on `/mcp` and on `/mcp/{backend}`, carries the v2
+  `_signature`. Its nonce is
   `params._meta["io.mcp-gateway/nonce"]` (`gateway_invoke` keeps `arguments.nonce`; sending both
   is refused `-32602`). A nonce is admitted once, before dispatch, in one replay store for both
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
-  dispatch, is refused, so send a new one per request. `require_nonce` stays your choice. A
-  task-augmented destructive call's confirmation challenge is delivered unsigned, since its
-  nonce has not been admitted yet. A result that cannot be signed is refused `-32603`.
+  dispatch, is refused, so send a new one per request (after a task-augmented call's challenge
+  the first nonce was never spent, so resending it there is accepted). `require_nonce` stays your choice. A
+  malformed nonce is refused `-32602` before anything else. Answers given before the nonce is
+  admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
+  call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
+  undeclared-key refusal. A result that cannot be signed is refused `-32603`.
 - **Elicitation.** A legacy (2025-era) client must declare `elicitation` in `initialize`.
   Without it, `initialize` is refused with 403 and `-32600 "client must declare elicitation
   (security.posture=hardened)"` and no session is created. Every other legacy request, and
@@ -3206,6 +3212,58 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
 
 **Action:** before adopting `hardened`, set the signing secret, send one fresh nonce per
 `tools/call`, and make legacy clients declare elicitation or move them to 2026-07-28.
+
+## 113. A recovered upstream task writes a settlement record
+
+**Startup:** no notice, applies only with a transparency log
+
+A task-augmented call can be answered by the backend with a task of its own. The gateway settles
+it later, from the worker that follows the upstream task or from the owner's `tasks/get`. That
+settlement now writes its own invocation record, before the result is committed:
+
+- `route: "task_recovery"`, with `server`, `tool` and the gateway `task_id`;
+- `correlation_source: "task_id"`, and `session_id` holds the task id;
+- `request_hash` is the hash of `{"task_id": <id>}`, since the recovering path does not hold the
+  original request; the call's own request hash is on the submission record;
+- `response_hash`, `outcome`, `error_code`, `tenants` and `data_classes` as on a live call. A
+  recovered result a gate refuses settles as a `-32603` failure; its `outcome` keeps the class a
+  live call's record gives that refusal (`denied` for a response-firewall refusal), and
+  `error_code` is the code the task committed;
+- `who` names only the principal the task was admitted under, with no credential kind.
+
+The submission record carries the same `task_id` whenever the backend's task handle was captured.
+Under `FailClosed`, a failed settlement write settles the task `-32005 "audit log unavailable"`
+with no backend content. Under `BestEffort`, it is logged and counted in
+`mcp_audit_settlement_write_failures_total`, and the task settles as before.
+
+**Action:** none unless you consume these records. Join a settlement record to its submission by
+`task_id`. A crash between the record and the commit can leave two settlement records for one
+task; it never leaves delivered content unrecorded. The record is written before the commit, so
+a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
+a recovery that did not land. A live call has the same window: its record is written
+(`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
+(`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
+
+## 114. Hardened can name backends that may reach private networks
+
+**Startup:** refuses to start, only under `security.posture: hardened` and only when `security.hardened.private_backends` names a backend that is not configured
+
+New key `security.hardened.private_backends: [backend names]`, default empty, read only under
+`security.posture: hardened` (under `standard` it is accepted and has no effect).
+
+- A listed backend may reach loopback (127.0.0.0/8, ::1), RFC 1918 (10/8, 172.16/12,
+  192.168/16) and unique-local (fc00::/7) addresses, by literal or by name: names are still
+  resolved once and pinned, and redirects and OAuth endpoints are held to the same rule. It
+  never reaches link-local (169.254.0.0/16, fe80::/10, which includes 169.254.169.254) or the
+  AWS IPv6 metadata address `fd00:ec2::254`, and every other special-use range item 109 refuses
+  stays refused.
+- Every backend not listed keeps item 109's public-only rule.
+- A listed name that is not under `backends` refuses start, naming it.
+- `security.hardened` is restart-only: a reload that changes it is refused with
+  `config reload refused: security.hardened requires restart`.
+
+**Action:** to adopt `hardened` with a local or in-cluster HTTP backend, add its name to
+`security.hardened.private_backends`. List only the backends that need it.
 
 ## Upgrading from 3.5.x: a walkthrough
 

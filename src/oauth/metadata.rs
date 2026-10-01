@@ -688,10 +688,10 @@ mod tests {
         let base = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await });
 
-        let error =
-            AuthorizationServerMetadata::discover(&Client::new(), &base, IssuerSource::Origin)
-                .await
-                .expect_err("an error status is not metadata");
+        let client = Client::builder().no_proxy().build().unwrap();
+        let error = AuthorizationServerMetadata::discover(&client, &base, IssuerSource::Origin)
+            .await
+            .expect_err("an error status is not metadata");
         assert!(error.to_string().contains("HTTP 500"), "{error}");
     }
 }

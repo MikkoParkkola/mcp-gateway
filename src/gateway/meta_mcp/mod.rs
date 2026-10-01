@@ -2755,3 +2755,9 @@ mod grant_decision_slot_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+
+mod session_end;
+
+#[cfg(test)]
+#[path = "session_cleanup_tests.rs"]
+mod session_cleanup_tests;

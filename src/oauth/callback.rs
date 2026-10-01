@@ -9,7 +9,7 @@
 //! 127.0.0.1 **and** `[::1]` on the same port so that browsers which resolve
 //! `localhost` to either address family work without extra configuration.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use axum::{
@@ -95,6 +95,40 @@ impl CallbackServer {
     }
 }
 
+/// The configured host as a loopback IP literal, if it is one (brackets
+/// allowed). Such a host is bound and named exactly as configured, so the
+/// address the redirect URI names is the address that answers (#2578).
+/// Anything else keeps today's behaviour: bound on 127.0.0.1, named
+/// `localhost`, and the callback never listens beyond loopback.
+fn loopback_literal(host: &str, dual_bind: bool) -> Option<IpAddr> {
+    let ip = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .ok()
+        .filter(IpAddr::is_loopback);
+    if !dual_bind && ip.is_none() {
+        warn!(
+            event = "oauth.callback_server.host_not_loopback",
+            host,
+            "callback_host is neither localhost nor a loopback IP: the callback listens on \
+             127.0.0.1 and the redirect URI names localhost"
+        );
+    }
+    ip
+}
+
+/// The host as the redirect URI names it: a loopback IP literal as
+/// configured, IPv6 in brackets as a URI authority requires; otherwise
+/// `localhost`, where the callback listens.
+fn url_host(loopback_ip: Option<IpAddr>) -> String {
+    match loopback_ip {
+        Some(IpAddr::V6(v6)) => format!("[{v6}]"),
+        Some(IpAddr::V4(v4)) => v4.to_string(),
+        None => "localhost".to_string(),
+    }
+}
+
 /// Start a callback server and return it immediately
 ///
 /// When `host` is `None` or `"localhost"`, the server binds both
@@ -116,15 +150,21 @@ pub async fn start_callback_server(
     let effective_host = host.unwrap_or("localhost");
     let callback_path = path.unwrap_or("/oauth/callback");
     let dual_bind = effective_host == "localhost";
+    let loopback_ip = loopback_literal(effective_host, dual_bind);
 
-    // Always bind the primary IPv4 loopback address first so we can
-    // learn the kernel-assigned port when `port` is `None`.
-    let ipv4_addr: SocketAddr = format!("127.0.0.1:{}", port.unwrap_or(0)).parse().unwrap();
-    let ipv4_listener = TcpListener::bind(ipv4_addr)
-        .await
-        .map_err(|e| Error::OAuth(format!("Failed to bind callback server: {e}")))?;
+    // Bind the primary address first so we can learn the kernel-assigned
+    // port when `port` is `None`.
+    let primary_addr = SocketAddr::new(
+        loopback_ip.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+        port.unwrap_or(0),
+    );
+    let primary_listener = TcpListener::bind(primary_addr).await.map_err(|e| {
+        Error::OAuth(format!(
+            "Failed to bind callback server on {primary_addr}: {e}"
+        ))
+    })?;
 
-    let actual_port = ipv4_listener
+    let actual_port = primary_listener
         .local_addr()
         .map_err(|e| Error::OAuth(format!("Failed to get callback server address: {e}")))?
         .port();
@@ -157,7 +197,10 @@ pub async fn start_callback_server(
         None
     };
 
-    let callback_url = format!("http://localhost:{actual_port}{callback_path}");
+    let callback_url = format!(
+        "http://{}:{actual_port}{callback_path}",
+        url_host(loopback_ip)
+    );
 
     // #143 — structured telemetry: server bind event.
     info!(
@@ -189,7 +232,7 @@ pub async fn start_callback_server(
     handles.push(tokio::spawn({
         let app = app.clone();
         async move {
-            axum::serve(ipv4_listener, app)
+            axum::serve(primary_listener, app)
                 .await
                 .map_err(|e| Error::OAuth(format!("Callback server error: {e}")))
         }
@@ -414,6 +457,73 @@ mod tests {
         for h in server.server_handles {
             h.abort();
         }
+    }
+
+    /// #2578: the redirect URI names the configured callback host, as
+    /// `docs/OAUTH_CONFIG.md` documents (`http://<callback_host>:<port><path>`),
+    /// and the server answers at exactly that address. A loopback IP host
+    /// used to be advertised as `localhost`, which a browser resolving
+    /// `localhost` to the other address family could not reach.
+    async fn served_where_advertised(host: &str, advertised_host: &str) {
+        let server = start_callback_server("s".to_string(), Some(host), None, None)
+            .await
+            .unwrap();
+        let port = reqwest::Url::parse(&server.callback_url)
+            .unwrap()
+            .port()
+            .unwrap();
+        assert_eq!(
+            server.callback_url,
+            format!("http://{advertised_host}:{port}/oauth/callback")
+        );
+        // Follow the advertised URI as given: that is what the browser does.
+        let url = format!("{}?code=c&state=s", server.callback_url);
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(server.wait_for_callback(), client.get(url).send())
+        })
+        .await
+        .expect("the advertised address answers");
+        assert_eq!(outcome.expect("a code").1.code, "c");
+    }
+
+    fn ipv6_loopback_available() -> bool {
+        std::net::TcpListener::bind("[::1]:0").is_ok()
+    }
+
+    #[tokio::test]
+    async fn an_ipv4_callback_host_is_advertised_as_configured() {
+        served_where_advertised("127.0.0.1", "127.0.0.1").await;
+    }
+
+    #[tokio::test]
+    async fn an_ipv6_callback_host_is_advertised_bracketed_and_bound() {
+        if !ipv6_loopback_available() {
+            eprintln!("no IPv6 loopback on this host; skipped");
+            return;
+        }
+        served_where_advertised("::1", "[::1]").await;
+        served_where_advertised("[::1]", "[::1]").await;
+    }
+
+    /// Any other host keeps today's behaviour: the redirect URI names
+    /// `localhost`, and the server answers on 127.0.0.1, never beyond loopback.
+    #[tokio::test]
+    async fn a_non_loopback_host_keeps_the_localhost_redirect_on_loopback() {
+        let server = start_callback_server("s".to_string(), Some("callback.example"), None, None)
+            .await
+            .unwrap();
+        let advertised = reqwest::Url::parse(&server.callback_url).unwrap();
+        assert_eq!(advertised.host_str(), Some("localhost"));
+        let port = advertised.port().unwrap();
+        let url = format!("http://127.0.0.1:{port}/oauth/callback?code=c&state=s");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(server.wait_for_callback(), client.get(url).send())
+        })
+        .await
+        .expect("the loopback address answers");
+        assert_eq!(outcome.expect("a code").1.code, "c");
     }
 
     #[tokio::test]

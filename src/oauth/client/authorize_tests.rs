@@ -137,18 +137,15 @@ async fn approve_via(
             .await
             .expect("authorize opens the browser")
             .expect("an authorization URL");
-        let query: HashMap<String, String> = Url::parse(&opened)
+        let mut query: HashMap<String, String> = Url::parse(&opened)
             .unwrap()
             .query_pairs()
             .into_owned()
             .collect();
-        let redirect = Url::parse(&query["redirect_uri"]).unwrap();
+        query.insert("__url".to_string(), opened.clone());
+        // Follow the advertised redirect URI as given, as a browser does.
         let callback = Url::parse_with_params(
-            &format!(
-                "http://127.0.0.1:{}{}",
-                redirect.port().unwrap(),
-                redirect.path()
-            ),
+            &query["redirect_uri"],
             &[
                 ("code", "c1"),
                 ("state", query["state"].as_str()),
@@ -190,10 +187,18 @@ async fn authorize_redeems_a_code_only_after_the_callback_proves_state_and_issue
 
     assert_eq!(outcome.expect("the flow completes"), "access-a");
     assert_eq!(query["response_type"], "code");
+    assert!(
+        query["__url"].starts_with(&format!("{issuer}/authorize?")),
+        "the browser is sent to the configured authorization endpoint: {}",
+        query["__url"]
+    );
     assert_eq!(query["client_id"], CLIENT_ID);
     assert_eq!(query["code_challenge_method"], "S256");
+    assert!(
+        query["redirect_uri"].starts_with("http://127.0.0.1:"),
+        "the redirect names the configured callback host"
+    );
     assert!(!query["state"].is_empty(), "a CSRF state is sent");
-    assert!(query["redirect_uri"].starts_with("http://localhost:"));
 
     let forms = forms.lock().unwrap().clone();
     assert_eq!(forms.len(), 1, "exactly one code redemption: {forms:?}");

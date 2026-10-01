@@ -1077,7 +1077,7 @@
         "scripts/release/test_check_tag_manifest.py",
         "scripts/release/test_workflow_wiring_mutations.py"
       ],
-      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-442, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
+      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-443, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
     },
     {
       "id": "GH1942.HARDEN.1",
@@ -1085,7 +1085,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Pending, ungraded. Built so far under security.posture (docs/design/2026-09-28-hardened-posture.md, increments 1-5): #1756 anomaly learning and forced blocking, the posture resolver with preset floor, restart-only posture and the multi-user WARN and doctor row, per-caller identity (row 8), the destination policy (4b, #2504), and in increment 5 forced signing of every tools/call on both routes and the elicitation requirement for legacy clients (rows 6, 7, 10, 11; docs/design/2026-10-01-hardened-increment-5-signing-elicitation.md). Still open: 4c security.hardened.private_backends, which waits on operator decision 8; and T14 (the WebSocket whole-connect timeout test), which needs 4c's loopback-allowing pinned policy and moves with it. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md."
+      "note": "Pending, ungraded. Built so far under security.posture (docs/design/2026-09-28-hardened-posture.md, increments 1-5): #1756 anomaly learning and forced blocking, the posture resolver with preset floor, restart-only posture and the multi-user WARN and doctor row, per-caller identity (row 8), the destination policy (4b, #2504), and in increment 5 forced signing of every tools/call on both routes and the elicitation requirement for legacy clients (rows 6, 7, 10, 11; docs/design/2026-10-01-hardened-increment-5-signing-elicitation.md). Still open: 4c security.hardened.private_backends, approved as operator decision 8 (decision row 26) and built in #2559; and T14 (the WebSocket whole-connect timeout test), which needs 4c's loopback-allowing pinned policy and moves with it. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md."
     },
     {
       "id": "GH1943.PROV.1",
@@ -1239,7 +1239,7 @@
         "docs/release/4.0.0-beta.2-notes.md",
         "docs/release/v4.0.0-release-notes-DRAFT.md"
       ],
-      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file and test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
+      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file or test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
     },
     {
       "id": "GH2294.AUDIT.1",
@@ -1302,11 +1302,15 @@
     },
     {
       "id": "MIK-7211.PARENT.7",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. MIK-7215.STATELESS.* rows are MET, and docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:433 counts 32 files, but no standalone inventory names each session-keyed behaviour and its replacement."
+      "evidence": [
+        "docs/design/2026-09-30-session-keyed-inventory.md:52",
+        "docs/design/2026-09-30-session-keyed-inventory.md:132",
+        "docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:273"
+      ],
+      "note": "Met 2026-10-01 by #2467 (merge 598b3650e). The standalone inventory is docs/design/2026-09-30-session-keyed-inventory.md: 28 rows (:52-83), each naming a replacement or stating that none is needed, each with a Built? citation, re-surveyed at e689b7a7c with every file:line re-read at that revision. RFC-0061 points to it as the governing list (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:273). Gaps it found are listed at :132 and held under MIK-7215.CONTROL.5, not this criterion. The criterion asks for the inventory and the names, not for the replacements to be built; unbuilt replacements are marked in the Built? column. Reviewed by one independent seat (SHIP, two small wording fixes applied). The 63 non-test files of the discovery set were not each read in full: files changed since the first survey were, the rest rely on the first survey. Earlier note: Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. MIK-7215.STATELESS.* rows are MET, and docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:433 counts 32 files, but no standalone inventory names each session-keyed behaviour and its replacement."
     },
     {
       "id": "MIK-7217.SEARCH.1",
@@ -1458,7 +1462,7 @@
       "status": "pending",
       "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "docs/release/v4.0.0-critical-path-coverage.md:177", "docs/release/v4.0.0-critical-functions.tsv:4", "scripts/release/critical_function_coverage.py:70", "src/gateway/server/support_tests.rs:105"],
+      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "docs/release/v4.0.0-critical-path-coverage.md:191", "docs/release/v4.0.0-critical-functions.tsv:4", "scripts/release/critical_function_coverage.py:156", "src/gateway/server/support_tests.rs:105"],
       "note": "Five-path ruling 2026-10-01: OAuth, HTTP dispatch, stdio dispatch, tasks and account paths are Standard; every security-enforcing function in all seven paths is Critical, inventoried in docs/release/v4.0.0-critical-functions.tsv (291 Critical rows; one review for omissions plus a helper sweep; 7 added after the measured run) and graded by scripts/release/critical_function_coverage.py. --tests baselines at 8b9929924 (CI run 36824032904): OAuth 79.23% misses 80%; HTTP 94.40%, stdio 88.76%, tasks 94.73%, accounts 95.52%, startup 92.45%, bridge 90.61% clear. Per function: 189 clear 95%, 90 below, 5 Windows-only unmeasured; closing them is test work, no waivers. Earlier: Tiers ruled 2026-10-01 and written into docs/release/v4.0.0-critical-path-coverage.md:38-70: startup and bridge are Standard (>=80%); four security-enforcing functions inside them are Critical (>=95%): serve_tls, PeerCertIdentityAcceptor::accept, Gateway::prepare_signing, Gateway::response_firewall. Measured 2026-10-01 (CI run 36802315128 at 141b7ec05, --all-features, lib plus --tests): startup 91.59% (4772/5210), bridge 90.61% (222/245), both clear Standard; only failures: two task-SDK tests (a_real_sdk_job_outlives_the_gateway_*) that need the Python SDK only the task-sdk-recovery job installs; the 2026-09-17 misses (68.78%, 69.44%) were --lib only on a dirty tree. The four Critical functions were below 95% (serve_tls and accept uncovered); closing tests: src/gateway/server/support_tests.rs (mtls_listener), src/gateway/server/tests/stdio_chain_nonce_refusal.rs, src/gateway/server/tests/response_firewall_anomaly.rs. After them (CI probe run 36806330639 on the #2540 head ea1bff9a8, same command): serve_tls 19/19, accept 9/9, prepare_signing 25/25, response_firewall 16/16 lines (100% each, from the lcov DA lines in each body); startup 92.32% (4810/5210), bridge 90.61% (222/245); the only failures were the two task-SDK tests above. Pending: graded with NFR.BUILD.1 C5 and C6 on the final revision. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md)."
     },
     {
