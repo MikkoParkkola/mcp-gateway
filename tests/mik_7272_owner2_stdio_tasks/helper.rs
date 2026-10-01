@@ -189,6 +189,15 @@ pub fn write_config(
     config.tasks.expiry_interval = Duration::from_secs(3_600);
     config.auth.enabled = matches!(auth, Auth::Key);
     if matches!(auth, Auth::Key) {
+        // Auth on requires an audit log (UPGRADING-4.0 item 43), and the
+        // readiness probe reads `/health` without a credential.
+        config.auth.public_paths = vec!["/health".to_string()];
+        config.security.transparency_log.enabled = true;
+        config.security.transparency_log.path = root
+            .join(format!("audit-{name}"))
+            .join("log.jsonl")
+            .to_string_lossy()
+            .into_owned();
         config.auth.api_keys.push(ApiKeyConfig {
             key: None,
             key_sha256: Some(mcp_gateway::config::api_key_digest_spec(API_KEY.as_bytes())),
