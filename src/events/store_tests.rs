@@ -242,3 +242,22 @@ fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
         "the tail began at expiry and has run out"
     );
 }
+
+#[test]
+fn a_skipped_challenge_without_a_usable_opt_in_is_refused() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let s = sub("p", "https://h/1", now);
+    assert_eq!(
+        store
+            .admit(s.clone(), false, CAPS, grace(), now, TAIL)
+            .expect("io"),
+        Err(CapHit::Unverified)
+    );
+    assert!(store.get(&s.id).is_none(), "nothing committed");
+    store
+        .admit(s, true, CAPS, grace(), now, TAIL)
+        .expect("io")
+        .expect("a fresh opt-in commits");
+}

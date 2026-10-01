@@ -112,6 +112,27 @@ fn cap_refusal(hit: CapHit) -> RpcError {
     }
 }
 
+/// The `events/subscribe` result; `deliveryStatus` only on a refresh.
+fn subscribe_answer(
+    id: &str,
+    expires_at: Option<DateTime<Utc>>,
+    existing: Option<&Subscription>,
+) -> Value {
+    let mut answer = json!({
+        "id": id,
+        "refreshBefore": to_wire_time(expires_at),
+        "cursor": null,
+        "truncated": false,
+    });
+    if let Some(old) = existing {
+        answer["deliveryStatus"] = json!({
+            "active": old.active,
+            "lastError": old.last_error,
+        });
+    }
+    answer
+}
+
 /// A callback URL: absolute `https` with a host.
 fn callback_url(raw: Option<&Value>) -> Result<url::Url, RpcError> {
     raw.and_then(Value::as_str)
@@ -230,7 +251,7 @@ impl EventsHub {
         // At most two passes: a cached opt-in can vanish (tail eviction)
         // between the read above and the commit; the store then refuses
         // and the callback is challenged before a second commit.
-        loop {
+        for _pass in 0..2 {
             if !verified {
                 self.challenge(&url, &id, &key).await?;
             }
@@ -241,24 +262,12 @@ impl EventsHub {
             })
             .await?
             {
-                Ok(()) => break,
+                Ok(()) => return Ok(subscribe_answer(&id, expires_at, existing.as_ref())),
                 Err(CapHit::Unverified) if verified => verified = false,
                 Err(hit) => return Err(cap_refusal(hit)),
             }
         }
-        let mut answer = json!({
-            "id": id,
-            "refreshBefore": to_wire_time(expires_at),
-            "cursor": null,
-            "truncated": false,
-        });
-        if let Some(old) = existing {
-            answer["deliveryStatus"] = json!({
-                "active": old.active,
-                "lastError": old.last_error,
-            });
-        }
-        Ok(answer)
+        Err(RpcError::internal())
     }
 
     /// Challenge the callback once: literal check, per-host limit, then the

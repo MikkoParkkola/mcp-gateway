@@ -141,13 +141,12 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
 
 /// Whether `ip` falls inside one of `allowed`; never for an always-denied address.
 pub(crate) fn in_allowed(allowed: &[(IpAddr, u8)], ip: IpAddr) -> bool {
-    // Never exempted, whatever the operator lists: the metadata address
-    // and link-local (169.254.0.0/16, fe80::/10), where cloud metadata lives.
-    let link_local = match ip {
-        IpAddr::V4(v4) => v4.is_link_local(),
-        IpAddr::V6(v6) => v6.segments()[0] & 0xffc0 == 0xfe80,
-    };
-    if link_local || super::destination::ALWAYS_DENIED.contains(&ip) {
+    // Only what `DestinationPolicy::Private` reaches can be exempted:
+    // loopback, RFC 1918 and unique-local, judged through any IPv4-mapped
+    // form. Link-local (cloud metadata), translation encodings and the
+    // always-denied address stay denied whatever the operator lists.
+    if !super::destination::private_reachable(ip) || super::destination::ALWAYS_DENIED.contains(&ip)
+    {
         return false;
     }
     allowed.iter().any(|&(net, len)| match (net, ip) {

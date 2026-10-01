@@ -260,7 +260,10 @@ impl Store {
                 }
             }
         }
-        if !verified_now && !state.verified_usable(&sub.principal, &sub.url, now, tail) {
+        // Judged on the clock at commit, not at request start: a tail can
+        // run out while the commit waits for a blocking thread.
+        let at_commit = Utc::now().max(now);
+        if !verified_now && !state.verified_usable(&sub.principal, &sub.url, at_commit, tail) {
             return Ok(Err(CapHit::Unverified));
         }
         let key = verified_file(&sub.principal, &sub.url);
@@ -280,18 +283,30 @@ impl Store {
         let prior = state.verified.get(&key).cloned();
         write_record(&self.verified_dir, &key, &record)?;
         state.verified.insert(key.clone(), record);
-        if let Err(error) = write_record(&self.subs_dir, &format!("{}.json", sub.id), &sub) {
-            // Put the verification back as it was, so a failed commit
-            // neither leaves an extra record nor resets an existing tail.
-            match prior {
+        let name = format!("{}.json", sub.id);
+        if let Err(error) = write_record(&self.subs_dir, &name, &sub) {
+            if self.subs_dir.join(&name).exists() {
+                // Renamed into place, durability uncertain: the row is
+                // installed, so its verification stays with it.
+                state.subs.insert(sub.id.clone(), sub);
+                return Err(error);
+            }
+            // Never installed: put the verification back as it was, so a
+            // failed commit neither leaves an extra record nor resets a tail.
+            let restored = match prior {
                 Some(prior) => {
-                    let _ = write_record(&self.verified_dir, &key, &prior);
+                    let restored = write_record(&self.verified_dir, &key, &prior);
                     state.verified.insert(key, prior);
+                    restored
                 }
                 None => {
-                    let _ = remove_record(&self.verified_dir, &key);
+                    let restored = remove_record(&self.verified_dir, &key);
                     state.verified.remove(&key);
+                    restored
                 }
+            };
+            if let Err(restore) = restored {
+                tracing::warn!(%restore, "events store: verification rollback failed");
             }
             return Err(error);
         }

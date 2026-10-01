@@ -43,7 +43,6 @@ pub(crate) struct EventsHub {
 /// and the lifecycle hooks join as the increments that use them land.
 pub(crate) trait EventSource: Send + Sync {
     /// What kind of producer this is.
-    #[allow(dead_code, reason = "read by the delivery audit record (I2)")]
     fn kind(&self) -> types::SourceKind;
     /// The event types this source offers now.
     fn descriptors(&self) -> Vec<EventDescriptor>;
@@ -83,9 +82,9 @@ impl EventsHub {
 
     /// Attach the webhook registry whose `event:` routes are a source.
     pub(crate) fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {
-        self.sources
-            .write()
-            .push(Arc::new(webhook_source::WebhookSource { registry }));
+        let mut sources = self.sources.write();
+        sources.retain(|source| source.kind() != types::SourceKind::Webhook);
+        sources.push(Arc::new(webhook_source::WebhookSource { registry }));
     }
 
     /// Take one verification slot for `host`.

@@ -65,3 +65,25 @@ fn literals_are_refused_unless_allowed() {
         "only the listed range"
     );
 }
+
+#[test]
+fn an_allowlist_never_exempts_link_local_or_its_encodings() {
+    let everything_v6 = CallbackClient::new(vec![("::".parse().expect("ip"), 0)]).expect("client");
+    for refused in [
+        "https://[fe80::1]/h",
+        "https://[::ffff:169.254.169.254]/h",
+        "https://[2002:a9fe:a9fe::]/h",
+    ] {
+        let url = url::Url::parse(refused).expect("url");
+        assert!(everything_v6.check_literal(&url).is_err(), "{refused}");
+    }
+    let ula = url::Url::parse("https://[fd00::1]/h").expect("url");
+    assert!(
+        everything_v6.check_literal(&ula).is_ok(),
+        "unique-local is exemptable"
+    );
+    let everything_v4 =
+        CallbackClient::new(vec![("0.0.0.0".parse().expect("ip"), 0)]).expect("client");
+    let metadata = url::Url::parse("https://169.254.169.254/h").expect("url");
+    assert!(everything_v4.check_literal(&metadata).is_err());
+}
