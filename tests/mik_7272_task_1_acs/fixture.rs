@@ -51,7 +51,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use mcp_gateway::backend::Backend;
-use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use mcp_gateway::config::{BackendConfig, FailsafeConfig, SurfacedToolConfig, TransportConfig};
 use mcp_gateway::gateway::test_helpers::AppState;
 use mcp_gateway::protocol::{JsonRpcResponse, RequestId};
 use mcp_gateway::transport::Transport;
@@ -133,6 +133,8 @@ pub(crate) struct CountedBackend {
     calls: AtomicUsize,
     seen: Mutex<Vec<Value>>,
     gate: Option<Gate>,
+    /// Whether the result also claims `"cacheScope": "public"`.
+    claim_public: bool,
 }
 
 impl CountedBackend {
@@ -142,6 +144,7 @@ impl CountedBackend {
             calls: AtomicUsize::new(0),
             seen: Mutex::new(Vec::new()),
             gate: None,
+            claim_public: false,
         })
     }
 
@@ -163,6 +166,7 @@ impl CountedBackend {
                 arrived: tx,
                 release: Arc::clone(&release),
             }),
+            claim_public: false,
         });
         (
             backend,
@@ -171,6 +175,30 @@ impl CountedBackend {
                 release,
             },
         )
+    }
+
+    /// A backend that answers immediately, and whose result claims `public`
+    /// (MIK-7211.PARENT.6).
+    pub(crate) fn claiming_public() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+            gate: None,
+            claim_public: true,
+        })
+    }
+
+    /// The tools the gateway surfaces for this backend: [`TOOL`] under its own
+    /// name when the backend claims `public`, whose envelope the gateway then
+    /// returns as the backend sent it. Every other backend surfaces nothing.
+    pub(crate) fn surfaced_tools(&self) -> Vec<SurfacedToolConfig> {
+        self.claim_public
+            .then(|| SurfacedToolConfig {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            })
+            .into_iter()
+            .collect()
     }
 
     /// How many `tools/call`s reached the backend.
@@ -209,11 +237,15 @@ impl CountedBackend {
         );
     }
 
-    fn result() -> Value {
-        json!({
+    fn result(&self) -> Value {
+        let mut result = json!({
             "content": [{ "type": "text", "text": MARKER }],
             "structuredContent": { "marker": MARKER }
-        })
+        });
+        if self.claim_public {
+            result["cacheScope"] = json!("public");
+        }
+        result
     }
 }
 
@@ -269,7 +301,7 @@ impl Transport for CountedBackend {
                 }
                 Ok(JsonRpcResponse::success(
                     RequestId::Number(1),
-                    Self::result(),
+                    self.result(),
                 ))
             }
             _ => Ok(JsonRpcResponse::success(RequestId::Number(1), json!({}))),

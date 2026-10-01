@@ -7,6 +7,12 @@ use mcp_gateway::config::Config;
 
 use super::CheckResult;
 
+/// Design row 15: the library's auth-shape table, the one the startup warning
+/// test reads, so the two rows cannot drift apart.
+#[cfg(test)]
+#[path = "../../security/posture_auth_shapes_tests.rs"]
+mod auth_shapes;
+
 pub(super) fn check_security_posture(config: &Config) -> CheckResult {
     let warning = mcp_gateway::security::unhardened_multi_user_warning(config);
     let row = if let Some(warning) = warning {
@@ -41,39 +47,10 @@ fn posture_name(config: &Config) -> String {
 
 #[cfg(test)]
 mod tests {
-    use mcp_gateway::security::{SecurityPosture, unhardened_multi_user_warning};
-    use serde_json::json;
-
     use super::super::CheckStatus;
+    use super::auth_shapes::auth_shapes;
     use super::*;
-
-    /// The auth-shape table from the library's `startup_warn_matches_unhardened_table`.
-    fn auth_shapes() -> Vec<(&'static str, Config, bool)> {
-        let key = |name: &str| serde_json::from_value(json!({ "name": name })).unwrap();
-        let mut shapes = Vec::new();
-        let mut disabled = Config::default();
-        disabled.auth.api_keys = vec![key("a"), key("b")];
-        shapes.push(("auth disabled, two keys", disabled, false));
-        let mut one_key = Config::default();
-        one_key.auth.enabled = true;
-        one_key.auth.api_keys = vec![key("a")];
-        shapes.push(("one key", one_key.clone(), true));
-        let mut solo = one_key.clone();
-        solo.auth.single_user = true;
-        shapes.push(("one key, single_user", solo.clone(), false));
-        let mut two_keys = solo.clone();
-        two_keys.auth.api_keys.push(key("b"));
-        shapes.push(("two keys, single_user", two_keys, true));
-        let mut oidc = solo;
-        oidc.key_server.oidc =
-            vec![serde_json::from_value(json!({ "issuer": "https://idp.example" })).unwrap()];
-        shapes.push(("one key, single_user, OIDC", oidc, true));
-        let mut bearer = Config::default();
-        bearer.auth.enabled = true;
-        bearer.auth.bearer_token = Some("t".repeat(40));
-        shapes.push(("bearer only", bearer, true));
-        shapes
-    }
+    use mcp_gateway::security::{SecurityPosture, unhardened_multi_user_warning};
 
     #[test]
     fn doctor_row_matches_unhardened_table() {
