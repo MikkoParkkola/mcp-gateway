@@ -503,14 +503,9 @@ impl Firewall {
         self.tenant_guard.response_tenants(result)
     }
 
-    /// Whether tenant attribution is configured on this firewall.
-    pub(crate) fn attributes_tenants(&self) -> bool {
-        self.tenant_guard.attributes()
-    }
-
-    /// Whether `result` holds text too large for tenant attribution to read.
-    pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
-        self.tenant_guard.response_uninspected(result)
+    /// The tenant guard, for attribution reads that record nothing (MIN.1).
+    pub(crate) const fn tenant_guard(&self) -> &tenant_guard::TenantGuard {
+        &self.tenant_guard
     }
 
     /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Pushes a

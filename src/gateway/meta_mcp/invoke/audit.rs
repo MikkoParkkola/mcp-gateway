@@ -225,7 +225,7 @@ impl MetaMcp {
     pub(crate) fn attributes_tenants(&self) -> bool {
         #[cfg(feature = "firewall")]
         if let Some(firewall) = &self.firewall {
-            return firewall.attributes_tenants();
+            return firewall.tenant_guard().attributes();
         }
         false
     }
@@ -239,7 +239,7 @@ impl MetaMcp {
     pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
         #[cfg(feature = "firewall")]
         if let Some(firewall) = &self.firewall {
-            return firewall.response_uninspected(result);
+            return firewall.tenant_guard().response_uninspected(result);
         }
         let _ = result;
         false
