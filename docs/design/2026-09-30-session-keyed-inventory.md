@@ -163,7 +163,8 @@ These are recorded here, not fixed here. Each is routed through the 4.0 lane rul
     a session ends, fired by an owned `DELETE /mcp` (`gateway/router/handlers.rs:339`) and by each
     reaper removal (`gateway/streaming.rs:170`); the reaper expires on last activity
     (`gateway/streaming.rs:197`); an ended session's cost folds into the aggregate. A late write is
-    cleaned by a second pass 120 s after the end (bound on #2568).
+    cleaned by a second pass 120 s after the end; a write later than that survives for the process
+    lifetime (bound on #2568, 4.0.1).
   - Residual, outside G2: the cost bucket's per-call `records` vector still grows within one live
     session until that session ends.
 - **G3.** A security finding, routed privately to the release coordinator on 2026-09-30 and tracked
