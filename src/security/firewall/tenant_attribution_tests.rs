@@ -106,7 +106,10 @@ fn deep_nested_json_text_is_uninspected() {
         "]".repeat(200)
     );
     let result = text_block(&deep);
-    assert!(g.response_uninspected(&result), "a too-deep block is uninspected");
+    assert!(
+        g.response_uninspected(&result),
+        "a too-deep block is uninspected"
+    );
     assert!(g.response_tenants(&result).is_empty());
 }
 
@@ -115,9 +118,15 @@ fn deep_nested_json_text_is_uninspected() {
 fn malformed_json_text_is_uninspected() {
     let g = guard(false, 1);
     let result = text_block(r#"{"customer_id":"cust-9""#);
-    assert!(g.response_uninspected(&result), "a malformed block is uninspected");
+    assert!(
+        g.response_uninspected(&result),
+        "a malformed block is uninspected"
+    );
     let field = json!({"structuredContent": {"rows": "[{\"customer_id\":"}});
-    assert!(g.response_uninspected(&field), "a malformed JSON field is uninspected");
+    assert!(
+        g.response_uninspected(&field),
+        "a malformed JSON field is uninspected"
+    );
     // Fail closed: text that opens like JSON but is not is reported as unread,
     // even when it was prose.
     let prose = json!({"structuredContent": {"note": "[draft] see {notes}"}});
@@ -132,7 +141,10 @@ fn double_encoded_text_is_read() {
     let twice = serde_json::to_string(once).unwrap();
     let result = text_block(&twice);
     assert_eq!(g.response_tenants(&result), set(&["cust-9"]));
-    assert!(!g.response_uninspected(&result), "a decoded block is inspected");
+    assert!(
+        !g.response_uninspected(&result),
+        "a decoded block is inspected"
+    );
 }
 
 /// MIN.1 gap 3. A JSON document carried in a string field is read, in a text
@@ -164,7 +176,12 @@ fn encoding_past_the_decode_bound_is_uninspected() {
 #[test]
 fn prose_and_plain_values_are_inspected() {
     let g = guard(false, 1);
-    for text in ["customer_id cust-9", "\"quoted\" words", "\"just a string\"", "42"] {
+    for text in [
+        "customer_id cust-9",
+        "\"quoted\" words",
+        "\"just a string\"",
+        "42",
+    ] {
         assert!(!g.response_uninspected(&text_block(text)), "{text}");
     }
 }
@@ -178,7 +195,11 @@ fn bom_led_json_text_is_read() {
     assert!(!g.response_uninspected(&result));
     assert!(g.response_uninspected(&text_block("\u{feff}{\"customer_id\":")));
     let spaced = text_block(" \u{feff} {\"customer_id\":\"cust-9\"}");
-    assert_eq!(g.response_tenants(&spaced), set(&["cust-9"]), "whitespace around a mark");
+    assert_eq!(
+        g.response_tenants(&spaced),
+        set(&["cust-9"]),
+        "whitespace around a mark"
+    );
 }
 
 /// Review (gap 3): a JSON document under a tenant key is also read, and an
