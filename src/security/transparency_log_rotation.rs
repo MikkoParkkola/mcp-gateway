@@ -228,53 +228,7 @@ pub(super) fn recover(
     let committed_drop = dropped.is_some_and(|d| hw.as_ref().is_some_and(|h| h.counter >= d));
     // A tail that ends below the authenticated mark lost committed records
     // whether the cut was torn or fell on a newline (MIK-7712).
-    let mut below_mark = false;
-    // The newest surviving record when the active file holds none: the
-    // newest seal, or nothing.
-    let sealed_tail = |sealed: &[Segment]| -> io::Result<u64> {
-        Ok(match sealed.last() {
-            Some(segment) => seal_of(segment)?.map_or(0, |(counter, _)| counter),
-            None => 0,
-        })
-    };
-    let mut state = match read_last_nonempty_line(path) {
-        Ok(Some(line)) => {
-            let (counter, hash, event, v) = record_head(&line)?;
-            if event.as_deref() == Some(EV_SEALED) {
-                // Crash after the seal, before the rename: finish it.
-                let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
-                let sealed = segments::sealed_path(path, seq);
-                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
-                segments::sync_dir(path)?;
-                let sealed = segments::list_segments(path)?;
-                let carry = newest_finding(&sealed, config)?;
-                below_mark = hw.as_ref().is_some_and(|h| counter < h.counter);
-                let carry = lost_from(carry, below_mark, counter);
-                open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
-            } else {
-                let resumed = resume_active(path, counter, hash, &sealed, hw.as_ref(), now)?;
-                below_mark = hw
-                    .as_ref()
-                    .is_some_and(|h| h.segment_seq == resumed.seg.seq && counter < h.counter);
-                resumed
-            }
-        }
-        Ok(None) => {
-            let carry = newest_finding(&sealed, config)?;
-            let tail = sealed_tail(&sealed)?;
-            below_mark = hw.as_ref().is_some_and(|h| tail < h.counter);
-            let carry = lost_from(carry, below_mark, tail);
-            open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let carry = newest_finding(&sealed, config)?;
-            let tail = sealed_tail(&sealed)?;
-            below_mark = hw.as_ref().is_some_and(|h| tail < h.counter);
-            let carry = lost_from(carry, below_mark, tail);
-            open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
-        }
-        Err(e) => return Err(e),
-    };
+    let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now)?;
     finish_pending_expiry(path)?;
     // The active file holds the finding from its open record or a marker,
     // and the newest sealed segment from its own; either can be edited, so
@@ -340,6 +294,64 @@ pub(super) fn recover(
     state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
     Ok(state)
+}
+
+/// Reopen the active segment from whatever its tail holds, and say whether
+/// that tail ends below the authenticated mark `hw` (MIK-7712): the newest
+/// surviving record is the active file's last, or the newest seal when the
+/// active file holds none.
+fn reopen_tail(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    sealed: &[Segment],
+    hw: Option<&HighWater>,
+    now: u64,
+) -> io::Result<(Recovered, bool)> {
+    let below = |tail: u64| hw.is_some_and(|h| tail < h.counter);
+    match read_last_nonempty_line(path) {
+        Ok(Some(line)) => {
+            let (counter, hash, event, v) = record_head(&line)?;
+            if event.as_deref() == Some(EV_SEALED) {
+                // Crash after the seal, before the rename: finish it.
+                let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
+                let sealed = segments::sealed_path(path, seq);
+                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
+                segments::sync_dir(path)?;
+                let sealed = segments::list_segments(path)?;
+                let carry = lost_from(newest_finding(&sealed, config)?, below(counter), counter);
+                let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
+                Ok((state, below(counter)))
+            } else {
+                let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
+                let below_mark =
+                    hw.is_some_and(|h| h.segment_seq == resumed.seg.seq && counter < h.counter);
+                Ok((resumed, below_mark))
+            }
+        }
+        Ok(None) => reopen_after_seal(path, config, sealed, hw, now),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            reopen_after_seal(path, config, sealed, hw, now)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// No active record: the newest seal (or nothing) is the tail.
+fn reopen_after_seal(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    sealed: &[Segment],
+    hw: Option<&HighWater>,
+    now: u64,
+) -> io::Result<(Recovered, bool)> {
+    let tail = match sealed.last() {
+        Some(segment) => seal_of(segment)?.map_or(0, |(counter, _)| counter),
+        None => 0,
+    };
+    let below_mark = hw.is_some_and(|h| tail < h.counter);
+    let carry = lost_from(newest_finding(sealed, config)?, below_mark, tail);
+    let state = open_after_seal(path, config, sealed, hw, now, carry)?;
+    Ok((state, below_mark))
 }
 
 /// The finding the replacement open record carries. A loss found below the

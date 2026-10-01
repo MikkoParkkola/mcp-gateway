@@ -276,19 +276,17 @@ async fn write_records(
         // behind slow writes fails like a slow append does (F20).
         let started = tokio::time::Instant::now();
         let deadline = LEDGER_WAIT;
-        let mut ledger = match &note.repeat {
-            Some(mark) => match tokio::time::timeout(deadline, mark.store.0.lock()).await {
-                Ok(guard) => Some(guard),
-                Err(_) => {
-                    first_failure.get_or_insert(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "grant decision record timed out waiting for its repeat check",
-                    ));
-                    continue;
-                }
-            },
-            None => None,
-        };
+        let mut ledger = None;
+        if let Some(mark) = &note.repeat {
+            let Ok(guard) = tokio::time::timeout(deadline, mark.store.0.lock()).await else {
+                first_failure.get_or_insert(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "grant decision record timed out waiting for its repeat check",
+                ));
+                continue;
+            };
+            ledger = Some(guard);
+        }
         let now = Instant::now();
         if let (Some(mark), Some(ledger)) = (&note.repeat, &ledger)
             && ledger.is_repeat(&mark.key, &mark.decision, now)
