@@ -95,6 +95,39 @@ impl CallbackServer {
     }
 }
 
+/// The configured host as a loopback IP literal, if it is one (brackets
+/// allowed). Such a host is bound exactly as configured, so the address the
+/// redirect URI names is the address that answers (#2578); anything else
+/// keeps the IPv4 loopback bind, and the callback never listens beyond it.
+fn loopback_literal(host: &str, dual_bind: bool) -> Option<IpAddr> {
+    let ip = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
+        .ok()
+        .filter(IpAddr::is_loopback);
+    if !dual_bind && ip.is_none() {
+        warn!(
+            event = "oauth.callback_server.host_not_loopback",
+            host,
+            "callback_host is neither localhost nor a loopback IP: the redirect URI names it, \
+             but the callback only listens on 127.0.0.1, so it must resolve there"
+        );
+    }
+    ip
+}
+
+/// The host as the redirect URI names it (`docs/OAUTH_CONFIG.md`): the
+/// configured host, with an IPv6 literal in brackets as a URI authority
+/// requires.
+fn url_host(host: &str, loopback_ip: Option<IpAddr>) -> String {
+    match loopback_ip {
+        Some(IpAddr::V6(v6)) => format!("[{v6}]"),
+        Some(IpAddr::V4(v4)) => v4.to_string(),
+        None => host.to_string(),
+    }
+}
+
 /// Start a callback server and return it immediately
 ///
 /// When `host` is `None` or `"localhost"`, the server binds both
@@ -116,23 +149,7 @@ pub async fn start_callback_server(
     let effective_host = host.unwrap_or("localhost");
     let callback_path = path.unwrap_or("/oauth/callback");
     let dual_bind = effective_host == "localhost";
-    // A loopback IP literal is bound exactly as configured, so the address the
-    // redirect URI names is the address that answers (#2578). Anything else
-    // keeps the IPv4 loopback bind: the callback never listens beyond it.
-    let loopback_ip = effective_host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .parse::<IpAddr>()
-        .ok()
-        .filter(IpAddr::is_loopback);
-    if !dual_bind && loopback_ip.is_none() {
-        warn!(
-            event = "oauth.callback_server.host_not_loopback",
-            host = effective_host,
-            "callback_host is neither localhost nor a loopback IP: the redirect URI names it, \
-             but the callback only listens on 127.0.0.1, so it must resolve there"
-        );
-    }
+    let loopback_ip = loopback_literal(effective_host, dual_bind);
 
     // Bind the primary address first so we can learn the kernel-assigned
     // port when `port` is `None`.
@@ -179,14 +196,10 @@ pub async fn start_callback_server(
         None
     };
 
-    // The redirect URI names the configured host (docs/OAUTH_CONFIG.md):
-    // an IPv6 literal in brackets, as a URI authority requires.
-    let url_host = match loopback_ip {
-        Some(IpAddr::V6(v6)) => format!("[{v6}]"),
-        Some(IpAddr::V4(v4)) => v4.to_string(),
-        None => effective_host.to_string(),
-    };
-    let callback_url = format!("http://{url_host}:{actual_port}{callback_path}");
+    let callback_url = format!(
+        "http://{}:{actual_port}{callback_path}",
+        url_host(effective_host, loopback_ip)
+    );
 
     // #143 — structured telemetry: server bind event.
     info!(
@@ -446,7 +459,7 @@ mod tests {
     }
 
     /// #2578: the redirect URI names the configured callback host, as
-    /// docs/OAUTH_CONFIG.md documents (`http://<callback_host>:<port><path>`),
+    /// `docs/OAUTH_CONFIG.md` documents (`http://<callback_host>:<port><path>`),
     /// and the server answers at exactly that address. A loopback IP host
     /// used to be advertised as `localhost`, which a browser resolving
     /// `localhost` to the other address family could not reach.
