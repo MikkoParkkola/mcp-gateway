@@ -97,12 +97,12 @@ fn a_create_body_is_capped_and_its_return_path_matched_exactly() {
     let config: crate::config::Config = serde_yaml::from_str(yaml).expect("config");
     let body = |value: serde_json::Value| axum::body::Bytes::from(value.to_string());
     let ok = serde_json::json!({"account_id": "work", "return_path": "/"});
-    assert!(admissible(&config, &body(ok)).is_some(), "control");
+    assert!(admissible(&config, &body(ok.clone())).is_some(), "control");
 
-    let padded =
-        serde_json::json!({"account_id": "work", "return_path": "/", "pad": "x".repeat(5000)});
+    let mut padded = ok.to_string();
+    padded.push_str(&" ".repeat(5000));
     assert!(
-        admissible(&config, &body(padded)).is_none(),
+        admissible(&config, &axum::body::Bytes::from(padded)).is_none(),
         "over the body cap"
     );
     let long_id = serde_json::json!({"account_id": "a".repeat(65), "return_path": "/"});
