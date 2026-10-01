@@ -8,7 +8,40 @@ Status: draft for review. Criteria: MIK-7116.MIN.2 and MIK-7116.MIN.4
 `origin/fix/min1-gap3-uninspected:src/security/firewall/tenant_guard.rs`
 (PR #2593). This design is written against that version.
 
-## 1. What exists
+## 1. Threat model and what exists
+
+### Threat model
+
+**Asset.** The asset is content attributed to a tenant through `arg_keys`.
+That covers request arguments and backend output, including output the
+gateway transformed, cached or stored.
+
+**Actor.** The actor is an authenticated principal: an API key, an OAuth or
+OIDC subject, an mTLS identity, or the stdio client. It may call any method
+it is authorised for and may retry, replay or run playbooks.
+
+**Channels.** Every frame the gateway writes to that principal (§3.2):
+- results and errors on HTTP POST, on its SSE arm, on stdio and on the
+  direct route;
+- notifications on the POST stream, the session stream and
+  `subscriptions/listen`;
+- server-to-client requests. Sampling and elicitation forward backend text
+  (proxy.rs:226-420), so they are in scope.
+
+**Out of scope, with reasons:**
+- `roots/list` requests (proxy.rs:425): the gateway asks the client for its
+  own roots, and no backend content is involved.
+- HTTP headers and status codes: the gateway sets these itself and copies no
+  backend payload into them.
+- Timing and size side channels: the criterion is about attributed content,
+  not inference.
+- Operator-facing logs and metrics: they reach the operator, not the actor.
+- Tenant ids in fields that are not configured in `arg_keys`: the operator's
+  configuration is the definition of what counts as tenant data.
+- `src/a2a` is a backend-side client and provider (client.rs, provider.rs),
+  not an inbound transport, so it writes no frames to the actor.
+
+### What exists
 
 - **Read attribution (MIN.1).** `TenantGuard::response_tenants` and
   `response_uninspected` scan a result (PR:163-177). The scan fails closed on
@@ -44,8 +77,8 @@ Status: draft for review. Criteria: MIK-7116.MIN.2 and MIK-7116.MIN.4
   authenticated principal. Cached deliveries never reach it: the response cache
   goes through `GuardedValue::from_cache` (guarded.rs:34-37), and idempotent
   replays go through `note_cached` (invoke.rs:1751; backend_handlers.rs:1118,
-  :1127). The verdict therefore goes at each route's final delivery boundary,
-  which sees the caller, the request and the final answer (§3.2).
+  :1127). The verdict therefore goes at every outbound frame, where the
+  reader, the request and the bytes sent are all known (§3.2).
 - **Withholding after attribution.** A gate refusal keeps the response tenants
   on the record (tests `gate_refused_response_keeps_response_tenants`,
   meta_mcp/audit_record_tests/tenants.rs:93; and
@@ -61,22 +94,27 @@ Status: draft for review. Criteria: MIK-7116.MIN.2 and MIK-7116.MIN.4
 
 ## 2. Definitions
 
-- **A delivery** is one answer the gateway sends a caller, for any method, at
-  the route's final delivery boundary (§3.2).
-- **A delivery's tenants** come from three sources, unioned:
-  - the tenants named in the incoming request's `params`, walked with
-    `request_tenants` (PR:154-158);
-  - the tenants named in the final assembled `result`, scanned with
-    `response_tenants` (PR:163-165);
-  - the attribution recorded during this delivery, or stored with it (§3.3).
+- **A frame** is one JSON-RPC message the gateway writes to a caller on any
+  transport: a result, an error, a notification, or a server-to-client
+  request (§3.2).
+- **A frame's tenants** are the union of three things:
+  - the tenants named in the incoming request's `params`, for a frame that
+    answers a request (walked with `request_tenants`, PR:154-158);
+  - one scan of the whole outgoing frame, covering `result`, `error.message`,
+    `error.data` and `params`;
+  - the frame's hidden attribution (§3.3).
 
-  A delivery is `uninspected` when any part of that result, or of the recorded
-  attribution, was unread (PR:175-177).
+  A frame is `uninspected` when any part of it, or of its hidden attribution,
+  was unread (PR:175-177). The single scan is a new
+  `TenantGuard::frame_attribution(&Value) -> ReadAttribution`, which calls the
+  existing private `scan_response` (PR:181-188) once and hashes the result.
+  The two walks in `response_tenants` / `response_uninspected` are not repeated,
+  and no existing symbol is widened.
 - **Sensitive** means attributed to at least one tenant. `data_classes` are
   not used: the kernel reports `public` when it finds nothing
   (kernel.rs:437-438), and the field is absent on cached and refused calls.
-- **The rule:** inside `window_secs`, a principal's committed deliveries may
-  name at most one tenant, and the delivery being judged counts toward that.
+- **The rule:** inside `window_secs`, a principal's committed frames may name
+  at most one tenant, and the frame being judged counts toward that.
   An `uninspected` delivery adds a fresh unknown tenant `U`. `U` is distinct
   from every other entry, including another `U`, so it conflicts in both
   orders. When `arg_keys` is empty, `TenantGuard::attributes` is false
@@ -113,12 +151,19 @@ upserts `committed`. A committed overflow raises `overflow_until` to
 counts. Overlapping tickets on the same tenant each hold one count, so neither
 can erase the other's reservation or a committed entry.
 
-The bounds are 256 distinct hashes per principal, counting committed and
-pending entries together, and 256 open tickets. A read that would cross
-either bound takes only an overflow reservation. The principal map is capped
-at 100,000: expired principals are swept first, and if the map is still full,
-a new principal's read is `Unattributable`. Live history is never evicted.
-Every bound fails closed, flagging or refusing.
+The bound is 256 distinct hashes per principal, counting committed and
+pending entries together. Past that bound, a read stores nothing new in the
+map: it only increments `pending_overflow`, a `u32`. In `block` mode such a
+read is refused outright. In `observe` mode it is flagged and delivered,
+holding an allocation-free overflow ticket.
+
+A principal's stored state is therefore at most 256 hashes plus two counters,
+however many requests are open. The request objects themselves are bounded
+by the transports' own admission limits (server/mod.rs:2446-2452 on stdio).
+The principal map is capped at 100,000: expired principals are swept first,
+and if the map is still full, a new principal's read is `Unattributable`.
+Live history is never evicted. Every bound fails closed, flagging or
+refusing.
 
 ```rust
 pub(crate) struct ReadAttribution { tenants: BTreeSet<TenantHash>, uninspected: bool }
@@ -142,102 +187,116 @@ Ids are hashed once, with `hash_argument` (data_flow.rs:139). The same hashes
 go to the judge, the records and any stored attribution, so live and stored
 ids compare equal.
 
-### 3.2 One judgement point per route
+### 3.2 One judge, at every outbound frame
 
-Each route judges once, where its final answer is assembled and before the
-last code that can refuse it. Tickets live in a request-scoped task-local,
-`ReadScope`, which has the same shape as `DispatchNotes` (audit.rs:75-78,
-:147-156). The ticket commits after the final refusal point, and only if the
-answer still carries a `result` and no `error`. Otherwise it drops.
+Every frame the gateway writes to a caller passes `judge_frame(key, frame,
+hidden)` immediately before it is written. Commit happens after the write is
+handed to the transport. Only stdio has a single writer for every frame. The
+other transports are judged at their smallest funnel:
 
-| Route | Judge (before) | Commit (after) | Covers |
+| Transport | Writer / smallest funnel (judge here) | Commit | Frames |
 |---|---|---|---|
-| HTTP `/mcp` | `finalize_response_after_inspection` (handlers.rs:1826) | its return (handlers.rs:1827-1828), before `complete_delivery` (:1829-1831) | every method matched at handlers.rs:1011 |
-| stdio | `finalize_response_for_delivery` (server/mod.rs:3050) | its return | every method, catalogue (server/mod.rs:3034-3035) and tasks included |
-| Direct `/mcp/{backend}` | `audited_call` on the inner answer, before `record` (direct_audit.rs:114-116) | the single return of `audited_call` (:116-118), whichever path `record` took (no log :141-143, written :193, non-fatal :204-207) | every forwarded method (one funnel, backend_handlers.rs:431-458) |
+| stdio | the one stdout writer, `run_stdout_writer` (stdio_writer.rs:17-27), the only consumer of the queue at server/mod.rs:2435-2436 ("everything … queues here", :2426-2430) | `write_response` returned `true` (stdio_writer.rs:22) | responses (via `send_frame`, server/mod.rs:147-152, at :2510, :2568, :2844), notifications, outbound bridged requests |
+| HTTP `/mcp`, POST result | the one result producer, just before `finalize_response_after_inspection` (handlers.rs:1826). Its bytes are reused verbatim by the SSE arm (streaming.rs:705-710) | its return (handlers.rs:1827-1828) | result and error frames |
+| HTTP `/mcp`, POST request-scoped notifications | the stream arm, `first_event_wins_stream` (streaming.rs:812), at each notification yield. The buffered arm discards them (handlers.rs:466-470), so they are never written and never judged | at yield | progress, logging, any backend notification |
+| HTTP `/mcp`, GET session stream | `create_sse_response` (streaming.rs:466), its single `yield Ok(event)` (:514); fed by `send_to_session` / `broadcast` (streaming.rs:381, :401) from proxy.rs and webhooks/mod.rs:605 | at yield | sampling and elicitation requests (proxy.rs:226-420), list-changed, webhook events |
+| HTTP `subscriptions/listen` | `subscription_stream` (streaming.rs:540), its event yield | at yield | subscribed notifications |
+| Direct `/mcp/{backend}` | the single return of `audited_call` (direct_audit.rs:114-118), on the full answer body: `result` or `error` | that return, on every `record` path (:141-143, :193, :204-207) | results and errors. Backend notifications are drained and discarded (backend_handlers.rs:425-430), so there are none to judge |
 
-Finalization can still refuse a delivery: through the response firewall, a
-signing failure, or a fail-closed delivery-event write
-(response_security.rs:168-276). Each of those returns an error, so nothing
-commits. Its no-log and non-fatal paths return the response, so they commit.
-On a `Blocked` verdict the answer becomes the existing delivery refusal
-(`delivery_refusal_error`, as finalization's firewall builds it), and
-finalization then runs on the refusal. On the direct route the answer becomes
-`refusal(id, &Error::ResponseFirewallRefused)` (direct_guards.rs:108-111).
-Because a block is judged before `complete_delivery` stores the answer, a
-blocked answer is stored as a refusal and replays as one.
+SSE gives no write acknowledgement, so the yield is the last point the gateway
+controls, and its commit counts as delivered. Errors are judged like results:
+a backend error whose `data` names B counts as a read of B. A gateway-built
+refusal carries no hidden attribution (§3.3), so a refusal that withholds
+content commits nothing it withheld.
 
-**Reader key.** On HTTP, `caller_key` (handlers.rs:1529). On stdio, the
-constant `stdio`: one process serves one client (stdio_nonce.rs:4-10). On the
-direct route, `identity::caller_key` (identity.rs:350) over the request's
-subject, certificate and client (backend_handlers.rs:515). The session and
-per-backend fallbacks are never used (handlers.rs:1295-1302;
-backend_handlers.rs:59-73). A stored task is judged on whoever reads it,
-because the judgement point is the reader's own delivery.
+**Block.** A frame with a `Blocked` verdict is replaced before it is written:
+- a response becomes the delivery refusal (`delivery_refusal_error`; on the
+  direct route `refusal(id, &Error::ResponseFirewallRefused)`,
+  direct_guards.rs:108-111);
+- a notification is dropped;
+- a server-to-client request is answered locally with a refusal error to its
+  pending waiter (proxy.rs:153-201).
 
-**No per-writer assessment.** The writers (`audit_invocation`, `audit_replay`,
-`refuse_stored_delivery`, the catalogue handlers) judge nothing and suppress
-nothing. They only add attribution to `ReadScope` (§3.3).
+For the HTTP POST result the replacement happens before finalization and
+before `complete_delivery` (handlers.rs:1829-1831), so a blocked answer is
+stored, and replays, as a refusal.
 
-### 3.3 Attribution the wire does not show
+**Reader key.**
+- HTTP POST: `caller_key` (handlers.rs:1529).
+- HTTP session and subscription streams: the session's `owner`
+  (streaming.rs:72), the same `SessionOwner` that resumption checks
+  (:239-243).
+- stdio: the constant `stdio`, since one process serves one client
+  (stdio_nonce.rs:4-10).
+- Direct: `identity::caller_key` (identity.rs:350, fed by
+  backend_handlers.rs:515).
 
-The request and the final result do not show every tenant a delivery reached.
-Three cases fill the gap:
+Session and per-backend fallbacks are never used (handlers.rs:1295-1302;
+backend_handlers.rs:59-73). A principal-less key is `Unattributable`.
 
-- **Inner dispatches in a live delivery.** Playbook and code-mode steps run as
-  `invoke_tool` calls on the request's own task (support.rs:391-398;
-  invoke.rs:3991-4020). Each step's `audit_invocation` already builds that
-  step's attribution: its request tenants, its raw response tenants, and its
-  `uninspected` flag (audit.rs:186-236, :348). It adds them to `ReadScope`.
-  A step whose arguments come from the playbook definition, or whose raw
-  response is mapped away, still counts. An output mapping that introduces a
-  new tenant is caught by the final-result scan.
-- **Replays** (#2472). An incoming replay request is the original request, so
-  its own tenants are walked live. The inner-step attribution is not visible,
-  though. `StoredDelivery` (admission.rs:100-108) gains `read: Option<{
-  tenants, uninspected }>`, written from `ReadScope` at `complete_delivery`
-  (handlers.rs:1829-1831). A replay adds the stored `read` to `ReadScope`. A
-  record from before the field existed (`None`) adds `uninspected`. Persisting
-  this is needed because a composite replay's result alone cannot carry its
-  steps' request-only tenants.
-- **Stored task results.** The incoming request is `tasks/get` or
-  `tasks/result` with only a task id, so the original arguments are absent.
-  Settlement stores `read_tenants` and `read_uninspected` on the task row in
-  the same write as the payload, with a version bump next to `TARGET_VERSION`
-  (record.rs:35-38; precedent store_targets.rs:118-196). The stored values are
-  the admitted request's tenants plus the dispatch's attribution, instead of
-  the empty set passed today (audit.rs:475). Delivery adds them to
-  `ReadScope`. A row without the field adds `uninspected`, which fails closed;
-  the result's visible tenants are scanned at the boundary anyway.
+### 3.3 Hidden attribution travels with the frame
 
-Cached deliveries need nothing extra: the cached value is the final result,
-and the incoming request is the caller's own.
+The wire does not show every tenant a frame reached. That attribution rides
+on the frame itself, in a non-wire field. `JsonRpcResponse` gains `read:
+Option<ReadAttribution>`, beside the existing non-wire `discovery_inspected`
+and `chain_source` (messages.rs:78-81). The stdio queue item becomes `{
+value, read }` (server/mod.rs:2435). A response built fresh by the gateway,
+which is every refusal, starts with `read: None`, so nothing hidden is judged
+or committed for content the gateway withheld. Hidden attribution comes from
+five places:
+
+- **Inner dispatches.** Each backend dispatch's attribution is collected in a
+  request-scoped task-local, shaped like `DispatchNotes` (audit.rs:75-78,
+  :147-156). That attribution is the dispatch's request tenants, its raw
+  pre-gate response tenants (noted at audit.rs:93, before any gate or
+  transform), and its `uninspected` flag. Playbook and code-mode steps run
+  `invoke_tool` (support.rs:391-398) on the request's task, so they are
+  collected too. The collected set is moved onto the response's `read` where
+  the response is built: handlers.rs:1826 on HTTP, and the dispatch's frame on
+  stdio. The collection happens before `audit_invocation`'s no-logger return
+  (audit.rs:338), so it works without a transparency log.
+- **Response cache.** The entry stored at invoke.rs:2543 keeps the dispatch's
+  pre-transform `ReadAttribution` beside the value. A hit (invoke.rs:1903)
+  restores it, so a cached B whose transform stripped the keys still counts
+  as B. An entry without it restores `uninspected`.
+- **Idempotency caches.** The meta store (`StoredDelivery`, admission.rs:100-108,
+  written at `complete_delivery`, handlers.rs:1829-1831), the inner idempotency
+  result (idempotency.rs:729; hit at invoke.rs:1787) and the direct-route
+  result (hit at backend_handlers.rs:1118) each keep `read` the same way. A
+  missing field restores `uninspected`.
+- **Stored task results.** `tasks/get` and `tasks/result` carry only an id.
+  The task row stores `read_tenants` and `read_uninspected` in the same write
+  as the payload. They hold the admitted request's tenants plus the dispatch's
+  attribution, instead of the empty set at audit.rs:475. The version bump
+  goes next to `TARGET_VERSION` (record.rs:35-38; precedent
+  store_targets.rs:118-196). A row without the fields restores `uninspected`.
+- **Notifications and server-to-client requests** carry no hidden attribution.
+  Their content is entirely on the wire, and the frame scan covers it.
 
 ### 3.4 Records
 
-On meta and stdio, every delivery already writes one immutable
+A response frame on meta and stdio already writes one
 `response_delivery_attempt` event in finalization (response_security.rs:263,
-:284-330). When attribution is configured and the delivery has tenants, `U`,
-or a verdict, that event gains three fields: `tenants` (hashed), `attribution`
-(`uninspected` when it applies), and `cross_tenant_read` (`flagged` |
-`blocked` | `unattributable`). It honours `FailClosed`, and a failed write
-withholds the answer, so nothing commits. On the direct route, `record`
-(direct_audit.rs:123) writes the same fields. `DirectCall::of`
-(direct_audit.rs:42-73) returns a call for every method, and a
-non-`tools/call` call is recorded only when it carries those fields. The MIN.1
-invocation record stays the per-dispatch execution record.
+:284-330). Every other judged frame writes one `tenant_read` event through the
+same `append_event` (response_security.rs:325-326). Those other frames are
+notifications, server-to-client requests, and direct-route answers; the
+direct route writes through `record`, direct_audit.rs:123. Either event
+carries the reader's caller key beside the display name, and three fields:
+`tenants` (hashed), `attribution` (`uninspected` when it applies), and
+`cross_tenant_read` (`flagged` | `blocked` | `unattributable`).
+An event is written only when attribution is configured and the frame has
+tenants, `U`, or a verdict. It honours `FailClosed`: a failed write withholds
+the frame, and nothing commits.
 
-"Audit entries for both the read and the verdict" are then asserted as two
-delivery events: A's, with `tenants=[h(A)]` and no verdict, and B's, with
-`tenants=[h(B)]` and `cross_tenant_read`.
-
-**Tenant ids** are compared as strings across all backends and keys.
-Operators whose backends reuse local ids must namespace them (§6).
+"Audit entries for both the read and the verdict" is asserted as two events:
+A's, with `tenants=[h(A)]` and no verdict, and B's, with `tenants=[h(B)]` and
+`cross_tenant_read`. Tenant ids are compared across all backends and keys, so
+operators must namespace ids that backends reuse (§6).
 
 ### 3.5 Increment split
 
-The task-row fields (§3.3, third bullet) can ship later without a bypass.
-Until then every stored task delivery adds `U`, which over-flags and never
+The task-row fields (§3.3) can ship later without a bypass. Until then every
+stored task frame restores `uninspected`, which over-flags and never
 under-flags. The rest ships together.
 
 ## 4. MIN.4: fixture corpus and false-positive measurement
@@ -294,7 +353,7 @@ mutant.
 | `a_then_b_block_refuses` (each route) | B answered with the delivery refusal; event `blocked`; tenants keep `h(B)` | verdict computed but not applied |
 | `request_only_tenant_any_method` | A, then `prompts/get` with `customer_id: B` in arguments and an unkeyed result: flagged | boundary scans only the result |
 | `catalogue_delivery_is_judged` | A, then `prompts/list` whose description is JSON naming B (HTTP, stdio, cached): flagged | catalogue methods skipped |
-| `playbook_step_tenant_counts` | live playbook whose step arguments (from the definition) name B, unkeyed output, after A: flagged | inner attribution not added to `ReadScope` |
+| `playbook_step_tenant_counts` | live playbook whose step arguments (from the definition) name B, unkeyed output, after A: flagged | inner attribution not merged into the response's `read` |
 | `playbook_mapping_introduces_b` | step result unattributed; output mapping produces `customer_id: B`: flagged | judged at a writer, not on the final result |
 | `playbook_replay_keeps_step_tenants` | replay of that playbook after A: flagged; a pre-field `StoredDelivery` adds `U` | replay judged on the result alone |
 | `task_result_judged_on_reader` | subjects S1 and S2 share credential K; S2 holds A and reads B's task result: flagged against S2 | admitting caller's key |
@@ -303,7 +362,14 @@ mutant.
 | `direct_every_audit_policy_commits` | no log, non-fatal failure: history kept; `FailClosed` failure: 503, no history | commit tied to one `record` branch |
 | `uninspected_both_orders` | A then opaque, opaque then B, opaque then opaque, and an opaque read naming held A: all flagged; a lone opaque read: `None` | `U` equal to a tenant, or not stored |
 | `overlapping_tickets` | barrier: A assessed and held, B assessed, then A commits: B flagged; two A tickets, one drops: A still pending | commit-only history; drop clears another's count |
-| `history_bounds` | 10,000 tenants in observe mode: stored hashes ≤ 256, overflow flags; 300 open tickets: ≤ 256; full principal map: `unattributable`, no eviction | unbounded storage; eviction |
+| `history_bounds` | 10,000 tenants and 300 concurrent requests in observe mode: stored hashes ≤ 256, past it only `pending_overflow` grows and reads are flagged; block mode refuses past the bound; full principal map: `unattributable`, no eviction | unbounded storage; overflow allocating; eviction |
+| `notification_frames_are_judged` | A result, then a backend `notifications/message` or progress frame naming B on the POST stream, the session stream and stdio: flagged; block drops it | notifications not judged |
+| `sampling_request_is_judged` | A, then a backend sampling/elicitation request whose text names B: flagged; block answers the waiter with a refusal | server-to-client requests skipped |
+| `error_payload_is_a_read` | A, then a backend error whose `error.data` names B (direct and meta, and its replay): flagged and committed | only `result` scanned; tickets dropped on every error |
+| `gateway_refusal_commits_nothing_hidden` | a withheld B answer (refusal frame) then A: not flagged | refusal frame inherits `read` |
+| `cache_hit_restores_pre_transform_attribution` | B cached after a key-stripping transform; A, then the cache hit: flagged; an entry without `read` restores `U` | cache entry without attribution |
+| `hidden_attribution_without_logger` | no transparency log: a playbook step naming B after A is flagged | merge placed after audit.rs:338 |
+| `one_scan_per_frame` | `frame_attribution` walks the frame once (counting walker) and returns tenants and `uninspected` | two walks |
 | `refused_retry_keeps_committed_a` | A committed, a repeat A refused, then B: flagged | drop erasing committed |
 | `window_expiry_clears` | A, then B after `window_secs + 1`: `None` | window ignored |
 | `principal_not_session` | one key across two sessions: flagged; two keys sharing one session: not | session key |
@@ -317,7 +383,7 @@ mutant.
 Add a row next to row 110 (UPGRADING-4.0.md:137); its number is assigned at
 merge. Proposed text:
 
-"With `tenant_guard.arg_keys` set, every delivery event names the tenants it
+"With `tenant_guard.arg_keys` set, every outbound frame event names the tenants it
 reached (hashed). A caller whose deliveries name more than one tenant inside
 `window_secs` is marked `cross_tenant_read: flagged`, or `unattributable`
 when it has no caller identity. A response the gateway could not fully read
@@ -356,3 +422,19 @@ Both round-4 improvements were taken: ticket ownership (§3.1) and raw
 fixtures (§4).
 
 **Round 4 decisions (merge lane):** one judgement point per route, at the final delivery boundary, replaces per-writer assessment. The delivery event records the caller key beside the display name, so the verdict names its actor exactly. Inner playbook steps must stay on the request task; `playbook_step_tenant_counts` fails if a future spawn drops step attribution.
+
+**Round 5 (merge lane):** the judgement point moves down to every outbound
+frame on each transport (§3.2). All four findings are fixed:
+
+| Finding | Closed by |
+|---|---|
+| Notifications reach the caller before the judge (CRITICAL) | Frames are judged at each stream's yield (streaming.rs:514, :540, :812) and at the stdio writer (stdio_writer.rs:17-27). Tests `notification_frames_are_judged` and `sampling_request_is_judged`. |
+| Error payloads escape (CRITICAL) | One frame scan covers `error.message` and `error.data`. A backend error commits; a gateway refusal has `read: None` and commits nothing hidden. Tests `error_payload_is_a_read` and `gateway_refusal_commits_nothing_hidden`. |
+| A cache hit loses pre-transform attribution (CRITICAL) | Cache and idempotency entries keep `read` (invoke.rs:2543 and :1903; admission.rs:100-108; idempotency.rs:729; backend_handlers.rs:1118). A missing field means `U`. Test `cache_hit_restores_pre_transform_attribution`. |
+| The 256-ticket bound was unenforced (MEDIUM) | Past the bound, only a `u32` counter grows, and block mode refuses (§3.1). Test `history_bounds`. |
+
+Both improvements were taken: a test with no logger, and one scan per frame
+through a new `frame_attribution` that wraps the private `scan_response`
+(PR:181-188), with no visibility widening. Threat model: §1.
+
+**Round 5 decisions (merge lane):** every outbound frame is judged (results, errors, notifications, server-to-client requests). SSE commits at yield: that can over-record a frame a dropped connection never delivered, never under-record, so it fails closed.
