@@ -697,3 +697,32 @@ fn safe_fragment(fragment: &str) -> String {
 #[cfg(test)]
 #[path = "kernel_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod l7_probe {
+    #[allow(unused_imports)]
+    use super::*;
+    pub(super) fn probe(name: &str, set: &regex::RegexSet) {
+        let text = "{\n  \"content\": [\n    {\n      \"text\": \"WORKLOAD_OK case=042 bundle=deterministic\",\n      \"type\": \"text\"\n    }\n  ],\n  \"isError\": false,\n  \"trace_id\": \"gw-35e3ed28-4745-4b31-a411-d3a8f4275462\"\n}\nWORKLOAD_OK case=042 bundle=deterministic\ntext\ncontent\nisError\ntrace_id";
+        let big = regex::RegexSetBuilder::new(set.patterns())
+            .dfa_size_limit(256 << 20)
+            .build()
+            .expect("rebuild");
+        let n = 20_000u32;
+        let mut hits = 0usize;
+        for _ in 0..500 { hits += set.matches(text).iter().count() + big.matches(text).iter().count(); }
+        let t0 = std::time::Instant::now();
+        for _ in 0..n { hits += set.matches(text).iter().count(); }
+        let d_default = t0.elapsed();
+        let t1 = std::time::Instant::now();
+        for _ in 0..n { hits += big.matches(text).iter().count(); }
+        let d_big = t1.elapsed();
+        println!("L7PROBE set={name} patterns={} default_ns={} big_ns={} ratio={:.2} hits={hits}",
+            set.len(), d_default.as_nanos() / u128::from(n), d_big.as_nanos() / u128::from(n),
+            d_default.as_secs_f64() / d_big.as_secs_f64());
+    }
+    #[test]
+    fn l7_probe_sets() {
+        probe("ci_personal", &PERSONAL_DATA_PATTERNS); probe("ci_financial", &FINANCIAL_DATA_PATTERNS); probe("ci_destructive", &DESTRUCTIVE_ACTION_PATTERNS); probe("ci_escalation", &TOOL_ACCESS_ESCALATION_PATTERNS); probe("ci_exfil", &EXFILTRATION_PATTERNS);
+    }
+}
