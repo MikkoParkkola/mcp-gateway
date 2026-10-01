@@ -99,16 +99,25 @@ pub(crate) enum Payload {                // typed, as built today; never convert
     Response(JsonRpcResponse),
     Notification(JsonRpcNotification),
     Request(Value),                      // server-to-client request
+    Batch(Vec<OutboundFrame>),           // stdio JSON-RPC array (server/mod.rs:2568); items judged one by one
+}
+pub(crate) enum OutboundReply {          // what every MCP HTTP handler returns (closed)
+    Http(OutboundHttp),                  // JSON body, or POST-SSE via H5/H6
+    Stream(OutboundStream),              // subscriptions/listen: a stream of OutboundFrame (H8)
 }
 pub(crate) struct OutboundFrame {        // private fields; no accessor returns the payload
     payload: Payload,
     assessment: Option<Assessment>,      // immutable: verdict, hashed tenants, uninspected
     ticket: Option<ReadTicket>,          // history reservation, committed by the sink
 }
-pub(crate) enum FrameOrigin<'a> {
+enum FrameOrigin<'a> {                   // private: callers cannot pick an origin
     Delivered { request: Option<&'a Value>, hidden: Option<&'a ReadAttribution> },
     Gateway { replaces: Option<Assessment> }, // gateway-built; never itself refused
 }
+// Gateway frames come only from fixed constructors in outbound.rs:
+// gateway_error(id, code, message), replacement(original, refusal),
+// sse_connected(), sse_lagged(n), stdio_busy(id), origin_forbidden(message).
+// A backend-derived payload has no route to a Gateway origin.
 pub(crate) fn judge_frame(reads: &ReadHistory, guard: &TenantGuard, key: Option<&str>,
     payload: Payload, origin: FrameOrigin<'_>) -> OutboundFrame
 // sinks, all private to outbound.rs: to_http(OutboundHttp) -> Response,
@@ -118,7 +127,9 @@ pub(crate) fn judge_frame(reads: &ReadHistory, guard: &TenantGuard, key: Option<
 `judge_frame` is the only constructor of `OutboundFrame`. Only the sinks in
 `outbound.rs` can consume one, and there is no `into_parts`, so judged content
 cannot be detached and changed. `OutboundHttp` does not implement
-`IntoResponse`. Every MCP body, SSE event and stdio write takes an
+`IntoResponse`. `judge_frame` is public only through `delivered(..)`, which
+sets the `Delivered` origin, and through the fixed `Gateway` constructors
+listed above. Every MCP body, SSE event and stdio write takes an
 `OutboundFrame`, so a path that skips the judge does not compile. These move
 into `outbound.rs` and become private:
 
@@ -176,23 +187,49 @@ Every place that builds an MCP JSON-RPC body today, and how it routes:
 | # | Today (file:line) | Frames | Routed through the writer by |
 |---|---|---|---|
 | H1 | `build_session_response` (helpers.rs:18-29), used by `build_json_response` :57, `build_response` :66, `build_error_response` :75, `build_error_response_with_data` :95 | POST `/mcp` answers and gateway errors | The helpers take `OutboundFrame`; `Json(...)` moves into `outbound.rs` |
-| H2 | handlers.rs:1876 `(status, axum::Json(response))` and :1878 | the final POST answer | `meta_mcp_dispatch` (handlers.rs:476) returns `OutboundHttp { frame, status, session }`; judged right after finalization's content steps (handlers.rs:1826-1828, response_security.rs:176-262) and before the delivery event |
+| H2 | handlers.rs:1876 `(status, axum::Json(response))` and :1878 | the final POST answer | `meta_mcp_dispatch` (handlers.rs:476) returns `OutboundReply`. The answer is judged right after finalization's content steps (handlers.rs:1826-1828, response_security.rs:176-262). Its delivery event is written after `slot_http` (§4.6) |
 | H3 | `slot_http` replacement (grant_audit.rs:303-323) | grant-audit failure answer | Takes and returns `OutboundHttp`. The replacement is `judge_frame(.., Gateway)` and drops the original ticket. Re-parsing the body (:309-313) goes away, because the id is on the typed frame |
-| H4 | `meta_mcp_handler` (handlers.rs:443-472), buffered arm :466-470 | POST answer without SSE | The single entry; converts `OutboundHttp` to the body. The JSON body commits here |
+| H4 | `meta_mcp_handler` (handlers.rs:443-472), buffered arm :466-470 | POST answer without SSE | The single entry. After `slot_http` it calls `outbound::emit_http`, which writes the delivery event, builds the body and commits |
 | H5 | `first_event_wins_stream` (streaming.rs:812-874): `message_frame` :762, `terminal_frame` :783, yields at :838, :845, :854, :857 | POST-SSE notifications and the terminal answer | The notification channel carries `OutboundFrame` (judged in `publish`, stream scopes only, §4.3); the terminal frame is `OutboundHttp`; each yield goes through the private `sse_event` sink and commits. `message_frame`, `terminal_frame` and `UNFRAMEABLE_FRAME` (streaming.rs:762-797) move into `outbound.rs` |
 | H6 | `request_scoped_event_stream` (streaming.rs:711-759), notification loop :736, result bytes :729 | dispatch-first fallback: drained notifications, then the result | Takes `Vec<OutboundFrame>` plus `OutboundHttp`, not bytes. This is the round-6 CRITICAL path |
-| H7 | `create_sse_response` (streaming.rs:466-529): events at :487, :498, :502, :521; broadcast via `send_to_session`/`broadcast` (:381, :401) from proxy.rs:250-559 and webhooks/mod.rs:605 | GET session stream: notifications and server-to-client requests | Judged at enqueue, in `send_to_session` and per session in `broadcast` (streaming.rs:381, :401), with the `caller_key` stored on the session at open (§4.2). `TaggedNotification` (streaming.rs:37) carries the frame with a shared commit-once ticket. On `Blocked`, `send_to_session` returns `Refused`, and `forward_*_with_response` (proxy.rs:226, :293) completes its pending waiter with a `Gateway` refusal instead of waiting for a timeout. `connected` and `lagged` are `Gateway` frames |
-| H8 | `subscription_stream` (streaming.rs:540-600), ack :556, events :579 | `subscriptions/listen` | Judged at the yield with the `caller_key` captured when it opens (handlers.rs:1089) |
+| H7 | `create_sse_response` (streaming.rs:466-529): events at :487, :498, :502, :521. Fan-out via `send_to_session`, `broadcast` and `broadcast_to_backend` (:381, :401, :304) from proxy.rs:250-559 and webhooks/mod.rs:605 | GET session stream: notifications and server-to-client requests | Judged at enqueue, per session, in all three fan-out functions, with that session's stored `caller_key`. The payload is clamped (`clamp_response_envelope`, cacheable.rs:160-168) before judging, and `sse_event` only serializes it. The `message_event_data` re-clamp and clone at yield (streaming.rs:498-500) goes away. `Refused` completes a request's waiter (proxy.rs:153-201). The ticket stays live until emission (§4.5). `connected` and `lagged` come from fixed `Gateway` constructors |
+| H8 | `subscription_stream` (streaming.rs:540-600), ack :556, events :579 | `subscriptions/listen` | Dispatch returns `OutboundReply::Stream`. Each listener event is judged with the `caller_key` captured at open (handlers.rs:1089), before the yield, and emitted through `sse_event` |
 | H9 | Direct route `Answer` (direct_audit.rs:23); `build_http_response` / `build_http_error_response` (helpers.rs:111-128); `audited_call` single return (direct_audit.rs:114-118) | every `/mcp/{name}` answer | `Answer` becomes `OutboundHttp`, judged in `audited_call` for every method. Its notifications are drained and discarded (backend_handlers.rs:425-430) |
 | H10 | http_error.rs:12-19 `json_body` / `json_response` | plain HTTP errors | Kept for non-MCP bodies; an MCP use moves to H1 |
 | H11 | origin middleware `forbidden` (origin_guard.rs:416-424), returned at :408 | JSON-RPC `-32600` refusal before authentication | Built by an `outbound.rs` constructor as `judge_frame(.., key: None, Gateway)` and written through `to_http`. No key exists before authentication; a `Gateway` frame is never refused |
+| H12 | `jsonrpc_error_body` (http_error.rs:40) via `jsonrpc_error_response` (middleware/errors.rs:33-42), for example `circuit_open_response` (:28-30) | middleware JSON-RPC errors | Built by `outbound::gateway_error` and written through `to_http` |
+| S1 | stdio batch array (server/mod.rs:2568) | batch answers | `Payload::Batch` of individually judged frames. `stdio_write` serializes the array inside `outbound.rs` and commits every item's ticket after the array is written |
+| S2 | stdio busy refusal, `try_send` (server/mod.rs:2588-2600) | overload refusal | `outbound::stdio_busy(id)` builds the frame; `try_send` takes an `OutboundFrame` |
 
-The structural guard is the type. Behind it sits a `clippy.toml`
-`disallowed_methods` / `disallowed_types` rule (merge-lane decision, §9). It
-forbids `axum::Json::<JsonRpcResponse>`, `axum::response::sse::Event::data`
-and serializing `JsonRpcResponse` / `JsonRpcNotification` directly, outside
-`outbound.rs` and the non-MCP allowlist. It runs in the existing
-`cargo clippy -D warnings` gate.
+**Enforcement: the type plus module privacy.** `outbound` is a private
+module. Its frame types are sealed, and their fields are private, so they
+cannot be built outside it. The MCP routes (`/mcp` POST and GET, and
+`/mcp/{name}`; router/mod.rs:454-464) are registered through one
+`outbound::mcp_route(handler)` adapter. That adapter accepts only handlers
+returning `OutboundReply`, and it alone turns an `OutboundReply` into a
+`Response`. The stdio queue is typed `Sender<OutboundFrame>`.
+
+What the compiler guarantees:
+- every value an MCP route handler returns, and every frame stdio writes, is
+  an `OutboundFrame` built by `judge_frame`;
+- nothing outside `outbound` can change a judged payload or skip a commit.
+
+What it does not guarantee:
+- code that builds a JSON-RPC-shaped body on a non-MCP route;
+- a tower middleware layered after the MCP routes that answers with its own
+  body. Today these are `origin_guard` (H11), the circuit-breaker middleware
+  (H12) and `CatchPanicLayer`, the last of which carries no backend content
+  (§9);
+- a handler that returns a stream of raw strings through some other route.
+
+Those cases are covered by a secondary tripwire: `clippy.toml`
+`disallowed_methods` and `disallowed_types`, with negative fixtures. It bans
+direct construction of `axum::Json`, `axum::response::sse::Event` and
+`axum::body::Body::from` outside `outbound.rs` and a named non-MCP allowlist,
+so `Json<Value>` and raw bodies are covered as well as typed ones. It runs in
+the existing `cargo clippy -D warnings` gate. clippy cannot select generic
+instantiations or argument types, so the ban works at the constructor level
+and the allowlist is reviewed.
 
 ### 4.2 Keys
 
@@ -252,7 +289,9 @@ one `caller_key` share one history.
 ### 4.4 Hidden attribution (what the frame does not show)
 
 A delivered response frame's `FrameOrigin::Delivered.hidden` comes from a
-non-wire field, `JsonRpcResponse.read: Option<ReadAttribution>`. It sits
+non-wire field, `#[serde(skip)] pub(crate) read: Option<ReadAttribution>` on
+`JsonRpcResponse`, so it is never on the wire nor in the HMAC over delivered
+bytes. It sits
 beside `discovery_inspected` and `chain_source` (messages.rs:78-81). A
 gateway-built response starts as `None`. The field is filled from four
 sources:
@@ -311,6 +350,26 @@ flags. The principal map is capped at 100,000. Expired entries are swept
 first; if the map is still full, a new principal is `Unattributable`. Live
 history is never evicted.
 
+**Delayed delivery: the ticket stays live until emission.** A frame that is
+queued but not yet written holds its pending reservation until its last copy
+is written or dropped. This applies to a GET-stream copy waiting in a slow
+subscriber's broadcast buffer, a POST-SSE notification, and a stdio frame in
+the queue. A shared ticket is an `Arc` (one allocation, configured path
+only). Each write upserts `committed` at that write's time. Dropping the last
+copy, including a broadcast slot overwritten on `Lagged`, releases the
+reservation.
+
+Why this fails closed: pending entries count as live in step 4 of the judge.
+So whenever a B frame is judged, every A frame not yet written to that
+principal is in `distinct`, and B is flagged. Expiry is measured from the
+last emission, never from enqueue, so a late copy of A cannot reach the
+caller after the window has let B through. Reservations are bounded by the
+existing per-session broadcast capacity and the stdio queue depth
+(server/mod.rs:2435).
+
+**Batch.** A stdio batch (`Payload::Batch`) holds individually judged items
+and is written as one array. Its tickets commit together after the write.
+
 The judge (`assess_read_at`) checks in this order:
 1. Off or unconfigured: no verdict.
 2. Empty and complete: no verdict.
@@ -326,7 +385,7 @@ Ids are hashed once with `hash_argument` (data_flow.rs:139).
 
 | Route | Replacers, in order | Where `judge_frame` runs | Commit |
 |---|---|---|---|
-| HTTP POST | finalization content steps (response_security.rs:176-262), then the delivery event (:263-276), then `slot_http` (grant_audit.rs:303-323) | after the content steps, before the delivery event | the `to_http` / `sse_event` sink, after all three |
+| HTTP POST | finalization content steps (response_security.rs:176-262), then `slot_http` (grant_audit.rs:303-323), then the delivery event, which moves out of :263-276 into `outbound::emit_http` | after the content steps | `emit_http`, after the event is written |
 | stdio | `slot_rpc` (grant_audit.rs:285-301, server/mod.rs:2978), then finalization (server/mod.rs:3050) | after the finalization content steps, before the delivery event and the enqueue | writer, after `write_response` (stdio_writer.rs:22) |
 | Direct | `record`'s fail-closed write (direct_audit.rs:194-203) | `audited_call`, before `record` | `audited_call`'s single return (:116-118), on every `record` path |
 
@@ -337,9 +396,17 @@ nothing writes to the payload afterwards. The payload is private, and no
 `judge_frame(.., Gateway { replaces })`. That drops the original ticket and
 carries its assessment forward.
 
-The delivery event is split out of finalization and runs after the judge.
-That holds on HTTP and stdio alike. It records the verdict and hashes the
-frame actually sent, including a replacement refusal. A refusal is unsigned,
+The delivery event is split out of finalization and written by the sink,
+after every replacer. On HTTP that is after `slot_http`, so its hash names
+the bytes actually emitted, including a replacement refusal. It records the
+verdict, and on a replacement it records the original assessment.
+
+**Terminal audit failure.** If the event write fails under `FailClosed`, the
+sink builds `replacement(original, refusal)`, makes one attempt to append
+that refusal's event, and then writes the refusal whether or not the append
+succeeded. A refusal carries no backend content, so emitting it without an
+event withholds nothing. No path audits a replacement more than once, so the
+sequence always terminates, even under a logger that keeps failing. A refusal is unsigned,
 as RESPONSE.4 requires (scope-update.md:125).
 
 ### 4.7 Records
@@ -410,10 +477,11 @@ guard. A header line gives each pattern's session count.
 
 Patterns, with their label:
 - **Legitimate:** `single_tenant`, `retry_same_tenant`, `mixed_workload`,
-  `opaque_only` (one opaque frame), `opaque_only_multi` (several opaque
-  frames in one session, a measured false positive under the fresh-`U` rule),
-  `support_handoff_slow`, `window_boundary`.
-- **Legitimate, known false positives:** `support_handoff_fast`,
+  `opaque_only` (one opaque frame), `support_handoff_slow`,
+  `window_boundary`.
+- **Legitimate, known false positives:** `opaque_only_multi` (several opaque
+  frames in one session: the price of failing closed under the fresh-`U`
+  rule), `support_handoff_fast`,
   `admin_sweep`, `large_single_tenant`.
 - **Cross-tenant:**
   - `a_then_b`;
@@ -428,7 +496,8 @@ Patterns, with their label:
 ordinary unit test with no network, built from `TenantGuardConfig { arg_keys,
 ..Default::default() }`. It counts per principal-session (the MIN.KILL unit)
 and asserts three gates:
-1. Zero flags on the legitimate patterns.
+1. Zero flags on the legitimate patterns. The known-false-positive group,
+   `opaque_only_multi` included, is excluded from this gate.
 2. Every cross-tenant session is flagged.
 3. Exact pinned counts and FP rate, following
    tests/provenance_eval_binary.rs:26-32.
@@ -454,6 +523,15 @@ under its mutant. Row 1 opens the plan.
 | 2f | `blocked_evidence_survives_replacement` | a blocked B frame then a `slot_http` failure: the event still carries `blocked` and `h(B)` | assessment lost on replacement |
 | 2g | `refusal_with_json_id_terminates` | a request id that is a JSON string naming B, refused after A: exactly one refusal, which is never re-refused | scanning `id`; `Gateway` frames refusable |
 | 2h | `origin_refusal_built_by_outbound` | a Host-mismatch refusal is produced through `outbound.rs` | `forbidden` keeps its own `Json` (origin_guard.rs:416-424) |
+| 2i | `delayed_subscriber_copy_fails_closed` | A queued to a stalled GET subscriber; the window passes; B judged; then the A copy is written: B flagged (A still pending), and the A write upserts at emission time. A `Lagged` drop releases the reservation | commit at first copy, or commit time taken at enqueue |
+| 2j | `stdio_batch_items_judged` | a stdio batch answering A then B: B item flagged/refused, the array written once, all tickets committed after the write | the batch as `Request(Value)` or unjudged |
+| 2k | `listen_is_a_stream_reply` | `subscriptions/listen` returns `OutboundReply::Stream`; its B event after A is flagged | listen kept on `Event::data` |
+| 2l | `event_hash_is_after_slot_http` | a `slot_http` failure after a judged A answer: the delivery event hashes the refusal that was sent and carries A's original assessment | event written before `slot_http` |
+| 2m | `terminal_audit_failure_terminates` | a logger that always fails under `FailClosed`: exactly one refusal is written, after one replacement-audit attempt | recursive replacement audit |
+| 2n | `gateway_constructors_closed` | compile-fail (trybuild): a backend payload cannot be given a `Gateway` origin; `OutboundFrame` cannot be built outside `outbound`; a route handler returning a `Response` cannot be registered with `mcp_route` | the origin or a constructor made public |
+| 2o | `middleware_errors_through_outbound` | the circuit-open and busy refusals come from `outbound` constructors (H12, S2) | `jsonrpc_error_body` kept raw |
+| 2p | `broadcast_to_backend_judged_per_session` | list-changed fan-out to two keys: each judged with its own key | one judged frame reused across keys |
+| 2q | `sse_bytes_equal_judged_payload` | GET-stream message bytes equal the judged, clamped payload, with no second clamp | `message_event_data` at yield |
 | 3 | `a_then_b_two_events` (POST JSON, POST-SSE, GET stream, listen, stdio, direct) | A event with `tenants=[h(A)]` and no verdict; B event with `cross_tenant_read=flagged` | a sink built without `judge_frame` |
 | 4 | `a_then_b_block_refuses` (each transport) | B replaced by the refusal (response) or dropped (notification); event `blocked` | verdict computed but not applied |
 | 5 | `request_only_tenant_any_method` | `prompts/get` with `customer_id: B` in args and an unkeyed result, after A: flagged (HTTP and stdio) | request params not passed to `Delivered` |
@@ -470,7 +548,7 @@ under its mutant. Row 1 opens the plan.
 | 16 | `uninspected_both_orders` | A then opaque, and opaque then B: flagged; a lone opaque frame: none | `U` not distinct |
 | 17 | `history_bounds_and_ownership` | 10,000 tenants: hashes stay at 256 or fewer; overlapping tickets; a drop keeps a committed A | eviction; a drop clearing others |
 | 18 | `hidden_attribution_without_logger` | no transparency log: a playbook step naming B after A is flagged | collection after audit.rs:338 |
-| 19 | clippy `disallowed_methods` fixture | a seeded `axum::Json(JsonRpcResponse)` outside `outbound.rs` fails the clippy gate | rule removed or allowlist widened |
+| 19 | clippy tripwire negative fixtures | seeded `axum::Json(json!({"jsonrpc":..}))`, `Json<JsonRpcResponse>`, `Event::default().data(..)` and `Body::from(String)` outside `outbound.rs` each fail the clippy gate | rule removed, or allowlist widened |
 | 20 | `unconfigured_is_noop` / `config_mode` | `arg_keys` empty: no fields, no refusal; `observe` default; bool rejected | judge before the attribution check |
 | 21 | `tenant_read_corpus_fp_measurement` | §5 gates 1-3 | window, threshold or default changed |
 | 22 | bench `judge_frame_fast_path` plus the NFR.WORKLOAD.1 k6 run | no regression beyond the NFR.WORKLOAD.1 budget at the default config | per-frame work on the fast path |
@@ -541,3 +619,16 @@ every frame is an `OutboundFrame`. The history is in git, up to commit
 | stdio request refusal not resolving its waiter (MEDIUM) | Fixed: `send_request` (stdio_channel.rs:91-140) returns the refusal to its caller, with nothing enqueued. Test 2c. stdio_channel.rs:68 is `resolve`, not a producer, and is corrected in §2 |
 | Origin middleware refusal outside the type (MEDIUM) | Fixed by routing: H11, built in `outbound.rs` (origin_guard.rs:416-424). Test 2h |
 | Improvements | Taken: `message_frame`, `UNFRAMEABLE_FRAME` and SSE assembly moved into `outbound.rs`; no `IntoResponse` for `OutboundHttp`; `caller_key` hoisted to handlers.rs:538-544; allocation and lock counts around the full conversion and the ticket lifecycle; multi-frame opaque-only and labelled two-session corpus patterns |
+
+### Review dispositions (C design, round 2)
+
+| Finding | Disposition |
+|---|---|
+| Delayed GET subscriber emits A after expiry (CRITICAL) | Fixed: the ticket stays live until the last copy is emitted or dropped, and commit time is the emission time (§4.5). Test 2i |
+| clippy cannot enforce the boundary (HIGH) | Fixed: enforcement is the type plus module privacy, with MCP routes registered only through `mcp_route` returning `OutboundReply`. What the compiler does and does not guarantee is stated in §4.1. clippy is a secondary constructor-level tripwire covering `Json<Value>`, `Event` and raw bodies. Tests 2n, 19 |
+| No batch inhabitant (HIGH, both seats) | Fixed: `Payload::Batch` (S1, server/mod.rs:2568). Test 2j |
+| Delivery event before `slot_http` (HIGH) | Fixed: the event is written by the sink after `slot_http` (§4.6). Test 2l |
+| Listen has no `OutboundHttp` form (HIGH) | Fixed: `OutboundReply::Stream` (H8, handlers.rs:1089). Test 2k |
+| `opaque_only_multi` in the zero-flag gate (MEDIUM and HIGH) | Fixed: moved to the known-false-positive group and excluded from gate 1 |
+| `jsonrpc_error_body` and busy `try_send` outside the type (MEDIUM) | Fixed by routing: H12 (http_error.rs:40, middleware/errors.rs:28-42) and S2 (server/mod.rs:2588-2600). Test 2o |
+| Improvements | Taken: fixed `Gateway` constructors with a private `FrameOrigin`; a terminal audit-failure path (one replacement-audit attempt); clippy covering `Json<Value>`; `broadcast_to_backend` (streaming.rs:304) judged per session; `sse_event` serializes the payload clamped before judging, with no `message_event_data` re-clamp (cacheable.rs:160-168, streaming.rs:498-500); `#[serde(skip)]` on `read`, as on `discovery_inspected` (messages.rs:78-79) |
