@@ -345,3 +345,105 @@ fn standard_does_not_stamp_listed_backends() {
     assert!(registry.register(Arc::clone(&backend)));
     assert_eq!(backend.destination(), DestinationPolicy::Configured);
 }
+
+/// A transport that stands in for one already started; records its close.
+struct Started(std::sync::atomic::AtomicBool);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Started {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        Err(crate::Error::Transport("not used".into()))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        self.0.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// Register `config` as `b` in an unpaired registry, seed a started shared
+/// transport, then pair the registry with a hardened config the way an
+/// embedder does: through `ReloadContext::new`.
+fn started_then_hardened(config: BackendConfig) -> (Arc<Backend>, Arc<Started>) {
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "b",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    let started = Arc::new(Started(std::sync::atomic::AtomicBool::new(false)));
+    backend.set_transport_for_test(Arc::clone(&started) as Arc<dyn crate::transport::Transport>);
+    let mut running = crate::config::Config::default();
+    running.security.posture = crate::security::posture::SecurityPosture::Hardened;
+    let _ctx = crate::config_reload::ReloadContext::new(
+        std::path::PathBuf::from("unused.yaml"),
+        Arc::new(crate::config_reload::LiveConfig::new(running)),
+        registry,
+        FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    (backend, started)
+}
+
+// MIK-7700: an HTTP backend started before a hardened pairing keeps no
+// unpinned transport. Pairing retires it, and the next start is pinned, so
+// nothing reaches the private address.
+#[tokio::test]
+async fn hardened_pairing_retires_a_started_unpinned_transport() {
+    let template = "http://127.0.0.1:{port}/mcp";
+    let (port, accepted) = counting_listener().await;
+    let (backend, started) = started_then_hardened(BackendConfig {
+        transport: transport(template, port),
+        timeout: Duration::from_secs(10),
+        ..BackendConfig::default()
+    });
+    assert_eq!(backend.destination(), DestinationPolicy::Public);
+    assert!(
+        backend
+            .pooled_transport_for_test(&super::PoolKey::Shared)
+            .is_none(),
+        "the transport started unpinned must be retired"
+    );
+    for _ in 0..100 {
+        if started.0.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        started.0.load(Ordering::SeqCst),
+        "the retired transport is closed"
+    );
+    let restarted = backend.ensure_started().await;
+    assert_refused(template, &restarted, accepted.load(Ordering::SeqCst));
+}
+
+// A stdio child does not depend on the destination policy; pairing leaves it.
+#[tokio::test]
+async fn hardened_pairing_keeps_a_started_stdio_transport() {
+    let (backend, started) = started_then_hardened(BackendConfig::default());
+    assert!(matches!(
+        backend.config.transport,
+        TransportConfig::Stdio { .. }
+    ));
+    assert!(
+        backend
+            .pooled_transport_for_test(&super::PoolKey::Shared)
+            .is_some()
+    );
+    assert!(!started.0.load(Ordering::SeqCst));
+}
