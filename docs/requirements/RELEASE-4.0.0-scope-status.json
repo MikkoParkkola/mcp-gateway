@@ -1320,7 +1320,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only. U5 ANSWERED 2026-10-01: the header contract (docs/design/RFC-0060-dual-generation-mcp.md:199-203) closes it without a prototype, and RFC-0061 Decision 1 (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:110-122) records the outcome, the gateway stays hand-rolled; the RFC-0060 open-questions table now says so. Pending on U1 only: a fresh 7-day window runs on the operator's live gateway from 2026-10-01 13:12 CEST (lead decision, HOLD)."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. docs/design/RFC-0060-dual-generation-mcp.md:3 still reads DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only. U5 ANSWERED 2026-10-01: the header contract (docs/design/RFC-0060-dual-generation-mcp.md:199-203) closes it without a prototype, and RFC-0061 Decision 1 (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:110-122) records the outcome, the gateway stays hand-rolled; the RFC-0060 open-questions table now says so. Pending on U1 only. The lead decided (HOLD) on a fresh 7-day window on the operator's live gateway from 2026-10-01 13:12 CEST, but no baseline was recorded for it (the snapshot files are empty). RFC-0060 requires the durable started_at_unix_seconds and an aligned HTTP baseline scrape, so U1 cannot be graded on that window until a baseline exists."
     },
     {
       "id": "MIK-7211.PARENT.5",
@@ -1328,7 +1328,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. RFC-0060 is DRAFT and its U1 window has not started, so no measured data exists yet."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Pending on U1: a fresh 7-day window on the live gateway was decided for 2026-10-01 13:12 CEST, but its baseline (durable started_at_unix_seconds and an aligned HTTP scrape, per RFC-0060) is not recorded, so no measured data can be cited yet."
     },
     {
       "id": "MIK-7211.PARENT.6",
