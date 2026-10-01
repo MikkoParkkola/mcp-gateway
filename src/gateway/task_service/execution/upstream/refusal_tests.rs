@@ -125,6 +125,15 @@ fn capture(handle: &str) -> UpstreamCapture {
     }
 }
 
+/// Move the fixture row to a terminal state through the real cancel path.
+async fn cancel(f: &Fixture) {
+    let revision = f.service.get(OWNER, &f.id).expect("row is readable").revision;
+    f.executor
+        .cancel(OWNER, &f.id, revision)
+        .await
+        .expect("a working row cancels");
+}
+
 #[tokio::test]
 async fn capture_refuses_an_unattributable_principal_an_absent_row_and_a_stale_revision() {
     let f = fixture().await;
@@ -190,6 +199,13 @@ async fn recovery_target_tells_absent_from_unavailable() {
     // Control: the owner reads the captured descriptor.
     assert_eq!(target(&f.owner_digest, &f.id), Ok("upstream-2".to_owned()));
 
+    cancel(&f).await;
+    assert_eq!(
+        target(&f.owner_digest, &f.id),
+        Err(RecoveryRefusal::NotRecoverable),
+        "a terminal row is served unchanged, never recovered"
+    );
+
     f.service.shutdown().await.expect("custody is released");
     assert_eq!(
         target(&f.owner_digest, &f.id),
@@ -199,12 +215,16 @@ async fn recovery_target_tells_absent_from_unavailable() {
 }
 
 /// Callbacks that fail the test if recovery reaches the settlement stage.
-async fn recover(f: &Fixture, executor: &TaskExecutor) -> Result<RecoveredRead, RecoveryRefusal> {
+async fn recover(
+    f: &Fixture,
+    executor: &TaskExecutor,
+    authorized: bool,
+) -> Result<RecoveredRead, RecoveryRefusal> {
     executor
         .recover_upstream_read(
             &f.owner_digest,
             &f.id,
-            true,
+            authorized,
             |_: Value| -> Result<Value, JsonRpcError> { panic!("no result may be processed") },
             |_: JsonRpcError| -> JsonRpcError { panic!("no error may be processed") },
             |event, _notes| std::future::ready(event),
@@ -224,7 +244,7 @@ async fn recovery_issues_no_query_without_a_claiming_adapter() {
 
     // No adapter installed on this executor.
     assert_eq!(
-        recover(&f, &f.executor).await,
+        recover(&f, &f.executor, true).await,
         Err(RecoveryRefusal::Unclaimed)
     );
 
@@ -236,7 +256,7 @@ async fn recovery_issues_no_query_without_a_claiming_adapter() {
         queries: Arc::clone(&silent),
     })));
     assert_eq!(
-        recover(&f, &declining).await,
+        recover(&f, &declining, true).await,
         Err(RecoveryRefusal::Unclaimed)
     );
     assert_eq!(silent.load(Ordering::SeqCst), 0, "refused before the wire");
@@ -249,8 +269,12 @@ async fn recovery_issues_no_query_without_a_claiming_adapter() {
         claims: true,
         queries: Arc::clone(&queried),
     })));
-    assert_eq!(recover(&f, &claiming).await, Ok(RecoveredRead::Retained));
+    assert_eq!(recover(&f, &claiming, true).await, Ok(RecoveredRead::Retained));
     assert_eq!(queried.load(Ordering::SeqCst), 1);
+
+    // The reader's own verdict is final: unauthorized issues no further query.
+    assert_eq!(recover(&f, &claiming, false).await, Err(RecoveryRefusal::Denied));
+    assert_eq!(queried.load(Ordering::SeqCst), 1, "denied before the wire");
     assert_eq!(
         f.executor
             .recovery_target(&f.owner_digest, &f.id)
@@ -287,6 +311,12 @@ async fn a_handle_is_live_only_for_a_readable_working_row_that_matches() {
     assert!(live(&f, &f.id, &handle(BACKEND, "upstream-4")));
     assert!(!live(&f, &f.id, &handle(BACKEND, "other-handle")));
     assert!(!live(&f, &f.id, &handle("other-backend", "upstream-4")));
+
+    cancel(&f).await;
+    assert!(
+        !live(&f, &f.id, &handle(BACKEND, "upstream-4")),
+        "a settled row is no longer followed"
+    );
 
     f.service.shutdown().await.expect("custody is released");
     assert!(
