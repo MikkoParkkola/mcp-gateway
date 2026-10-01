@@ -515,3 +515,20 @@ async fn token_from_an_uppercase_https_or_loopback_issuer_verifies() {
         assert_eq!(id.issuer, issuer);
     }
 }
+
+// The refusal is logged and may reach a client: it carries no part of the
+// issuer beyond the fact that it was refused.
+#[tokio::test]
+async fn a_cleartext_issuer_refusal_carries_no_issuer_detail() {
+    let h = Harness::start(&config_yaml("[]", "")).await;
+    let issuer = "http://user:pw@idp.example/tenant?k=secret";
+    let token = h.mint(issuer, "attacker", &json!({}));
+    let err = unvalidated_verifier(&h, issuer)
+        .verify(&token, &AGE)
+        .await
+        .expect_err("a token from a cleartext issuer must be refused");
+    let shown = format!("{err} {err:?}");
+    for leaked in ["user", "pw", "tenant", "secret", "idp.example"] {
+        assert!(!shown.contains(leaked), "leaked {leaked:?}: {shown}");
+    }
+}
