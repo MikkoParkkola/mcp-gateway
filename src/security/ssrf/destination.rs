@@ -95,9 +95,14 @@ impl DestinationPolicy {
     /// `Error::Protocol("SSRF blocked: ...")` (-32600), or an invalid URL.
     pub(crate) fn check_configured_url(self, url: &str) -> Result<()> {
         match self {
-            Self::Private => url::Url::parse(url)
-                .map_err(|e| Error::Protocol(format!("SSRF check: invalid URL: {e}")))
-                .and_then(|url| self.check_literal(&url)),
+            Self::Private => {
+                let parsed = url::Url::parse(url)
+                    .map_err(|e| Error::Protocol(format!("SSRF check: invalid URL: {e}")))?;
+                if parsed.host_str().is_none() {
+                    return Err(Error::Protocol("SSRF check: URL has no host".to_string()));
+                }
+                self.check_literal(&parsed)
+            }
             Self::Configured | Self::Public => super::validate_url_not_ssrf(url),
         }
     }

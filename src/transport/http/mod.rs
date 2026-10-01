@@ -40,7 +40,6 @@ use crate::security::http_diagnostics::{
     status_refusal,
 };
 use crate::security::ssrf::DestinationPolicy;
-use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 use extra_headers::merge_extra_headers;
 
@@ -115,7 +114,7 @@ enum RedirectDecision {
 /// Three guards, each of which a hop must clear:
 /// 1. **Hop cap** — at most five redirects, matching the prior policy.
 /// 2. **SSRF** — the target must not resolve to an internal/metadata range
-///    ([`validate_url_not_ssrf`]).
+///    ([`DestinationPolicy::check_configured_url`]).
 /// 3. **Same-origin** — the target must share the base URL's origin. The SSE
 ///    message POST carries the per-user `Authorization: Bearer <assertion>`
 ///    (MIK-6704); without this guard a legitimate same-origin backend could
@@ -124,11 +123,24 @@ enum RedirectDecision {
 ///    cross-origin, defeating the same-origin guard `resolve_message_url`
 ///    added. MCP message endpoints are same-origin by spec, so this rejects
 ///    nothing legitimate.
+#[cfg(test)]
 fn evaluate_redirect(base: &Url, target: &Url, previous_hops: usize) -> RedirectDecision {
+    evaluate_redirect_for(DestinationPolicy::Public, base, target, previous_hops)
+}
+
+/// [`evaluate_redirect`] under the backend's policy: a backend listed in
+/// `security.hardened.private_backends` may follow a hop to an address its
+/// policy allows; every other backend keeps the full URL validation.
+fn evaluate_redirect_for(
+    destination: DestinationPolicy,
+    base: &Url,
+    target: &Url,
+    previous_hops: usize,
+) -> RedirectDecision {
     if previous_hops >= 5 {
         return RedirectDecision::Stop;
     }
-    if let Err(e) = validate_url_not_ssrf(target.as_str()) {
+    if let Err(e) = destination.check_configured_url(target.as_str()) {
         return RedirectDecision::Reject(e.to_string());
     }
     if !same_origin(base, target) {

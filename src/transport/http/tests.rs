@@ -2821,3 +2821,26 @@ async fn row_16d_a_404_carrying_a_session_error_body_still_reinitializes() {
 
 #[path = "status_typing_tests.rs"]
 mod status_typing;
+
+/// Row 13: a listed private backend follows a same-origin redirect on its own
+/// loopback origin; its policy still refuses link-local, and every other
+/// backend keeps the full validation.
+#[test]
+fn private_backend_follows_a_same_origin_loopback_redirect() {
+    use crate::security::ssrf::DestinationPolicy;
+    let base = Url::parse("http://127.0.0.1:8080/mcp").unwrap();
+    let same = Url::parse("http://127.0.0.1:8080/mcp/").unwrap();
+    let metadata = Url::parse("http://169.254.169.254/latest").unwrap();
+    assert!(matches!(
+        super::evaluate_redirect_for(DestinationPolicy::Private, &base, &same, 0),
+        RedirectDecision::Follow
+    ));
+    assert!(matches!(
+        super::evaluate_redirect_for(DestinationPolicy::Private, &base, &metadata, 0),
+        RedirectDecision::Reject(_)
+    ));
+    assert!(matches!(
+        super::evaluate_redirect_for(DestinationPolicy::Public, &base, &same, 0),
+        RedirectDecision::Reject(_)
+    ));
+}
