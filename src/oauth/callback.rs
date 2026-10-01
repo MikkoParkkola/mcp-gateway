@@ -260,12 +260,14 @@ async fn handle_callback(
     Query(params): Query<CallbackParams>,
 ) -> impl IntoResponse {
     // #143 — structured telemetry: callback received event.
+    // Fields computed before the macro: tracing compiles its arguments twice,
+    // and the coverage instrument reads the copy that never runs (MIK-7324).
+    let has_code = params.code.is_some();
+    let has_state = params.state.is_some();
+    let has_error = params.error.is_some();
     debug!(
         event = "oauth.callback.received",
-        has_code = params.code.is_some(),
-        has_state = params.state.is_some(),
-        has_error = params.error.is_some(),
-        "OAuth callback received"
+        has_code, has_state, has_error, "OAuth callback received"
     );
 
     let mut state = state.lock().await;
@@ -296,10 +298,10 @@ async fn handle_callback(
     // Validate state
     if params.state.as_deref() != Some(&state.expected_state) {
         // #143 — structured telemetry: CSRF / state-mismatch event.
+        let received = params.state.as_deref().unwrap_or("<none>");
         warn!(
             event = "oauth.callback.state_mismatch",
-            received = params.state.as_deref().unwrap_or("<none>"),
-            "OAuth state mismatch — possible CSRF attempt"
+            received, "OAuth state mismatch — possible CSRF attempt"
         );
         let result = Err(Error::OAuth(
             "State mismatch - possible CSRF attack".to_string(),
@@ -330,10 +332,10 @@ async fn handle_callback(
     };
 
     // #143 — structured telemetry: successful callback event.
+    let code_len = code.len();
     info!(
         event = "oauth.callback.success",
-        code_len = code.len(),
-        "OAuth authorization code received successfully"
+        code_len, "OAuth authorization code received successfully"
     );
 
     // Send success
