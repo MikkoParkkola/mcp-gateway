@@ -253,7 +253,7 @@ async fn webhook_methods_require_an_authenticated_principal() {
     // Auth on, `/mcp` public, no credential presented.
     let root = tempfile::tempdir().expect("root");
     let mut cfg = config(root.path(), &json!({}));
-    cfg["auth"]["public_paths"] = json!(["/mcp"]);
+    cfg["auth"]["public_paths"] = json!(["/health", "/mcp"]);
     let gw = Gateway::start(root.path(), cfg).await;
     gw.event_names(Some(ALICE), Some(EVENT)).await;
     let sub = gw
