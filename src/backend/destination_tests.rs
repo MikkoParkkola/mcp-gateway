@@ -435,11 +435,14 @@ async fn hardened_pairing_retires_a_started_unpinned_transport() {
 // A stdio child does not depend on the destination policy; pairing leaves it.
 #[tokio::test]
 async fn hardened_pairing_keeps_a_started_stdio_transport() {
-    let (backend, started) = started_then_hardened(BackendConfig::default());
-    assert!(matches!(
-        backend.config.transport,
-        TransportConfig::Stdio { .. }
-    ));
+    let (backend, started) = started_then_hardened(BackendConfig {
+        transport: TransportConfig::Stdio {
+            command: "true".to_string(),
+            cwd: None,
+            protocol_version: None,
+        },
+        ..BackendConfig::default()
+    });
     assert!(
         backend
             .pooled_transport_for_test(&super::PoolKey::Shared)
