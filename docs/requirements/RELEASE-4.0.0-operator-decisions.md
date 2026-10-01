@@ -78,7 +78,8 @@ rulings, not as approvals of any specific change. C1 and C2 were given in the
 session chat on 2026-09-29, not through the question tool, and are quoted
 verbatim. C3, C4 and C5 were answered through the question tool on 2026-09-30 in
 the coordinator's session; `extract-operator-decisions.py` has not yet been run
-over that transcript, so they are paraphrased here until it is.
+over that transcript, so they are paraphrased here until it is. C6 was given
+in the coordinator's session chat on 2026-10-01 and is quoted verbatim.
 
 | # | Date | Ruling (verbatim) | Effect recorded by the coordinator |
 |---|---|---|---|
@@ -87,3 +88,4 @@ over that transcript, so they are paraphrased here until it is.
 | C3 | 2026-09-30 | MIK-7116 parts 3, 5 and 6 come after 4.0, only if the post-release one-week measurement (MIN.KILL) shows they are needed. (Answered through the question tool about 00:08; relayed by the release coordinator; not yet in the extractor's table.) | MIN.3/5/6 leave the 4.0.0 criteria for MIK-7627; MIN.1, MIN.2 (observe mode) and MIN.4 stay. Ledger decision `mik_7116_min_kill_gate`. |
 | C4 | 2026-09-30 | Keyless data-changing stdio calls keep running, as the sub-4-idempotency-wiring Axis 3 design says; keyed calls stay protected. (Answered through the question tool about 00:55; relayed by the release coordinator; not yet in the extractor's table.) | MIK-7272 SUB4.STDIO.OWNER.1 amended: keyed writes execute once, a missing key executes (no refusal), unkeyed legacy repeats, six management branches tested. Ledger row MIK-7272.OWNER.1. |
 | C5 | 2026-09-30 | The other-repository work (hebb, nab, trvl, metacognition, throttla answering server/discover; the other-repository halves of MIK-7211 AC.2-4; the hebb de-fork spike MIK-7219) goes to separate follow-ups; mcp-gateway 4.0 does not wait for it. (Answered through the question tool about 01:12; relayed by the release coordinator; not yet in the extractor's table.) | Ledger decision `portfolio_halves_outside_4_0`; follow-ups MIK-7628 and MIK-7629. |
+| C6 | 2026-10-01 | "I agree your task split, please update linear tickets and make the designs, remember to follow the development-process" (given in chat, relayed verbatim by the release coordinator). The split it approves was proposed by the release coordinator, not authored by the operator. | MIK-7630 in 4.0.0 with its ticket criteria plus backend-notification and task-settled sources, the safety controls, durable delivery with dead letters and replay, and gateway_search discovery; REST watch, gateway operational and scheduler time events to a 4.0.1 follow-up ticket. Ledger decision `mik_7630_events_scope`; criteria MIK-7630.EVENTS.1-8, SOURCE.1-3, SAFETY.1-6, RELIABLE.1-3, DISCOVER.1. |

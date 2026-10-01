@@ -14,20 +14,26 @@ delivery?
 
 Every request the stub receives is appended to --log as one JSON line; that
 log is the evidence. See docs/design/2026-10-01-mik-7630-mcp-events.md.
+
+Wire shapes follow the draft extension at commit 28ec35e9
+(modelcontextprotocol/experimental-ext-triggers-events,
+docs/design-sketch-proposal.md): the verification envelope, the four delivery
+headers and the error codes. Re-check them if the draft moves.
 """
 import argparse
 import base64
 import hashlib
 import hmac
+import http.client
 import ipaddress
 import json
 import os
 import secrets
 import socket
+import ssl
 import sys
 import threading
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -89,41 +95,66 @@ def public_ip(ip):
 
 
 def post_signed(url, key, msg_id, sub_id, body, allow_local):
-    """POST once. Resolve, check, and connect to the checked address; no redirects."""
+    """POST once to an address checked and pinned before connecting; never follows redirects.
+
+    Every resolved address must be public (unless allow_local); the socket is
+    opened to the checked address and TLS verifies the original hostname, so a
+    second DNS answer cannot redirect the request (no rebinding window).
+    """
     u = urllib.parse.urlsplit(url)
     if u.scheme != "https" and not allow_local:
         return None, "tls_error"
     host, port = u.hostname, u.port or (443 if u.scheme == "https" else 80)
     try:
-        addr = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0][4][0]
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except OSError:
         return None, "connection_refused"
-    if not public_ip(addr) and not allow_local:
+    addrs = [i[4][0] for i in infos]
+    if not addrs or (not allow_local and not all(public_ip(a) for a in addrs)):
         return None, "connection_refused"
     ts = str(int(time.time()))
     headers = {
+        "Host": u.netloc,
         "Content-Type": "application/json",
         "webhook-id": msg_id,
         "webhook-timestamp": ts,
         "webhook-signature": sign(key, msg_id, ts, body),
         "X-MCP-Subscription-Id": sub_id,
     }
-    # ponytail: urllib re-resolves the host, so this stub has a check-to-connect
-    # window; the gateway pins the checked address (design doc, SSRF section).
-    opener = urllib.request.build_opener(NoRedirect)
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    path = (u.path or "/") + (f"?{u.query}" if u.query else "")
     try:
-        with opener.open(req, timeout=10) as r:
-            return r.status, r.read(64 * 1024)
-    except urllib.error.HTTPError as e:
-        return e.code, b""
-    except (urllib.error.URLError, OSError) as e:
-        return None, "timeout" if "timed out" in str(e) else "connection_refused"
+        sock = socket.create_connection((addrs[0], port), timeout=10)
+        if u.scheme == "https":
+            sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+        conn = http.client.HTTPConnection(host, port, timeout=10)
+        conn.sock = sock  # pinned: http.client never resolves the name itself
+        conn.request("POST", path, body=body, headers=headers)
+        r = conn.getresponse()
+        data = r.read(64 * 1024)
+        conn.close()
+        return r.status, data
+    except ssl.SSLError:
+        return None, "tls_error"
+    except OSError as e:
+        return None, "timeout" if isinstance(e, TimeoutError) or "timed out" in str(e) else "connection_refused"
 
 
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):
-        return None
+def redact(v):
+    """Strip what would let a log reader forge deliveries: signing secrets and callback paths."""
+    if isinstance(v, dict):
+        out = {}
+        for k, x in v.items():
+            if k == "secret":
+                out[k] = "<redacted>"
+            elif k == "url" and isinstance(x, str):
+                p = urllib.parse.urlsplit(x)
+                out[k] = f"{p.scheme}://{p.netloc}/<path redacted>"
+            else:
+                out[k] = redact(x)
+        return out
+    if isinstance(v, list):
+        return [redact(x) for x in v]
+    return v
 
 
 class Stub:
@@ -138,12 +169,13 @@ class Stub:
 
     def save(self):
         tmp = self.store + ".tmp"
-        with open(tmp, "w") as f:
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
             json.dump(self.subs, f, indent=1)
         os.replace(tmp, self.store)
 
     def record(self, entry):
-        with self.lock, open(self.log, "a") as f:
+        entry = redact(entry)
+        with self.lock, open(os.open(self.log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a") as f:
             f.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(), **entry}) + "\n")
 
     def principal(self, headers):
@@ -380,9 +412,12 @@ def selftest(workdir):
     assert call(mcp, "events/unsubscribe", un)["result"] == {}, "idempotent unsubscribe"
     emit("a")
     assert len([s for s in seen if "body" in s]) == 2 and not any("rejected" in s for s in seen), seen
+    logged = open(log).read()
+    assert secret not in logged and secret[6:] not in logged and "/hook" not in logged, "log leaks secret or path"
+    assert os.stat(store).st_mode & 0o077 == 0 and os.stat(log).st_mode & 0o077 == 0, "store/log not owner-only"
     srv.shutdown()
     rcv.shutdown()
-    print("selftest PASS: discover, list, short-secret, verify, idempotent, persist, filter, sign, unsubscribe")
+    print("selftest PASS: discover, list, short-secret, verify, idempotent, persist, filter, sign, unsubscribe, redaction")
     return 0
 
 
