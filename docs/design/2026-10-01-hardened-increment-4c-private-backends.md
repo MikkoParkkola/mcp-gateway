@@ -18,10 +18,11 @@ Only `security.posture: hardened` changes; under `standard` the key is accepted 
     172.16/12, 192.168/16) and unique-local (fc00::/7). An always-deny list is checked first and
     holds `fd00:ec2::254`, the AWS IPv6 instance-metadata address. Every other special-use range
     `Public` denies stays denied, link-local (169.254/16, fe80::/10) included. Only an
-    IPv4-mapped address (::ffff:0:0/96) is judged by its embedded IPv4. Every other encoding
-    stays denied whatever it embeds, because it is not in the allowance: IPv4-compatible
-    (::/96), NAT64 (64:ff9b::/96, 64:ff9b:1::/48), 6to4 (2002::/16) and Teredo (2001::/32).
-    `Public` already denies those whole prefixes (`ranges.rs:150-170`).
+    IPv4-mapped address (::ffff:0:0/96) gets the private allowance by its embedded IPv4. No
+    other encoding gets it. So `Private` reaches an encoded address exactly when `Public` does:
+    `Public` denies the whole NAT64, 6to4 and Teredo prefixes (`ranges.rs:150-170`) and judges
+    IPv4-compatible (::/96) by the embedded IPv4. `::8.8.8.8` is reachable under both, and
+    `::10.0.0.1` under neither.
 - **Where it applies.** Every site 4b made policy-aware calls `denies` rather than
   `is_private_or_reserved`:
   - `check_literal` (transport start, every OAuth URL and redirect hop);
@@ -46,7 +47,7 @@ Only `security.posture: hardened` changes; under `standard` the key is accepted 
 | Row | Test | Asserts | Mutant |
 |---|---|---|---|
 | 13 | `listed_private_backend_policy` | for a listed backend, an RFC 1918 literal and a loopback hostname connect, while 169.254.169.254, fe80::1 and fd00:ec2::254 (also as a resolved name) are refused with 0 connections; an unlisted backend is still refused at loopback | allow link-local / drop the always-deny / stamp every backend `Private` |
-| 13 | `private_policy_denies` (unit, table) | `denies` for each policy across allowed, denied, mapped, IPv4-compatible, NAT64, 6to4 and Teredo forms of an allowed and a denied IPv4, plus fd00:ec2::254 | each range edge / decode a non-mapped encoding |
+| 13 | `private_policy_denies` (unit, table) | `denies` for each policy across allowed, denied, mapped, IPv4-compatible, NAT64, 6to4 and Teredo forms of an allowed and a denied IPv4, plus fd00:ec2::254, `::8.8.8.8` (reachable under both) and `::10.0.0.1` (denied under both) | each range edge / decode a non-mapped encoding |
 | 13 | `listed_private_backend_oauth_policy` | the OAuth client of a listed backend reaches a loopback authorization server, while a metadata or link-local literal in a discovered endpoint, a redirect hop, and a name resolving to fd00:ec2::254 are refused with 0 connections | build the OAuth client `Public` / skip a hop |
 | reload | `reload_stamps_listed_backends_private` | with the list unchanged, a reload-added listed backend is `Private` and a reload-modified unlisted one stays `Public`, on the gateway's registry and on a caller-built one | stamp only at startup |
 | 13 | `listed_private_backend_tool_call_passes_proxy_check` | under hardened, a tool call to a listed loopback backend is served (backend saw it); an unlisted one is refused | keep the generic literal check |
@@ -76,3 +77,13 @@ graded after this merges.
   policy error text with 0 connections. Not taken: an integration case per encoded form (the
   unit table covers the predicate every site calls); asserting no port opened for row 17 (the
   refusal happens at config load, before any listener).
+
+## 5. Review dispositions (seat A, delta round 2)
+
+- ACCEPTED as a wording fix: "every other encoding stays denied" was false for IPv4-compatible
+  public addresses. `Public` judges ::/96 by its embedded IPv4 (verified, `ranges.rs:148-150`),
+  and `Private` reaches exactly what `Public` reaches outside its three ranges, so no change in
+  behaviour is needed. `::8.8.8.8` and `::10.0.0.1` were added to the unit table.
+- Recorded limit: a timeout moved to after DNS and TCP would survive T14. Loopback TCP cannot
+  stall, and DNS is the system resolver at that site. Placement is verified at source instead:
+  the timeout wraps `pinned::connect`, which resolves, connects, then runs TLS and the upgrade.
