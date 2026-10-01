@@ -338,3 +338,34 @@ async fn an_owned_delete_reclaims_the_per_session_stores() {
     );
     assert!(state.meta_mcp.cost_tracker().session_snapshot(&kept).is_some());
 }
+
+/// The idle deadline is not a session end: a legacy session that is only quiet
+/// keeps its profile and cost bucket through the 5-minute reclaim sweep.
+#[tokio::test]
+async fn a_live_session_keeps_its_stores_through_the_idle_reclaim() {
+    let (state, _store) = test_router_app_state().await;
+    let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("the test owns the state"));
+    let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+    crate::gateway::session_lifecycle::wire_meta_session_cleanup(&lifecycle, &state.meta_mcp);
+    state.session_lifecycle = Some(Arc::clone(&lifecycle));
+    let state = Arc::new(state);
+
+    let live = mint(&state, caller(Some("agent-a"), None)).await;
+    state.meta_mcp.session_profiles().set_profile(&live, "strict");
+    state
+        .meta_mcp
+        .cost_tracker()
+        .record(&live, None, "backend", "tool", 10, 1.0);
+    // With no caller key the firewall tracks the session id itself.
+    lifecycle.track(live.clone(), 0);
+
+    assert_eq!(lifecycle.reap(1), 1, "the deadline passed and was swept");
+
+    assert!(state.multiplexer.has_session(&live), "the session is still open");
+    assert_eq!(
+        state.meta_mcp.session_profiles().get_profile_name(&live, "default"),
+        "strict",
+        "an idle sweep must not reset a live session's profile"
+    );
+    assert!(state.meta_mcp.cost_tracker().session_snapshot(&live).is_some());
+}
