@@ -323,7 +323,8 @@ Written 2026-10-01 at `bf5c901e3`. The red commit comes after rev 5's review.
   `tests/task_upstream_recovery/helper.rs:424-440`, copied into the new file's helper module and
   not shared.
 - **Client sequence.**
-  - `initialize` at the modern revision, declaring the Tasks extension.
+  - `initialize` at the modern revision, then every modern request declaring the Tasks
+    extension in its own `_meta`, as HTTP requires.
   - A task-augmented `tools/call`: a `task` member, plus an idempotency key in `_meta`.
   - Then `tasks/get` until the task is terminal.
 
@@ -331,7 +332,7 @@ Written 2026-10-01 at `bf5c901e3`. The red commit comes after rev 5's review.
 
 Red proof: every integration row drives only seams that exist before the fix (the binary, its
 config, and JSON-RPC over pipes), so the red commit compiles and fails on assertions. The
-in-crate rows (U1–U3) name new items (`TaskHost`, `TaskOwnerText`), so they land with the fix.
+in-crate rows (U1–U9) name new items (`TaskHost`, `TaskOwnerText`), so they land with the fix.
 They are green on arrival, and the mutant batch is their proof.
 
 ## Integration rows (`tests/mik_7272_owner2_stdio_tasks.rs`)

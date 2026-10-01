@@ -14,7 +14,9 @@
 >
 > Evidence: `src/gateway/router/authorization.rs`, `tests/a0_per_caller_cache.rs`,
 > `src/control_plane/role_mapping.rs`, `src/gateway/router/sso_admin_tests.rs`,
-> `tests/d1_audit_required.rs`, `tests/e4_hash_key_cli.rs`.
+> `tests/d1_audit_required.rs`, `src/gateway/meta_mcp/audit_record_tests.rs`,
+> `src/gateway/router/audit_degraded_tests.rs`, `src/config/features/api_key.rs`,
+> `src/config/features/api_key_digest_tests.rs`, `tests/e4_hash_key_cli.rs`.
 
 A single-user gateway trusts whoever can reach the port. A multi-user gateway has
 to answer three questions instead, and they are answered by three different
