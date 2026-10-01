@@ -1,31 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Task eligibility, wire envelopes, and the three `tasks/*` arms.
+//! Task eligibility, the task intent, and the HTTP glue of the three `tasks/*` arms.
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::{AppState, missing_task_error, task_id_param};
+use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::router::OwnedRouterAuthorizer;
-use crate::gateway::task_service::{InputOutcome, OwnedCallerContext, ServiceError, TaskIntent};
+use crate::gateway::task_route::{TaskOwnerText, TaskRoute, is_task_dispatchable};
+use crate::gateway::task_service::{OwnedCallerContext, TaskIntent};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
-use crate::protocol::tasks::{Task, TaskOptions};
+use crate::protocol::tasks::TaskOptions;
 use crate::protocol::{JsonRpcResponse, RequestId};
-
-/// Tools that may be handed to the worker after the confirmation gate.
-fn is_task_dispatchable(meta_mcp: &MetaMcp, tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "gateway_invoke" | "gateway_execute" | "gateway_run_playbook"
-    ) || meta_mcp.surfaced_tool_server(tool_name).is_some()
-}
 
 /// Admission principal: verified identity when present, else the session key.
 pub(super) fn task_principal(
@@ -63,23 +55,6 @@ pub(super) fn route_task_owner(
         None if !state.auth_config.enabled => AUTH_DISABLED_TASK_OWNER.to_owned(),
         None => task_principal(None, owner_key),
     }
-}
-
-/// `Task::wire()` plus the envelope discriminator the arm supplies.
-pub(super) fn task_envelope(task: &Task, result_type: &str) -> Value {
-    let mut value = serde_json::to_value(task.wire()).unwrap_or(Value::Null);
-    if let Some(object) = value.as_object_mut() {
-        object.insert("resultType".into(), json!(result_type));
-    }
-    value
-}
-
-fn ack_complete() -> Value {
-    json!({ "resultType": "complete" })
-}
-
-fn store_unavailable(id: RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
 }
 
 /// Everything the task-intent decision reads about one `tools/call`.
@@ -167,7 +142,7 @@ pub(super) fn task_intent_for_call(
     Ok(Some(TaskIntent {
         executor: Arc::clone(&state.task_executor),
         owned: OwnedCallerContext::new(
-            Arc::downgrade(state),
+            crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),
             OwnedRouterAuthorizer::capture(req.client, req.oauth_agent_identity, req.cert_identity),
             req.api_key_name.map(str::to_owned),
             req.agent_id.map(crate::security::OwnedProvenAgentId::from),
@@ -215,11 +190,59 @@ pub(super) struct RecoveryCaller<'a> {
     pub cert_identity: Option<&'a CertIdentity>,
     pub api_key_name: Option<&'a str>,
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
+    /// The request's own declared label: audit attribution only (#2430).
+    pub agent_declared: Option<crate::security::DeclaredAgentLabel<'a>>,
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     pub verified_identity: Option<&'a VerifiedIdentity>,
     pub is_admin: bool,
     pub input_capabilities: Declared,
     pub session_id: Option<&'a str>,
+}
+
+/// Run `check` against THIS request's live policy caller context.
+///
+/// Every field is the request's own; nothing is restored from a record: a
+/// record supplies the target, and the target is then judged against the caller
+/// in front of us. Shared by the recovery read and the delivery check so the
+/// two cannot build different callers. No prepared-signing context is carried,
+/// which is what keeps `check_invocation_policy` running.
+fn with_policy_caller<R>(
+    state: &Arc<AppState>,
+    caller: &RecoveryCaller<'_>,
+    check: impl FnOnce(&crate::gateway::meta_mcp::MetaMcpCallerContext<'_>) -> R,
+) -> R {
+    let router_authorizer = OwnedRouterAuthorizer::capture(
+        caller.client,
+        caller.oauth_agent_identity,
+        caller.cert_identity,
+    );
+    let borrowed = router_authorizer.borrow(state);
+    let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
+    let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        is_modern: true,
+        // This context checks authorization only; it never accesses a cache.
+        protocol_revision: None,
+        credential_principal: caller.client.map(|client| client.principal.as_str()),
+        authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
+        credential_kind: crate::security::audit::CredentialKind::of(caller.client),
+        execution: None,
+        signing: None,
+        authorizer,
+        api_key_name: caller.api_key_name,
+        agent_id: caller.agent_id,
+        agent_declared: None,
+        grant_subject: caller.grant_subject.clone(),
+        stdio_nonce: None,
+        verified_identity: caller.verified_identity,
+        is_admin: caller.is_admin,
+        input_capabilities: caller.input_capabilities,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        task: None,
+        era: crate::protocol::meta::Era::Modern,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+    };
+    check(&policy_caller)
 }
 
 pub(super) async fn tasks_get(
@@ -229,26 +252,32 @@ pub(super) async fn tasks_get(
     params: Option<&Value>,
     caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
-    let Some(task_id) = task_id_param(params) else {
-        return missing_task_error(id);
-    };
-    // The existing owner-scoped lookup FIRST. A foreign or missing identity gets
-    // the existing absence response and causes zero upstream calls, because
-    // there is nothing below this line for it to reach.
-    let committed = match state.tasks.get(owner, task_id) {
-        Ok(committed) => committed,
-        Err(ServiceError::NotFound) => return missing_task_error(id),
-        Err(_) => return store_unavailable(id),
-    };
-    if committed.task.status() == crate::protocol::tasks::TaskStatus::Working {
-        recover_from_upstream(state, owner, task_id, params, caller).await;
-    }
-    // Re-read: recovery may have committed a terminal outcome, and this read
-    // serves whatever is durably committed now.
-    match state.tasks.get(owner, task_id) {
-        Ok(current) => JsonRpcResponse::success(id, task_envelope(&current.task, "complete")),
-        Err(ServiceError::NotFound) => missing_task_error(id),
-        Err(_) => store_unavailable(id),
+    let owner_text = TaskOwnerText::Http(owner.to_owned());
+    route(state, &owner_text)
+        .get(
+            id.clone(),
+            params,
+            |task_id| recover_from_upstream(state, owner, task_id, params, caller),
+            |current| {
+                with_policy_caller(state, caller, |policy_caller| {
+                    state.meta_mcp.refuse_stored_delivery(
+                        &id,
+                        current,
+                        crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                        caller.session_id,
+                        policy_caller,
+                    )
+                })
+            },
+        )
+        .await
+}
+
+fn route<'a>(state: &'a Arc<AppState>, owner: &'a TaskOwnerText) -> TaskRoute<'a> {
+    TaskRoute {
+        service: &state.tasks,
+        executor: &state.task_executor,
+        owner,
     }
 }
 
@@ -276,44 +305,9 @@ async fn recover_from_upstream(
         return;
     };
 
-    // Scoped: the rebuilt authorizer and caller context exist only for the
-    // verdict, and are gone before the query's await. Nothing about this
-    // caller is carried into the upstream call.
-    let authorized = {
-        let router_authorizer = OwnedRouterAuthorizer::capture(
-            caller.client,
-            caller.oauth_agent_identity,
-            caller.cert_identity,
-        );
-        let borrowed = router_authorizer.borrow(state);
-        let authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync) = &borrowed;
-        let policy_caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
-            is_modern: true,
-            // This context checks authorization only; it never accesses a cache.
-            protocol_revision: None,
-            credential_principal: caller.client.map(|client| client.principal.as_str()),
-            authentication: crate::gateway::meta_mcp::Authentication::of(caller.client),
-            credential_kind: crate::security::audit::CredentialKind::of(caller.client),
-            execution: None,
-            // No saved prepared-signing context: `None` is what keeps
-            // `check_invocation_policy` running on this read, which is the point.
-            signing: None,
-            authorizer,
-            api_key_name: caller.api_key_name,
-            agent_id: caller.agent_id,
-            agent_declared: None,
-            grant_subject: caller.grant_subject.clone(),
-            stdio_nonce: None,
-            verified_identity: caller.verified_identity,
-            is_admin: caller.is_admin,
-            input_capabilities: caller.input_capabilities,
-            confirmation:
-                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-            retry: &crate::protocol::mrtr::NO_RETRY,
-            task: None,
-            era: crate::protocol::meta::Era::Modern,
-            channel: &crate::gateway::input_bridge::NoClientChannel,
-        };
+    // Scoped inside the helper: the rebuilt authorizer and caller context exist
+    // only for the verdict, and are gone before the query's await.
+    let authorized = with_policy_caller(state, caller, |policy_caller| {
         // A fresh token for THIS read, from the gateway-namespaced recovery
         // field. Missing or expired denies before any query; nothing spent is
         // restored, and no saved prepared-signing context is reconstructed.
@@ -325,9 +319,9 @@ async fn recover_from_upstream(
         );
         state
             .meta_mcp
-            .check_invocation_policy(&policy_args, caller.session_id, &policy_caller)
+            .check_invocation_policy(&policy_args, caller.session_id, policy_caller)
             .is_ok()
-    };
+    });
     if !authorized {
         tracing::info!(
             task_id,
@@ -376,61 +370,12 @@ pub(super) async fn tasks_update(
     params: Option<&Value>,
     caller: &RecoveryCaller<'_>,
 ) -> JsonRpcResponse {
-    let Some(task_id) = task_id_param(params) else {
-        return missing_task_error(id);
-    };
-    let answers = params.and_then(|params| params.get("inputResponses"));
-    if !crate::protocol::mrtr::input_responses_nonempty(answers) {
-        return match state.tasks.update(owner, task_id, 0, json!({})).await {
-            Ok(_) => JsonRpcResponse::success(id, ack_complete()),
-            Err(ServiceError::NotFound) => missing_task_error(id),
-            Err(_) => store_unavailable(id),
-        };
-    }
-    let Some(Value::Object(answers)) = answers.cloned() else {
-        return JsonRpcResponse::error(Some(id), -32602, "inputResponses must be an object");
-    };
-    // Owner-scoped first: a foreign or absent task is answered as absent
-    // before anything about a round is said.
-    match state.tasks.get(owner, task_id) {
-        Ok(current)
-            if current.task.status() == crate::protocol::tasks::TaskStatus::InputRequired => {}
-        Ok(_) => return no_round(id),
-        Err(ServiceError::NotFound) => return missing_task_error(id),
-        Err(_) => return store_unavailable(id),
-    }
-    let outcome = state
-        .task_executor
-        .provide_input(
-            update_caller(state, owner, params, caller),
-            owner,
-            task_id,
-            answers,
-        )
-        .await;
-    match outcome {
-        InputOutcome::Accepted => JsonRpcResponse::success(id, ack_complete()),
-        InputOutcome::NotOutstanding => no_round(id),
-        InputOutcome::TooLarge => JsonRpcResponse::error(
-            Some(id),
-            -32602,
-            "inputResponses exceed the task record size limit",
-        ),
-        InputOutcome::Busy => JsonRpcResponse::error(Some(id), -32603, "task busy, retry"),
-        InputOutcome::PoolFull => {
-            JsonRpcResponse::error(Some(id), -32603, "task worker pool is full, retry")
-        }
-        InputOutcome::NotFound => missing_task_error(id),
-        InputOutcome::Unavailable => store_unavailable(id),
-    }
-}
-
-fn no_round(id: RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(
-        Some(id),
-        -32602,
-        "inputResponses are not accepted until an input round is outstanding",
-    )
+    let owner_text = TaskOwnerText::Http(owner.to_owned());
+    route(state, &owner_text)
+        .update(id, params, |owner| {
+            update_caller(state, owner, params, caller)
+        })
+        .await
 }
 
 /// The resume's caller: THIS update request's live identity, the bundle
@@ -442,7 +387,7 @@ fn update_caller(
     caller: &RecoveryCaller<'_>,
 ) -> OwnedCallerContext {
     OwnedCallerContext::new(
-        Arc::downgrade(state),
+        crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),
         OwnedRouterAuthorizer::capture(
             caller.client,
             caller.oauth_agent_identity,
@@ -452,7 +397,7 @@ fn update_caller(
         caller
             .agent_id
             .map(crate::security::OwnedProvenAgentId::from),
-        None,
+        caller.agent_declared.map(|label| label.as_str().to_owned()),
         caller.grant_subject.clone(),
         caller.verified_identity.cloned(),
         owner.to_owned(),
@@ -471,26 +416,11 @@ fn update_caller(
 }
 
 pub(super) async fn tasks_cancel(
-    state: &AppState,
+    state: &Arc<AppState>,
     owner: &str,
     id: RequestId,
     params: Option<&Value>,
 ) -> JsonRpcResponse {
-    let Some(task_id) = task_id_param(params) else {
-        return missing_task_error(id);
-    };
-    let committed = match state.tasks.get(owner, task_id) {
-        Ok(committed) => committed,
-        Err(ServiceError::NotFound) => return missing_task_error(id),
-        Err(_) => return store_unavailable(id),
-    };
-    match state
-        .task_executor
-        .cancel(owner, task_id, committed.revision)
-        .await
-    {
-        Ok(_) => JsonRpcResponse::success(id, ack_complete()),
-        Err(ServiceError::NotFound) => missing_task_error(id),
-        Err(_) => store_unavailable(id),
-    }
+    let owner_text = TaskOwnerText::Http(owner.to_owned());
+    route(state, &owner_text).cancel(id, params).await
 }

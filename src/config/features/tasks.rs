@@ -22,8 +22,11 @@ const DEFAULT_LOGICAL_BUDGET_BYTES: usize = 128 * 1024 * 1024;
 
 /// Tasks extension store, worker pool, and later-increment knobs.
 ///
-/// `store_dir` is a durable path. A process that cannot open it does not start;
-/// there is no volatile fallback.
+/// `store_dir` is a durable path. An HTTP gateway that cannot open it does not
+/// start; there is no volatile fallback. A stdio gateway uses its own
+/// `<store_dir>/stdio` instead, so the two never contend for one lease; if that
+/// store cannot be opened, stdio serves without tasks and does not advertise
+/// them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TasksConfig {

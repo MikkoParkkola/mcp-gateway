@@ -39,6 +39,7 @@ use crate::security::http_diagnostics::{
     RedirectEvidence, SESSION_EXPIRED_MARKER, safe_request_error, safe_request_error_for,
     status_refusal,
 };
+use crate::security::ssrf::DestinationPolicy;
 use crate::security::validate_url_not_ssrf;
 use crate::{Error, Result};
 use extra_headers::merge_extra_headers;
@@ -300,17 +301,15 @@ pub struct HttpTransport {
     era: std::sync::OnceLock<Arc<crate::protocol::era::EraCache>>,
     /// Per-caller-identity MCP session ids (MIK-6784).
     ///
-    /// A single `HttpTransport` is Arc-shared across every gateway user for a
-    /// given backend, so a single `Option<String>` session slot (the prior
-    /// design) let the first caller's `MCP-Session-Id` be stamped onto every
-    /// other caller's outbound request — a stateful upstream could then serve
-    /// one user's session-bound data to another. Partitioning by the caller's
+    /// A single `HttpTransport` is Arc-shared across every gateway user for a given backend, so a
+    /// single `Option<String>` session slot (the prior design) let the first caller's
+    /// `MCP-Session-Id` be stamped onto every other caller's outbound request — a stateful upstream
+    /// could then serve one user's session-bound data to another. Partitioning by the caller's
     /// stable identity binding
-    /// ([`crate::identity_propagation::PropagatedCredential::cache_binding`])
-    /// closes that hole: each identity negotiates and reuses its own upstream
-    /// session. The empty-string key is the shared default bucket used by the
-    /// no-identity static path (plain [`Transport::request`]), so single-tenant
-    /// behavior is byte-for-byte unchanged.
+    /// ([`crate::identity_propagation::PropagatedCredential::cache_binding`]) closes that hole:
+    /// each identity negotiates and reuses its own upstream session. The empty-string key is the
+    /// shared default bucket used by the no-identity static path (plain [`Transport::request`]), so
+    /// single-tenant behavior is byte-for-byte unchanged.
     sessions: RwLock<HashMap<String, String>>,
     /// Set by [`HttpTransport::mark_single_tenant`] when the owning `Backend`
     /// built this instance for a per-user pool slot (MIK-6735 `PoolKey::PerUser`).
@@ -616,12 +615,36 @@ impl HttpTransport {
         oauth_client: Option<OAuthClient>,
         protocol_version: Option<String>,
     ) -> Result<Arc<Self>> {
+        let configured = DestinationPolicy::Configured;
+        Self::with_destination(
+            url,
+            headers,
+            timeout,
+            streamable_http,
+            oauth_client,
+            protocol_version,
+            configured,
+        )
+    }
+
+    /// [`Self::new_with_oauth`] under a backend destination policy: `Public`
+    /// refuses a private literal base before anything connects, and pins names.
+    pub(crate) fn with_destination(
+        url: &str,
+        headers: HashMap<String, String>,
+        timeout: Duration,
+        streamable_http: bool,
+        oauth_client: Option<OAuthClient>,
+        protocol_version: Option<String>,
+        destination: DestinationPolicy,
+    ) -> Result<Arc<Self>> {
         // Parse the base URL once so the redirect policy can enforce
         // same-origin on every hop (credential-exfil guard, see
         // `evaluate_redirect`). An unparseable base cannot function as a
         // transport at all, so failing construction here is correct.
         let base_origin = Url::parse(url)
             .map_err(|e| Error::Transport(format!("Invalid transport base URL: {e}")))?;
+        destination.check_literal(&base_origin)?;
         // Refuse at construction, not only at request time: `initialize` runs
         // the full authorization flow and starts a refresh task, so a
         // request-time-only guard would mint a credential it may never send.
@@ -629,29 +652,12 @@ impl HttpTransport {
             require_secure_oauth_target(&base_origin)?;
         }
         let redirects_followed = Arc::new(AtomicU64::new(0));
-        let redirect_counter = Arc::clone(&redirects_followed);
-        let client = Client::builder()
-            .timeout(timeout)
-            .pool_max_idle_per_host(10)
-            .pool_idle_timeout(Duration::from_secs(90))
-            .tcp_keepalive(Duration::from_secs(30))
-            .tcp_nodelay(true)
-            .redirect(reqwest::redirect::Policy::custom(
-                move |attempt| match evaluate_redirect(
-                    &base_origin,
-                    attempt.url(),
-                    attempt.previous().len(),
-                ) {
-                    RedirectDecision::Stop => attempt.stop(),
-                    RedirectDecision::Reject(msg) => attempt.error(msg),
-                    RedirectDecision::Follow => {
-                        redirect_counter.fetch_add(1, Ordering::SeqCst);
-                        attempt.follow()
-                    }
-                },
-            ))
-            .build()
-            .map_err(|e| Error::Transport(e.to_string()))?;
+        let client = client::build(
+            base_origin,
+            timeout,
+            destination,
+            Arc::clone(&redirects_followed),
+        )?;
 
         Ok(Arc::new(Self {
             client,
@@ -762,14 +768,12 @@ impl HttpTransport {
     pub(crate) async fn connect(&self) -> Result<()> {
         // Initialize OAuth client if configured
         if let Some(ref oauth_arc) = self.oauth_client {
-            // MIK-4486: Detach the OAuth handshake from the calling request
-            // future. The interactive browser flow can take 10-30s, and most
-            // MCP clients time out at 15-30s. Without `tokio::spawn`, dropping
-            // the outer future would also drop the callback server, discarding
-            // any browser auth that completes after the cancel. By spawning,
-            // the task continues to completion and persists the token to disk
-            // even when the original request is gone — so a follow-up call
-            // finds a valid token and skips re-authorization.
+            // MIK-4486: Detach the OAuth handshake from the calling request future. The interactive
+            // browser flow can take 10-30s, and most MCP clients time out at 15-30s. Without
+            // `tokio::spawn`, dropping the outer future would also drop the callback server,
+            // discarding any browser auth that completes after the cancel. By spawning, the task
+            // continues to completion and persists the token to disk even when the original request
+            // is gone — so a follow-up call finds a valid token and skips re-authorization.
             let oauth_arc_for_task = Arc::clone(oauth_arc);
             let base_url_for_task = self.base_url.clone();
             let oauth_task = tokio::spawn(async move {
@@ -880,15 +884,13 @@ impl HttpTransport {
             })),
         };
 
-        // A status-level rejection carries the server's supported list and
-        // nothing else the gateway may repeat. Negotiate from it and retry
-        // once, which is the same move the JSON-RPC-error branch below makes
-        // for backends that reject in band.
-        // Both rejection branches write `protocol_version` before their retry,
-        // because the outbound header is built from it. A handshake that then
-        // fails must not leave the transport claiming a version no backend ever
-        // agreed to, so the negotiation runs inside one block whose single
-        // error exit restores what was there before.
+        // A status-level rejection carries the server's supported list and nothing else the gateway
+        // may repeat. Negotiate from it and retry once, which is the same move the JSON-RPC-error
+        // branch below makes for backends that reject in band. Both rejection branches write
+        // `protocol_version` before their retry, because the outbound header is built from it. A
+        // handshake that then fails must not leave the transport claiming a version no backend ever
+        // agreed to, so the negotiation runs inside one block whose single error exit restores what
+        // was there before.
         let previous_version = self.protocol_version.read().clone();
         let negotiated: Result<JsonRpcResponse> = async {
         let response = match self.send_request(&request).await {
@@ -1475,14 +1477,12 @@ impl HttpTransport {
                 self.sessions
                     .write()
                     .insert(bucket.to_string(), id.to_string());
-                // Maintainability guard (MIK-6735 fix 2): under a per-user
-                // pool slot this instance serves exactly one caller identity
-                // for life, so `sessions` is provably <=1 entry — do NOT
-                // "simplify" this map to a single `Option<String>` on the
-                // strength of that; it stays multi-entry and load-bearing
-                // for the Shared slot (Stateless-mode backends and the
-                // no-identity path), which is Arc-shared across every caller
-                // and relies on this map to keep each identity's
+                // Maintainability guard (MIK-6735 fix 2): under a per-user pool slot this instance
+                // serves exactly one caller identity for life, so `sessions` is provably <=1 entry
+                // — do NOT "simplify" this map to a single `Option<String>` on the strength of
+                // that; it stays multi-entry and load-bearing for the Shared slot (Stateless-mode
+                // backends and the no-identity path), which is Arc-shared across every caller and
+                // relies on this map to keep each identity's
                 // `MCP-Session-Id` isolated (MIK-6784).
                 debug_assert!(
                     !self.single_tenant_hint.load(Ordering::Relaxed)
@@ -1914,6 +1914,7 @@ impl Drop for HttpTransport {
     }
 }
 
+mod client;
 mod extra_headers;
 mod sse_decoder;
 

@@ -1717,14 +1717,13 @@ fn absolute_watch_path_resolves_relative_paths() {
 /// Resolving the final component aims the watcher at the symlink target's
 /// directory, so a deploy that retargets the symlink writes nowhere the
 /// watcher is looking and the gateway keeps serving the superseded config.
-#[cfg(unix)]
 #[test]
 fn absolute_watch_path_keeps_a_symlinked_file_unresolved() {
     let dir = tempfile::tempdir().expect("tempdir");
     let real = dir.path().join("release.yaml");
     write_owner_only(&real, "servers: {}\n").expect("write");
     let link = dir.path().join("gateway.yaml");
-    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    crate::test_symlink::symlink(&real, &link).expect("symlink");
 
     let resolved = super::absolute_watch_path(link);
     assert!(
@@ -1741,7 +1740,6 @@ fn absolute_watch_path_keeps_a_symlinked_file_unresolved() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn config_watch_paths_covers_the_symlink_and_its_target() {
     // GIVEN: a config the operator names through a symlink
@@ -1749,7 +1747,7 @@ fn config_watch_paths_covers_the_symlink_and_its_target() {
     let target = dir.path().join("release.yaml");
     write_owner_only(&target, "backends: {}\n").expect("write target");
     let link = dir.path().join("gateway.yaml");
-    std::os::unix::fs::symlink(&target, &link).expect("symlink");
+    crate::test_symlink::symlink(&target, &link).expect("symlink");
 
     // WHEN: we work out which paths the watcher has to recognise
     let paths = super::config_watch_paths(link.clone());
@@ -1782,7 +1780,6 @@ fn config_watch_paths_of_a_plain_file_is_a_single_path() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn a_retargeted_symlink_is_matched_at_its_new_target() {
     // GIVEN: a config named through a link, pointed at one release
@@ -1792,12 +1789,12 @@ fn a_retargeted_symlink_is_matched_at_its_new_target() {
     write_owner_only(&first, "a: 1").unwrap();
     write_owner_only(&second, "a: 2").unwrap();
     let link = dir.path().join("gateway.yaml");
-    std::os::unix::fs::symlink(&first, &link).unwrap();
+    crate::test_symlink::symlink(&first, &link).unwrap();
     let paths_at_startup = super::config_watch_paths(link.clone());
 
     // WHEN: the deployment repoints the link at the next release and writes it
     std::fs::remove_file(&link).unwrap();
-    std::os::unix::fs::symlink(&second, &link).unwrap();
+    crate::test_symlink::symlink(&second, &link).unwrap();
     let event = notify::Event {
         kind: EventKind::Modify(notify::event::ModifyKind::Data(
             notify::event::DataChange::Any,
@@ -2381,6 +2378,7 @@ async fn envfile_19i_home_moved_before_a_later_tilde_entry_reports_restart_requi
 /// comparison of final values are silent. A restart would expand the entry
 /// against the process home instead of the moved one. Only startup's OWN
 /// assignment records that the expansion base was ever moved. Unix only: no process HOME on Windows.
+// Unix-only: moves and restores HOME; Windows resolves the home directory from USERPROFILE.
 #[cfg(unix)]
 #[tokio::test]
 async fn envfile_19j_deleting_the_move_still_reports_when_the_restored_value_is_the_process_home() {

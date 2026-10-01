@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+// Used only by the 0755-rejection test, which is Unix-only (POSIX mode bits).
 #[cfg(unix)]
 use super::ServiceError;
 use super::{StoreLimits, open_runtime};
@@ -40,6 +41,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
     .await
     .expect("an absent store path is created by the store's own creator");
     assert!(store_dir.is_dir());
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -62,6 +64,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
     reopened.shutdown().await.expect("custody is released");
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn open_runtime_refuses_an_existing_group_readable_directory_unchanged() {
@@ -211,21 +214,26 @@ mod expiry;
 /// writable `HOME` kept every chart pod from starting. The control proves the
 /// same path opens once the parent is writable, so the refusal is about the
 /// parent and nothing else.
-#[cfg(unix)]
 #[tokio::test]
 async fn task_store_under_readonly_home_is_fatal() {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
 
     let root = tempfile::tempdir().expect("a fixture root");
     let home = root.path().join("home");
     fs::create_dir(&home).unwrap();
-    fs::set_permissions(&home, fs::Permissions::from_mode(0o500)).unwrap();
+    // Unix takes the write mode away; Windows denies the user write and append (DACL).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::deny_user("readonly-home", &home, "WD,AD");
     let store_dir = home.join(".mcp-gateway").join("tasks");
 
     // Root ignores the mode bits, so the premise cannot be observed there.
     if fs::write(home.join("probe"), b"").is_ok() {
-        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+        make_writable(&home);
         // A skip in CI would make this pin pass without testing anything, so
         // CI must run it unprivileged; only a local root shell may skip.
         assert!(
@@ -242,10 +250,21 @@ async fn task_store_under_readonly_home_is_fatal() {
         "a store under an unwritable home must refuse to open"
     );
 
-    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    make_writable(&home);
     let (service, _executor) =
         open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions())
             .await
             .expect("the same path opens once its parent is writable");
     service.shutdown().await.expect("custody is released");
+}
+
+/// Undo the fixture's write denial on `dir`.
+fn make_writable(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::remove_deny("readonly-home", dir);
 }

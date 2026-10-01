@@ -420,6 +420,7 @@ mod multi_user_tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
         }
     }
 
@@ -533,6 +534,7 @@ mod single_user_principal_tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
         }
     }
 
@@ -724,6 +726,7 @@ mod api_key_name_tests {
                 allowed_tools: None,
                 denied_tools: None,
                 admin: false,
+                kind: crate::config::ApiKeyKind::Shared,
             })
             .collect();
         config

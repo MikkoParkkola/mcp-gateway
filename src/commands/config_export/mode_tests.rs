@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! F18 W4: a client config `config export` rewrites holds other servers'
 //! secrets, so it is written 0600, and the tightening is announced once.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt as _;

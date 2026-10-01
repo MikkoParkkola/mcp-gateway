@@ -297,7 +297,6 @@ mod tests {
     /// A `.write-probe` symlink planted in the store dir must not become a
     /// write through the gateway's privileges. Chosen outcome: the probe
     /// unlinks the link and succeeds, and the link's target keeps its bytes.
-    #[cfg(unix)]
     #[test]
     fn write_probe_does_not_follow_a_planted_symlink() {
         let (cfg_dir, data, outside) = (
@@ -309,7 +308,7 @@ mod tests {
         std::fs::create_dir_all(&store_dir).unwrap();
         let target = outside.path().join("victim");
         crate::gateway::test_helpers::write_owner_only(&target, b"known bytes").unwrap();
-        std::os::unix::fs::symlink(&target, store_dir.join(".write-probe")).unwrap();
+        crate::test_symlink::symlink(&target, store_dir.join(".write-probe")).unwrap();
         let (config, path) = load(
             cfg_dir.path(),
             &auth_on_with_store_dir(&store_dir.to_string_lossy()),

@@ -61,6 +61,9 @@ impl StdioSession {
                 command.env_remove(name);
             }
         }
+        // Windows resolves home through the Known Folder API, not HOME: the
+        // debug build's override isolates the child's default task store too.
+        command.env("MCP_GATEWAY_TEST_HOME_DIR", home);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

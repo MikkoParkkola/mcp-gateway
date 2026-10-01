@@ -10,6 +10,7 @@ use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{BackendCall, DirectOutcome};
+use crate::gateway::meta_mcp::signing::SigningScope;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
@@ -25,9 +26,12 @@ impl DirectRouteGuards {
     /// S1 policy, then the G7 signing refusal. Runs before the idempotency
     /// reservation, so a refused call reserves nothing and a cached result is
     /// never served past a refusal.
-    pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<()> {
+    ///
+    /// G7 applies where the signed envelope is `gateway_invoke`-only. Under
+    /// `hardened` this route signs its own results (GH1942.HARDEN.1 row 7).
+    pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>, scope: SigningScope) -> Result<()> {
         meta.admit_target(call)?;
-        if meta.signing_enabled() {
+        if meta.signing_enabled() && scope == SigningScope::InvokeOnly {
             return Err(Error::json_rpc(-32001, SIGNING_REFUSAL));
         }
         Ok(())
@@ -44,7 +48,7 @@ impl DirectRouteGuards {
     /// A transport failure is returned unchanged for the caller's failure arm.
     pub(crate) fn after_dispatch(
         state: &AppState,
-        call: &BackendCall<'_>,
+        (call, challenge): (&BackendCall<'_>, Option<&str>),
         params: Option<&Value>,
         client: Option<&AuthenticatedClient>,
         warnings: &[String],
@@ -53,15 +57,31 @@ impl DirectRouteGuards {
         let meta = &state.meta_mcp;
         meta.account_dispatch(call, DirectOutcome::from_response(&forward));
         let mut response = forward?;
+        // ASI07 inc3 raw receipt: verify before the gates read the reply,
+        // against the challenge this dispatch minted (never read back).
+        let slot = crate::gateway::meta_mcp::response_security::chain_receipt::ChainSlot::default();
+        if let Some(result) = response.result.as_mut() {
+            meta.chain_receive_for(call.server, result, challenge, &slot)?;
+        }
+        let receipt = std::mem::take(&mut *slot.lock());
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
-                Ok(mut result) => {
+                Ok((mut result, effect)) => {
                     if !warnings.is_empty()
                         && let Some(obj) = result.as_object_mut()
                     {
                         obj.insert("_cost_warnings".to_string(), serde_json::json!(warnings));
                     }
                     response.result = Some(result);
+                    // A3 and inc3 D4: a gated-through backend answer, with
+                    // its checked upstream outcome when the backend is chained.
+                    let (source, upstream) =
+                        crate::gateway::meta_mcp::response_security::chain_after_gates(
+                            effect,
+                            receipt.eligibility(),
+                            receipt.into_upstream(),
+                        );
+                    (response.chain_source, response.chain_upstream) = (source, upstream);
                 }
                 // A post-dispatch refusal: the backend ran and was accounted;
                 // the caller gets the gate's error with HTTP 200, settled.

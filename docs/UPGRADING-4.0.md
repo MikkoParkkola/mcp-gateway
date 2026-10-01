@@ -106,7 +106,7 @@ backend" and "fails a capability file" first.**
 | 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
 | 80 | Discovery keeps a server's `env`, `headers` and argument boundaries and reads commented Zed settings; `DiscoveredServer` is `#[non_exhaustive]` | Library users build it with `DiscoveredServer::new`; check that `cap discover --write-config` output holds only credentials you mean to keep |
 | 81 | Reserved: lands with a pending change | None yet |
-| 82 | Reserved: lands with a pending change | None yet |
+| 82 | A signature chain a backend puts in a result's `_meta` is stripped; the new `security.signature_chain` lets the gateway sign an origin link | Nothing unless you consumed a backend-sent chain; to emit links, configure `security.signature_chain` |
 | 83 | `MigratedCredential` gains a public `reachability` field and is `#[non_exhaustive]` | Library users: stop building `MigratedCredential` with a struct literal; read `reachability` for where a migrated grant can be used |
 | 84 | A capability's OAuth `token_endpoint` gets the same destination check as its request URL; an IP-literal private, loopback or metadata endpoint is refused, so its token refresh fails | Name a private identity provider by hostname and reach it through `capabilities.egress_proxy`, or re-authenticate |
 | 85 | The response firewall scans object keys as well as values; a credential-shaped key in a tool result is renamed to `[REDACTED:credential]` (`#2`, `#3`, ... on collision), and one in a question the client must echo refuses it | Read keys, not only values, when you match firewall findings; rely on key names only if they cannot look like a credential |
@@ -129,6 +129,14 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
+| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record. Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
+| 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
+| 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
+| 108 | Reserved: lands with a pending change | None yet |
+| 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
+| 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
+| 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
+| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result on `/mcp` and `/mcp/{backend}` is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]`; a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -733,6 +741,20 @@ admitted this way.
 - The era marker is chosen by the client, so `required` is a contract for
   cooperating clients, not a security boundary.
 - `server` is restart-scoped: a change takes effect on restart.
+
+**Classification.** Every tool the gateway exposes is classified read-only or
+side-effecting as data. Capabilities: `metadata.read_only`, required in every
+capability YAML. Meta tools: one table, `META_TOOL_EFFECTS`; a name absent from
+it is side-effecting. Backend MCP tools: the operator's `idempotency.read_only_tools`
+list decides admission, and only an explicit `readOnlyHint: true` or
+`idempotentHint: true` permits a resend; an unannotated tool is side-effecting
+by declared default (ADR-012 A1), whatever its name suggests. Playbooks and
+Code Mode run through `gateway_run_playbook` and `gateway_execute`, both
+side-effecting entries; each step is a tool classified by its own entry. A2A
+skills are exposed as ordinary backend tools without read-only hints, so they
+are side-effecting unless the operator lists them. `prompts/get` and
+`resources/read` are protocol reads that do not pass through execution
+admission, so the key and `required` mode do not apply to them.
 
 **Migration.** Watch `mcp_unkeyed_calls_total` by `era` and `gateway_read_only`
 (labels carry no identity). The counter sees the sync-admission routes only
@@ -2104,8 +2126,11 @@ reached the log.
 Behind a reverse proxy on the same host, open the dashboard link by the gateway's loopback URL on
 first use: a forwarded first attempt now uses the link up, and a restart prints a fresh one.
 With an HTTPS `server.public_url` on a plain-HTTP listener (the `tls_terminated_upstream` shape),
-the link is refused with 409 whichever way it is opened, until #2130 lands: enable `mtls` so the
-listener serves HTTPS, or remove `public_url`, to sign in by link.
+the loopback URL shows a one-time code instead of signing in there, since the session cookie must
+be `Secure` and belongs to the public origin (#2130). Type `<public_url>/dashboard/handoff` into the
+browser and enter the code within 60 seconds; the session cookie is then set on the public origin.
+The code works once and never appears in a URL, so the proxy's access log does not record it; do
+not configure the proxy to log request bodies for that path.
 
 ## 71. Dashboard sessions expire, and logout ends them
 
@@ -2442,6 +2467,38 @@ and `headers` (`SecretMap`, whose `Debug` and `Serialize` show keys only) and is
 **Action:** after `cap discover --write-config`, review the written backends: they now carry the
 credentials the client config held. Library users replace struct literals with
 `DiscoveredServer::new`.
+
+## 82. Backend signature chains are stripped; the gateway can sign an origin link
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `security.signature_chain` set and invalid
+
+A backend result's `_meta["io.mcp-gateway/signature-chain"]` is now removed on every route, and
+from stored replays, before anything is delivered. Only this gateway may put a chain on a result.
+
+The new optional `security.signature_chain` gives the gateway an Ed25519 chain identity:
+
+```yaml
+security:
+  signature_chain:
+    signing_key: "env:CHAIN_SEED"   # base64 of a 32-byte seed
+    key_id: "gw-eu-1"               # 1 to 64 bytes
+    emit: on_request                # or always
+```
+
+With it set, a `gateway_invoke` result from an MCP backend (and its synchronous idempotent replay)
+carries one signed origin link when the request sends `params._meta["io.mcp-gateway/chain-nonce"]`
+(a 1 to 256 byte string, else `-32602`), or on every such result under `emit: always`. The link
+covers the delivered result and sits under the v2 `_signature` MAC. The direct `/mcp/{name}` route
+links its live `tools/call` results. Capability results, meta-only tools, Code Mode, playbooks,
+cache hits and direct-route idempotent replays are not linked in 4.0: the direct replay store can
+hold a gateway-authored side-effect notice and records no origin. The `gateway_invoke` `nonce` is
+the link's fallback nonce only while `message_signing` is enabled; with it off, a link carries the
+chain nonce or `null`. A result that cannot carry a link is
+refused with `-32001`. A change to `signing_key`, `key_id` or `emit` needs a restart; a reload
+that changes one is refused.
+
+**Action:** none unless a client read a chain a backend sent. To emit links, set
+`security.signature_chain`.
 
 ## 83. `MigratedCredential` has a public `reachability` field
 
@@ -2934,6 +2991,221 @@ no subject keep the 3.x behaviour.
 
 **Action:** a client that proves a subject and renews its bearer token mid-session must
 re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients need no change.
+
+## 105. A finished task's result is re-checked against current policy
+
+**Startup:** no notice
+
+In 3.x and the betas, `tasks/get` returned a finished task's stored result with no invocation
+policy, and a repeated task call with the same key answered from the stored task. A tool that was
+withheld, a backend that was killed, or a grant that was revoked after the task finished did not
+stop either. In 4.0 both paths run the policy for the calls that produced the result before
+returning it: the identity grants, the caller's backend scope, the active profile, the kill
+switch, capability disable and withheld tools, plus the recovery attestation when enforcement is
+on. A refused read returns the policy error and no result.
+
+The task record now lists those calls (server and tool names, never arguments). A
+`gateway_invoke` or surfaced-tool task records its call at creation; a playbook or `gateway_execute`
+task records the calls it actually dispatched when it settles. A row written by a beta has no
+list: a finished playbook or `gateway_execute` row is refused, and any other legacy row is
+checked at the backend level only. Only beta task stores contain such plan rows.
+
+**Rollback:** a record that carries calls is written as version 5, and a version 4 or 5 row makes
+a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
+4.0.0 does not keep those rows readable by the betas. The task store is the directory
+`tasks.store_dir` (default `~/.mcp-gateway/tasks`). Back it up before upgrading. Clearing it to
+start a beta is destructive: it abandons every task and every task idempotency key, it is not a
+migration, and a repeated call then runs again. Restoring an older backup can lose completion and
+idempotency knowledge and replay external effects that already completed. 3.5.x has no task store
+and is not affected.
+
+Three client-visible changes follow from that check:
+
+- Under attestation `enforce`, reading a finished task (`tasks/get`, or a repeat of a task-augmented
+  call) needs a currently valid token in `_meta["io.mcp-gateway/recovery"].attestation`. Without
+  one the read returns -32002 and no result. Under `observe` the read is delivered.
+- A task whose dispatch an identity grant refused now reads back as the current grant denial
+  (-32004), not as the failure it stored, for as long as the grant stays denied.
+- Every read of a finished task writes one `identity_grant_decision` record to the audit log when
+  the target is a personal capability, beside the record the worker wrote at dispatch.
+
+**Action:** none on upgrade. A client that attests calls must send a fresh recovery token in
+`_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task, as it already
+does for a working one. Where a SIEM rule counts decision records per call, expect one more per
+read.
+
+## 106. Hardened requires a per-caller identity
+
+**Startup:** no notice, applies only to `security.posture: hardened`
+
+`security.posture: hardened` is new in 4.0. Under it, every HTTP MCP request, on `/mcp` (POST,
+GET and DELETE) and on `/mcp/{name}`, must identify one caller before its body is read. Any of
+these identifies one: a subject proven by an IdP (OIDC or Cloudflare Access), a trusted proxy
+header, an mTLS client certificate, an agent JWT, or an API key configured `kind: personal`.
+A request that has none is refused with HTTP 403 and JSON-RPC `-32600 "per-caller identity required
+(security.posture=hardened)"`.
+
+A shared API key (`kind: shared`, the default), the static bearer token and a dashboard session
+are shared credentials, so on their own they are refused. That includes MCP calls from the
+dashboard: under hardened, the dashboard needs an IdP or Access subject. stdio is exempt.
+`security.posture: standard`, the default, is unchanged.
+
+**Action:** before adopting `hardened`, give every HTTP caller an identity, or set
+`kind: personal` on an API key that exactly one person holds:
+
+```yaml
+auth:
+  api_keys:
+    - name: alice
+      key_sha256: "sha256:..."
+      kind: personal
+```
+
+## 107. Gateways can verify and extend each other's signature chains
+
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with a backend set to `verify` or `require` and an incomplete chain setting
+
+A backend that is itself a chain-signing gateway can now be verified hop by hop:
+
+```yaml
+security:
+  signature_chain: {signing_key: "env:CHAIN_SEED", key_id: "gw-edge"}
+  remote_server_signing:
+    trusted_keys:
+      gw-core: {algorithm: ed25519, public_key: "<base64>"}
+backends:
+  core:
+    http_url: "https://core.example/mcp/tools"
+    signature_chain: require   # off (default) | verify | require
+    chain_origins: [gw-core]
+    chain_signer: gw-core
+```
+
+For such a backend this gateway sends each call its own random challenge and checks the reply's
+chain before anything else reads it: trusted signers, signatures, origin, linkage, content, the
+challenge, and freshness within `message_signing.replay_window`. A verified chain is delivered
+unchanged, with this gateway's link appended, so the client verifies the whole chain. Under
+`require`, a chain that is absent or fails a rule is refused with `-32001`, naming the rule, and so
+are an interim reply and a task-augmented call. Under `verify`, the result is delivered with this
+gateway's link marked `up: unverified`, which a client verifier refuses. A chain that would exceed
+`max_links` or 16 KiB when this gateway appends its link is refused in either mode.
+
+Chained results are not served from the response cache, and an idempotent replay of one carries
+no chain. Chaining covers `gateway_invoke` and direct-route `tools/call`, for requests that carry a
+chain nonce. Tasks, Code Mode, playbooks and capability backends are not chained.
+
+**Action:** none unless you chain gateways. The three backend settings are refused at startup,
+naming the field, when `chain_origins` or `chain_signer` is missing or names a key absent from
+`trusted_keys`, or when this gateway has no `security.signature_chain`.
+## 109. SSRF refusals are typed, and hardened pins backend destinations
+
+**Startup:** no notice; fails a backend, only under `security.posture: hardened` and only a backend at a loopback or private-network address
+
+**Every posture.** When the SSRF guard resolves a destination's name and refuses the address it
+gets (a capability endpoint, or a backend under `hardened`), the call now answers JSON-RPC
+`-32600` with a message starting `SSRF blocked:`, after one attempt. Before, the refusal looked
+like a connection failure: it was tried three times, counted against the capability backend's
+health and answered `-32000 "<label> failed: error sending request"`. Ordinary connection failures keep
+their retries.
+
+**Under `security.posture: hardened`**, which is new in 4.0:
+
+- `security.ssrf_protection` is forced on and `security.trust_configured_backends` off, whatever
+  the file says, so the proxy-time check covers configured backends too.
+- HTTP and WebSocket backends connect only to public addresses. A name is resolved once, every
+  address it resolves to is checked, and the connection goes to a checked address; a WebSocket
+  keeps the configured name for TLS SNI and `Host`. An IP literal is refused before anything
+  connects. `HTTP_PROXY`, `HTTPS_PROXY` and `ALL_PROXY` are ignored for backend traffic, since
+  a proxy would resolve the name instead.
+- An OAuth backend's authorization server, token endpoint, registration endpoint and every
+  redirect hop are held to the same rule.
+- So a backend at `localhost`, `127.0.0.1`, an RFC 1918 or unique-local address, or a
+  link-local address is refused on its first connect with `-32600 "SSRF blocked: ..."`.
+  stdio backends are unaffected.
+
+The policy is applied by the gateway's backend registry. An embedder that builds its own
+`BackendRegistry` gets it when it passes the registry to `ReloadContext::new` with a hardened
+config; a backend it started before that keeps its connection until it restarts.
+
+**Action:** where a client matched `-32000` for a refused capability destination, match `-32600`.
+Before adopting `hardened`, move local backends to stdio, or keep the deployment on `standard`.
+
+## 110. Invocation records name the tenants a call reached
+
+**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
+
+With `arg_keys` configured, the guard does not need to be enabled for this. Every transparency-log
+invocation record then names the tenants the call reached, request and response, as sorted
+16-hex SHA-256 hashes in `tenants`, next to the kernel's `data_classes`. Raw tenant ids are
+never written. At most 1024 hashes are kept; past that the record adds `tenants_total`.
+
+The `attribution` field says how far that list reaches:
+
+- absent: the response was attributed as the backend returned it, before the gates;
+- `cached_delivery`: the value was served past the gates, from a cache or an idempotent replay,
+  so it is attributed from what was delivered, and carries no `data_classes`;
+- `uninspected`: some of the response was not read for tenants, because a `content[].text` block
+  was over the 1 MiB parse bound or the reply was refused for its signature chain before it was
+  read. `tenants` still lists what was read. The record carries this even when `tenants` is empty;
+- `cached_delivery_uninspected`: both.
+
+**Action:** none unless you consume these records. Under `uninspected`, treat `tenants` as a
+lower bound, not a complete list.
+
+## 111. A stdio gateway keeps durable tasks in its own store
+
+**Startup:** no notice; refuses to start, only an HTTP gateway whose `tasks.store_dir` is a running stdio gateway's `stdio` directory
+
+A stdio gateway (`serve --stdio`) now serves the tasks extension for the client that spawned it.
+A task-augmented `tools/call` with an idempotency key becomes a durable task, and `tasks/get`,
+`tasks/update` and `tasks/cancel` answer on stdio. Before, stdio answered every such call
+synchronously and `tasks/*` answered `-32601`.
+
+The store is `<tasks.store_dir>/stdio`, its own directory beside the HTTP gateway's
+`tasks.store_dir`, so an HTTP gateway and a stdio gateway on one config never contend for one lease. A
+task survives a restart and a moved base directory, and no HTTP caller can read, cancel or update
+it: the store keys it under the local operator, a principal no HTTP credential can name.
+
+- A second stdio gateway on the same config finds the store held. It serves as before, answers
+  task-augmented calls synchronously, and advertises no tasks extension in `initialize` or
+  `server/discover`.
+- An HTTP gateway whose `tasks.store_dir` is set to another gateway's `stdio` directory fails to
+  start while that gateway holds it. The error names the likely holder.
+- `tasks.recovery_adapters` stays an HTTP feature: stdio settles every interrupted task on start.
+
+**Action:** none for separate stores. Give each gateway its own `tasks.store_dir` if two configs
+point HTTP at a stdio directory. Back up `tasks.store_dir` with every gateway that writes under it
+stopped; the `stdio` subdirectory is inside it.
+
+## 112. Hardened signs every tool call and requires elicitation
+
+**Startup:** refuses to start, only under `security.posture: hardened` and only without a signing secret of at least 32 bytes
+
+Everything here applies only under `security.posture: hardened`; `standard` is unchanged.
+
+- **Signing.** `security.message_signing.enabled` is forced on, whatever the file says, so
+  `security.message_signing.shared_secret` must resolve to at least 32 bytes (an env-only
+  `${VAR}` reference resolves) or the gateway refuses to start. Every successful `tools/call`
+  result, on `/mcp` and on `/mcp/{backend}`, carries the v2 `_signature`. Its nonce is
+  `params._meta["io.mcp-gateway/nonce"]` (`gateway_invoke` keeps `arguments.nonce`; sending both
+  is refused `-32602`). A nonce is admitted once, before dispatch, in one replay store for both
+  routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
+  dispatch, is refused, so send a new one per request. `require_nonce` stays your choice. A
+  task-augmented destructive call's confirmation challenge is delivered unsigned, since its
+  nonce has not been admitted yet. A result that cannot be signed is refused `-32603`.
+- **Elicitation.** A legacy (2025-era) client must declare `elicitation` in `initialize`.
+  Without it, `initialize` is refused with 403 and `-32600 "client must declare elicitation
+  (security.posture=hardened)"` and no session is created. Every other legacy request, and
+  `GET /mcp`, is served only inside a session such an `initialize` opened. The direct route
+  keeps no session, so it refuses every legacy request except a declaring `initialize`, and
+  classifies a request the way `/mcp` does: a modern header over a legacy body is refused.
+- **Destructive calls.** A legacy destructive call that nobody can confirm is refused
+  (`-32001`) instead of proceeding with a warning.
+- **Reload.** A reload that changes the posture is refused with the posture's reason first,
+  since changing it also changes what it forces.
+
+**Action:** before adopting `hardened`, set the signing secret, send one fresh nonce per
+`tools/call`, and make legacy clients declare elicitation or move them to 2026-07-28.
 
 ## Upgrading from 3.5.x: a walkthrough
 

@@ -58,12 +58,9 @@ pub struct JsonRpcResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
     /// Internal marker: this response answered a destructive call without
-    /// running it — the confirmation could not be obtained, the operator
-    /// declined, or the caller was asked in band and has not answered yet.
-    ///
-    /// `#[serde(skip)]` in both directions: it is never written to the wire,
-    /// and a wire key of this name can never set it. Read only by the
-    /// dispatcher, to keep a refusal out of client failure accounting.
+    /// running it (confirmation unobtainable, declined, or still pending).
+    /// Never on the wire in either direction; read only by the dispatcher, to
+    /// keep a refusal out of client failure accounting.
     #[serde(skip)]
     pub confirmation_refusal: bool,
     /// Server-owned response security refusal. Never accepted from wire data
@@ -72,28 +69,40 @@ pub struct JsonRpcResponse {
     pub(crate) delivery_refusal: bool,
     /// Server-owned: a discovery handler inspected this result's canonical
     /// value before it was serialised (MIK-7407.RESPONSE.3), so no later pass
-    /// scans the served copy. Never read from or written to the wire, so a
-    /// backend or a retried call under a discovery name cannot set it.
+    /// scans the served copy. Never on the wire, so no caller can set it.
     #[serde(skip)]
     pub(crate) discovery_inspected: bool,
+    /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
+    #[serde(skip)]
+    pub(crate) chain_source: super::ChainSource,
+    /// The upstream chain outcome for a chained backend; never on the wire.
+    #[serde(skip)]
+    pub(crate) chain_upstream: Option<std::sync::Arc<super::UpstreamChain>>,
 }
 
 #[path = "messages_response_de.rs"]
 mod response_de;
 
 impl JsonRpcResponse {
-    /// Create a success response
-    #[must_use]
-    pub fn success(id: RequestId, result: Value) -> Self {
+    /// The one place every server-owned marker gets its default.
+    fn envelope(id: Option<RequestId>, result: Option<Value>, error: Option<JsonRpcError>) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
-            id: Some(id),
-            result: Some(result),
-            error: None,
+            id,
+            result,
+            error,
             confirmation_refusal: false,
             delivery_refusal: false,
             discovery_inspected: false,
+            chain_source: super::ChainSource::NotEligible,
+            chain_upstream: None,
         }
+    }
+
+    /// Create a success response
+    #[must_use]
+    pub fn success(id: RequestId, result: Value) -> Self {
+        Self::envelope(Some(id), Some(result), None)
     }
 
     /// Create a success response from any serializable payload.
@@ -116,19 +125,7 @@ impl JsonRpcResponse {
 
     /// Create an error response
     pub fn error(id: Option<RequestId>, code: i32, message: impl Into<String>) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: None,
-            error: Some(JsonRpcError {
-                code,
-                message: message.into(),
-                data: None,
-            }),
-            confirmation_refusal: false,
-            delivery_refusal: false,
-            discovery_inspected: false,
-        }
+        Self::failure(id, code, message.into(), None)
     }
 
     /// Create a standard internal error response.
@@ -155,19 +152,16 @@ impl JsonRpcResponse {
         message: impl Into<String>,
         data: Value,
     ) -> Self {
-        Self {
-            jsonrpc: "2.0".to_string(),
-            id,
-            result: None,
-            error: Some(JsonRpcError {
-                code,
-                message: message.into(),
-                data: Some(data),
-            }),
-            confirmation_refusal: false,
-            delivery_refusal: false,
-            discovery_inspected: false,
-        }
+        Self::failure(id, code, message.into(), Some(data))
+    }
+
+    fn failure(id: Option<RequestId>, code: i32, message: String, data: Option<Value>) -> Self {
+        let error = JsonRpcError {
+            code,
+            message,
+            data,
+        };
+        Self::envelope(id, None, Some(error))
     }
 }
 

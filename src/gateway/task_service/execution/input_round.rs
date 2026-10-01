@@ -20,10 +20,10 @@ use super::settlement::{
 };
 use super::worker::inspect_settled;
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor, WriteOutcome};
-use crate::gateway::router::AppState;
-use crate::gateway::task_service::record::InputRound;
+use crate::gateway::task_service::host::LiveHost;
+use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound, Target};
 use crate::gateway::task_service::store::StoreError;
-use crate::gateway::task_service::store::input::ProvideOutcome;
+use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
 use crate::protocol::mrtr::{InputRequired, RetryFields};
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
@@ -39,7 +39,7 @@ const PRODUCE_SEAM_WAIT: Duration = Duration::from_secs(1);
 /// The worker's view of one owned task while it settles a response.
 pub(super) struct Settling<'a> {
     executor: &'a Arc<TaskExecutor>,
-    state: &'a Arc<AppState>,
+    state: &'a LiveHost,
     owned: &'a OwnedCallerContext,
     call: &'a TaskCall,
     principal: &'a str,
@@ -50,7 +50,7 @@ pub(super) struct Settling<'a> {
 impl<'a> Settling<'a> {
     pub(super) const fn new(
         executor: &'a Arc<TaskExecutor>,
-        state: &'a Arc<AppState>,
+        state: &'a LiveHost,
         owned: &'a OwnedCallerContext,
         call: &'a TaskCall,
         principal: &'a str,
@@ -108,16 +108,73 @@ impl<'a> Settling<'a> {
         }
     }
 
+    /// The calls a plan actually dispatched, for the settlement to commit with
+    /// its outcome. `None` for a call whose one target was recorded at creation.
+    fn plan_targets(&self) -> Option<Vec<Target>> {
+        matches!(
+            self.call.tool.as_str(),
+            "gateway_execute" | "gateway_run_playbook"
+        )
+        .then(|| {
+            self.owned
+                .dispatch_log()
+                .snapshot()
+                .into_iter()
+                .map(|(server, tool)| Target { server, tool })
+                .collect()
+        })
+    }
+
     async fn settle(&self, event: TaskTransition) {
         self.executor
-            .settle_cas(self.principal, self.id, self.revision, event)
+            .settle_cas_with(
+                self.principal,
+                self.id,
+                self.revision,
+                (event, self.plan_targets()),
+            )
             .await;
+    }
+
+    /// Record a parked plan's calls so far; the resume's log starts empty.
+    /// `false` means they are NOT durable, and the round must not be parked.
+    async fn park_targets(&self) -> bool {
+        let Some(targets) = self.plan_targets() else {
+            return true;
+        };
+        let Ok(owner) = self.executor.service.owner(self.principal) else {
+            return false;
+        };
+        let stored = self
+            .executor
+            .service
+            .store
+            .add_targets(owner.as_digest(), self.id, self.revision, targets)
+            .await;
+        // A row a cancel already moved is not parked either way.
+        matches!(stored, Ok(()) | Err(StoreError::RevisionConflict))
     }
 
     /// Commit `input_required` with the continuation, then release: the worker
     /// returns and the row waits with no owner.
     async fn park(&self, round: InputRequired) {
+        if !self.park_targets().await {
+            return self
+                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .await;
+        }
         let Ok(owner) = self.executor.service.owner(self.principal) else {
+            return self
+                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .await;
+        };
+        // The continuation the resume will redeem dies at its own deadline;
+        // a round that could only fail is settled now, never parked.
+        let now = unix_secs(self.executor.service.store.now());
+        let continuation = self.state.meta_mcp().continuation();
+        let Ok(continuation_deadline) =
+            round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
+        else {
             return self
                 .settle(TaskTransition::Complete(abandoned_input_round()))
                 .await;
@@ -127,6 +184,7 @@ impl<'a> Settling<'a> {
             tool: self.call.tool.clone(),
             arguments: self.call.arguments.clone(),
             accepted_inputs: Map::new(),
+            continuation_deadline,
         };
         let parked = self
             .executor
@@ -180,7 +238,7 @@ impl<'a> Settling<'a> {
 
 /// One cancellable dispatch through the invoke funnel, carrying `retry`.
 async fn dispatch(
-    state: &Arc<AppState>,
+    state: &LiveHost,
     owned: &OwnedCallerContext,
     call: &TaskCall,
     retry: &RetryFields,
@@ -189,14 +247,18 @@ async fn dispatch(
     if *cancel_rx.borrow() {
         return None;
     }
-    let authorizer = owned.authorizer().borrow(state);
+    let authorizer = state.authorizer(owned.authorizer());
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
-    let dispatched = state.meta_mcp.dispatch_below_gate_native_result(
+    let dispatched = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
         &call.tool,
         call.arguments.clone(),
         owned.session_id(),
         &caller,
+    );
+    let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+        Arc::clone(owned.dispatch_log()),
+        dispatched,
     );
     tokio::select! {
         biased;
@@ -218,6 +280,8 @@ pub(crate) enum InputOutcome {
     Busy,
     /// No worker is free; the round stays open and the answers unapplied.
     PoolFull,
+    /// The round closed at its continuation deadline or the task's TTL.
+    Closed(RoundClosed),
     NotFound,
     Unavailable,
 }
@@ -289,6 +353,23 @@ impl TaskExecutor {
                     InputOutcome::Accepted
                 }
                 Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
+                Ok(ProvideOutcome::Closed(closed)) => {
+                    // Settle it now rather than at the next sweep. Either way the
+                    // round is closed to answers: every later one is refused the
+                    // same way, and the sweep retries a close that fails here.
+                    let settled = match executor.service.store.get(&digest, &id) {
+                        Ok(current) => {
+                            executor
+                                .close_round(&digest, &id, current.revision, closed.reason())
+                                .await
+                        }
+                        Err(_) => Err(super::CommitFailure::RevisionConflict),
+                    };
+                    if let Err(super::CommitFailure::Service(error)) = settled {
+                        tracing::warn!(task_id = %id, ?error, "closed input round not settled yet; the sweep retries");
+                    }
+                    InputOutcome::Closed(closed)
+                }
                 Ok(ProvideOutcome::Resumed { task, round, slot }) => {
                     let revision = task.revision;
                     executor.published(&WriteOutcome::Transitioned(task), &id);
@@ -349,11 +430,21 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     // create path.
     let _handoff = handoff;
     let _slot = slot;
-    let Some(state) = owned.state().upgrade() else {
+    let Some(state) = owned.host().upgrade() else {
         let event = TaskTransition::Complete(interrupted_before_dispatch());
         executor.settle_cas(&principal, &id, revision, event).await;
         return;
     };
+    // An answer taken in time can still reach dispatch late; redeeming then
+    // could only fail, so the round is closed as the sweep would close it.
+    let deadline = round.continuation_deadline;
+    if let Some(deadline) = deadline
+        && unix_secs(executor.service.store.now()) >= deadline
+    {
+        return executor
+            .close_late_round(&principal, &id, revision, deadline)
+            .await;
+    }
     let call = TaskCall {
         tool: round.tool,
         arguments: round.arguments,
@@ -365,8 +456,159 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     let Some(response) = dispatch(&state, &owned, &call, &retry, &mut cancel_rx).await else {
         return;
     };
+    // Preparation inside the funnel can outlast the margin. A continuation
+    // refused once its envelope has expired was refused for expiry: close the
+    // round with that reason rather than fail the task.
+    if let Some(deadline) = deadline
+        && rejected_after_expiry(&response, deadline, unix_secs(executor.service.store.now()))
+    {
+        return executor
+            .close_late_round(&principal, &id, revision, deadline)
+            .await;
+    }
     let response = inspect_settled(&state, &call, &id, response);
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;
+}
+
+/// When a parked round stops taking answers (#2429): the sealed
+/// continuation's own expiry, less the margin. `Ok(None)` when no
+/// continuation is stored; an error when it cannot be opened or is already
+/// due, since such a round could only ever fail.
+pub(super) fn round_deadline(
+    keyring: &crate::protocol::continuation::Keyring,
+    request_state: Option<&str>,
+    now: u64,
+) -> Result<Option<u64>, crate::protocol::continuation::ContinuationError> {
+    let Some(token) = request_state else {
+        return Ok(None);
+    };
+    let deadline = keyring
+        .open(token, now)?
+        .expires_at
+        .saturating_sub(CONTINUATION_DEADLINE_MARGIN_SECS);
+    if now >= deadline {
+        return Err(crate::protocol::continuation::ContinuationError::Expired);
+    }
+    Ok(Some(deadline))
+}
+
+/// Whether `response` is the funnel refusing the continuation after the
+/// envelope itself expired (the stored deadline plus the margin).
+///
+/// The funnel answers every refusal with one message, but past the expiry
+/// the refusal of this gateway's own stored envelope is, in practice, the
+/// expiry: `redeem_retry` opens the envelope before any other check, `open`
+/// tests the deadline straight after authentication, and the hold checked
+/// next dies with the envelope. `>` as `open` uses it.
+// ponytail: an envelope opened just before expiry and then refused by the
+// spent-ledger's capacity bound just after reads as expiry, settling
+// `cancelled` rather than `failed`. A typed refusal through the funnel would
+// separate them; add it if that window is ever observed.
+fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) -> bool {
+    let expired = crate::protocol::continuation::ContinuationError::Expired;
+    now > deadline.saturating_add(CONTINUATION_DEADLINE_MARGIN_SECS)
+        && response
+            .error
+            .as_ref()
+            .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
+}
+
+fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
+    u64::try_from(at.timestamp()).unwrap_or(0)
+}
+
+impl TaskExecutor {
+    /// Close a resumed round that met its deadline. A write that fails for any
+    /// reason but a moved row is tried once more, reason and all.
+    // ponytail: two attempts, then the row waits for restart recovery (which
+    // settles it interrupted), as every other settlement write does.
+    async fn close_late_round(&self, principal: &str, id: &str, revision: u64, deadline: u64) {
+        let Ok(owner) = self.service.owner(principal) else {
+            return;
+        };
+        let reason = RoundClosed::Continuation(deadline).reason();
+        match self
+            .close_round(owner.as_digest(), id, revision, reason)
+            .await
+        {
+            Ok(()) | Err(super::CommitFailure::RevisionConflict) => {}
+            Err(_) => {
+                let reason = RoundClosed::Continuation(deadline).reason();
+                if self
+                    .close_round(owner.as_digest(), id, revision, reason)
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!(task_id = %id, "a late input round was not closed");
+                }
+            }
+        }
+    }
+
+    /// Cancel a task with `reason` in one store write, then publish it (#2429).
+    pub(super) async fn close_round(
+        &self,
+        owner_digest: &str,
+        id: &str,
+        revision: u64,
+        reason: String,
+    ) -> Result<(), super::CommitFailure> {
+        match self
+            .service
+            .store
+            .close_round(owner_digest, id, revision, reason)
+            .await
+        {
+            Ok(committed) => {
+                self.published(&WriteOutcome::Transitioned(committed), id);
+                self.notify_observer(CommitStage::Transitioned, id).await;
+                Ok(())
+            }
+            Err(StoreError::RevisionConflict) => Err(super::CommitFailure::RevisionConflict),
+            Err(StoreError::NotFound) => Err(super::CommitFailure::Service(
+                crate::gateway::task_service::ServiceError::NotFound,
+            )),
+            Err(_) => Err(super::CommitFailure::Service(
+                crate::gateway::task_service::ServiceError::Unavailable,
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::round_deadline;
+    use crate::protocol::continuation::{ContinuationState, now_unix_secs};
+
+    /// Mutant: a resume refused after expiry settles `failed`, or any refusal
+    /// is read as expiry.
+    #[test]
+    fn only_a_refusal_after_the_envelope_expired_is_read_as_expiry() {
+        use super::{CONTINUATION_DEADLINE_MARGIN_SECS as MARGIN, rejected_after_expiry};
+        use crate::protocol::continuation::ContinuationError;
+        use crate::protocol::{JsonRpcResponse, RequestId};
+        let refused = JsonRpcResponse::error(
+            Some(RequestId::Number(0)),
+            -32602,
+            ContinuationError::Expired.client_message(),
+        );
+        assert!(rejected_after_expiry(&refused, 100, 100 + MARGIN + 1));
+        assert!(!rejected_after_expiry(&refused, 100, 100 + MARGIN));
+        let other = JsonRpcResponse::error(Some(RequestId::Number(0)), -32602, "bad params");
+        assert!(!rejected_after_expiry(&other, 100, 100 + MARGIN + 1));
+    }
+
+    /// Mutant: an envelope that does not open is parked with no deadline.
+    #[test]
+    fn an_unopenable_continuation_has_no_deadline_to_park_with() {
+        let state = ContinuationState::new();
+        let refused = round_deadline(state.keyring(), Some("not-an-envelope"), now_unix_secs());
+        assert!(refused.is_err(), "{refused:?}");
+        assert_eq!(
+            round_deadline(state.keyring(), None, now_unix_secs()).ok(),
+            Some(None)
+        );
+    }
 }

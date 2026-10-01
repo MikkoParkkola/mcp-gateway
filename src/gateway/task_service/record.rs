@@ -29,6 +29,28 @@ pub(super) const UPSTREAM_VERSION: u32 = 3;
 /// only a row that holds a continuation it could not honour.
 pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 
+/// The record version that introduced [`Record::targets`]. Written only on a row
+/// that carries at least one target; every other row keeps its version and its
+/// bytes. A beta loader (`1..=3`) refuses such a row, which UPGRADING-4.0 states.
+pub(super) const TARGET_VERSION: u32 = 5;
+
+/// The highest record version the loader accepts: the newest field's version.
+pub(super) const MAX_LOADABLE_VERSION: u32 = TARGET_VERSION;
+
+/// One backend call a task's result was produced by: names only, never
+/// arguments. No current invocation policy reads `ToolTarget.arguments`; a
+/// policy that did would have to revisit replay authorization.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Target {
+    pub(crate) server: String,
+    pub(crate) tool: String,
+}
+
+/// How far before the stored continuation's own expiry a round stops taking
+/// answers: room for an accepted answer to reach redemption (#2429).
+pub(crate) const CONTINUATION_DEADLINE_MARGIN_SECS: u64 = 10;
+
 /// An open input round's continuation: what a resume needs and nothing else.
 ///
 /// Gateway state, never part of the wire task. `request_state` is the
@@ -46,6 +68,11 @@ pub(crate) struct InputRound {
     pub(crate) arguments: Value,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub(crate) accepted_inputs: Map<String, Value>,
+    /// When the stored continuation stops being redeemable, less a margin, in
+    /// unix seconds (#2429). `None`: no continuation is stored, and the task's
+    /// TTL alone bounds the round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) continuation_deadline: Option<u64>,
 }
 
 /// Upper bound on a durable upstream handle, in bytes.
@@ -151,6 +178,16 @@ pub(super) struct Record {
     /// with no round outstanding, so such a row serializes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) input_round: Option<InputRound>,
+    /// The backend calls this task made or will make, for re-authorizing a
+    /// stored result before it is delivered. Absent on rows written before
+    /// [`TARGET_VERSION`] and on rows that dispatched nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) targets: Vec<Target>,
+    /// Set when the row settled as the gateway's own bounded failure because
+    /// the real outcome did not fit the record budget: it holds no backend
+    /// output, so delivering it needs no target check.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) output_free: bool,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
@@ -185,18 +222,26 @@ impl PreparedTask {
     /// Build a prepared task from an admitted lease's binding and its one-shot
     /// publication token. The digests are the binding's own: the task service
     /// stores what admission derived and never derives identity itself.
-    pub(super) fn admitted(
+    pub(super) fn admitted_with_targets(
         task: &Task,
         binding: &crate::idempotency::admission::TaskBinding,
         publication: crate::idempotency::admission::TaskPublication,
         backend: &str,
+        targets: Vec<Target>,
     ) -> Self {
+        let version = if targets.is_empty() {
+            RECORD_VERSION
+        } else {
+            TARGET_VERSION
+        };
         Self {
             record: Record {
-                version: RECORD_VERSION,
+                version,
                 dispatched: false,
                 upstream: None,
                 input_round: None,
+                targets,
+                output_free: false,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -212,6 +257,17 @@ impl PreparedTask {
         }
     }
 
+    /// [`Self::admitted_with_targets`] for a call that records none.
+    #[cfg(test)]
+    pub(super) fn admitted(
+        task: &Task,
+        binding: &crate::idempotency::admission::TaskBinding,
+        publication: crate::idempotency::admission::TaskPublication,
+        backend: &str,
+    ) -> Self {
+        Self::admitted_with_targets(task, binding, publication, backend, Vec::new())
+    }
+
     #[cfg(test)]
     pub(super) fn for_test(task: &Task, owner: &str, identity: u64) -> Self {
         Self {
@@ -221,6 +277,8 @@ impl PreparedTask {
                 dispatched: false,
                 upstream: None,
                 input_round: None,
+                targets: Vec::new(),
+                output_free: false,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),
@@ -263,4 +321,30 @@ pub(super) struct InterruptedTask {
 pub(crate) struct CommittedTask {
     pub(crate) task: Task,
     pub(crate) revision: u64,
+    /// The backend label the task was admitted under: an aggregate label for
+    /// a plan, so never proof of what a plan called.
+    pub(crate) backend: String,
+    /// The calls that produced this snapshot's result; empty on a legacy row.
+    pub(crate) targets: Vec<Target>,
+    /// Whether the row was written by a gateway that records targets. An empty
+    /// list on such a row means nothing was dispatched; on an older row it
+    /// means the provenance is unavailable.
+    pub(crate) targets_recorded: bool,
+    /// The row holds only the gateway's own bounded failure, no backend output.
+    pub(crate) output_free: bool,
+}
+
+impl CommittedTask {
+    /// The committed view of `record`, read in one piece so a caller that
+    /// authorizes delivery checks the snapshot it returns.
+    pub(super) fn of(task: Task, record: &Record) -> Self {
+        Self {
+            task,
+            revision: record.revision,
+            backend: record.backend.clone(),
+            targets: record.targets.clone(),
+            targets_recorded: record.version >= TARGET_VERSION,
+            output_free: record.output_free,
+        }
+    }
 }

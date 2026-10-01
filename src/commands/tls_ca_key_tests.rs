@@ -3,6 +3,7 @@
 //! F18 R6: `tls issue-server` reads the CA key through the library's
 //! mode-checked loader, refuses one other users can read, and the re-encoded
 //! key still signs a leaf that chains to the CA.
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt as _;

@@ -305,6 +305,8 @@ jobs:
       - name: Set up Helm for the chart-on-real-image check
         if: matrix.arch == 'amd64'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Create kind cluster for the chart-on-real-image check
         if: matrix.arch == 'amd64'
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
@@ -346,6 +348,33 @@ jobs:
         # itself, the daemon): the probes' own budgets sum well under this.
         timeout-minutes: 20
         run: scripts/ci/smoke-full-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full"
+
+      # Release-line commits publish nothing (every push is main-only), so a
+      # functional verifier has no way to get the exact image CI built. Export
+      # the scanned, started image with its content ID so it can be pinned
+      # after `docker load`. Registry pushes are untouched.
+      - name: Export the scanned image (release-line push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        # explicit bash enables pipefail, so a failed `docker save` fails the step
+        shell: bash
+        run: |
+          mkdir -p image-export
+          image="${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
+          id="$(docker image inspect --format '{{.Id}}' "$image")"
+          echo "$id" > "image-export/image-id-${{ matrix.arch }}.txt"
+          docker save "$image" | gzip > "image-export/image-${{ matrix.arch }}.tar.gz"
+          echo "image-${{ matrix.arch }} ${{ github.sha }} ${id}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the scanned image (release-line push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.arch }}-${{ github.sha }}
+          path: image-export/
+          retention-days: 7
+          if-no-files-found: error
+          # the image is already gzipped
+          compression-level: 0
 
       # Push by digest with no tag; `manifest` below creates the branch and sha
       # tags over both legs' digests. Nothing is resolvable by name until it

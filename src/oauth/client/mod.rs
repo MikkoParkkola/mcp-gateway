@@ -168,6 +168,9 @@ pub struct OAuthClient {
     ///
     /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
     token_refresh_buffer_secs: u64,
+
+    /// Where advertised URLs may point (the backend's destination policy).
+    destination: crate::security::ssrf::DestinationPolicy,
 }
 
 /// OAuth token response
@@ -289,6 +292,7 @@ impl OAuthClient {
             callback_port: cfg.callback_port,
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
+            destination: crate::security::ssrf::DestinationPolicy::Configured,
         }
     }
 
@@ -342,11 +346,14 @@ impl OAuthClient {
 
         // Discover authorization server metadata
         let auth_base = self.oauth_base_url.as_ref().unwrap();
+        self.check_destination(auth_base)?;
         let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
-        self.auth_metadata = Some(
+        let discovered =
             AuthorizationServerMetadata::discover(&self.http_client, auth_base, issuer_source)
-                .await?,
-        );
+                .await?;
+        // Checked before it is kept: a refused document never reaches a request.
+        self.check_advertised_endpoints(&discovered)?;
+        self.auth_metadata = Some(discovered);
 
         self.drop_credentials_from_other_issuer(previous_issuer.as_deref());
 
@@ -375,10 +382,9 @@ impl OAuthClient {
     /// loop or, worse, a client id presented to a server that never issued
     /// it.
     ///
-    /// An error before the authorization server has been discovered: a
-    /// credential cannot be attributed to an issuer that is not yet known.
-    /// There is deliberately no unqualified key to fall back to, because
-    /// falling back is precisely the reuse this keying exists to prevent.
+    /// An error before the authorization server has been discovered: a credential cannot be
+    /// attributed to an issuer that is not yet known. There is deliberately no unqualified key to
+    /// fall back to, because falling back is precisely the reuse this keying exists to prevent.
     fn credential_key(&self) -> Result<String> {
         let meta = self.auth_metadata.as_ref().ok_or_else(|| {
             Error::OAuth("OAuth not initialized: no issuer to key credentials by".to_string())
@@ -391,20 +397,17 @@ impl OAuthClient {
     ///
     /// A no-op when a `client_id` is already set: that only happens when
     /// `OAuthClientConfig.client_id` was supplied, i.e. operator config that
-    /// must never be overwritten by (or conflated with) a stale disk record.
-    /// Because of that guard, any id loaded here is necessarily a prior
-    /// Dynamic Client Registration, never operator config (Defect 2,
-    /// MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client`
-    /// rejection may purge it.
-    /// Drop in-memory credentials when re-initializing lands on a different
+    /// must never be overwritten by (or conflated with) a stale disk record. Because of that guard,
+    /// any id loaded here is necessarily a prior Dynamic Client Registration, never operator config
+    /// (Defect 2, MIK-6750 r7) — safe to mark `Registered` so a later `invalid_client` rejection
+    /// may purge it. Drop in-memory credentials when re-initializing lands on a different
     /// authorization server.
     ///
-    /// Keying storage by issuer stops the *disk* from crossing that line.
-    /// In-memory state crosses it too unless it is dropped here, and a
-    /// retained client id additionally makes
-    /// [`restore_persisted_client_id`](Self::restore_persisted_client_id) a
-    /// no-op for the new issuer. A configured client id belongs to the
-    /// operator rather than to an issuer, so it stays.
+    /// Keying storage by issuer stops the *disk* from crossing that line. In-memory state crosses
+    /// it too unless it is dropped here, and a retained client id additionally makes
+    /// [`restore_persisted_client_id`](Self::restore_persisted_client_id) a no-op for the new
+    /// issuer. A configured client id belongs to the operator rather than to an issuer, so it
+    /// stays.
     fn drop_credentials_from_other_issuer(&self, previous_issuer: Option<&str>) {
         let Some(previous) = previous_issuer else {
             return;
@@ -553,9 +556,8 @@ impl OAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            // Mirror the exchange_code/refresh_token paths: a rejected
-            // dynamic registration must be purged so the next attempt
-            // re-registers. Fix 1's guard makes this a no-op for
+            // Mirror the exchange_code/refresh_token paths: a rejected dynamic registration must be
+            // purged so the next attempt re-registers. Fix 1's guard makes this a no-op for
             // configured-secret (static) clients.
             self.purge_client_id_if_invalid(&body);
             return Err(Error::OAuth(safe_oauth_http_error(
@@ -671,17 +673,14 @@ impl OAuthClient {
 
     /// RFC 8707 resource indicator for this backend.
     ///
-    /// MCP's authorization spec (rev 2025-06-18) mandates Resource Indicators
-    /// (RFC 8707): the `resource` parameter MUST be sent on both the
-    /// authorization request and every token request so the authorization
-    /// server can audience-bind the issued token to this specific MCP server.
-    /// Omitting it makes strict providers reject the flow with `server_error`
-    /// (see issue #369).
+    /// MCP's authorization spec (rev 2025-06-18) mandates Resource Indicators (RFC 8707): the
+    /// `resource` parameter MUST be sent on both the authorization request and every token request
+    /// so the authorization server can audience-bind the issued token to this specific MCP server.
+    /// Omitting it makes strict providers reject the flow with `server_error` (see issue #369).
     ///
-    /// Prefers the canonical identifier advertised by discovered
-    /// protected-resource metadata (RFC 9728 `resource` field); falls back to
-    /// the configured MCP endpoint URL when metadata discovery did not run or
-    /// omitted it.
+    /// Prefers the canonical identifier advertised by discovered protected-resource metadata (RFC
+    /// 9728 `resource` field); falls back to the configured MCP endpoint URL when metadata
+    /// discovery did not run or omitted it.
     fn resource_indicator(&self) -> &str {
         self.resource_metadata
             .as_ref()
@@ -1035,11 +1034,10 @@ impl OAuthClient {
                             return Ok(persisted);
                         }
                         Err(e) => {
-                            // Do NOT silently swallow: a lost write re-opens the
-                            // "new client_id every restart" churn bug. The
-                            // in-memory id is still valid for THIS session, so
-                            // the live auth proceeds, but the operator must see
-                            // that persistence failed.
+                            // Do NOT silently swallow: a lost write re-opens the "new client_id
+                            // every restart" churn bug. The in-memory id is still valid for THIS
+                            // session, so the live auth proceeds, but the operator must see that
+                            // persistence failed.
                             let client_file = self
                                 .storage
                                 .client_path(&credential_key, &self.resource_url);
@@ -1080,14 +1078,12 @@ impl OAuthClient {
         if !response_body.contains("invalid_client") {
             return;
         }
-        // Guard on provenance, not `client_secret` presence: a PUBLIC
-        // operator-configured client (client_id set, no secret — e.g. a
-        // native/PKCE-only app registration) is just as much operator config
-        // as a confidential one, and the old `client_secret.is_some()` guard
-        // did not protect it (Defect 2, MIK-6750 r7). Only a client_id whose
-        // provenance is positively known to be `Registered` — Dynamic Client
-        // Registration, a generated DCR fallback, or a loaded prior
-        // registration — is safe to purge and re-register.
+        // Guard on provenance, not `client_secret` presence: a PUBLIC operator-configured client
+        // (client_id set, no secret — e.g. a native/PKCE-only app registration) is just as much
+        // operator config as a confidential one, and the old `client_secret.is_some()` guard did
+        // not protect it (Defect 2, MIK-6750 r7). Only a client_id whose provenance is positively
+        // known to be `Registered` — Dynamic Client Registration, a generated DCR fallback, or a
+        // loaded prior registration — is safe to purge and re-register.
         if *self.client_id_source.read() != Some(ClientIdSource::Registered) {
             warn!(
                 backend = %self.backend_name,
@@ -1205,6 +1201,7 @@ fn open_browser(url: &str) -> bool {
     result.is_ok()
 }
 
+pub(crate) mod destination;
 #[cfg(test)]
 mod tests;
 

@@ -3,7 +3,6 @@
 //! #1943: a remote backend that runs without signed provenance is named in a
 //! startup WARN and in `doctor`. The config leaves `remote_server_signing` out
 //! entirely, so what loads is the shipped default.
-#![cfg(unix)]
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -56,9 +55,14 @@ fn doctor_reports_an_unverified_remote_backend() {
     command
         .env_clear()
         .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
         .current_dir(home.path())
         .stdin(Stdio::null())
         .args(["doctor", "--config", "gateway.yaml", "--format", "json"]);
+    // A cleared environment loses the Windows system root the process needs to start.
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
     if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
         command.env("LLVM_PROFILE_FILE", profile);
     }

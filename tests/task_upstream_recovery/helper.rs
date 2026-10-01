@@ -265,7 +265,6 @@ pub struct Fixture<'a> {
     /// Filename under the temp root. Named per fixture so a test that writes a
     /// second configuration is visibly writing a different file.
     pub name: &'a str,
-    pub port: u16,
     pub backend_url: &'a str,
     /// Names written to `tasks.recovery_adapters`. Empty is the no-adapter
     /// control, whose behaviour must be unchanged.
@@ -277,7 +276,8 @@ pub struct Fixture<'a> {
 pub fn write_config(root: &Path, fixture: &Fixture<'_>) -> PathBuf {
     let mut config = Config::default();
     config.server.host = "127.0.0.1".to_string();
-    config.server.port = fixture.port;
+    // Port 0: the child binds a port of the OS's choosing (#2513).
+    config.server.port = 0;
     config.server.modern_protocol = true;
     config.auth.enabled = false;
     config.capabilities.enabled = false;
@@ -332,13 +332,38 @@ pub fn store_dir(root: &Path) -> PathBuf {
     root.join("tasks")
 }
 
-pub fn free_port() -> u16 {
-    let listener =
-        std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port can be reserved");
-    listener
-        .local_addr()
-        .expect("the reserved listener reports its address")
-        .port()
+/// The port a gateway child bound, from the last complete `Listening` banner
+/// line (`src/gateway/server/support.rs`) in its log. Only complete lines
+/// count, so a banner caught mid-write never reads as a shorter port. The
+/// fmt layer may colour field names, so escape sequences are dropped first.
+/// `tests/common/signing_gateway.rs` carries the same reader.
+fn bound_port(log: &str) -> Option<u16> {
+    let complete = &log[..=log.rfind('\n')?];
+    complete.lines().rev().find_map(|line| {
+        let plain = without_ansi(line);
+        let (_, fields) = plain.split_once("server::support: Listening ")?;
+        fields
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("port=")?.parse().ok())
+    })
+}
+
+fn without_ansi(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // An SGR sequence, `ESC [ ... m`: skip through its final `m`.
+            for c in chars.by_ref() {
+                if c == 'm' {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    plain
 }
 
 /// Every durable record body, parsed. The store is the assertion surface for
@@ -396,8 +421,8 @@ pub struct Gateway {
 }
 
 impl Gateway {
-    pub fn start(root: &Path, config: &Path, port: u16, log_name: &str) -> Self {
-        Self::start_with_env(root, config, port, log_name, &[])
+    pub fn start(root: &Path, config: &Path, log_name: &str) -> Self {
+        Self::start_with_env(root, config, log_name, &[])
     }
 
     /// The same child with additional environment entries, applied AFTER the
@@ -408,7 +433,6 @@ impl Gateway {
     pub fn start_with_env(
         root: &Path,
         config: &Path,
-        port: u16,
         log_name: &str,
         env: &[(&str, &str)],
     ) -> Self {
@@ -424,6 +448,14 @@ impl Gateway {
             }
         }
         command.env("MCP_GATEWAY_CONFIG_DIR", root.join("gateway-state"));
+        // The bound port is read from an info-level banner, so an inherited
+        // filter keeps its own directives but may not hide that one line.
+        if let Ok(filter) = std::env::var("RUST_LOG") {
+            command.env(
+                "RUST_LOG",
+                format!("{filter},mcp_gateway::gateway::server::support=info"),
+            );
+        }
         for (key, value) in env {
             command.env(key, value);
         }
@@ -441,7 +473,8 @@ impl Gateway {
         Self {
             child,
             log,
-            base: format!("http://127.0.0.1:{port}"),
+            // Learned from the child's banner in `wait_until_ready`.
+            base: String::new(),
         }
     }
 
@@ -452,26 +485,47 @@ impl Gateway {
     }
 
     pub async fn wait_until_ready(&mut self, client: &reqwest::Client) {
-        let url = format!("{}/health", self.base);
-        let ready = async {
-            loop {
-                if let Some(status) = self.child.try_wait().expect("owned child status") {
-                    panic!(
-                        "gateway exited before readiness ({status})\n{}",
-                        self.logs()
-                    );
-                }
-                if client.get(&url).send().await.is_ok() {
-                    return;
-                }
-                tokio::time::sleep(POLL_GAP).await;
+        let deadline = tokio::time::Instant::now() + READY_BOUND;
+        loop {
+            if let Some(status) = self.child.try_wait().expect("owned child status") {
+                panic!(
+                    "gateway exited before readiness ({status})\n{}",
+                    self.logs()
+                );
             }
-        };
-        assert!(
-            tokio::time::timeout(READY_BOUND, ready).await.is_ok(),
-            "the gateway never answered on {url} within {READY_BOUND:?}\n{}",
-            self.logs()
-        );
+            // The child binds port 0, so the OS picks a port nothing else
+            // holds, and its banner names it (#2513). Reserving a port in the
+            // test and handing it over let another test take it first (#2510).
+            if self.base.is_empty()
+                && let Ok(log) = std::fs::read_to_string(&self.log)
+                && let Some(port) = bound_port(&log)
+            {
+                self.base = format!("http://127.0.0.1:{port}");
+            }
+            // A gateway /health body carries its version, healthy (200) or
+            // degraded (503).
+            if !self.base.is_empty()
+                && let Ok(response) = client.get(format!("{}/health", self.base)).send().await
+                && let Ok(body) = response.json::<Value>().await
+                && body["version"] == env!("CARGO_PKG_VERSION")
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the gateway was not ready within {READY_BOUND:?} (no `Listening` line \
+                 means it never logged one; a RUST_LOG above info hides it)\n{}",
+                self.logs()
+            );
+            tokio::time::sleep(POLL_GAP).await;
+        }
+        if let Some(status) = self.child.try_wait().expect("owned child status") {
+            panic!(
+                "a /health on {} answered but the gateway had exited ({status})\n{}",
+                self.base,
+                self.logs()
+            );
+        }
     }
 
     pub async fn post(&self, client: &reqwest::Client, body: &Value) -> Value {

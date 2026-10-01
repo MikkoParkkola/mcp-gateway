@@ -12,7 +12,7 @@ use std::path::PathBuf;
 /// Falls back to the current directory if `dirs::home_dir()` returns `None`
 /// (unusual, but possible in restricted environments).
 pub fn home_path(rel: &str) -> PathBuf {
-    dirs::home_dir().unwrap_or_default().join(rel)
+    crate::home_dir::home_dir().unwrap_or_default().join(rel)
 }
 
 /// Platform-specific path for Claude Desktop's config file.
@@ -29,7 +29,7 @@ pub fn claude_desktop_path() -> PathBuf {
 /// `~/.config` on Linux, `%APPDATA%` on Windows).
 #[cfg(not(target_os = "macos"))]
 pub fn config_dir_path(rel: &str) -> PathBuf {
-    dirs::config_dir()
+    crate::home_dir::config_dir()
         .unwrap_or_else(|| home_path(".config"))
         .join(rel)
 }

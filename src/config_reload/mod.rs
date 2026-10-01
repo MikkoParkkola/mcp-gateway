@@ -62,7 +62,7 @@ use crate::backend::{Backend, BackendRegistry, runtime_plan_for_backend};
 use crate::config::{
     BackendConfig, Config, EnvOverlay, LiveEnv, ResolvedEnvFiles, RuntimeConfig, ServerConfig,
 };
-use crate::security::posture;
+use crate::security::{posture, ssrf::DestinationPolicy};
 
 // ============================================================================
 // Public types
@@ -1038,6 +1038,7 @@ pub struct ConfigWatcher {
     /// the gateway shuts down.
     _chain: Arc<watch_chain::ChainWatch>,
     /// What the reload task did with `EnvFile` triggers.
+    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
     #[cfg(all(test, target_os = "linux"))]
     env_reloads: Arc<env_poll::EnvReloadCounts>,
 }
@@ -1055,6 +1056,7 @@ impl ConfigWatcher {
     }
 
     /// What the reload task did with `EnvFile` triggers so far.
+    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
     #[cfg(all(test, target_os = "linux"))]
     fn env_reloads(&self) -> &env_poll::EnvReloadCounts {
         &self.env_reloads
@@ -1121,6 +1123,7 @@ impl ConfigWatcher {
 
         Ok(Self {
             _chain: chain,
+            // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
             #[cfg(all(test, target_os = "linux"))]
             env_reloads,
         })
@@ -1474,6 +1477,9 @@ impl ReloadContext {
         failsafe_config: crate::config::FailsafeConfig,
         cache_ttl: Duration,
     ) -> Self {
+        // A registry built by the caller still serves this config's posture.
+        let posture = live_config.running().security.posture;
+        registry.enforce_destination(DestinationPolicy::for_posture(posture));
         Self {
             config_path,
             live_config,
@@ -1805,28 +1811,28 @@ impl ReloadContext {
     /// lock; taking it here as well would deadlock on the non-reentrant mutex.
     async fn reload_outcome_locked(&self) -> std::result::Result<ReloadOutcome, String> {
         let evaluated = self.load_off_worker().await?;
-        if let Some(field) = self
-            .live_config
-            .running()
-            .security
-            .message_signing
-            .restart_changed_field(
-                &evaluated.config.security.message_signing,
-                self.env.startup(),
-                &evaluated.overlay,
-            )
-            .map_err(|error| error.to_string())?
+        // First: a posture change also changes what the posture forces (signing
+        // among it), and the posture is the cause the operator must act on.
+        if let Some(refusal) =
+            posture::reload_refusal(self.live_config.running(), &evaluated.config)
         {
-            // Before even the empty-patch path: equal effective key bytes can
-            // conceal a configured-reference edit, and env-only reloads publish
-            // there too. This refusal changes no live state or backend object.
-            return Err(format!(
-                "config reload refused: security.message_signing.{field} requires restart"
-            ));
-        }
-        let running = self.live_config.running();
-        if let Some(refusal) = posture::reload_refusal(running, &evaluated.config) {
             return Err(refusal);
+        }
+        let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
+        let (env, overlay): (&crate::config::EnvOverlay, &crate::config::EnvOverlay) =
+            (self.env.startup(), &evaluated.overlay);
+        let signing = (running.message_signing)
+            .restart_changed_field(&proposed.security.message_signing, env, overlay)
+            .map_err(|error| error.to_string())?;
+        let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
+        let chain =
+            crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
+        if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
+            .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
+        {
+            return Err(format!(
+                "config reload refused: security.{field} requires restart"
+            ));
         }
         // Measured against the overlay startup captured, so a requirement stays
         // reported on every reload until the process actually restarts.
@@ -2200,6 +2206,7 @@ fn watch_dir_of(path: &std::path::Path) -> PathBuf {
 }
 
 mod env_poll;
+// Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
 #[cfg(all(test, target_os = "linux"))]
 mod env_poll_e2e_tests;
 pub(crate) mod grant_audit;

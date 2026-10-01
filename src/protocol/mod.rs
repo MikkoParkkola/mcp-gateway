@@ -22,6 +22,42 @@ pub use messages::*;
 pub use negotiate::*;
 pub use types::*;
 
+/// Where a final result came from, decided by the dispatch outcome and carried
+/// server-side to delivery. Only these results are eligible for a signature
+/// chain origin link; anything unset is `NotEligible`, so a missed site emits
+/// nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ChainSource {
+    /// A live cache-miss `Ok` from an MCP backend whose gates passed it through.
+    Backend,
+    /// A sync-admission replay of a stored `Backend` result.
+    Replay,
+    /// Gateway-authored output, composites, cache hits and capability results.
+    #[default]
+    NotEligible,
+}
+
+/// A backend's signature chain as checked at raw receipt (ASI07 inc3, D3/D4).
+/// Server-owned: never read from or written to the wire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UpstreamChain {
+    /// The verified upstream links as received; empty when unverified.
+    pub(crate) links: Vec<serde_json::Value>,
+    /// `H(raw result)` the chain was checked against: this hop's `in`.
+    pub(crate) received: String,
+    /// What this gateway's appended link records about the upstream.
+    pub(crate) state: UpstreamState,
+}
+
+/// Whether the upstream chain verified (design D5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpstreamState {
+    /// Every rule passed; the links are the delivered prefix.
+    Verified,
+    /// Absent or failed under `verify`; this gateway's link says so.
+    Unverified,
+}
+
 /// MCP Protocol version (latest)
 pub const PROTOCOL_VERSION: &str = "2025-11-25";
 

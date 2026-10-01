@@ -5,6 +5,7 @@
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
 mod commands;
+mod home_dir;
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -19,10 +20,6 @@ use mcp_gateway::{
     validator::ValidateConfig,
 };
 use tracing::{error, info};
-
-// ── New command imports ────────────────────────────────────────────────────────
-// These modules live in the binary-only `commands/` tree and are not part of
-// the library crate, so they are imported directly here.
 
 /// Stack for the thread that runs the async main body.
 ///
@@ -293,7 +290,7 @@ async fn run() -> ExitCode {
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
-        Some(Command::Serve { stdio: false }) | None => run_server(cli).await,
+        Some(Command::Serve { stdio: false }) | None => Box::pin(run_server(cli)).await,
     }
 }
 

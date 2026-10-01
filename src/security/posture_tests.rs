@@ -27,8 +27,15 @@ fn load(body: &str) -> Config {
 }
 
 fn preset_yaml(posture: &str, preset: &str) -> String {
-    format!("security:\n  posture: {posture}\n  context_integrity:\n    preset: {preset}\n")
+    format!(
+        "security:\n  posture: {posture}\n  context_integrity:\n    preset: {preset}\n{SIGNING_YAML}"
+    )
 }
+
+/// Under `security:`: the signing secret hardened requires (row 6). Inert
+/// under standard, where signing stays off.
+const SIGNING_YAML: &str =
+    "  message_signing:\n    shared_secret: hardened-signing-secret-0123456789abcdef\n";
 
 #[test]
 fn hardened_raises_monitor_only_to_team_shared() {
@@ -89,12 +96,80 @@ fn posture_defaults_to_standard_and_round_trips() {
 
 #[test]
 fn standard_posture_applies_no_override() {
-    let config = load(&preset_yaml("standard", "monitor_only"));
+    let config = load(&format!(
+        "{}{SSRF_OFF}",
+        preset_yaml("standard", "monitor_only")
+    ));
     let ci = &config.security.context_integrity;
     assert_eq!(ci.preset, Preset::MonitorOnly);
     assert!(!ci.non_bypassable);
+    assert!(
+        !config.security.ssrf_protection,
+        "standard keeps the file's value"
+    );
+    assert!(config.security.trust_configured_backends);
+    assert!(
+        !config.security.message_signing.enabled,
+        "standard leaves signing off"
+    );
     let mut config = config;
     resolve(&mut config, FirewallBuild::Absent).expect("standard never refuses");
+}
+
+/// A 32-byte signing secret for hardened fixtures.
+pub(crate) const SIGNING_SECRET: &str = "hardened-signing-secret-0123456789abcdef";
+
+/// Row 6: hardened forces signing before the secret is resolved, so a secret
+/// set only in an env file resolves, whatever `enabled` the file says.
+#[test]
+fn hardened_resolves_env_secret_before_signing_check() {
+    for enabled in ["", "    enabled: false\n"] {
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join("gateway.env");
+        crate::gateway::test_helpers::write_owner_only(
+            &env,
+            format!("HARDENED_SIGNING_SECRET={SIGNING_SECRET}\n"),
+        )
+        .unwrap();
+        let body = format!(
+            "env_files:\n  - '{}'\nsecurity:\n  posture: hardened\n  message_signing:\n{enabled}    \
+             shared_secret: \"${{HARDENED_SIGNING_SECRET}}\"\n",
+            env.display()
+        );
+        let config = Config::load(Some(&write_yaml(&dir, &body))).expect("the env secret resolves");
+        let signing = &config.security.message_signing;
+        assert!(signing.enabled, "hardened forces signing ({enabled:?})");
+        assert_eq!(signing.shared_secret, SIGNING_SECRET, "({enabled:?})");
+    }
+}
+
+/// Row 6: hardened with no signing secret refuses to start.
+#[test]
+fn hardened_without_signing_secret_refuses() {
+    let err = load_err("security:\n  posture: hardened\n");
+    assert!(
+        err.contains("security.message_signing.shared_secret"),
+        "{err}"
+    );
+}
+
+/// Appended under a `security:` block: the two SSRF switches at their weakest.
+const SSRF_OFF: &str = "  ssrf_protection: false\n  trust_configured_backends: true\n";
+
+#[test]
+fn hardened_forces_ssrf_flags() {
+    let config = load(&format!(
+        "{}{SSRF_OFF}",
+        preset_yaml("hardened", "team_shared")
+    ));
+    assert!(
+        config.security.ssrf_protection,
+        "hardened forces SSRF protection"
+    );
+    assert!(
+        !config.security.trust_configured_backends,
+        "hardened re-checks configured backends"
+    );
 }
 
 #[test]
@@ -258,6 +333,7 @@ fn gateway_startup_logs_posture_once() {
     let mut hardened = unhardened.clone();
     // Not resolved here: the constructor must apply the floor itself.
     hardened.security.posture = SecurityPosture::Hardened;
+    hardened.security.message_signing.shared_secret = SIGNING_SECRET.to_string();
     for (name, config, level) in [
         ("unhardened", unhardened, "WARN"),
         ("hardened", hardened, "INFO"),
@@ -296,6 +372,7 @@ fn gateway_constructor_validates_what_hardened_forces() {
     let mut config = Config::default();
     config.security.posture = SecurityPosture::Hardened;
     config.security.firewall.anomaly_block_threshold = Some(1.5);
+    config.security.message_signing.shared_secret = SIGNING_SECRET.to_string();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -317,7 +394,7 @@ fn firewall_yaml(posture: &str, block: Option<&str>) -> String {
     });
     format!(
         "security:\n  posture: {posture}\n  firewall:\n    enabled: false\n    \
-         anomaly_detection: false\n{block}"
+         anomaly_detection: false\n{block}{SIGNING_YAML}"
     )
 }
 
@@ -362,4 +439,21 @@ fn hardened_refuses_a_block_threshold_below_the_floor() {
     assert!(error.contains("anomaly_block_threshold"), "{error}");
     // Standard keeps its own semantics: detection off, nothing checked.
     load(&firewall_yaml("standard", Some("0.85")));
+}
+
+/// Row 12b (#1881): under hardened the egress proxy is refused at load, since
+/// it is a route out that the destination policy does not govern.
+#[test]
+fn hardened_refuses_capability_egress_proxy() {
+    let yaml = |posture: &str| {
+        format!(
+            "security:\n  posture: {posture}\ncapabilities:\n  egress_proxy: \"http://proxy.internal:3128\"\n"
+        )
+    };
+    let error = load_err(&yaml("hardened"));
+    assert!(error.contains("capabilities.egress_proxy"), "{error}");
+    assert!(error.contains("security.posture=hardened"), "{error}");
+    // Standard keeps the proxy.
+    let config = load(&yaml("standard"));
+    assert!(config.capabilities.egress_proxy.is_some());
 }

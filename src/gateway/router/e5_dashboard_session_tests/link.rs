@@ -240,40 +240,30 @@ async fn cookie_security_follows_a_reloaded_public_url() {
     assert!(!out.set_cookie().contains("Secure"), "{}", out.set_cookie());
 }
 
-/// E5-T22: a link printed for a plain-HTTP listener is refused, and not spent,
-/// once a reload names an HTTPS `public_url`: the `Secure` cookie it would set
-/// is dropped by a browser on `http://`, which would waste the only link.
+/// E5-T22 (#2130): a link printed for a plain-HTTP listener, redeemed after a
+/// reload names an HTTPS `public_url`, shows the one-time code for the public
+/// origin instead of setting a `Secure` cookie a browser on `http://` would
+/// drop. A wrong value is still refused without naming the deployment.
 #[tokio::test]
-async fn a_stale_http_link_is_refused_before_it_is_spent() {
+async fn a_stale_http_link_hands_off_after_an_https_reload() {
     let (state, _dir) = fixture().await;
     let value = state.dashboard_bootstrap.peek().expect("startup value");
     reload(&state, |c| {
         c.server.public_url = Some("https://gw.example".to_string());
     });
-    let out = send(&state, redeem(&value, None)).await;
-    assert_eq!(out.status, StatusCode::CONFLICT, "{}", out.body);
-    assert!(out.body.contains("public_url"), "{}", out.body);
-    // A same-host HTTPS proxy reaches this listener over plain loopback and
-    // gets this same refusal, so the advice must not send the operator there.
-    assert!(out.body.contains("Enable mtls"), "{}", out.body);
-    assert!(!out.body.contains("HTTPS address"), "{}", out.body);
-    assert_eq!(
-        state.dashboard_bootstrap.peek().as_deref(),
-        Some(value.as_str()),
-        "the link was not spent"
-    );
     let wrong = send(&state, redeem("not-the-value", None)).await;
     assert_eq!(wrong.status, StatusCode::UNAUTHORIZED, "{}", wrong.body);
     assert!(!wrong.body.contains("public_url"), "{}", wrong.body);
 
-    reload(&state, |c| c.server.public_url = None);
     let out = send(&state, redeem(&value, None)).await;
-    assert_eq!(
-        out.status,
-        StatusCode::SEE_OTHER,
-        "the kept link still opens: {}",
+    assert_eq!(out.status, StatusCode::OK, "{}", out.body);
+    assert!(
+        out.body.contains("https://gw.example/dashboard/handoff"),
+        "{}",
         out.body
     );
+    assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
+    assert_eq!(state.dashboard_bootstrap.peek(), None, "the link is spent");
 }
 
 /// The session handle a redemption set.

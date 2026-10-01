@@ -569,6 +569,7 @@ mod tests {
         assert!(contents.contains("BEGIN CERTIFICATE"));
     }
 
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     #[test]
     fn write_to_dir_private_key_is_owner_only() {
@@ -821,6 +822,7 @@ mod tests {
     }
 }
 
+// Unix-only (W-L1): asserts POSIX mode bits on the written key; Windows uses DACLs (win_acl).
 #[cfg(all(test, unix))]
 mod private_key_permission_tests {
     use super::*;

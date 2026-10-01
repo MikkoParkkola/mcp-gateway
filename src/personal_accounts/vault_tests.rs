@@ -335,10 +335,13 @@ fn stdio_is_admitted_but_stays_distinguishable_from_a_validated_secret() {
     seed_sole_operator(tmp.path());
     let (vault, _) = strategy(tmp.path(), true);
 
+    // The stdio name alone is text, never the transport (MIK-7272.OWNER.3):
+    // `LocalTransport` needs the transport's mark, pinned in
+    // `gateway/server/tests/stdio_sole_operator.rs`.
     assert_eq!(
         CallerProvenance::classify(Some("stdio")),
-        CallerProvenance::LocalTransport,
-        "the stdio constant is matched by name, not counted as a presented secret"
+        CallerProvenance::Credential,
+        "the stdio name is text, not the transport"
     );
     assert_eq!(
         CallerProvenance::classify(Some("a1b2c3-digest-of-a-validated-secret")),

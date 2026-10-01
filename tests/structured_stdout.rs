@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! #1909: a command asked for a machine-readable format writes exactly one
 //! document to stdout. Hints, progress and empty-state text go to stderr.
-#![cfg(unix)]
 
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -26,6 +25,10 @@ impl Home {
         command
             .env_clear()
             .env("HOME", &self.root)
+            .env("USERPROFILE", &self.root)
+            // Debug-build seam: Windows `dirs::home_dir()` ignores HOME (#2368).
+            .env("MCP_GATEWAY_TEST_HOME_DIR", &self.root)
+            .env("APPDATA", self.root.join("AppData/Roaming"))
             .env("XDG_CONFIG_HOME", self.root.join("xdg"))
             // Process discovery calls `ps` by name; an empty PATH keeps host
             // processes out of the discovered set.
@@ -33,6 +36,10 @@ impl Home {
             .current_dir(&self.root)
             .stdin(Stdio::null())
             .args(args);
+        // A cleared environment loses the Windows system root the process needs to start.
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            command.env("SystemRoot", root);
+        }
         if found {
             command.env("MCP_SERVER_PROBE_URL", "http://127.0.0.1:9/mcp");
         }

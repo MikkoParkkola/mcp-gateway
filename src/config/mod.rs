@@ -52,16 +52,16 @@ pub(crate) use secret_file::{CheckedFile, read_checked_bytes, read_checked_file}
 
 // Re-export all feature config types so external code needs only `crate::config::Foo`.
 pub use features::{
-    AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, AuthConfig,
-    CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, CircuitBreakerConfig,
-    CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig, DEFAULT_MAX_WORKERS,
-    DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, HealthCheckConfig,
-    IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig, KeyServerConfig,
-    KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig, PlaybooksConfig,
-    PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig, RemoteServerSigningConfig,
-    ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig, RuntimeConfig,
-    RuntimeProfileConfig, SecurityConfig, StreamingConfig, TasksConfig, ToolContractConfig,
-    WebhookConfig, api_key_digest_spec,
+    AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, ApiKeyKind,
+    AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit, ChainMode,
+    CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
+    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig,
+    HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
+    KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
+    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
+    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
+    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig,
+    TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
 pub(crate) use features::{api_key_expired, parse_api_key_digest};
 
@@ -305,7 +305,7 @@ impl Config {
         }
 
         // Home-relative candidate
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::home_dir::home_dir() {
             let p = home.join(".config/mcp-gateway/gateway.yaml");
             if p.exists() {
                 tracing::debug!("Auto-discovered config: {}", p.display());
@@ -564,23 +564,13 @@ impl Config {
         // ORDER MATTERS, AND IT DID NOT BEFORE.
         //
         // `expand_env_vars` below INLINES `auth.bearer_token` and
-        // `auth.api_keys[].key_sha256`: after it, a credential written `env:SHARED`
-        // holds the VALUE `SHARED` had, and the `env:` spelling is gone. The
-        // structural alias check inside `validate_with_env` compares an
-        // adapter's `env:SHARED` reference against that gateway text, so on
-        // this path it was comparing a reference against plaintext and never
-        // matched. With a DISABLED store the material half is deliberately
-        // skipped, so the one variable wired into both places was accepted in
-        // silence — the very case the structural check exists to catch, and the
-        // one an operator only discovers on the day they enable custody.
-        //
+        // `auth.api_keys[].key_sha256`, so the structural alias check inside
+        // `validate_with_env` would compare an adapter's `env:SHARED` reference
+        // against plaintext and never match (silent with a DISABLED store).
         // Running it here, before any inlining, is the only point on this path
         // where BOTH sides are still references. The call inside
-        // `validate_with_env` stays exactly where it is: callers that parse and
-        // validate without ever inlining (and the reload/validation entry
-        // points) reach only that one, and re-running a text-only check costs
-        // nothing. Nothing else moves — allowlist semantics and runtime wiring
-        // are untouched by this.
+        // `validate_with_env` stays for callers that never inline; re-running a
+        // text-only check costs nothing.
         // The API key digest check sits here for the same reason: an `env:`
         // variable holding plaintext must be refused by NAME, before inlining.
         config.auth.validate_api_key_material(&overlay)?;
@@ -598,6 +588,8 @@ impl Config {
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
+                let chain = &mut config.security.signature_chain;
+                SignatureChainConfig::resolve_section(chain, &overlay)?;
                 refs
             }
             Expansion::Literal => (BTreeSet::new(), SecretFileDigests::new()),
@@ -788,6 +780,7 @@ impl Config {
         self.auth.validate_api_key_names()?;
         self.security.validate_sections(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;
+        features::validate_backend_chains(self)?;
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
         self.tasks.validate()?;
@@ -976,18 +969,11 @@ impl Config {
                      stdio/websocket cannot carry the credential header (IDP.2)"
                 )));
             }
-            // `SessionMode::PerUser` is now supported by the per-user transport
-            // pool (MIK-6735): the backend keeps a distinct transport/session per
-            // caller identity, so no shared session is reused across users
-            // (IDP.7). No rejection needed here.
-            // A backend running the gateway's own OAuth client authorizes and
-            // persists a gateway-held token during initialize(), authenticating
-            // the transport session as the gateway *before* the per-request
-            // credential override is applied. Combined with identity_propagation
-            // that silently defeats per-user propagation: the session is already
-            // gateway-authenticated, so the per-user credential rides on top of a
-            // channel that no longer represents the end user. Refuse the pairing
-            // at load rather than dispatch under a contradictory trust model (F3).
+            // `SessionMode::PerUser` is supported by the per-user transport pool
+            // (MIK-6735, IDP.7). A backend running the gateway's own OAuth client
+            // authenticates its session as the gateway during initialize(), so a
+            // per-user credential would ride a channel that no longer represents
+            // the end user. Refuse the pairing at load (F3).
             if backend.oauth.as_ref().is_some_and(|o| o.enabled) {
                 return Err(Error::ConfigValidation(format!(
                     "backend '{name}' cannot combine identity_propagation with its own enabled \
@@ -1685,19 +1671,20 @@ pub struct BackendConfig {
     /// static-credential behavior (IDP.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_propagation: Option<crate::identity_propagation::IdentityPropagationConfig>,
-    /// Explicit reference to an `accounts.descriptors` MAP KEY.
-    ///
-    /// The value is the descriptor's logical id — the `backend_id` half of the
-    /// account key — and never the backend registry name, the provider id, an
-    /// email or a display name. A name that is not a declared descriptor key is
-    /// a startup refusal (`account_bindings`), never a silent downgrade to the
-    /// static credential this backend also carries.
-    ///
-    /// Mutually exclusive with [`Self::identity_propagation`]: the descriptor
-    /// decides how this backend is authenticated, and two answers to that
-    /// question are a conflict rather than a precedence rule.
+    /// Explicit reference to an `accounts.descriptors` MAP KEY: the descriptor's
+    /// logical id, never a registry name, provider id or email. An undeclared
+    /// key refuses startup (`account_bindings`). Mutually exclusive with
+    /// [`Self::identity_propagation`]: two answers to how this backend is
+    /// authenticated are a conflict, not a precedence rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// ASI07: whether this backend's signature chain is ignored, verified or
+    /// required (design 2026-09-30-asi07-chain-inc3, D1). Default `off`.
+    pub signature_chain: ChainMode,
+    /// Key ids that may sign the origin link of this backend's chains.
+    pub chain_origins: Vec<String>,
+    /// Key id that must sign the last link this backend delivers.
+    pub chain_signer: Option<String>,
 }
 
 impl Default for BackendConfig {
@@ -1719,6 +1706,9 @@ impl Default for BackendConfig {
             runtime_profile: None,
             identity_propagation: None,
             account: None,
+            signature_chain: ChainMode::Off,
+            chain_origins: Vec::new(),
+            chain_signer: None,
         }
     }
 }

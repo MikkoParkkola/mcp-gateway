@@ -45,3 +45,29 @@ mod stdio_cost_persistence;
 mod http_cost_persistence;
 
 mod grant_decision_stdio;
+
+// MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
+mod owner3_stdio_keying;
+mod owner5_stdio_context;
+
+// MIK-7272.OWNER.1 and OWNER.4 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I2).
+mod owner1_stdio_management;
+mod owner1_stdio_reload;
+mod owner4_stdio_policy;
+
+// MIK-7272.LIFE.1 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I3).
+mod life1_stdio_cancel;
+mod owner2_stdio_tasks;
+
+// #2480: a stdio idempotent replay writes its invocation record.
+mod stdio_replay_audit;
+
+// MIK-7324.COV.3: the stdio chain-nonce refusal in `prepare_signing`.
+mod stdio_chain_nonce_refusal;
+
+// MIK-7324.COV.3: the firewall `response_firewall` builds carries anomaly blocking.
+#[cfg(feature = "firewall")]
+mod response_firewall_anomaly;
+
+#[cfg(feature = "firewall")]
+mod hardened_destination;

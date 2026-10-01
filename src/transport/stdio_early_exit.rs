@@ -253,6 +253,7 @@ pub(super) async fn reply_or_eof<T>(
 pub(super) struct StartState {
     eof: parking_lot::Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     exited: std::sync::atomic::AtomicBool,
+    // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
     failure: parking_lot::Mutex<Option<String>>,
 }
@@ -261,6 +262,7 @@ impl StartState {
     pub(super) fn begin(&self, eof: tokio::sync::watch::Receiver<bool>) {
         *self.eof.lock() = Some(eof);
         // An excerpt describes the last start only.
+        // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
         #[cfg(all(test, unix))]
         {
             *self.failure.lock() = None;
@@ -277,6 +279,7 @@ impl StartState {
 impl StdioTransport {
     /// The redacted stderr tail of the last start that ended in an early exit,
     /// as the log record carried it.
+    // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
     #[cfg(all(test, unix))]
     pub(super) fn start_failure_excerpt(&self) -> Option<String> {
         self.start.failure.lock().clone()
@@ -357,6 +360,7 @@ impl StdioTransport {
         };
         // `doctor --start-stdio` reads this record's `stderr` field.
         warn!(command = %command, stderr = %excerpt, "stdio backend {what}");
+        // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
         #[cfg(all(test, unix))]
         {
             *self.start.failure.lock() = Some(excerpt);
@@ -367,6 +371,7 @@ impl StdioTransport {
     }
 }
 
+// Unix-only (W-L5): the tests drive `sh -c` scripts as stdio backends.
 #[cfg(all(test, unix))]
 #[path = "stdio_early_exit_tests.rs"]
 mod tests;

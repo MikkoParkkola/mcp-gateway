@@ -56,24 +56,19 @@ fn a_validated_secret_is_a_credential_and_not_a_local_transport() {
     assert_ne!(provenance, CallerProvenance::LocalTransport);
 }
 
-/// The stdio admission identifier is matched by VALUE, against the one constant
-/// the transport actually sets. Written as a guard rather than a pattern: a
-/// constant in pattern position degrades into a catch-all binding if its path
-/// stops resolving, and this test is what notices.
+/// MIK-7272.OWNER.3: text never selects the trusted transport, not even the
+/// stdio principal's own spelling. `LocalTransport` comes only from
+/// `CallerProvenance::local_transport`, which needs the transport's mark
+/// (pinned in `gateway/server/tests/stdio_sole_operator.rs`).
 #[test]
-fn the_stdio_identifier_is_a_local_transport() {
-    assert_eq!(
-        CallerProvenance::classify(Some(STDIO_CREDENTIAL_PRINCIPAL)),
-        CallerProvenance::LocalTransport
-    );
-    // The catch-all falsifier: if the guard ever became a binding, this input
-    // would classify as `LocalTransport` too, and the assertion above would
-    // still pass on its own.
-    assert_ne!(
-        CallerProvenance::classify(Some("not-the-stdio-identifier")),
-        CallerProvenance::LocalTransport,
-        "only the stdio constant itself may be a trusted transport"
-    );
+fn the_stdio_principal_text_is_not_a_local_transport() {
+    for text in [STDIO_CREDENTIAL_PRINCIPAL, "not-the-stdio-identifier"] {
+        assert_eq!(
+            CallerProvenance::classify(Some(text)),
+            CallerProvenance::Credential,
+            "{text:?} is text, so it is a presented credential at most"
+        );
+    }
 }
 
 /// A verified identity outranks provenance, including the anonymous one: an
