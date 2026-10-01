@@ -100,12 +100,38 @@ fn token(access: &str, refresh: Option<&str>, expiry: Expiry) -> TokenInfo {
     token
 }
 
-/// Run `authorize` while playing the person at the browser: read the URL it
-/// opens, then call its callback with `code`, the URL's own state and `iss`.
-/// Returns the flow's outcome and the authorization URL's query.
+/// Which call starts the flow.
+#[derive(Clone, Copy)]
+enum Entry {
+    Authorize,
+    GetToken,
+}
+
+/// Whether the system browser opened. When it did not, the URL is printed
+/// for the person to visit by hand, and the flow goes on the same way.
+#[derive(Clone, Copy)]
+enum Browser {
+    Opens,
+    Fails,
+}
+
+/// Run the flow while playing the person at the browser: read the URL it
+/// hands over, then call its callback with `code`, the URL's own state and
+/// `iss`. Returns the flow's outcome and the authorization URL's query.
 async fn approve(client: &mut OAuthClient, iss: &str) -> (Result<String>, HashMap<String, String>) {
+    approve_via(client, iss, Entry::Authorize, Browser::Opens).await
+}
+
+async fn approve_via(
+    client: &mut OAuthClient,
+    iss: &str,
+    entry: Entry,
+    browser: Browser,
+) -> (Result<String>, HashMap<String, String>) {
     let (url_tx, mut url_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    client.open_browser = Box::new(move |url| url_tx.send(url.to_string()).is_ok());
+    client.open_browser = Box::new(move |url| {
+        url_tx.send(url.to_string()).is_ok() && matches!(browser, Browser::Opens)
+    });
     let person = async move {
         let opened = tokio::time::timeout(Duration::from_secs(10), url_rx.recv())
             .await
@@ -140,8 +166,14 @@ async fn approve(client: &mut OAuthClient, iss: &str) -> (Result<String>, HashMa
             .expect("the callback answers");
         query
     };
+    let flow = async {
+        match entry {
+            Entry::Authorize => client.authorize().await,
+            Entry::GetToken => client.get_token().await,
+        }
+    };
     let (outcome, query) = tokio::time::timeout(Duration::from_secs(20), async {
-        tokio::join!(client.authorize(), person)
+        tokio::join!(flow, person)
     })
     .await
     .expect("the flow finishes");
@@ -254,4 +286,45 @@ async fn without_an_authorization_server_get_token_fails_and_no_key_is_invented(
         client.current_token.read().is_some(),
         "with no current issuer there is no change of issuer to drop credentials for"
     );
+}
+
+/// No token at all: `get_token` runs the whole flow, and the browser failing
+/// to open only means the person visits the printed URL instead.
+#[tokio::test]
+async fn get_token_authorizes_from_scratch_even_when_the_browser_does_not_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, forms) = token_endpoint(Some("access-c")).await;
+    let mut client = client(dir.path(), Some(&issuer));
+
+    let (outcome, _) = approve_via(&mut client, &issuer, Entry::GetToken, Browser::Fails).await;
+
+    assert_eq!(outcome.expect("the flow completes"), "access-c");
+    assert_eq!(forms.lock().unwrap().len(), 1, "one code redemption");
+}
+
+/// An authorization endpoint that is not a URL is refused before a browser
+/// is pointed anywhere.
+#[tokio::test]
+async fn an_unparseable_authorization_endpoint_is_refused_before_any_browser_opens() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client(dir.path(), Some("https://as.example"));
+    if let Some(meta) = client.auth_metadata.as_mut() {
+        meta.authorization_endpoint = "not a url".to_string();
+    }
+    let opened = Arc::new(Mutex::new(0_usize));
+    let count = Arc::clone(&opened);
+    client.open_browser = Box::new(move |_| {
+        *count.lock().unwrap() += 1;
+        true
+    });
+
+    let error = tokio::time::timeout(Duration::from_secs(10), client.authorize())
+        .await
+        .expect("refused promptly")
+        .expect_err("an unparseable endpoint is refused");
+    assert!(
+        error.to_string().contains("Invalid auth endpoint"),
+        "{error}"
+    );
+    assert_eq!(*opened.lock().unwrap(), 0, "no browser is opened");
 }
