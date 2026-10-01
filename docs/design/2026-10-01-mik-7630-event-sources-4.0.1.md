@@ -30,9 +30,11 @@ and push or poll delivery.
 **Descriptor.** One per REST capability marked read-only. The gateway already
 classifies every exposed capability as read-only or side-effecting as data
 (MIK-7216.IDEM.1). A side-effecting capability is never watchable, because
-polling it would repeat its effect. `inputSchema` is the capability's own
-input schema plus `interval` (seconds, default 300, minimum 60) and an
-optional `fields` list (JSON pointers) naming what counts as a change.
+polling it would repeat its effect. `inputSchema` is `{arguments: <the
+capability's own input schema, unchanged>, interval: seconds (default 300,
+minimum 60), fields?: [JSON pointer]}`. Nesting keeps the watch options from
+colliding with a capability that already takes an `interval` or `fields`
+argument.
 `payloadSchema` is `{capability, changed: [pointer], digest_before,
 digest_after, observed_at}`. The payload carries **digests and changed
 pointers, not values**. A subscriber reads the new value through the
@@ -56,11 +58,15 @@ principal's credential never answers for another's subscription.
 
 **Poll.** Each poll calls the capability through the normal executor, so it
 picks up the firewall, budget and rate limits a tool call gets. It then takes
-a JCS digest of the selected `fields` (or of the whole result) and emits on a
-digest change. The first poll sets the baseline and emits nothing. Equal
-consecutive digests emit nothing. `upstream_id` = digest_before ‖
-digest_after ‖ the poller's monotonic change counter, so every transition,
-including a flap A→B→A→B, is a distinct occurrence. Polls run with jitter. Cost: a
+a JCS digest of the selected `fields` (or of the whole result) of the
+**firewall-approved application value**, taken before per-call metadata such
+as `_meta` and the provenance receipt is attached, so a stamp that changes
+every call cannot fake a change (U12). It emits on a digest change. The first poll sets the baseline and emits nothing. Equal
+consecutive digests emit nothing. `upstream_id` is a fresh
+random 128-bit id minted per detected transition, so every transition,
+including a flap A→B→A→B and one after a poller restart, is a distinct
+occurrence; the parent stores it in the outbox record, so retries and replays
+keep it. Polls run with jitter. Cost: a
 credentialed (unshared) poller charges each poll to its one principal under
 `events:watch:<cap>`; an exhausted budget stops that poller. A shared,
 credential-free poller is charged to the gateway's global budget, not split
@@ -223,7 +229,7 @@ criterion in the follow-up ticket.
 | U9 | `schedule_label_is_capped_and_scanned` | a 65-character label → `-32602`; a label carrying a blocked injection pattern is dead-lettered `firewall_blocked` | no schedule source |
 | U10 | `deferred_sources_need_no_core_change` (structural guard, exempt from red-first) | a CI check that a PR adding a source touches no file under `src/events/` other than the source's own module and the registry line | lands as its own PR **before** the first 4.0.1 source and is shown to fail on a synthetic diff that edits a core file; it guards structure and has no behaviour to see red |
 | U11 | `watch_stops_when_its_capability_is_removed_or_reclassified` | reclassifying a watched capability as side-effecting on reload → poller stops (mock sees no further calls), subscription deleted, refresh answers `-32011` | no watch source |
-| U12 | `watch_ignores_default_volatile_fields` | a result whose only change is `timestamp` → no event; with `fields` naming `/timestamp` → an event | no watch source |
+| U12 | `watch_ignores_default_volatile_fields_and_metadata` | a result whose only change is `timestamp` → no event; with `fields` naming `/timestamp` → an event; with provenance stamping on, ten unchanged polls → no event; a restarted poller's first transition gets an `eventId` different from every earlier one | no watch source |
 
 ## 8. Increments
 
@@ -239,3 +245,5 @@ exercises shared pollers and budget per poll).
 |---|---|---|---|
 | 1 | A (on the parent packet) | SHIP-WITH-FIXES | Hooks keyed without the principal could not run credentialed pollers (fixed with `lifecycle_key` in the parent trait); `digest_after` alone repeated on a flap (fixed with a change counter). |
 | 1 | B | SHIP-WITH-FIXES | Shared-poller charging rule (global budget for shared polls, per-delivery charge per subscriber); flap id; U10 relabelled as a structural guard landing first; occurrence scope, pool caps, capability removal and volatile fields specified; rows U11–U12. |
+| 2 | A | SHIP-WITH-FIXES | Watch options nested apart from capability arguments; digest taken before per-call metadata; random per-transition id survives poller restarts. |
+| 2 | B | SHIP-WITH-FIXES | Scheduler double-fire prevented by a persisted last-fired value, not the outbox; U4 split into shared and credentialed cases. |

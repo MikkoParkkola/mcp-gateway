@@ -122,8 +122,20 @@ def post_signed(url, key, msg_id, sub_id, body, allow_local):
         "X-MCP-Subscription-Id": sub_id,
     }
     path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+    deadline = time.monotonic() + 10
     try:
-        sock = socket.create_connection((addrs[0], port), timeout=10)
+        sock = None
+        for addr in addrs:  # every address was validated above; try each until one connects
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            try:
+                sock = socket.create_connection((addr, port), timeout=left)
+                break
+            except OSError:
+                continue
+        if sock is None:
+            return None, "connection_refused"
         if u.scheme == "https":
             sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
         conn = http.client.HTTPConnection(host, port, timeout=10)
@@ -148,7 +160,7 @@ def redact(v):
                 out[k] = "<redacted>"
             elif k == "url" and isinstance(x, str):
                 p = urllib.parse.urlsplit(x)
-                out[k] = f"{p.scheme}://{p.netloc}/<path redacted>"
+                out[k] = f"{p.scheme}://{p.hostname}{f':{p.port}' if p.port else ''}/<path redacted>"
             else:
                 out[k] = redact(x)
         return out
@@ -162,6 +174,11 @@ class Stub:
 
     def __init__(self, store, log, bearer, allow_local):
         self.store, self.log, self.bearer, self.allow_local = store, log, bearer, allow_local
+        for path in (store, log):
+            if os.path.exists(path):
+                os.chmod(path, 0o600)  # repair files left by an earlier run
+        if os.path.exists(log):  # each run starts a fresh, fully redacted evidence log
+            os.replace(log, f"{log}.{int(time.time())}.old")
         self.lock = threading.Lock()
         self.subs = json.load(open(store)) if os.path.exists(store) else {}
         self.verified = set()  # (principal, url): verification cache, per spec
@@ -319,7 +336,7 @@ def stub_handler(stub, emit_token):
                 msg = json.loads(raw)
             except ValueError:
                 stub.record({"kind": "request", "path": self.path, "headers": hdrs,
-                             "unparsed": raw[:2048].decode("utf-8", "replace")})
+                             "unparsed_bytes": len(raw)})  # never the text: it may hold a secret
                 return self.reply(400, {"jsonrpc": "2.0", "id": None,
                                         "error": {"code": -32700, "message": "Parse error"}})
             stub.record({"kind": "request", "path": self.path, "headers": hdrs, "body": msg})
@@ -441,6 +458,8 @@ def main():
         print(f"receiver on 127.0.0.1:{a.port}")
         return srv.serve_forever()
     token = secrets.token_urlsafe(16)
+    os.makedirs(a.dir, mode=0o700, exist_ok=True)
+    os.chmod(a.dir, 0o700)
     stub = Stub(os.path.join(a.dir, "subs.json"), os.path.join(a.dir, "log.jsonl"), a.bearer, allow_local=False)
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), stub_handler(stub, token))
     print(f"stub MCP endpoint: http://127.0.0.1:{a.port}/mcp")
