@@ -28,6 +28,7 @@ mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
+mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_dispatches;
@@ -1285,9 +1286,7 @@ impl Gateway {
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
-        #[cfg(feature = "firewall")]
-        crate::security::firewall::anomaly_config::refuse_keyless_http_anomaly(&self.config)
-            .map_err(Error::Config)?;
+        start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
                 .server
