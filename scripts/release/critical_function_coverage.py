@@ -4,14 +4,14 @@
 """Grade each Critical function's own line coverage (MIK-7324.COV.3).
 
 Reads the function inventory (docs/release/v4.0.0-critical-functions.tsv) and
-an lcov report from `cargo llvm-cov report --lcov`. A function's lines are the
-lcov `DA:` records from its `fn` line to the brace that closes its body; its
-coverage is the share of those with a non-zero count.
+one or more lcov reports from `cargo llvm-cov report --lcov`. A function's
+lines are the `DA:` records from its `fn` line to the brace that closes its
+body; its coverage is the share of those with a non-zero count, over the union
+of the reports. Give one report per platform run (Linux and Windows), so a
+`#[cfg(windows)]` function is graded by the run that compiles it.
 
 Exit status: 0 when every Critical row clears the floor, 1 otherwise. A row
-whose function is gone, or whose body has no `DA:` record (compiled out on
-this platform), fails unless `--unmeasured report` is given, which lists it
-without failing: a Linux run cannot grade a Windows-only function.
+whose function is gone, or that no given report measured, fails.
 """
 
 import argparse
@@ -49,9 +49,9 @@ def fn_line(lines, name, occurrence):
     return hits[occurrence - 1] if len(hits) >= occurrence else None
 
 
-def read_lcov(path):
+def read_lcov(paths):
     hits, current = {}, None
-    for raw in Path(path).read_text().splitlines():
+    for raw in (line for path in paths for line in Path(path).read_text().splitlines()):
         if raw.startswith("SF:"):
             current = "src/" + raw[3:].replace("\\", "/").split("/src/", 1)[-1]
             hits.setdefault(current, {})
@@ -67,8 +67,8 @@ def read_inventory(path):
     return list(csv.DictReader(rows, delimiter="\t"))
 
 
-def grade(root, inventory, lcov):
-    hits = read_lcov(lcov)
+def grade(root, inventory, lcovs):
+    hits = read_lcov(lcovs)
     results = []
     for row in read_inventory(inventory):
         if row["tier"] != "critical":
@@ -95,9 +95,8 @@ def grade(root, inventory, lcov):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--inventory", default="docs/release/v4.0.0-critical-functions.tsv")
-    parser.add_argument("--lcov", required=True)
+    parser.add_argument("--lcov", action="append", required=True, help="repeat per platform run")
     parser.add_argument("--root", default=".")
-    parser.add_argument("--unmeasured", choices=["fail", "report"], default="fail")
     args = parser.parse_args(argv)
 
     failed = 0
@@ -110,7 +109,7 @@ def main(argv=None):
             failed += status == "BELOW"
         else:
             print(f"{status}\t-\t-\t{where}")
-            failed += status == "MISSING" or args.unmeasured == "fail"
+            failed += 1
     print(f"critical rows failing: {failed}")
     return 1 if failed else 0
 

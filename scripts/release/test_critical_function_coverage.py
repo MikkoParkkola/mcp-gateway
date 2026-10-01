@@ -71,18 +71,18 @@ class CriticalFunctionCoverage(unittest.TestCase):
     def tearDown(self):
         self.dir.cleanup()
 
-    def run_rows(self, rows, unmeasured="fail"):
+    def run_rows(self, rows, lcovs=None):
         inventory = self.root / "inv.tsv"
         inventory.write_text(HEADER + "".join(r + "\n" for r in rows))
-        return cfc.main(
-            ["--inventory", str(inventory), "--lcov", str(self.lcov), "--root", str(self.root),
-             "--unmeasured", unmeasured]
-        )
+        args = ["--inventory", str(inventory), "--root", str(self.root)]
+        for lcov in lcovs or [self.lcov]:
+            args += ["--lcov", str(lcov)]
+        return cfc.main(args)
 
     def statuses(self, rows):
         inventory = self.root / "inv.tsv"
         inventory.write_text(HEADER + "".join(r + "\n" for r in rows))
-        return [r[0] for r in cfc.grade(self.root, inventory, self.lcov)]
+        return [r[0] for r in cfc.grade(self.root, inventory, [self.lcov])]
 
     def test_a_fully_covered_function_passes_despite_a_brace_in_a_string(self):
         row = "src/lib.rs\tguard\t1\tcritical\td\tguard\tr"
@@ -94,16 +94,22 @@ class CriticalFunctionCoverage(unittest.TestCase):
         self.assertEqual(self.statuses([row]), ["BELOW"])
         self.assertEqual(self.run_rows([row]), 1)
 
-    def test_occurrence_picks_the_compiled_out_variant_which_fails_unless_reported(self):
+    def test_a_variant_no_report_measured_fails(self):
         row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
         self.assertEqual(self.statuses([row]), ["UNMEASURED"])
         self.assertEqual(self.run_rows([row]), 1)
-        self.assertEqual(self.run_rows([row], unmeasured="report"), 0)
+
+    def test_the_other_platforms_report_grades_its_variant(self):
+        # The Windows run's report measures lines 15-17; the union passes.
+        windows = self.root / "windows.lcov"
+        windows.write_text("SF:C:\\build\\repo\\src\\lib.rs\nDA:15,1\nDA:16,1\nDA:17,1\nend_of_record\n")
+        row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
+        self.assertEqual(self.run_rows([row], lcovs=[self.lcov, windows]), 0)
 
     def test_a_vanished_function_always_fails(self):
         row = "src/lib.rs\tgone\t1\tcritical\td\tgone\tr"
         self.assertEqual(self.statuses([row]), ["MISSING"])
-        self.assertEqual(self.run_rows([row], unmeasured="report"), 1)
+        self.assertEqual(self.run_rows([row]), 1)
 
     def test_standard_rows_are_not_graded(self):
         row = "src/lib.rs\tcheck\t1\tstandard\tborderline\tcheck\tr"

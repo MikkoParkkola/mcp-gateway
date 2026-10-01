@@ -429,4 +429,3 @@ src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregis
 src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_response	Refuses a peer request on the response stream; delivers a response only to the pending id
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call
 src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
-src/transport/stdio.rs	drop	1	standard	borderline	ProgressRegistrationGuard::drop	Only the owner of the registration deregisters, so the incumbent's route is preserved
