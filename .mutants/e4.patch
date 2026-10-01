@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index 7a9e83899..4bc1199eb 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -245,7 +245,7 @@ pub(super) fn recover(
+         tracing::warn!(error = %e, "audit log: disk-full reserve could not be written");
+         telemetry_metrics::gauge!("mcp_audit_reserve_present").set(0.0);
+     }
+-    if (hw.is_none() || committed_drop || below_mark) && state.counter > 0 {
++    if (hw.is_none() || committed_drop) && state.counter > 0 {
+         // Re-minting `.hwm` from a cut tail would launder the cut, so a log
+         // that went through segment handling first records that the mark
+         // was missing (#2294). A pre-D6 log (no open record) and a

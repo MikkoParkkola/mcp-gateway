@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/grant_audit.rs b/src/gateway/meta_mcp/grant_audit.rs
+index f1e82d954..efe335648 100644
+--- a/src/gateway/meta_mcp/grant_audit.rs
++++ b/src/gateway/meta_mcp/grant_audit.rs
+@@ -77,7 +77,7 @@ impl RepeatLedger {
+     /// Whether `decision` is what was last written for `key`, inside the window.
+     pub(super) fn is_repeat(&self, key: &str, decision: &str, now: Instant) -> bool {
+         self.0.get(key).is_some_and(|(last, at)| {
+-            last == decision && now.saturating_duration_since(*at) < REPEAT_WINDOW
++            { let _ = (last, decision); now.saturating_duration_since(*at) < REPEAT_WINDOW }
+         })
+     }
+ 

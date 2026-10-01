@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/grant_audit.rs b/src/gateway/meta_mcp/grant_audit.rs
+index f1e82d954..3bf164645 100644
+--- a/src/gateway/meta_mcp/grant_audit.rs
++++ b/src/gateway/meta_mcp/grant_audit.rs
+@@ -290,6 +290,7 @@ async fn write_records(
+         let now = Instant::now();
+         if let (Some(mark), Some(ledger)) = (&note.repeat, &ledger)
+             && ledger.is_repeat(&mark.key, &mark.decision, now)
++            && false
+         {
+             continue;
+         }

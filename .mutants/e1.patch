@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 8645554d0..736f60257 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -357,8 +357,7 @@ impl MetaMcp {
+         // #2472: a replay of this execution is recorded with these facts, but
+         // only once they describe what was delivered (#2521): a failed write
+         // withholds the value, so a replay must not record it as delivered.
+-        if written.is_ok()
+-            && let Some(lease) = caller.execution
++        if let Some(lease) = caller.execution
+         {
+             lease.note_audit(facts);
+         }

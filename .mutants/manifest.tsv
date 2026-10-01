@@ -1,0 +1,17 @@
+head_sha	79d49850d5c95925aab6b8e69939233d6d57f2e7
+# MIK-7718 facts noted before the write
+e1-facts	linux	e1.patch	--lib meta_replay_after_a_failed_record_is_not_ok
+# MIK-7692 repeats never suppressed
+e2-skip	linux	e2.patch	--lib polling_a_finished_task_records_an_unchanged_decision_once
+# MIK-7692 a changed decision counts as a repeat
+e3-change	linux	e3.patch	--lib polling_a_finished_task_records_an_unchanged_decision_once
+# MIK-7712 AC1 below-mark marker dropped
+e4-below	linux	e4.patch	--lib a_whole_line_cut_of_a_committed_marker_is_not_forgotten
+# MIK-7712 AC2 committed flag dropped
+e5-committed	linux	e5.patch	--lib a_crash_before_the_marker_keeps_a_committed_torn_drop
+# MIK-7712 AC3 hash at mark not compared
+e6-hash	linux	e6.patch	--lib verify_compares_the_hash_at_the_mark
+# MIK-7712 empty or missing active not judged below the mark
+e7-empty	linux	e7.patch	--lib an_emptied_active_below_the_mark_is_not_forgotten
+# MIK-7712 loss not carried in the replacement open record
+e8-carry	linux	e8.patch	--lib a_crash_after_the_replacement_open_record_keeps_the_loss

@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index 7a9e83899..5bfaaa0e0 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -348,7 +348,7 @@ fn reopen_after_seal(
+         Some(segment) => seal_of(segment)?.map_or(0, |(counter, _)| counter),
+         None => 0,
+     };
+-    let below_mark = hw.is_some_and(|h| tail < h.counter);
++    let below_mark = hw.is_some_and(|h| tail < h.counter) && false;
+     let carry = lost_from(newest_finding(sealed, config)?, below_mark, tail);
+     let state = open_after_seal(path, config, sealed, hw, now, carry)?;
+     Ok((state, below_mark))

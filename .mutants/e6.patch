@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_verify.rs b/src/security/transparency_log_verify.rs
+index 48b23a3da..93144d76f 100644
+--- a/src/security/transparency_log_verify.rs
++++ b/src/security/transparency_log_verify.rs
+@@ -744,7 +744,7 @@ impl Stream<'_> {
+                 last + 1,
+                 h.counter
+             )),
+-            Some(h) if self.at_mark.as_ref().is_some_and(|at| *at != h.entry_hash) => {
++            Some(h) if false && self.at_mark.as_ref().is_some_and(|at| *at != h.entry_hash) => {
+                 Some(format!(
+                     "high-water mark hash mismatch at counter {}: the record there is not \
+                      the one the mark recorded",

@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index 7a9e83899..fec308c1f 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -592,7 +592,7 @@ fn repair_torn_tail(
+             .map_err(segments::ctx("open", path))?;
+         let committed = hw.is_some_and(|h| h.counter > pred_counter);
+         let mut extra = vec![("bytes", dropped.into())];
+-        if committed {
++        if committed && false {
+             extra.push((TORN_COMMITTED, true.into()));
+         }
+         let fields = housekeeping(EV_TORN, &extra);

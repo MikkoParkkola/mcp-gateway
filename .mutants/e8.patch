@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index 7a9e83899..9f3990eeb 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -358,7 +358,7 @@ fn reopen_after_seal(
+ /// mark is carried from the first lost counter, so a crash after that record
+ /// is synced but before the marker cannot lose it (MIK-7712).
+ fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
+-    if below_mark {
++    if below_mark && false {
+         Some(carry.map_or(tail + 1, |at| at.min(tail + 1)))
+     } else {
+         carry
