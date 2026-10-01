@@ -120,3 +120,24 @@ async fn joining_a_predecessor_keeps_its_successors_marks() {
         "joining the first dispatch cleared the second's marks; the third call kept running"
     );
 }
+
+/// An id whose call was cancelled is free to reuse at once, before the
+/// aborted dispatch is joined.
+#[tokio::test]
+async fn a_cancelled_id_is_reusable_before_its_dispatch_is_joined() {
+    let mut dispatches = StdioDispatches::default();
+    dispatches.spawn(Some(id()), std::future::pending::<()>());
+    dispatches.cancel(&id());
+
+    let (alive, dropped) = oneshot::channel::<()>();
+    dispatches.spawn(Some(id()), async move {
+        let _alive = alive;
+        std::future::pending::<()>().await;
+    });
+    dispatches.cancel(&id());
+    let outcome = tokio::time::timeout(BOUND, dropped).await;
+    assert!(
+        outcome.is_ok(),
+        "the second cancel hit the cancelled dispatch; the reused id's call kept running"
+    );
+}
