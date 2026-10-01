@@ -239,5 +239,5 @@ pub(crate) mod tests;
 
 /// Design row 15: the auth-shape table the startup and `doctor` tests share.
 #[cfg(test)]
-#[path = "posture_auth_shapes.rs"]
+#[path = "posture_auth_shapes_tests.rs"]
 mod auth_shapes;

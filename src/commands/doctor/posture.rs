@@ -10,7 +10,7 @@ use super::CheckResult;
 /// Design row 15: the library's auth-shape table, the one the startup warning
 /// test reads, so the two rows cannot drift apart.
 #[cfg(test)]
-#[path = "../../security/posture_auth_shapes.rs"]
+#[path = "../../security/posture_auth_shapes_tests.rs"]
 mod auth_shapes;
 
 pub(super) fn check_security_posture(config: &Config) -> CheckResult {

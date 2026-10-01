@@ -169,7 +169,7 @@ CHANGELOG `[Unreleased]`; OWASP ASI03/ASI07/ASI10 cite this.
 As built (MIK-7633). Rows 3c and 4c run on the firewall a hardened `Config::load` produces
 (`src/security/firewall/anomaly_learning_tests.rs`). Row 15 is two tests over one table: the
 startup warning is crate-private and `doctor` lives in the binary, so one test cannot drive
-both. `src/security/posture_auth_shapes.rs` is the single table, declared by `#[path]` from
+both. `src/security/posture_auth_shapes_tests.rs` is the single table, declared by `#[path]` from
 `posture.rs` and `commands/doctor/posture.rs`; it is read by `startup_warn_matches_unhardened_table`
 and `doctor_row_matches_unhardened_table`. Row 17's short secret is set under `enabled: false`,
 so only the posture's forcing makes it refuse.
