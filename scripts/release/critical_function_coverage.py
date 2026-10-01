@@ -84,20 +84,41 @@ PLAIN_FIELD = re.compile(
 # string, a comment, another delimiter, a call. One anchored match, no
 # stripping or parsing, so there is no preprocessing step to fool. Spurious
 # fails are possible; an unrun call passing is not.
-TRACING_NAME = re.compile(r"(?<!\w)(?:trace|debug|info|warn|error|event|span)\s*!")
-_ITEM_VALUE = r"[%?]?(?:" + _PATH + r"|-?\d[\w.]*)"
-_ITEM = r'(?:"[^"\\]*"|[A-Za-z_][\w.]*\s*=\s*' + _ITEM_VALUE + r"|" + _ITEM_VALUE + r")"
+_LEVELS = ("trace", "debug", "info", "warn", "error", "event", "span")
+# A head-line value is an identifier or `::` path, or a numeric literal. No `.`:
+# a field access can run user Deref code, which this line's count cannot vouch
+# for. (The argument-line rule above keeps its own, separately ruled whitelist.)
+_HEAD_PATH = r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*"
+_NUMBER = r"-?\d[\d_]*(?:\.\d[\d_]*)?(?:[iuf](?:8|16|32|64|128|size))?"
+_ITEM_VALUE = r"[%?]?(?:" + _HEAD_PATH + r"|" + _NUMBER + r")"
+_ITEM = r'(?:"[^"\\]*"|[A-Za-z_]\w*\s*=\s*' + _ITEM_VALUE + r"|" + _ITEM_VALUE + r")"
 PLAIN_HEAD = re.compile(
     r"^\s*(?:(?:::)?tracing::)?(?:trace|debug|info|warn|error|event)!\(\s*"
     r"(?:" + _ITEM + r"(?:\s*,\s*" + _ITEM + r")*\s*,?)?"
     r"\s*(?:\)\s*;?)?\s*$"
 )
+_ALIAS = re.compile(r"\b(" + "|".join(_LEVELS) + r")\s+as\s+(\w+)")
+_TRACING_USE = re.compile(r"\buse\s+(?:::)?tracing\s*::[^;]*;")
 
 
-def head_has_call(raw):
+def tracing_names(text):
+    """The level macro names, plus any `use tracing::<level> as <alias>` in
+    this file, as a pattern that also allows block comments before the `!`."""
+    names = set(_LEVELS)
+    for use in _TRACING_USE.findall(text):
+        names.update(alias for _, alias in _ALIAS.findall(use))
+    return re.compile(
+        r"(?<!\w)(?:" + "|".join(sorted(names)) + r")\s*(?:/\*.*?\*/\s*)*!"
+    )
+
+
+TRACING_NAME = tracing_names("")
+
+
+def head_has_call(raw, names=TRACING_NAME):
     """True when this raw source line names a tracing macro but is not, as a
     whole, a plain head line (see above)."""
-    return bool(TRACING_NAME.search(raw)) and not PLAIN_HEAD.match(raw)
+    return bool(names.search(raw)) and not PLAIN_HEAD.match(raw)
 
 
 def is_plain_field(code):
@@ -203,8 +224,9 @@ def grade(root, inventory, lcovs):
             results.append(("UNMEASURED", row, lo, hi, []))
             continue
         unverifiable = []
+        names = tracing_names("\n".join(lines))
         for n in range(lo, hi + 1):
-            if n in counts and head_has_call(lines[n - 1]):
+            if n in counts and head_has_call(lines[n - 1], names):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []

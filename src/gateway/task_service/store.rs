@@ -772,7 +772,8 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             StoreError::CorruptRecord
         })?;
         if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
-            tracing::warn!(path = %shown_path, version = record.version, "unsupported task record version");
+            let version = record.version;
+            tracing::warn!(path = %shown_path, version, "unsupported task record version");
             return Err(StoreError::CorruptRecord);
         }
         let task = Task::from_snapshot(record.model.clone()).map_err(|error| {

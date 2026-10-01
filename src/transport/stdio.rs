@@ -528,14 +528,16 @@ impl StdioTransport {
 
         match token.and_then(|t| self.progress_destinations.get(&t)) {
             Some(destination) => {
-                debug!(method = %notification.method, "Delivering peer notification to its caller");
+                let method = &notification.method;
+                debug!(method = %method, "Delivering peer notification to its caller");
                 // Sent, not queued, and from the reader task: `deliver` uses
                 // `try_send`, because a blocking send here would park the only
                 // reader of this backend's stdout.
                 destination.deliver(notification);
             }
             None => {
-                debug!(method = %notification.method, "Ignoring peer notification");
+                let method = &notification.method;
+                debug!(method = %method, "Ignoring peer notification");
             }
         }
     }

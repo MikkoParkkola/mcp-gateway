@@ -372,12 +372,30 @@ class HeadLineCalls(unittest.TestCase):
             '    span!(Level::INFO, "work");\n',
             '    debug!("a \\" b", clean(x));\n',
             '    debug!("a", clean(x), "b");\n',
+            '    debug!(v = wrapper.value, "seen");\n',
+            '    debug!(v = %self.name, "seen");\n',
+            '    debug!(n = 1.max, "seen");\n',
+            '    debug /* note */ !(v = %clean(x));\n',
         ]
         for body in shapes:
             with self.subTest(body=body.strip()):
                 result = self.grade(body, {2: 1})
                 self.assertEqual(result[4], [2])
                 self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_a_file_alias_for_a_level_macro_is_a_tracing_head(self):
+        source = 'use tracing::{debug as d, info};\nfn logs(x: u8) -> bool {\n    d!(v = %clean(x));\n    x > 0\n}\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(source)
+            lcov = root / "cov.lcov"
+            lcov.write_text("SF:/repo/src/lib.rs\nDA:2,1\nDA:3,1\nDA:4,1\nDA:5,1\nend_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3])
+        self.assertEqual(result[9], ["src/lib.rs:3 (head count 1)"])
 
     def test_the_cli_prints_the_unverifiable_line_and_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -398,7 +416,7 @@ class HeadLineCalls(unittest.TestCase):
         shapes = [
             '    debug!(url = %x, kind = ?k, n = 3, "seen {}", x);\n',
             '    tracing::warn!(%error, path = %shown_path, "task record unreadable");\n',
-            '    ::tracing::info!(?reason, v = self.name, "seen")\n',
+            '    ::tracing::info!(?reason, kind = Kind::Plain, n = 3u8, "seen")\n',
             '    error!(\n',
             '    debug!(url = %x,\n',
         ]
