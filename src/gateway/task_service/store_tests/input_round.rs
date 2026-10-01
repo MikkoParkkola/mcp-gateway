@@ -449,37 +449,13 @@ async fn closing_an_already_settled_round_writes_nothing() {
     );
 }
 
-/// Mutant: the readiness check removed from the owner-scoped row read, or the
-/// revision compare-and-set removed from `require_input`.
-#[tokio::test]
-async fn a_closed_store_and_a_moved_revision_refuse_every_input_round_write() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("tasks");
-    let store = TaskStore::open(&path, limits()).await.unwrap();
-    let task = task();
-    // Parking at the committed revision is the positive control: it succeeds
-    // and moves the row to revision 2.
-    let revision = parked(&store, &task, &["confirm"]).await;
-    assert_eq!(revision, 2);
-    let before = on_disk(&path, task.id());
-    let stale = store
-        .require_input(
-            OWNER,
-            task.id(),
-            1,
-            question("again"),
-            round("sealed"),
-            at(2),
-        )
-        .await;
-    assert!(
-        matches!(stale, Err(StoreError::RevisionConflict)),
-        "{stale:?}"
-    );
-    assert_eq!(on_disk(&path, task.id()), before, "nothing was written");
-
-    let reader = store.clone();
-    store.close().await.unwrap();
+/// Every round write and the expiry sweep refuse a store that is not serving.
+async fn assert_rounds_unserved(
+    reader: &TaskStore,
+    task: &Task,
+    revision: u64,
+    far: chrono::DateTime<chrono::Utc>,
+) {
     let closed = reader
         .require_input(
             OWNER,
@@ -509,5 +485,52 @@ async fn a_closed_store_and_a_moved_revision_refuse_every_input_round_write() {
         .close_round(OWNER, task.id(), revision, "expired".into())
         .await;
     assert!(matches!(closed, Err(StoreError::Unavailable)), "{closed:?}");
-    assert!(reader.expired_input_rounds(at(2)).is_empty());
+    assert!(reader.expired_input_rounds(far).is_empty());
+}
+
+/// Mutant: the readiness check removed from the owner-scoped row read, or the
+/// revision compare-and-set removed from `require_input`.
+#[tokio::test]
+async fn a_closed_store_and_a_moved_revision_refuse_every_input_round_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = TaskStore::open(&path, limits()).await.unwrap();
+    let task = task();
+    // Parking at the committed revision is the positive control: it succeeds
+    // and moves the row to revision 2.
+    let revision = parked(&store, &task, &["confirm"]).await;
+    assert_eq!(revision, 2);
+    let before = on_disk(&path, task.id());
+    let stale = store
+        .require_input(
+            OWNER,
+            task.id(),
+            1,
+            question("again"),
+            round("sealed"),
+            at(2),
+        )
+        .await;
+    assert!(
+        matches!(stale, Err(StoreError::RevisionConflict)),
+        "{stale:?}"
+    );
+    assert_eq!(on_disk(&path, task.id()), before, "nothing was written");
+
+    // Past the task's TTL the sweep sees the round while the store serves.
+    let far = at(0) + chrono::Duration::days(2);
+    assert_eq!(store.expired_input_rounds(far).len(), 1, "control");
+
+    // Poisoned with every row still in memory: the guards, not an empty map.
+    let spare = super::support::task();
+    store
+        .create(PreparedTask::for_test(&spare, OWNER, 2))
+        .await
+        .unwrap();
+    poison(&store, OWNER, spare.id(), 1).await;
+    assert_rounds_unserved(&store, &task, revision, far).await;
+
+    let reader = store.clone();
+    store.close().await.unwrap();
+    assert_rounds_unserved(&reader, &task, revision, far).await;
 }

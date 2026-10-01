@@ -778,4 +778,7 @@ async fn open_refuses_a_lease_it_cannot_inspect_and_creates_none() {
         0,
         "no lease and no record was created"
     );
+
+    // Positive control: a path whose lease fits opens and closes.
+    open(&dir.path().join("fits")).await.close().await.unwrap();
 }

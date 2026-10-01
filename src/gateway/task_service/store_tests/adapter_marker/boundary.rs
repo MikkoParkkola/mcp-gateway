@@ -215,6 +215,42 @@ async fn upstream_02_a_descriptor_that_overflows_the_record_cap_is_refused_unwri
     );
     assert_eq!(store.upstream_of(&owner, task.id()).unwrap().0, None);
     store.close().await.unwrap();
+
+    // Positive control: with room, the same descriptor is persisted.
+    let store = open(&path).await;
+    store
+        .mark_upstream(&owner, task.id(), 1, upstream_for(&binding, "handle-1"))
+        .await
+        .unwrap();
+    assert!(store.upstream_of(&owner, task.id()).unwrap().0.is_some());
+    store.close().await.unwrap();
+}
+
+/// Every read and write entry point refuses a store that is not serving, and
+/// writes nothing.
+async fn assert_unserved(reader: &TaskStore, owner: &str, id: &str, binding: &TaskBinding) {
+    let args = json!({"sku": "x"});
+    assert_eq!(reader.get(owner, id).unwrap_err(), StoreError::Unavailable);
+    assert_eq!(
+        reader.upstream_of(owner, id).unwrap_err(),
+        StoreError::Unavailable
+    );
+    assert_eq!(reader.operation_digest_of(owner, id), None);
+    assert_eq!(
+        reader.admits_upstream_descriptor(owner, id, "orders", "create", &args),
+        Err(StoreError::Unavailable)
+    );
+    assert_eq!(
+        reader.mark_dispatched(owner, id, 1).await.unwrap_err(),
+        StoreError::Unavailable
+    );
+    assert_eq!(
+        reader
+            .mark_upstream(owner, id, 1, upstream_for(binding, "handle-1"))
+            .await
+            .unwrap_err(),
+        StoreError::Unavailable
+    );
 }
 
 /// Mutant: the readiness check removed from any store read or marker write.
@@ -239,29 +275,14 @@ async fn closed_01_a_closed_store_answers_nothing_about_a_row_it_held() {
         Ok(true)
     );
 
+    // Poisoned, with every row still in memory: each guard is exercised on its own.
+    let (spare, spare_binding) = admitted(&store, &services(), "poisoner").await;
+    poison(&store, spare_binding.principal_digest(), spare.id(), 1).await;
+    assert_unserved(&store, &owner, id, &binding).await;
+
     let reader = store.clone();
     store.close().await.unwrap();
-    assert_eq!(reader.get(&owner, id).unwrap_err(), StoreError::Unavailable);
-    assert_eq!(
-        reader.upstream_of(&owner, id).unwrap_err(),
-        StoreError::Unavailable
-    );
-    assert_eq!(reader.operation_digest_of(&owner, id), None);
-    assert_eq!(
-        reader.admits_upstream_descriptor(&owner, id, "orders", "create", &args),
-        Err(StoreError::Unavailable)
-    );
-    assert_eq!(
-        reader.mark_dispatched(&owner, id, 1).await.unwrap_err(),
-        StoreError::Unavailable
-    );
-    assert_eq!(
-        reader
-            .mark_upstream(&owner, id, 1, upstream_for(&binding, "handle-1"))
-            .await
-            .unwrap_err(),
-        StoreError::Unavailable
-    );
+    assert_unserved(&reader, &owner, id, &binding).await;
     // Nothing was written by the refused calls.
     assert_eq!(record_json(&path, id)["dispatched"], json!(false));
     assert!(record_json(&path, id).get("upstream").is_none());
