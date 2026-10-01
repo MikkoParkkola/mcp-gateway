@@ -375,3 +375,33 @@ async fn a_result_over_the_record_budget_settles_failed_without_output() {
         "no output is kept"
     );
 }
+
+/// MIK-7686: a legacy row cannot name the tool it ran (`task.tool()` is the
+/// meta tool), so it is refused while any tool its backend lists is withheld,
+/// on `tasks/get` and on a repeated keyed call alike.
+#[tokio::test]
+async fn a_legacy_row_is_refused_on_get_when_its_tool_is_withheld() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_invoke(&state, "b-legacy-withheld").await;
+    strip_targets(&state, &id);
+    withhold(&state, TOOL);
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+}
+
+#[tokio::test]
+async fn a_legacy_row_is_refused_on_repeat_when_its_tool_is_withheld() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_invoke(&state, "b-legacy-repeat").await;
+    strip_targets(&state, &id);
+    withhold(&state, TOOL);
+    let repeat = post(
+        &state,
+        "key-a",
+        task_invoke(11, "b-legacy-repeat", json!({ "q": 1 })),
+    )
+    .await;
+    assert_refused(&repeat, "withheld");
+    assert_ne!(repeat.pointer("/result/taskId"), Some(&json!(id)));
+}
