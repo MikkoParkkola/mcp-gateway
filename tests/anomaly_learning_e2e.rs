@@ -31,6 +31,8 @@ async fn start() -> (BackendFixture, HttpGateway) {
         "backends": {(BACKEND): {"http_url": backend.url, "streamable_http": true}},
         "security": {
             "trust_configured_backends": true,
+            // Auth on needs the audit log; relative to the child's own directory.
+            "transparency_log": {"enabled": true, "path": "audit.jsonl"},
             "firewall": {
                 "enabled": true,
                 "anomaly_detection": true,
