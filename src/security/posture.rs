@@ -236,3 +236,8 @@ pub(crate) fn log_startup(config: &Config) {
 #[cfg(test)]
 #[path = "posture_tests.rs"]
 pub(crate) mod tests;
+
+/// Design row 15: the auth-shape table the startup and `doctor` tests share.
+#[cfg(test)]
+#[path = "posture_auth_shapes.rs"]
+mod auth_shapes;
