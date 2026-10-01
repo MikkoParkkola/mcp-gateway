@@ -533,8 +533,8 @@ async fn pinning_loopback_rebinding_blocked() {
         .unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("127.0.0.1"),
-        "error must name the blocked IP: {msg}"
+        !msg.contains("127.0.0.1"),
+        "a host name's refusal must not name what it resolves to: {msg}"
     );
     assert!(
         msg.contains("SSRF blocked"),
@@ -550,9 +550,11 @@ async fn pinning_metadata_rebinding_blocked() {
         .await
         .unwrap_err();
     let msg = err.to_string();
+    // A name's refusal names neither what it resolved to nor its kind: that
+    // would answer internal DNS for whoever sees the error.
     assert!(
-        msg.contains("cloud metadata address 169.254.169.254"),
-        "error must name the metadata IP as the metadata service: {msg}"
+        msg.contains("SSRF blocked") && !msg.contains("169.254") && !msg.contains("metadata"),
+        "a host name's refusal must not name what it resolves to: {msg}"
     );
 }
 
