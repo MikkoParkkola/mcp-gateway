@@ -465,12 +465,11 @@ fn glob_match_chars(text: &[char], pattern: &[char]) -> bool {
 pub(crate) fn tool_matches_query(server: &str, tool: &Tool, query: &str) -> bool {
     let name_lower = tool.name.to_lowercase();
     let desc_lower = tool.description.as_deref().unwrap_or("").to_lowercase();
-    let server_lower = server.to_lowercase();
+    let _ = server;
 
     query.split_whitespace().any(|word| {
         word_matches_text(word, &name_lower)
             || word_matches_text(word, &desc_lower)
-            || word_matches_text(word, &server_lower)
     })
 }
 
