@@ -32,7 +32,7 @@ async fn a_public_result_is_signed_as_private_and_verifies_as_delivered() {
 #[tokio::test]
 async fn a_direct_route_delivery_is_signed_as_private_and_verifies_as_delivered() {
     let mut delivered = JsonRpcResponse::success(
-        RequestId::Number(-42),
+        RequestId::Number(-41),
         json!({"content": [], "cacheScope": "public"}),
     );
 
