@@ -267,7 +267,7 @@ impl BackendRegistry {
             return false;
         }
         if let Some(destinations) = self.destination.get() {
-            backend.stamp_destination(destinations.for_backend(&backend.name));
+            backend.restamp(destinations.for_backend(&backend.name));
         }
         let name = backend.name.clone();
         self.backends.insert(name.clone(), backend);
@@ -283,6 +283,10 @@ impl BackendRegistry {
     /// when the running posture is `hardened`, so a caller-built registry
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
+    ///
+    /// A backend that already started an HTTP or WebSocket transport before
+    /// its stamp started it unpinned; the stamp retires those transports, so
+    /// its next use rebuilds them under the stamped policy (MIK-7700).
     ///
     /// The backends named in `security.hardened.private_backends` are
     /// stamped `Private` instead. The policy and the names are one snapshot,
@@ -304,7 +308,7 @@ impl BackendRegistry {
             private: private_backends.iter().cloned().collect(),
         });
         for backend in &self.backends {
-            backend.stamp_destination(destinations.for_backend(backend.key()));
+            backend.restamp(destinations.for_backend(backend.key()));
         }
     }
 

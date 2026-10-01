@@ -346,8 +346,9 @@ fn standard_does_not_stamp_listed_backends() {
     assert_eq!(backend.destination(), DestinationPolicy::Configured);
 }
 
-/// A transport that stands in for one already started; records its close.
-struct Started(std::sync::atomic::AtomicBool);
+/// A transport that stands in for one already started; records its close in
+/// a flag the test keeps, so the test holds no owner of the transport itself.
+struct Started(Arc<std::sync::atomic::AtomicBool>);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Started {
@@ -376,7 +377,9 @@ impl crate::transport::Transport for Started {
 /// Register `config` as `b` in an unpaired registry, seed a started shared
 /// transport, then pair the registry with a hardened config the way an
 /// embedder does: through `ReloadContext::new`.
-fn started_then_hardened(config: BackendConfig) -> (Arc<Backend>, Arc<Started>) {
+fn started_then_hardened(
+    config: BackendConfig,
+) -> (Arc<Backend>, Arc<std::sync::atomic::AtomicBool>) {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "b",
@@ -385,8 +388,8 @@ fn started_then_hardened(config: BackendConfig) -> (Arc<Backend>, Arc<Started>) 
         Duration::from_secs(60),
     ));
     assert!(registry.register(Arc::clone(&backend)));
-    let started = Arc::new(Started(std::sync::atomic::AtomicBool::new(false)));
-    backend.set_transport_for_test(Arc::clone(&started) as Arc<dyn crate::transport::Transport>);
+    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    backend.set_transport_for_test(Arc::new(Started(Arc::clone(&closed))));
     let mut running = crate::config::Config::default();
     running.security.posture = crate::security::posture::SecurityPosture::Hardened;
     let _ctx = crate::config_reload::ReloadContext::new(
@@ -396,7 +399,7 @@ fn started_then_hardened(config: BackendConfig) -> (Arc<Backend>, Arc<Started>) 
         FailsafeConfig::default(),
         Duration::from_secs(60),
     );
-    (backend, started)
+    (backend, closed)
 }
 
 // MIK-7700: an HTTP backend started before a hardened pairing keeps no
@@ -419,13 +422,13 @@ async fn hardened_pairing_retires_a_started_unpinned_transport() {
         "the transport started unpinned must be retired"
     );
     for _ in 0..100 {
-        if started.0.load(Ordering::SeqCst) {
+        if started.load(Ordering::SeqCst) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(
-        started.0.load(Ordering::SeqCst),
+        started.load(Ordering::SeqCst),
         "the retired transport is closed"
     );
     let restarted = backend.ensure_started().await;
@@ -448,5 +451,61 @@ async fn hardened_pairing_keeps_a_started_stdio_transport() {
             .pooled_transport_for_test(&super::PoolKey::Shared)
             .is_some()
     );
-    assert!(!started.0.load(Ordering::SeqCst));
+    assert!(!started.load(Ordering::SeqCst));
+}
+
+// A start that read the policy before a stamp and publishes after it is
+// refused, so nothing built unpinned lands in the pool once pairing retired
+// the rest. The same transport built under the stamped policy publishes.
+#[test]
+fn a_start_built_before_the_stamp_is_not_published() {
+    let backend = Backend::new(
+        "b",
+        BackendConfig {
+            transport: transport("http://127.0.0.1:{port}/mcp", 9),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    );
+    let built_under = backend.destination();
+    assert!(backend.stamp_destination(DestinationPolicy::Public));
+    let entry = backend.shared_entry();
+    let started: Arc<dyn crate::transport::Transport> = Arc::new(Started(Arc::default()));
+    assert!(backend.publish(&entry, &started, built_under).is_err());
+    assert!(
+        backend
+            .pooled_transport_for_test(&super::PoolKey::Shared)
+            .is_none()
+    );
+    assert!(
+        backend
+            .publish(&entry, &started, DestinationPolicy::Public)
+            .is_ok()
+    );
+}
+
+// The other order: a backend started on its own, then registered into a
+// registry already paired with a hardened config.
+#[test]
+fn registering_a_started_backend_into_a_hardened_registry_retires_it() {
+    let registry = BackendRegistry::new();
+    registry.enforce_destinations(DestinationPolicy::Public, &[]);
+    let backend = Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: transport("http://127.0.0.1:{port}/mcp", 9),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(Started(Arc::default())));
+    assert!(registry.register(Arc::clone(&backend)));
+    assert_eq!(backend.destination(), DestinationPolicy::Public);
+    assert!(
+        backend
+            .pooled_transport_for_test(&super::PoolKey::Shared)
+            .is_none()
+    );
 }

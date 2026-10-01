@@ -356,6 +356,9 @@ impl Backend {
         }
 
         info!(backend = %self.name, ?key, "Starting backend transport");
+        // Read once, before anything connects: the policy every connection
+        // below is built under. `publish` refuses if it changed meanwhile.
+        let built_under = self.destination();
 
         // Whatever the reason for starting - a client request, a health-driven
         // force_restart, warm start - this slot is no longer stopped-for-idleness.
@@ -467,20 +470,11 @@ impl Backend {
         // traversal finds it, or shutdown latches first and this refuses. There
         // is no third case, which is what the previous check-then-publish could
         // not say.
-        let refused = {
-            let cleanups = self.replaced_transport_cleanups.lock();
-            if cleanups.stopping {
-                true
-            } else {
-                *entry.transport.write() = Some(Arc::clone(&transport));
-                false
-            }
-        };
-        if refused {
+        if let Err(refusal) = self.publish(entry, &transport, built_under) {
             warn!(
                 backend = %self.name,
-                "Backend shut down while this transport was starting; closing it \
-                 instead of publishing"
+                %refusal,
+                "Closing a transport instead of publishing it"
             );
             let _ = transport.close().await;
             return Err(Error::BackendUnavailable(self.name.clone()));
@@ -997,7 +991,7 @@ impl Backend {
     /// trade - leaking one transport beats terminating a live request - and the
     /// poll backs off to seconds and warns once so it stays cheap and visible
     /// rather than silent.
-    fn close_after_last_owner(&self, old: Arc<dyn Transport>) {
+    pub(super) fn close_after_last_owner(&self, old: Arc<dyn Transport>) {
         const FIRST_POLL: Duration = Duration::from_millis(20);
         const MAX_POLL: Duration = Duration::from_secs(5);
         const WARN_AFTER: Duration = Duration::from_secs(300);
