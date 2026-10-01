@@ -260,9 +260,24 @@ impl Store {
                 last_subscription_ended_at: None,
             },
         };
+        let prior = state.verified.get(&key).cloned();
         write_record(&self.verified_dir, &key, &record)?;
-        state.verified.insert(key, record);
-        write_record(&self.subs_dir, &format!("{}.json", sub.id), &sub)?;
+        state.verified.insert(key.clone(), record);
+        if let Err(error) = write_record(&self.subs_dir, &format!("{}.json", sub.id), &sub) {
+            // Put the verification back as it was, so a failed commit
+            // neither leaves an extra record nor resets an existing tail.
+            match prior {
+                Some(prior) => {
+                    let _ = write_record(&self.verified_dir, &key, &prior);
+                    state.verified.insert(key, prior);
+                }
+                None => {
+                    let _ = remove_record(&self.verified_dir, &key);
+                    state.verified.remove(&key);
+                }
+            }
+            return Err(error);
+        }
         state.subs.insert(sub.id.clone(), sub);
         self.trim_tails(&mut state, now, tail)?;
         Ok(Ok(()))
@@ -307,6 +322,7 @@ impl Store {
         let mut state = self.state.lock();
         self.sweep(&mut state, now)?;
         let Some(sub) = state.subs.get(id).cloned() else {
+            self.trim_tails(&mut state, now, tail)?;
             return Ok(false);
         };
         remove_record(&self.subs_dir, &format!("{id}.json"))?;
