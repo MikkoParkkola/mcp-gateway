@@ -106,6 +106,12 @@ class CriticalFunctionCoverage(unittest.TestCase):
         row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
         self.assertEqual(self.run_rows([row], lcovs=[self.lcov, windows]), 0)
 
+    def test_a_checkout_under_a_directory_named_src_still_resolves(self):
+        nested = self.root / "nested.lcov"
+        nested.write_text(LCOV.replace("SF:/build/repo/src/lib.rs", "SF:/src/mcp-gateway/src/lib.rs"))
+        row = "src/lib.rs\tguard\t1\tcritical\td\tguard\tr"
+        self.assertEqual(self.run_rows([row], lcovs=[nested]), 0)
+
     def test_a_vanished_function_always_fails(self):
         row = "src/lib.rs\tgone\t1\tcritical\td\tgone\tr"
         self.assertEqual(self.statuses([row]), ["MISSING"])

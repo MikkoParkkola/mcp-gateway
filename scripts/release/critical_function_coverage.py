@@ -49,12 +49,31 @@ def fn_line(lines, name, occurrence):
     return hits[occurrence - 1] if len(hits) >= occurrence else None
 
 
-def read_lcov(paths):
+def repo_relative(source, root):
+    """The `src/...` path of an lcov `SF:` entry, as it exists under `root`.
+
+    Reports from different platforms carry different absolute prefixes, and a
+    checkout may itself sit under a directory named `src`, so the first `/src/`
+    is not the repository boundary: take the first `src/...` suffix that names
+    a file in this checkout.
+    """
+    source = source.replace("\\", "/")
+    parts = source.split("/")
+    for i, part in enumerate(parts):
+        if part == "src":
+            candidate = "/".join(parts[i:])
+            if (Path(root) / candidate).is_file():
+                return candidate
+    return None
+
+
+def read_lcov(paths, root):
     hits, current = {}, None
     for raw in (line for path in paths for line in Path(path).read_text().splitlines()):
         if raw.startswith("SF:"):
-            current = "src/" + raw[3:].replace("\\", "/").split("/src/", 1)[-1]
-            hits.setdefault(current, {})
+            current = repo_relative(raw[3:], root)
+            if current:
+                hits.setdefault(current, {})
         elif raw.startswith("DA:") and current:
             number, count = raw[3:].split(",")[:2]
             line = int(number)
@@ -68,7 +87,7 @@ def read_inventory(path):
 
 
 def grade(root, inventory, lcovs):
-    hits = read_lcov(lcovs)
+    hits = read_lcov(lcovs, root)
     results = []
     for row in read_inventory(inventory):
         if row["tier"] != "critical":
