@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Reclaiming what a gateway keeps per session when that session ends.
 
 use super::MetaMcp;
