@@ -1,4 +1,8 @@
-# MIN.1 gap 1: a settlement record for a recovered upstream task
+Status: ADOPTED at r3.2 (2026-10-01), after three review rounds (gpt-review and
+synthetic-review GLM each round). Round 3 was allowed because round 2 raised a HIGH. Round 3:
+both seats SHIP-WITH-FIXES, with no HIGH, and every fix was applied in r3.1 and r3.2. Lead
+ruling: option (a), an additive record value under delegated authority. This is an increment of
+`2026-09-30-min1-tenant-attribution.md` §4.# MIN.1 gap 1: a settlement record for a recovered upstream task
 
 Status: r3, for review. Lead ruling 2026-10-01: option (a), an additive record value under
 delegated authority. This is an increment of `2026-09-30-min1-tenant-attribution.md` §4. The r1
