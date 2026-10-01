@@ -271,7 +271,7 @@ async fn listed_private_backend_oauth_policy() {
         client.initialize().await
     };
     initialize(Advertised {
-        authorization_server: "http://127.0.0.1:{port}",
+        authorization_server: "http://localhost:{port}",
         token: "http://localhost:{port}/token",
         registration: "http://localhost:{port}/register",
     })

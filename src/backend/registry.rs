@@ -395,6 +395,18 @@ impl Default for BackendRegistry {
     }
 }
 
+/// The destination answer a registry stamps on its backends.
+struct Destinations {
+    policy: crate::security::ssrf::DestinationPolicy,
+}
+
+impl Destinations {
+    fn for_backend(&self, name: &str) -> crate::security::ssrf::DestinationPolicy {
+        let _ = name;
+        self.policy
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -465,17 +477,5 @@ mod tests {
             Arc::ptr_eq(&still_there, &original),
             "the entry under this name is not the one that was registered"
         );
-    }
-}
-
-/// The destination answer a registry stamps on its backends.
-struct Destinations {
-    policy: crate::security::ssrf::DestinationPolicy,
-}
-
-impl Destinations {
-    fn for_backend(&self, name: &str) -> crate::security::ssrf::DestinationPolicy {
-        let _ = name;
-        self.policy
     }
 }
