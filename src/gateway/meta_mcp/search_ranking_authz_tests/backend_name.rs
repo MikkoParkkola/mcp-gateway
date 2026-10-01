@@ -80,3 +80,27 @@ async fn a_direct_tool_match_ranks_above_a_backend_name_match() {
     assert_eq!(tool_names(&response), vec!["codesearch_index".to_string()]);
     assert_eq!(response["total_available"], 2);
 }
+
+/// The reported case: an MCP backend whose tools never mention its name.
+#[tokio::test]
+async fn a_query_naming_an_mcp_backend_finds_its_tools() {
+    let backends = Arc::new(BackendRegistry::new());
+    assert!(
+        backends.register(mcp_backend(BACKEND, &[("search_code", "returns exact snippets")]).await),
+        "fixture backend failed to register"
+    );
+    let meta = MetaMcp::with_features(
+        backends,
+        None,
+        None,
+        Some(Arc::new(SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(false)
+    .with_profile_registry(profile(None));
+    let response = meta
+        .search_tools_anon(&json!({ "query": BACKEND }), None)
+        .await
+        .unwrap();
+    assert_eq!(tool_names(&response), vec!["search_code".to_string()]);
+}
