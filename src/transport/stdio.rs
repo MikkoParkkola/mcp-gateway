@@ -242,7 +242,8 @@ impl StdioTransport {
             loop {
                 match reader.next_line().await {
                     Ok(Some(line)) => {
-                        debug!(line_len = line.len(), "Received line from stdout");
+                        let line_len = line.len();
+                        debug!(line_len, "Received line from stdout");
                         let Some(transport) = transport.upgrade() else {
                             debug!("Transport dropped while reading; stopping reader task");
                             return;
@@ -563,7 +564,8 @@ impl StdioTransport {
 
         if let Some(ref id) = response.id {
             let key = id.to_string();
-            debug!(id = %key, pending_keys = ?self.pending.iter().map(|r| r.key().clone()).collect::<Vec<_>>(), "Looking for pending request");
+            let pending_count = self.pending.len();
+            debug!(id = %key, pending_count, "Looking for pending request");
             if let Some((_, sender)) = self.pending.remove(&key) {
                 debug!(id = %key, "Found pending request, sending response");
                 let _ = sender.send(response);
