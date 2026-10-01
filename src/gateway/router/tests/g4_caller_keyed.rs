@@ -109,6 +109,28 @@ fn has_hints(body: &Value) -> bool {
     body.to_string().contains("predicted_next")
 }
 
+/// The `predicted_next` hints anywhere in the response, as text: the tool
+/// result travels as JSON inside a text block, so string leaves are parsed too.
+fn hints(body: &Value) -> String {
+    match body {
+        Value::Object(map) => map
+            .iter()
+            .map(|(k, v)| {
+                if k == "predicted_next" {
+                    v.to_string()
+                } else {
+                    hints(v)
+                }
+            })
+            .collect(),
+        Value::Array(items) => items.iter().map(hints).collect(),
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .map(|inner| hints(&inner))
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
 /// Whether the response carries a hint naming `beta_tool`.
 fn hints_beta(body: &Value) -> bool {
     has_hints(body) && body.to_string().contains("beta_tool")
@@ -153,8 +175,7 @@ async fn r1_one_callers_tool_is_never_another_callers_predecessor() {
     );
     // Its own history: alpha_read after alpha_read, three times.
     assert!(
-        last.to_string().contains("predicted_next")
-            && last.to_string().matches("alpha_read").count() > 0,
+        hints(&last).contains("alpha_read"),
         "open-key's own sequence is not predicted: {last}"
     );
 }
