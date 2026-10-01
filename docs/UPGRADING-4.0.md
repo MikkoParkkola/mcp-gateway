@@ -2617,7 +2617,8 @@ connects only to those checked addresses, as capability calls and `cap import` o
 by URL already do:
 
 - A base URL whose host resolves to a blocked address fails with
-  `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to private/reserved address <ip>`.
+  `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to a private/reserved address`.
+  The address it resolved to is not named, so the error answers no internal DNS.
 - A redirect to such a name is not followed.
 - Public names are unaffected. Environment proxies stay ignored (item 77).
 
