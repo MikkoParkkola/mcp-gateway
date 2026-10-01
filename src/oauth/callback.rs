@@ -416,6 +416,53 @@ mod tests {
         }
     }
 
+    /// #2578: the redirect URI names the configured callback host, as
+    /// docs/OAUTH_CONFIG.md documents (`http://<callback_host>:<port><path>`),
+    /// and the server answers at exactly that address. A loopback IP host
+    /// used to be advertised as `localhost`, which a browser resolving
+    /// `localhost` to the other address family could not reach.
+    async fn served_where_advertised(host: &str, advertised_host: &str) {
+        let server = start_callback_server("s".to_string(), Some(host), None, None)
+            .await
+            .unwrap();
+        let port = reqwest::Url::parse(&server.callback_url)
+            .unwrap()
+            .port()
+            .unwrap();
+        assert_eq!(
+            server.callback_url,
+            format!("http://{advertised_host}:{port}/oauth/callback")
+        );
+        // Follow the advertised URI as given: that is what the browser does.
+        let url = format!("{}?code=c&state=s", server.callback_url);
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(server.wait_for_callback(), client.get(url).send())
+        })
+        .await
+        .expect("the advertised address answers");
+        assert_eq!(outcome.expect("a code").1.code, "c");
+    }
+
+    fn ipv6_loopback_available() -> bool {
+        std::net::TcpListener::bind("[::1]:0").is_ok()
+    }
+
+    #[tokio::test]
+    async fn an_ipv4_callback_host_is_advertised_as_configured() {
+        served_where_advertised("127.0.0.1", "127.0.0.1").await;
+    }
+
+    #[tokio::test]
+    async fn an_ipv6_callback_host_is_advertised_bracketed_and_bound() {
+        if !ipv6_loopback_available() {
+            eprintln!("no IPv6 loopback on this host; skipped");
+            return;
+        }
+        served_where_advertised("::1", "[::1]").await;
+        served_where_advertised("[::1]", "[::1]").await;
+    }
+
     #[tokio::test]
     async fn callback_server_binds_to_specified_port() {
         // Use port 0 as fallback since specific ports might be taken
