@@ -501,13 +501,33 @@ pub(super) fn refusal_principal(
     None
 }
 
-/// The principal a passthrough slot budget is charged to (MIK-7689).
+/// The principal a passthrough slot budget is charged to (MIK-7689): the
+/// credential's quota principal (API key digest, OAuth `client_id`, whole
+/// certificate), never a display label two credentials can share. A caller
+/// without one keys on its configured key name, its `client_id`, or (for a
+/// hand-built certificate only) its label.
 pub(super) fn slot_principal(
     client: Option<&AuthenticatedClient>,
     oauth_agent_identity: Option<&OAuthAgentIdentity>,
     cert_identity: Option<&CertIdentity>,
 ) -> Option<String> {
-    refusal_principal(client, oauth_agent_identity, cert_identity)
+    let key = |quota: Option<&crate::gateway::auth::QuotaPrincipal>| {
+        quota.map(|q| q.as_store_key().to_owned())
+    };
+    if let Some(client) = client
+        && client.authenticated
+    {
+        return key(client.quota_principal.as_ref()).or_else(|| Some(client.name.clone()));
+    }
+    if let Some(agent) = oauth_agent_identity {
+        return key(agent.quota_principal.as_ref())
+            .or_else(|| Some(format!("agent:{}", agent.client_id)));
+    }
+    if let Some(cert) = cert_identity {
+        return key(cert.quota_principal.as_ref())
+            .or_else(|| Some(format!("cert:{}", cert.display_name)));
+    }
+    None
 }
 
 #[cfg(test)]
