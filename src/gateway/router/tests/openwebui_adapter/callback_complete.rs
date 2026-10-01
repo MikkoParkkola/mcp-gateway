@@ -37,7 +37,11 @@ async fn complete_page_without_a_session_adapter_never_asks_open_webui() {
     // THEN
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
     assert!(body.contains(SIGN_IN), "{body}");
-    assert!(owui.seen().is_empty(), "asked Open WebUI: {:?}", owui.seen());
+    assert!(
+        owui.seen().is_empty(),
+        "asked Open WebUI: {:?}",
+        owui.seen()
+    );
 }
 
 /// A session Open `WebUI` does not recognise gets the same refusal, and is

@@ -156,7 +156,9 @@ async fn start_when_custody_cannot_arm_the_journey_is_unavailable() {
     let owui = FakeOwui::start(users(), Answer::Session).await;
     let gw = with_journeys(
         gateway(&owui, 5).await,
-        Arc::new(Busy { names_account: true }),
+        Arc::new(Busy {
+            names_account: true,
+        }),
     );
     // WHEN
     let (status, headers, body) = start(&gw, "j1", &[&session_cookie()]).await;
