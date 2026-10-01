@@ -416,7 +416,11 @@ def selftest(workdir):
     assert seen and seen[0]["body"]["type"] == "verification", seen
     r2 = call(mcp, "events/subscribe", p)["result"]
     assert r1["id"] == r2["id"] and len(seen) == 1, "idempotent; verification cached"
-    assert Stub(store, log, None, True).subs.keys() == {r1["id"]}, "persisted across restart"
+    restarted = Stub(store, log + ".restart", None, True)  # a fresh process reading the same store
+    assert restarted.subs.keys() == {r1["id"]}, "persisted across restart"
+    out = restarted.emit("a")  # delivery through the restored record: its url and secret
+    assert len(out) == 1 and out[0]["status"] == 200 and seen[-1]["sub"] == r1["id"], out
+    seen.pop()  # keep the counts below about the original stub
     emit("b")
     assert len(seen) == 1, "filter: topic b must not deliver"
     emit("a")
