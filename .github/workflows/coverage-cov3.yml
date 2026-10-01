@@ -107,6 +107,8 @@ jobs:
       - name: Task store and account storage tests
         shell: bash
         run: |
+          cargo test --all-features --lib -- diag_mik_7749 --nocapture > diag-run.log 2>&1 || true
+          cat diag-run.log | grep -E 'DIAG|panicked|test result' || true
           cargo llvm-cov --all-features --lib --lcov --output-path windows.lcov --ignore-run-fail -- task_service personal_accounts > windows-run.log 2>&1
           grep -E '^test result|FAILED|panicked' windows-run.log || true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -116,3 +118,4 @@ jobs:
           path: |
             windows.lcov
             windows-run.log
+            diag-run.log

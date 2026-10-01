@@ -268,3 +268,39 @@ fn make_writable(dir: &std::path::Path) {
     #[cfg(windows)]
     crate::private_fs::test_support::remove_deny("readonly-home", dir);
 }
+
+/// THROWAWAY (MIK-7749 diagnosis, probe branch only): what the Windows store
+/// does under the readonly-home fixture.
+#[cfg(windows)]
+#[tokio::test]
+async fn diag_mik_7749_readonly_home_on_windows() {
+    use std::fs;
+    let show = |what: &str, path: &std::path::Path| {
+        let out = std::process::Command::new("icacls").arg(path).output().unwrap();
+        eprintln!("DIAG {what} icacls {}:\n{}", path.display(), String::from_utf8_lossy(&out.stdout));
+    };
+    let whoami = std::process::Command::new("whoami").args(["/priv"]).output().unwrap();
+    eprintln!("DIAG whoami /priv:\n{}", String::from_utf8_lossy(&whoami.stdout));
+    let root = tempfile::tempdir().expect("a fixture root");
+    let home = root.path().join("home");
+    fs::create_dir(&home).unwrap();
+    crate::private_fs::test_support::deny_user("readonly-home", &home, "WD,AD");
+    show("after deny", &home);
+    eprintln!("DIAG probe file write: {:?}", fs::write(home.join("probe"), b""));
+    eprintln!("DIAG create_dir .mcp-gateway: {:?}", fs::create_dir(home.join("direct-subdir")));
+    let store_dir = home.join(".mcp-gateway").join("tasks");
+    let opened = open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions()).await;
+    eprintln!("DIAG open_runtime ok: {}", opened.is_ok());
+    eprintln!("DIAG .mcp-gateway exists: {}", home.join(".mcp-gateway").exists());
+    eprintln!("DIAG store_dir exists: {}", store_dir.exists());
+    for entry in fs::read_dir(&home).unwrap() {
+        eprintln!("DIAG home entry: {:?}", entry.unwrap().path());
+    }
+    if home.join(".mcp-gateway").exists() {
+        show("created .mcp-gateway", &home.join(".mcp-gateway"));
+    }
+    if let Ok((service, _executor)) = opened {
+        let _ = service.shutdown().await;
+    }
+    crate::private_fs::test_support::remove_deny("readonly-home", &home);
+}
