@@ -159,8 +159,13 @@ five fields, no seconds.
 canonical `(cron, timezone, label)`. Timers share one minute-boundary ticker
 task rather than one task each.
 
-**Emit.** `upstream_id = cron ‖ timezone ‖ label ‖ scheduled_for`, so a
-gateway restart within the same minute does not double-fire. A missed tick
+**Emit.** The source persists, per timer key, the last `scheduled_for` it
+emitted (one small file in its own state directory under the events store,
+written before the emit). On restart a timer fires only for a boundary later
+than that value, so a restart within the same minute does not double-fire;
+the outbox is not relied on for this, because it forgets delivered records.
+`upstream_id = cron ‖ timezone ‖ label ‖ scheduled_for` keeps the event id
+stable if the same tick is ever re-emitted. A missed tick
 while the gateway was down is not emitted late (emit-only).
 
 **matches.** Exact equality on the canonical arguments.
@@ -210,11 +215,11 @@ criterion in the follow-up ticket.
 | U1 | `watch_is_offered_only_for_read_only_capabilities` | `events/list` shows `watch.<cap>.changed` for a read-only REST capability and not for a side-effecting one; subscribing to the latter → `-32011` | no watch descriptors exist |
 | U2 | `watch_emits_on_digest_change_only` | a mock REST endpoint answers A, A, B, B, A → events after the 3rd and 5th polls; first poll emits nothing; payload holds pointers and digests, no values | no watch source |
 | U3 | `watch_pollers_are_shared_per_canonical_arguments_and_credential` | two principals, credential-free capability, same arguments → one poller (mock sees one call per interval), charged to the global budget; credentialed capability → two pollers, each under its own credential; a flap A→B→A→B → three events with three distinct `eventId`s | no watch source |
-| U4 | `watch_polls_are_budgeted_and_floored` | `interval: 10` → `-32602`; each poll charges `events:watch:<cap>` to the subscriber; an exhausted budget stops polling | no watch source |
+| U4 | `watch_polls_are_budgeted_and_floored` | `interval: 10` → `-32602`; on a **credentialed** capability each poll charges `events:watch:<cap>` to its one principal and an exhausted budget stops that poller; on a **shared** credential-free capability each poll charges the global budget, and one subscriber's exhausted budget stops only that subscriber's deliveries while the poller keeps running for the other | no watch source |
 | U5 | `operational_events_are_operator_only_except_own_budget` | an admin sees all four descriptors; a non-admin sees only `gateway.budget.*` and receives only events for their own budget scope | no operational source |
 | U6 | `budget_events_are_not_charged_to_the_budget_they_report` | exhausting a principal's budget delivers `gateway.budget.exhausted` exactly once and the ledger shows no charge for that delivery | no operational source |
 | U7 | `health_and_kill_switch_transitions_become_events` | killing and reviving a backend → two `kill_switch.changed` events; tripping a breaker → one `health_changed` | no operational source |
-| U8 | `schedule_ticks_fire_on_cron_and_respect_the_floor` | a test clock crossing `*/5 * * * *` fires one tick per boundary; `* * * * *` → `-32602`; restart within the same minute does not double-fire | no schedule source |
+| U8 | `schedule_ticks_fire_on_cron_and_respect_the_floor` | a test clock crossing `*/5 * * * *` fires one tick per boundary; `* * * * *` → `-32602`; restart within the same minute does not double-fire (the persisted last-fired value is read back; the receiver sees one POST) | no schedule source |
 | U9 | `schedule_label_is_capped_and_scanned` | a 65-character label → `-32602`; a label carrying a blocked injection pattern is dead-lettered `firewall_blocked` | no schedule source |
 | U10 | `deferred_sources_need_no_core_change` (structural guard, exempt from red-first) | a CI check that a PR adding a source touches no file under `src/events/` other than the source's own module and the registry line | lands as its own PR **before** the first 4.0.1 source and is shown to fail on a synthetic diff that edits a core file; it guards structure and has no behaviour to see red |
 | U11 | `watch_stops_when_its_capability_is_removed_or_reclassified` | reclassifying a watched capability as side-effecting on reload → poller stops (mock sees no further calls), subscription deleted, refresh answers `-32011` | no watch source |
