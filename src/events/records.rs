@@ -155,11 +155,13 @@ pub(crate) fn write_record<T: Serialize>(
 ) -> std::io::Result<Placed> {
     let bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
     let temp = dir.join(format!(".{name}.{}.tmp", rand::random::<u64>()));
-    let mut file = crate::config_persistence::create_new_private(&temp)?;
-    let staged = file
-        .write_all(&bytes)
-        .and_then(|()| file.sync_all())
-        .and_then(|()| rename(&temp, &dir.join(name)));
+    // The handle is closed before the rename: Windows refuses to move a file
+    // that is still open under an exclusive share mode.
+    let written = {
+        let mut file = crate::config_persistence::create_new_private(&temp)?;
+        file.write_all(&bytes).and_then(|()| file.sync_all())
+    };
+    let staged = written.and_then(|()| rename(&temp, &dir.join(name)));
     if staged.is_err() {
         let _ = std::fs::remove_file(&temp);
     }
