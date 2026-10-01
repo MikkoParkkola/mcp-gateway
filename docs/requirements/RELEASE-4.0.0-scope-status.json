@@ -1426,8 +1426,8 @@
       "status": "pending",
       "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Known misses: startup 68.78% and bridge 69.44% against the ticket's floors (Critical >=95, Standard >=80); no waiver exists. Graded with NFR.BUILD.1 C5 and C6 on the final revision."
+      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "src/gateway/server/support_tests.rs:105"],
+      "note": "Tiers ruled 2026-10-01 and written into docs/release/v4.0.0-critical-path-coverage.md:38-70: startup and bridge are Standard (>=80%); four security-enforcing functions inside them are Critical (>=95%): serve_tls, PeerCertIdentityAcceptor::accept, Gateway::prepare_signing, Gateway::response_firewall. Measured 2026-10-01 (CI run 36802315128 at 141b7ec05, --all-features, lib plus --tests): startup 91.59% (4772/5210), bridge 90.61% (222/245), both clear Standard; the 2026-09-17 misses (68.78%, 69.44%) were --lib only on a dirty tree. The four Critical functions were below 95% (serve_tls and accept uncovered); closing tests: src/gateway/server/support_tests.rs (mtls_listener), src/gateway/server/tests/stdio_chain_nonce_refusal.rs, src/gateway/server/tests/response_firewall_anomaly.rs. Pending: graded with NFR.BUILD.1 C5 and C6 on the final revision. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md)."
     },
     {
       "id": "MIK-7216.IDEM.1",
