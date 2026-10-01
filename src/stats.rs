@@ -103,7 +103,7 @@ impl UsageStats {
 
     /// Drop a session's cached-token counter (called on session disconnect).
     pub fn remove_session(&self, session_id: &str) {
-        let _ = session_id;
+        self.cached_tokens_by_session.remove(session_id);
     }
 
     /// Get usage count for a specific tool

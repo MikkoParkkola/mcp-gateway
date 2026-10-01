@@ -58,7 +58,10 @@ struct ClientSession {
     /// Subscribed backends
     subscribed_backends: RwLock<Vec<String>>,
     /// Timestamp of session creation (for TTL-based reaping)
-    created_at: Instant,
+    /// Last time a request resumed this session. The reaper goes by this, not
+    /// by creation: a session that only POSTs holds no stream, so age alone
+    /// would reap it mid-use and the next request would start a fresh one.
+    last_active: RwLock<Instant>,
     /// The identity that created this session.
     ///
     /// A session id arrives in a header the caller controls, so without this a
@@ -116,7 +119,7 @@ impl NotificationMultiplexer {
     /// Create a new notification multiplexer.
     ///
     /// Spawns a background session-reaper task that periodically removes
-    /// sessions older than `config.session_ttl` that have no active receivers,
+    /// sessions idle for `config.session_ttl` that have no active receivers,
     /// preventing FD exhaustion from dropped SSE connections.
     #[must_use]
     pub fn new(backends: Arc<BackendRegistry>, config: StreamingConfig) -> Self {
@@ -162,7 +165,10 @@ impl NotificationMultiplexer {
                     break;
                 };
 
-                mux.reap_expired_sessions(ttl);
+                for id in mux.reap_expired_sessions(ttl) {
+                    // A reaped id is dead; state keyed by it goes with it.
+                    lifecycle.on_disconnect(&id);
+                }
 
                 let reclaimed = lifecycle.reap(now_unix());
                 if reclaimed > 0 {
@@ -180,24 +186,27 @@ impl NotificationMultiplexer {
     }
 
     /// Remove all sessions that are both expired and have no active receivers.
-    fn reap_expired_sessions(&self, ttl: Duration) {
+    ///
+    /// Returns the ids it removed, so the caller can announce their end.
+    fn reap_expired_sessions(&self, ttl: Duration) -> Vec<String> {
         let now = Instant::now();
         let mut sessions = self.sessions.write();
 
-        let before = sessions.len();
+        let mut reaped_ids = Vec::new();
         sessions.retain(|id, session| {
-            let expired = now.duration_since(session.created_at) >= ttl;
+            let expired = now.duration_since(*session.last_active.read()) >= ttl;
             let abandoned = session.tx.receiver_count() == 0;
 
             if expired && abandoned {
                 info!(session_id = %id, "Reaping expired streaming session (no active receivers)");
+                reaped_ids.push(id.expose_secret().to_string());
                 false
             } else {
                 true
             }
         });
 
-        let reaped = before.saturating_sub(sessions.len());
+        let reaped = reaped_ids.len();
         if reaped > 0 {
             info!(
                 reaped,
@@ -205,6 +214,7 @@ impl NotificationMultiplexer {
                 "Session reaper completed"
             );
         }
+        reaped_ids
     }
 
     /// Create or get a session
@@ -232,6 +242,7 @@ impl NotificationMultiplexer {
         if let Some(session) = session_id.and_then(|id| sessions.get(id))
             && session.owner == *owner
         {
+            *session.last_active.write() = Instant::now();
             return (
                 session.id.expose_secret().to_string(),
                 session.tx.subscribe(),
@@ -257,7 +268,7 @@ impl NotificationMultiplexer {
             tx,
             last_event_id: RwLock::new(None),
             subscribed_backends: RwLock::new(Vec::new()),
-            created_at: Instant::now(),
+            last_active: RwLock::new(Instant::now()),
             owner,
             credential: RwLock::new(None),
         };
