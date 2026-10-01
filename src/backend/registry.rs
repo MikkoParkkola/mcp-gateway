@@ -269,8 +269,8 @@ impl BackendRegistry {
         if let Some(destinations) = self.destination.get() {
             // Check and stamp under the lock `Backend::publish` takes, so no
             // start publishes between them.
-            let publishing = backend.replaced_transport_cleanups.lock();
-            if backend.started_unpinned(&publishing) {
+            let _publishing = backend.replaced_transport_cleanups.lock();
+            if backend.started_unpinned() {
                 warn!(
                     backend = %backend.name,
                     "Refusing to register a backend that connected before this registry's \
@@ -331,17 +331,13 @@ impl BackendRegistry {
         // Every member's publish lock is held from the check until its stamp
         // lands: a start that publishes first is seen by the check, and one
         // that publishes after finds the stamp and is refused (`publish`).
-        let publishing: Vec<_> = members
+        let _publishing: Vec<_> = members
             .iter()
             .map(|b| b.replaced_transport_cleanups.lock())
             .collect();
         // Only an unstamped backend can qualify, so once the snapshot is
         // recorded (every member stamped) this never refuses again.
-        if let Some((started, _)) = members
-            .iter()
-            .zip(&publishing)
-            .find(|(b, cleanups)| b.started_unpinned(cleanups))
-        {
+        if let Some(started) = members.iter().find(|b| b.started_unpinned()) {
             return Err(crate::Error::ConfigValidation(format!(
                 "backend '{}' connected before the hardened destination policy was set, so \
                  its connection is not pinned; pair the registry with the config before \

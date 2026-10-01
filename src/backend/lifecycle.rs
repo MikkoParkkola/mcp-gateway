@@ -165,6 +165,7 @@ impl Backend {
             stopped: std::sync::atomic::AtomicBool::new(false),
             budgets: super::ShutdownBudgets::default(),
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
+            connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             destination: std::sync::OnceLock::new(),
         }
     }
@@ -357,10 +358,14 @@ impl Backend {
 
         info!(backend = %self.name, ?key, "Starting backend transport");
         // Read once, before anything connects, under the lock a pairing holds
-        // from its check to its stamp: this start already counts as in
-        // flight, so it either blocks that pairing or reads its stamp.
+        // from its check to its stamp: either this start reads the stamp, or
+        // it marks the backend so that pairing refuses it.
         let built_under = {
             let _pairing = self.replaced_transport_cleanups.lock();
+            if self.destination.get().is_none() {
+                self.connected_unpinned
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
             self.destination()
         };
 

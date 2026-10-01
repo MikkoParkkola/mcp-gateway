@@ -412,13 +412,6 @@ fn http() -> TransportConfig {
     transport("http://127.0.0.1:{port}/mcp", 9)
 }
 
-/// Seed a started shared transport; returns its close flag.
-fn seed_started(backend: &Backend) -> Arc<std::sync::atomic::AtomicBool> {
-    let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    backend.set_transport_for_test(Arc::new(Started(Arc::clone(&closed))));
-    closed
-}
-
 /// Pair `registry` with a hardened config the way an embedder does.
 fn pair_hardened(
     registry: Arc<BackendRegistry>,
@@ -434,41 +427,46 @@ fn pair_hardened(
     )
 }
 
-// MIK-7700: an HTTP backend that connected before a hardened pairing is on an
-// unpinned connection that cannot be re-pinned in place (closing it would
+/// A backend at a loopback listener that has really started once (the
+/// listener drops the connection, so the start itself fails).
+async fn started_at_loopback() -> (Arc<Backend>, Arc<AtomicUsize>) {
+    let (port, accepted) = counting_listener().await;
+    let backend = Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: transport("http://127.0.0.1:{port}/mcp", port),
+            timeout: Duration::from_secs(10),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    (backend, accepted)
+}
+
+// MIK-7700: an HTTP backend that started before a hardened pairing built an
+// unpinned connection, which cannot be re-pinned in place (closing it would
 // itself send to the address). Pairing is refused, naming the backend, and
-// touches nothing: no stamp, no close, the transport where it was.
+// stamps nothing.
 #[tokio::test]
 async fn hardened_pairing_refuses_a_backend_started_unpinned() {
     let registry = Arc::new(BackendRegistry::new());
-    let backend = backend_at(http());
+    let (backend, accepted) = started_at_loopback().await;
     assert!(registry.register(Arc::clone(&backend)));
-    let closed = seed_started(&backend);
+    let _ = backend.ensure_started().await;
+    assert!(
+        accepted.load(Ordering::SeqCst) > 0,
+        "the start connected unpinned"
+    );
     let error = pair_hardened(Arc::clone(&registry))
         .err()
-        .expect("pairing over an unpinned connection must be refused");
+        .expect("pairing over an unpinned start must be refused");
     assert!(
         error.to_string().contains("'b'"),
         "names the backend: {error}"
     );
     assert!(!error.to_string().contains("127.0.0.1"), "no URL: {error}");
     assert_eq!(backend.destination(), DestinationPolicy::Configured);
-    assert!(
-        backend
-            .pooled_transport_for_test(&super::PoolKey::Shared)
-            .is_some()
-    );
-    assert!(!closed.load(Ordering::SeqCst));
-}
-
-// A start still in flight counts: it reads no policy and connects unpinned.
-#[tokio::test]
-async fn hardened_pairing_refuses_while_a_start_is_in_flight() {
-    let registry = Arc::new(BackendRegistry::new());
-    let backend = backend_at(http());
-    assert!(registry.register(Arc::clone(&backend)));
-    backend.starts_in_flight.fetch_add(1, Ordering::SeqCst);
-    assert!(pair_hardened(registry).is_err());
 }
 
 // The shipped binary's order: pair the empty registry, then start. Every
@@ -479,9 +477,12 @@ async fn a_paired_registry_pairs_again_with_started_backends() {
     registry
         .enforce_destinations(DestinationPolicy::Public, &[])
         .expect("an empty registry pairs");
-    let backend = backend_at(http());
+    let (backend, _) = started_at_loopback().await;
     assert!(registry.register(Arc::clone(&backend)));
-    seed_started(&backend);
+    assert!(
+        backend.ensure_started().await.is_err(),
+        "pinned: loopback refused"
+    );
     assert!(pair_hardened(registry).is_ok());
     assert_eq!(backend.destination(), DestinationPolicy::Public);
 }
@@ -496,21 +497,20 @@ async fn hardened_pairing_accepts_a_started_stdio_backend() {
         protocol_version: None,
     });
     assert!(registry.register(Arc::clone(&backend)));
-    let closed = seed_started(&backend);
+    backend.connected_unpinned.store(true, Ordering::SeqCst);
     assert!(pair_hardened(registry).is_ok());
-    assert!(!closed.load(Ordering::SeqCst));
 }
 
 // The other order: a backend started on its own, then registered into a
 // registry already paired with a hardened config, is refused registration.
-#[test]
-fn registering_a_started_unpinned_backend_into_a_hardened_registry_is_refused() {
+#[tokio::test]
+async fn registering_a_started_unpinned_backend_into_a_hardened_registry_is_refused() {
     let registry = BackendRegistry::new();
     registry
         .enforce_destinations(DestinationPolicy::Public, &[])
         .expect("an empty registry pairs");
-    let backend = backend_at(http());
-    seed_started(&backend);
+    let (backend, _) = started_at_loopback().await;
+    let _ = backend.ensure_started().await;
     assert!(!registry.register(Arc::clone(&backend)));
     assert_eq!(backend.destination(), DestinationPolicy::Configured);
 }
@@ -536,20 +536,4 @@ fn a_start_built_before_the_stamp_is_not_published() {
             .publish(&entry, &started, DestinationPolicy::Public)
             .is_ok()
     );
-}
-
-// A transport replaced or evicted while a request held it stays open until
-// that request lets go: as live and as unpinned as a pooled one.
-#[tokio::test]
-async fn hardened_pairing_refuses_while_a_replaced_transport_is_closing() {
-    let registry = Arc::new(BackendRegistry::new());
-    let backend = backend_at(http());
-    assert!(registry.register(Arc::clone(&backend)));
-    let closing = tokio::spawn(std::future::pending::<()>());
-    backend
-        .replaced_transport_cleanups
-        .lock()
-        .handles
-        .push(closing);
-    assert!(pair_hardened(registry).is_err());
 }

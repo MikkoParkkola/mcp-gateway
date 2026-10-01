@@ -209,6 +209,10 @@ pub struct Backend {
     /// Where this backend's transports may connect; stamped by its registry.
     /// Unstamped means `Configured`: a backend no config governs.
     destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// Set, and never cleared, when a start began before any stamp: whatever
+    /// that start built may still be alive somewhere (pooled, closing, held
+    /// by a request), so a hardened pairing refuses this backend (MIK-7700).
+    connected_unpinned: std::sync::atomic::AtomicBool,
     pub(crate) budgets: ShutdownBudgets,
 }
 
@@ -218,27 +222,16 @@ impl Backend {
         let _ = self.destination.set(policy);
     }
 
-    /// Whether this backend has connected, or is connecting, before any
-    /// destination policy was stamped on it: an HTTP or WebSocket transport
-    /// built under the unstamped `Configured` policy (MIK-7700). Such a
-    /// transport cannot be re-pinned in place; closing it would itself send
-    /// to the unpinned address, so pairing refuses instead.
-    ///
-    /// `cleanups` is this backend's cleanup state, locked by the caller: a
-    /// replaced or evicted transport still closing (one a request holds) is
-    /// as live as a pooled one.
-    pub(crate) fn started_unpinned(&self, cleanups: &CleanupState) -> bool {
+    /// Whether a start began on this HTTP or WebSocket backend before any
+    /// destination policy was stamped on it. What that start built was not
+    /// pinned and cannot be re-pinned in place (closing it would itself send
+    /// to the address), so pairing refuses instead (MIK-7700).
+    pub(crate) fn started_unpinned(&self) -> bool {
         self.destination_bound()
             && self.destination.get().is_none()
-            && (self
-                .starts_in_flight
+            && self
+                .connected_unpinned
                 .load(std::sync::atomic::Ordering::SeqCst)
-                > 0
-                || cleanups.handles.iter().any(|close| !close.is_finished())
-                || self
-                    .pool
-                    .iter()
-                    .any(|entry| entry.value().transport.read().is_some()))
     }
 
     /// Whether this backend's transports connect under its destination
