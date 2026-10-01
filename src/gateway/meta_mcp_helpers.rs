@@ -449,19 +449,24 @@ fn glob_match_chars(text: &[char], pattern: &[char]) -> bool {
     }
 }
 
-/// Check whether a tool matches a search query by name or description.
+/// Check whether a tool matches a search query by server, name or description.
 ///
 /// The `query` may contain multiple whitespace-separated words. A tool
 /// matches if **any** query word (or any of its synonyms) appears
-/// case-insensitively in the tool name or description (including keyword tags).
-/// Single-word queries behave identically to the previous substring match.
-pub(crate) fn tool_matches_query(tool: &Tool, query: &str) -> bool {
+/// case-insensitively in the tool name, its description (including keyword
+/// tags), or the name of the backend that serves it. The serving backend is
+/// part of the haystack because a caller that knows which server it wants
+/// otherwise has to guess a tool name to find that server's tools at all.
+pub(crate) fn tool_matches_query(server: &str, tool: &Tool, query: &str) -> bool {
     let name_lower = tool.name.to_lowercase();
     let desc_lower = tool.description.as_deref().unwrap_or("").to_lowercase();
+    let server_lower = server.to_lowercase();
 
-    query
-        .split_whitespace()
-        .any(|word| word_matches_text(word, &name_lower) || word_matches_text(word, &desc_lower))
+    query.split_whitespace().any(|word| {
+        word_matches_text(word, &name_lower)
+            || word_matches_text(word, &desc_lower)
+            || word_matches_text(word, &server_lower)
+    })
 }
 
 /// Build suggestions from the tag index when a search returns zero results.

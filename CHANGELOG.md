@@ -46,6 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backend now gets its own cache directory. An operator-set
   `npm_config_cache` is left alone.
 
+- **`gateway_search_tools` finds a backend by its own name.** The match ran over
+  each tool's name and description only, so a query naming the server returned
+  nothing unless the caller happened to guess one of that server's tool names —
+  `codesearch` serves `search_code`, `search_instructions` and
+  `get_code_context`, and the string `codesearch` appears in none of them, so
+  the search answered with spelling suggestions for a backend whose tools were
+  being served at that moment. The serving backend's name is now part of the
+  haystack, which is also what the code-mode path already did for `server:tool`
+  queries.
+
 ### Changed
 - **A tool count is no longer reported as `0` before a backend has been
   enumerated.** `gateway_list_servers`, the `initialize` preamble and the

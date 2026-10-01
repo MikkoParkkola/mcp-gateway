@@ -722,33 +722,33 @@ fn build_stats_tool_has_no_unmeasured_savings_parameter() {
 #[test]
 fn tool_matches_query_by_name() {
     let tool = make_tool("gateway_search_tools", Some("Search stuff"));
-    assert!(tool_matches_query(&tool, "search"));
+    assert!(tool_matches_query("testserver", &tool, "search"));
 }
 
 #[test]
 fn tool_matches_query_by_description() {
     let tool = make_tool("my_tool", Some("Weather forecast service"));
-    assert!(tool_matches_query(&tool, "weather"));
+    assert!(tool_matches_query("testserver", &tool, "weather"));
 }
 
 #[test]
 fn tool_matches_query_case_insensitive() {
     let tool = make_tool("MyTool", Some("Advanced Analytics"));
-    assert!(tool_matches_query(&tool, "mytool"));
-    assert!(tool_matches_query(&tool, "analytics"));
+    assert!(tool_matches_query("testserver", &tool, "mytool"));
+    assert!(tool_matches_query("testserver", &tool, "analytics"));
 }
 
 #[test]
 fn tool_does_not_match_unrelated_query() {
     let tool = make_tool("gateway_invoke", Some("Invoke a tool"));
-    assert!(!tool_matches_query(&tool, "weather"));
+    assert!(!tool_matches_query("testserver", &tool, "weather"));
 }
 
 #[test]
 fn tool_matches_query_with_no_description() {
     let tool = make_tool("search_engine", None);
-    assert!(tool_matches_query(&tool, "search"));
-    assert!(!tool_matches_query(&tool, "weather"));
+    assert!(tool_matches_query("testserver", &tool, "search"));
+    assert!(!tool_matches_query("testserver", &tool, "weather"));
 }
 
 #[test]
@@ -757,7 +757,7 @@ fn tool_matches_multi_word_query_any_word_in_name() {
     let tool = make_tool("brave_search", Some("Web search tool"));
     // WHEN: querying with two words
     // THEN: matches because "search" is in the name
-    assert!(tool_matches_query(&tool, "batch search"));
+    assert!(tool_matches_query("testserver", &tool, "batch search"));
 }
 
 #[test]
@@ -766,7 +766,7 @@ fn tool_matches_multi_word_query_any_word_in_description() {
     let tool = make_tool("parallel_task", Some("Run deep research tasks in parallel"));
     // WHEN: querying "batch research"
     // THEN: matches because "research" is in the description
-    assert!(tool_matches_query(&tool, "batch research"));
+    assert!(tool_matches_query("testserver", &tool, "batch research"));
 }
 
 #[test]
@@ -775,7 +775,7 @@ fn tool_no_match_when_no_word_found() {
     let tool = make_tool("weather_api", Some("Returns current temperature"));
     // WHEN: searching for "batch search"
     // THEN: no match
-    assert!(!tool_matches_query(&tool, "batch search"));
+    assert!(!tool_matches_query("testserver", &tool, "batch search"));
 }
 
 #[test]
@@ -787,7 +787,7 @@ fn tool_matches_keyword_tag_in_description() {
     );
     // WHEN: querying "web"
     // THEN: matches because "web" appears in the description
-    assert!(tool_matches_query(&tool, "web"));
+    assert!(tool_matches_query("testserver", &tool, "web"));
 }
 
 #[test]
@@ -799,7 +799,7 @@ fn tool_matches_multi_word_where_one_word_is_tag() {
     );
     // WHEN: "batch monitor"
     // THEN: matches because "monitor" is in description (as keyword tag)
-    assert!(tool_matches_query(&tool, "batch monitor"));
+    assert!(tool_matches_query("testserver", &tool, "batch monitor"));
 }
 
 // ── build_match_json ────────────────────────────────────────────────
@@ -919,5 +919,28 @@ fn ac_ext_1_a_the_builder_serializes_the_map_it_was_given() {
         "the builder must serialize the map it was given and nothing else; \
          any other key means the extension source is read from somewhere \
          other than the parameter"
+    );
+}
+
+#[test]
+fn tool_matches_query_finds_a_backend_by_its_own_name() {
+    // The serving backend is part of the haystack. Without it, a caller that
+    // knows which server it wants finds nothing unless it happens to guess one
+    // of that server's tool names: `codesearch` serves `search_code`,
+    // `search_instructions` and `get_code_context`, and none of the three
+    // contains the string the caller is searching for.
+    let tool = make_tool("search_code", Some("Search for exact code snippets"));
+
+    assert!(
+        tool_matches_query("codesearch", &tool, "codesearch"),
+        "a query naming the server must find that server's tools"
+    );
+    assert!(
+        !tool_matches_query("gh-justin-personal", &tool, "codesearch"),
+        "a tool served by another backend is not a match for that name"
+    );
+    assert!(
+        tool_matches_query("codesearch", &tool, "search"),
+        "matching on the tool name and description is unchanged"
     );
 }
