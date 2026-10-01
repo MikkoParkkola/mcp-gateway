@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index 9db4c7185..2fe50d427 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -1238,7 +1238,7 @@ async fn backend_handler_inner(
+                 // computed before it can say `within` about a document the
+                 // client never receives.
+                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
+-                if response.error.is_none() {
++                if true || response.error.is_none() {
+                     record_client_success(&state, client.as_ref());
+                 }
+                 normalize_tools_list_response(&backend, &mut response);

@@ -1,0 +1,6 @@
+head_sha	8d9ab762b416f1a56ff684dfaf5c334803521457
+# router group PR 2622
+SLOT1	linux	slot.patch	--lib gateway::router::authorization::slot_principal_tests::two_agents_sharing_a_display_name_get_separate_slot_budgets -- --exact
+SLOT2	linux	slot.patch	--lib gateway::router::authorization::slot_principal_tests::two_certificates_sharing_a_display_name_get_separate_slot_budgets -- --exact
+LIST	linux	list.patch	--lib gateway::router::tests::meta_firewall_verdict::list_and_task_block::a_blocked_direct_tool_list_is_not_a_client_success -- --exact
+LAST	linux	last.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::a_wide_last_round_is_held_to_the_request_budget -- --exact

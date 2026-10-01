@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 5106c217b..ad2d3c705 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -511,6 +511,8 @@ pub(super) fn slot_principal(
+     oauth_agent_identity: Option<&OAuthAgentIdentity>,
+     cert_identity: Option<&CertIdentity>,
+ ) -> Option<String> {
++    return refusal_principal(client, oauth_agent_identity, cert_identity);
++    #[allow(unreachable_code)]
+     let key = |quota: Option<&crate::gateway::auth::QuotaPrincipal>| {
+         quota.map(|q| q.as_store_key().to_owned())
+     };

@@ -1,0 +1,16 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index a47fa1e8a..eb3876aac 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -552,10 +552,7 @@ impl InputBridge<'_> {
+             // Handed back, not asked, but still requests this call makes the
+             // client answer: they count against the same budget (MIK-7691).
+             let prompts = Self::plan(&interim, declared, slice)?;
+-            spent = spent.saturating_add(u32::try_from(prompts.len()).unwrap_or(u32::MAX));
+-            if spent > self.bounds.requests {
+-                return Err(BridgeError::RequestBudgetExhausted);
+-            }
++            let _ = &prompts;
+             self.gate
+                 .admit(&Self::handed_back(body))
+                 .map_err(|error| match error {
