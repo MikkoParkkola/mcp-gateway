@@ -1214,14 +1214,14 @@
     },
     {
       "id": "MIK-7587.WINDOWS.1",
-      "status": "pending",
-      "stage": "built",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
       "evidence": [
         "CONTRIBUTING.md",
         ".github/workflows/ci.yml"
       ],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7587, title \"(4.0-gating)\"). #1142 closed by #2374 (507367ac9): the Windows job runs every test target (green probe run 36590176015) and CONTRIBUTING.md documents the remaining Windows gates. Not graded against the Linear acceptance yet: the per-area classification and the README/docs Windows-limitation text need checking at source. #2368 (shell-quoted temp paths) is labelled 4.0.1."
+      "note": "Met 2026-10-01 (#2498, squash-merged as 576cda88c). Every area the Windows job skipped is classified: fixed test assumptions now run on Windows, the rest are cfg-gated with a stated reason and listed as Windows limitations W-L1..W-L10 in CONTRIBUTING.md. No product defect was found. Green Windows check on the PR head, CI run 36780915299; feature-combos run 36785570638 green. The #2368 home-directory problem is closed by the debug-only MCP_GATEWAY_TEST_HOME_DIR seam.\n\n--- prior note follows ---\nAdded 2026-09-29 under operator chat ruling C1 (Linear MIK-7587, title \"(4.0-gating)\"). #1142 closed by #2374 (507367ac9): the Windows job runs every test target (green probe run 36590176015) and CONTRIBUTING.md documents the remaining Windows gates. Not graded against the Linear acceptance yet: the per-area classification and the README/docs Windows-limitation text need checking at source. #2368 (shell-quoted temp paths) is labelled 4.0.1."
     },
     {
       "id": "MIK-7581.DOCS.1",
@@ -1412,11 +1412,18 @@
     },
     {
       "id": "MIK-7216.IDEM.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. PARTIAL. Declared readOnlyHint/idempotentHint are captured before name inference (src/backend/annotations.rs:163; resend_decision, src/backend/ops.rs:168); capability YAML entries are not classified, and unannotated tools default to side-effecting rather than being classified."
+      "evidence": [
+        "src/gateway/meta_mcp/effects.rs:78",
+        "src/gateway/meta_mcp/effects.rs:88",
+        "src/gateway/meta_mcp/effects.rs:112",
+        "tests/capability_read_only_classified.rs:14",
+        "src/backend/prepare_tool_metadata_tests.rs:149",
+        "src/config/features/idempotency.rs:62"
+      ],
+      "note": "MET 2026-10-01 by PR #2509: every shipped capability YAML declares metadata.read_only (enforced by every_capability_yaml_declares_an_explicit_boolean_read_only); every meta tool is in META_TOOL_EFFECTS, checked against build_meta_tools plus build_code_mode_tools with the ten read-only names pinned; backend tools follow the declared ADR-012 A1 rule (annotation, else operator list, else side-effecting). Mutant proof, run 36784221285: flipping a table value (m1), dropping a table entry (m2), removing read_only from a capability (m3) and making an unannotated backend tool read-only (m4) are all RED. Tests added: effects_table_names_exactly_the_meta_tools_the_gateway_lists, effects_table_pins_the_ten_read_only_meta_tools, a_name_absent_from_the_table_is_side_effecting, every_capability_yaml_declares_an_explicit_boolean_read_only, prepare_tool_metadata_grants_resend_only_to_explicit_hints, only_an_operator_listed_pair_is_read_only_for_admission; graded below. The declared default 'an unannotated backend tool is side-effecting' (ADR-012 A1) is a classification, not an absence. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). MIK-7216 is a sub-issue of MIK-7211 scheduled into the 4.0.0 queue (item 1c, 2026-08-31). Its IDEM.2/3/4/7 map to MET rows MIK-7212.MRTR.10a/10b, MIK-7272.SUB.4 and NFR.COMPAT.1; IDEM.4 as amended for stdio only: keyless stdio calls are admitted per operator ruling C4 unless server.idempotency_key is required; C4 grants no HTTP exemption. The 2026-09-30 audit before this PR read PARTIAL: Declared readOnlyHint/idempotentHint are captured before name inference (src/backend/annotations.rs:163; resend_decision, src/backend/ops.rs:168)."
     },
     {
       "id": "MIK-7216.IDEM.5",

@@ -1,4 +1,4 @@
-sha256: d58014cd44a8deea6930b00fb233a6d89a11adabed7021bfe5c1b4c8f44076c8
+sha256: cbad4de9d05eee2e8ddc3bad9453524ebcfbae53037626f1f5f21ad5ac830ec4
 # Metacognition NLI Verification - Gateway Capability
 #
 # This capability exposes metacognition verification via the MCP Gateway
@@ -71,6 +71,7 @@ tags:
   - contradiction
 
 metadata:
+  read_only: true
   latency_ms: 15
   cost_per_call: 0
   accuracy: 0.915

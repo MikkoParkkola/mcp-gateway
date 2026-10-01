@@ -739,6 +739,20 @@ admitted this way.
   cooperating clients, not a security boundary.
 - `server` is restart-scoped: a change takes effect on restart.
 
+**Classification.** Every tool the gateway exposes is classified read-only or
+side-effecting as data. Capabilities: `metadata.read_only`, required in every
+capability YAML. Meta tools: one table, `META_TOOL_EFFECTS`; a name absent from
+it is side-effecting. Backend MCP tools: the operator's `idempotency.read_only_tools`
+list decides admission, and only an explicit `readOnlyHint: true` or
+`idempotentHint: true` permits a resend; an unannotated tool is side-effecting
+by declared default (ADR-012 A1), whatever its name suggests. Playbooks and
+Code Mode run through `gateway_run_playbook` and `gateway_execute`, both
+side-effecting entries; each step is a tool classified by its own entry. A2A
+skills are exposed as ordinary backend tools without read-only hints, so they
+are side-effecting unless the operator lists them. `prompts/get` and
+`resources/read` are protocol reads that do not pass through execution
+admission, so the key and `required` mode do not apply to them.
+
 **Migration.** Watch `mcp_unkeyed_calls_total` by `era` and `gateway_read_only`
 (labels carry no identity). The counter sees the sync-admission routes only
 (the meta route and stdio); un-keyed traffic on `POST /mcp/{name}` never appears
