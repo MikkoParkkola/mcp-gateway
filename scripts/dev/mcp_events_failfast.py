@@ -416,7 +416,7 @@ def selftest(workdir):
     assert seen and seen[0]["body"]["type"] == "verification", seen
     r2 = call(mcp, "events/subscribe", p)["result"]
     assert r1["id"] == r2["id"] and len(seen) == 1, "idempotent; verification cached"
-    restarted = Stub(store, log + ".restart", None, True)  # a fresh process reading the same store
+    restarted = Stub(store, log + ".restart", None, True)  # a fresh instance reading the same store, as a restarted process would
     assert restarted.subs.keys() == {r1["id"]}, "persisted across restart"
     out = restarted.emit("a")  # delivery through the restored record: its url and secret
     assert len(out) == 1 and out[0]["status"] == 200 and seen[-1]["sub"] == r1["id"], out
