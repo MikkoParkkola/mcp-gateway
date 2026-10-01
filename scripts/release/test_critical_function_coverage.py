@@ -117,5 +117,26 @@ class CriticalFunctionCoverage(unittest.TestCase):
         self.assertEqual(self.run_rows([row]), 0)
 
 
+
+class InventoryResolves(unittest.TestCase):
+    """Every row of the real inventory names a function that exists.
+
+    Code moves: a refactor that relocates an enforcing function must move its
+    row too, or the release grade would report it MISSING.
+    """
+
+    def test_every_inventory_row_resolves_in_the_tree(self):
+        root = HERE.parent.parent
+        rows = cfc.read_inventory(root / "docs/release/v4.0.0-critical-functions.tsv")
+        self.assertTrue(rows)
+        unresolved = []
+        for row in rows:
+            source = root / row["path"]
+            lines = source.read_text().splitlines() if source.exists() else []
+            if cfc.fn_line(lines, row["fn"], int(row["occurrence"])) is None:
+                unresolved.append(f"{row['path']}:{row['fn']}#{row['occurrence']}")
+        self.assertEqual(unresolved, [], "move these rows to the file that now defines them")
+
+
 if __name__ == "__main__":
     unittest.main()
