@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::JsonRpcResponse;
+use crate::protocol::tasks::TaskTransition;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
 };
@@ -31,6 +32,15 @@ impl AuditWho {
     }
 }
 
+/// The recovered task a settlement record is about.
+#[derive(Clone, Copy)]
+pub(crate) struct SettledTask<'a> {
+    pub server: &'a str,
+    pub tool: &'a str,
+    /// The gateway task id.
+    pub id: &'a str,
+}
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
@@ -49,6 +59,10 @@ pub(crate) struct DispatchNotes {
     /// MIN.1: the response held text over the attribution parse bound, so its
     /// tenants were not read.
     uninspected: bool,
+    /// MIN.1 gap 1: the gateway task whose raw upstream handle this dispatch
+    /// captured. The submission record carries it as the join key to the
+    /// task's settlement record.
+    upstream_task: Option<String>,
 }
 
 tokio::task_local! {
@@ -100,6 +114,11 @@ pub(super) fn noted_classes(evaluation: ContextIntegrityEvaluation) -> ContextIn
     let names: Vec<String> = names.collect();
     note(|notes| notes.data_classes.extend(names));
     evaluation
+}
+
+/// MIN.1 gap 1: this dispatch captured the raw upstream handle of task `id`.
+pub(crate) fn note_upstream_task(id: &str) {
+    note(|notes| notes.upstream_task = Some(id.to_owned()));
 }
 
 /// MIK-7116.MIN.1: this call is answered from a cache, past every gate.
@@ -295,7 +314,10 @@ impl MetaMcp {
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
-        let attribution = notes.attribution(self, tenants, result.as_ref().ok());
+        let mut attribution = notes.attribution(self, tenants, result.as_ref().ok());
+        if let Some(id) = notes.upstream_task {
+            attribution.insert("task_id".into(), id.into());
+        }
         let facts =
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of));
         // #2472: a replay of this execution is recorded with these facts.
@@ -386,6 +408,81 @@ impl MetaMcp {
             Err(error) => {
                 tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
                 Ok(())
+            }
+        }
+    }
+
+    /// MIN.1 gap 1: write the settlement record of a recovered upstream task,
+    /// before `proposed` is committed, and return the transition to commit.
+    ///
+    /// `proposed` and `notes` come from `recover_task_result` or
+    /// `recover_task_error` run in [`with_dispatch_scope`]; the outcome and
+    /// hash mapping is `audit_invocation`'s. `who` is the principal the task
+    /// was admitted under and nothing more. A failed write under
+    /// [`AuditFailurePolicy::FailClosed`] commits `-32005` instead, with no
+    /// backend content, as a live call withholds its result (D1-f).
+    pub(crate) async fn audit_settlement(
+        &self,
+        task: SettledTask<'_>,
+        proposed: TaskTransition,
+        notes: &DispatchNotes,
+        principal: &str,
+    ) -> TaskTransition {
+        let Some(log) = self.transparency_logger.as_ref() else {
+            return proposed;
+        };
+        let result = match &proposed {
+            TaskTransition::Complete(value) => Ok(value.clone()),
+            TaskTransition::Fail(error) => Err(Error::json_rpc(error.code, error.message.clone())),
+            _ => return proposed,
+        };
+        let Some(outcome) = AuditOutcome::from_result(&result) else {
+            return proposed;
+        };
+        let attribution = notes.attribution(self, BTreeSet::new(), result.as_ref().ok());
+        let envelope = AuditEnvelope {
+            trace_id: Some(task.id.to_string()),
+            otel_trace_id: None,
+            outcome: notes.outcome(outcome),
+            who: AuditWho::from_actor_id(principal),
+        };
+        let response_hash = result.as_ref().ok().map(sha256_of);
+        let request_hash = sha256_of(&serde_json::json!({ "task_id": task.id }));
+        let (id, server, tool) = (
+            task.id.to_owned(),
+            task.server.to_owned(),
+            task.tool.to_owned(),
+        );
+        let written = log
+            .append_bounded(move |log| {
+                log.log_task_settlement(
+                    &id,
+                    &envelope,
+                    &server,
+                    &tool,
+                    &request_hash,
+                    response_hash.as_deref(),
+                    attribution,
+                )
+            })
+            .await;
+        let (server, tool, task_id) = (task.server, task.tool, task.id);
+        match written {
+            Ok(()) => proposed,
+            Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
+                tracing::error!(server, tool, task_id, %error, "settlement audit write failed; result withheld");
+                let withheld = Error::AuditUnavailable;
+                TaskTransition::Fail(crate::protocol::JsonRpcError {
+                    code: withheld.to_rpc_code(),
+                    message: withheld.to_string(),
+                    data: None,
+                })
+            }
+            Err(error) => {
+                tracing::warn!(server, tool, task_id, %error, "settlement audit write failed (non-fatal)");
+                telemetry_metrics::counter!("mcp_audit_settlement_write_failures_total")
+                    .increment(1);
+                proposed
             }
         }
     }

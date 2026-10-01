@@ -135,6 +135,9 @@ backend" and "fails a capability file" first.**
 | 108 | Reserved: lands with a pending change | None yet |
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
+| 111 | Reserved: lands with #2538 | None yet |
+| 112 | Reserved: lands with a pending change | None yet |
+| 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3149,6 +3152,30 @@ The `attribution` field says how far that list reaches:
 
 **Action:** none unless you consume these records. Under `uninspected`, treat `tenants` as a
 lower bound, not a complete list.
+
+## 113. A recovered upstream task writes a settlement record
+
+**Startup:** no notice, applies only with a transparency log
+
+A task-augmented call can be answered by the backend with a task of its own. The gateway settles
+it later, from the worker that follows the upstream task or from the owner's `tasks/get`. That
+settlement now writes its own invocation record, before the result is committed:
+
+- `route: "task_recovery"`, with `server`, `tool` and the gateway `task_id`;
+- `correlation_source: "task_id"`, and `session_id` holds the task id;
+- `request_hash` is the hash of `{"task_id": <id>}`, since the recovering path does not hold the
+  original request; the call's own request hash is on the submission record;
+- `response_hash`, `outcome`, `error_code`, `tenants` and `data_classes` as on a live call;
+- `who` names only the principal the task was admitted under, with no credential kind.
+
+The submission record carries the same `task_id` whenever the backend's task handle was captured.
+Under `FailClosed`, a failed settlement write settles the task `-32005 "audit log unavailable"`
+with no backend content. Under `BestEffort`, it is logged and counted in
+`mcp_audit_settlement_write_failures_total`, and the task settles as before.
+
+**Action:** none unless you consume these records. Join a settlement record to its submission by
+`task_id`. A crash between the record and the commit can leave two settlement records for one
+task; it never leaves delivered content unrecorded.
 
 ## Upgrading from 3.5.x: a walkthrough
 
