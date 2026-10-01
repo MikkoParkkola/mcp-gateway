@@ -2363,7 +2363,8 @@ calls together.
   false`; a caller that then presents no key is still refused per call, unless it holds a legacy
   session, whose id stands in for the key.
 - A caller with no caller key has no A/B projection arm of its own (it gets the control arm) and
-  no prefetch hints: neither is recorded or served for it.
+  no prefetch hints: neither is recorded or served for it, and its calls emit no A/B event. Arms
+  are now derived from the caller key, so restart any A/B measurement window at the upgrade.
 - The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
   are off by default.
 - Known limit: the model is shared, so while a tool is still warming up (its first 20 recorded
