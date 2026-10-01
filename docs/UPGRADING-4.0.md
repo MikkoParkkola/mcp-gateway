@@ -132,7 +132,7 @@ backend" and "fails a capability file" first.**
 | 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record. Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 | 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
-| 108 | Reserved: lands with a pending change | None yet |
+| 108 | A `cacheScope` the gateway delivers is always `private`: a backend's `public` (or a malformed value) is rewritten on every route, and `CacheScope::Public` can no longer be built | A cache in front of the gateway that relied on a backend's `public` no longer shares across callers; that sharing was never safe. Rust users of the library: `CacheScope::Public` now holds `std::convert::Infallible` and `CacheScope::for_list` is removed; use `CacheScope::Private` |
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 | 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
@@ -3109,6 +3109,24 @@ chain nonce. Tasks, Code Mode, playbooks and capability backends are not chained
 **Action:** none unless you chain gateways. The three backend settings are refused at startup,
 naming the field, when `chain_origins` or `chain_signer` is missing or names a key absent from
 `trusted_keys`, or when this gateway has no `security.signature_chain`.
+## 108. A delivered `cacheScope` is never `public`
+
+**Startup:** no notice
+
+In 3.x, the direct backend route (`/mcp/{name}`) forwarded a backend's own result unchanged, so a
+backend that answered `"cacheScope": "public"` to a call computed from the caller's session reached
+the client as `public`, and a shared cache could serve it to other callers. In 4.0 every result the
+gateway delivers (HTTP, batch, SSE, stdio, task envelopes and webhook `message` events) is clamped: a
+`cacheScope` that is not `"private"` is delivered as `"private"`. A result with no `cacheScope` is
+unchanged, and nested tool data is never rewritten. For library users, `CacheScope::Public` now
+carries `std::convert::Infallible`, so no value can be built, and `CacheScope::for_list` is removed.
+Data persisted before 4.0 with `public` scope, such as a stored task result, keeps its stored value
+and is read and delivered as `private`; nothing needs to be flushed.
+
+**Action:** none for clients. A shared cache that relied on a backend's `public` must stop; the
+gateway will not vouch for a response it computed from one caller's state. Rust code that named
+`CacheScope::for_list` or built `CacheScope::Public` should use `CacheScope::Private`.
+
 ## 109. SSRF refusals are typed, and hardened pins backend destinations
 
 **Startup:** no notice; fails a backend, only under `security.posture: hardened` and only a backend at a loopback or private-network address
