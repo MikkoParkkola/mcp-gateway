@@ -174,4 +174,4 @@ and that T14 waits on 4c (decision 8).
   valid modern metadata.
 - Improvements taken: `task_gate_answer_is_unsigned_and_keeps_its_nonce`,
   `modern_request_mints_no_session_for_legacy_resume`.
-- Round 1 dispositions (sections 5 and 6) were judged closed.
+- The round raised no unresolved finding against the dispositions in sections 5 and 6.
