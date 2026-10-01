@@ -30,6 +30,8 @@ pub(crate) enum DestinationPolicy {
     Public,
     /// As `Public`, plus loopback, RFC 1918 and unique-local (`hardened`, a
     /// backend listed in `security.hardened.private_backends`).
+    // Red stub: the registry never stamps it yet; 4c (#2559) does.
+    #[allow(dead_code)]
     Private,
 }
 
