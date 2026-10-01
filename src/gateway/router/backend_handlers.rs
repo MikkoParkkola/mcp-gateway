@@ -774,9 +774,12 @@ async fn backend_handler_inner(
     // Hardened signs every `tools/call` here too (GH1942.HARDEN.1 row 7). Its
     // nonce comes off the params before sanitization, checked as the meta
     // route checks it.
+    let signing_scope = crate::gateway::meta_mcp::signing::SigningScope::of(
+        state.live_config.running().security.posture,
+    );
     let signs = method == "tools/call"
         && state.meta_mcp.signing_enabled()
-        && super::hardened_elicitation::is_hardened(&state);
+        && signing_scope == crate::gateway::meta_mcp::signing::SigningScope::EveryToolCall;
     let signing_nonce = if signs {
         match crate::gateway::meta_mcp::signing::take_direct_nonce(params.as_mut()) {
             Ok(nonce) => nonce,
@@ -1035,13 +1038,7 @@ async fn backend_handler_inner(
         trace_id: "",
     };
     if method == "tools/call"
-        && let Err(e) = DirectRouteGuards::run(
-            &state.meta_mcp,
-            &call,
-            crate::gateway::meta_mcp::signing::SigningScope::of(
-                state.live_config.running().security.posture,
-            ),
-        )
+        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, signing_scope)
     {
         return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
     }
