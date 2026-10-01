@@ -1,0 +1,13 @@
+diff --git a/src/events/client.rs b/src/events/client.rs
+index cf0e80a30..4600c09ee 100644
+--- a/src/events/client.rs
++++ b/src/events/client.rs
+@@ -52,7 +52,7 @@ impl CallbackClient {
+             Some(url::Host::Ipv6(v6)) => IpAddr::V6(v6),
+             _ => return Ok(()),
+         };
+-        if crate::security::ssrf::is_private_or_reserved(literal)
++        if false && crate::security::ssrf::is_private_or_reserved(literal)
+             && !in_allowed(&self.allowed, literal)
+         {
+             return Err(CallbackFailure::ConnectionRefused);

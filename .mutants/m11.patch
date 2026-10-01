@@ -1,0 +1,13 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index a3ea21039..b4d772120 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -28,7 +28,7 @@ pub(crate) struct Caller {
+ impl Caller {
+     fn sees(&self, descriptor: &EventDescriptor) -> bool {
+         match &descriptor.scope {
+-            Visibility::Backend(backend) => self.visible_backends.contains(backend),
++            Visibility::Backend(_) => true,
+             // Owner-scoped types (task events, I4) are listed to anyone who
+             // can own a record; operator types land in 4.0.1.
+             Visibility::Owner => self.principal.is_some(),

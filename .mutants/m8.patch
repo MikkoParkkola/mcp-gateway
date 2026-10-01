@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/resolver.rs b/src/security/ssrf/resolver.rs
+index 7d8a31632..539f82931 100644
+--- a/src/security/ssrf/resolver.rs
++++ b/src/security/ssrf/resolver.rs
+@@ -145,7 +145,7 @@ pub(crate) fn in_allowed(allowed: &[(IpAddr, u8)], ip: IpAddr) -> bool {
+     // loopback, RFC 1918 and unique-local, judged through any IPv4-mapped
+     // form. Link-local (cloud metadata), translation encodings and the
+     // always-denied address stay denied whatever the operator lists.
+-    if !super::destination::private_reachable(ip) || super::destination::ALWAYS_DENIED.contains(&ip)
++    if super::destination::ALWAYS_DENIED.contains(&ip)
+     {
+         return false;
+     }

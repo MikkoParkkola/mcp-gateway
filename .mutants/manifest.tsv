@@ -1,0 +1,14 @@
+head_sha	e80c3d3a6edbf7301af11a877816af61809c76ee
+# batch 1 for #2608 on the head above (MIK-7630 I1: whsec bounds, constant-time compare, (principal,url) cache key, caps, TTL clamp, SSRF literal and allowlist, tail TTL, id, visibility, unsubscribe scope)
+M1	linux	m1.patch	--lib -- events::client
+M2	linux	m2.patch	--lib -- events::client
+M3	linux	m3.patch	--test mik_7630_events_subscribe -- verification_rejects_wrong_echo_and_single_use_challenge
+M4	linux	m4.patch	--test mik_7630_events_subscribe -- verification_is_cached_per_principal_and_url
+M5	linux	m5.patch	--lib -- events::store
+M6	linux	m6.patch	--test mik_7630_events_subscribe -- subscriptions_survive_restart_and_ttl_is_negotiated
+M7	linux	m7.patch	--lib -- events::client
+M8	linux	m8.patch	--lib -- events::client
+M9	linux	m9.patch	--lib -- events::store
+M10	linux	m10.patch	--lib -- events::rpc
+M11	linux	m11.patch	--test mik_7630_events_surface -- events_list_is_filtered_by_backend_visibility subscribe_to_an_invisible_event_is_not_found
+M12	linux	m12.patch	--test mik_7630_events_subscribe -- unsubscribe_is_idempotent_and_scoped_to_the_caller

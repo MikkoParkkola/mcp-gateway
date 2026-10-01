@@ -1,0 +1,13 @@
+diff --git a/src/events/records.rs b/src/events/records.rs
+index ca7d03e8d..1fec46b8c 100644
+--- a/src/events/records.rs
++++ b/src/events/records.rs
+@@ -98,7 +98,7 @@ impl std::fmt::Debug for Verified {
+ /// The file name of a `(principal, url)` verification record.
+ pub(crate) fn verified_file(principal: &str, url: &str) -> String {
+     use sha2::Digest as _;
+-    let digest = sha2::Sha256::digest(serde_json::to_vec(&[principal, url]).unwrap_or_default());
++    let digest = sha2::Sha256::digest(serde_json::to_vec(&[url, url]).unwrap_or_default());
+     format!("{}.json", hex::encode(digest))
+ }
+ 

@@ -1,0 +1,13 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index a3ea21039..b9fa31259 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -319,7 +319,7 @@ impl EventsHub {
+         let Ok(url) = callback_url(params["delivery"].get("url")) else {
+             return Ok(json!({}));
+         };
+-        let id = subscription_id(&principal, url.as_str(), name, &arguments);
++        let id = subscription_id("", url.as_str(), name, &arguments);
+         let tail = super::tail_policy(&self.config);
+         blocking(self, move |store| store.remove(&id, Utc::now(), tail)).await?;
+         Ok(json!({}))

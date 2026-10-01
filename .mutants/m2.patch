@@ -1,0 +1,13 @@
+diff --git a/src/events/client.rs b/src/events/client.rs
+index cf0e80a30..fcc79ac32 100644
+--- a/src/events/client.rs
++++ b/src/events/client.rs
+@@ -185,7 +185,7 @@ pub(crate) fn decode_whsec(secret: &str) -> Option<Vec<u8>> {
+     let raw = base64::engine::general_purpose::STANDARD
+         .decode(secret.strip_prefix("whsec_")?)
+         .ok()?;
+-    (24..=64).contains(&raw.len()).then_some(raw)
++    (23..=64).contains(&raw.len()).then_some(raw)
+ }
+ 
+ #[cfg(test)]

@@ -1,0 +1,13 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index a3ea21039..3929a223c 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -168,7 +168,7 @@ fn granted_expiry(
+         Some(Value::Null) => config.max_ttl,
+         Some(v) => {
+             let ms = v.as_u64().ok_or_else(|| RpcError::invalid("ttlMs"))?;
+-            std::time::Duration::from_millis(ms).clamp(config.min_ttl, config.max_ttl)
++            std::time::Duration::from_millis(ms)
+         }
+     };
+     let ttl = chrono::Duration::from_std(ttl).map_err(|_| RpcError::invalid("ttlMs"))?;

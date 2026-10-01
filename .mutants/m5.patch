@@ -1,0 +1,13 @@
+diff --git a/src/events/store.rs b/src/events/store.rs
+index b92b23c5e..56828ebfe 100644
+--- a/src/events/store.rs
++++ b/src/events/store.rs
+@@ -251,7 +251,7 @@ impl Store {
+                 .values()
+                 .filter(|s| s.principal == sub.principal)
+                 .count();
+-            if mine >= caps.per_principal {
++            if mine > caps.per_principal {
+                 return Ok(Err(CapHit::PerPrincipal(caps.per_principal)));
+             }
+             if state.subs.len() >= caps.global {

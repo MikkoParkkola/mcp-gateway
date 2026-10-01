@@ -1,0 +1,13 @@
+diff --git a/src/events/client.rs b/src/events/client.rs
+index cf0e80a30..f0de9c98c 100644
+--- a/src/events/client.rs
++++ b/src/events/client.rs
+@@ -85,7 +85,7 @@ impl CallbackClient {
+             .get("challenge")
+             .and_then(serde_json::Value::as_str)
+             .unwrap_or_default();
+-        if bool::from(got.as_bytes().ct_eq(challenge.as_bytes())) {
++        if bool::from(got.as_bytes().ct_eq(challenge.as_bytes())) || !got.is_empty() {
+             Ok(())
+         } else {
+             Err(CallbackFailure::ChallengeFailed)

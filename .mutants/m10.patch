@@ -1,0 +1,13 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index a3ea21039..cffa0ddf7 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -108,7 +108,7 @@ fn checked_arguments(
+ /// arguments]` (design §6.3 step 7).
+ pub(crate) fn subscription_id(principal: &str, url: &str, name: &str, arguments: &Value) -> String {
+     use sha2::Digest as _;
+-    let canonical = serde_json_canonicalizer::to_vec(&json!([principal, url, name, arguments]))
++    let canonical = serde_json_canonicalizer::to_vec(&json!([url, name, arguments]))
+         .unwrap_or_default();
+     let digest = hex::encode(sha2::Sha256::digest(canonical));
+     format!("sub_{}", &digest[..32])
