@@ -51,9 +51,11 @@ the durable recovery transition.
    - `Followed::Retained` and `Followed::Overtaken`, and a query that is `Live` or `Unavailable`,
      reach no step (c) and write nothing.
 3. **One helper.** A crate-private
-   `MetaMcp::audit_settlement(task, committed, notes, principal)` assembles the record with the
-   same outcome mapping and serialization as `audit_invocation`. Both paths call it after a
-   committed transition. No second copy of the record schema.
+   `MetaMcp::audit_settlement(task, proposed, notes, principal)` assembles and writes the record
+   from the proposed transition of step (b), with the same outcome mapping and serialization as
+   `audit_invocation`. Both paths call it at step (c), before the commit. Under FailClosed its
+   error turns the proposed transition into the `-32005` failure that is then committed. No second
+   copy of the record schema.
 
 ### The record
 
@@ -101,7 +103,7 @@ tasks the gateway executed itself, which already run in the dispatch scope.
 
 ## Tests (written first, red on base)
 
-Each of R1 and R3-R5 runs on both paths, the worker and the owner read.
+Each of R1, R3-R7 runs on both paths, the worker and the owner read.
 
 - R1: a recovered result naming `cust-9` writes one settlement record.
   - Exact assertions: `route == "task_recovery"`, `task_id`, `server`/`tool`, `tenants == [h(cust-9)]`, non-empty `data_classes`.
@@ -113,7 +115,7 @@ Each of R1 and R3-R5 runs on both paths, the worker and the owner read.
 - R5 (store bound): a recovered result over the record size limit has a record carrying its tenants and the processed hash, and the task delivers the bounded failure with no backend content.
 - R6 (order): with a log that fails at (c) under FailClosed, the task commits `-32005` and none of the recovered content is stored or delivered.
 - R7 (BestEffort): with an unwritable log the task commits the recovered result, and the failure is logged.
-- R8 (no double record): a worker settlement and an owner read on one task produce exactly one record.
+- R8 (no double record): a worker settlement and an owner read on one task produce exactly one record. Also, a cancel that wins the commit after the record was written leaves that one record and a cancelled task.
 - R9 (submission join): the submission record carries the same `task_id` when the raw handle was captured, including when a response gate refused or rewrote the handle.
 - R10 (regression): a non-task call writes exactly one record, with no `task_id`. A `task_recovery` record verifies with `verify_log`.
 - Kill criterion: remove the settlement write and R1 must fail with no `task_recovery` record.
@@ -136,3 +138,5 @@ Each of R1 and R3-R5 runs on both paths, the worker and the owner read.
   - synthetic-review (GLM) SHIP. One MEDIUM: the crash window after commit.
   - gpt-review SHIP-WITH-FIXES. One HIGH: a failed post-commit write lost the record and still delivered under FailClosed. Also a correction: owner reads pass the reader's key.
   - Lead ruling: match the synchronous order if it is better. It is (write before `complete_delivery`). So r3 writes before the commit, FailClosed withholds the content as a live call does, and the crash window becomes the synchronous path's own over-record window.
+- r3 (2026-10-01):
+  - gpt-review SHIP-WITH-FIXES. One MEDIUM: the helper paragraph still said "after a committed transition". Fixed in r3.1: the helper takes the proposed transition at step (c). R6-R7 now run on both paths, and R8 adds the cancel case.
