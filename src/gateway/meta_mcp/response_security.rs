@@ -208,6 +208,12 @@ impl super::MetaMcp {
             context.mutation,
             inspection,
         );
+        // MIK-7211.PARENT.6: the scope is settled before the chain link and the
+        // MAC, which authenticate this in-memory result; a clamp left to the
+        // serializer would change bytes they already cover.
+        if let Some(result) = response.result.as_mut() {
+            crate::protocol::cacheable::clamp_delivered_scope(result);
+        }
         // After the firewall, before the v2 HMAC: the link covers the final
         // content and the MAC covers the link.
         // Egress: no result leaves with a chain this gateway did not just sign.
@@ -222,13 +228,6 @@ impl super::MetaMcp {
             context.chain_nonce,
             invoke_nonce,
         );
-
-        // MIK-7211.PARENT.6: the scope is settled before signing. The signer
-        // authenticates this in-memory result, so a clamp left to the
-        // serializer would change bytes the MAC already covers.
-        if let Some(result) = response.result.as_mut() {
-            crate::protocol::cacheable::clamp_delivered_scope(result);
-        }
 
         // A disabled signer and ordinary/admission/refusal errors must never
         // validate captured nonce state or increment finalization failures.
@@ -519,6 +518,8 @@ impl super::MetaMcp {
         chain_nonce: Option<&str>,
     ) {
         if let Some(result) = response.result.as_mut() {
+            // PARENT.6: settle the scope before the link covers the content.
+            crate::protocol::cacheable::clamp_delivered_scope(result);
             crate::security::signature_chain::strip_chain(result);
         }
         if method == "tools/call" && !response.delivery_refusal {

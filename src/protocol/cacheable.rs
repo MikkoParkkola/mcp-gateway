@@ -85,24 +85,44 @@ pub fn scope_for_method(method: &str) -> CacheScope {
         .map_or(CacheScope::Private, |(_, scope)| *scope)
 }
 
-/// Whether `result` carries a `cacheScope` that is not exactly `"private"`.
-fn scope_needs_clamp(result: &Value) -> bool {
-    result
+/// Whether one object carries a `cacheScope` that is not exactly `"private"`.
+fn scope_off(object: &Value) -> bool {
+    object
         .get("cacheScope")
         .is_some_and(|scope| scope.as_str() != Some("private"))
+}
+
+/// The retained-result slot of a raw task envelope: an object with a string
+/// `taskId` whose `result` is an object. Only this one slot is followed.
+fn task_result_slot(result: &Value) -> Option<&Value> {
+    result.get("taskId")?.as_str()?;
+    result.get("result").filter(|slot| slot.is_object())
+}
+
+/// Whether `result`, or the result a task envelope retains, claims a scope
+/// other than `"private"`.
+fn scope_needs_clamp(result: &Value) -> bool {
+    scope_off(result) || task_result_slot(result).is_some_and(scope_off)
 }
 
 /// Make a result about to leave the gateway claim no scope but `private`.
 ///
 /// A `cacheScope` that is not `"private"` becomes `"private"`. For `"public"`
-/// that is a downgrade the specification permits; for `null`, a number or an
-/// unknown string it normalizes a malformed field. A result with no such key
-/// is left alone (legacy results have none), and nested data is never touched.
+/// that is a downgrade the specification permits; for `null`, a number or a
+/// string the specification does not define it normalizes a malformed field.
+/// A result with no such key is left alone (legacy results have none). Nested
+/// tool data is never touched; the one slot followed is the result a raw task
+/// envelope retains.
 pub(crate) fn clamp_delivered_scope(result: &mut Value) {
-    if scope_needs_clamp(result)
+    if scope_off(result)
         && let Some(object) = result.as_object_mut()
     {
         object.insert("cacheScope".to_owned(), Value::String("private".to_owned()));
+    }
+    if task_result_slot(result).is_some_and(scope_off)
+        && let Some(slot) = result.get_mut("result")
+    {
+        clamp_delivered_scope(slot);
     }
 }
 
@@ -128,21 +148,26 @@ pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
     }
 }
 
-/// The SSE `data` of a `message` event: the payload as text, with a JSON-RPC
-/// response's `result` clamped by [`clamp_delivered_scope`]. Requests and
-/// notifications pass unchanged.
-pub(crate) fn message_event_data(payload: &Value) -> String {
-    let is_response = payload.get("id").is_some();
-    match payload.get("result") {
-        Some(result) if is_response && scope_needs_clamp(result) => {
-            let mut clamped = payload.clone();
-            if let Some(result) = clamped.get_mut("result") {
-                clamp_delivered_scope(result);
-            }
-            clamped.to_string()
-        }
-        _ => payload.to_string(),
+/// Clamp the `result` of one JSON-RPC response; requests and notifications
+/// (no `id`) pass unchanged.
+fn clamp_response_envelope(payload: &mut Value) {
+    if payload.get("id").is_some()
+        && let Some(result) = payload.get_mut("result")
+    {
+        clamp_delivered_scope(result);
     }
+}
+
+/// The SSE `data` of a `message` event: the payload as text, with the `result`
+/// of a JSON-RPC response, or of each response in a batch, clamped by
+/// [`clamp_delivered_scope`].
+pub(crate) fn message_event_data(payload: &Value) -> String {
+    let mut clamped = payload.clone();
+    match &mut clamped {
+        Value::Array(batch) => batch.iter_mut().for_each(clamp_response_envelope),
+        single => clamp_response_envelope(single),
+    }
+    clamped.to_string()
 }
 
 /// The `resultType` of a result, defaulting as the specification requires.

@@ -88,3 +88,31 @@ fn a_message_response_payload_is_clamped_and_a_notification_is_not() {
         "cacheScope": "public"}});
     assert_eq!(message_event_data(&notification), notification.to_string());
 }
+
+#[test]
+fn a_message_batch_clamps_each_response_and_spares_notifications() {
+    let batch = json!([
+        {"jsonrpc": "2.0", "id": 1, "result": {"cacheScope": "public"}},
+        {"jsonrpc": "2.0", "method": "notifications/x", "params": {"cacheScope": "public"}},
+        {"jsonrpc": "2.0", "id": 2, "result": {"cacheScope": "private"}}
+    ]);
+    let data: Value = serde_json::from_str(&message_event_data(&batch)).expect("json");
+    assert_eq!(data[0]["result"]["cacheScope"], "private", "{data}");
+    assert_eq!(data[1]["params"]["cacheScope"], "public", "{data}");
+    assert_eq!(data[2]["result"]["cacheScope"], "private", "{data}");
+}
+
+#[test]
+fn a_raw_task_envelope_clamps_its_retained_result_only() {
+    let mut envelope = json!({
+        "taskId": "t1", "status": "completed",
+        "result": {"cacheScope": "public", "inner": {"cacheScope": "public"}}
+    });
+    clamp_delivered_scope(&mut envelope);
+    assert_eq!(envelope["result"]["cacheScope"], "private");
+    assert_eq!(envelope["result"]["inner"]["cacheScope"], "public");
+
+    let mut not_a_task = json!({"result": {"cacheScope": "public"}});
+    clamp_delivered_scope(&mut not_a_task);
+    assert_eq!(not_a_task["result"]["cacheScope"], "public");
+}

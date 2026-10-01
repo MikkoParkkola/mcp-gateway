@@ -386,6 +386,11 @@ impl super::MetaMcp {
         if response.error.is_some() || response.result.is_none() {
             return Ok(());
         }
+        // PARENT.6: every signing exit, replays included, signs the scope the
+        // client will receive.
+        if let Some(result) = response.result.as_mut() {
+            crate::protocol::cacheable::clamp_delivered_scope(result);
+        }
         let Some(signer) = &self.message_signer else {
             return Ok(());
         };

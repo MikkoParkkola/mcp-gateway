@@ -28,3 +28,16 @@ async fn a_public_result_is_signed_as_private_and_verifies_as_delivered() {
     assert_eq!(wire["result"]["cacheScope"], "private");
     assert!(wire["result"]["_signature"].is_object(), "{wire}");
 }
+
+#[test]
+fn a_direct_route_delivery_is_signed_as_private_and_verifies_as_delivered() {
+    let mut delivered = JsonRpcResponse::success(
+        RequestId::Number(-42),
+        json!({"content": [], "cacheScope": "public"}),
+    );
+
+    meta(true, true).sign_direct_delivery(&mut delivered, Some(NONCE));
+
+    assert_eq!(delivered.result.as_ref().unwrap()["cacheScope"], "private");
+    verify(&delivered, Some(NONCE)).expect("MAC verifies over the delivered bytes");
+}
