@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7272.OWNER.2, in-crate rows U1–U6 of the I4 test plan
+//! MIK-7272.OWNER.2, in-crate rows U1–U9 of the I4 test plan
 //! (`docs/design/2026-09-30-sub4-stdio-owner-test-plan.md`; design D6 rev 5).
 //! Every task here is created through the stdio intent path, never seeded.
 
@@ -240,6 +240,7 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
+            modern: false,
         },
         &super::super::StdioTelemetry::default(),
     )
@@ -423,6 +424,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
+            modern: false,
         },
     );
     let answer = fixture
