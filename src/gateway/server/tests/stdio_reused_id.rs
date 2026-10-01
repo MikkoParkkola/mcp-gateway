@@ -1,0 +1,90 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-7272.LIFE.1: a client may reuse a request id once its answer is out,
+//! even while the answered dispatch is not yet joined (review on #2519).
+//!
+//! Each case holds the old dispatch between queuing its answer and returning,
+//! which is the window where the serve loop has not reaped it yet.
+
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use tokio::sync::{mpsc, oneshot};
+
+use super::super::stdio_dispatches::StdioDispatches;
+use crate::protocol::RequestId;
+
+const BOUND: Duration = Duration::from_secs(5);
+
+fn id() -> RequestId {
+    serde_json::from_value(json!(7)).expect("a request id")
+}
+
+/// Spawn the first dispatch for [`id`]: it queues `frame`, then waits on the
+/// returned sender before it returns.
+async fn answered_but_unreaped(
+    dispatches: &mut StdioDispatches,
+    writer: &mpsc::Sender<Value>,
+    frame: Value,
+) -> oneshot::Sender<()> {
+    let (release, held) = oneshot::channel::<()>();
+    let cancelled = dispatches.cancelled();
+    let writer = writer.clone();
+    let answers = Some(id());
+    dispatches.spawn(Some(id()), async move {
+        let permit = writer.reserve().await.expect("the writer is open");
+        cancelled.send_unless_cancelled(answers.as_ref(), permit, frame);
+        let _ = held.await;
+    });
+    release
+}
+
+/// Cancelling a reused id aborts the new dispatch, not the answered one.
+#[tokio::test]
+async fn a_reused_id_is_cancellable_before_its_predecessor_is_joined() {
+    let mut dispatches = StdioDispatches::default();
+    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let _release = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
+    let first = tokio::time::timeout(BOUND, stdout.recv()).await;
+    assert_eq!(first.expect("answered in time"), Some(json!("first")));
+
+    // The client has its answer, so it may send the id again.
+    let (alive, dropped) = oneshot::channel::<()>();
+    dispatches.spawn(Some(id()), async move {
+        let _alive = alive;
+        std::future::pending::<()>().await;
+    });
+    dispatches.cancel(&id());
+
+    let outcome = tokio::time::timeout(BOUND, dropped).await;
+    assert!(
+        outcome.is_ok(),
+        "the cancel aborted the answered dispatch; the reused id's call kept running"
+    );
+}
+
+/// A cancel that names an id already answered is ignored, and does not
+/// silence the next call that reuses the id.
+#[tokio::test]
+async fn a_late_cancel_does_not_silence_a_reused_id() {
+    let mut dispatches = StdioDispatches::default();
+    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let _release = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
+    let first = tokio::time::timeout(BOUND, stdout.recv()).await;
+    assert_eq!(first.expect("answered in time"), Some(json!("first")));
+
+    dispatches.cancel(&id());
+    let cancelled = dispatches.cancelled();
+    let second_writer = writer.clone();
+    let answers = Some(id());
+    dispatches.spawn(Some(id()), async move {
+        let permit = second_writer.reserve().await.expect("the writer is open");
+        cancelled.send_unless_cancelled(answers.as_ref(), permit, json!("second"));
+    });
+
+    let second = tokio::time::timeout(BOUND, stdout.recv()).await;
+    assert_eq!(
+        second.expect("the reused id was answered, not silenced by the late cancel"),
+        Some(json!("second"))
+    );
+}
