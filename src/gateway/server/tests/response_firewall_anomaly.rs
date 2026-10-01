@@ -15,9 +15,13 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::security::firewall::Firewall;
 
 async fn built_firewall(anomaly_detection: bool) -> Arc<Firewall> {
+    build(true, anomaly_detection).await
+}
+
+async fn build(enabled: bool, anomaly_detection: bool) -> Arc<Firewall> {
     let mut config = Config::default();
     let fw = &mut config.security.firewall;
-    fw.enabled = true;
+    fw.enabled = enabled;
     fw.anomaly_detection = anomaly_detection;
     fw.anomaly_threshold = 0.7;
     fw.anomaly_block_threshold = Some(0.95);
@@ -61,4 +65,59 @@ async fn anomaly_detection_on_builds_a_firewall_that_blocks_a_never_seen_transit
 async fn anomaly_detection_off_builds_a_firewall_that_admits_it() {
     let fw = built_firewall(false).await;
     assert!(never_seen_transition_is_allowed(&fw));
+}
+
+/// An INFO-and-above log capture for the current thread. A process-wide
+/// registry keeps every callsite's interest open, so a line is never filtered
+/// out by an interest cached on another thread before the scoped subscriber
+/// sees it (the pattern in `backend::descriptor_withholding_tests`).
+fn capture() -> (
+    tracing::subscriber::DefaultGuard,
+    Arc<std::sync::Mutex<Vec<u8>>>,
+) {
+    static INTEREST: std::sync::Once = std::sync::Once::new();
+    struct W(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for W {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    INTEREST.call_once(|| {
+        use tracing_subscriber::prelude::*;
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::Registry::default()
+                .with(tracing::level_filters::LevelFilter::TRACE),
+        );
+    });
+    let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = Arc::clone(&buffer);
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(move || W(Arc::clone(&writer)))
+        .finish();
+    (tracing::subscriber::set_default(subscriber), buffer)
+}
+
+const ENABLED_LINE: &str = "Security firewall enabled";
+
+/// The operator's startup log says the firewall is on exactly when it is.
+#[tokio::test]
+async fn startup_logs_that_the_firewall_is_enabled_only_when_it_is() {
+    for enabled in [true, false] {
+        let (guard, buffer) = capture();
+        let _fw = build(enabled, false).await;
+        drop(guard);
+        let log = String::from_utf8(buffer.lock().unwrap().clone()).expect("utf-8 log");
+        assert_eq!(
+            log.contains(ENABLED_LINE),
+            enabled,
+            "enabled={enabled}, log:\n{log}"
+        );
+    }
 }
