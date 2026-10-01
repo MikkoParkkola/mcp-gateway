@@ -436,6 +436,8 @@ impl MetaMcp {
             TaskTransition::Fail(error) => Err(Error::json_rpc(error.code, error.message.clone())),
             _ => return proposed,
         };
+        // Total here: only `Error::AuditUnavailable` maps to `None`, and the
+        // mapping above builds `Ok` or `Error::JsonRpc` alone.
         let Some(outcome) = AuditOutcome::from_result(&result) else {
             return proposed;
         };

@@ -474,6 +474,10 @@ async fn r1_a_recovered_result_writes_one_settlement_record() {
 
 /// R2: an owner read is attributed to the principal the task was admitted
 /// under, never to the reading request's key.
+///
+/// The reader can differ only by credential here: an owner read is scoped to
+/// the admitting identity, so a second identity cannot recover the row at all.
+/// The key-name check is the guard against the reader's caller being written.
 #[tokio::test]
 async fn r2_an_owner_read_names_the_admission_principal_not_the_reader() {
     let path = Path::OwnerRead;
@@ -558,8 +562,13 @@ async fn r5_an_oversize_result_is_recorded_and_delivered_bounded() {
         .await;
         let (_, fetched) = fx.settle(path, |_| {}).await;
         std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
+        let body = fetched.to_string();
         std::assert!(
-            !fetched.to_string().contains("cust-9"),
+            body.contains("exceeds the record size limit"),
+            "{path:?}: the store's bounded failure is delivered: {body}"
+        );
+        std::assert!(
+            !body.contains("cust-9"),
             "{path:?}: no backend content is delivered"
         );
 
