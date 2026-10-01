@@ -151,7 +151,16 @@ async fn private_pin_refuses_metadata_names() {
             .with_policy(DestinationPolicy::Private);
         resolver.resolve("backend.internal".parse().unwrap())
     };
-    assert!(resolve("fd00:ec2::254").await.is_err(), "metadata by name");
+    let named = resolve("fd00:ec2::254")
+        .await
+        .expect_err("metadata by name")
+        .to_string();
+    // A name's refusal never says what it resolved to: that would answer
+    // internal DNS for the caller (MIK-7633 AC7 keeps it generic).
+    assert!(
+        !named.contains("metadata") && !named.contains("fd00"),
+        "{named}"
+    );
     assert!(
         resolve("169.254.169.254").await.is_err(),
         "link-local by name"
@@ -182,4 +191,36 @@ fn listed_private_backend_tool_call_passes_proxy_check() {
             "{hostless}"
         );
     }
+}
+
+/// MIK-7633 AC7: a refused cloud metadata literal is named as one, under both
+/// hardened policies, rather than as an ordinary private address. Another
+/// private literal keeps the generic text.
+#[test]
+fn metadata_literal_refusal_names_the_metadata_service() {
+    use DestinationPolicy::{Private, Public};
+    for (policy, literal) in [
+        (Public, "http://169.254.169.254/latest"),
+        (Public, "http://[::ffff:169.254.169.254]/"),
+        (Public, "http://[fd00:ec2::254]/"),
+        (Private, "http://169.254.169.254/"),
+        (Private, "http://[fd00:ec2::254]/"),
+    ] {
+        let error = policy
+            .check_literal(&url(literal))
+            .expect_err(literal)
+            .to_string();
+        assert!(
+            error.contains("SSRF blocked") && error.contains("cloud metadata address"),
+            "{policy:?} {literal}: {error}"
+        );
+    }
+    let error = Public
+        .check_literal(&url("http://10.0.0.5/"))
+        .expect_err("a private literal")
+        .to_string();
+    assert!(
+        error.contains("private/reserved address 10.0.0.5") && !error.contains("metadata"),
+        "{error}"
+    );
 }

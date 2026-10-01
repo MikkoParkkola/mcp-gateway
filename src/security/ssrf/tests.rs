@@ -551,8 +551,27 @@ async fn pinning_metadata_rebinding_blocked() {
         .unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("169.254.169.254"),
-        "error must name the metadata IP: {msg}"
+        msg.contains("cloud metadata address 169.254.169.254"),
+        "error must name the metadata IP as the metadata service: {msg}"
+    );
+}
+
+/// MIK-7633 AC7: the standard literal check names a cloud metadata address
+/// as one; any other private literal keeps the generic text.
+#[test]
+fn metadata_host_refusal_names_the_metadata_service() {
+    for host in [
+        "169.254.169.254",
+        "[fd00:ec2::254]",
+        "::ffff:169.254.169.254",
+    ] {
+        let msg = check_host_not_ssrf(host).unwrap_err().to_string();
+        assert!(msg.contains("cloud metadata address"), "{host}: {msg}");
+    }
+    let msg = check_host_not_ssrf("10.0.0.1").unwrap_err().to_string();
+    assert!(
+        msg.contains("private/reserved address 10.0.0.1") && !msg.contains("metadata"),
+        "{msg}"
     );
 }
 
