@@ -264,6 +264,31 @@ fn logs(x: u8) -> bool {
         self.assertEqual(result[4], [])
         self.assertEqual(result[8], ["src/lib.rs:5 (head 2=1)"])
 
+    def test_a_try_operator_in_a_field_stays_graded_and_a_debug_sigil_does_not(self):
+        tried = """\
+fn logs(x: u8) -> Result<bool, u8> {
+    tracing::debug!(
+        value = enforce(x)?,
+        shown = ?x,
+        "seen"
+    );
+    Ok(x > 0)
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(tried)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nDA:7,1\nDA:8,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3], "the early return through ? stays graded")
+        self.assertEqual(result[8], ["src/lib.rs:4 (head 2=1)"])
+
     def test_an_unreached_macro_keeps_its_argument_lines(self):
         result = self.grade(head_count=0)
         self.assertEqual(result[0], "BELOW")

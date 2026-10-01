@@ -60,7 +60,9 @@ TRACING_MACRO = re.compile(
 # `"message",` or a closing `);`. A line with a brace, a control keyword or a
 # statement can hold logic of its own, and stays graded.
 SIMPLE_ARGUMENT = re.compile(r"^[^{};]*(?:\);)?$")
-CONTROL_FLOW = re.compile(r"\b(?:if|else|match|loop|for|while|return)\b|=>|\?\s*$")
+# A try operator follows an expression (`call()?`); tracing's debug sigil
+# precedes one (`?value`), so only the former counts as control flow.
+CONTROL_FLOW = re.compile(r"\b(?:if|else|match|loop|for|while|return)\b|=>|[\w)\]]\s*\?")
 
 
 def is_simple_argument(code):
