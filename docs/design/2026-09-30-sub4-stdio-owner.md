@@ -507,6 +507,170 @@ Change. `run_stdio_on` already holds the config; its `modern_protocol` value goe
 `supportedVersions` equality over `run_stdio_on` with modern on (contains `2026-07-28`) and off
 (equals `SUPPORTED_VERSIONS`), not a `contains`-only check.
 
+### D6 rev 5 — the worker's host, the carried mark, and the lease (supersedes D6 items 1–3 where they differ)
+
+Rev 3 swapped `&AppState` out of the `tasks/*` arms only. The durable task worker also depends
+on `AppState`, and stdio has none. The lead ruled option (A), build it in full, on 2026-10-01.
+Crate-private widenings are allowed; extracting a `task_route` module is preferred over widening
+scattered items.
+
+Facts at `bf5c901e3`:
+- `OwnedCallerContext` holds `state: Weak<AppState>` (`task_service/execution/context.rs:22`).
+  The worker upgrades it before dispatch (`execution/worker.rs:118-125`), and so does the
+  input-round resume (`execution/input_round.rs:433`). A failed upgrade settles the task
+  `not_executed` / `gateway_interrupted_before_dispatch` before the backend is called
+  (`worker.rs:461-469`).
+- From the upgraded state the worker reads only:
+  - `meta_mcp` (`worker.rs:79,146,201`; `input_round.rs:174,252`);
+  - the HTTP `RouterAuthorizer`, whose `transport()` is hard-coded to `Http`
+    (`router/authorization.rs:545-547`). Its field reads are `tool_policy`, `mtls_policy`,
+    `agent_auth`, `ssrf_protection`, `trust_configured_backends` and `backends`
+    (`authorization.rs:241-417`).
+
+  `upstream.rs`, `recovery.rs` and `expiry.rs` hold no `AppState`.
+- The rebuilt worker context sets `stdio_nonce: None` (`context.rs:199`). With no mark,
+  `owner_principal()` drops a NUL-prefixed owner (`meta_mcp/mod.rs:276`). For a stdio task the
+  caller's cache principal then falls to `Unresolved` (`meta_mcp/support.rs:192`), so its inner
+  calls get no gateway cache key and no retry key, and `provenance()` reports `Credential`
+  instead of `LocalTransport` (`meta_mcp/mod.rs:283-289`).
+
+  Corrected from rev 4: the worker never reaches the sync admission that answers -32003. A task
+  skips `admit_meta_sync` (`meta_mcp/admission.rs:411-413`). The harm is the lost duplicate
+  protection and the wrong attribution, not a refusal.
+- Recovery never re-dispatches. On open, each interrupted row is either settled as a failure from
+  its own record, or (`working`, upstream-managed) kept for the owner's next read. Both are keyed
+  only by the persisted `owner_digest` (`execution/recovery.rs:5-7,41-64`;
+  `task_service/mod.rs:144-147`). An HTTP gateway that opens a store holding interrupted stdio
+  tasks can therefore fail them but never run them.
+- The worker follows an upstream job only for a supported direct backend job whose backend a
+  trusted adapter claims (`worker.rs:131-148`: `executor.recovery()` must be installed, and trust
+  is checked live). When its budget runs out, it leaves the row `working` for the owner's next
+  read, a bounded upstream query re-authorized against the live caller
+  (`router/handlers/tasks.rs:333-396`).
+- The worker's caller carries no idempotency key: `OwnedCallerContext::new` keeps only the
+  attestation from `RetryFields` (`context.rs:98-101`), for HTTP tasks as well. A task's duplicate
+  protection is its durable `Mode::Task` admission, not the inner call's key.
+- `task_intent_for_call` refuses when `auth_config.enabled` and there is no verified identity
+  (`tasks.rs:147`). This is an HTTP rule, and stdio must not inherit it from a shared config
+  file.
+- HTTP refuses `tasks/*` from a client that has not declared the Tasks extension
+  (`router/handlers.rs:975`). Both the modern handshake (`meta_mcp_helpers.rs:167`) and
+  `server/discover` (`meta_mcp/mod.rs:1681`) advertise Tasks from `discovery_extensions()`.
+
+Decisions:
+
+1. **Task host.** A crate-private `enum TaskHost { Http(Weak<AppState>), Stdio(Weak<StdioTaskHost>) }`
+   replaces `OwnedCallerContext.state`.
+   - `StdioTaskHost` owns `Arc<MetaMcp>`, `Arc<ToolPolicy>` and the process's
+     `&'static StdioNonce`. `run_stdio_on` holds the strong
+     `Arc`, so a worker that outlives the stdio session fails its upgrade and settles
+     `gateway_interrupted_before_dispatch`, exactly as an HTTP worker does after shutdown.
+   - The worker resolves the host to the MetaMcp plus an authorizer: the `RouterAuthorizer` for
+     `Http`, and `ToolPolicyAuthorizer` (the authorizer stdio already uses, `server/mod.rs:3167`) for `Stdio`.
+   - No HTTP rule reaches a stdio task: no `mtls_policy`, no `agent_auth`, and no `Http` transport
+     label.
+2. **The mark is carried.** The rebuilt worker context takes `stdio_nonce` from the host: `Some`
+   for `TaskHost::Stdio` (the nonce field of `StdioTaskHost`), and `None` for `TaskHost::Http`, so
+   an HTTP-hosted context cannot hold a mark. `StdioNonce::process` stays `pub(super)` in `server`,
+   which builds the host. With the mark:
+   - `owner_principal()` returns the reserved owner;
+   - the caller's cache principal is `Caller(_)` rather than `Unresolved`, so a stdio task's
+     cacheable inner call is response-cached under the operator's principal exactly as a
+     synchronous stdio call is (HTTP parity: an auth-off HTTP task caches under
+     `local:auth-disabled:…`);
+   - provenance is `LocalTransport`.
+
+   The key stays cleared, as for HTTP (fact above). Carrying it would give stdio tasks a second
+   dedupe layer that HTTP tasks do not have.
+3. **Typed owner.** The `task_route` module takes the owner as
+   `enum TaskOwnerText { Http(String), LocalOperator }`.
+   - `Http` refuses NUL-prefixed text (answered as not found, like every other owner miss).
+   - `LocalOperator` resolves to `LOCAL_OPERATOR_PRINCIPAL`, which is widened `private → pub(crate)`.
+   - This replaces rev 3's guard inside `ExecutionAdmission::owner`, which has 0 lines of headroom
+     under the file-size baseline (`idempotency/admission.rs`, baseline 984 = counted 984). The
+     guard sits at the one place HTTP owner text enters the task surface.
+4. **Route.** `router/handlers/tasks.rs` keeps the HTTP glue. The owner-independent bodies of
+   `tasks_get`, `tasks_update` and `tasks_cancel` move to a new crate-private
+   `gateway/task_route.rs`, taking `TaskRoute { service, executor, host: TaskHost, owner: TaskOwnerText }`.
+   - The upstream recovery read stays HTTP-only. Stdio installs no upstream adapter:
+     `tasks.recovery_adapters` stays an HTTP feature. Its store is its own directory (item 7), so
+     no stdio row ever carries an upstream handle, and a stdio `tasks/get` never needs a recovery
+     read.
+   - On restart, stdio passes no managed adapters, so every interrupted row it holds is settled
+     (`recovery.rs:57-64`).
+   - The HTTP arms become thin adapters over the shared bodies, so the two transports cannot drift.
+5. **Stdio creation.** A task-augmented modern `tools/call` on stdio builds its `TaskIntent` in
+   the server, not through `task_intent_for_call`. Same rules except the HTTP auth gate:
+   - modern request;
+   - a `task` member;
+   - not a retry continuation;
+   - a dispatchable tool;
+   - an idempotency key, with refusal texts identical to HTTP's;
+   - the client declared Tasks on `initialize`.
+
+   Each rule answers exactly as HTTP answers the same request: a refusal with the same code and
+   text, or the ordinary synchronous path. The owner is `TaskOwnerText::LocalOperator`. The admission request uses the reserved owner, so
+   a task and a later synchronous stdio call with the same key meet at the one admission index.
+6. **Store, degradation and shutdown.**
+   - Stdio opens its store directory (item 7) through `open_runtime_with_recovery` with no managed
+     adapters. The open sequence moves into one shared crate-private helper.
+   - On any open failure, stdio:
+     - logs the path and the cause;
+     - serves without tasks: `tasks/*` answers -32601, and a task-augmented `tools/call` is
+       answered synchronously, which is exactly today's behaviour;
+     - leaves Tasks out of both the modern `initialize` answer and `server/discover`, for the life
+       of the process.
+   - `ServiceError` collapses a lease conflict into `Unavailable` (`task_service/service.rs:89`).
+     Stdio does not need to tell the two apart.
+   - The expiry loop starts from the same helper, with `tasks.expiry_interval`.
+   - EOF order in `run_stdio_on`, after the dispatch drain and the writer join (D5), is HTTP's
+     own task shutdown, extracted from `Gateway::run` (`server/mod.rs:2196-2223`) into the
+     shared helper so the two cannot drift:
+     1. Join the expiry sweep.
+     2. Drain the executor (`TaskExecutor::drain`, `execution.rs:339-371`), joining handoffs, then
+        worker permits, within the shutdown timeout.
+     3. Close the store, which releases the lease.
+
+     Then the existing teardown runs (`backends.stop_all`).
+   - Residual, identical on both transports and not widened here: a drain that times out leaves
+     straggler workers running past the store close and into `stop_all`. Their writes fail on the
+     closed store. The fix (cancel and join remaining handoffs after the timeout) belongs in the
+     shared helper and lands for both transports at once. It is proposed for #2530's 4.0.1 scope,
+     with the lead.
+7. **Lease direction: decided by the lead, 2026-10-01, option (d).** Stdio derives its own
+   store from the same base path: `expand_home_path(tasks.store_dir).join("stdio")`. It is
+   resolved literally, with no new config key, and the derived path is logged at open.
+   - **No contention by default.** HTTP keeps `tasks.store_dir` and stdio uses its `stdio`
+     subdirectory, so neither holds the other's lease. The HTTP store's loader ignores the
+     subdirectory: it reads only `task-*.json` names (`task_service/store.rs:665,747-749`), and
+     the directory judge accepts it (`:903-905`). Rejected options:
+     - (a): a running desktop-spawned stdio gateway would turn into an HTTP startup failure on the
+       default config. That is an upgrade regression.
+     - (b) and (c), as before.
+   - **Relocation carries over.** Moving the base directory and rewriting `tasks.store_dir`
+     moves the stdio store with it.
+   - **A second concurrent stdio gateway** finds the lease held and degrades as in item 6: no
+     durable tasks, and discover and `initialize` stay honest.
+   - **Explicitly shared directory.** An operator who points HTTP's `tasks.store_dir` at another
+     config's stdio subdirectory meets the existing lease rule. HTTP fails fast, and its error now
+     names the likely holder: "held by another gateway process, possibly a stdio gateway using
+     `<base>/stdio`". This is the only HTTP-visible change; the error text is tested.
+   - **I-OWN is still tested,** by configuring HTTP explicitly onto the stdio directory once stdio
+     has exited.
+   - **Documented** in the `tasks.store_dir` config doc comment (`src/config/features/tasks.rs`),
+     `docs/UPGRADING-4.0.md`, and `docs/runbooks/backup-restore-and-keys.md`.
+     - The backup set is unchanged, because the subdirectory is inside the backed-up directory.
+     - The runbook gains one line: stop every gateway, HTTP and stdio, that writes under the base
+       directory before backup or restore, since the two stores are now independent writers.
+8. **Placement.**
+   - New code goes in sibling modules: `gateway/task_route.rs`, `gateway/task_service/host.rs`
+     (`TaskHost`, `StdioTaskHost`), and `gateway/server/stdio_tasks.rs` (open, creation, the
+     `tasks/*` dispatch, the degradation flag).
+   - `server/mod.rs` gains only call sites, within its 45 lines of headroom.
+   - `router/handlers/tasks.rs` shrinks.
+9. **Size.** About 500–700 lines of product code plus 500–600 of tests, at the FULL tier. No
+   public API item and no config key.
+
 ### Increments (one PR each, in order)
 
 | # | Rows | Tier | Content |
@@ -514,7 +678,7 @@ Change. `run_stdio_on` already holds the config; its `modern_protocol` value goe
 | I1 | OWNER.3, OWNER.5 | FULL (identity) | D1 + D4 |
 | I2 | OWNER.1, OWNER.4 | FULL (policy) | D2 + D3 tests; a fix only if red |
 | I3 | LIFE.1 | FULL (it touches admission settlement) | D5 |
-| I4 | OWNER.2 | FULL | D6 (ruled in scope) |
+| I4 | OWNER.2 | FULL | D6 rev 5 (ruled in scope; option A, 2026-10-01) |
 | I5 | STDIO.1 | STANDARD | D7, after I4 |
 
 Red proof with CI as the only compiler. A failing-tests commit must fail on assertions, not fail
@@ -573,3 +737,21 @@ failing tests are written.
   upstream cancel is tracked as #2495 (4.0.1).
 - Rev 4 also records D1 as built in #2494: a reserved NUL-prefixed owner principal replaces rev
   3's "own domain string", and catalogue tag plumbing is dropped (no decision depends on it).
+- Rev 5 (2026-10-01, at `bf5c901e3`): D6 rev 5 added after the I4 inventory found the worker's
+  `AppState` dependency. Sized to the lead, who ruled option (A). Item 7 (lease direction) ruled
+  option (d) by the lead: stdio uses `<store_dir>/stdio`. Sent to two seats on the design delta before code.
+- Rev 5.1: both seats returned SHIP-WITH-FIXES on the design delta (seat A on `c4f9c5405`,
+  seat B on `2567148cb`). Taken:
+  - the worker's key is cleared, so U2 now pins the response cache;
+  - upstream follow is adapter-gated, and stdio installs no adapter;
+  - degraded creation stays synchronous;
+  - one host shape;
+  - the EOF shutdown order.
+
+  Test-plan changes are listed in its I4 review log.
+- Rev 5.1, round 2 (seat A, delta `c4f9c5405..211432dad`, SHIP-WITH-FIXES):
+  - all four round-1 findings are closed, and option (d) is upheld against the loader, lease and
+    relocation code;
+  - the EOF order now reuses HTTP's task shutdown, with the timed-out straggler residual recorded;
+  - N10's proof moves in-process (test plan);
+  - the backup runbook gains the stop-every-writer line.

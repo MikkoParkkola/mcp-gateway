@@ -20,7 +20,7 @@ use super::settlement::{
 };
 use super::worker::inspect_settled;
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor, WriteOutcome};
-use crate::gateway::router::AppState;
+use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound, Target};
 use crate::gateway::task_service::store::StoreError;
 use crate::gateway::task_service::store::input::{ProvideOutcome, RoundClosed};
@@ -39,7 +39,7 @@ const PRODUCE_SEAM_WAIT: Duration = Duration::from_secs(1);
 /// The worker's view of one owned task while it settles a response.
 pub(super) struct Settling<'a> {
     executor: &'a Arc<TaskExecutor>,
-    state: &'a Arc<AppState>,
+    state: &'a LiveHost,
     owned: &'a OwnedCallerContext,
     call: &'a TaskCall,
     principal: &'a str,
@@ -50,7 +50,7 @@ pub(super) struct Settling<'a> {
 impl<'a> Settling<'a> {
     pub(super) const fn new(
         executor: &'a Arc<TaskExecutor>,
-        state: &'a Arc<AppState>,
+        state: &'a LiveHost,
         owned: &'a OwnedCallerContext,
         call: &'a TaskCall,
         principal: &'a str,
@@ -171,7 +171,7 @@ impl<'a> Settling<'a> {
         // The continuation the resume will redeem dies at its own deadline;
         // a round that could only fail is settled now, never parked.
         let now = unix_secs(self.executor.service.store.now());
-        let continuation = self.state.meta_mcp.continuation();
+        let continuation = self.state.meta_mcp().continuation();
         let Ok(continuation_deadline) =
             round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
         else {
@@ -238,7 +238,7 @@ impl<'a> Settling<'a> {
 
 /// One cancellable dispatch through the invoke funnel, carrying `retry`.
 async fn dispatch(
-    state: &Arc<AppState>,
+    state: &LiveHost,
     owned: &OwnedCallerContext,
     call: &TaskCall,
     retry: &RetryFields,
@@ -247,9 +247,9 @@ async fn dispatch(
     if *cancel_rx.borrow() {
         return None;
     }
-    let authorizer = owned.authorizer().borrow(state);
+    let authorizer = state.authorizer(owned.authorizer());
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
-    let dispatched = state.meta_mcp.dispatch_below_gate_native_result(
+    let dispatched = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
         &call.tool,
         call.arguments.clone(),
@@ -430,7 +430,7 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     // create path.
     let _handoff = handoff;
     let _slot = slot;
-    let Some(state) = owned.state().upgrade() else {
+    let Some(state) = owned.host().upgrade() else {
         let event = TaskTransition::Complete(interrupted_before_dispatch());
         executor.settle_cas(&principal, &id, revision, event).await;
         return;

@@ -28,8 +28,11 @@ mod replica_state_tests;
 mod signing_allocation_tests;
 mod stdio_catalogue;
 mod stdio_channel;
+mod stdio_dispatches;
 mod stdio_nonce;
+mod stdio_tasks;
 mod stdio_writer;
+mod task_runtime;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 mod tools_changed;
@@ -70,7 +73,7 @@ use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
-use crate::security::{ToolPolicy, posture};
+use crate::security::{ToolPolicy, posture, ssrf::DestinationPolicy};
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
@@ -351,6 +354,11 @@ struct StdioClient<'a> {
     session_id: &'a str,
     channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
     handshake_capabilities: crate::protocol::meta::Declared,
+    /// The session's task store; `None` serves no `tasks/*` (MIK-7272.OWNER.2).
+    tasks: Option<&'a stdio_tasks::StdioTasks>,
+    /// `server.modern_protocol` at stdio start: whether `server/discover`
+    /// lists 2026-07-28 (MIK-7217.STDIO.1, design D7).
+    modern: bool,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -591,6 +599,7 @@ impl Gateway {
         posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
+        backends.enforce_destination(DestinationPolicy::for_posture(config.security.posture));
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding
@@ -1684,20 +1693,17 @@ impl Gateway {
         // (audience, token-exchange endpoint/scope) arrive via the
         // `BackendDescriptor` at `propagate()` time, not from this instance.
         //
-        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING: the caller
-        // attaches its own backend credential and the direct route forwards it
-        // verbatim. So a Passthrough-only deployment must NOT install a minting
-        // strategy. Doing so would let the meta route (`gateway_invoke`), whose
-        // resolver keys off the globally-installed strategy rather than the
-        // per-backend `strategy` enum, mint a credential for a Passthrough
-        // backend and violate INV-4 (GPT review F1). With the strategy unset the
-        // meta route fails closed (required) or falls back to static creds
-        // (optional) instead of minting. Mixed deployments (>=1 minting backend
-        // plus >=1 passthrough backend) still install the strategy for the
-        // minting backend; honoring passthrough on the meta route for that
-        // residual case needs the per-backend strategy check in the (currently
-        // locked) resolver, tracked on MIK-6746. Interim contract: passthrough is
-        // direct-route-only.
+        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING: the caller attaches its own backend
+        // credential and the direct route forwards it verbatim. So a Passthrough-only deployment
+        // must NOT install a minting strategy. Doing so would let the meta route
+        // (`gateway_invoke`), whose resolver keys off the globally-installed strategy rather than
+        // the per-backend `strategy` enum, mint a credential for a Passthrough backend and violate
+        // INV-4 (GPT review F1). With the strategy unset the meta route fails closed (required) or
+        // falls back to static creds (optional) instead of minting. Mixed deployments (>=1 minting
+        // backend plus >=1 passthrough backend) still install the strategy for the minting backend;
+        // honoring passthrough on the meta route for that residual case needs the per-backend
+        // strategy check in the (currently locked) resolver, tracked on MIK-6746. Interim contract:
+        // passthrough is direct-route-only.
         match configured_minting_strategy_kind(&self.config) {
             Some(crate::identity_propagation::PropagationStrategyKind::SignedAssertion) => {
                 use crate::identity_propagation::SignedAssertionStrategy;
@@ -1857,27 +1863,24 @@ impl Gateway {
             .filter(|name| self.backends.get(name).is_some())
             .cloned()
             .collect();
-        let (task_service, task_executor) =
-            crate::gateway::task_service::open_runtime_with_recovery(
-                &task_store_dir,
-                self.config.tasks.max_workers,
-                crate::gateway::task_service::StoreLimits {
-                    records: self.config.tasks.max_records,
-                    per_principal: self.config.tasks.max_per_principal,
-                    record_bytes: self.config.tasks.max_record_bytes,
-                    logical_bytes: self.config.tasks.logical_budget_bytes,
-                },
-                Arc::clone(&subscriptions),
-                Arc::clone(meta_mcp.execution_admission()),
-                &managed_adapters,
-            )
-            .await
-            .map_err(|error| {
-                Error::Config(format!(
-                    "task store at '{}' could not be opened: {error}",
-                    task_store_dir.display()
-                ))
-            })?;
+        let (task_service, task_executor) = task_runtime::open(
+            &self.config,
+            &task_store_dir,
+            Arc::clone(&subscriptions),
+            &meta_mcp,
+            &managed_adapters,
+        )
+        .await
+        .map_err(|error| {
+            // A held lease is most often a stdio gateway on the same
+            // directory (MIK-7272.OWNER.2, design D6 rev 5 item 7).
+            Error::Config(format!(
+                "task store at '{}' could not be opened: {error} (if it is held by \
+                 another gateway process, possibly a stdio gateway using '<store_dir>/stdio', \
+                 give each gateway its own tasks.store_dir)",
+                task_store_dir.display()
+            ))
+        })?;
         info!(
             path = %task_store_dir.display(),
             max_workers = self.config.tasks.max_workers,
@@ -2192,35 +2195,13 @@ impl Gateway {
         // own transaction and no new one starts against a store about to give
         // its lease back. The join returns what the sweep actually met, so a
         // store it could not delete from is not reported as a clean stop.
-        if let Err(error) = expiry_sweep.shutdown().await {
-            warn!(%error, "Task expiry sweep did not stop cleanly");
-        } else {
-            info!("Task expiry sweep stopped");
-        }
-
-        // Task workers hold no inflight permit — the request that created one
-        // was answered with a handle and released its permit long before the
-        // work finished — so the drain above cannot see them and a second wait
-        // is what makes shutdown graceful for them too.
-        //
-        // Ahead of `stop_all`, because a worker's dispatch IS a backend call:
-        // stopping the pool first would fail the very work this wait exists to
-        // let finish. The store closes afterwards, which joins any writer still
-        // in flight and gives the directory lease back — a lease this process
-        // kept would refuse the next start its own store.
-        info!(timeout = ?drain_timeout, "Draining in-flight tasks...");
-        let task_drain = task_executor_for_shutdown.drain(drain_timeout).await;
-        if task_drain.timed_out {
-            warn!(
-                acquired_workers = task_drain.acquired,
-                "Task drain timeout reached, proceeding with shutdown"
-            );
-        } else {
-            info!("All in-flight tasks completed");
-        }
-        if let Err(error) = task_service_for_shutdown.shutdown().await {
-            warn!(%error, "Task store did not release its lease cleanly");
-        }
+        task_runtime::shutdown(
+            expiry_sweep,
+            &task_executor_for_shutdown,
+            &task_service_for_shutdown,
+            drain_timeout,
+        )
+        .await;
 
         // Release the custody store before the backends go: the drain above is
         // what guarantees no in-flight request is still holding a credential.
@@ -2327,6 +2308,11 @@ impl Gateway {
                 }
             },
         ));
+        // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
+        let task_store =
+            stdio_tasks::open(&self.config, self.env.startup(), &meta_mcp, &tool_policy).await;
+        // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
+        let modern = self.config.server.modern_protocol;
 
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -2437,12 +2423,13 @@ impl Gateway {
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
         let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+        let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
         let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.clone()));
-        let mut dispatches: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+        let mut dispatches = stdio_dispatches::StdioDispatches::default();
+        let cancelled = dispatches.cancelled();
         // Admission, not just concurrency: a client that writes faster than the
         // backends answer would otherwise pile one task per line onto the
         // JoinSet. The permit is released when the dispatch task ends.
@@ -2484,6 +2471,16 @@ impl Gateway {
                     stdout_died = true;
                     break;
                 }
+                // Reaped as each ends, so an aborted dispatch is joined at once
+                // and a long session does not accumulate task records.
+                Some(joined) = dispatches.join_next(), if !dispatches.is_empty() => {
+                    if let Err(error) = joined
+                        && !error.is_cancelled()
+                    {
+                        warn!(%error, "stdio: a dispatch task did not finish cleanly");
+                    }
+                    continue;
+                }
                 read = reader.next_line() => match read {
                     Ok(Some(line)) => line,
                     _ => break,
@@ -2496,14 +2493,6 @@ impl Gateway {
             }
 
             debug!(line_len = line.len(), "stdio: received line");
-
-            // Reap what has finished, so a long session does not accumulate
-            // task records and a panicking dispatch is visible before EOF.
-            while let Some(joined) = dispatches.try_join_next() {
-                if let Err(error) = joined {
-                    warn!(%error, "stdio: a dispatch task did not finish cleanly");
-                }
-            }
 
             let request: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
@@ -2528,6 +2517,21 @@ impl Gateway {
             if let Some(reply_id) = stdio_channel::StdioClientChannel::reply_id(&request) {
                 if !channel.resolve(&reply_id, request) {
                     debug!(id = %reply_id, "stdio: reply matched no outstanding request");
+                }
+                continue;
+            }
+
+            // Routed here, never dispatched (MIK-7272.LIFE.1). No frame answers
+            // it; `initialize` runs inline and is never tracked, so it cannot
+            // be cancelled.
+            if request.get("method").and_then(serde_json::Value::as_str)
+                == Some("notifications/cancelled")
+            {
+                if let Some(id) = request
+                    .pointer("/params/requestId")
+                    .and_then(|id| serde_json::from_value(id.clone()).ok())
+                {
+                    dispatches.cancel(&id);
                 }
                 continue;
             }
@@ -2593,6 +2597,9 @@ impl Gateway {
             } else {
                 None
             };
+            let request_id: Option<crate::protocol::RequestId> = request
+                .get("id")
+                .and_then(|id| serde_json::from_value(id.clone()).ok());
             let task = {
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
@@ -2601,7 +2608,10 @@ impl Gateway {
                 // Cloned, not borrowed: the caller context holds
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
                 let channel = Arc::clone(&channel);
+                let tasks = task_store.as_ref().map(|(tasks, _)| Arc::clone(tasks));
                 let writer = writer.clone();
+                let cancelled = cancelled.clone();
+                let answers = request_id.clone();
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
                 async move {
@@ -2615,6 +2625,8 @@ impl Gateway {
                                 session_id,
                                 channel: &*channel,
                                 handshake_capabilities,
+                                tasks: tasks.as_deref(),
+                                modern,
                             },
                             &telemetry,
                         )),
@@ -2626,8 +2638,13 @@ impl Gateway {
                     if let Some(gate) = gate {
                         drop(gate.acquire().await);
                     }
-                    if let Some(response) = response {
-                        send_frame(&writer, response).await;
+                    // Room first, then the cancel check and the enqueue under
+                    // one lock: no frame for the id is queued after its cancel
+                    // was processed, however long the queue was full.
+                    if let Some(response) = response
+                        && let Ok(permit) = writer.reserve().await
+                    {
+                        cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                     }
                 }
             };
@@ -2647,7 +2664,7 @@ impl Gateway {
                 // guaranteed position, and it keeps it by being inline.
                 let admission = Arc::clone(&admission);
                 let closed_probe = writer.clone();
-                dispatches.spawn(async move {
+                dispatches.spawn(request_id, async move {
                     // The wait that used to be here, moved off the reader. It
                     // is unbounded, so stdout can die inside it: admission was
                     // checked against a queue that may no longer exist, and
@@ -2684,9 +2701,16 @@ impl Gateway {
         // and `close` is terminal, so a question raised inside the drain window
         // is refused rather than left waiting out the bridge's own timeout.
         channel.close();
-        if tokio::time::timeout(STDIO_DRAIN_TIMEOUT, async {
+        // One deadline for the drain and the writer join (MIK-7272.LIFE.1):
+        // a client that stops reading stdout blocks the writer, and the two
+        // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. The
+        // teardown after the join is not bounded here.
+        let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
+        if tokio::time::timeout_at(deadline, async {
             while let Some(joined) = dispatches.join_next().await {
-                if let Err(e) = joined {
+                if let Err(e) = joined
+                    && !e.is_cancelled()
+                {
                     warn!("stdio: dispatch task failed during drain: {e}");
                 }
             }
@@ -2714,8 +2738,13 @@ impl Gateway {
         // and returns, which is what flushes the responses the drain produced.
         drop(writer);
         drop(channel);
-        if let Err(error) = writer_task.await {
-            warn!(%error, "stdio: the stdout writer did not finish cleanly");
+        match tokio::time::timeout_at(deadline, &mut writer_task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
+            Err(_) => {
+                writer_task.abort();
+                warn!("stdio: stdout is not being read; unwritten frames are dropped");
+            }
         }
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
@@ -2730,6 +2759,10 @@ impl Gateway {
         // starts for a gateway that is on its way out. The guard remains the
         // backstop for every path that does not reach this line.
         warm_start_tasks.cancel().await;
+        // Tasks before custody and backends: a worker's dispatch IS a backend call.
+        if let Some((tasks, expiry)) = task_store {
+            stdio_tasks::shutdown(&tasks, expiry, self.config.server.shutdown_timeout).await;
+        }
         // Release the custody store before the backends go. Reached on the EOF
         // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
         // Not covered by gateway_bootstrap_tests — no test drives `run_stdio`.
@@ -2827,6 +2860,8 @@ impl Gateway {
                 session_id,
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
+                modern: false,
             },
             &StdioTelemetry::default(),
         )
@@ -2948,21 +2983,41 @@ impl Gateway {
             (
                 match method.as_str() {
                     // 2026-07-28 MUST, answered without a handshake: on stdio it is
-                    // also the backward-compatibility probe. Always the legacy list:
-                    // this dispatcher has no running config, and the stateless
-                    // revision is specified over streamable HTTP (a limitation, not
-                    // a decision that stdio is excluded).
-                    "server/discover" => {
-                        JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false))
-                    }
-                    "initialize" => meta_mcp.handle_initialize(
-                        id,
-                        params,
-                        Some(session_id),
-                        None,
-                        request_shape.era(),
-                        scope,
+                    // also the backward-compatibility probe. It lists 2026-07-28 when
+                    // `server.modern_protocol` was on at stdio start (MIK-7217.STDIO.1);
+                    // a batch is a legacy shape and always gets the legacy list.
+                    "server/discover" => stdio_tasks::advertised(
+                        client.tasks,
+                        JsonRpcResponse::success_serialized(
+                            id,
+                            meta_mcp.discover_document(client.modern),
+                        ),
                     ),
+                    "initialize" => stdio_tasks::advertised(
+                        client.tasks,
+                        meta_mcp.handle_initialize(
+                            id,
+                            params,
+                            Some(session_id),
+                            None,
+                            request_shape.era(),
+                            scope,
+                        ),
+                    ),
+                    m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
+                        let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+                        let caller = Self::build_stdio_caller_context(
+                            true,
+                            None,
+                            &policy,
+                            &retry,
+                            &request_shape,
+                            client,
+                        );
+                        let shape = &request_shape;
+                        stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
+                            .await
+                    }
                     "tools/list" => {
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
@@ -3230,6 +3285,8 @@ impl Gateway {
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+            // Read before the merge below moves `_meta` out of the request.
+            let wants_task = params.is_some_and(|params| params.get("task").is_some());
             let is_modern = matches!(
                 request_shape,
                 crate::protocol::meta::RequestShape::Modern(_)
@@ -3306,13 +3363,32 @@ impl Gateway {
                 );
             }
             caller.signing = signing_context.as_ref();
-            let admission = meta_mcp.admit_meta_sync(
-                &caller,
-                &tool_name,
-                arguments.as_ref(),
-                Some(session_id),
-                &id,
-            );
+            if wants_task && let Some(tasks) = client.tasks {
+                match stdio_tasks::task_intent(
+                    tasks,
+                    &id,
+                    &tool_name,
+                    &arguments,
+                    &caller,
+                    request_shape,
+                    session_id,
+                ) {
+                    Ok(intent) => caller.task = intent,
+                    Err(refusal) => break 'tool_call *refusal,
+                }
+            }
+            // A task is admitted durably by its handoff, as on HTTP.
+            let admission = if caller.task.is_some() {
+                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
+            } else {
+                meta_mcp.admit_meta_sync(
+                    &caller,
+                    &tool_name,
+                    arguments.as_ref(),
+                    Some(session_id),
+                    &id,
+                )
+            };
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
@@ -3405,6 +3481,9 @@ impl Gateway {
                     // handshake would widen a channel that cannot ask.
                     channel: &crate::gateway::input_bridge::NoClientChannel,
                     handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                    // A batch is a legacy shape; it serves no `tasks/*`.
+                    tasks: None,
+                    modern: false,
                 },
                 protocol_telemetry_sink,
             ))
@@ -4128,6 +4207,8 @@ mod tests {
                 session_id: "stdio-durable-window-test",
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
+                modern: false,
             },
             &sink,
         )

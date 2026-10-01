@@ -74,9 +74,9 @@ pub(super) async fn commit_and_run(
 fn creation_targets(intent: &TaskIntent, call: &TaskCall) -> Vec<Target> {
     intent
         .owned
-        .state()
+        .host()
         .upgrade()
-        .and_then(|state| state.meta_mcp.direct_job(&call.tool, &call.arguments))
+        .and_then(|host| host.meta_mcp().direct_job(&call.tool, &call.arguments))
         .map(|job| Target {
             server: job.server,
             tool: job.tool,
@@ -117,7 +117,7 @@ async fn run_dispatched(
     let _slot = slot;
     let fail_upgrade = executor.fail_state_upgrade(&id);
     let Some(state) = (!fail_upgrade)
-        .then(|| intent.owned.state().upgrade())
+        .then(|| intent.owned.host().upgrade())
         .flatten()
     else {
         settle_interrupted(&executor, &principal, &id, revision).await;
@@ -143,7 +143,7 @@ async fn run_dispatched(
     // `not_executed` rather than as `unknown`.
     let mut job = executor
         .recovery()
-        .and_then(|_| state.meta_mcp.direct_job(&call.tool, &call.arguments));
+        .and_then(|_| state.meta_mcp().direct_job(&call.tool, &call.arguments));
     // Trust is a live question with an await in it, so it cannot be a match
     // guard: asked here, after the shape is known and before anything is armed.
     // The verdict is computed first and the option cleared after, so nothing
@@ -186,19 +186,19 @@ async fn run_dispatched(
         return;
     }
 
-    let authorizer = intent.owned.authorizer().borrow(&state);
+    let authorizer = state.authorizer(intent.owned.authorizer());
     let caller = intent.owned.dispatch_context(&state, &authorizer);
     let session_id = intent.owned.session_id().map(str::to_owned);
 
     let submission = job
         .as_ref()
-        .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool)));
+        .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool, &id)));
 
     // The same tail the request thread takes, asked for the backend's own
     // result rather than the synchronous wrapper: design §4 settles a task on
     // that result verbatim, `isError` included, and classifies an interim
     // `input_required` round from it before anything is committed.
-    let dispatch = state.meta_mcp.dispatch_below_gate_native_result(
+    let dispatch = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
         &call.tool,
         call.arguments.clone(),
@@ -277,7 +277,7 @@ async fn run_dispatched(
 /// does not stop the job, which is why the follow below still runs.
 async fn follow_upstream_job(
     executor: &Arc<TaskExecutor>,
-    state: &Arc<crate::gateway::router::AppState>,
+    state: &crate::gateway::task_service::host::LiveHost,
     principal: &str,
     id: &str,
     revision: u64,
@@ -347,13 +347,14 @@ async fn follow_upstream_job(
             return;
         }
     };
-    match answer {
-        UpstreamAnswer::Completed(result) => {
-            // The identical post-dispatch processing a live dispatch applies,
-            // from the same implementation, before the durable settlement.
-            let event =
+    // The identical post-dispatch processing a live dispatch applies, from the
+    // same implementation, in the dispatch scope so the gates' attribution
+    // notes travel with the transition (MIN.1 gap 1).
+    let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
+        match answer {
+            UpstreamAnswer::Completed(result) => Some(
                 match state
-                    .meta_mcp
+                    .meta_mcp()
                     .recover_task_result(&job.server, &job.tool, None, id, result)
                 {
                     Ok(processed) => TaskTransition::Complete(processed),
@@ -362,25 +363,37 @@ async fn follow_upstream_job(
                         message: error.to_string(),
                         data: None,
                     }),
-                };
-            executor.settle_cas(principal, id, revision, event).await;
-        }
-        UpstreamAnswer::Failed(error) => {
+                },
+            ),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            let screened = state.meta_mcp.recover_task_error(
-                &job.server,
-                &job.tool,
-                None,
-                id,
-                strip_http_status(error),
-            );
-            executor
-                .settle_cas(principal, id, revision, TaskTransition::Fail(screened))
-                .await;
+            UpstreamAnswer::Failed(error) => {
+                Some(TaskTransition::Fail(state.meta_mcp().recover_task_error(
+                    &job.server,
+                    &job.tool,
+                    None,
+                    id,
+                    strip_http_status(error),
+                )))
+            }
+            // [`poll_to_terminal`] hands back a lease only with a terminal answer.
+            UpstreamAnswer::Live | UpstreamAnswer::Unavailable => None,
         }
-        // [`poll_to_terminal`] hands back a lease only with a terminal answer.
-        UpstreamAnswer::Live | UpstreamAnswer::Unavailable => {}
+    })
+    .await;
+    if let (Some(event), notes) = processed {
+        // Recorded before the commit, still under the lease, as a live call is
+        // recorded before its result is stored.
+        let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
+            server: &job.server,
+            tool: &job.tool,
+            id,
+        };
+        let event = state
+            .meta_mcp()
+            .audit_settlement(task, event, &notes, principal)
+            .await;
+        executor.settle_cas(principal, id, revision, event).await;
     }
     lease.release(executor, id).await;
 }
@@ -492,7 +505,7 @@ async fn settle_descriptor_refused(
 /// The response firewall on a native task result, under the targets the
 /// synchronous call would use (#2351): a refusal is what the task settles on.
 pub(super) fn inspect_settled(
-    state: &crate::gateway::router::AppState,
+    state: &crate::gateway::task_service::host::LiveHost,
     call: &TaskCall,
     id: &str,
     mut response: crate::protocol::JsonRpcResponse,
@@ -504,14 +517,14 @@ pub(super) fn inspect_settled(
         return response;
     };
     let backend = crate::gateway::router::backend_tool_targets_for_call(
-        &state.meta_mcp,
+        state.meta_mcp(),
         &call.tool,
         &call.arguments,
     );
     let targets =
         crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);
     if state
-        .meta_mcp
+        .meta_mcp()
         .inspect_task_result(&targets, id, result)
         .is_err()
     {

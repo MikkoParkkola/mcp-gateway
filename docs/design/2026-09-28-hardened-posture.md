@@ -84,7 +84,10 @@ line listing the five forced controls and their effective values. When `hardened
    and none is added (no new store): under hardened it refuses every legacy-shaped request except an
    `initialize` that declares elicitation (`backend_handlers.rs:764`). Second line: the legacy fork (`handlers.rs:1545-1549`) uses
    `for_modern()` (refuse); stdio already refuses (`server/mod.rs:4210-4225`). Direct-route
-   destructive backend tools are out of scope (M3: refuse at connect).
+   destructive backend tools are out of scope (M3: refuse at connect). On `/mcp`, every other
+   legacy request, a sessionless `ping` included, only resumes a session a declaring `initialize`
+   opened, and is refused when there is none (amendment, increment 5:
+   `2026-10-01-hardened-increment-5-signing-elicitation.md` §2 Row 10).
 
 **Startup refuses** under hardened: no `firewall` feature; signing secret under 32 bytes;
 `private_backends` naming no configured backend; block threshold below 0.9. `posture` is

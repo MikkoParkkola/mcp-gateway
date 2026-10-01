@@ -11,6 +11,7 @@ use serde_json::{Map, Value};
 use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::JsonRpcResponse;
+use crate::protocol::tasks::TaskTransition;
 use crate::security::audit::{
     AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
 };
@@ -31,6 +32,15 @@ impl AuditWho {
     }
 }
 
+/// The recovered task a settlement record is about.
+#[derive(Clone, Copy)]
+pub(crate) struct SettledTask<'a> {
+    pub server: &'a str,
+    pub tool: &'a str,
+    /// The gateway task id.
+    pub id: &'a str,
+}
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
@@ -46,7 +56,21 @@ pub(crate) struct DispatchNotes {
     data_classes: BTreeSet<String>,
     /// Served from a cache: no gate ran, so the delivered value is attributed.
     cached: bool,
+    /// MIN.1: the response held text over the attribution parse bound, so its
+    /// tenants were not read.
+    uninspected: bool,
+    /// MIN.1 gap 1: the gateway task whose raw upstream handle this dispatch
+    /// captured. The submission record carries it as the join key to the
+    /// task's settlement record.
+    upstream_task: Option<String>,
+    /// MIN.1 gap 1: how `audit_invocation` would class the refusal of a
+    /// recovered result, which recovery commits as a plain `-32603` failure.
+    refusal: Option<AuditOutcome>,
 }
+
+#[cfg(test)]
+#[path = "audit_settlement_tests.rs"]
+mod settlement_tests;
 
 tokio::task_local! {
     /// The notes of the call running in this scope, for this call only.
@@ -71,7 +95,18 @@ pub(super) fn noted_response(meta: &MetaMcp, result: Value) -> Value {
     if !tenants.is_empty() {
         note(|notes| notes.response_tenants.extend(tenants));
     }
+    if meta.response_uninspected(&result) {
+        note(|notes| notes.uninspected = true);
+    }
     result
+}
+
+/// MIN.1: this call's response was refused before its tenants could be read
+/// (a signature-chain refusal at raw receipt). Only when attribution is on.
+pub(crate) fn note_uninspected(meta: &MetaMcp) {
+    if meta.attributes_tenants() {
+        note(|notes| notes.uninspected = true);
+    }
 }
 
 /// MIK-7116.MIN.1: note the kernel's data classes, and hand the evaluation on.
@@ -86,6 +121,21 @@ pub(super) fn noted_classes(evaluation: ContextIntegrityEvaluation) -> ContextIn
     let names: Vec<String> = names.collect();
     note(|notes| notes.data_classes.extend(names));
     evaluation
+}
+
+/// MIN.1 gap 1: this dispatch captured the raw upstream handle of task `id`.
+pub(crate) fn note_upstream_task(id: &str) {
+    note(|notes| notes.upstream_task = Some(id.to_owned()));
+}
+
+/// MIN.1 gap 1: note how a refused recovered `result` is classed, so its
+/// settlement record says `denied` where a live call's record would.
+pub(crate) fn note_refusal(result: &Result<Value>) {
+    if result.is_err()
+        && let Some(outcome) = AuditOutcome::from_result(result)
+    {
+        note(|notes| notes.refusal = Some(outcome));
+    }
 }
 
 /// MIK-7116.MIN.1: this call is answered from a cache, past every gate.
@@ -115,6 +165,20 @@ impl DispatchNotes {
         }
     }
 
+    /// MIN.1 gap 1: a settlement's outcome. A gate refusal keeps the class a
+    /// live call's record gives it, with the code the task commits.
+    fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
+        match (self.outcome(outcome), self.refusal) {
+            (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
+                AuditOutcome::Denied(code)
+            }
+            (AuditOutcome::Error(code), Some(AuditOutcome::Invalid(_))) => {
+                AuditOutcome::Invalid(code)
+            }
+            (outcome, _) => outcome,
+        }
+    }
+
     /// MIK-7116.MIN.1: the attribution fields of one invocation record, given
     /// the request's tenants and the `delivered` value (attributed instead of
     /// the raw response on a cache hit). Empty when the call named no tenant,
@@ -125,25 +189,29 @@ impl DispatchNotes {
         mut tenants: BTreeSet<String>,
         delivered: Option<&Value>,
     ) -> Map<String, Value> {
+        let mut uninspected = self.uninspected;
         if self.cached {
             if let Some(value) = delivered {
                 tenants.extend(meta.response_tenants(value));
+                uninspected |= meta.response_uninspected(value);
             }
         } else {
             tenants.extend(self.response_tenants.iter().cloned());
         }
         let mut fields = Map::new();
-        if tenants.is_empty() {
+        if tenants.is_empty() && !uninspected {
             return fields;
         }
-        let hashed: BTreeSet<String> = tenants
-            .into_iter()
-            .map(|id| crate::security::hash_argument(&Value::String(id)))
-            .collect();
-        fields.insert(
-            "tenants".into(),
-            hashed.into_iter().collect::<Vec<_>>().into(),
-        );
+        if !tenants.is_empty() {
+            let hashed: BTreeSet<String> = tenants
+                .into_iter()
+                .map(|id| crate::security::hash_argument(&Value::String(id)))
+                .collect();
+            fields.insert(
+                "tenants".into(),
+                hashed.into_iter().collect::<Vec<_>>().into(),
+            );
+        }
         if !self.data_classes.is_empty() {
             let classes: Vec<Value> = self
                 .data_classes
@@ -153,8 +221,16 @@ impl DispatchNotes {
                 .collect();
             fields.insert("data_classes".into(), classes.into());
         }
-        if self.cached {
-            fields.insert("attribution".into(), "cached_delivery".into());
+        // One value names how far the attribution can be trusted: past the
+        // gates (a cache or replay), unread (text over the parse bound), or both.
+        let marker = match (self.cached, uninspected) {
+            (true, true) => Some("cached_delivery_uninspected"),
+            (true, false) => Some("cached_delivery"),
+            (false, true) => Some("uninspected"),
+            (false, false) => None,
+        };
+        if let Some(marker) = marker {
+            fields.insert("attribution".into(), marker.into());
         }
         fields
     }
@@ -188,6 +264,35 @@ impl MetaMcp {
         }
         let _ = result;
         BTreeSet::new()
+    }
+
+    /// MIN.1: whether tenant attribution is configured (a firewall with
+    /// `arg_keys`). False without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn attributes_tenants(&self) -> bool {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.tenant_guard().attributes();
+        }
+        false
+    }
+
+    /// MIN.1: whether `result` holds text the attribution could not read.
+    /// False without a firewall, like [`Self::response_tenants`].
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.tenant_guard().response_uninspected(result);
+        }
+        let _ = result;
+        false
     }
 }
 
@@ -240,7 +345,10 @@ impl MetaMcp {
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
-        let attribution = notes.attribution(self, tenants, result.as_ref().ok());
+        let mut attribution = notes.attribution(self, tenants, result.as_ref().ok());
+        if let Some(id) = notes.upstream_task {
+            attribution.insert("task_id".into(), id.into());
+        }
         let facts =
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of));
         // #2472: a replay of this execution is recorded with these facts.
@@ -331,6 +439,83 @@ impl MetaMcp {
             Err(error) => {
                 tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
                 Ok(())
+            }
+        }
+    }
+
+    /// MIN.1 gap 1: write the settlement record of a recovered upstream task,
+    /// before `proposed` is committed, and return the transition to commit.
+    ///
+    /// `proposed` and `notes` come from `recover_task_result` or
+    /// `recover_task_error` run in [`with_dispatch_scope`]; the outcome and
+    /// hash mapping is `audit_invocation`'s. `who` is the principal the task
+    /// was admitted under and nothing more. A failed write under
+    /// [`AuditFailurePolicy::FailClosed`] commits `-32005` instead, with no
+    /// backend content, as a live call withholds its result (D1-f).
+    pub(crate) async fn audit_settlement(
+        &self,
+        task: SettledTask<'_>,
+        proposed: TaskTransition,
+        notes: &DispatchNotes,
+        principal: &str,
+    ) -> TaskTransition {
+        let Some(log) = self.transparency_logger.as_ref() else {
+            return proposed;
+        };
+        let result = match &proposed {
+            TaskTransition::Complete(value) => Ok(value.clone()),
+            TaskTransition::Fail(error) => Err(Error::json_rpc(error.code, error.message.clone())),
+            _ => return proposed,
+        };
+        // Total here: only `Error::AuditUnavailable` maps to `None`, and the
+        // mapping above builds `Ok` or `Error::JsonRpc` alone.
+        let Some(outcome) = AuditOutcome::from_result(&result) else {
+            return proposed;
+        };
+        let attribution = notes.attribution(self, BTreeSet::new(), result.as_ref().ok());
+        let envelope = AuditEnvelope {
+            trace_id: Some(task.id.to_string()),
+            otel_trace_id: None,
+            outcome: notes.settled_outcome(outcome),
+            who: AuditWho::from_actor_id(principal),
+        };
+        let response_hash = result.as_ref().ok().map(sha256_of);
+        let request_hash = sha256_of(&serde_json::json!({ "task_id": task.id }));
+        let (id, server, tool) = (
+            task.id.to_owned(),
+            task.server.to_owned(),
+            task.tool.to_owned(),
+        );
+        let written = log
+            .append_bounded(move |log| {
+                log.log_task_settlement(
+                    &id,
+                    &envelope,
+                    &server,
+                    &tool,
+                    &request_hash,
+                    response_hash.as_deref(),
+                    attribution,
+                )
+            })
+            .await;
+        let (server, tool, task_id) = (task.server, task.tool, task.id);
+        match written {
+            Ok(()) => proposed,
+            Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
+                tracing::error!(server, tool, task_id, %error, "settlement audit write failed; result withheld");
+                let withheld = Error::AuditUnavailable;
+                TaskTransition::Fail(crate::protocol::JsonRpcError {
+                    code: withheld.to_rpc_code(),
+                    message: withheld.to_string(),
+                    data: None,
+                })
+            }
+            Err(error) => {
+                tracing::warn!(server, tool, task_id, %error, "settlement audit write failed (non-fatal)");
+                telemetry_metrics::counter!("mcp_audit_settlement_write_failures_total")
+                    .increment(1);
+                proposed
             }
         }
     }

@@ -190,6 +190,7 @@ impl super::super::MetaMcp {
         // record: fail closed, never an unchecked eligible result.
         let Some(challenge) = challenge else {
             *slot.lock() = ChainReceipt::Refused;
+            crate::gateway::meta_mcp::invoke::audit::note_uninspected(self);
             return Err(refusal("challenge"));
         };
         match receive(identity, policy, result, challenge, now()) {
@@ -199,6 +200,8 @@ impl super::super::MetaMcp {
             }
             Err(error) => {
                 *slot.lock() = ChainReceipt::Refused;
+                // MIN.1: refused unread, so its tenants are recorded as not read.
+                crate::gateway::meta_mcp::invoke::audit::note_uninspected(self);
                 Err(error)
             }
         }

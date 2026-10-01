@@ -10,6 +10,7 @@ use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{BackendCall, DirectOutcome};
+use crate::gateway::meta_mcp::signing::SigningScope;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
@@ -25,9 +26,12 @@ impl DirectRouteGuards {
     /// S1 policy, then the G7 signing refusal. Runs before the idempotency
     /// reservation, so a refused call reserves nothing and a cached result is
     /// never served past a refusal.
-    pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<()> {
+    ///
+    /// G7 applies where the signed envelope is `gateway_invoke`-only. Under
+    /// `hardened` this route signs its own results (GH1942.HARDEN.1 row 7).
+    pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>, scope: SigningScope) -> Result<()> {
         meta.admit_target(call)?;
-        if meta.signing_enabled() {
+        if meta.signing_enabled() && scope == SigningScope::InvokeOnly {
             return Err(Error::json_rpc(-32001, SIGNING_REFUSAL));
         }
         Ok(())
