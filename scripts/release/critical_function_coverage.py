@@ -83,14 +83,16 @@ def macro_argument_lines(lines, lo, hi):
                 text = text[match.end() - 1 :]
             depth += text.count("(") - text.count(")")
             if depth <= 0:
-                simple, braces = [], 0
+                simple, nesting = [], 0
                 for m in range(head + 1, n + 1):
                     code = strip_literals(lines[m - 1])
                     # Only a line at the argument list's own level: anything
-                    # inside a block is that block's logic, not a field.
-                    if braces == 0 and is_simple_argument(code):
+                    # inside a nested block, call or array is that
+                    # expression's logic, not a field.
+                    if nesting == 0 and is_simple_argument(code):
                         simple.append(m)
-                    braces += code.count("{") - code.count("}")
+                    nesting += sum(code.count(c) for c in "({[") - sum(code.count(c) for c in ")}]")
+                    nesting = max(nesting, 0)
                 calls.append((head, simple))
                 break
     return calls
