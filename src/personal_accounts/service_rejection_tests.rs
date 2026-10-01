@@ -10,6 +10,7 @@ use std::sync::atomic::Ordering;
 
 use super::super::RejectionOutcome;
 use super::*;
+use crate::personal_accounts::ForceClaim;
 
 /// T3 at the service boundary: a backend that answers 401 to every token
 /// costs one provider round trip per token revision, however many calls.
@@ -191,5 +192,114 @@ fn expiry_rotation_then_401_still_forces_once() {
             service.store().lookup(&alice()).expect("lookup"),
             AccountLookup::ReconnectRequired(_)
         ));
+    });
+}
+
+fn version_of_grant(record: &GrantRecord) -> GrantVersion {
+    GrantVersion {
+        generation: record.generation.clone(),
+        token_revision: record.token_revision,
+        authorization_epoch: record.authorization_epoch,
+        descriptor_revision: record.descriptor_revision.clone(),
+    }
+}
+
+/// The store grants a force-claim only to the live, connected version: an
+/// account it does not hold and a version it has moved past are both
+/// `Superseded`, and neither writes a mark.
+#[test]
+fn claim_is_refused_for_an_absent_account_and_for_a_moved_version() {
+    let (_tmp, store) = seed(&[(&alice(), unexpired_grant())]);
+    let live = version_of_grant(&unexpired_grant());
+
+    assert_eq!(
+        store.claim_forced_refresh(&bob(), &live).expect("answered"),
+        ForceClaim::Superseded,
+        "no entry for this account"
+    );
+    for (what, moved) in [
+        (
+            "token revision",
+            GrantVersion {
+                token_revision: live.token_revision + 1,
+                ..live.clone()
+            },
+        ),
+        (
+            "authorization epoch",
+            GrantVersion {
+                authorization_epoch: live.authorization_epoch + 1,
+                ..live.clone()
+            },
+        ),
+        (
+            "generation",
+            GrantVersion {
+                generation: "ffffffffffffffffffffffffffffffff".into(),
+                ..live.clone()
+            },
+        ),
+        (
+            "descriptor revision",
+            GrantVersion {
+                descriptor_revision: "moved".into(),
+                ..live.clone()
+            },
+        ),
+    ] {
+        assert_eq!(
+            store
+                .claim_forced_refresh(&alice(), &moved)
+                .expect("answered"),
+            ForceClaim::Superseded,
+            "{what}"
+        );
+    }
+    // No refusal above left a mark: the live version still claims once.
+    assert_eq!(
+        store.claim_forced_refresh(&alice(), &live).expect("claim"),
+        ForceClaim::Claimed
+    );
+    assert_eq!(
+        store.claim_forced_refresh(&alice(), &live).expect("again"),
+        ForceClaim::AlreadyForced
+    );
+}
+
+/// The rotated revision's own mark is written after the rotation is durable.
+/// When that second write fails the error surfaces, and the rotation is kept:
+/// the cost is one extra provider call later, never a lost or doubled token.
+#[test]
+fn failed_mark_of_the_rotated_revision_surfaces_and_keeps_the_rotation() {
+    block_on(async {
+        let (_tmp, store) = seed(&[(&alice(), unexpired_grant())]);
+        // Two commits succeed (the claim, the rotation); the third overflows.
+        store
+            .lock_authority()
+            .as_mut()
+            .expect("open store")
+            .commit_revision = u64::MAX - 2;
+        let provider = ScriptedProvider::new();
+        let calls = provider.ready(
+            &alice(),
+            Ok(rotation("synthetic-alice-access-mark-fails", None)),
+        );
+        let (observer, _) = counting_observer();
+        let service = AccountService::new(store, provider, observer);
+        let lease = refuse_scaffold(service.resolve(&alice()), "resolve").expect("connected");
+
+        let outcome = service.refresh_after_rejection(&lease).await;
+
+        assert_eq!(
+            domain_err(outcome, "mark of the rotated revision"),
+            AccountServiceError::Store(AccountError::StorageUnavailable)
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let durable = expect_connected(service.store().lookup(&alice()).expect("lookup"));
+        assert_eq!(
+            durable.token_revision,
+            unexpired_grant().token_revision + 1,
+            "the rotation is durable"
+        );
     });
 }
