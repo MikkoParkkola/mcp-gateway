@@ -534,3 +534,52 @@ async fn confirmation_follow_up_needs_a_fresh_nonce() {
         "the replay must not have run the action: {done}"
     );
 }
+
+/// 4c plan row 13: under hardened, a tool call to an HTTP backend on loopback
+/// is served when the backend is listed in `security.hardened.private_backends`
+/// (the backend sees it, and the result is signed), and refused before it is
+/// reached when it is not listed.
+#[tokio::test]
+async fn listed_private_backend_tool_call_is_served() {
+    for listed in [true, false] {
+        let backend = BackendFixture::start(backend_result()).await;
+        let home = tempfile::tempdir().expect("gateway home");
+        let mut config = outer_config(home.path(), home.path());
+        config["backends"] = json!({(BACKEND): {"http_url": backend.url, "streamable_http": true}});
+        if listed {
+            config["security"]["hardened"] = json!({"private_backends": [BACKEND]});
+        }
+        let stack = Stack {
+            gateway: HttpGateway::start(config).await,
+            backend,
+            _inner: home,
+        };
+        let nonce = if listed {
+            "listed-call"
+        } else {
+            "unlisted-call"
+        };
+        let call = modern_call(
+            91,
+            "gateway_invoke",
+            &json!({"server": BACKEND, "tool": TOOL, "arguments": {}}),
+            Some(nonce),
+        );
+        let wire = post(&stack, "/mcp", &call).await;
+        if listed {
+            assert_signed(&wire, nonce, "a call to a listed loopback backend");
+            assert_eq!(stack.backend.calls().len(), 1, "not served: {wire}");
+        } else {
+            let response = parse(&wire);
+            assert!(
+                response.get("error").is_some() || response["result"]["isError"] == json!(true),
+                "an unlisted loopback backend was served: {wire}"
+            );
+            assert_eq!(
+                stack.backend.calls().len(),
+                0,
+                "an unlisted loopback backend was reached: {wire}"
+            );
+        }
+    }
+}
