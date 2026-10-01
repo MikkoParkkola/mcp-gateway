@@ -296,6 +296,70 @@ fn logs(x: u8) -> Result<bool, u8> {
         self.assertEqual(result[8], [])
 
 
+class HeadLineCalls(unittest.TestCase):
+    """A call on a tracing macro's head line rides that line's hit count, so the
+    count cannot show the call ran: the line is graded as missed and listed as
+    unverifiable, whatever its count (MIK-7725). It can fail spuriously; it can
+    never pass an unrun call."""
+
+    def grade(self, body, counts):
+        source = "fn logs(x: u8) -> bool {\n" + body + "    x > 0\n}\n"
+        last = source.count("\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(source)
+            records = "".join(f"DA:{n},{c}\n" for n, c in sorted({1: 1, **counts, last - 1: 1, last: 1}.items()))
+            lcov = root / "cov.lcov"
+            lcov.write_text(f"SF:/repo/src/lib.rs\n{records}end_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def test_a_reached_one_line_macro_with_a_call_is_missed_and_listed(self):
+        result = self.grade('    debug!(url = %clean(x), "seen");\n', {2: 5})
+        self.assertEqual(result[0], "BELOW")
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 5)"])
+
+    def test_a_method_call_on_the_head_line_is_unverifiable(self):
+        result = self.grade('    tracing::warn!(path = %p.display(), "seen");\n', {2: 1})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_a_nested_macro_on_the_head_line_is_unverifiable(self):
+        result = self.grade('    info!(msg = %format!("{x}"), "seen");\n', {2: 1})
+        self.assertEqual(result[4], [2])
+
+    def test_a_multi_line_macro_with_a_call_on_its_head_line_is_unverifiable(self):
+        body = '    debug!(url = %clean(x),\n        "seen"\n    );\n'
+        result = self.grade(body, {2: 1, 3: 1})
+        self.assertEqual(result[4], [2], "the head is unverifiable whatever its count")
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_plain_fields_on_the_head_line_stay_covered(self):
+        result = self.grade('    debug!(url = %x, kind = ?k, n = 3, "seen {}", x);\n', {2: 1})
+        self.assertEqual(result[0], "ok")
+        self.assertEqual(result[9], [])
+
+    def test_a_call_inside_the_message_literal_is_not_a_call(self):
+        result = self.grade('    debug!("see clean(x) for {}", x);\n', {2: 1})
+        self.assertEqual(result[0], "ok")
+        self.assertEqual(result[9], [])
+
+    def test_a_call_before_the_macro_on_the_same_line_is_graded_by_its_count(self):
+        # Only the macro's own arguments are unverifiable: a statement that ends
+        # in a macro call is not a field of it.
+        result = self.grade('    let y = f(x); debug!(y, "seen");\n', {2: 1})
+        self.assertEqual(result[0], "ok")
+        self.assertEqual(result[9], [])
+
+    def test_an_unreached_one_line_macro_with_a_call_is_missed_and_listed(self):
+        result = self.grade('    debug!(url = %clean(x), "seen");\n', {2: 0})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 0)"])
+
+
 class PlainFieldWhitelist(unittest.TestCase):
     """Only a plain field line is ever excluded; every other shape stays graded."""
 
