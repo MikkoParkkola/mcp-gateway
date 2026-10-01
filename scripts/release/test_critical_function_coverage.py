@@ -383,19 +383,39 @@ class HeadLineCalls(unittest.TestCase):
                 self.assertEqual(result[4], [2])
                 self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
 
-    def test_a_file_alias_for_a_level_macro_is_a_tracing_head(self):
-        source = 'use tracing::{debug as d, info};\nfn logs(x: u8) -> bool {\n    d!(v = %clean(x));\n    x > 0\n}\n'
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            (root / "src").mkdir()
-            (root / "src/lib.rs").write_text(source)
-            lcov = root / "cov.lcov"
-            lcov.write_text("SF:/repo/src/lib.rs\nDA:2,1\nDA:3,1\nDA:4,1\nDA:5,1\nend_of_record\n")
-            inventory = root / "inv.tsv"
-            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
-            result = cfc.grade(root, inventory, [lcov])[0]
-        self.assertEqual(result[4], [3])
-        self.assertEqual(result[9], ["src/lib.rs:3 (head count 1)"])
+    def test_any_way_to_run_a_tracing_macro_under_another_name_refuses_the_grade(self):
+        # Fail closed: a renamed or wrapped level macro would hide from the
+        # head-line rule, so its mere presence anywhere in src/ fails the grade.
+        refused = [
+            "use tracing::debug as d;\n",
+            "use tracing::debug as r#emit;\n",
+            "use tracing::{info, debug as d};\n",
+            "use tracing::{\n    // logging\n    debug as d,\n};\n",
+            "pub use ::tracing::warn as w;\n",
+            "use tracing as t;\n",
+            "macro_rules! emit {\n    ($($t:tt)*) => { tracing::debug!($($t)*) };\n}\n",
+        ]
+        allowed = [
+            "use tracing::{debug, info};\n",
+            "use tracing::instrument::WithSubscriber as _;\n",
+            "macro_rules! twice {\n    ($e:expr) => { $e + $e };\n}\n",
+        ]
+        for header, expect in [(h, True) for h in refused] + [(h, False) for h in allowed]:
+            with self.subTest(header=header):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = pathlib.Path(tmp)
+                    (root / "src").mkdir()
+                    (root / "src/lib.rs").write_text(header + "fn logs(x: u8) -> bool {\n    x > 0\n}\n")
+                    (root / "src/other.rs").write_text("fn quiet() {}\n")
+                    lines = header.count("\n")
+                    lcov = root / "cov.lcov"
+                    lcov.write_text(f"SF:/repo/src/lib.rs\nDA:{lines + 1},1\nDA:{lines + 2},1\nDA:{lines + 3},1\nend_of_record\n")
+                    inventory = root / "inv.tsv"
+                    inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+                    statuses = [r[0] for r in cfc.grade(root, inventory, [lcov])]
+                    code = cfc.main(["--root", str(root), "--inventory", str(inventory), "--lcov", str(lcov)])
+                self.assertEqual("INDIRECT" in statuses, expect)
+                self.assertEqual(code, 1 if expect else 0)
 
     def test_the_cli_prints_the_unverifiable_line_and_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

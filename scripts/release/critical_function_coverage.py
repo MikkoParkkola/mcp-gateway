@@ -97,28 +97,42 @@ PLAIN_HEAD = re.compile(
     r"(?:" + _ITEM + r"(?:\s*,\s*" + _ITEM + r")*\s*,?)?"
     r"\s*(?:\)\s*;?)?\s*$"
 )
-_ALIAS = re.compile(r"\b(" + "|".join(_LEVELS) + r")\s+as\s+(\w+)")
-_TRACING_USE = re.compile(r"\buse\s+(?:::)?tracing\s*::[^;]*;")
+TRACING_NAME = re.compile(
+    r"(?<!\w)(?:" + "|".join(_LEVELS) + r")\s*(?:/\*.*?\*/\s*)*!"
+)
+# The head-line rule recognises a tracing macro by its own name. Anything that
+# lets one be invoked under another name (a renaming `use` of a tracing item,
+# a re-export, or a `macro_rules!` wrapper around a level macro) would hide it,
+# so the grade refuses outright while any exists in `src/`: fail closed rather
+# than chase spellings. `as _` imports a trait anonymously and names nothing.
+_USE_STATEMENT = re.compile(r"\buse\s[^;]*;", re.S)
+_RENAMING = re.compile(r"\bas\s+(?!_(?!\w))")
+_MACRO_RULES = re.compile(r"macro_rules!\s*(?:r#)?(\w+)\s*\{")
 
 
-def tracing_names(text):
-    """The level macro names, plus any `use tracing::<level> as <alias>` in
-    this file, as a pattern that also allows block comments before the `!`."""
-    names = set(_LEVELS)
-    for use in _TRACING_USE.findall(text):
-        names.update(alias for _, alias in _ALIAS.findall(use))
-    return re.compile(
-        r"(?<!\w)(?:" + "|".join(sorted(names)) + r")\s*(?:/\*.*?\*/\s*)*!"
-    )
+def tracing_indirections(root):
+    """`file: what` for each way a tracing macro could run under another name."""
+    found = []
+    for path in sorted((Path(root) / "src").rglob("*.rs")):
+        text = path.read_text()
+        where = path.relative_to(root).as_posix()
+        for use in _USE_STATEMENT.findall(text):
+            if "tracing" in use and _RENAMING.search(use):
+                found.append(f"{where}: renaming use of a tracing item")
+        for match in _MACRO_RULES.finditer(text):
+            depth, end = 1, match.end()
+            while depth and end < len(text):
+                depth += {"{": 1, "}": -1}.get(text[end], 0)
+                end += 1
+            if TRACING_NAME.search(text[match.end():end]):
+                found.append(f"{where}: macro_rules! {match.group(1)} wraps a tracing macro")
+    return found
 
 
-TRACING_NAME = tracing_names("")
-
-
-def head_has_call(raw, names=TRACING_NAME):
+def head_has_call(raw):
     """True when this raw source line names a tracing macro but is not, as a
     whole, a plain head line (see above)."""
-    return bool(names.search(raw)) and not PLAIN_HEAD.match(raw)
+    return bool(TRACING_NAME.search(raw)) and not PLAIN_HEAD.match(raw)
 
 
 def is_plain_field(code):
@@ -208,7 +222,10 @@ def read_inventory(path):
 
 def grade(root, inventory, lcovs):
     hits = read_lcov(lcovs, root)
-    results = []
+    results = [
+        ("INDIRECT", {"path": what.split(":", 1)[0], "fn": what.split(": ", 1)[1], "occurrence": "-"}, None, None, [])
+        for what in tracing_indirections(root)
+    ]
     for row in read_inventory(inventory):
         if row["tier"] != "critical":
             continue
@@ -224,9 +241,8 @@ def grade(root, inventory, lcovs):
             results.append(("UNMEASURED", row, lo, hi, []))
             continue
         unverifiable = []
-        names = tracing_names("\n".join(lines))
         for n in range(lo, hi + 1):
-            if n in counts and head_has_call(lines[n - 1], names):
+            if n in counts and head_has_call(lines[n - 1]):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []
