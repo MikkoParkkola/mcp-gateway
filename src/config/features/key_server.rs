@@ -171,7 +171,7 @@ impl KeyServerConfig {
                     "key_server.oidc[{idx}] (issuer '{}') must declare at least one non-empty \
                      audience; an empty `audiences` list accepts a token minted for any client \
                      (audience-confusion, MIK-6784)",
-                    provider.issuer
+                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
                 )));
             }
             // MIK-7704: discovery and keys come from these URLs; over cleartext
@@ -180,7 +180,7 @@ impl KeyServerConfig {
                 return Err(Error::ConfigValidation(format!(
                     "key_server.oidc[{idx}] issuer '{}' is non-HTTPS and off this machine; \
                      use https://, or http:// only to a loopback host",
-                    provider.issuer
+                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
                 )));
             }
             for (field, url) in [
