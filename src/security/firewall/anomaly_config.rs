@@ -50,6 +50,11 @@ impl FirewallConfig {
     }
 }
 
+const KEYLESS_HTTP: &str = "security.firewall.anomaly_detection is on but auth.enabled is off, \
+    and no client certificate, agent token or identity header can name a caller either: every \
+    HTTP call without a session would be refused unscored. Turn auth.enabled on, or \
+    anomaly_detection off";
+
 /// Refuse an HTTP start where anomaly detection is on and no caller can carry
 /// a caller key (MIK-7215.CONTROL.5, gap G5).
 ///
@@ -57,12 +62,20 @@ impl FirewallConfig {
 /// or a trusted identity header. With all four off every HTTP caller's key is
 /// empty, and the detector refuses each call it cannot attribute, so the
 /// gateway would start and then refuse every meta call that has no session.
-/// Stdio is not checked: its operator identity is a key.
+/// Stdio is not checked: it serves the one local operator.
 ///
 /// # Errors
 ///
 /// A message naming `anomaly_detection` and `auth.enabled`.
-pub(crate) fn refuse_keyless_http_anomaly(_config: &crate::config::Config) -> Result<(), String> {
+pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Result<(), String> {
+    let keyed = config.auth.enabled
+        || config.mtls.enabled
+        || config.agent_auth.enabled
+        || config.security.caller_identity.mode
+            != crate::security::caller_identity::CallerIdentityMode::Off;
+    if config.security.firewall.anomaly_detection && !keyed {
+        return Err(KEYLESS_HTTP.to_owned());
+    }
     Ok(())
 }
 
