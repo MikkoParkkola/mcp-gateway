@@ -62,7 +62,10 @@ impl DirectCall {
             request_hash: sha256_of(params),
             otel_trace_id,
             who: AuditWho::from_request(client, grant_subject),
-            arguments: params.get("arguments").cloned().unwrap_or(Value::Null),
+            // The firewall's own fallback (`handle_backend_call`): a call with
+            // no `arguments` member is scanned over `params`, so attribute it
+            // the same way (#2523).
+            arguments: params.get("arguments").unwrap_or(params).clone(),
             request_id: request
                 .get("id")
                 .and_then(|id| serde_json::from_value(id.clone()).ok()),

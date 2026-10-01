@@ -1,4 +1,4 @@
-sha256: e2ee9c373f487c60bb4f7d100db1766ef7ee65e335c1da0d32e32c6701917c03
+sha256: b136673f56286d0bbb20a0e8aabc4fe84299b231fe5bb481fa2f44e6bce12a85
 fulcrum: "1.0"
 name: trawl_extract
 description: Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign.
@@ -58,6 +58,7 @@ providers:
         {% if wait %}--wait {{ wait }}{% endif %}
 
 metadata:
+  read_only: true
   cost_tier: 1
   rate_limit: 60
   timeout: 60s

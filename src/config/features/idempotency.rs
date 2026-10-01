@@ -42,3 +42,28 @@ impl IdempotencyConfig {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod idempotency_config_tests {
+    use super::*;
+
+    fn listed() -> IdempotencyConfig {
+        IdempotencyConfig {
+            read_only_tools: vec![IdempotencyReadOnlyTool {
+                server: "files".into(),
+                tool: "read_file".into(),
+            }],
+        }
+    }
+
+    /// MIK-7216.IDEM.1 — admission's read-only check for a backend tool is
+    /// this operator list alone; backend annotations are never consulted.
+    #[test]
+    fn only_an_operator_listed_pair_is_read_only_for_admission() {
+        let config = listed();
+        assert!(config.is_read_only("files", "read_file"));
+        assert!(!config.is_read_only("files", "get_and_increment"));
+        assert!(!config.is_read_only("other", "read_file"));
+        assert!(!IdempotencyConfig::default().is_read_only("files", "read_file"));
+    }
+}
