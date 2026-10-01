@@ -223,3 +223,43 @@ async fn a_tasks_arm_is_its_callers_arm() {
         "the task's arm is not its caller's: {settled}"
     );
 }
+
+/// A resume renews its caller's reclaim deadline, as a direct call does: a
+/// task parked past the idle sweep would otherwise write hint state under a
+/// key nothing tracks any more.
+#[tokio::test]
+async fn a_resume_renews_its_callers_reclaim_deadline() {
+    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (mut state, _store) = fixture_state(&auth()).await;
+    let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+    Arc::get_mut(&mut state)
+        .expect("state is uniquely owned here")
+        .session_lifecycle = Some(Arc::clone(&lifecycle));
+    register(&state, BACKEND, &mock);
+    let created = post(
+        &state,
+        "key-a",
+        declaring_elicitation(task_at(1, "g4-task-renew", BACKEND)),
+    )
+    .await;
+    let task = task_id(&created);
+    wait_input_required(&state, &task).await;
+    // The idle sweep reclaims the key while the task waits for input.
+    lifecycle.reap(u64::MAX);
+    assert_eq!(lifecycle.tracked_count(), 0, "the sweep reclaimed the key");
+    let acked = post(
+        &state,
+        "key-a",
+        update(2, &task, json!({ "confirm": answer() })),
+    )
+    .await;
+    assert!(
+        acked.get("error").is_none(),
+        "the answer is accepted: {acked}"
+    );
+    assert_eq!(
+        lifecycle.tracked_count(),
+        1,
+        "the resume did not renew its caller's deadline"
+    );
+}
