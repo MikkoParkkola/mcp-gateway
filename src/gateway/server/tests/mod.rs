@@ -55,5 +55,8 @@ mod owner1_stdio_management;
 mod owner1_stdio_reload;
 mod owner4_stdio_policy;
 
+// MIK-7272.LIFE.1 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I3).
+mod life1_stdio_cancel;
+
 // #2480: a stdio idempotent replay writes its invocation record.
 mod stdio_replay_audit;
