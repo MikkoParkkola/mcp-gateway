@@ -633,8 +633,10 @@ mod deadline_tests {
             payload.expires_at = expires_at;
             state.keyring().mint(&payload).expect("seals")
         };
-        let due = round_deadline(state.keyring(), Some(&seal(now + MARGIN)), now);
-        assert!(matches!(due, Err(ContinuationError::Expired)), "{due:?}");
+        for inside in [now + MARGIN, now + MARGIN - 1] {
+            let due = round_deadline(state.keyring(), Some(&seal(inside)), now);
+            assert!(matches!(due, Err(ContinuationError::Expired)), "{due:?}");
+        }
         // Positive control: one second more room parks at expiry less margin.
         let room = round_deadline(state.keyring(), Some(&seal(now + MARGIN + 1)), now);
         assert_eq!(room.ok(), Some(Some(now + 1)));

@@ -112,6 +112,7 @@ async fn provide_input_refuses_answers_past_the_record_cap_and_keeps_the_round()
     let (state, _store) = state_with(&mock).await;
     let owner = alice();
     let id = parked(&state, "guards-b").await;
+    let revision = state.tasks.get(&owner, &id).expect("parked").revision;
     let big = "x".repeat(600 * 1024);
     let oversized = answers(json!({ "confirm": { "action": "accept", "content": { "v": big } } }));
     let outcome = state
@@ -123,16 +124,46 @@ async fn provide_input_refuses_answers_past_the_record_cap_and_keeps_the_round()
         status_of(&get_task(&state, "key-a", &id).await),
         "input_required"
     );
+    std::assert_eq!(
+        state.tasks.get(&owner, &id).expect("parked").revision,
+        revision,
+        "the refusal wrote nothing"
+    );
     std::assert_eq!(mock.calls(), 1, "nothing resumed");
+
+    // Positive control: bounded answers are then accepted and the call resumes.
+    let acked = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(acked.get("error").is_none(), "{acked}");
+    assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id).await);
 }
 
 /// Mutant: an update on a store that cannot be read is reported as accepted
 /// or as absent.
 #[tokio::test]
 async fn provide_input_on_a_closed_store_is_unavailable() {
-    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let mock = MockBackend::answering(Answer::Sequence(vec![
+        ask("confirm", STATE_1),
+        done(),
+        ask("confirm", STATE_1),
+        done(),
+    ]));
     let (state, _store) = state_with(&mock).await;
     let owner = alice();
+    // Positive control: before the shutdown the same kind of request is accepted.
+    let first = parked(&state, "guards-c0").await;
+    let acked = post(
+        &state,
+        "key-a",
+        update(2, &first, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(acked.get("error").is_none(), "{acked}");
+    assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &first).await);
     let id = parked(&state, "guards-c").await;
     state.tasks.shutdown().await.expect("custody released");
     let outcome = state
