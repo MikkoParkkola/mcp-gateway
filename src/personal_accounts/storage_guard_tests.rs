@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt as _;
 
 use super::{AccountError, create_directory, private_directory, validate_path};
 
-/// A component the filesystem cannot even look up (longer than NAME_MAX).
+/// A component the filesystem cannot even look up (longer than `NAME_MAX`).
 fn unlookable(root: &std::path::Path) -> std::path::PathBuf {
     root.join("n".repeat(300))
 }
