@@ -367,7 +367,8 @@ impl MetaMcp {
         let envelope = match self.continuation.keyring().mint(&payload) {
             Ok(envelope) => envelope,
             Err(error) => {
-                warn!(tool = request.tool_name, %error, "Confirmation grant mint refused");
+                let tool = request.tool_name;
+                warn!(tool, %error, "Confirmation grant mint refused");
                 return refuse(
                     request,
                     "mint_refused",
@@ -414,7 +415,8 @@ impl MetaMcp {
         let payload = match self.continuation.keyring().open(token, now) {
             Ok(payload) => payload,
             Err(error) => {
-                warn!(tool = request.tool_name, %error, "Confirmation grant refused");
+                let tool = request.tool_name;
+                warn!(tool, %error, "Confirmation grant refused");
                 return refuse_grant(request, "not_authentic");
             }
         };

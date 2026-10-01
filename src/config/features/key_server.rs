@@ -171,7 +171,7 @@ impl KeyServerConfig {
                     "key_server.oidc[{idx}] (issuer '{}') must declare at least one non-empty \
                      audience; an empty `audiences` list accepts a token minted for any client \
                      (audience-confusion, MIK-6784)",
-                    provider.issuer
+                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
                 )));
             }
             // MIK-7704: discovery and keys come from these URLs; over cleartext
@@ -180,7 +180,7 @@ impl KeyServerConfig {
                 return Err(Error::ConfigValidation(format!(
                     "key_server.oidc[{idx}] issuer '{}' is non-HTTPS and off this machine; \
                      use https://, or http:// only to a loopback host",
-                    provider.issuer
+                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
                 )));
             }
             for (field, url) in [
@@ -478,6 +478,25 @@ mod tests {
             p.jwks_uri = Some("http://127.0.0.1:39400/.well-known/jwks.json".into());
             let cfg = enabled_with(vec![p]);
             assert!(cfg.validate().is_ok(), "{issuer}: {:?}", cfg.validate());
+        }
+    }
+
+    // An issuer may carry userinfo, a tenant path or a query; a refusal is
+    // printed on startup and pasted into support threads, so it echoes the
+    // origin only (MIK-7221).
+    #[test]
+    fn issuer_refusals_echo_only_the_origin() {
+        let cleartext = provider("http://user:pw@idp.example/tenant?k=secret", vec!["a"]);
+        let no_audience = provider("https://user:pw@idp.example/tenant?k=secret", vec![]);
+        for p in [cleartext, no_audience] {
+            let message = refusal(&enabled_with(vec![p]));
+            assert!(
+                message.contains("://idp.example"),
+                "names the origin: {message}"
+            );
+            for leaked in ["user", "pw", "tenant", "secret"] {
+                assert!(!message.contains(leaked), "leaked {leaked:?}: {message}");
+            }
         }
     }
 
