@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index 91c3523be..9dd3c7715 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -499,9 +499,6 @@ impl Shared {
+         // Bounded before anything is read or written: an over-long handle is
+         // refused rather than persisted or truncated, and the row stays
+         // unrecoverable — which is the honest state for a handle we do not hold.
+-        if upstream.handle.len() > MAX_UPSTREAM_HANDLE_BYTES {
+-            return Err(StoreError::Capacity);
+-        }
+         let _order = self.order();
+         let (task, mut record) = {
+             let state = self.state();

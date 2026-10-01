@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index 91c3523be..2897e0b3d 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -260,9 +260,6 @@ impl TaskStore {
+         id: &str,
+     ) -> Result<(Option<UpstreamRecord>, u64, TaskStatus), StoreError> {
+         let state = self.0.state();
+-        if !state.ready {
+-            return Err(StoreError::Unavailable);
+-        }
+         let entry = owned(&state, owner, id)?;
+         let descriptor = entry
+             .record

@@ -1,0 +1,17 @@
+diff --git a/src/gateway/task_service/store_targets.rs b/src/gateway/task_service/store_targets.rs
+index d7608e5b8..0828dd413 100644
+--- a/src/gateway/task_service/store_targets.rs
++++ b/src/gateway/task_service/store_targets.rs
+@@ -107,12 +107,6 @@ impl Shared {
+             if entry.record.revision != expected_revision {
+                 return Err(StoreError::RevisionConflict);
+             }
+-            if matches!(
+-                entry.task.status(),
+-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+-            ) {
+-                return Err(StoreError::InvalidTransition);
+-            }
+             (entry.task.clone(), entry.record.clone())
+         };
+         for target in targets {

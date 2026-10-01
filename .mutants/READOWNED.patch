@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store_input.rs b/src/gateway/task_service/store_input.rs
+index 39c698f34..4f27f4862 100644
+--- a/src/gateway/task_service/store_input.rs
++++ b/src/gateway/task_service/store_input.rs
+@@ -260,9 +260,6 @@ impl Shared {
+     /// The owner-scoped row, cloned under the ordering lock the caller holds.
+     fn read_owned(&self, owner: &str, id: &str) -> Result<(Task, Record), StoreError> {
+         let state = self.state();
+-        if !state.ready {
+-            return Err(StoreError::Unavailable);
+-        }
+         let entry = owned(&state, owner, id)?;
+         Ok((entry.task.clone(), entry.record.clone()))
+     }

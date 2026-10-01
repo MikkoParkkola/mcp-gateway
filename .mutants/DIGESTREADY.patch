@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index 91c3523be..149cca280 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -345,9 +345,6 @@ impl TaskStore {
+     /// to the digest the record itself was admitted under.
+     pub(crate) fn operation_digest_of(&self, owner: &str, id: &str) -> Option<String> {
+         let state = self.0.state();
+-        if !state.ready {
+-            return None;
+-        }
+         owned(&state, owner, id)
+             .ok()
+             .map(|entry| entry.record.admission.operation_digest.clone())

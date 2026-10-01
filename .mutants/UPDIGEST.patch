@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index 91c3523be..7738f1cec 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -521,9 +521,6 @@ impl Shared {
+             (entry.task.clone(), entry.record.clone())
+         };
+         // The descriptor must name the operation this record was admitted for.
+-        if upstream.operation_digest != record.admission.operation_digest {
+-            return Err(StoreError::InvalidTransition);
+-        }
+         record.upstream = Some(upstream);
+         record.version = record.version.max(UPSTREAM_VERSION);
+         let bytes = serialize(&record)?;

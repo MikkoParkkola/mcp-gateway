@@ -1,0 +1,12 @@
+head_sha	9712535479bb8fac918d58a44cfed039a29426ca
+# mutants for #25711
+UPREV	linux	UPREV.patch	--lib gateway::task_service::store_tests::adapter_marker::boundary::upstream_01_a_descriptor_is_attached_only_to_the_owners_live_matching_row -- --exact
+UPDIGEST	linux	UPDIGEST.patch	--lib gateway::task_service::store_tests::adapter_marker::boundary::upstream_01_a_descriptor_is_attached_only_to_the_owners_live_matching_row -- --exact
+UPHANDLE	linux	UPHANDLE.patch	--lib gateway::task_service::store_tests::adapter_marker::boundary::upstream_01_a_descriptor_is_attached_only_to_the_owners_live_matching_row -- --exact
+DIGESTREADY	linux	DIGESTREADY.patch	--lib gateway::task_service::store_tests::adapter_marker::boundary::closed_01_a_closed_store_answers_nothing_about_a_row_it_held -- --exact
+UPOFREADY	linux	UPOFREADY.patch	--lib gateway::task_service::store_tests::adapter_marker::boundary::closed_01_a_closed_store_answers_nothing_about_a_row_it_held -- --exact
+TGTTERMINAL	linux	TGTTERMINAL.patch	--lib gateway::task_service::store_tests::targets::add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_closed_store -- --exact
+TGTREV	linux	TGTREV.patch	--lib gateway::task_service::store_tests::targets::add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_closed_store -- --exact
+TGTREADY	linux	TGTREADY.patch	--lib gateway::task_service::store_tests::targets::add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_closed_store -- --exact
+READOWNED	linux	READOWNED.patch	--lib gateway::task_service::store_tests::input_round::a_closed_store_and_a_moved_revision_refuse_every_input_round_write -- --exact
+EXPIREDREADY	linux	EXPIREDREADY.patch	--lib gateway::task_service::store_tests::input_round::a_closed_store_and_a_moved_revision_refuse_every_input_round_write -- --exact

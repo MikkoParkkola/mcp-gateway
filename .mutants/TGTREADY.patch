@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store_targets.rs b/src/gateway/task_service/store_targets.rs
+index d7608e5b8..3b0063b59 100644
+--- a/src/gateway/task_service/store_targets.rs
++++ b/src/gateway/task_service/store_targets.rs
+@@ -100,9 +100,6 @@ impl Shared {
+         let _order = self.order();
+         let (task, mut record): (Task, Record) = {
+             let state = self.state();
+-            if !state.ready {
+-                return Err(StoreError::Unavailable);
+-            }
+             let entry = owned(&state, owner, id)?;
+             if entry.record.revision != expected_revision {
+                 return Err(StoreError::RevisionConflict);

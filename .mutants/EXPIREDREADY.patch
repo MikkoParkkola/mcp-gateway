@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store_input.rs b/src/gateway/task_service/store_input.rs
+index 39c698f34..d75ba3767 100644
+--- a/src/gateway/task_service/store_input.rs
++++ b/src/gateway/task_service/store_input.rs
+@@ -237,9 +237,6 @@ impl TaskStore {
+         now: DateTime<Utc>,
+     ) -> Vec<(String, u64, String, RoundClosed)> {
+         let state = self.0.state();
+-        if !state.ready {
+-            return Vec::new();
+-        }
+         state
+             .entries
+             .iter()
