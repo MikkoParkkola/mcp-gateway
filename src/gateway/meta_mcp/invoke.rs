@@ -210,6 +210,9 @@ fn apply_capability_projection(
 /// zero-cost outside the experiment.
 fn emit_projection_ab_event(
     session_id: Option<&str>,
+    // The experiment key the arm was drawn from, logged as a fingerprint so a
+    // modern call (no session) can still be joined to its caller.
+    arm_key: &str,
     server: &str,
     tool: &str,
     rec: crate::projection::AbRecord,
@@ -239,7 +242,10 @@ fn emit_projection_ab_event(
         target: "projection_ab",
         // A modern call has no session and logs "none"; its arm is its
         // caller's (G4). A keyless call emits no event at all.
-        session_id = %session_id.map_or_else(|| "none".to_string(), crate::gateway::session_id::session_fp),
+        session_id = %session_id
+            .filter(|sid| !sid.is_empty())
+            .map_or_else(|| "none".to_string(), crate::gateway::session_id::session_fp),
+        caller = %crate::gateway::session_id::session_fp(arm_key),
         server = server,
         tool = tool,
         arm = rec.arm,
@@ -1776,12 +1782,8 @@ impl MetaMcp {
                         "kind" => "idempotency"
                     )
                     .increment(1);
-                    let predictions = self.record_and_predict(
-                        session_id,
-                        caller.experiment_key(session_id),
-                        &tool_key,
-                        caller.scope(),
-                    );
+                    let predictions =
+                        self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
                     return Ok(GuardedValue::from_cache(cached).augment(|v| {
                         let v =
                             augment_with_trace(augment_with_predictions(v, predictions), trace_id);
@@ -1896,12 +1898,8 @@ impl MetaMcp {
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.complete(&cached);
             }
-            let predictions = self.record_and_predict(
-                session_id,
-                caller.experiment_key(session_id),
-                &tool_key,
-                caller.scope(),
-            );
+            let predictions =
+                self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
             return Ok(GuardedValue::from_cache(cached).augment(|v| {
                 let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
                 self.maybe_stamp_provenance(
@@ -2559,12 +2557,7 @@ impl MetaMcp {
             );
         }
 
-        let predictions = self.record_and_predict(
-            session_id,
-            caller.experiment_key(session_id),
-            &tool_key,
-            caller.scope(),
-        );
+        let predictions = self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
 
         // SEP-1862 dynamic promotion: auto-surface this tool in the session's
         // tools/list after a successful invocation so the LLM can call it
@@ -3552,13 +3545,15 @@ impl MetaMcp {
             // A/B telemetry (MIK-5877, PROJ-ROLLOUT.3): one structured event per
             // eligible invocation so the experiment is measurable. No-op outside
             // `experimental` mode / spec-less tools.
-            if let Some(rec) = crate::projection::ab_classification(
-                self.projection_mode,
-                arm_key,
-                want_full,
-                spec_present,
-            ) {
-                emit_projection_ab_event(session_id, server, tool, rec, &final_result);
+            if let Some(key) = arm_key
+                && let Some(rec) = crate::projection::ab_classification(
+                    self.projection_mode,
+                    Some(key),
+                    want_full,
+                    spec_present,
+                )
+            {
+                emit_projection_ab_event(session_id, key, server, tool, rec, &final_result);
             }
             return Ok(final_result);
         }

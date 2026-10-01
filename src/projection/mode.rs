@@ -149,7 +149,7 @@ pub struct AbRecord {
 #[must_use]
 pub fn ab_classification(
     mode: ProjectionMode,
-    session_id: Option<&str>,
+    key: Option<&str>,
     want_full: bool,
     spec_present: bool,
 ) -> Option<AbRecord> {
@@ -159,7 +159,7 @@ pub fn ab_classification(
     if mode != ProjectionMode::Experimental || !spec_present {
         return None;
     }
-    let key = session_id?;
+    let key = key?;
     let decision = projection_decision(mode, Some(key));
     Some(AbRecord {
         arm: decision.arm,
