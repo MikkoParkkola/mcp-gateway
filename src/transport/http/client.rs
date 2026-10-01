@@ -9,11 +9,11 @@ use std::time::Duration;
 use reqwest::Client;
 use url::Url;
 
-use super::{RedirectDecision, evaluate_redirect};
+use super::{RedirectDecision, evaluate_redirect_for};
 use crate::security::ssrf::DestinationPolicy;
 use crate::{Error, Result};
 
-/// A pooled client whose every redirect passes [`evaluate_redirect`].
+/// A pooled client whose every redirect passes [`evaluate_redirect_for`].
 ///
 /// Under [`DestinationPolicy::Public`] it starts from the pinned builder:
 /// each name is resolved once and checked, and `HTTP(S)_PROXY` from the
@@ -26,7 +26,9 @@ pub(super) fn build(
 ) -> Result<Client> {
     let builder = match destination {
         DestinationPolicy::Configured => Client::builder(),
-        DestinationPolicy::Public => crate::security::ssrf::pinned_client_builder(),
+        policy @ (DestinationPolicy::Public | DestinationPolicy::Private) => {
+            crate::security::ssrf::pinned_client_builder_for(policy)
+        }
     };
     builder
         .timeout(timeout)
@@ -35,7 +37,8 @@ pub(super) fn build(
         .tcp_keepalive(Duration::from_secs(30))
         .tcp_nodelay(true)
         .redirect(reqwest::redirect::Policy::custom(
-            move |attempt| match evaluate_redirect(
+            move |attempt| match evaluate_redirect_for(
+                destination,
                 &base_origin,
                 attempt.url(),
                 attempt.previous().len(),

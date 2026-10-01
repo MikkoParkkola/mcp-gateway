@@ -430,7 +430,7 @@ src/transport/http/client.rs	build	1	standard	borderline	build	Installs the redi
 src/transport/http/extra_headers.rs	merge_extra_headers	1	critical	borderline	merge_extra_headers	Withholds the static credential when the caller's credential value is invalid (#2292).
 src/transport/http/mod.rs	build_mcp_headers	1	critical	c	HttpTransport::build_mcp_headers	Picks MCP-Session-Id from the caller's identity bucket only.
 src/transport/http/mod.rs	establish_sse_connection	1	critical	borderline	HttpTransport::establish_sse_connection	64 KiB handshake cap (defence-in-depth against a misbehaving backend).
-src/transport/http/mod.rs	evaluate_redirect	1	critical	b,d	evaluate_redirect	Redirect hop cap, SSRF refusal and cross-origin refusal.
+src/transport/http/redirect_policy.rs	evaluate_redirect_for	1	critical	b,d	evaluate_redirect_for	Redirect hop cap, SSRF refusal, cross-origin refusal and the private-backend same-origin exemption.
 src/transport/http/mod.rs	get_oauth_token	1	critical	d	HttpTransport::get_oauth_token	Checks the message URL is secure before releasing the OAuth token.
 src/transport/http/mod.rs	require_secure_oauth_target	1	critical	d	require_secure_oauth_target	Refuses to send an OAuth bearer over cleartext to a non-loopback host.
 src/transport/http/mod.rs	resolve_message_url	1	critical	b,d	HttpTransport::resolve_message_url	Refuses an SSE message endpoint that resolves cross-origin (credential-exfiltration guard).

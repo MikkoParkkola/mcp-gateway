@@ -433,9 +433,10 @@ pub struct ToolCost {
 pub struct CostTracker {
     per_session: DashMap<String, Arc<SessionCost>>,
     per_key: DashMap<String, Arc<KeyCost>>,
-    /// Totals of calls with no session: `(calls, tokens, micro-USD)`. Counted
-    /// in the admin aggregate only, never reported as anyone's session, and
-    /// kept as counters because no session end would ever free records.
+    /// Totals of calls with no session, and of sessions since removed:
+    /// `(calls, tokens, micro-USD)`. Counted in the admin aggregate only, never
+    /// reported as anyone's session, and kept as counters because no session
+    /// end would ever free records.
     sessionless: [AtomicU64; 3],
     /// Default budget applied to keys with no explicit config.
     default_budget: BudgetConfig,
@@ -608,9 +609,21 @@ impl CostTracker {
         }
     }
 
-    /// Remove a session (called when the MCP session is terminated).
+    /// Remove a session (called when the MCP session is terminated). Its totals
+    /// move into the aggregate-only counters, so ending a session never lowers
+    /// the operator's usage total.
     pub fn remove_session(&self, session_id: &str) {
-        self.per_session.remove(session_id);
+        let Some((_, session)) = self.per_session.remove(session_id) else {
+            return;
+        };
+        let ended = [
+            &session.call_count,
+            &session.total_tokens,
+            &session.total_cost_micro_usd,
+        ];
+        for (total, add) in self.sessionless.iter().zip(ended) {
+            total.fetch_add(add.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
     }
 }
 

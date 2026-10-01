@@ -14,7 +14,7 @@ use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
-use crate::security::{validate_tool_name, validate_url_not_ssrf};
+use crate::security::validate_tool_name;
 
 pub(crate) fn backend_tool_targets_for_call(
     meta_mcp: &MetaMcp,
@@ -339,7 +339,9 @@ pub(super) fn decide_tool_target<'a>(
         && let Some(backend) = state.backends.get(target.server)
         && let Some(url) = backend.transport_url()
     {
-        verdict = validate_url_not_ssrf(url)
+        verdict = backend
+            .destination()
+            .check_configured_url(url)
             .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()));
     }
 

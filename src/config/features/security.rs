@@ -593,6 +593,9 @@ pub struct SecurityConfig {
     /// See [`crate::security::posture`] for what `hardened` enforces.
     #[serde(default)]
     pub posture: crate::security::posture::SecurityPosture,
+    /// Settings read only under `posture: hardened`. Restart-only.
+    #[serde(default)]
+    pub hardened: crate::security::posture::HardenedConfig,
     /// Enable input sanitization (null byte rejection, control char stripping, NFC).
     pub sanitize_input: bool,
     /// Enable SSRF protection for outbound URLs.
@@ -682,6 +685,7 @@ impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
             posture: crate::security::posture::SecurityPosture::default(),
+            hardened: crate::security::posture::HardenedConfig::default(),
             sanitize_input: true,
             ssrf_protection: true,
             trust_configured_backends: default_trust_configured_backends(),

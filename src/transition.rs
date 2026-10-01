@@ -77,6 +77,12 @@ impl TransitionTracker {
         }
     }
 
+    /// Forget a session's last tool (called on session disconnect). The
+    /// learned transitions are global and stay.
+    pub fn remove_session(&self, session_id: &str) {
+        self.last_per_session.remove(session_id);
+    }
+
     /// Record a tool invocation for a session.
     ///
     /// If the session has a previous tool, increments the `previous → tool`
