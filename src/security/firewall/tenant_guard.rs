@@ -84,8 +84,19 @@ impl Default for TenantGuardConfig {
     }
 }
 
-/// Largest `content[].text` block [`TenantGuard::response_tenants`] parses.
+/// Largest JSON-carrying string [`TenantGuard::response_tenants`] parses.
 const MAX_PARSED_TEXT_BYTES: usize = 1024 * 1024;
+
+/// How many nested JSON-in-a-string layers the response scan decodes before
+/// it reports the rest unread (MIN.1 gap 3).
+const MAX_DECODE_DEPTH: usize = 3;
+
+/// What one response scan found.
+#[derive(Default)]
+struct ResponseScan {
+    tenants: Vec<String>,
+    uninspected: bool,
+}
 
 /// Per-principal cross-tenant reach limiter.
 pub struct TenantGuard {
@@ -146,26 +157,11 @@ impl TenantGuard {
         tenants.into_iter().collect()
     }
 
-    /// The tenants a tool result names: the request walk over the result, plus
-    /// every `content[].text` block that parses as JSON, which is how most
-    /// backends return rows. Pure, like [`Self::request_tenants`].
+    /// The tenants a tool result names: the guard's walk over the result, also
+    /// into every JSON document a string carries (`content[].text`, a string
+    /// field, a double-encoded text). Pure, like [`Self::request_tenants`].
     pub(crate) fn response_tenants(&self, result: &Value) -> BTreeSet<String> {
-        if self.config.arg_keys.is_empty() {
-            return BTreeSet::new();
-        }
-        let mut tenants = Vec::new();
-        self.collect(result, &mut tenants);
-        for text in Self::texts(result) {
-            // A text block over 1 MiB is not parsed (a DoS bound): the record
-            // says so through `response_uninspected` instead of naming none.
-            if text.len() > MAX_PARSED_TEXT_BYTES {
-                continue;
-            }
-            if let Ok(parsed @ (Value::Object(_) | Value::Array(_))) = serde_json::from_str(text) {
-                self.collect(&parsed, &mut tenants);
-            }
-        }
-        tenants.into_iter().collect()
+        self.scan_response(result).0
     }
 
     /// Whether tenant attribution is configured (`arg_keys` set).
@@ -173,21 +169,71 @@ impl TenantGuard {
         !self.config.arg_keys.is_empty()
     }
 
-    /// MIN.1 gap 2: whether `result` holds a `content[].text` block over the
-    /// parse bound, so [`Self::response_tenants`] could not read its tenants.
+    /// MIN.1 gaps 2 and 3: whether any part of `result` could not be read for
+    /// tenants: a document over the parse bound, one that fails to parse (depth
+    /// limit included), or encoding nested past [`MAX_DECODE_DEPTH`].
     pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
-        !self.config.arg_keys.is_empty()
-            && Self::texts(result).any(|text| text.len() > MAX_PARSED_TEXT_BYTES)
+        self.scan_response(result).1
     }
 
-    /// The `content[].text` blocks of a tool result.
-    fn texts(result: &Value) -> impl Iterator<Item = &str> {
-        result
-            .get("content")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
+    /// One walk: the tenants read, and whether anything was left unread.
+    // ponytail: each public caller rescans; merge into one call if a profile shows it.
+    fn scan_response(&self, result: &Value) -> (BTreeSet<String>, bool) {
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        self.walk_response(result, 0, &mut scan);
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    fn walk_response(&self, value: &Value, decoded: usize, scan: &mut ResponseScan) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if self.config.arg_keys.iter().any(|k| k == key)
+                        && let Some(tenant) = Self::tenant_name(child)
+                    {
+                        scan.tenants.push(tenant);
+                        continue;
+                    }
+                    self.walk_response(child, decoded, scan);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    self.walk_response(item, decoded, scan);
+                }
+            }
+            Value::String(text) => self.decode_response(text, decoded, scan),
+            _ => {}
+        }
+    }
+
+    /// Read the JSON a string carries. Prose is not JSON and holds no keyed
+    /// tenant, so it is skipped. Text that opens like a document (`{`, `[`)
+    /// must parse, or it is unread: fail closed, even for bracket-led prose. A
+    /// quoted text is decoded when it is exactly one JSON string.
+    fn decode_response(&self, text: &str, decoded: usize, scan: &mut ResponseScan) {
+        let opens = text.trim_start().as_bytes().first().copied();
+        let document = matches!(opens, Some(b'{' | b'['));
+        let quoted = opens == Some(b'"');
+        if !document && !quoted {
+            return;
+        }
+        if text.len() > MAX_PARSED_TEXT_BYTES {
+            scan.uninspected = true;
+            return;
+        }
+        let parsed = serde_json::from_str::<Value>(text);
+        if decoded >= MAX_DECODE_DEPTH {
+            scan.uninspected |= document || matches!(parsed, Ok(Value::String(_)));
+            return;
+        }
+        match parsed {
+            Ok(value) => self.walk_response(&value, decoded + 1, scan),
+            Err(_) => scan.uninspected |= document,
+        }
     }
 
     /// Gather every value under a configured tenant key, at any depth.
