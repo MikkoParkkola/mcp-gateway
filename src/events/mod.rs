@@ -38,10 +38,11 @@ pub(crate) struct EventsHub {
     client: client::CallbackClient,
     verify_limit: HostLimiter,
     webhooks: RwLock<Option<Arc<parking_lot::RwLock<WebhookRegistry>>>>,
-    /// Serialises subscribe and unsubscribe, so a cap check and the commit
-    /// it guards cannot be raced past.
-    writes: tokio::sync::Mutex<()>,
 }
+
+/// Distinct callback hosts the verification limiter tracks before it sheds
+/// idle ones; past it, after shedding, a new host is refused.
+const MAX_TRACKED_HOSTS: usize = 10_000;
 
 impl EventsHub {
     /// Open the hub on `store_dir` (already `~`-expanded).
@@ -67,13 +68,24 @@ impl EventsHub {
             client: client::CallbackClient::new(allowed)?,
             verify_limit: governor::RateLimiter::keyed(governor::Quota::per_minute(per_minute)),
             webhooks: RwLock::new(None),
-            writes: tokio::sync::Mutex::new(()),
         }))
     }
 
     /// Attach the webhook registry whose `event:` routes are a source.
     pub(crate) fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {
         *self.webhooks.write() = Some(registry);
+    }
+
+    /// Take one verification token for `host`. The limiter's key set is
+    /// bounded: idle hosts are shed first, then a new host is refused.
+    fn host_admitted(&self, host: &str) -> bool {
+        if self.verify_limit.len() >= MAX_TRACKED_HOSTS {
+            self.verify_limit.retain_recent();
+            if self.verify_limit.len() >= MAX_TRACKED_HOSTS {
+                return false;
+            }
+        }
+        self.verify_limit.check_key(&host.to_owned()).is_ok()
     }
 
     /// Every descriptor any source offers now, sorted by name.

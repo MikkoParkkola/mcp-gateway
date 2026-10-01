@@ -3,6 +3,11 @@
 
 use super::*;
 
+const CAPS: Caps = Caps {
+    per_principal: 100,
+    global: 100,
+};
+
 const TAIL: TailPolicy = TailPolicy {
     ttl: Duration::from_secs(3600),
     max: 3,
@@ -36,11 +41,14 @@ fn records_survive_reopen_and_secrets_stay_out_of_debug() {
     let now = Utc::now();
     let store = Store::open(dir.path(), now, TAIL).expect("open");
     let s = sub("p", "https://h/a", now);
-    store.upsert(s.clone(), true, now).expect("upsert");
+    store
+        .admit(s.clone(), true, CAPS, now, TAIL)
+        .expect("io")
+        .expect("admitted");
     assert!(!format!("{s:?}").contains("whsec_x"));
     drop(store);
     let store = Store::open(dir.path(), now, TAIL).expect("reopen");
-    assert_eq!(store.live_count(Some("p"), now), 1);
+    assert!(store.get(&s.id).is_some());
     assert!(store.is_verified("p", "https://h/a", now, TAIL));
     assert!(
         !store.is_verified("q", "https://h/a", now, TAIL),
@@ -57,7 +65,10 @@ fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
     for (n, url) in urls.iter().enumerate() {
         let at = t0 + chrono::Duration::seconds(i64::try_from(n).expect("small"));
         let s = sub("p", url, at);
-        store.upsert(s.clone(), true, at).expect("upsert");
+        store
+            .admit(s.clone(), true, CAPS, at, TAIL)
+            .expect("io")
+            .expect("admitted");
         store.remove(&s.id, at, TAIL).expect("remove");
     }
     let now = t0 + chrono::Duration::seconds(10);
@@ -80,7 +91,8 @@ fn a_live_subscriptions_verification_is_never_evicted() {
     let now = Utc::now();
     let store = Store::open(dir.path(), now, TAIL).expect("open");
     store
-        .upsert(sub("p", "https://live/xyz", now), true, now)
+        .admit(sub("p", "https://live/xyz", now), true, CAPS, now, TAIL)
+        .expect("io")
         .expect("live");
     for url in [
         "https://h/1",
@@ -89,8 +101,80 @@ fn a_live_subscriptions_verification_is_never_evicted() {
         "https://h/4444",
     ] {
         let s = sub("p", url, now);
-        store.upsert(s.clone(), true, now).expect("upsert");
+        store
+            .admit(s.clone(), true, CAPS, now, TAIL)
+            .expect("io")
+            .expect("admitted");
         store.remove(&s.id, now, TAIL).expect("remove");
     }
     assert!(store.is_verified("p", "https://live/xyz", now, TAIL));
+}
+
+#[test]
+fn caps_are_checked_with_the_commit_and_refresh_is_never_capped() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let caps = Caps {
+        per_principal: 1,
+        global: 2,
+    };
+    let first = sub("p", "https://h/1", now);
+    store
+        .admit(first.clone(), true, caps, now, TAIL)
+        .expect("io")
+        .expect("first");
+    let second = sub("p", "https://h/22", now);
+    assert_eq!(
+        store.admit(second, true, caps, now, TAIL).expect("io"),
+        Err(CapHit::PerPrincipal(1))
+    );
+    store
+        .admit(first, false, caps, now, TAIL)
+        .expect("io")
+        .expect("refresh at the cap");
+    store
+        .admit(sub("q", "https://h/1", now), true, caps, now, TAIL)
+        .expect("io")
+        .expect("q");
+    assert_eq!(
+        store
+            .admit(sub("r", "https://h/1", now), true, caps, now, TAIL)
+            .expect("io"),
+        Err(CapHit::Global(2))
+    );
+}
+
+#[test]
+fn expired_rows_are_swept_on_admission_and_free_their_slot() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let caps = Caps {
+        per_principal: 1,
+        global: 1,
+    };
+    let mut old = sub("p", "https://h/1", now);
+    old.expires_at = Some(now + chrono::Duration::seconds(1));
+    store
+        .admit(old.clone(), true, caps, now, TAIL)
+        .expect("io")
+        .expect("old");
+    let later = now + chrono::Duration::seconds(5);
+    store
+        .admit(sub("p", "https://h/22", later), true, caps, later, TAIL)
+        .expect("io")
+        .expect("the expired row no longer holds the slot");
+    assert!(store.get(&old.id).is_none(), "swept from memory");
+    assert!(
+        !dir.path()
+            .join("subs")
+            .join(format!("{}.json", old.id))
+            .exists(),
+        "and disk"
+    );
+    assert!(
+        store.is_verified("p", "https://h/1", later, TAIL),
+        "its tail began at expiry"
+    );
 }

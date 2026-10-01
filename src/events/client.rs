@@ -67,7 +67,6 @@ impl CallbackClient {
         subscription_id: &str,
         key: &[u8],
     ) -> Result<(), CallbackFailure> {
-        self.check_literal(url)?;
         let challenge =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
         let body = serde_json::to_vec(&serde_json::json!({
@@ -102,6 +101,7 @@ impl CallbackClient {
         keys: &[&[u8]],
         body: Vec<u8>,
     ) -> Result<Vec<u8>, CallbackFailure> {
+        self.check_literal(url)?;
         let timestamp = chrono::Utc::now().timestamp().to_string();
         let signature = sign(keys, webhook_id, &timestamp, &body);
         let mut response = self
@@ -128,10 +128,10 @@ impl CallbackClient {
         }
         let mut read = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|e| classify(&e))? {
-            read.extend_from_slice(&chunk);
-            if read.len() > MAX_READ {
+            if read.len() + chunk.len() > MAX_READ {
                 return Err(CallbackFailure::ChallengeFailed);
             }
+            read.extend_from_slice(&chunk);
         }
         Ok(read)
     }

@@ -39,16 +39,34 @@ impl State {
     }
 
     /// When the pair's verification stopped being held by a live
-    /// subscription: the recorded end, else the latest expiry.
-    fn ended_at(&self, record: &Verified) -> Option<DateTime<Utc>> {
-        record.last_subscription_ended_at.or_else(|| {
-            self.subs
-                .values()
-                .filter(|s| s.principal == record.principal && s.url == record.url)
-                .filter_map(|s| s.expires_at)
-                .max()
-        })
+    /// subscription: the recorded end, else the latest expiry, else the
+    /// opt-in itself (an orphan record ages out from when it was made).
+    fn ended_at(&self, record: &Verified) -> DateTime<Utc> {
+        record
+            .last_subscription_ended_at
+            .or_else(|| {
+                self.subs
+                    .values()
+                    .filter(|s| s.principal == record.principal && s.url == record.url)
+                    .filter_map(|s| s.expires_at)
+                    .max()
+            })
+            .unwrap_or(record.verified_at)
     }
+}
+
+/// Why an admission was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CapHit {
+    PerPrincipal(usize),
+    Global(usize),
+}
+
+/// The subscription caps checked by an admission of a new key.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Caps {
+    pub per_principal: usize,
+    pub global: usize,
 }
 
 /// The store. One per gateway.
@@ -68,22 +86,8 @@ impl Store {
         create_private_dir(&subs_dir)?;
         create_private_dir(&verified_dir)?;
         let mut state = State::default();
-        for (path, sub) in load_records::<Subscription>(&subs_dir) {
-            if sub.live(now) {
-                state.subs.insert(sub.id.clone(), sub);
-            } else {
-                // The pair's tail starts at this expiry, not at the restart.
-                let key = verified_file(&sub.principal, &sub.url);
-                if let Some((_, mut record)) = load_records::<Verified>(&verified_dir)
-                    .into_iter()
-                    .find(|(p, _)| p.file_name().and_then(|n| n.to_str()) == Some(key.as_str()))
-                    && record.last_subscription_ended_at.is_none()
-                {
-                    record.last_subscription_ended_at = sub.expires_at;
-                    write_record(&verified_dir, &key, &record)?;
-                }
-                std::fs::remove_file(path)?;
-            }
+        for (_, sub) in load_records::<Subscription>(&subs_dir) {
+            state.subs.insert(sub.id.clone(), sub);
         }
         for (path, record) in load_records::<Verified>(&verified_dir) {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -95,22 +99,43 @@ impl Store {
             verified_dir,
             state: Mutex::new(state),
         };
-        store.trim_tails(now, tail)?;
+        store.sweep(&mut store.state.lock(), now)?;
+        store.trim_tails(&mut store.state.lock(), now, tail)?;
         Ok(store)
+    }
+
+    /// Remove expired subscriptions. A pair left with no live subscription
+    /// records its latest expiry as the start of its verification tail.
+    fn sweep(&self, state: &mut State, now: DateTime<Utc>) -> std::io::Result<()> {
+        let expired: Vec<Subscription> = state
+            .subs
+            .values()
+            .filter(|s| !s.live(now))
+            .cloned()
+            .collect();
+        for sub in &expired {
+            let key = verified_file(&sub.principal, &sub.url);
+            if !state.pair_live(&sub.principal, &sub.url, now)
+                && let Some(record) = state.verified.get(&key)
+            {
+                let ended = state.ended_at(record);
+                if record.last_subscription_ended_at != Some(ended) {
+                    let mut record = record.clone();
+                    record.last_subscription_ended_at = Some(ended);
+                    write_record(&self.verified_dir, &key, &record)?;
+                    state.verified.insert(key, record);
+                }
+            }
+        }
+        for sub in expired {
+            remove_record(&self.subs_dir, &format!("{}.json", sub.id))?;
+            state.subs.remove(&sub.id);
+        }
+        Ok(())
     }
 
     pub(crate) fn get(&self, id: &str) -> Option<Subscription> {
         self.state.lock().subs.get(id).cloned()
-    }
-
-    /// Live subscriptions, all or one principal's.
-    pub(crate) fn live_count(&self, principal: Option<&str>, now: DateTime<Utc>) -> usize {
-        self.state
-            .lock()
-            .subs
-            .values()
-            .filter(|s| s.live(now) && principal.is_none_or(|p| s.principal == p))
-            .count()
     }
 
     /// Whether `(principal, url)` holds a usable opt-in: held by a live
@@ -130,18 +155,36 @@ impl Store {
             return true;
         }
         let ttl = chrono::Duration::from_std(tail.ttl).unwrap_or(chrono::Duration::MAX);
-        state.ended_at(record).is_none_or(|ended| now - ended < ttl)
+        now - state.ended_at(record) < ttl
     }
 
-    /// Commit `sub`, and the pair's verification as held from now on.
+    /// Cap check and commit as one step under the store lock, after
+    /// sweeping what has expired: two admissions cannot both pass a cap that
+    /// only one fits under. A refresh of a live key is never capped.
     /// `verified_now` stamps a fresh opt-in.
-    pub(crate) fn upsert(
+    pub(crate) fn admit(
         &self,
         sub: Subscription,
         verified_now: bool,
+        caps: Caps,
         now: DateTime<Utc>,
-    ) -> std::io::Result<()> {
+        tail: TailPolicy,
+    ) -> std::io::Result<Result<(), CapHit>> {
         let mut state = self.state.lock();
+        self.sweep(&mut state, now)?;
+        if !state.subs.contains_key(&sub.id) {
+            let mine = state
+                .subs
+                .values()
+                .filter(|s| s.principal == sub.principal)
+                .count();
+            if mine >= caps.per_principal {
+                return Ok(Err(CapHit::PerPrincipal(caps.per_principal)));
+            }
+            if state.subs.len() >= caps.global {
+                return Ok(Err(CapHit::Global(caps.global)));
+            }
+        }
         let key = verified_file(&sub.principal, &sub.url);
         let record = match state.verified.get(&key) {
             Some(existing) if !verified_now => Verified {
@@ -156,10 +199,34 @@ impl Store {
                 last_subscription_ended_at: None,
             },
         };
-        write_record(&self.verified_dir, &key, &record)?;
-        state.verified.insert(key, record);
         write_record(&self.subs_dir, &format!("{}.json", sub.id), &sub)?;
         state.subs.insert(sub.id.clone(), sub);
+        write_record(&self.verified_dir, &key, &record)?;
+        state.verified.insert(key, record);
+        self.trim_tails(&mut state, now, tail)?;
+        Ok(Ok(()))
+    }
+
+    /// Whether a new key for `principal` would pass the caps now. Advisory:
+    /// lets subscribe refuse before any outbound verification; [`Self::admit`]
+    /// decides.
+    pub(crate) fn would_admit(
+        &self,
+        principal: &str,
+        caps: Caps,
+        now: DateTime<Utc>,
+    ) -> Result<(), CapHit> {
+        let state = self.state.lock();
+        let live = state.subs.values().filter(|s| s.live(now));
+        let (mine, all) = live.fold((0, 0), |(m, a), s| {
+            (m + usize::from(s.principal == principal), a + 1)
+        });
+        if mine >= caps.per_principal {
+            return Err(CapHit::PerPrincipal(caps.per_principal));
+        }
+        if all >= caps.global {
+            return Err(CapHit::Global(caps.global));
+        }
         Ok(())
     }
 
@@ -171,38 +238,40 @@ impl Store {
         now: DateTime<Utc>,
         tail: TailPolicy,
     ) -> std::io::Result<bool> {
-        {
-            let mut state = self.state.lock();
-            let Some(sub) = state.subs.get(id).cloned() else {
-                return Ok(false);
-            };
-            remove_record(&self.subs_dir, &format!("{id}.json"))?;
-            state.subs.remove(id);
-            if !state.pair_live(&sub.principal, &sub.url, now) {
-                let key = verified_file(&sub.principal, &sub.url);
-                if let Some(mut record) = state.verified.get(&key).cloned() {
-                    record.last_subscription_ended_at = Some(now);
-                    write_record(&self.verified_dir, &key, &record)?;
-                    state.verified.insert(key, record);
-                }
+        let mut state = self.state.lock();
+        let Some(sub) = state.subs.get(id).cloned() else {
+            return Ok(false);
+        };
+        remove_record(&self.subs_dir, &format!("{id}.json"))?;
+        state.subs.remove(id);
+        if !state.pair_live(&sub.principal, &sub.url, now) {
+            let key = verified_file(&sub.principal, &sub.url);
+            if let Some(mut record) = state.verified.get(&key).cloned() {
+                record.last_subscription_ended_at = Some(now);
+                write_record(&self.verified_dir, &key, &record)?;
+                state.verified.insert(key, record);
             }
         }
-        self.trim_tails(now, tail)?;
+        self.trim_tails(&mut state, now, tail)?;
         Ok(true)
     }
 
     /// Drop tail records past their TTL, then evict the oldest beyond the
     /// per-principal and global caps. A record held by a live subscription
     /// is never a tail and never evicted.
-    fn trim_tails(&self, now: DateTime<Utc>, tail: TailPolicy) -> std::io::Result<()> {
-        let mut state = self.state.lock();
+    fn trim_tails(
+        &self,
+        state: &mut State,
+        now: DateTime<Utc>,
+        tail: TailPolicy,
+    ) -> std::io::Result<()> {
         let ttl = chrono::Duration::from_std(tail.ttl).unwrap_or(chrono::Duration::MAX);
         let mut tails: Vec<(DateTime<Utc>, String, String)> = state
             .verified
             .iter()
             .filter(|(_, r)| !state.pair_live(&r.principal, &r.url, now))
             .map(|(key, r)| {
-                let ended = state.ended_at(r).unwrap_or(r.verified_at);
+                let ended = state.ended_at(r);
                 (ended, key.clone(), r.principal.clone())
             })
             .collect();

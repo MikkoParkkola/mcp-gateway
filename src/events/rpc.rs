@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::EventsHub;
 use super::records::Subscription;
+use super::store::{CapHit, Caps};
 use super::types::{EventDescriptor, RpcError, Visibility};
 
 /// Who is calling, as the transport resolved it.
@@ -99,6 +100,15 @@ pub(crate) fn subscription_id(principal: &str, url: &str, name: &str, arguments:
     format!("sub_{}", &digest[..32])
 }
 
+/// The `-32013` answer for a cap an admission hit.
+fn cap_refusal(hit: CapHit) -> RpcError {
+    match hit {
+        CapHit::PerPrincipal(max) | CapHit::Global(max) => {
+            RpcError::exhausted("subscriptions", Some(max))
+        }
+    }
+}
+
 /// A callback URL: absolute `https` with a host.
 fn callback_url(raw: Option<&Value>) -> Result<url::Url, RpcError> {
     raw.and_then(Value::as_str)
@@ -179,9 +189,14 @@ impl EventsHub {
         let now = Utc::now();
         let expires_at = granted_expiry(self, &params, now)?;
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
-        let existing = self.store.get(&id).filter(|s| s.live(now));
-        if existing.is_none() {
-            self.check_caps(&principal, now)?;
+        let caps = Caps {
+            per_principal: self.config.max_subscriptions_per_principal,
+            global: self.config.max_subscriptions,
+        };
+        if self.store.get(&id).filter(|s| s.live(now)).is_none() {
+            self.store
+                .would_admit(&principal, caps, now)
+                .map_err(cap_refusal)?;
         }
 
         let tail = super::tail_policy(&self.config);
@@ -191,7 +206,7 @@ impl EventsHub {
             self.client
                 .check_literal(&url)
                 .map_err(RpcError::callback)?;
-            if self.verify_limit.check_key(&host).is_err() {
+            if !self.host_admitted(&host) {
                 return Err(RpcError::exhausted("verifications", None));
             }
             self.client
@@ -200,11 +215,7 @@ impl EventsHub {
                 .map_err(RpcError::callback)?;
         }
 
-        let _writes = self.writes.lock().await;
         let existing = self.store.get(&id).filter(|s| s.live(now));
-        if existing.is_none() {
-            self.check_caps(&principal, now)?;
-        }
         let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
             .unwrap_or_else(|_| chrono::Duration::zero());
         let (previous_secret, previous_until) = match &existing {
@@ -230,7 +241,11 @@ impl EventsHub {
             last_delivery_at: existing.as_ref().and_then(|s| s.last_delivery_at),
             last_error: existing.as_ref().and_then(|s| s.last_error.clone()),
         };
-        blocking(self, move |store| store.upsert(record, !verified, now)).await?;
+        blocking(self, move |store| {
+            store.admit(record, !verified, caps, now, tail)
+        })
+        .await?
+        .map_err(cap_refusal)?;
         let mut answer = json!({
             "id": id,
             "refreshBefore": to_wire_time(expires_at),
@@ -244,18 +259,6 @@ impl EventsHub {
             });
         }
         Ok(answer)
-    }
-
-    fn check_caps(&self, principal: &str, now: DateTime<Utc>) -> Result<(), RpcError> {
-        let per_principal = self.config.max_subscriptions_per_principal;
-        if self.store.live_count(Some(principal), now) >= per_principal {
-            return Err(RpcError::exhausted("subscriptions", Some(per_principal)));
-        }
-        let global = self.config.max_subscriptions;
-        if self.store.live_count(None, now) >= global {
-            return Err(RpcError::exhausted("subscriptions", Some(global)));
-        }
-        Ok(())
     }
 
     /// `events/unsubscribe`: `{}` whether or not the caller's key existed
@@ -281,7 +284,6 @@ impl EventsHub {
         };
         let id = subscription_id(&principal, url.as_str(), name, &arguments);
         let tail = super::tail_policy(&self.config);
-        let _writes = self.writes.lock().await;
         blocking(self, move |store| store.remove(&id, Utc::now(), tail)).await?;
         Ok(json!({}))
     }
