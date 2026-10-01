@@ -7,7 +7,9 @@ occurrence), a fully covered one, one below the floor, one compiled out
 (no DA records) and one that no longer exists.
 """
 
+import contextlib
 import importlib.util
+import io
 import pathlib
 import tempfile
 import unittest
@@ -344,6 +346,44 @@ class HeadLineCalls(unittest.TestCase):
         result = self.grade(body, {2: 1, 3: 0})
         self.assertEqual(result[4], [2])
         self.assertEqual(result[8], ["src/lib.rs:3 (head 2=1)"])
+
+    def test_shapes_a_call_list_would_miss_are_unverifiable(self):
+        # A head line is verifiable only when every argument on it is plain, so
+        # call shapes no pattern lists stay graded missed (a whitelist).
+        shapes = [
+            '    debug!(v = %clean::<Vec<u8>>(x), "seen");\n',
+            '    debug!(v = %(clean)(x), "seen");\n',
+            '    debug!(v = %x[0], "seen");\n',
+            '    debug!(v = %x + y, "seen");\n',
+            '    debug!(v = %|| x, "seen");\n',
+            '    ::tracing::warn!(v = %clean(x), "seen");\n',
+            '    tracing :: warn ! (v = %clean(x), "seen");\n',
+            '    debug!{v = %x, "seen"};\n',
+            '    debug![v = %x, "seen"];\n',
+            '    debug!(r#"a "quoted" {}"#, clean(x));\n',
+            "    debug!(c = ?'\"', v = %clean(x));\n",
+            '    debug!(v = %x /* note */, "seen");\n',
+        ]
+        for body in shapes:
+            with self.subTest(body=body.strip()):
+                result = self.grade(body, {2: 1})
+                self.assertEqual(result[4], [2])
+                self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_the_cli_prints_the_unverifiable_line_and_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text('fn logs(x: u8) -> bool {\n    debug!(v = %clean(x), "seen");\n    x > 0\n}\n')
+            lcov = root / "cov.lcov"
+            lcov.write_text("SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,1\nend_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = cfc.main(["--root", str(root), "--inventory", str(inventory), "--lcov", str(lcov)])
+        self.assertEqual(code, 1)
+        self.assertIn("unverifiable tracing head line src/lib.rs:2 (head count 1): graded missed", out.getvalue())
 
     def test_plain_fields_on_the_head_line_stay_covered(self):
         result = self.grade('    debug!(url = %x, kind = ?k, n = 3, "seen {}", x);\n', {2: 1})

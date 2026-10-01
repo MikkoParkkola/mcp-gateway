@@ -18,8 +18,8 @@ event was emitted. Those argument lines are excluded, but only when the
 macro's head line has a non-zero count (the call was reached); every excluded
 line is printed with its head count so the exclusion can be audited.
 
-A call in a macro's arguments on its head line (`debug!(url = %clean(x), ..)`)
-is the reverse case: it shares the head line, so the head's count says the
+A call (or any non-plain argument) on a macro's head line
+(`debug!(url = %clean(x), ..)`) is the reverse case: it shares the head line, so the head's count says the
 macro was reached, not that the call ran. Such a head line is graded as missed
 whatever its count and listed as unverifiable (MIK-7725), so the rule can fail
 spuriously but never pass an unrun call. Compute the value into a local before
@@ -75,16 +75,41 @@ PLAIN_FIELD = re.compile(
 )
 
 
-# A call or a macro: an identifier or path followed by `(` (optionally with a
-# turbofish), or a macro bang. Literals are already blanked.
-CALL = re.compile(r"[A-Za-z_]\w*\s*(?:::<[^>]*>\s*)?\(|!\s*[(\[{]")
+# A head line is verifiable only when every argument written on it is plain:
+# `[name =] [%|?]value` with a literal, identifier or path value. Anything else
+# (a call, index, operator, closure, block, macro, or a delimiter other than
+# `(`) is unverifiable. A whitelist, as for argument lines: shapes it does not
+# know fail spuriously, never pass. A raw string, a quote character literal or
+# a block comment survives literal stripping as a non-plain argument, so it is
+# unverifiable too. The name is matched after any path (`::tracing::warn!`).
+ANY_TRACING_HEAD = re.compile(r"(?<!\w)(trace|debug|info|warn|error|event|span)\s*!\s*([(\[{])")
+PLAIN_ARGUMENT = re.compile(r"^(?:[A-Za-z_][\w.]*\s*=\s*)?[%?]?" + _VALUE + r"$")
 
 
-def head_has_call(code):
-    """True when a tracing macro on this (literal-stripped) line has a call in
-    the arguments that sit on the line itself."""
-    match = TRACING_MACRO.search(code)
-    return bool(match and CALL.search(code[match.end():]))
+def head_has_call(raw):
+    """True when a tracing macro head on this raw source line carries, on the
+    line itself, an argument that is not plain (see above)."""
+    code = strip_literals(raw)
+    match = ANY_TRACING_HEAD.search(code)
+    if not match:
+        return False
+    if match.group(2) != "(":
+        return True
+    arguments, current, depth = [], "", 0
+    for ch in code[match.end():]:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        if ch == "," and depth == 0:
+            arguments.append(current)
+            current = ""
+        else:
+            current += ch
+    arguments.append(current)
+    return any(a.strip() and not PLAIN_ARGUMENT.match(a.strip()) for a in arguments)
 
 
 def is_plain_field(code):
@@ -191,7 +216,7 @@ def grade(root, inventory, lcovs):
             continue
         unverifiable = []
         for n in range(lo, hi + 1):
-            if n in counts and head_has_call(strip_literals(lines[n - 1])):
+            if n in counts and head_has_call(lines[n - 1]):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []
