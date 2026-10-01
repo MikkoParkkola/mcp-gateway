@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_dispatches.rs b/src/gateway/server/stdio_dispatches.rs
+index fe65caa24..e132f8db5 100644
+--- a/src/gateway/server/stdio_dispatches.rs
++++ b/src/gateway/server/stdio_dispatches.rs
+@@ -46,7 +46,7 @@ impl Cancelled {
+             permit.send(frame);
+         }
+         if let (Some(_), Some(task)) = (id, task) {
+-            marks.answered.insert(task);
++            let _ = task;
+         }
+     }
+ }

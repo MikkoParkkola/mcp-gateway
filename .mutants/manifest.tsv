@@ -1,0 +1,7 @@
+head_sha	56ef10d0f46bcf2200b185e9f0af7ddc8c350843
+# batch 1 for #2557 on the head above: the reused-id remap, the answered mark, owner-only clearing, and the cancelled remap
+A1	linux	a1.patch	--lib -- stdio_reused_id::a_reused_id_is_cancellable_before_its_predecessor_is_joined
+A2	linux	a2.patch	--lib -- stdio_reused_id::a_reused_id_is_cancellable_before_its_predecessor_is_joined
+A3	linux	a3.patch	--lib -- stdio_reused_id::joining_a_predecessor_keeps_its_successors_marks
+A4	linux	a4.patch	--lib -- stdio_reused_id::a_cancelled_id_is_reusable_before_its_dispatch_is_joined
+A5	linux	a5.patch	--lib -- stdio_reused_id::a_reused_id_is_cancellable_before_its_predecessor_is_joined
