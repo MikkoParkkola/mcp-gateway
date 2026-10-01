@@ -1300,11 +1300,11 @@
     },
     {
       "id": "MIK-7217.SEARCH.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. The breaker half is tested (src/backend/tests.rs:1179, :1202, :1458, :1482); no test asserts gateway_search visibility of a modern-era backend. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
+      "evidence": ["tests/mik_7217_search_modern_visible.rs:247", "src/gateway/meta_mcp/era_gate_tests.rs:220"],
+      "note": "Met 2026-10-01 by #2528: a_2026_speaking_backend_is_visible_to_gateway_search_and_leaves_the_breaker_closed (tests/mik_7217_search_modern_visible.rs:247), green in CI run 36795559225 on 084810d9e. Mutant run 36798563070 (throwaway/mutants-2528): all 3 RED - startup forced to the legacy handshake (src/backend/lifecycle.rs:434), the modern arm of finish_startup handshaking (src/transport/http/mod.rs:843), and the discover probe skipped (src/backend/lifecycle.rs:423). Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md), which read PARTIAL: breaker half tested (src/backend/tests.rs:1179, :1202, :1458, :1482), search half untested. That audit missed the unit test at src/gateway/meta_mcp/era_gate_tests.rs:220 (MetaMcp over a stub transport whose era came from its discover answer). The new test is the end-to-end half: real HTTP startup against a peer that refuses initialize and ping, then gateway_search and gateway_search_tools through POST /mcp. Not covered: the warm-start path (src/gateway/server/warmstart.rs) is not driven here. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
     },
     {
       "id": "MIK-7217.CLAIMS.1",
