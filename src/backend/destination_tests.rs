@@ -48,7 +48,9 @@ fn transport(template: &str, port: u16) -> TransportConfig {
 async fn start(template: &str, policy: DestinationPolicy) -> (crate::Result<()>, usize) {
     let (port, accepted) = counting_listener().await;
     let registry = BackendRegistry::new();
-    registry.enforce_destinations(policy, &[]);
+    registry
+        .enforce_destinations(policy, &[])
+        .expect("the registry pairs");
     let config = BackendConfig {
         transport: transport(template, port),
         // Long enough for a `localhost` control on Windows, which tries `::1`
@@ -119,7 +121,9 @@ async fn hardened_backend_oauth_discovery_is_pinned() {
     ] {
         let (port, accepted) = counting_listener().await;
         let registry = BackendRegistry::new();
-        registry.enforce_destinations(policy, &[]);
+        registry
+            .enforce_destinations(policy, &[])
+            .expect("the registry pairs");
         let config = BackendConfig {
             transport: transport("http://localhost:{port}/mcp", port),
             timeout: Duration::from_secs(2),
@@ -165,8 +169,12 @@ fn enforced_public_is_never_downgraded() {
     let registry = BackendRegistry::new();
     let before = backend("before");
     assert!(registry.register(Arc::clone(&before)));
-    registry.enforce_destinations(DestinationPolicy::Public, &[]);
-    registry.enforce_destinations(DestinationPolicy::Configured, &[]);
+    registry
+        .enforce_destinations(DestinationPolicy::Public, &[])
+        .expect("the registry pairs");
+    registry
+        .enforce_destinations(DestinationPolicy::Configured, &[])
+        .expect("the registry pairs");
     let after = backend("after");
     assert!(registry.register(Arc::clone(&after)));
     assert_eq!(before.destination(), DestinationPolicy::Public);
@@ -178,7 +186,9 @@ fn enforced_public_is_never_downgraded() {
 #[test]
 fn configured_first_does_not_block_public() {
     let registry = BackendRegistry::new();
-    registry.enforce_destinations(DestinationPolicy::Configured, &[]);
+    registry
+        .enforce_destinations(DestinationPolicy::Configured, &[])
+        .expect("the registry pairs");
     let backend = Arc::new(Backend::new(
         "b",
         BackendConfig::default(),
@@ -186,7 +196,9 @@ fn configured_first_does_not_block_public() {
         Duration::from_secs(60),
     ));
     assert!(registry.register(Arc::clone(&backend)));
-    registry.enforce_destinations(DestinationPolicy::Public, &[]);
+    registry
+        .enforce_destinations(DestinationPolicy::Public, &[])
+        .expect("the registry pairs");
     assert_eq!(backend.destination(), DestinationPolicy::Public);
     let later = Arc::new(Backend::new(
         "later",
@@ -203,7 +215,9 @@ async fn start_listed(template: &str, name: &str, listed: &[&str]) -> (crate::Re
     let (port, accepted) = counting_listener().await;
     let registry = BackendRegistry::new();
     let listed: Vec<String> = listed.iter().map(|n| (*n).to_string()).collect();
-    registry.enforce_destinations(DestinationPolicy::Public, &listed);
+    registry
+        .enforce_destinations(DestinationPolicy::Public, &listed)
+        .expect("the registry pairs");
     let config = BackendConfig {
         transport: transport(template, port),
         timeout: Duration::from_secs(10),
@@ -262,7 +276,9 @@ async fn listed_private_backend_policy() {
 #[test]
 fn reload_stamps_listed_backends_private() {
     let registry = BackendRegistry::new();
-    registry.enforce_destinations(DestinationPolicy::Public, &["listed".to_string()]);
+    registry
+        .enforce_destinations(DestinationPolicy::Public, &["listed".to_string()])
+        .expect("the registry pairs");
     let backend = |name: &str| {
         Arc::new(Backend::new(
             name,
@@ -277,7 +293,9 @@ fn reload_stamps_listed_backends_private() {
     assert_eq!(listed.destination(), DestinationPolicy::Private);
     assert_eq!(other.destination(), DestinationPolicy::Public);
     // A second pairing cannot replace the snapshot.
-    registry.enforce_destinations(DestinationPolicy::Public, &["later".to_string()]);
+    registry
+        .enforce_destinations(DestinationPolicy::Public, &["later".to_string()])
+        .expect("the registry pairs");
     let later = backend("later");
     assert!(registry.register(Arc::clone(&later)));
     assert_eq!(later.destination(), DestinationPolicy::Public);
@@ -305,7 +323,9 @@ async fn pinned_websocket_connect_times_out_whole() {
     for scheme in ["ws", "wss"] {
         let port = stalling_listener().await;
         let registry = BackendRegistry::new();
-        registry.enforce_destinations(DestinationPolicy::Public, &["slow".to_string()]);
+        registry
+            .enforce_destinations(DestinationPolicy::Public, &["slow".to_string()])
+            .expect("the registry pairs");
         let config = BackendConfig {
             transport: transport(&format!("{scheme}://127.0.0.1:{{port}}/ws"), port),
             timeout: Duration::from_secs(1),
@@ -335,7 +355,9 @@ async fn pinned_websocket_connect_times_out_whole() {
 #[test]
 fn standard_does_not_stamp_listed_backends() {
     let registry = BackendRegistry::new();
-    registry.enforce_destinations(DestinationPolicy::Configured, &["listed".to_string()]);
+    registry
+        .enforce_destinations(DestinationPolicy::Configured, &["listed".to_string()])
+        .expect("the registry pairs");
     let backend = Arc::new(Backend::new(
         "listed",
         BackendConfig::default(),
@@ -344,4 +366,174 @@ fn standard_does_not_stamp_listed_backends() {
     ));
     assert!(registry.register(Arc::clone(&backend)));
     assert_eq!(backend.destination(), DestinationPolicy::Configured);
+}
+
+/// A transport that stands in for one already started; records its close in
+/// a flag the test keeps.
+struct Started(Arc<std::sync::atomic::AtomicBool>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Started {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        Err(crate::Error::Transport("not used".into()))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        self.0.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn backend_at(transport: TransportConfig) -> Arc<Backend> {
+    Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport,
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+fn http() -> TransportConfig {
+    transport("http://127.0.0.1:{port}/mcp", 9)
+}
+
+/// Pair `registry` with a hardened config the way an embedder does.
+fn pair_hardened(
+    registry: Arc<BackendRegistry>,
+) -> crate::Result<crate::config_reload::ReloadContext> {
+    let mut running = crate::config::Config::default();
+    running.security.posture = crate::security::posture::SecurityPosture::Hardened;
+    crate::config_reload::ReloadContext::new(
+        std::path::PathBuf::from("unused.yaml"),
+        Arc::new(crate::config_reload::LiveConfig::new(running)),
+        registry,
+        FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+}
+
+/// A backend at a loopback listener that has really started once (the
+/// listener drops the connection, so the start itself fails).
+async fn started_at_loopback() -> (Arc<Backend>, Arc<AtomicUsize>) {
+    let (port, accepted) = counting_listener().await;
+    let backend = Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: transport("http://127.0.0.1:{port}/mcp", port),
+            timeout: Duration::from_secs(10),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    (backend, accepted)
+}
+
+// MIK-7700: an HTTP backend that started before a hardened pairing built an
+// unpinned connection, which cannot be re-pinned in place (closing it would
+// itself send to the address). Pairing is refused, naming the backend, and
+// stamps nothing.
+#[tokio::test]
+async fn hardened_pairing_refuses_a_backend_started_unpinned() {
+    let registry = Arc::new(BackendRegistry::new());
+    let (backend, accepted) = started_at_loopback().await;
+    assert!(registry.register(Arc::clone(&backend)));
+    let _ = backend.ensure_started().await;
+    assert!(
+        accepted.load(Ordering::SeqCst) > 0,
+        "the start connected unpinned"
+    );
+    let error = pair_hardened(Arc::clone(&registry))
+        .err()
+        .expect("pairing over an unpinned start must be refused");
+    assert!(
+        error.to_string().contains("'b'"),
+        "names the backend: {error}"
+    );
+    assert!(!error.to_string().contains("127.0.0.1"), "no URL: {error}");
+    assert_eq!(backend.destination(), DestinationPolicy::Configured);
+}
+
+// The shipped binary's order: pair the empty registry, then start. Every
+// later pairing (reload contexts) must still succeed.
+#[tokio::test]
+async fn a_paired_registry_pairs_again_with_started_backends() {
+    let registry = Arc::new(BackendRegistry::new());
+    registry
+        .enforce_destinations(DestinationPolicy::Public, &[])
+        .expect("an empty registry pairs");
+    let (backend, _) = started_at_loopback().await;
+    assert!(registry.register(Arc::clone(&backend)));
+    assert!(
+        backend.ensure_started().await.is_err(),
+        "pinned: loopback refused"
+    );
+    assert!(pair_hardened(registry).is_ok());
+    assert_eq!(backend.destination(), DestinationPolicy::Public);
+}
+
+// A stdio child reaches no network destination of its own.
+#[tokio::test]
+async fn hardened_pairing_accepts_a_started_stdio_backend() {
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = backend_at(TransportConfig::Stdio {
+        command: "true".to_string(),
+        cwd: None,
+        protocol_version: None,
+    });
+    assert!(registry.register(Arc::clone(&backend)));
+    backend.connected_unpinned.store(true, Ordering::SeqCst);
+    assert!(pair_hardened(registry).is_ok());
+}
+
+// The other order: a backend started on its own, then registered into a
+// registry already paired with a hardened config, is refused registration.
+#[tokio::test]
+async fn registering_a_started_unpinned_backend_into_a_hardened_registry_is_refused() {
+    let registry = BackendRegistry::new();
+    registry
+        .enforce_destinations(DestinationPolicy::Public, &[])
+        .expect("an empty registry pairs");
+    let (backend, _) = started_at_loopback().await;
+    let _ = backend.ensure_started().await;
+    assert!(!registry.register(Arc::clone(&backend)));
+    assert_eq!(backend.destination(), DestinationPolicy::Configured);
+}
+
+// A start that read the policy before a stamp and publishes after it is
+// refused, so nothing built unpinned lands in the pool after pairing. The same
+// transport built under the stamped policy publishes.
+#[test]
+fn a_start_built_before_the_stamp_is_not_published() {
+    let backend = backend_at(http());
+    let built_under = backend.destination();
+    backend.stamp_destination(DestinationPolicy::Public);
+    let entry = backend.shared_entry();
+    let started: Arc<dyn crate::transport::Transport> = Arc::new(Started(Arc::default()));
+    assert!(backend.publish(&entry, &started, built_under).is_err());
+    assert!(
+        backend
+            .pooled_transport_for_test(&super::PoolKey::Shared)
+            .is_none()
+    );
+    assert!(
+        backend
+            .publish(&entry, &started, DestinationPolicy::Public)
+            .is_ok()
+    );
 }

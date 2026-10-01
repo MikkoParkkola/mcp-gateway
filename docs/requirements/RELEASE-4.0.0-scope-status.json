@@ -1081,11 +1081,34 @@
     },
     {
       "id": "GH1942.HARDEN.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending, ungraded. Built so far under security.posture (docs/design/2026-09-28-hardened-posture.md, increments 1-5): #1756 anomaly learning and forced blocking, the posture resolver with preset floor, restart-only posture and the multi-user WARN and doctor row, per-caller identity (row 8), the destination policy (4b, #2504), and in increment 5 forced signing of every tools/call on both routes and the elicitation requirement for legacy clients (rows 6, 7, 10, 11; docs/design/2026-10-01-hardened-increment-5-signing-elicitation.md). Still open: 4c security.hardened.private_backends, approved as operator decision 8 (decision row 26) and built in #2559; and T14 (the WebSocket whole-connect timeout test), which needs 4c's loopback-allowing pinned policy and moves with it. Tracked in #1942. Decision row 24 in RELEASE-4.0.0-operator-decisions.md."
+      "evidence": [
+        "tests/anomaly_learning_e2e.rs",
+        "src/security/firewall/anomaly.rs",
+        "src/security/firewall/anomaly_config.rs",
+        "src/security/firewall/anomaly_learning_tests.rs",
+        "src/security/firewall/anomaly_posture_tests.rs",
+        "src/transition.rs",
+        "src/security/posture_tests.rs",
+        "src/security/posture_auth_shapes_tests.rs",
+        "src/commands/doctor/posture.rs",
+        "tests/hardened_signing_e2e.rs",
+        "src/gateway/meta_mcp/signing_scope_tests.rs",
+        "src/gateway/router/hardened_identity_tests.rs",
+        "src/gateway/router/caller_key_tests.rs",
+        "src/gateway/router/handlers_session_subject_tests.rs",
+        "src/gateway/router/hardened_elicitation_tests.rs",
+        "src/gateway/server/tests/hardened_destination.rs",
+        "src/oauth/client/destination_tests.rs",
+        "src/transport/websocket_pinned_tests.rs",
+        "tests/hardened_backend_env_proxy.rs",
+        "src/backend/destination_tests.rs",
+        "src/security/ssrf/destination_tests.rs",
+        "tests/posture_reload.rs"
+      ],
+      "note": "Graded 2026-10-01 (MIK-7633). Every row of docs/design/2026-09-28-hardened-posture.md section 6, of the increment-4c plan (docs/design/2026-10-01-hardened-increment-4c-private-backends.md section 2) and of the increment-5 plan has a test, read at source. Row 1: real_direct_calls_train_the_router_firewall and real_meta_calls_train_the_router_firewall (tests/anomaly_learning_e2e.rs:92, :119). Row 2: never_seen_scores_one_and_above_rare (src/security/firewall/anomaly.rs:516). Row 3: cold_predecessor_is_warming_up (anomaly.rs:545). Row 3b: anomaly_ranges_refused_at_load (anomaly_config.rs:94), warmup_has_no_score_and_is_counted (anomaly_learning_tests.rs:165). Row 3c: diverse_warm_predecessor_not_blocked_at_default (anomaly_learning_tests.rs:137). Row 4: record_pair_leaves_session_map_empty (src/transition.rs:687), pair_cap_full_hardened_refuses and pair_cap_full_standard_counts_and_passes (anomaly_posture_tests.rs:45, :62). Row 4b: blocked_call_is_not_learned, stripe_lock_serializes_one_identity, committed_pairs_form_one_path (anomaly_learning_tests.rs:67, :177, :212), serialized_at_identity_cap_no_deadlock (anomaly.rs:583). Row 4c: anomaly_block_survives_allow_rule_standard and _hardened (anomaly_learning_tests.rs:103, :120). Row 5: hardened_raises_monitor_only_to_team_shared, hardened_keeps_enterprise_strict (src/security/posture_tests.rs:39, :53). Row 6: hardened_resolves_env_secret_before_signing_check, hardened_without_signing_secret_refuses (posture_tests.rs:123, :146). Row 7: hardened_signs_tools_call_on_both_routes, hardened_tool_call_nonce_replay_refused, hardened_meta_replay_never_dispatches, confirmation_follow_up_needs_a_fresh_nonce (tests/hardened_signing_e2e.rs:231, :259, :449, :486); the four unit-level substitutions the increment-5 plan records are in src/gateway/meta_mcp/signing_scope_tests.rs. Row 8: hardened_refuses_without_subject_meta, _direct, _dashboard, personal_api_key_is_identity (src/gateway/router/hardened_identity_tests.rs:120, :131, :212, :145). Row 9: caller_key_separates_subjects, token_exchange_keeps_bucket (caller_key_tests.rs:153, :161); cross_subject_session_refused, same_subject_other_credential_new_session under standard (handlers_session_subject_tests.rs:131, :171); hardened_resume_refuses_another_owner under hardened (hardened_elicitation_tests.rs:298). Row 10: hardened_elicitation_tests.rs:176, :211, :260, :348, :420. Row 11: hardened_legacy_confirmation_policy_refuses (:496). Row 12: hardened_startup_backend_is_pinned (src/gateway/server/tests/hardened_destination.rs:68), hardened_oauth_refuses_private_authorization_server, hardened_oauth_refuses_private_registration, hardened_oauth_client_refuses_a_literal_redirect (src/oauth/client/destination_tests.rs:104, :117, :231), pinned_websocket_keeps_sni (src/transport/websocket_pinned_tests.rs:42), proxy_env_does_not_bypass_policy (tests/hardened_backend_env_proxy.rs:113). Row 12b: hardened_refuses_capability_egress_proxy (posture_tests.rs:445). Row 13: listed_private_backend_policy (src/backend/destination_tests.rs:228), private_policy_denies and listed_private_backend_tool_call_passes_proxy_check (src/security/ssrf/destination_tests.rs:75, :175), listed_private_backend_tool_call_is_served through the shipped binary (tests/hardened_signing_e2e.rs:543: a listed loopback backend is served and signed, an unlisted one is never reached), listed_private_backend_oauth_policy (oauth/client/destination_tests.rs:257). Row 14: reload_refuses_posture_change (tests/posture_reload.rs:85), reload_refuses_private_backends_change (posture_tests.rs:488). Row 15: startup_warn_matches_unhardened_table (posture_tests.rs:285) and doctor_row_matches_unhardened_table (src/commands/doctor/posture.rs:56) over one table, src/security/posture_auth_shapes_tests.rs. Row 16: standard_posture_applies_no_override (posture_tests.rs:96), standard_ignores_private_backends (:480), standard_signing_keeps_invoke_only_scope (hardened_signing_e2e.rs:341). Row 17: hardened_startup_refusals (posture_tests.rs:174: no firewall feature, short secret, unlisted private backend, block threshold below 0.9), hardened_refuses_missing_private_backend (:471). T14: pinned_websocket_connect_times_out_whole (src/backend/destination_tests.rs:304). The metadata refusal is worded as a cloud metadata address (metadata_literal_refusal_names_the_metadata_service, src/security/ssrf/destination_tests.rs:201). Closing PRs: #2594 (CI 36904386003, mutants 36905022003 5 of 5 RED), #2596 (CI 36908343868, mutants 36909589214 2 of 2 RED), #2599 (red run 36913242179, green CI 36918108306, mutants 36916796578 3 of 3 RED). Recorded limits: rows 10 and 11 set the posture on the config by hand instead of loading it, as the increment-5 plan allows; row 12's OAuth tests set the destination policy by hand, and the posture-to-policy link is driven at start and for the proxy environment."
     },
     {
       "id": "GH1943.PROV.1",
@@ -1254,11 +1277,26 @@
     },
     {
       "id": "MIK-7116.MIN.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.1). Audited at release tip e83b5fd5a. UNBUILT. The tenant guard reads tenant ids from request arguments only (src/security/firewall/tenant_guard.rs:55-65, arg_keys); ContextDataClass (src/context_integrity/mod.rs:48) carries no tenant; nothing attributes a response to a tenant. Attribution reaches the firewall audit only as a CrossTenantReach finding when a call is refused (src/security/firewall/mod.rs:481-510), so an allowed call leaves no attribution record."
+      "evidence": [
+        "src/security/firewall/tenant_audit_tests.rs",
+        "src/security/firewall/tenant_attribution_tests.rs",
+        "src/gateway/meta_mcp/audit_record_tests/tenants.rs",
+        "src/gateway/router/direct_audit_tests/tenants.rs",
+        "src/gateway/router/direct_audit_tests/meta_replay.rs",
+        "src/security/transparency_log_attributed_tests.rs",
+        "src/security/transparency_log_attributed.rs:80-90",
+        "src/gateway/router/tests/task_execution_adapter/settlement_record.rs:413-787",
+        "src/gateway/meta_mcp/audit_record_tests/tenants.rs:188-199",
+        "src/security/firewall/tenant_attribution_tests.rs:71-89",
+        "tests/signature_chain_hops/rows_policy.rs:311-331",
+        "src/security/firewall/tenant_guard.rs:181-239",
+        "src/security/firewall/tenant_attribution_tests.rs:101-247",
+        "src/gateway/meta_mcp/audit_record_tests/tenants.rs:206-222"
+      ],
+      "note": "Met 2026-10-01 (#2475 increment 1, squash f824e778e; T31 in #2507, squash 620bca303; #2523 fixed in #2527, squash 17ea059ff; gap 2 in #2529, squash 025c0b42f; gap 1 in #2545, squash 988626fa3; gap 3 in #2593, squash d5e387a5c). All three gaps closed. Gap 3 (lead ruling 2026-10-01: uninspected covers any response content not fully read, for any reason; fail closed): #2593 scans every response string that opens like JSON, after leading whitespace and byte-order marks. It reads JSON carried in strings, including double-encoded text and a value under a tenant key, up to three layers. A part over 1 MiB, malformed, nested past the parser depth limit, or encoded deeper is marked uninspected (tenant_guard.rs:181-239). Tests tenant_attribution_tests.rs:101-247 and the meta record audit_record_tests/tenants.rs:206-222. Red runs 36899326419 (6 failed) and 36901604724 (3 failed); mutants M1-M9 RED, run 36905655011; feature combinations green, run 36905684831. Gap 1, a recovered upstream task settled with no record: #2545 writes a settlement record (route task_recovery, joined by task_id; transparency_log_attributed.rs:80-90) on the worker and the owner-read paths, before the commit; under FailClosed a failed write settles -32005 with no backend content. R1-R10 at settlement_record.rs:413-787 (red run 36816177963, 11 failed; mutants M1-M11 RED, run 36841258110; feature combinations green, run 36841267936). Gap 2, a content text block over the 1 MiB parse bound was silently unattributed: #2529 marks the record attribution uninspected (cached_delivery_uninspected on a cache hit), audit_record_tests/tenants.rs:188-199, T6 re-pinned at tenant_attribution_tests.rs:71-89, and a chain-refused reply at rows_policy.rs:311-331 (red runs 36796957730 and 36798505631). Clause read, VERIFIED. (1) 'Tool responses carry a tenant attribution alongside the existing ContextDataClass': the invocation record for a tool response names the hashed tenants next to data_classes. On the meta route, audit_record_tests/tenants.rs::allowed_call_record_carries_tenants_and_data_classes (T7). On the direct route, direct_audit_tests/tenants.rs::direct_record_carries_tenants_and_data_classes (T12). The firewall request line, tenant_audit_tests.rs::allowed_request_line_names_hashed_tenants (T1). Extraction reads text-JSON and structuredContent (tenant_attribution_tests.rs T5, bound T6) and never counts against the guard (T4). (2) 'recorded in the audit trail whether or not it triggers a block'. Allowed calls: T1, T7, T12. Guard block: refused_request_line_names_the_refused_tenant (T2), plus the #2421 meta refusal record, direct_audit_tests/tenants.rs::meta_tenant_guard_refusal_record_names_the_tenants. A direct guard refusal of a call with no arguments member names the tenants the firewall scanned in params (direct_audit_tests/tenants.rs::direct_refusal_without_arguments_names_the_tenants, #2527; it was a counterexample before that fix). Gate block: gate_refused_response_keeps_response_tenants (T8) and direct_gate_refusal_keeps_response_tenants (T26). Deliveries past the gates are marked attribution cached_delivery: the meta cache hit (T25), the direct idempotent replay (T28) and the meta admission replay (T31, meta_replay.rs::meta_replay_record_carries_delivered_tenants; it found and #2507 fixed a replay that attributed the JSON-text wrapper). The fields sit inside the hash chain: attribution_fields_are_inside_the_hash_chain and attributed_meta_record_verifies (T11). The list is capped with tenants_total (T23), and extra fields cannot collide with record fields (T24). Schema stability guards: T3, T9, T10. Red proofs: #2475 run 36671007723, where exactly the 15 new tests failed at their assertions; #2507 run 36776782204, where T31 failed on a null attribution. Mutants: #2475 run 36673654931, where m2 was RED and m1 (the meta cached-error marker) SURVIVED, tracked in #2482 (4.0.1); #2507 run 36782161344, M2 and M3 on the replay unwrap RED. Green: CI run 36783838760, Tests job, on #2507 head 498ee73a5, carrying all rows; #2527: red run 36789101723, mutant M1 RED in run 36794584369, green CI run 36791703935. Open 4.0.1 follow-ups, none a conjunct: #2479 (a T25 withheld case), #2482 (m1), #2487 (a reserved extra key and T2's two-request shape).\n\n--- prior note follows ---\nAdded 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.1). Audited at release tip e83b5fd5a. UNBUILT. The tenant guard reads tenant ids from request arguments only (src/security/firewall/tenant_guard.rs:55-65, arg_keys); ContextDataClass (src/context_integrity/mod.rs:48) carries no tenant; nothing attributes a response to a tenant. Attribution reaches the firewall audit only as a CrossTenantReach finding when a call is refused (src/security/firewall/mod.rs:481-510), so an allowed call leaves no attribution record."
     },
     {
       "id": "MIK-7116.MIN.2",
@@ -1325,7 +1363,10 @@
       "status": "met",
       "stage": "met",
       "blocked_on": "none",
-      "evidence": ["tests/mik_7217_search_modern_visible.rs:247", "src/gateway/meta_mcp/era_gate_tests.rs:220"],
+      "evidence": [
+        "tests/mik_7217_search_modern_visible.rs:247",
+        "src/gateway/meta_mcp/era_gate_tests.rs:220"
+      ],
       "note": "Met 2026-10-01 by #2528: a_2026_speaking_backend_is_visible_to_gateway_search_and_leaves_the_breaker_closed (tests/mik_7217_search_modern_visible.rs:247), green in CI run 36795559225 on 084810d9e. Mutant run 36798563070 (throwaway/mutants-2528): all 3 RED - startup forced to the legacy handshake (src/backend/lifecycle.rs:434), the modern arm of finish_startup handshaking (src/transport/http/mod.rs:843), and the discover probe skipped (src/backend/lifecycle.rs:423). Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md), which read PARTIAL: breaker half tested (src/backend/tests.rs:1179, :1202, :1458, :1482), search half untested. That audit missed the unit test at src/gateway/meta_mcp/era_gate_tests.rs:220 (MetaMcp over a stub transport whose era came from its discover answer). The new test is the end-to-end half: real HTTP startup against a peer that refuses initialize and ping, then gateway_search and gateway_search_tools through POST /mcp. Not covered: the warm-start path (src/gateway/server/warmstart.rs) is not driven here. Named SEARCH, not DISCOVER.6, because the baseline MIK-7217.DISCOVER.6 row is the warm-start retry."
     },
     {
@@ -1470,7 +1511,13 @@
       "status": "pending",
       "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": ["docs/release/v4.0.0-critical-path-coverage.md:38", "docs/release/v4.0.0-critical-path-coverage.md:191", "docs/release/v4.0.0-critical-functions.tsv:4", "scripts/release/critical_function_coverage.py:156", "src/gateway/server/support_tests.rs:105"],
+      "evidence": [
+        "docs/release/v4.0.0-critical-path-coverage.md:38",
+        "docs/release/v4.0.0-critical-path-coverage.md:191",
+        "docs/release/v4.0.0-critical-functions.tsv:4",
+        "scripts/release/critical_function_coverage.py:156",
+        "src/gateway/server/support_tests.rs:105"
+      ],
       "note": "Five-path ruling 2026-10-01: OAuth, HTTP dispatch, stdio dispatch, tasks and account paths are Standard; every security-enforcing function in all seven paths is Critical, inventoried in docs/release/v4.0.0-critical-functions.tsv (291 Critical rows; one review for omissions plus a helper sweep; 7 added after the measured run) and graded by scripts/release/critical_function_coverage.py. --tests baselines at 8b9929924 (CI run 36824032904): OAuth 79.23% misses 80%; HTTP 94.40%, stdio 88.76%, tasks 94.73%, accounts 95.52%, startup 92.45%, bridge 90.61% clear. Per function: 189 clear 95%, 90 below, 5 Windows-only unmeasured; closing them is test work, no waivers. Earlier: Tiers ruled 2026-10-01 and written into docs/release/v4.0.0-critical-path-coverage.md:38-70: startup and bridge are Standard (>=80%); four security-enforcing functions inside them are Critical (>=95%): serve_tls, PeerCertIdentityAcceptor::accept, Gateway::prepare_signing, Gateway::response_firewall. Measured 2026-10-01 (CI run 36802315128 at 141b7ec05, --all-features, lib plus --tests): startup 91.59% (4772/5210), bridge 90.61% (222/245), both clear Standard; only failures: two task-SDK tests (a_real_sdk_job_outlives_the_gateway_*) that need the Python SDK only the task-sdk-recovery job installs; the 2026-09-17 misses (68.78%, 69.44%) were --lib only on a dirty tree. The four Critical functions were below 95% (serve_tls and accept uncovered); closing tests: src/gateway/server/support_tests.rs (mtls_listener), src/gateway/server/tests/stdio_chain_nonce_refusal.rs, src/gateway/server/tests/response_firewall_anomaly.rs. After them (CI probe run 36806330639 on the #2540 head ea1bff9a8, same command): serve_tls 19/19, accept 9/9, prepare_signing 25/25, response_firewall 16/16 lines (100% each, from the lcov DA lines in each body); startup 92.32% (4810/5210), bridge 90.61% (222/245); the only failures were the two task-SDK tests above. Pending: graded with NFR.BUILD.1 C5 and C6 on the final revision. Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md)."
     },
     {
