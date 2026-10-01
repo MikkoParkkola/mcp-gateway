@@ -176,9 +176,9 @@ fn base_yaml(capabilities_dir: &std::path::Path) -> String {
     // The task store beside the capabilities, never the default under $HOME.
     let tasks = capabilities_dir.with_file_name("tasks");
     format!(
-        "capabilities:\n  enabled: true\n  name: capabilities\n  directories:\n    - {}\ntasks:\n  store_dir: {:?}\n",
+        "capabilities:\n  enabled: true\n  name: capabilities\n  directories:\n    - {}\ntasks:\n  store_dir: {}\n",
         capabilities_dir.display(),
-        tasks.display().to_string()
+        serde_json::to_string(&tasks.display().to_string()).expect("a JSON string")
     )
 }
 

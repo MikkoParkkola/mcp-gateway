@@ -81,8 +81,8 @@ fn load(dir: &Path, yaml: &str) -> Config {
     let path = dir.join("gateway.yaml");
     // The task store under the test's own directory, never the default under $HOME.
     let yaml = format!(
-        "{yaml}tasks:\n  store_dir: {:?}\n",
-        dir.join("tasks").display().to_string()
+        "{yaml}tasks:\n  store_dir: {}\n",
+        serde_json::to_string(&dir.join("tasks").display().to_string()).expect("a JSON string")
     );
     crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     Config::load(Some(&path)).expect("config loads")

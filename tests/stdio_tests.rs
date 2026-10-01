@@ -529,6 +529,10 @@ fn test_stdio_stdout_carries_only_jsonrpc() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_mcp-gateway"))
         .args(["serve", "--stdio", "-c"])
         .arg(&cfg_path)
+        // An isolated home, so the default task store is the test's own (Windows
+        // reads the debug build's override, not HOME).
+        .env("HOME", dir.path())
+        .env("MCP_GATEWAY_TEST_HOME_DIR", dir.path())
         .env("RUST_LOG", "info") // guarantee startup logs are emitted
         .env("NO_COLOR", "1") // determinism; logs must still land on stderr
         .stdin(Stdio::piped())
