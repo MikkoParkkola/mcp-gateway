@@ -240,7 +240,9 @@ pub fn modern(id: Value, method: &str, mut params: Value, tasks: bool) -> Value 
             params["_meta"][key] = value;
         }
     }
-    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+    let mut request = json!({"jsonrpc": "2.0", "method": method, "params": params});
+    request["id"] = id;
+    request
 }
 
 /// The modern handshake, declaring the Tasks extension.
@@ -302,7 +304,9 @@ pub fn tasks_update(id: Value, task: &str) -> Value {
 }
 
 pub fn discover(id: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "method": "server/discover", "params": {}})
+    let mut request = json!({"jsonrpc": "2.0", "method": "server/discover", "params": {}});
+    request["id"] = id;
+    request
 }
 
 /// The `taskId` of a create-task answer, or a failed assertion naming what
