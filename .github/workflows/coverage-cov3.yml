@@ -89,3 +89,30 @@ jobs:
             all.lcov
             lib-run.log
             all-run.log
+
+  # The five Critical rows compiled only on Windows (task store and account
+  # storage) are graded from this report, unioned with the Linux one.
+  coverage-windows:
+    name: llvm-cov Windows-only rows
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Task store and account storage tests
+        shell: bash
+        run: |
+          cargo llvm-cov --all-features --lib --lcov --output-path windows.lcov --ignore-run-fail -- task_service personal_accounts > windows-run.log 2>&1
+          grep -E '^test result|FAILED|panicked' windows-run.log || true
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-windows
+          path: |
+            windows.lcov
+            windows-run.log
