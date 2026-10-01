@@ -1080,6 +1080,15 @@ impl ConfigWatcher {
         identity_grants: Option<Arc<IdentityGrantSink>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
+        // Pair first, so a refusal is returned before any watcher or task
+        // exists; the reload task's own context then pairs as a no-op.
+        {
+            let running = live_config.running();
+            registry.enforce_destinations(
+                DestinationPolicy::for_posture(running.security.posture),
+                &running.security.hardened.private_backends,
+            )?;
+        }
         let (event_tx, event_rx) = tokio::sync::mpsc::channel::<ReloadTrigger>(32);
 
         let config_path = watch_chain::named_config_path(config_path);
@@ -1107,16 +1116,6 @@ impl ConfigWatcher {
 
         let failsafe_cfg = initial_config.failsafe.clone();
         let cache_ttl = initial_config.meta_mcp.cache_ttl;
-        // Pair here, where a refusal can still be returned: the task below
-        // builds its context again, and that pairing is then a no-op.
-        {
-            let running = live_config.running();
-            registry.enforce_destinations(
-                DestinationPolicy::for_posture(running.security.posture),
-                &running.security.hardened.private_backends,
-            )?;
-        }
-
         Self::spawn_reload_task(
             config_path,
             live_config,

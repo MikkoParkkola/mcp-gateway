@@ -267,6 +267,17 @@ impl BackendRegistry {
             return false;
         }
         if let Some(destinations) = self.destination.get() {
+            // Check and stamp under the lock `Backend::publish` takes, so no
+            // start publishes between them.
+            let _publishing = backend.replaced_transport_cleanups.lock();
+            if backend.started_unpinned() {
+                warn!(
+                    backend = %backend.name,
+                    "Refusing to register a backend that connected before this registry's \
+                     destination policy was set; build it after pairing"
+                );
+                return false;
+            }
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         let name = backend.name.clone();
@@ -309,12 +320,34 @@ impl BackendRegistry {
             return Ok(());
         }
         let _stopping = self.stopping.lock();
+        let members: Vec<Arc<Backend>> = self
+            .backends
+            .iter()
+            .map(|b| Arc::clone(b.value()))
+            .collect();
+        // Every member's publish lock is held from the check until its stamp
+        // lands: a start that publishes first is seen by the check, and one
+        // that publishes after finds the stamp and is refused (`publish`).
+        let _publishing: Vec<_> = members
+            .iter()
+            .map(|b| b.replaced_transport_cleanups.lock())
+            .collect();
+        // Only an unstamped backend can qualify, so once the snapshot is
+        // recorded (every member stamped) this never refuses again.
+        if let Some(started) = members.iter().find(|b| b.started_unpinned()) {
+            return Err(crate::Error::ConfigValidation(format!(
+                "backend '{}' connected before the hardened destination policy was set, so \
+                 its connection is not pinned; pair the registry with the config before \
+                 starting any backend",
+                started.name
+            )));
+        }
         let destinations = self.destination.get_or_init(|| Destinations {
             policy,
             private: private_backends.iter().cloned().collect(),
         });
-        for backend in &self.backends {
-            backend.stamp_destination(destinations.for_backend(backend.key()));
+        for backend in &members {
+            backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         Ok(())
     }

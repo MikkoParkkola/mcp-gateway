@@ -356,9 +356,13 @@ impl Backend {
         }
 
         info!(backend = %self.name, ?key, "Starting backend transport");
-        // Read once, before anything connects: the policy every connection
-        // below is built under. `publish` refuses if it changed meanwhile.
-        let built_under = self.destination();
+        // Read once, before anything connects, under the lock a pairing holds
+        // from its check to its stamp: this start already counts as in
+        // flight, so it either blocks that pairing or reads its stamp.
+        let built_under = {
+            let _pairing = self.replaced_transport_cleanups.lock();
+            self.destination()
+        };
 
         // Whatever the reason for starting - a client request, a health-driven
         // force_restart, warm start - this slot is no longer stopped-for-idleness.

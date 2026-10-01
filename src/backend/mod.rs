@@ -218,6 +218,24 @@ impl Backend {
         let _ = self.destination.set(policy);
     }
 
+    /// Whether this backend has connected, or is connecting, before any
+    /// destination policy was stamped on it: an HTTP or WebSocket transport
+    /// built under the unstamped `Configured` policy (MIK-7700). Such a
+    /// transport cannot be re-pinned in place; closing it would itself send
+    /// to the unpinned address, so pairing refuses instead.
+    pub(crate) fn started_unpinned(&self) -> bool {
+        self.destination_bound()
+            && self.destination.get().is_none()
+            && (self
+                .starts_in_flight
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0
+                || self
+                    .pool
+                    .iter()
+                    .any(|entry| entry.value().transport.read().is_some()))
+    }
+
     /// Whether this backend's transports connect under its destination
     /// policy. A stdio child reaches no network destination of its own.
     pub(crate) fn destination_bound(&self) -> bool {
