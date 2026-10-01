@@ -306,6 +306,32 @@ async fn malformed_signing_nonce_refused() {
     );
 }
 
+/// A surfaced tool the inner gateway never lists: the task gate cannot read
+/// it, so it confirms it as unclassified.
+const UNLISTED: &str = "unlisted_task_tool";
+
+/// Row 7: the task-augmented destructive gate answers before admission, so a
+/// malformed nonce is refused ahead of it with `-32602`, never answered with a
+/// challenge (whose delivery would fail `-32603`) or the gate's own refusal.
+#[tokio::test]
+async fn malformed_signing_nonce_refused_before_the_task_gate() {
+    let stack = stack_with(|config| {
+        config["meta_mcp"] = json!({"surfaced_tools": [{"server": INNER, "tool": UNLISTED}]});
+    })
+    .await;
+    let mut request = modern_call(51, UNLISTED, &json!({}), Some(""));
+    request["params"]["task"] = json!({});
+    request["params"]["_meta"]["io.mcp-gateway/idempotency-key"] = json!("task-gate-key");
+    let wire = post(&stack, "/mcp", &request).await;
+    assert_refused(&wire, "a malformed nonce on a task-augmented call");
+    assert_eq!(parse(&wire)["error"]["code"], -32602, "{wire}");
+    assert_eq!(
+        stack.backend.calls().len(),
+        0,
+        "a malformed nonce dispatched"
+    );
+}
+
 /// Row 16: `standard` with signing explicitly on keeps today's scope: a
 /// non-invoke meta call and a direct call are delivered unsigned, and
 /// `gateway_invoke` is signed as before.
