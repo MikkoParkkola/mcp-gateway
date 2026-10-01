@@ -293,7 +293,14 @@ impl StdioTasks {
                     })
                     .await
             }
-            _ => route.cancel(id, params).await,
+            "tasks/cancel" => route.cancel(id, params).await,
+            // Fail closed: a method this body does not name is never handled
+            // as one of the three it does.
+            other => crate::protocol::JsonRpcResponse::error(
+                Some(id),
+                -32601,
+                format!("Method not found: {other}"),
+            ),
         }
     }
 }
@@ -356,6 +363,11 @@ pub(super) fn task_intent(
     session_id: &str,
 ) -> Result<Option<crate::gateway::task_service::TaskIntent>, Box<crate::protocol::JsonRpcResponse>>
 {
+    // A legacy shape cannot declare an extension, and a legacy `task` member
+    // was always answered synchronously on stdio: it stays so, unrefused.
+    if !caller.is_modern {
+        return Ok(None);
+    }
     if let Some(refusal) = undeclared(id.clone(), "tools/call", shape) {
         return Err(Box::new(refusal));
     }

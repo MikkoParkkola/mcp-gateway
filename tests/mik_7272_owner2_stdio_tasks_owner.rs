@@ -295,6 +295,11 @@ async fn a_task_and_a_sync_call_share_one_admission() {
         1,
         "one admission, one round: {sync}"
     );
+    assert_eq!(
+        error_code(&sync),
+        Some(409),
+        "the admission refuses it: {sync}"
+    );
     assert!(
         sync.to_string()
             .contains("belongs to another execution or representation"),
@@ -331,14 +336,18 @@ async fn stdio_creation_rules_match_http() {
     let mut continuation = task_call(json!(5), ECHO, Some("k-cont"));
     continuation["params"]["requestState"] = json!("owner2-state");
 
-    for (case, request) in [
-        ("no key", no_key),
-        ("undeclared", undeclared),
-        ("not dispatchable", not_dispatchable),
-        ("continuation", continuation),
+    for (case, request, expected) in [
+        ("no key", no_key, "refused -32602"),
+        ("undeclared", undeclared, "refused -32021"),
+        ("not dispatchable", not_dispatchable, "not a task"),
+        ("continuation", continuation, "not a task"),
     ] {
         let on_http = http.post(&request, None).await;
         let on_stdio = stdio.request(&request).await;
+        assert!(
+            shape(&on_stdio).starts_with(expected),
+            "{case}: expected {expected}, stdio answered {on_stdio}"
+        );
         assert_eq!(
             shape(&on_stdio),
             shape(&on_http),

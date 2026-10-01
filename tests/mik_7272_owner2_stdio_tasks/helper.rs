@@ -343,9 +343,13 @@ pub fn error_code(answer: &Value) -> Option<i64> {
     answer.pointer("/error/code").and_then(Value::as_i64)
 }
 
-/// Whether an answer (initialize or discover) declares the Tasks extension.
+/// Whether an answer (initialize or discover) declares the Tasks extension
+/// under `capabilities.extensions`, read structurally.
 pub fn declares_tasks(answer: &Value) -> bool {
-    answer.to_string().contains(TASKS_EXTENSION)
+    answer
+        .pointer("/result/capabilities/extensions")
+        .and_then(Value::as_object)
+        .is_some_and(|extensions| extensions.contains_key(TASKS_EXTENSION))
 }
 
 /// The shipped binary over stdio, with an explicit config.

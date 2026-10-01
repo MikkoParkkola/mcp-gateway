@@ -423,3 +423,64 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
         "the lease is free once run_stdio_on returned"
     );
 }
+
+/// U7: a `tasks/*` method the stdio body does not name is not found, never
+/// handled as one it does (a cancel, say) on the caller's task id.
+#[tokio::test]
+async fn an_unnamed_tasks_method_fails_closed() {
+    let fixture = fixture(None).await;
+    let id = settle(&fixture, TOOL, "u7").await;
+    let policy = ToolPolicy::default();
+    let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+        tool_policy: &policy,
+    };
+    let retry = RetryFields::default();
+    let caller = Gateway::build_stdio_caller_context(
+        true,
+        None,
+        &authorizer,
+        &retry,
+        &crate::protocol::meta::RequestShape::Legacy,
+        super::super::StdioClient {
+            session_id: super::super::STDIO_SESSION_ID,
+            channel: &crate::gateway::input_bridge::NoClientChannel,
+            handshake_capabilities: Declared::NONE,
+            tasks: Some(&fixture.tasks),
+        },
+    );
+    let answer = fixture
+        .tasks
+        .dispatch(
+            "tasks/list",
+            RequestId::Number(7),
+            Some(&json!({"taskId": id})),
+            &caller,
+            super::super::STDIO_SESSION_ID,
+        )
+        .await;
+    assert_eq!(
+        answer.error.as_ref().map(|error| error.code),
+        Some(-32601),
+        "{answer:?}"
+    );
+}
+
+/// U8: a legacy `tools/call` carrying a `task` member is answered
+/// synchronously, as before stdio had a store: a legacy shape cannot declare
+/// the extension, so it is neither refused nor made a task.
+#[tokio::test]
+async fn a_legacy_task_member_is_answered_synchronously() {
+    let fixture = fixture(None).await;
+    let legacy = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},
+        "task": {},
+    }});
+    let answer = dispatch(&fixture, legacy).await;
+    assert!(answer.get("error").is_none(), "not refused: {answer}");
+    assert!(
+        answer.pointer("/result/taskId").is_none(),
+        "not a task: {answer}"
+    );
+    assert_eq!(fixture.rounds.load(Ordering::SeqCst), 1, "{answer}");
+}
