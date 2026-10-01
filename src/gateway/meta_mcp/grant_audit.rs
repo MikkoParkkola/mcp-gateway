@@ -54,24 +54,31 @@ pub(super) const REPEAT_WINDOW: Duration = Duration::from_secs(600);
 const REPEAT_CAP: usize = 4096;
 
 /// The last written re-check decision per task, caller and target.
+///
+/// One async lock spans the repeat check, the append and the remember, so
+/// the remembered decision is always the last one written: two concurrent
+/// re-checks straddling a grant change cannot leave an older decision
+/// remembered over a newer record. The append it waits on is bounded (F20).
+// ponytail: one lock per gateway serializes re-check records only; per-key
+// locks if polling a finished task ever becomes a throughput concern.
 #[derive(Debug, Default)]
-pub(crate) struct DecisionDedupe(Mutex<HashMap<String, (String, Instant)>>);
+pub(crate) struct DecisionDedupe(tokio::sync::Mutex<RepeatLedger>);
 
-impl DecisionDedupe {
+/// The suppression state [`DecisionDedupe`] guards.
+#[derive(Debug, Default)]
+pub(super) struct RepeatLedger(HashMap<String, (String, Instant)>);
+
+impl RepeatLedger {
     /// Whether `decision` is what was last written for `key`, inside the window.
     pub(super) fn is_repeat(&self, key: &str, decision: &str, now: Instant) -> bool {
-        self.0
-            .lock()
-            .expect("repeat store lock")
-            .get(key)
-            .is_some_and(|(last, at)| {
-                last == decision && now.saturating_duration_since(*at) < REPEAT_WINDOW
-            })
+        self.0.get(key).is_some_and(|(last, at)| {
+            last == decision && now.saturating_duration_since(*at) < REPEAT_WINDOW
+        })
     }
 
     /// Record that `decision` was written for `key` at `now`.
-    pub(super) fn remember(&self, key: String, decision: String, now: Instant) {
-        let mut map = self.0.lock().expect("repeat store lock");
+    pub(super) fn remember(&mut self, key: String, decision: String, now: Instant) {
+        let map = &mut self.0;
         if map.len() >= REPEAT_CAP && !map.contains_key(&key) {
             map.retain(|_, (_, at)| now.saturating_duration_since(*at) < REPEAT_WINDOW);
             if map.len() >= REPEAT_CAP {
@@ -259,9 +266,14 @@ async fn write_records(
 ) -> std::io::Result<()> {
     let mut first_failure = None;
     for note in select_records(notes) {
+        // Held across the append: check, write and remember are one step.
+        let mut ledger = match &note.repeat {
+            Some(mark) => Some(mark.store.0.lock().await),
+            None => None,
+        };
         let now = Instant::now();
-        if let Some(mark) = &note.repeat
-            && mark.store.is_repeat(&mark.key, &mark.decision, now)
+        if let (Some(mark), Some(ledger)) = (&note.repeat, &ledger)
+            && ledger.is_repeat(&mark.key, &mark.decision, now)
         {
             continue;
         }
@@ -272,9 +284,8 @@ async fn write_records(
         match written {
             // Remembered only once written: a failed write suppresses nothing.
             Ok(()) => {
-                if let Some(mark) = &note.repeat {
-                    mark.store
-                        .remember(mark.key.clone(), mark.decision.clone(), now);
+                if let (Some(mark), Some(ledger)) = (&note.repeat, ledger.as_mut()) {
+                    ledger.remember(mark.key.clone(), mark.decision.clone(), now);
                 }
             }
             Err(error) => {
