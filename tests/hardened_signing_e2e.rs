@@ -321,6 +321,8 @@ async fn malformed_signing_nonce_refused_before_the_task_gate() {
     .await;
     let mut request = modern_call(51, UNLISTED, &json!({}), Some(""));
     request["params"]["task"] = json!({});
+    request["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({"extensions": {"io.modelcontextprotocol/tasks": {}}});
     request["params"]["_meta"]["io.mcp-gateway/idempotency-key"] = json!("task-gate-key");
     let wire = post(&stack, "/mcp", &request).await;
     assert_refused(&wire, "a malformed nonce on a task-augmented call");
