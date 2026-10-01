@@ -1,0 +1,3 @@
+head_sha	22c9c157d2e153035f0ce5e69ca0687762c74b4b
+# Private denies loopback like Public: a listed backend is refused
+d1-listed	linux	d1.patch	--test hardened_signing_e2e listed_private_backend_tool_call_is_served
