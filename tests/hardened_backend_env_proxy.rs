@@ -105,7 +105,8 @@ async fn start_probe(posture: &str) -> mcp_gateway::Result<()> {
         registry,
         evaluated.config.failsafe,
         Duration::from_secs(60),
-    );
+    )
+    .expect("the registry pairs with the config");
     backend.ensure_started().await
 }
 

@@ -488,6 +488,12 @@ impl SessionProfileStore {
     pub fn remove_session(&self, session_id: &str) {
         self.sessions.write().remove(session_id);
     }
+
+    /// Sessions holding a profile, for the store-bound tests.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.sessions.read().len()
+    }
 }
 
 // ============================================================================

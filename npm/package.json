@@ -1,7 +1,7 @@
 {
   "name": "@mikkoparkkola/mcp-gateway",
   "version": "2.12.1",
-  "description": "Universal MCP Gateway — single-port multiplexing with a compact Meta-MCP surface",
+  "description": "Universal MCP Gateway — single-port multiplexing with a compact Meta-MCP surface, bridging MCP revisions",
   "license": "SEE LICENSE IN LICENSES.md",
   "author": "Mikko Parkkola <mikko.parkkola@iki.fi>",
   "repository": {

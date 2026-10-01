@@ -61,6 +61,7 @@ impl Reload {
             crate::config::FailsafeConfig::default(),
             Duration::from_secs(300),
         )
+        .expect("the registry pairs with the config")
         .with_identity_grant_sink(self.sink.clone())
     }
 

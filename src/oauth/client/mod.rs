@@ -158,6 +158,9 @@ pub struct OAuthClient {
     /// Callback host override (default: "localhost", dual-binds IPv4+IPv6).
     callback_host: Option<String>,
 
+    /// Hands the authorization URL to its approver (the browser; a test in tests).
+    open_browser: Box<dyn Fn(&str) -> bool + Send + Sync>,
+
     /// Fixed callback port (None = OS-assigned).
     callback_port: Option<u16>,
 
@@ -289,6 +292,7 @@ impl OAuthClient {
             client_id_source: RwLock::new(client_id_source),
             client_secret: cfg.client_secret,
             callback_host: cfg.callback_host,
+            open_browser: Box::new(open_browser),
             callback_port: cfg.callback_port,
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
@@ -834,15 +838,13 @@ impl OAuthClient {
         let auth_url_str = auth_url.to_string();
         info!(url = %auth_url_str, "Opening browser for authorization");
 
-        if !open_browser(&auth_url_str) {
+        if !(self.open_browser)(&auth_url_str) {
             warn!("Failed to open browser automatically");
             println!("\nPlease authorize this client by visiting:\n{auth_url_str}\n");
         }
 
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server.wait_for_callback().await?;
-
-        debug!(code = %callback_result.code, "Received authorization code");
 
         // RFC 9207, before the code is redeemed: a code that came from another
         // authorization server must not be sent to this one's token endpoint.
@@ -1201,6 +1203,8 @@ fn open_browser(url: &str) -> bool {
     result.is_ok()
 }
 
+#[cfg(test)]
+mod authorize_tests;
 pub(crate) mod destination;
 #[cfg(test)]
 mod tests;

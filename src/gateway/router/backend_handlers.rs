@@ -674,7 +674,7 @@ async fn backend_handler_inner(
     let session_id = inbound_headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
-        .filter(|id| state.multiplexer.is_owned_by(id, &owner));
+        .filter(|id| state.multiplexer.touch_if_owned(id, &owner));
     crate::protocol_revision_telemetry::observe_inbound_request(
         &json_request,
         params.as_ref(),

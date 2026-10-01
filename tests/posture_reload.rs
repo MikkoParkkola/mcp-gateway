@@ -64,6 +64,7 @@ impl Fixture {
             evaluated.config.failsafe,
             Duration::from_secs(60),
         )
+        .expect("the registry pairs with the config")
         .with_env(env);
         Self {
             _directory: directory,
@@ -202,4 +203,53 @@ async fn reload_backend_is_pinned() {
         .expect("adding and modifying backends reloads");
     assert_refused(&fixture, "added", &accepted).await;
     assert_refused(&fixture, "keep", &accepted).await;
+}
+
+/// `with_backends` under hardened with `listed` in
+/// `security.hardened.private_backends`.
+fn with_private(backends: Value, listed: &[&str]) -> Value {
+    let mut document = with_backends("hardened", backends);
+    document["security"]["hardened"] = json!({"private_backends": listed});
+    document
+}
+
+/// Row 13 through `ReloadContext::new` and a reload: a caller-built
+/// registry stamps a listed backend `Private`, so it reaches its loopback
+/// listener, and keeps doing so after a reload modifies it. An unlisted
+/// backend in the same config is still refused.
+#[tokio::test]
+async fn reload_context_stamps_listed_backends_private() {
+    let (port, accepted) = counting_listener().await;
+    let (other_port, other_accepted) = counting_listener().await;
+    let fixture = Fixture::from(&with_private(
+        json!({"local": local(port), "other": local(other_port)}),
+        &["local"],
+    ));
+    let backend = fixture.context.registry.get("local").unwrap();
+    let _ = backend.ensure_started().await;
+    assert!(
+        accepted.load(Ordering::SeqCst) > 0,
+        "a listed backend connects"
+    );
+    assert_refused(&fixture, "other", &other_accepted).await;
+
+    let (moved, moved_accepted) = counting_listener().await;
+    write(
+        &fixture.path,
+        &with_private(
+            json!({"local": local(moved), "other": local(other_port)}),
+            &["local"],
+        ),
+    );
+    fixture
+        .context
+        .reload_outcome()
+        .await
+        .expect("modifying a listed backend reloads");
+    let backend = fixture.context.registry.get("local").unwrap();
+    let _ = backend.ensure_started().await;
+    assert!(
+        moved_accepted.load(Ordering::SeqCst) > 0,
+        "the modified listed backend still connects"
+    );
 }

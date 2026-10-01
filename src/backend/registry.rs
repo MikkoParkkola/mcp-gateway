@@ -186,8 +186,8 @@ pub struct BackendRegistry {
     /// a cancelled reload (#1808), so this is held by the read, not the lock.
     reload_read: Arc<tokio::sync::Semaphore>,
     /// Where registered backends may connect; set once. See
-    /// [`BackendRegistry::enforce_destination`].
-    destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// [`BackendRegistry::enforce_destinations`].
+    destination: std::sync::OnceLock<Destinations>,
 }
 
 impl BackendRegistry {
@@ -266,8 +266,19 @@ impl BackendRegistry {
             );
             return false;
         }
-        if let Some(policy) = self.destination.get() {
-            backend.stamp_destination(*policy);
+        if let Some(destinations) = self.destination.get() {
+            // Check and stamp under the lock `Backend::publish` takes, so no
+            // start publishes between them.
+            let _publishing = backend.replaced_transport_cleanups.lock();
+            if backend.started_unpinned() {
+                warn!(
+                    backend = %backend.name,
+                    "Refusing to register a backend that connected before this registry's \
+                     destination policy was set; build it after pairing"
+                );
+                return false;
+            }
+            backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         let name = backend.name.clone();
         self.backends.insert(name.clone(), backend);
@@ -283,17 +294,65 @@ impl BackendRegistry {
     /// when the running posture is `hardened`, so a caller-built registry
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
-    pub(crate) fn enforce_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
+    ///
+    /// The first such pairing is refused, recording and stamping nothing, when
+    /// a backend already connected (or is connecting) over HTTP or WebSocket
+    /// under no policy: that transport is unpinned and cannot be re-pinned in
+    /// place (MIK-7700). A start that races the pairing is refused when it
+    /// publishes (`Backend::publish`).
+    ///
+    /// # Errors
+    ///
+    /// Names the first such backend, and nothing else of its config.
+    ///
+    /// The backends named in `security.hardened.private_backends` are
+    /// stamped `Private` instead. The policy and the names are one snapshot,
+    /// recorded once, so every backend registered later is stamped from the
+    /// same answer.
+    pub(crate) fn enforce_destinations(
+        &self,
+        policy: crate::security::ssrf::DestinationPolicy,
+        private_backends: &[String],
+    ) -> crate::Result<()> {
         // Unset already means `Configured`; recording anything but `Public`
         // would let a standard pairing block a later hardened one.
         if policy != crate::security::ssrf::DestinationPolicy::Public {
-            return;
+            return Ok(());
         }
         let _stopping = self.stopping.lock();
-        let policy = *self.destination.get_or_init(|| policy);
-        for backend in &self.backends {
-            backend.stamp_destination(policy);
+        let mut members: Vec<Arc<Backend>> = self
+            .backends
+            .iter()
+            .map(|b| Arc::clone(b.value()))
+            .collect();
+        // One global lock order (by address): a backend shared by two
+        // registries paired at once cannot have its lock taken in two orders.
+        members.sort_by_key(Arc::as_ptr);
+        // Every member's publish lock is held from the check until its stamp
+        // lands: a start that publishes first is seen by the check, and one
+        // that publishes after finds the stamp and is refused (`publish`).
+        let _publishing: Vec<_> = members
+            .iter()
+            .map(|b| b.replaced_transport_cleanups.lock())
+            .collect();
+        // Only an unstamped backend can qualify, so once the snapshot is
+        // recorded (every member stamped) this never refuses again.
+        if let Some(started) = members.iter().find(|b| b.started_unpinned()) {
+            return Err(crate::Error::ConfigValidation(format!(
+                "backend '{}' connected before the hardened destination policy was set, so \
+                 its connection is not pinned; pair the registry with the config before \
+                 starting any backend",
+                started.name
+            )));
         }
+        let destinations = self.destination.get_or_init(|| Destinations {
+            policy,
+            private: private_backends.iter().cloned().collect(),
+        });
+        for backend in &members {
+            backend.stamp_destination(destinations.for_backend(&backend.name));
+        }
+        Ok(())
     }
 
     /// Route every membership change to one consumer (F24). Set once, by the HTTP server.
@@ -381,6 +440,22 @@ impl BackendRegistry {
 impl Default for BackendRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// The destination answer a registry stamps on its backends.
+struct Destinations {
+    policy: crate::security::ssrf::DestinationPolicy,
+    private: std::collections::HashSet<String>,
+}
+
+impl Destinations {
+    fn for_backend(&self, name: &str) -> crate::security::ssrf::DestinationPolicy {
+        if self.private.contains(name) {
+            crate::security::ssrf::DestinationPolicy::Private
+        } else {
+            self.policy
+        }
     }
 }
 
