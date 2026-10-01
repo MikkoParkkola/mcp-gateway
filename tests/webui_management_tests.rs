@@ -205,7 +205,6 @@ async fn make_app_state_with_reload(
     .expect("the registry pairs with the config");
     meta_mcp.set_reload_context(reload_context);
     let capability_dirs = cap_dir.map(|d| vec![d.to_string()]).unwrap_or_default();
-
     let subscriptions = Arc::new(SubscriptionRegistry::new(64, authorizer.clone()));
     let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
 
