@@ -623,13 +623,20 @@ Decisions:
    - `ServiceError` collapses a lease conflict into `Unavailable` (`task_service/service.rs:89`).
      Stdio does not need to tell the two apart.
    - The expiry loop starts from the same helper, with `tasks.expiry_interval`.
-   - EOF order in `run_stdio_on`, after the dispatch drain and the writer join (D5):
-     1. Stop the expiry loop and shut down the executor, so workers are cancelled or settled
-        exactly as on HTTP shutdown.
-     2. Close the store, which releases the lease.
-     3. Run the existing teardown (`backends.stop_all`).
+   - EOF order in `run_stdio_on`, after the dispatch drain and the writer join (D5), is HTTP's
+     own task shutdown, extracted from `Gateway::run` (`server/mod.rs:2196-2223`) into the
+     shared helper so the two cannot drift:
+     1. Join the expiry sweep.
+     2. Drain the executor (`TaskExecutor::drain`, `execution.rs:339-371`), joining handoffs, then
+        worker permits, within the shutdown timeout.
+     3. Close the store, which releases the lease.
 
-     No worker can race the backend shutdown or the store close.
+     Then the existing teardown runs (`backends.stop_all`).
+   - Residual, identical on both transports and not widened here: a drain that times out leaves
+     straggler workers running past the store close and into `stop_all`. Their writes fail on the
+     closed store. The fix (cancel and join remaining handoffs after the timeout) belongs in the
+     shared helper and lands for both transports at once. It is proposed for #2530's 4.0.1 scope,
+     with the lead.
 7. **Lease direction: decided by the lead, 2026-10-01, option (d).** Stdio derives its own
    store from the same base path: `expand_home_path(tasks.store_dir).join("stdio")`. It is
    resolved literally, with no new config key, and the derived path is logged at open.
@@ -651,8 +658,10 @@ Decisions:
    - **I-OWN is still tested,** by configuring HTTP explicitly onto the stdio directory once stdio
      has exited.
    - **Documented** in the `tasks.store_dir` config doc comment (`src/config/features/tasks.rs`),
-     `docs/UPGRADING-4.0.md`, and `docs/runbooks/backup-restore-and-keys.md`. The backup runbook
-     needs no procedure change, because the subdirectory is inside the backed-up directory.
+     `docs/UPGRADING-4.0.md`, and `docs/runbooks/backup-restore-and-keys.md`.
+     - The backup set is unchanged, because the subdirectory is inside the backed-up directory.
+     - The runbook gains one line: stop every gateway, HTTP and stdio, that writes under the base
+       directory before backup or restore, since the two stores are now independent writers.
 8. **Placement.**
    - New code goes in sibling modules: `gateway/task_route.rs`, `gateway/task_service/host.rs`
      (`TaskHost`, `StdioTaskHost`), and `gateway/server/stdio_tasks.rs` (open, creation, the
@@ -740,3 +749,9 @@ failing tests are written.
   - the EOF shutdown order.
 
   Test-plan changes are listed in its I4 review log.
+- Rev 5.1, round 2 (seat A, delta `c4f9c5405..211432dad`, SHIP-WITH-FIXES):
+  - all four round-1 findings are closed, and option (d) is upheld against the loader, lease and
+    relocation code;
+  - the EOF order now reuses HTTP's task shutdown, with the timed-out straggler residual recorded;
+  - N10's proof moves in-process (test plan);
+  - the backup runbook gains the stop-every-writer line.

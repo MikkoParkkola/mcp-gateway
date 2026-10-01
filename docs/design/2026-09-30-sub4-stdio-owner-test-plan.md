@@ -364,11 +364,12 @@ global index are its "no global lookup and no new instance UUID".
 
 | # | Test | Assertion |
 |---|---|---|
-| U1 | `a_stdio_task_dispatch_keeps_its_owner_mark` (`task_service/host_tests.rs`) | An `OwnedCallerContext` built through the stdio intent path, rebuilt by the worker's own `dispatch_context`: `owner_principal() == Some(LOCAL_OPERATOR_PRINCIPAL)`, `provenance()` is `LocalTransport`, and `caller_cache_principal(..)` is `Caller(_)`, not `Unresolved`. This is the lead's pinned path: the keyed inner call keeps its key. |
+| U1 | `a_stdio_task_dispatch_keeps_its_owner_mark` (`task_service/host_tests.rs`) | An `OwnedCallerContext` built through the stdio intent path, rebuilt by the worker's own `dispatch_context`: `owner_principal() == Some(LOCAL_OPERATOR_PRINCIPAL)`, `provenance()` is `LocalTransport`, and `caller_cache_principal(..)` is `Caller(_)`, not `Unresolved`. |
 | U2 | `a_stdio_task_s_inner_call_is_cached_under_the_operator` | With the response cache on for a cacheable fixture tool: a stdio task (built through the stdio creation path, run by `TaskExecutor` under `TaskHost::Stdio`) calls it, then a synchronous stdio call repeats it. The repeat is a cache hit, so backend rounds = 1. This is the lead's pinned path: without the mark the task's cache principal is `Unresolved`, nothing is stored, and rounds = 2. |
 | U3 | `http_owner_text_cannot_name_the_local_operator` (`task_route_tests.rs`) | `TaskOwnerText::Http` with each of `"\0local-operator.v1"`, `"\0"`, and `"\0local-operator.v1x"` resolves to not found against a store holding a task created through the stdio intent path (not a hand-seeded record). `"stdio"`, `local:auth-disabled:tasks:v1` and a `credential:` digest also miss it. |
 | U4 | `a_stdio_worker_outliving_its_session_settles_before_dispatch` | Drop the `StdioTaskHost` before the worker upgrades it. The task settles `not_executed` / `gateway_interrupted_before_dispatch`, with backend rounds = 0. |
 | U5 | `a_stdio_task_runs_under_the_current_tool_policy` | A stdio task whose target `ToolPolicy` denies is refused by the worker's authorizer: terminal with an error, backend rounds = 0. A permitted neighbour task completes. |
+| U6 | `stdio_eof_releases_the_store_lease_before_returning` (in-process, `server/tests/`) | `run_stdio_on` over duplex pipes with a task created and completed. After it returns, still inside the same runtime and process, `open_runtime` on the stdio store directory succeeds at once. |
 
 ## Mutant batch
 
@@ -383,7 +384,7 @@ global index are its "no global lookup and no new instance UUID".
 | N6 | the stdio creation path keeps HTTP's auth gate | T11 |
 | N7 | the `Stdio` host's authorizer allows every target, skipping `ToolPolicy` | U5 |
 | N9 | the stdio creation path drops the idempotency-key requirement | T17 |
-| N10 | stdio's EOF skips closing the store | T3 (the respawn finds the lease held and degrades) |
+| N10 | stdio's EOF skips closing the store | U6. If dropping the last store reference releases the lease anyway, N10 is recorded as an equivalent mutant (same observable end state), not as a gap. T3 cannot kill it: process exit frees the OS lock. |
 
 ## Out of this increment
 
@@ -404,7 +405,7 @@ global index are its "no global lookup and no new instance UUID".
   - the holder-undisturbed check in T13 and the HTTP-on-relocated-base check in T4;
   - the immediate respawn in T3;
   - U3 built through the stdio intent path;
-  - mutants N9 and N10;
+  - mutants N9 and N10, with N10 proven in-process by U6 (round 2);
   - the structural traceability line.
 - Not taken: the managed-upstream restart row. Stdio installs no upstream adapter (D6 rev 5
   item 4), so the path it would test does not exist on stdio.
