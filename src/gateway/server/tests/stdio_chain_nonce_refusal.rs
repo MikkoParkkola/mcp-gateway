@@ -47,6 +47,7 @@ async fn dispatch_on(meta: &Arc<MetaMcp>, request: Value) -> Value {
             session_id: "cov3-stdio",
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
+            tasks: None,
         },
         &super::super::StdioTelemetry::default(),
     )
