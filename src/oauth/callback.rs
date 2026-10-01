@@ -125,6 +125,14 @@ pub async fn start_callback_server(
         .parse::<IpAddr>()
         .ok()
         .filter(IpAddr::is_loopback);
+    if !dual_bind && loopback_ip.is_none() {
+        warn!(
+            event = "oauth.callback_server.host_not_loopback",
+            host = effective_host,
+            "callback_host is neither localhost nor a loopback IP: the redirect URI names it, \
+             but the callback only listens on 127.0.0.1, so it must resolve there"
+        );
+    }
 
     // Bind the primary address first so we can learn the kernel-assigned
     // port when `port` is `None`.
@@ -132,9 +140,11 @@ pub async fn start_callback_server(
         loopback_ip.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
         port.unwrap_or(0),
     );
-    let primary_listener = TcpListener::bind(primary_addr)
-        .await
-        .map_err(|e| Error::OAuth(format!("Failed to bind callback server: {e}")))?;
+    let primary_listener = TcpListener::bind(primary_addr).await.map_err(|e| {
+        Error::OAuth(format!(
+            "Failed to bind callback server on {primary_addr}: {e}"
+        ))
+    })?;
 
     let actual_port = primary_listener
         .local_addr()
@@ -480,6 +490,26 @@ mod tests {
         }
         served_where_advertised("::1", "[::1]").await;
         served_where_advertised("[::1]", "[::1]").await;
+    }
+
+    /// Any other host is named as written but never bound beyond loopback:
+    /// the server still answers on 127.0.0.1 at the advertised port and path.
+    #[tokio::test]
+    async fn a_non_loopback_host_is_named_as_written_and_stays_on_loopback() {
+        let server = start_callback_server("s".to_string(), Some("callback.example"), None, None)
+            .await
+            .unwrap();
+        let advertised = reqwest::Url::parse(&server.callback_url).unwrap();
+        assert_eq!(advertised.host_str(), Some("callback.example"));
+        let port = advertised.port().unwrap();
+        let url = format!("http://127.0.0.1:{port}/oauth/callback?code=c&state=s");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::join!(server.wait_for_callback(), client.get(url).send())
+        })
+        .await
+        .expect("the loopback address answers");
+        assert_eq!(outcome.expect("a code").1.code, "c");
     }
 
     #[tokio::test]
