@@ -99,21 +99,6 @@ fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The `taskId` a task method names, if it names one.
-fn task_id_param(params: Option<&Value>) -> Option<&str> {
-    params?.get("taskId")?.as_str()
-}
-
-/// The one answer a caller gets for a task that is absent, or that belongs to
-/// another principal.
-///
-/// Deliberately carries no id: a message naming the task would let a caller
-/// tell "not yours" from "never existed", which is the whole disclosure the
-/// ownership rule exists to prevent.
-fn missing_task_error(id: crate::protocol::RequestId) -> JsonRpcResponse {
-    JsonRpcResponse::error(Some(id), -32602, "no such task")
-}
-
 /// The owner key of a stateless task: the validated API-key credential. Only
 /// `route_task_owner` reads it (the firewall keys on `identity::caller_key`);
 /// tasks keep this encoding so an upgrade does not orphan stored ones. Empty
@@ -930,7 +915,11 @@ async fn meta_mcp_dispatch(
             "status" => "error"
         )
         .increment(1);
-        return build_response(missing_task_error(id), &session_id, StatusCode::OK);
+        return build_response(
+            crate::gateway::task_route::missing_task_error(id),
+            &session_id,
+            StatusCode::OK,
+        );
     }
 
     // A `subscriptions/listen` naming tasks and nothing else HAS said what it

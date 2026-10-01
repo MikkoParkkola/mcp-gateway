@@ -89,7 +89,7 @@ fn intent(state: &Arc<AppState>, key: &str, arguments: &Value) -> TaskIntent {
     TaskIntent {
         executor: Arc::clone(&state.task_executor),
         owned: OwnedCallerContext::new(
-            Arc::downgrade(state),
+            crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),
             OwnedRouterAuthorizer::capture(None, None, None),
             None,
             None,
@@ -378,7 +378,7 @@ async fn an_idle_executor_drains_clean_and_still_runs_the_next_task() {
 async fn a_task_worker_keeps_the_declared_agent_label() {
     let (state, _store) = fixture_state(&auth_disabled()).await;
     let owned = OwnedCallerContext::new(
-        Arc::downgrade(&state),
+        crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(&state)),
         OwnedRouterAuthorizer::capture(None, None, None),
         None,
         None,
@@ -394,8 +394,9 @@ async fn a_task_worker_keeps_the_declared_agent_label() {
         None,
         None,
     );
-    let authorizer = owned.authorizer().borrow(&state);
-    let caller = owned.dispatch_context(&state, &authorizer);
+    let host = crate::gateway::task_service::host::LiveHost::Http(Arc::clone(&state));
+    let authorizer = host.authorizer(owned.authorizer());
+    let caller = owned.dispatch_context(&host, &authorizer);
 
     let declared = caller
         .agent_declared

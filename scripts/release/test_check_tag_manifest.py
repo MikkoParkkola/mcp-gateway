@@ -655,6 +655,38 @@ TAG_INPUT = r"inputs\s*(?:\.\s*tag\b|\[\s*['\"]tag['\"]\s*\])"
 TAG_EXPRESSION = re.compile(r"\$\{\{[^}]*" + TAG_INPUT + r"[^}]*\}\}")
 
 
+RELEASE_LINE_ONLY = (
+    "github.event_name == 'push' && "
+    "github.ref == 'refs/heads/docs/ranking-1-release-line'"
+)
+
+
+EXPORT_ARTIFACT_NAME = "image-${{ matrix.arch }}-${{ github.sha }}"
+
+
+def is_release_line_export(block):
+    """True for the one step that hands verifiers an image and publishes nothing.
+
+    Safe by what it does, never by what it is called. The parsed step must be an
+    upload-artifact whose own `if:` is exactly the release-line push condition
+    (so it cannot run on main or a tag) and whose artifact is exactly the export
+    name -- not anything under `image-digest-`, the prefix the manifest job
+    consumes to create tags. Parsed, not pattern-matched: a nested `if:` or a
+    quoted name must not be able to satisfy it.
+    """
+    try:
+        step = yaml.safe_load("\n".join(block))[0]
+    except (yaml.YAMLError, IndexError, KeyError, TypeError):
+        return False
+    if not isinstance(step, dict) or not isinstance(step.get("with") or {}, dict):
+        return False
+    return (
+        " ".join(str(step.get("if", "")).split()) == RELEASE_LINE_ONLY
+        and str(step.get("uses", "")).lower().startswith("actions/upload-artifact@")
+        and str((step.get("with") or {}).get("name", "")) == EXPORT_ARTIFACT_NAME
+    )
+
+
 def job_if(workflow, job):
     """A job's own `if:` scalar, folded to one line.
 
@@ -1653,6 +1685,33 @@ class WorkflowWiring(unittest.TestCase):
                     f"{workflow}: {block[0].strip()} does not build {want}",
                 )
 
+    def test_the_release_line_export_exemption_is_keyed_on_what_makes_it_safe(self):
+        # A step name is a free-text label: keying the exemption on it would
+        # let any future step walk past the main-only rule by copying it.
+        def step(cond=RELEASE_LINE_ONLY, uses="actions/upload-artifact@x",
+                 name=EXPORT_ARTIFACT_NAME, env=""):
+            lines = ["- name: Upload the scanned image (release-line push only)"]
+            if cond:
+                lines.append(f"  if: {cond}")
+            lines.append(f"  uses: {uses}")
+            if env:
+                lines += ["  env:", f"    if: {env}"]
+            lines += ["  with:", f"    name: {name}"]
+            return lines
+
+        self.assertTrue(is_release_line_export(step()))
+        # Each requirement fails on its own, the others held valid.
+        for held, why in (
+            (step(cond="github.ref == 'refs/heads/main'"), "main-only condition"),
+            (step(cond=""), "no condition"),
+            (step(cond="", env=RELEASE_LINE_ONLY), "condition only nested in env"),
+            (step(name="image-digest-${{ matrix.arch }}"), "digest artifact"),
+            (step(name="'image-digest-amd64'"), "quoted digest artifact"),
+            (step(name="other"), "unlisted artifact name"),
+            (step(uses="docker/build-push-action@x"), "registry publisher"),
+        ):
+            self.assertFalse(is_release_line_export(held), why)
+
     def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
         # A regression lock, green today: docker.yml handed :VERSION over, and
         # this condition is the only thing keeping the second publisher from
@@ -1670,6 +1729,7 @@ class WorkflowWiring(unittest.TestCase):
             block
             for block in steps("docker.yml", "build")
             for line in block
+            if not is_release_line_export(block)
             if re.search(r"\bpush\s*=\s*true\b", line)
             or re.match(r"^\s*push:\s*\$\{\{", line)
             or re.match(r"^\s*uses:\s*actions/upload-artifact@", line)

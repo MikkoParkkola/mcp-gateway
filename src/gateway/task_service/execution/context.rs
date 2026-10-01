@@ -8,7 +8,8 @@ use crate::gateway::authz::ToolAuthorizer;
 use crate::gateway::destructive_confirmation::ConfirmationChannel;
 use crate::gateway::meta_mcp::dispatch_log::DispatchLog;
 use crate::gateway::meta_mcp::{Authentication, MetaMcpCallerContext};
-use crate::gateway::router::{AppState, OwnedRouterAuthorizer, RouterAuthorizer};
+use crate::gateway::router::OwnedRouterAuthorizer;
+use crate::gateway::task_service::host::{HostAuthorizer, LiveHost, TaskHost};
 use crate::idempotency::admission::{Mode, Request};
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -19,7 +20,9 @@ use crate::protocol::mrtr::RetryFields;
 /// context at dispatch. `task` is always `None` on the rebuilt context so the
 /// worker cannot re-enter admission.
 pub(crate) struct OwnedCallerContext {
-    state: std::sync::Weak<AppState>,
+    /// The transport the task runs for: the HTTP router's state or the stdio
+    /// gateway's host (design D6 rev 5 item 1).
+    host: TaskHost,
     authorizer: OwnedRouterAuthorizer,
     api_key_name: Option<String>,
     agent_id: Option<crate::security::OwnedProvenAgentId>,
@@ -61,7 +64,7 @@ pub(crate) struct OwnedCallerContext {
 impl OwnedCallerContext {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        state: std::sync::Weak<AppState>,
+        host: TaskHost,
         authorizer: OwnedRouterAuthorizer,
         api_key_name: Option<String>,
         agent_id: Option<crate::security::OwnedProvenAgentId>,
@@ -81,7 +84,7 @@ impl OwnedCallerContext {
         // one construction site: it is the durable task's owner, not a display
         // name, and with authentication off no identity renders it.
         Self {
-            state,
+            host,
             authorizer,
             api_key_name,
             agent_id,
@@ -107,8 +110,8 @@ impl OwnedCallerContext {
         &self.dispatch_log
     }
 
-    pub(crate) fn state(&self) -> &std::sync::Weak<AppState> {
-        &self.state
+    pub(crate) fn host(&self) -> &TaskHost {
+        &self.host
     }
 
     pub(crate) fn authorizer(&self) -> &OwnedRouterAuthorizer {
@@ -128,10 +131,10 @@ impl OwnedCallerContext {
     /// - Capabilities are the creating request's.
     pub(crate) fn dispatch_context<'a>(
         &'a self,
-        state: &'a AppState,
-        authorizer: &'a RouterAuthorizer<'a>,
+        host: &LiveHost,
+        authorizer: &'a HostAuthorizer<'a>,
     ) -> MetaMcpCallerContext<'a> {
-        self.dispatch_context_retrying(state, authorizer, &self.retry)
+        self.dispatch_context_retrying(host, authorizer, &self.retry)
     }
 
     /// The retry fields of one input-round continuation: the gateway-sealed
@@ -153,8 +156,8 @@ impl OwnedCallerContext {
     /// own fields: the continuation of an input round.
     pub(crate) fn dispatch_context_retrying<'a>(
         &'a self,
-        _state: &'a AppState,
-        authorizer: &'a RouterAuthorizer<'a>,
+        host: &LiveHost,
+        authorizer: &'a HostAuthorizer<'a>,
         retry: &'a RetryFields,
     ) -> MetaMcpCallerContext<'a> {
         let authorizer: &'a (dyn ToolAuthorizer + Sync) = authorizer;
@@ -196,7 +199,10 @@ impl OwnedCallerContext {
                 .as_deref()
                 .map(crate::security::DeclaredAgentLabel::new),
             grant_subject: self.grant_subject.clone(),
-            stdio_nonce: None,
+            // The stdio host's mark, so the reserved owner, the cache
+            // principal and `LocalTransport` provenance survive the rebuild
+            // (D6 rev 5 item 2). An HTTP host has none.
+            stdio_nonce: host.stdio_nonce(),
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
