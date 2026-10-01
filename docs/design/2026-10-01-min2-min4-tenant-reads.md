@@ -124,14 +124,23 @@ ReadHistory`. For each principal (the key is in §3.4) it holds three things:
 - `committed: HashMap<TenantHash, Instant>`: the last delivery time of each
   hashed tenant (`hash_argument`, as on the record). `U` entries use a fresh
   random id.
-- `pending: HashMap<TicketId, Vec<TenantHash>>`: reservations owned by
-  unfinished reads. A pending tenant counts as live.
+- `pending: HashMap<TicketId, Reservation>`: what unfinished reads have
+  reserved. A pending tenant counts as live.
 - `overflow_until: Option<Instant>`: set when `committed` would exceed 256
   entries. The tenant is then not inserted. Instead `overflow_until` becomes
   `max(overflow_until, now + window)`, and while it is in the future it counts
-  as one extra distinct tenant. Memory per principal is therefore bounded in
-  both modes, and an overflowing principal is flagged or refused, never
-  silently trimmed.
+  as one extra distinct tenant.
+
+**One bound covers committed and pending together.** The bound is 256
+distinct hashes per principal, counting committed and pending entries
+together, plus at most 256 open tickets. A read that would cross either limit
+reserves only an overflow reservation: a single slot that counts as one extra
+distinct tenant until its ticket commits (then it becomes `overflow_until`) or
+drops. A pending tenant that is already held is not stored again. The read's
+own tenant set is transient and is freed when the request ends.
+
+Peak memory per principal is therefore fixed in both modes, and an
+overflowing principal is flagged or refused, never silently trimmed.
 
 Expiry is by time alone. A committed entry is never removed by anything except
 expiry, so a refused retry of A cannot erase A. Dropping an uncommitted ticket
@@ -143,12 +152,20 @@ history is never evicted.
 ### 3.3 Judge API
 
 ```rust
-pub(crate) struct ReadAttribution { tenants: BTreeSet<String>, uninspected: bool }
+pub(crate) struct ReadAttribution { tenants: BTreeSet<TenantHash>, uninspected: bool }
 pub(crate) fn assess_read_at(&self, principal: Option<&str>,
     read: &ReadAttribution, now: Instant) -> (ReadVerdict, Option<ReadTicket>)
 // ReadVerdict { None, Flagged { distinct }, Blocked { distinct }, Unattributable }
 // ReadTicket::commit(self, now): pending -> committed. Drop: removes its own pending entry.
 ```
+
+`ReadAttribution` holds hashes only. Each raw id is hashed once, with
+`hash_argument` (data_flow.rs:139), at the point where the record fields are
+built, and the same `TenantHash` values go to the record, the judge and the
+task row. Nothing hashes twice, and live and stored ids compare equal. `U` is
+never an id: `uninspected` travels as a boolean (on the task row,
+`read_uninspected`), and the judge mints a fresh `U` slot each time it sees
+`true`.
 
 The judge applies these steps in order. Steps 4 and 5 run under the
 principal's map-entry lock, so two concurrent reads see each other's
@@ -176,17 +193,29 @@ transparency log. The ticket is parked in a request-scoped task-local,
 `ReadTickets`, which uses the same `tokio::task_local!` scope shape as
 `DispatchNotes` (audit.rs:75-78, :147-156).
 
-**Commit** happens at exactly one point per route. That point sits after the
-last code that can still turn the answer into a refusal. Tickets commit only
-if the final answer carries a `result` and no `error`. Otherwise the scope ends
-and every ticket drops. The table below lists each route; the "last refusal
-before it" column names what can still refuse before the commit point.
+**Commit** happens at exactly one point per route. That point is a single
+return that every audit-policy outcome passes through: no log, a non-fatal
+write failure, and a successful write all reach it. It sits after the last
+code that can still turn the answer into a refusal. Tickets commit only if the
+final answer carries a `result` and no `error`. Otherwise the scope ends and
+every ticket drops. The table below lists each route; the "last refusal before
+it" column names what can still refuse before the commit point.
 
 | Route | Methods | Assessed at | Single commit point | Last refusal before it |
 |---|---|---|---|---|
-| HTTP `/mcp` | all, matched at handlers.rs:1011 | tool calls: `audit_invocation` (audit.rs:324), `audit_replay` (:530, before :539/:546); other forwards: `forward_for_caller` (caller_forward.rs:123); stored tasks: `refuse_stored_delivery` (task_replay.rs:24) | right after `finalize_response_after_inspection` returns (handlers.rs:1826-1828), beside `complete_delivery` (:1829-1831) | finalization: response firewall, signing failure, fail-closed delivery-attempt audit (response_security.rs:168-276) |
-| stdio | all | as HTTP (stdio_catalogue.rs:62-65, stdio_tasks.rs:275) | right after `finalize_response_for_delivery` returns (server/mod.rs:3050) | same finalization |
-| Direct `/mcp/{backend}` | **every** forwarded method; one funnel, `dispatch_in_scope` (backend_handlers.rs:431-458) | `audited_call` (direct_audit.rs:102-119) on the inner answer, for every method | end of `record`, on the `Ok(())` write branch (direct_audit.rs:193) | fail-closed record write (direct_audit.rs:194-203); signing and response firewall already ran inside (backend_handlers.rs:1121; direct_guards.rs:91-92) |
+| HTTP `/mcp` | all, matched at handlers.rs:1011 | tool calls: `audit_invocation` (audit.rs:324), `audit_replay` (:530, before :539/:546); stored tasks: `refuse_stored_delivery` (task_replay.rs:24); **every other method**, catalogues included: on the assembled `response.result`, just before finalization (handlers.rs:1826) | right after `finalize_response_after_inspection` returns (handlers.rs:1826-1828), beside `complete_delivery` (:1829-1831) | finalization: response firewall, signing failure, fail-closed delivery-attempt audit (response_security.rs:168-276); its no-log and non-fatal paths return the response, so they reach the commit too |
+| stdio | all | as HTTP; other methods (stdio_catalogue.rs:60-75 included, dispatched at server/mod.rs:3034-3035) just before finalization (server/mod.rs:3050) | right after `finalize_response_for_delivery` returns (server/mod.rs:3050) | same finalization |
+| Direct `/mcp/{backend}` | **every** forwarded method; one funnel, `dispatch_in_scope` (backend_handlers.rs:431-458) | `audited_call` (direct_audit.rs:102-119) on the inner answer, for every method | the single return of `audited_call` (direct_audit.rs:114-118), after `record` returns, whatever path `record` took: no log (:141-143), success (:193), non-fatal failure (:204-207) | fail-closed record write (direct_audit.rs:194-203), which returns a 503 error, so nothing commits; signing and response firewall already ran inside (backend_handlers.rs:1121; direct_guards.rs:91-92) |
+
+**Catch-all assessment** ("every other method") applies `response_tenants` and
+`response_uninspected` (PR:163-177) to the final assembled result. It covers
+`prompts/list`, `resources/list` and `resources/templates/list`, whose handlers
+assemble catalogues without `forward_for_caller` (protocol.rs:150,
+resources.rs:294), as well as `resources/read`, `prompts/get` and cached
+catalogues. It runs only if no writer assessed the request already: writers
+mark the `ReadTickets` scope. That keeps one assessment and one record per
+request. A blocked catch-all answer becomes the existing finalization refusal
+before finalization runs.
 
 The direct route is judged generically. `DirectCall::of` (direct_audit.rs:42-73)
 returns a call for every method, not only `tools/call`. It carries
@@ -221,8 +250,9 @@ context.rs:206) delivers to nobody, so it is not assessed.
   non-empty. It honours `FailClosed` like `write_invocation` (audit.rs:434-437),
   and a failed write withholds the
   delivery, so the ticket drops.
-- **Resource, prompt and other forwards:** one `log_invocation_attributed`
-  record, with the method as the tool, when attribution is non-empty.
+- **Every other method (catch-all, §3.4; direct non-`tools/call`):** one
+  `log_invocation_attributed` record, with the method as the tool, when
+  attribution is non-empty.
 - **Not recorded:** `meta_refusal_audit.rs:89` (nothing delivered). The task
   settlement keeps its own record (audit.rs:455). It is not a delivery.
 
@@ -241,8 +271,13 @@ or replaces a deliverable payload writes the payload's `read_tenants` in the
 same write. That covers completion, a parked `input_required` round, the
 completion of a resumed task, and upstream recovery. The precedent is
 `store_targets.rs:118-196`, which writes `targets` with the record. A row
-without the field, from an older version or an unrecorded path, is judged as
-`uninspected`, that is `U`. It fails closed under §3.1, and only when
+without the field, from an older version or an unrecorded path, is judged on
+`ReadAttribution { tenants: response_tenants(stored payload), uninspected:
+true }`. That is its visible tenants plus `U`. The stored payload is the
+task's output or its pending input requests (`CommittedTask.task`,
+record.rs:322; task_replay.rs:18-22). A first delivery that visibly names A
+and B is therefore flagged even when there is no history, and request-only
+tenants that could not be recovered are covered by `U`. This applies only when
 attribution is configured.
 
 **Cached deliveries and replays** are reads. The caller receives the data
@@ -257,7 +292,8 @@ UPGRADING says so (§6).
 
 If 4.0 needs it smaller, §3.6 can ship as a second increment with no bypass.
 Until it lands, every stored task delivery has no `read_tenants`, so it is
-judged as `U`. The result is fail-closed and over-flagging, never under. The
+judged on its visible tenants plus `U` (§3.6). The result is fail-closed and
+over-flagging, never under. The
 rest is one increment, because each part closes a bypass the others depend
 on: the model, the history, the generic direct funnel, the commit points and
 the records.
@@ -334,6 +370,13 @@ for a mutant must go red with that mutant applied.
 | `task_result_judged_on_reader` | task admitted under credential K by subject S1 holding A; subject S2 on K reads B result: judged against S2's history, and against S1's when S1 reads it | key taken from the admitting caller |
 | `task_request_only_tenant_survives_settlement` | task naming B only in request, unkeyed upstream result: a later `tasks/result` after an A read is flagged | settlement passes the empty set (audit.rs:475) |
 | `legacy_task_row_fails_closed` | row without `read_tenants`, after an A read: flagged / refused | missing field read as empty |
+| `legacy_task_first_delivery_a_and_b` | row without `read_tenants` whose stored output names A and B, no history: flagged / refused | legacy row judged on `U` alone |
+| `direct_no_log_retains_history` | direct route, no transparency log: A then B flagged | commit only on the `Ok(())` write branch |
+| `direct_nonfatal_write_failure_retains_history` | direct route, write fails under the non-fatal policy: A then B flagged | same |
+| `direct_failclosed_write_failure_no_history` | write fails under `FailClosed`: 503, then B unflagged | committing before the policy resolves |
+| `catalogue_delivery_is_judged` | tool read A, then `prompts/list` whose description is JSON naming `customer_id` B (HTTP, stdio, and cached catalogue): flagged / refused, record written | catch-all assessment missing |
+| `pending_storage_is_bounded` | 300 open tickets and one 1,000-tenant read held before commit: stored hashes ≤ 256, tickets ≤ 256, the excess reads flagged; drop restores | no bound on pending |
+| `hash_once_live_matches_stored` | a task row's `read_tenants` equals the live record's `tenants` for the same id | double hashing |
 | `uninspected_is_unknown_tenant_both_orders` | A then opaque; opaque then B; opaque then opaque; one opaque read whose inspected part names held A: each flagged / refused. A lone opaque read: `None` | empty-set return before the `U` step; `U` equal to A; `U` not stored |
 | `finalization_refusal_records_no_history` | B refused at finalization (response firewall, signing failure, fail-closed delivery-attempt audit), then A read: not flagged; stdio and direct-route fail-closed write likewise | commit before handlers.rs:1826-1828 / server/mod.rs:3050 / direct_audit.rs:193 |
 | `refused_retry_keeps_committed_a` | A committed; a repeat A read refused at finalization; then B: still flagged | Drop removing the committed entry |
@@ -443,3 +486,22 @@ Both improvements were taken: an overlap barrier and two-session key tests
 (§5), and the `read_tenants` write invariant (§3.6). None was refuted.
 
 **Round 2 decisions (merge lane):** the per-principal cap stays a constant (256); a knob waits for a measured need. `large_single_tenant` (A, then an unreadable page of A) is a deliberate false positive of failing closed, measured by the corpus and carried into the post-release MIN.KILL week. The stdio stored-task finalize path is checked at implementation.
+
+### Review dispositions (third round)
+
+All four findings were confirmed and are fixed:
+1. **Direct history lost on no-log and non-fatal paths.** Confirmed: `record`
+   returns early at direct_audit.rs:141-143 and again at :204-207. Fixed by
+   moving the commit to the single return of `audited_call` (§3.4).
+2. **Catalogue deliveries were not assessed.** Confirmed: `prompts/list`,
+   `resources/list` and templates are assembled without `forward_for_caller`
+   (protocol.rs:150, resources.rs:294; stdio_catalogue.rs:60-75). Fixed by the
+   catch-all assessment before finalization (§3.4).
+3. **Legacy task row judged on `U` alone.** Confirmed against the earlier
+   §3.6. Fixed: visible tenants plus `U` (§3.6).
+4. **Pending reservations were unbounded.** Confirmed against the earlier
+   §3.2. Fixed: one bound covering committed and pending entries, plus a
+   ticket cap with overflow reservations (§3.2).
+
+Both improvements were taken: hash-once ids and a boolean `read_uninspected`
+(§3.3), and the named witnesses in §5.
