@@ -363,6 +363,10 @@ class HeadLineCalls(unittest.TestCase):
             '    debug!(r#"a "quoted" {}"#, clean(x));\n',
             "    debug!(c = ?'\"', v = %clean(x));\n",
             '    debug!(v = %x /* note */, "seen");\n',
+            '    debug!("first"); debug!(v = %clean(x));\n',
+            "    let q = '\"'; debug!(v = %clean(x), \"seen\");\n",
+            '    let q = r"\\"; debug!(v = %clean(x), "seen");\n',
+            '    /* " */ debug!(v = %clean(x), "seen");\n',
         ]
         for body in shapes:
             with self.subTest(body=body.strip()):

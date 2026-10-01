@@ -79,24 +79,22 @@ PLAIN_FIELD = re.compile(
 # `[name =] [%|?]value` with a literal, identifier or path value. Anything else
 # (a call, index, operator, closure, block, macro, or a delimiter other than
 # `(`) is unverifiable. A whitelist, as for argument lines: shapes it does not
-# know fail spuriously, never pass. A raw string, a quote character literal or
-# a block comment survives literal stripping as a non-plain argument, so it is
-# unverifiable too. The name is matched after any path (`::tracing::warn!`).
+# know fail spuriously, never pass. Every macro head on the line is checked.
+# Literal stripping is not a lexer: a line that also holds a raw string, a quote
+# character literal or a block comment anywhere is unverifiable before stripping,
+# since any of those can make it erase or invent code. The name is matched after
+# any path (`::tracing::warn!`).
 ANY_TRACING_HEAD = re.compile(r"(?<!\w)(trace|debug|info|warn|error|event|span)\s*!\s*([(\[{])")
+TRACING_NAME = re.compile(r"(?<!\w)(?:trace|debug|info|warn|error|event|span)\s*!")
+UNLEXED = re.compile(r"(?<!\w)b?r#*\"|/\*|'\\?\"'")
 PLAIN_ARGUMENT = re.compile(r"^(?:[A-Za-z_][\w.]*\s*=\s*)?[%?]?" + _VALUE + r"$")
 
 
-def head_has_call(raw):
-    """True when a tracing macro head on this raw source line carries, on the
-    line itself, an argument that is not plain (see above)."""
-    code = strip_literals(raw)
-    match = ANY_TRACING_HEAD.search(code)
-    if not match:
-        return False
-    if match.group(2) != "(":
-        return True
+def plain_arguments(text):
+    """True when the argument list opening `text` (just past its `(`) holds
+    only plain arguments up to its closing `)` or the end of the line."""
     arguments, current, depth = [], "", 0
-    for ch in code[match.end():]:
+    for ch in text:
         if ch in "([{":
             depth += 1
         elif ch in ")]}":
@@ -109,7 +107,21 @@ def head_has_call(raw):
         else:
             current += ch
     arguments.append(current)
-    return any(a.strip() and not PLAIN_ARGUMENT.match(a.strip()) for a in arguments)
+    return all(not a.strip() or PLAIN_ARGUMENT.match(a.strip()) for a in arguments)
+
+
+def head_has_call(raw):
+    """True when a tracing macro head on this raw source line carries, on the
+    line itself, an argument that is not plain (see above)."""
+    if not TRACING_NAME.search(raw):
+        return False
+    if UNLEXED.search(raw):
+        return True
+    code = strip_literals(raw)
+    for match in ANY_TRACING_HEAD.finditer(code):
+        if match.group(2) != "(" or not plain_arguments(code[match.end():]):
+            return True
+    return False
 
 
 def is_plain_field(code):
