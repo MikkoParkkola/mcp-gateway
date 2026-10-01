@@ -35,6 +35,9 @@ pub(crate) mod input;
 mod platform;
 #[path = "store_targets.rs"]
 pub(crate) mod targets;
+#[cfg(all(test, unix))]
+#[path = "store_lease_tests.rs"]
+mod lease_tests;
 #[cfg(test)]
 use crate::protocol::tasks::TaskTransition;
 use crate::protocol::tasks::{Task, TaskStatus};
