@@ -395,16 +395,22 @@ impl Store {
         for (_, _, principal) in &tails {
             *per_principal.entry(principal.clone()).or_default() += 1;
         }
-        let mut kept = tails.len();
+        // Two passes, oldest first: expiry and each principal's own cap
+        // before the global cap, so one principal's churn evicts its own
+        // records before anyone else's.
         let mut evict: Vec<String> = Vec::new();
+        let mut kept: Vec<&String> = Vec::new();
         for (ended, key, principal) in &tails {
             let count = per_principal.get_mut(principal).expect("counted above");
-            if now - *ended >= ttl || *count > tail.max_per_principal || kept > tail.max {
+            if now - *ended >= ttl || *count > tail.max_per_principal {
                 evict.push(key.clone());
                 *count -= 1;
-                kept -= 1;
+            } else {
+                kept.push(key);
             }
         }
+        let over = kept.len().saturating_sub(tail.max);
+        evict.extend(kept.into_iter().take(over).cloned());
         for key in evict {
             remove_record(&self.verified_dir, &key)?;
             state.verified.remove(&key);
