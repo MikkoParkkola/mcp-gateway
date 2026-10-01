@@ -32,7 +32,7 @@ Only `security.posture: hardened` changes; under `standard` the key is accepted 
   - The proxy-time check (`router/authorization.rs:337-344`) applies the backend's own stamped
     policy when it is `Private`. Without that, a listed backend would connect and then have
     every tool call refused by the generic literal check.
-- **Stamping.** `BackendRegistry::enforce_destination` installs one immutable snapshot, the
+- **Stamping.** `BackendRegistry::enforce_destinations` installs one immutable snapshot, the
   posture policy plus the listed names, under the lock `register` inserts under (4b's race-free
   rule). It stamps `Private` on each listed backend and `Public` on every other. This holds at
   startup and on reload add or modify. A backend's policy never downgrades from `Public` to

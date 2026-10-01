@@ -48,7 +48,7 @@ fn transport(template: &str, port: u16) -> TransportConfig {
 async fn start(template: &str, policy: DestinationPolicy) -> (crate::Result<()>, usize) {
     let (port, accepted) = counting_listener().await;
     let registry = BackendRegistry::new();
-    registry.enforce_destination(policy);
+    registry.enforce_destinations(policy, &[]);
     let config = BackendConfig {
         transport: transport(template, port),
         // Long enough for a `localhost` control on Windows, which tries `::1`
@@ -119,7 +119,7 @@ async fn hardened_backend_oauth_discovery_is_pinned() {
     ] {
         let (port, accepted) = counting_listener().await;
         let registry = BackendRegistry::new();
-        registry.enforce_destination(policy);
+        registry.enforce_destinations(policy, &[]);
         let config = BackendConfig {
             transport: transport("http://localhost:{port}/mcp", port),
             timeout: Duration::from_secs(2),
@@ -165,8 +165,8 @@ fn enforced_public_is_never_downgraded() {
     let registry = BackendRegistry::new();
     let before = backend("before");
     assert!(registry.register(Arc::clone(&before)));
-    registry.enforce_destination(DestinationPolicy::Public);
-    registry.enforce_destination(DestinationPolicy::Configured);
+    registry.enforce_destinations(DestinationPolicy::Public, &[]);
+    registry.enforce_destinations(DestinationPolicy::Configured, &[]);
     let after = backend("after");
     assert!(registry.register(Arc::clone(&after)));
     assert_eq!(before.destination(), DestinationPolicy::Public);
@@ -178,7 +178,7 @@ fn enforced_public_is_never_downgraded() {
 #[test]
 fn configured_first_does_not_block_public() {
     let registry = BackendRegistry::new();
-    registry.enforce_destination(DestinationPolicy::Configured);
+    registry.enforce_destinations(DestinationPolicy::Configured, &[]);
     let backend = Arc::new(Backend::new(
         "b",
         BackendConfig::default(),
@@ -186,7 +186,7 @@ fn configured_first_does_not_block_public() {
         Duration::from_secs(60),
     ));
     assert!(registry.register(Arc::clone(&backend)));
-    registry.enforce_destination(DestinationPolicy::Public);
+    registry.enforce_destinations(DestinationPolicy::Public, &[]);
     assert_eq!(backend.destination(), DestinationPolicy::Public);
     let later = Arc::new(Backend::new(
         "later",

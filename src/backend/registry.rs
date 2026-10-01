@@ -186,7 +186,7 @@ pub struct BackendRegistry {
     /// a cancelled reload (#1808), so this is held by the read, not the lock.
     reload_read: Arc<tokio::sync::Semaphore>,
     /// Where registered backends may connect; set once. See
-    /// [`BackendRegistry::enforce_destination`].
+    /// [`BackendRegistry::enforce_destinations`].
     destination: std::sync::OnceLock<Destinations>,
 }
 
@@ -283,16 +283,11 @@ impl BackendRegistry {
     /// when the running posture is `hardened`, so a caller-built registry
     /// cannot serve a hardened config unpinned. Taken under the lock
     /// [`Self::register`] inserts under, so no registration slips between.
-    #[cfg(test)]
-    pub(crate) fn enforce_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
-        self.enforce_destinations(policy, &[]);
-    }
-
-    /// [`Self::enforce_destination`], with the backends named in
-    /// `security.hardened.private_backends` stamped `Private` instead.
     ///
-    /// The policy and the names are one snapshot, recorded once, so every
-    /// backend registered later is stamped from the same answer.
+    /// The backends named in `security.hardened.private_backends` are
+    /// stamped `Private` instead. The policy and the names are one snapshot,
+    /// recorded once, so every backend registered later is stamped from the
+    /// same answer.
     pub(crate) fn enforce_destinations(
         &self,
         policy: crate::security::ssrf::DestinationPolicy,
