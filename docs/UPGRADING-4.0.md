@@ -135,6 +135,7 @@ backend" and "fails a capability file" first.**
 | 108 | Reserved: lands with a pending change | None yet |
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
+| 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3149,6 +3150,31 @@ The `attribution` field says how far that list reaches:
 
 **Action:** none unless you consume these records. Under `uninspected`, treat `tenants` as a
 lower bound, not a complete list.
+
+## 111. A stdio gateway keeps durable tasks in its own store
+
+**Startup:** no notice; refuses to start, only an HTTP gateway whose `tasks.store_dir` is a running stdio gateway's `stdio` directory
+
+A stdio gateway (`serve --stdio`) now serves the tasks extension for the client that spawned it.
+A task-augmented `tools/call` with an idempotency key becomes a durable task, and `tasks/get`,
+`tasks/update` and `tasks/cancel` answer on stdio. Before, stdio answered every such call
+synchronously and `tasks/*` answered `-32601`.
+
+The store is `<tasks.store_dir>/stdio`, its own directory beside the HTTP gateway's
+`tasks.store_dir`, so an HTTP gateway and a stdio gateway on one config never contend for one lease. A
+task survives a restart and a moved base directory, and no HTTP caller can read, cancel or update
+it: the store keys it under the local operator, a principal no HTTP credential can name.
+
+- A second stdio gateway on the same config finds the store held. It serves as before, answers
+  task-augmented calls synchronously, and advertises no tasks extension in `initialize` or
+  `server/discover`.
+- An HTTP gateway whose `tasks.store_dir` is set to another gateway's `stdio` directory fails to
+  start while that gateway holds it. The error names the likely holder.
+- `tasks.recovery_adapters` stays an HTTP feature: stdio settles every interrupted task on start.
+
+**Action:** none for separate stores. Give each gateway its own `tasks.store_dir` if two configs
+point HTTP at a stdio directory. Back up `tasks.store_dir` with every gateway that writes under it
+stopped; the `stdio` subdirectory is inside it.
 
 ## Upgrading from 3.5.x: a walkthrough
 

@@ -43,6 +43,7 @@ fn real_stdio_context_carries_principal_and_no_personal_identity() {
             session_id: super::super::STDIO_SESSION_ID,
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
+            tasks: None,
         },
     );
 

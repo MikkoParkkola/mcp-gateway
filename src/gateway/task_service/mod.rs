@@ -24,6 +24,7 @@ mod service;
 mod service_tests;
 
 pub(crate) mod execution;
+pub(crate) mod host;
 
 #[cfg(test)]
 mod runtime_tests;

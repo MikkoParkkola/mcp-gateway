@@ -30,7 +30,9 @@ mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_dispatches;
 mod stdio_nonce;
+mod stdio_tasks;
 mod stdio_writer;
+mod task_runtime;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 mod tools_changed;
@@ -352,6 +354,8 @@ struct StdioClient<'a> {
     session_id: &'a str,
     channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
     handshake_capabilities: crate::protocol::meta::Declared,
+    /// The session's task store; `None` serves no `tasks/*` (MIK-7272.OWNER.2).
+    tasks: Option<&'a stdio_tasks::StdioTasks>,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -1856,27 +1860,24 @@ impl Gateway {
             .filter(|name| self.backends.get(name).is_some())
             .cloned()
             .collect();
-        let (task_service, task_executor) =
-            crate::gateway::task_service::open_runtime_with_recovery(
-                &task_store_dir,
-                self.config.tasks.max_workers,
-                crate::gateway::task_service::StoreLimits {
-                    records: self.config.tasks.max_records,
-                    per_principal: self.config.tasks.max_per_principal,
-                    record_bytes: self.config.tasks.max_record_bytes,
-                    logical_bytes: self.config.tasks.logical_budget_bytes,
-                },
-                Arc::clone(&subscriptions),
-                Arc::clone(meta_mcp.execution_admission()),
-                &managed_adapters,
-            )
-            .await
-            .map_err(|error| {
-                Error::Config(format!(
-                    "task store at '{}' could not be opened: {error}",
-                    task_store_dir.display()
-                ))
-            })?;
+        let (task_service, task_executor) = task_runtime::open(
+            &self.config,
+            &task_store_dir,
+            Arc::clone(&subscriptions),
+            &meta_mcp,
+            &managed_adapters,
+        )
+        .await
+        .map_err(|error| {
+            // A held lease is most often a stdio gateway on the same
+            // directory (MIK-7272.OWNER.2, design D6 rev 5 item 7).
+            Error::Config(format!(
+                "task store at '{}' could not be opened: {error} (if it is held by \
+                 another gateway process, possibly a stdio gateway using '<store_dir>/stdio', \
+                 give each gateway its own tasks.store_dir)",
+                task_store_dir.display()
+            ))
+        })?;
         info!(
             path = %task_store_dir.display(),
             max_workers = self.config.tasks.max_workers,
@@ -2191,35 +2192,13 @@ impl Gateway {
         // own transaction and no new one starts against a store about to give
         // its lease back. The join returns what the sweep actually met, so a
         // store it could not delete from is not reported as a clean stop.
-        if let Err(error) = expiry_sweep.shutdown().await {
-            warn!(%error, "Task expiry sweep did not stop cleanly");
-        } else {
-            info!("Task expiry sweep stopped");
-        }
-
-        // Task workers hold no inflight permit — the request that created one
-        // was answered with a handle and released its permit long before the
-        // work finished — so the drain above cannot see them and a second wait
-        // is what makes shutdown graceful for them too.
-        //
-        // Ahead of `stop_all`, because a worker's dispatch IS a backend call:
-        // stopping the pool first would fail the very work this wait exists to
-        // let finish. The store closes afterwards, which joins any writer still
-        // in flight and gives the directory lease back — a lease this process
-        // kept would refuse the next start its own store.
-        info!(timeout = ?drain_timeout, "Draining in-flight tasks...");
-        let task_drain = task_executor_for_shutdown.drain(drain_timeout).await;
-        if task_drain.timed_out {
-            warn!(
-                acquired_workers = task_drain.acquired,
-                "Task drain timeout reached, proceeding with shutdown"
-            );
-        } else {
-            info!("All in-flight tasks completed");
-        }
-        if let Err(error) = task_service_for_shutdown.shutdown().await {
-            warn!(%error, "Task store did not release its lease cleanly");
-        }
+        task_runtime::shutdown(
+            expiry_sweep,
+            &task_executor_for_shutdown,
+            &task_service_for_shutdown,
+            drain_timeout,
+        )
+        .await;
 
         // Release the custody store before the backends go: the drain above is
         // what guarantees no in-flight request is still holding a credential.
@@ -2326,6 +2305,9 @@ impl Gateway {
                 }
             },
         ));
+        // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
+        let task_store =
+            stdio_tasks::open(&self.config, self.env.startup(), &meta_mcp, &tool_policy).await;
 
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -2621,6 +2603,7 @@ impl Gateway {
                 // Cloned, not borrowed: the caller context holds
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
                 let channel = Arc::clone(&channel);
+                let tasks = task_store.as_ref().map(|(tasks, _)| Arc::clone(tasks));
                 let writer = writer.clone();
                 let cancelled = cancelled.clone();
                 let answers = request_id.clone();
@@ -2637,6 +2620,7 @@ impl Gateway {
                                 session_id,
                                 channel: &*channel,
                                 handshake_capabilities,
+                                tasks: tasks.as_deref(),
                             },
                             &telemetry,
                         )),
@@ -2769,6 +2753,10 @@ impl Gateway {
         // starts for a gateway that is on its way out. The guard remains the
         // backstop for every path that does not reach this line.
         warm_start_tasks.cancel().await;
+        // Tasks before custody and backends: a worker's dispatch IS a backend call.
+        if let Some((tasks, expiry)) = task_store {
+            stdio_tasks::shutdown(&tasks, expiry, self.config.server.shutdown_timeout).await;
+        }
         // Release the custody store before the backends go. Reached on the EOF
         // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
         // Not covered by gateway_bootstrap_tests — no test drives `run_stdio`.
@@ -2866,6 +2854,7 @@ impl Gateway {
                 session_id,
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
             },
             &StdioTelemetry::default(),
         )
@@ -2991,17 +2980,35 @@ impl Gateway {
                     // this dispatcher has no running config, and the stateless
                     // revision is specified over streamable HTTP (a limitation, not
                     // a decision that stdio is excluded).
-                    "server/discover" => {
-                        JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false))
-                    }
-                    "initialize" => meta_mcp.handle_initialize(
-                        id,
-                        params,
-                        Some(session_id),
-                        None,
-                        request_shape.era(),
-                        scope,
+                    "server/discover" => stdio_tasks::advertised(
+                        client.tasks,
+                        JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false)),
                     ),
+                    "initialize" => stdio_tasks::advertised(
+                        client.tasks,
+                        meta_mcp.handle_initialize(
+                            id,
+                            params,
+                            Some(session_id),
+                            None,
+                            request_shape.era(),
+                            scope,
+                        ),
+                    ),
+                    m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
+                        let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+                        let caller = Self::build_stdio_caller_context(
+                            true,
+                            None,
+                            &policy,
+                            &retry,
+                            &request_shape,
+                            client,
+                        );
+                        let shape = &request_shape;
+                        stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
+                            .await
+                    }
                     "tools/list" => {
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
@@ -3269,6 +3276,8 @@ impl Gateway {
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+            // Read before the merge below moves `_meta` out of the request.
+            let wants_task = params.is_some_and(|params| params.get("task").is_some());
             let is_modern = matches!(
                 request_shape,
                 crate::protocol::meta::RequestShape::Modern(_)
@@ -3345,13 +3354,32 @@ impl Gateway {
                 );
             }
             caller.signing = signing_context.as_ref();
-            let admission = meta_mcp.admit_meta_sync(
-                &caller,
-                &tool_name,
-                arguments.as_ref(),
-                Some(session_id),
-                &id,
-            );
+            if wants_task && let Some(tasks) = client.tasks {
+                match stdio_tasks::task_intent(
+                    tasks,
+                    &id,
+                    &tool_name,
+                    &arguments,
+                    &caller,
+                    request_shape,
+                    session_id,
+                ) {
+                    Ok(intent) => caller.task = intent,
+                    Err(refusal) => break 'tool_call *refusal,
+                }
+            }
+            // A task is admitted durably by its handoff, as on HTTP.
+            let admission = if caller.task.is_some() {
+                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
+            } else {
+                meta_mcp.admit_meta_sync(
+                    &caller,
+                    &tool_name,
+                    arguments.as_ref(),
+                    Some(session_id),
+                    &id,
+                )
+            };
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
@@ -3444,6 +3472,8 @@ impl Gateway {
                     // handshake would widen a channel that cannot ask.
                     channel: &crate::gateway::input_bridge::NoClientChannel,
                     handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                    // A batch is a legacy shape; it serves no `tasks/*`.
+                    tasks: None,
                 },
                 protocol_telemetry_sink,
             ))
@@ -4167,6 +4197,7 @@ mod tests {
                 session_id: "stdio-durable-window-test",
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
             },
             &sink,
         )
