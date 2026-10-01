@@ -506,3 +506,41 @@ fn a_missing_challenge_fails_closed() {
     inject_nonce(&mut params, "n").expect("object _meta");
     assert_eq!(params["_meta"]["keep"], 1);
 }
+
+/// MIK-7211.PARENT.6: the scope is settled before the link is computed, so the
+/// link covers the bytes actually delivered.
+#[tokio::test]
+async fn origin_link_covers_the_clamped_scope() {
+    let out = deliver(
+        &meta(Some(ChainEmit::OnRequest)),
+        JsonRpcResponse::success(
+            RequestId::Number(1),
+            json!({"content": [], "cacheScope": "public"}),
+        ),
+        ChainSource::Backend,
+        Some(NONCE),
+        None,
+    )
+    .await;
+    assert_eq!(result_of(&out)["cacheScope"], "private");
+    let chain = chain_of(result_of(&out)).expect("chain emitted");
+    let digest = content_digest(result_of(&out)).expect("digest of the delivered result");
+    verify_self(chain, &digest, NONCE).expect("link verifies against the delivered bytes");
+}
+
+/// The direct route links in `finish_direct`; it too settles the scope first.
+#[test]
+fn direct_origin_link_covers_the_clamped_scope() {
+    let mut response = JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({"content": [], "cacheScope": "public"}),
+    );
+    response.chain_source = ChainSource::Backend;
+
+    meta(Some(ChainEmit::OnRequest)).finish_direct(&mut response, "tools/call", Some(NONCE));
+
+    assert_eq!(result_of(&response)["cacheScope"], "private");
+    let chain = chain_of(result_of(&response)).expect("chain emitted");
+    let digest = content_digest(result_of(&response)).expect("digest");
+    verify_self(chain, &digest, NONCE).expect("link verifies against the delivered bytes");
+}

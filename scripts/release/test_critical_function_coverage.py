@@ -124,6 +124,214 @@ class CriticalFunctionCoverage(unittest.TestCase):
 
 
 
+TRACED = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        value = x,
+        "seen"
+    );
+    x > 0
+}
+"""
+
+
+class TracingArgumentLines(unittest.TestCase):
+    """A reached macro's zero-count argument lines are excluded (and listed);
+    an unreached macro's are not, so an untested log call still fails."""
+
+    def grade(self, head_count):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(TRACED)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                f"SF:/repo/src/lib.rs\nDA:1,1\nDA:2,{head_count}\nDA:3,0\nDA:6,1\nDA:7,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def test_a_reached_macro_has_its_argument_lines_excluded_and_listed(self):
+        result = self.grade(head_count=1)
+        self.assertEqual(result[0], "ok")
+        self.assertEqual((result[5], result[6]), (4, 4))
+        self.assertEqual(result[8], ["src/lib.rs:3 (head 2=1)"])
+
+    def test_logic_nested_in_an_argument_stays_graded(self):
+        nested = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        value = if x > 1 {
+            enforce(x)
+        } else {
+            0
+        },
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(nested)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,0\nDA:10,1\nDA:11,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [4], "the branch body inside the argument is still graded")
+        self.assertEqual(result[8], [])
+
+    def test_a_call_nested_in_an_argument_stays_graded(self):
+        nested = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        value = Some(
+            enforce(x)
+        ),
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(nested)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nDA:8,1\nDA:9,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3, 4], "an argument spanning lines is graded whole")
+        self.assertEqual(result[8], [])
+
+    def test_a_continued_expression_in_an_argument_stays_graded(self):
+        continued = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        allowed = x > 1
+            && enforce(x),
+        count = x,
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(continued)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nDA:5,0\nDA:8,1\nDA:9,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3, 4], "both halves of the continued field stay graded")
+        self.assertEqual(result[8], ["src/lib.rs:5 (head 2=1)"], "the whole field line is excluded")
+
+    def test_a_comment_between_fields_keeps_the_next_field_whole(self):
+        commented = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        event = "seen",
+        // the count is the field the instrument mis-attributes
+        count = x,
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(commented)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:5,0\nDA:8,1\nDA:9,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [])
+        self.assertEqual(result[8], ["src/lib.rs:5 (head 2=1)"])
+
+    def test_a_try_operator_in_a_field_stays_graded_and_a_debug_sigil_does_not(self):
+        tried = """\
+fn logs(x: u8) -> Result<bool, u8> {
+    tracing::debug!(
+        value = enforce(x)?,
+        shown = ?x,
+        "seen"
+    );
+    Ok(x > 0)
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(tried)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nDA:7,1\nDA:8,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3], "the early return through ? stays graded")
+        self.assertEqual(result[8], ["src/lib.rs:4 (head 2=1)"])
+
+    def test_an_unreached_macro_keeps_its_argument_lines(self):
+        result = self.grade(head_count=0)
+        self.assertEqual(result[0], "BELOW")
+        self.assertEqual(result[4], [2, 3])
+        self.assertEqual(result[8], [])
+
+
+class PlainFieldWhitelist(unittest.TestCase):
+    """Only a plain field line is ever excluded; every other shape stays graded."""
+
+    ALLOWED = [
+        'event = "",',
+        "count = x,",
+        "x,",
+        "%self.name,",
+        "?err,",
+        "kind = a::B,",
+        "n = -3,",
+        "flag = true,",
+    ]
+    REFUSED = [
+        "v = x.count_ones(),",
+        "v = a + b,",
+        "v = f()?,",
+        "v = x?,",
+        "v = !x,",
+        "v = |x| x,",
+        "v = m!(x),",
+        "v = (x),",
+        "v = x",
+        "v = x && y,",
+        "v = if a { b } else { c },",
+    ]
+
+    def test_the_table(self):
+        for shape in self.ALLOWED:
+            with self.subTest(allowed=shape):
+                self.assertTrue(cfc.is_plain_field(shape))
+        for shape in self.REFUSED:
+            with self.subTest(refused=shape):
+                self.assertFalse(cfc.is_plain_field(shape))
+
+
 class InventoryResolves(unittest.TestCase):
     """Every row of the real inventory names a function that exists.
 

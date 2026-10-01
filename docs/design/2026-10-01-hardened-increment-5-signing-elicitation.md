@@ -135,9 +135,11 @@ into their state: `task_gate_answer_is_unsigned_and_keeps_its_nonce`,
 `gateway_invoke_with_two_nonces_refused`, `hardened_direct_signing_failure_fails_closed` (the
 inner gateway always answers an object, which the primitive signs), and
 `hardened_capture_signs_every_tool_call`, which carries the stored-copy mutant of
-`hardened_meta_stored_result_is_resigned`. `confirmation_follow_up_needs_a_fresh_nonce` is
-covered by `hardened_tool_call_nonce_replay_refused`: a follow-up resending a nonce is a
-replay. `hardened_direct_cached_result_is_signed` drives the direct cache exit end to end.
+`hardened_meta_stored_result_is_resigned`. `confirmation_follow_up_needs_a_fresh_nonce`
+drives the shipped binary (MIK-7633): the `gateway_kill_server` challenge is signed over its
+nonce, the follow-up resending that nonce is refused and runs nothing, and the follow-up with
+a fresh nonce completes signed; both MACs pass the independent oracle.
+`hardened_direct_cached_result_is_signed` drives the direct cache exit end to end.
 
 ### Existing hardened fixtures
 

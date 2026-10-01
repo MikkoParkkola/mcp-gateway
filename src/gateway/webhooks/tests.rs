@@ -762,3 +762,6 @@ async fn a_dashboard_session_receives_webhook_data_only_on_an_issued_handle() {
         "a handle this process never issued authenticates nobody"
     );
 }
+
+#[path = "message_clamp_tests.rs"]
+mod message_clamp;
