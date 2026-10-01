@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/redirect_policy.rs b/src/transport/http/redirect_policy.rs
+index 5618df8cf..f92e4e5d1 100644
+--- a/src/transport/http/redirect_policy.rs
++++ b/src/transport/http/redirect_policy.rs
+@@ -62,7 +62,7 @@ pub(super) fn evaluate_redirect_for(
+     if let Err(e) = destination.check_configured_url(target.as_str()) {
+         return RedirectDecision::Reject(e.to_string());
+     }
+-    if !same_origin(base, target) {
++    if !same_origin(base, target) && destination != DestinationPolicy::Private {
+         return RedirectDecision::Reject(format!(
+             "redirect target is cross-origin to the transport base URL; \
+              refusing to replay per-user credentials to a different origin \

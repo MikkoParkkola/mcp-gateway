@@ -1,0 +1,13 @@
+diff --git a/src/backend/registry.rs b/src/backend/registry.rs
+index 7c3b861af..0d1367f30 100644
+--- a/src/backend/registry.rs
++++ b/src/backend/registry.rs
+@@ -295,7 +295,7 @@ impl BackendRegistry {
+     ) {
+         // Unset already means `Configured`; recording anything but `Public`
+         // would let a standard pairing block a later hardened one.
+-        if policy != crate::security::ssrf::DestinationPolicy::Public {
++        if policy != crate::security::ssrf::DestinationPolicy::Public && private_backends.is_empty() {
+             return;
+         }
+         let _stopping = self.stopping.lock();

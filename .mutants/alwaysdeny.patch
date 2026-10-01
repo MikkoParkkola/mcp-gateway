@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/destination.rs b/src/security/ssrf/destination.rs
+index 8ae9df522..fb36bd412 100644
+--- a/src/security/ssrf/destination.rs
++++ b/src/security/ssrf/destination.rs
+@@ -54,7 +54,7 @@ impl DestinationPolicy {
+             Self::Configured => false,
+             Self::Public => super::is_private_or_reserved(addr),
+             Self::Private => {
+-                ALWAYS_DENIED.contains(&addr)
++                false
+                     || (super::is_private_or_reserved(addr) && !private_reachable(addr))
+             }
+         }

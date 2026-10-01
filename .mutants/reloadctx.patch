@@ -1,0 +1,13 @@
+diff --git a/src/config_reload/mod.rs b/src/config_reload/mod.rs
+index 5750e1087..cc6120844 100644
+--- a/src/config_reload/mod.rs
++++ b/src/config_reload/mod.rs
+@@ -1481,7 +1481,7 @@ impl ReloadContext {
+         let running = live_config.running();
+         registry.enforce_destinations(
+             DestinationPolicy::for_posture(running.security.posture),
+-            &running.security.hardened.private_backends,
++            &[],
+         );
+         Self {
+             config_path,

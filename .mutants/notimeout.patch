@@ -1,0 +1,13 @@
+diff --git a/src/transport/websocket.rs b/src/transport/websocket.rs
+index b1fa9cf4c..2f7642d12 100644
+--- a/src/transport/websocket.rs
++++ b/src/transport/websocket.rs
+@@ -351,7 +351,7 @@ impl WebSocketTransport {
+ 
+         // The timeout bounds the whole connect: lookup, TCP, TLS and upgrade.
+         let connecting = pinned::connect(request, self.destination, &SystemResolver);
+-        let (ws_stream, _response) = tokio::time::timeout(self.timeout, connecting)
++        let (ws_stream, _response) = tokio::time::timeout(Duration::from_secs(3600), connecting)
+             .await
+             .map_err(|_| {
+                 // The configured value, not the measured one: this text is

@@ -1,0 +1,13 @@
+diff --git a/src/backend/registry.rs b/src/backend/registry.rs
+index 7c3b861af..ea7457a85 100644
+--- a/src/backend/registry.rs
++++ b/src/backend/registry.rs
+@@ -404,7 +404,7 @@ struct Destinations {
+ 
+ impl Destinations {
+     fn for_backend(&self, name: &str) -> crate::security::ssrf::DestinationPolicy {
+-        if self.private.contains(name) {
++        if !name.is_empty() {
+             crate::security::ssrf::DestinationPolicy::Private
+         } else {
+             self.policy

@@ -1,0 +1,17 @@
+head_sha	08c917449dd4b77b3ce358e504d20ca90e01fa66
+ALLOWLL	linux	allowll.patch	--lib security::ssrf::destination::tests::private_policy_denies -- --exact
+ALWAYSDENY	linux	alwaysdeny.patch	--lib security::ssrf::destination::tests::private_policy_denies -- --exact
+COMPAT	linux	compat.patch	--lib security::ssrf::destination::tests::private_policy_denies -- --exact
+PROXYCHK	linux	proxychk.patch	--lib security::ssrf::destination::tests::listed_private_backend_tool_call_passes_proxy_check -- --exact
+STAMPALL	linux	stampall.patch	--lib backend::destination_tests::listed_private_backend_policy -- --exact
+REGSTAMP	linux	regstamp.patch	--lib backend::destination_tests::reload_stamps_listed_backends_private -- --exact
+STDSTAMP	linux	stdstamp.patch	--lib security::posture::tests::standard_ignores_private_backends -- --exact
+RELOADCTX	linux	reloadctx.patch	--test posture_reload reload_context_stamps_listed_backends_private -- --exact
+STARTUP	linux	startup.patch	--lib --tests private_backend
+MISSING	linux	missing.patch	--lib security::posture::tests::hardened_refuses_missing_private_backend -- --exact
+RELOADDIFF	linux	reloaddiff.patch	--lib security::posture::tests::reload_refuses_private_backends_change -- --exact
+NOTIMEOUT	linux	notimeout.patch	--lib backend::destination_tests::pinned_websocket_connect_times_out_whole -- --exact
+REDIRECTWIDEN	linux	redirectwiden.patch	--lib transport::http::private_redirect_tests::private_backend_redirect_exemption_is_same_origin_only -- --exact
+WSUNPINNED	linux	wsunpinned.patch	--lib backend::destination_tests::listed_private_backend_policy -- --exact
+OAUTHPUB	linux	oauthpub.patch	--lib oauth::client::destination::tests::listed_private_backend_oauth_policy -- --exact
+RESOLVER	linux	resolver.patch	--lib security::ssrf::destination::tests::private_pin_refuses_metadata_names -- --exact

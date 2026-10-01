@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/destination.rs b/src/security/ssrf/destination.rs
+index 8ae9df522..4324c0ef3 100644
+--- a/src/security/ssrf/destination.rs
++++ b/src/security/ssrf/destination.rs
+@@ -113,7 +113,7 @@ impl DestinationPolicy {
+ /// encoding (compatible, NAT64, 6to4, Teredo) stays denied.
+ fn private_reachable(addr: IpAddr) -> bool {
+     match addr {
+-        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
++        IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+             Some(v4) => v4.is_loopback() || v4.is_private(),
+             None => v6.is_loopback() || v6.segments()[0] & 0xFE00 == 0xFC00,

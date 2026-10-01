@@ -1,0 +1,13 @@
+diff --git a/src/security/posture.rs b/src/security/posture.rs
+index 747b7620c..f4f85ba68 100644
+--- a/src/security/posture.rs
++++ b/src/security/posture.rs
+@@ -111,7 +111,7 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
+         .hardened
+         .private_backends
+         .iter()
+-        .find(|name| !config.backends.contains_key(name.as_str()))
++        .find(|name| name.is_empty())
+     {
+         return Err(Error::ConfigValidation(format!(
+             "security.hardened.private_backends names '{missing}', which is not a configured \

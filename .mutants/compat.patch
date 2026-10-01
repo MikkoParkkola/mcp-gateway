@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/destination.rs b/src/security/ssrf/destination.rs
+index 8ae9df522..91d32bc96 100644
+--- a/src/security/ssrf/destination.rs
++++ b/src/security/ssrf/destination.rs
+@@ -114,7 +114,7 @@ impl DestinationPolicy {
+ fn private_reachable(addr: IpAddr) -> bool {
+     match addr {
+         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
+-        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
++        IpAddr::V6(v6) => match v6.to_ipv4() {
+             Some(v4) => v4.is_loopback() || v4.is_private(),
+             None => v6.is_loopback() || v6.segments()[0] & 0xFE00 == 0xFC00,
+         },

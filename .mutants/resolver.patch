@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/resolver.rs b/src/security/ssrf/resolver.rs
+index 52a8e1da3..df5e6ebeb 100644
+--- a/src/security/ssrf/resolver.rs
++++ b/src/security/ssrf/resolver.rs
+@@ -109,7 +109,7 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
+                 .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as BoxErr)?;
+ 
+             for ip in &ips {
+-                if policy.denies(*ip) {
++                if crate::security::ssrf::DestinationPolicy::Public.denies(*ip) {
+                     // The address stays in the log: the refusal reaches callers,
+                     // and naming it would answer internal DNS for them.
+                     tracing::warn!(host = %host, address = %ip, "SSRF pin refused a resolved address");

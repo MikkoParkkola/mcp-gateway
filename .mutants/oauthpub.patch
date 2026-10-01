@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
+index 2eeb34abd..516b7e88f 100644
+--- a/src/oauth/client/destination.rs
++++ b/src/oauth/client/destination.rs
+@@ -29,7 +29,7 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
+     let builder = match destination {
+         DestinationPolicy::Configured => Client::builder(),
+         policy @ (DestinationPolicy::Public | DestinationPolicy::Private) => {
+-            crate::security::ssrf::pinned_client_builder_for(policy)
++            crate::security::ssrf::pinned_client_builder_for(DestinationPolicy::Public)
+         }
+     };
+     builder

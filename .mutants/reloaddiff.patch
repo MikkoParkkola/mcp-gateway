@@ -1,0 +1,13 @@
+diff --git a/src/security/posture.rs b/src/security/posture.rs
+index 747b7620c..1c939befb 100644
+--- a/src/security/posture.rs
++++ b/src/security/posture.rs
+@@ -175,7 +175,7 @@ pub(crate) fn reload_refusal(running: &Config, candidate: &Config) -> Option<Str
+     if running.security.posture != candidate.security.posture {
+         return Some("config reload refused: security.posture requires restart".to_string());
+     }
+-    (running.security.hardened != candidate.security.hardened)
++    (running.security.hardened.private_backends.len() > 99)
+         .then(|| "config reload refused: security.hardened requires restart".to_string())
+ }
+ 

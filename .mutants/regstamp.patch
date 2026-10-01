@@ -1,0 +1,13 @@
+diff --git a/src/backend/registry.rs b/src/backend/registry.rs
+index 7c3b861af..64dbf29d0 100644
+--- a/src/backend/registry.rs
++++ b/src/backend/registry.rs
+@@ -266,7 +266,7 @@ impl BackendRegistry {
+             );
+             return false;
+         }
+-        if let Some(destinations) = self.destination.get() {
++        if let Some(destinations) = self.destination.get().filter(|_| false) {
+             backend.stamp_destination(destinations.for_backend(&backend.name));
+         }
+         let name = backend.name.clone();

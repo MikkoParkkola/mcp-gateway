@@ -1,0 +1,17 @@
+diff --git a/src/transport/websocket_pinned.rs b/src/transport/websocket_pinned.rs
+index a42992ae7..8aae1ff9e 100644
+--- a/src/transport/websocket_pinned.rs
++++ b/src/transport/websocket_pinned.rs
+@@ -63,8 +63,10 @@ pub(super) async fn connect(
+     resolver: &impl HostResolver,
+ ) -> Result<Upgraded> {
+     match destination {
+-        DestinationPolicy::Configured => connect_async(request).await.map_err(|e| failed(&e)),
+-        DestinationPolicy::Public | DestinationPolicy::Private => {
++        DestinationPolicy::Configured | DestinationPolicy::Private => {
++            connect_async(request).await.map_err(|e| failed(&e))
++        }
++        DestinationPolicy::Public => {
+             connect_pinned(request, destination, resolver).await
+         }
+     }

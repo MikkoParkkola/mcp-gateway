@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/destination.rs b/src/security/ssrf/destination.rs
+index 8ae9df522..c9e2ee7e5 100644
+--- a/src/security/ssrf/destination.rs
++++ b/src/security/ssrf/destination.rs
+@@ -101,7 +101,7 @@ impl DestinationPolicy {
+                 if parsed.host_str().is_none() {
+                     return Err(Error::Protocol("SSRF check: URL has no host".to_string()));
+                 }
+-                self.check_literal(&parsed)
++                super::validate_url_not_ssrf(parsed.as_str())
+             }
+             Self::Configured | Self::Public => super::validate_url_not_ssrf(url),
+         }
