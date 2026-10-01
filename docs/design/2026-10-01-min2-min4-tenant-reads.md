@@ -44,8 +44,8 @@ Status: draft for review. Criteria: MIK-7116.MIN.2 and MIK-7116.MIN.4
   authenticated principal. Cached deliveries never reach it: the response cache
   goes through `GuardedValue::from_cache` (guarded.rs:34-37), and idempotent
   replays go through `note_cached` (invoke.rs:1751; backend_handlers.rs:1118,
-  :1127). The record writers know the caller and see every delivery, so the
-  verdict goes there.
+  :1127). The verdict therefore goes at each route's final delivery boundary,
+  which sees the caller, the request and the final answer (§3.2).
 - **Withholding after attribution.** A gate refusal keeps the response tenants
   on the record (tests `gate_refused_response_keeps_response_tenants`,
   meta_mcp/audit_record_tests/tenants.rs:93; and
@@ -61,447 +61,298 @@ Status: draft for review. Criteria: MIK-7116.MIN.2 and MIK-7116.MIN.4
 
 ## 2. Definitions
 
-- **A read** is a delivered result (`Ok`, or a 200 with a `result` on the
-  direct route), served live or from a cache. Refused and failed calls deliver
-  nothing and are not reads.
-- **A read's tenants** are the union `attribution()` already computes: request
-  tenants plus response tenants, or the delivered value's tenants on a cached
-  delivery (audit.rs:186-200). Request tenants are included because a call
-  naming `customer_id: B` that returns B's rows without echoing the key is
-  still a read of B. With the union, the verdict and the recorded `tenants`
-  cannot disagree.
-- **Sensitive** means attributed to at least one tenant. The verdict does not
-  depend on `data_classes`, for three reasons. The kernel reports `public`
-  whenever it finds nothing (kernel.rs:437-438), so a plain customer row reads
-  as public. `data_classes` are absent on cached deliveries and on refusals
-  before classification (tenants.rs:104-105). And `arg_keys` is the operator's
-  own declaration of which data is tenant data. `data_classes` stays on the
-  record, so the MIN.KILL week can narrow the definition post hoc
-  (`ContextDataClass`, context_integrity/mod.rs:48).
-- **The cross-tenant pattern:** a principal whose reads inside `window_secs`
-  span more than one distinct tenant. This includes one response naming two
-  tenants. The threshold is fixed at 1 because the criterion is "A, then B".
-  The window is the only tuning knob.
+- **A delivery** is one answer the gateway sends a caller, for any method, at
+  the route's final delivery boundary (§3.2).
+- **A delivery's tenants** come from three sources, unioned:
+  - the tenants named in the incoming request's `params`, walked with
+    `request_tenants` (PR:154-158);
+  - the tenants named in the final assembled `result`, scanned with
+    `response_tenants` (PR:163-165);
+  - the attribution recorded during this delivery, or stored with it (§3.3).
+
+  A delivery is `uninspected` when any part of that result, or of the recorded
+  attribution, was unread (PR:175-177).
+- **Sensitive** means attributed to at least one tenant. `data_classes` are
+  not used: the kernel reports `public` when it finds nothing
+  (kernel.rs:437-438), and the field is absent on cached and refused calls.
+- **The rule:** inside `window_secs`, a principal's committed deliveries may
+  name at most one tenant, and the delivery being judged counts toward that.
+  An `uninspected` delivery adds a fresh unknown tenant `U`. `U` is distinct
+  from every other entry, including another `U`, so it conflicts in both
+  orders. When `arg_keys` is empty, `TenantGuard::attributes` is false
+  (PR:168-170) and the judge returns `None`.
 
 ## 3. Design
 
-**Config.** Add to `TenantGuardConfig` (PR:56-69):
-`cross_tenant_reads: off | observe | block`, a `#[serde(rename_all = "lowercase")]`
-enum that defaults to `observe`. It is independent of `enabled`, which is the
-request guard's switch and stays as it is. `observe` does nothing until
-`arg_keys` is set, because no tenants means no reads to judge (PR:182-184). So
-the default changes nothing on a deployment without attribution. `block` is
-opt-in, as decision `mik_7116_min_kill_gate` requires. The key lives on the
-serde struct. The unknown-key check (UPGRADING-4.0.md §29, :778) must accept
-it: verify this at implementation.
+**Config.** Add to `TenantGuardConfig` (PR:56-69) a new key,
+`cross_tenant_reads: off | observe | block`. It is a lowercase serde enum
+that defaults to `observe`, and it is independent of the request guard's
+`enabled`. Without `arg_keys` it does nothing. `block` is opt-in, as decision
+`mik_7116_min_kill_gate` requires. The unknown-key check (UPGRADING-4.0.md
+§29, :778) must accept the key; verify this at implementation.
 
-### 3.1 The model
+### 3.1 History and judge
 
-The rule has one sentence and one exception class.
+`TenantGuard` gains `reads: ReadHistory`. `PrincipalWindow` is not reused: it
+drops the oldest observation at 4,096 (principal_window.rs:109-112) and evicts
+whole principals when full (:173-180). Both fail open. For each principal,
+`ReadHistory` holds three structures:
 
-- **Rule:** the reads a principal had delivered inside `window_secs` may name
-  at most one tenant. The read being judged counts.
-- **Unknown tenant:** a read whose attribution is `uninspected` contributes a
-  fresh unknown tenant `U`. `U` is distinct from every other entry, including
-  any other `U`. So one rule covers every case: A then opaque, opaque then A,
-  opaque then opaque, and an opaque read whose inspected part names A. A read is
-  single-tenant only when its attribution is complete. An opaque read with no
-  other history passes, but it leaves `U` in the window, so the next read of
-  anything conflicts. This is fail-closed in both orders, with no special case
-  in the judge.
-- **Off switch:** when attribution is unconfigured (`arg_keys` empty,
-  `TenantGuard::attributes` is false, PR:168-170), the judge returns `None`
-  before anything else, legacy task rows included. A deployment without
-  `arg_keys` keeps its behaviour and its record schema.
+- `committed: HashMap<TenantHash, Instant>`: last delivery time per tenant.
+  Entries leave by expiry only.
+- `pending: HashMap<TenantHash, u32>`: a reference count per tenant reserved
+  by an open ticket. `pending_overflow: u32` counts open overflow
+  reservations.
+- `overflow_until: Option<Instant>`: while in the future, counts as one extra
+  distinct tenant.
 
-### 3.2 History (`ReadHistory`)
+Ticket ownership works as follows. A ticket owns a list of the hashes it
+incremented and an overflow flag. `commit` decrements each of its counts and
+upserts `committed`. A committed overflow raises `overflow_until` to
+`now + window`. `Drop` of an uncommitted ticket decrements only its own
+counts. Overlapping tickets on the same tenant each hold one count, so neither
+can erase the other's reservation or a committed entry.
 
-`PrincipalWindow` is not reused. It drops the oldest observation at 4,096
-(principal_window.rs:109-112) and evicts an arbitrary principal's whole history
-when full (:173-180). Both fail open. `TenantGuard` instead gains `reads:
-ReadHistory`. For each principal (the key is in §3.4) it holds three things:
-
-- `committed: HashMap<TenantHash, Instant>`: the last delivery time of each
-  hashed tenant (`hash_argument`, as on the record). `U` entries use a fresh
-  random id.
-- `pending: HashMap<TicketId, Reservation>`: what unfinished reads have
-  reserved. A pending tenant counts as live.
-- `overflow_until: Option<Instant>`: set when `committed` would exceed 256
-  entries. The tenant is then not inserted. Instead `overflow_until` becomes
-  `max(overflow_until, now + window)`, and while it is in the future it counts
-  as one extra distinct tenant.
-
-**One bound covers committed and pending together.** The bound is 256
-distinct hashes per principal, counting committed and pending entries
-together, plus at most 256 open tickets. A read that would cross either limit
-reserves only an overflow reservation: a single slot that counts as one extra
-distinct tenant until its ticket commits (then it becomes `overflow_until`) or
-drops. A pending tenant that is already held is not stored again. The read's
-own tenant set is transient and is freed when the request ends.
-
-Peak memory per principal is therefore fixed in both modes, and an
-overflowing principal is flagged or refused, never silently trimmed.
-
-Expiry is by time alone. A committed entry is never removed by anything except
-expiry, so a refused retry of A cannot erase A. Dropping an uncommitted ticket
-removes only that ticket's `pending` entry. The principal map is capped at
-100,000. When it is full, expired principals are swept first. If it is still
-full, a new principal's read is `Unattributable` (refused in block mode). Live
-history is never evicted.
-
-### 3.3 Judge API
+The bounds are 256 distinct hashes per principal, counting committed and
+pending entries together, and 256 open tickets. A read that would cross
+either bound takes only an overflow reservation. The principal map is capped
+at 100,000: expired principals are swept first, and if the map is still full,
+a new principal's read is `Unattributable`. Live history is never evicted.
+Every bound fails closed, flagging or refusing.
 
 ```rust
 pub(crate) struct ReadAttribution { tenants: BTreeSet<TenantHash>, uninspected: bool }
 pub(crate) fn assess_read_at(&self, principal: Option<&str>,
     read: &ReadAttribution, now: Instant) -> (ReadVerdict, Option<ReadTicket>)
 // ReadVerdict { None, Flagged { distinct }, Blocked { distinct }, Unattributable }
-// ReadTicket::commit(self, now): pending -> committed. Drop: removes its own pending entry.
 ```
 
-`ReadAttribution` holds hashes only. Each raw id is hashed once, with
-`hash_argument` (data_flow.rs:139), at the point where the record fields are
-built, and the same `TenantHash` values go to the record, the judge and the
-task row. Nothing hashes twice, and live and stored ids compare equal. `U` is
-never an id: `uninspected` travels as a boolean (on the task row,
-`read_uninspected`), and the judge mints a fresh `U` slot each time it sees
-`true`.
+The judge checks, in order:
 
-The judge applies these steps in order. Steps 4 and 5 run under the
-principal's map-entry lock, so two concurrent reads see each other's
-reservations, and the second is judged against the first (fail closed):
+1. Mode `off`, or attribution unconfigured: `None`.
+2. Empty and complete: `None`.
+3. No principal: `Unattributable`.
+4. Under the principal's entry lock, distinct is counted over live committed
+   entries, pending entries, overflow, the read's tenants, and a fresh `U` if
+   the read is uninspected. `distinct > 1` gives `Flagged` or `Blocked`.
+5. Unless the verdict is `Blocked`, the read reserves its entries under a new
+   ticket. A fresh `U` is reserved as its own random hash.
 
-1. Mode `off`, or attribution unconfigured: `None`, no ticket.
-2. Empty tenants and not uninspected: `None`, no ticket (nothing tenant-bearing
-   was read).
-3. No principal: `Unattributable`, no ticket.
-4. Distinct is computed over live committed entries, live pending entries,
-   `overflow_until`, and this read's tenants (plus a fresh `U` if
-   `uninspected`). `distinct > 1` gives `Flagged` or `Blocked`, by mode.
-5. Unless the verdict is `Blocked`, this read's entries go into `pending`
-   under a new ticket. A blocked read reserves nothing.
+Ids are hashed once, with `hash_argument` (data_flow.rs:139). The same hashes
+go to the judge, the records and any stored attribution, so live and stored
+ids compare equal.
 
-### 3.4 Where it runs, and the one commit point per route
+### 3.2 One judgement point per route
 
-**Assessment** runs where the delivered value and the reader are both known.
-The writer computes the attribution fields first, from the value before any
-swap, so a blocked cache hit still records the tenants that exist only in its
-response (audit.rs:193-197; direct_audit.rs:148). On `Blocked`, the result
-becomes the existing `Error::ResponseFirewallRefused`. Assessment runs before
-the D4 count and before any `let Some(log)` return, so `block` works without a
-transparency log. The ticket is parked in a request-scoped task-local,
-`ReadTickets`, which uses the same `tokio::task_local!` scope shape as
-`DispatchNotes` (audit.rs:75-78, :147-156).
+Each route judges once, where its final answer is assembled and before the
+last code that can refuse it. Tickets live in a request-scoped task-local,
+`ReadScope`, which has the same shape as `DispatchNotes` (audit.rs:75-78,
+:147-156). The ticket commits after the final refusal point, and only if the
+answer still carries a `result` and no `error`. Otherwise it drops.
 
-**Commit** happens at exactly one point per route. That point is a single
-return that every audit-policy outcome passes through: no log, a non-fatal
-write failure, and a successful write all reach it. It sits after the last
-code that can still turn the answer into a refusal. Tickets commit only if the
-final answer carries a `result` and no `error`. Otherwise the scope ends and
-every ticket drops. The table below lists each route; the "last refusal before
-it" column names what can still refuse before the commit point.
+| Route | Judge (before) | Commit (after) | Covers |
+|---|---|---|---|
+| HTTP `/mcp` | `finalize_response_after_inspection` (handlers.rs:1826) | its return (handlers.rs:1827-1828), before `complete_delivery` (:1829-1831) | every method matched at handlers.rs:1011 |
+| stdio | `finalize_response_for_delivery` (server/mod.rs:3050) | its return | every method, catalogue (server/mod.rs:3034-3035) and tasks included |
+| Direct `/mcp/{backend}` | `audited_call` on the inner answer, before `record` (direct_audit.rs:114-116) | the single return of `audited_call` (:116-118), whichever path `record` took (no log :141-143, written :193, non-fatal :204-207) | every forwarded method (one funnel, backend_handlers.rs:431-458) |
 
-| Route | Methods | Assessed at | Single commit point | Last refusal before it |
-|---|---|---|---|---|
-| HTTP `/mcp` | all, matched at handlers.rs:1011 | tool calls: `audit_invocation` (audit.rs:324), `audit_replay` (:530, before :539/:546); stored tasks: `refuse_stored_delivery` (task_replay.rs:24); **every other method**, catalogues included: on the assembled `response.result`, just before finalization (handlers.rs:1826) | right after `finalize_response_after_inspection` returns (handlers.rs:1826-1828), beside `complete_delivery` (:1829-1831) | finalization: response firewall, signing failure, fail-closed delivery-attempt audit (response_security.rs:168-276); its no-log and non-fatal paths return the response, so they reach the commit too |
-| stdio | all | as HTTP; other methods (stdio_catalogue.rs:60-75 included, dispatched at server/mod.rs:3034-3035) just before finalization (server/mod.rs:3050) | right after `finalize_response_for_delivery` returns (server/mod.rs:3050) | same finalization |
-| Direct `/mcp/{backend}` | **every** forwarded method; one funnel, `dispatch_in_scope` (backend_handlers.rs:431-458) | `audited_call` (direct_audit.rs:102-119) on the inner answer, for every method | the single return of `audited_call` (direct_audit.rs:114-118), after `record` returns, whatever path `record` took: no log (:141-143), success (:193), non-fatal failure (:204-207) | fail-closed record write (direct_audit.rs:194-203), which returns a 503 error, so nothing commits; signing and response firewall already ran inside (backend_handlers.rs:1121; direct_guards.rs:91-92) |
+Finalization can still refuse a delivery: through the response firewall, a
+signing failure, or a fail-closed delivery-event write
+(response_security.rs:168-276). Each of those returns an error, so nothing
+commits. Its no-log and non-fatal paths return the response, so they commit.
+On a `Blocked` verdict the answer becomes the existing delivery refusal
+(`delivery_refusal_error`, as finalization's firewall builds it), and
+finalization then runs on the refusal. On the direct route the answer becomes
+`refusal(id, &Error::ResponseFirewallRefused)` (direct_guards.rs:108-111).
+Because a block is judged before `complete_delivery` stores the answer, a
+blocked answer is stored as a refusal and replays as one.
 
-**Catch-all assessment** ("every other method") applies `response_tenants` and
-`response_uninspected` (PR:163-177) to the final assembled result. It covers
-`prompts/list`, `resources/list` and `resources/templates/list`, whose handlers
-assemble catalogues without `forward_for_caller` (protocol.rs:150,
-resources.rs:294), as well as `resources/read`, `prompts/get` and cached
-catalogues. It runs only if no writer assessed the request already: writers
-mark the `ReadTickets` scope. That keeps one assessment and one record per
-request. A blocked catch-all answer becomes the existing finalization refusal
-before finalization runs.
+**Reader key.** On HTTP, `caller_key` (handlers.rs:1529). On stdio, the
+constant `stdio`: one process serves one client (stdio_nonce.rs:4-10). On the
+direct route, `identity::caller_key` (identity.rs:350) over the request's
+subject, certificate and client (backend_handlers.rs:515). The session and
+per-backend fallbacks are never used (handlers.rs:1295-1302;
+backend_handlers.rs:59-73). A stored task is judged on whoever reads it,
+because the judgement point is the reader's own delivery.
 
-The direct route is judged generically. `DirectCall::of` (direct_audit.rs:42-73)
-returns a call for every method, not only `tools/call`. It carries
-`caller_key` from `identity::caller_key` (identity.rs:350), fed `cert_identity`
-(backend_handlers.rs:515, :615). It attributes `result` whatever the method,
-so `completion/complete` (backend_handlers.rs:222) and any future method are
-covered without a list. A non-`tools/call` answer writes a record only when
-attribution is non-empty, so the record set does not change for tenantless
-traffic.
+**No per-writer assessment.** The writers (`audit_invocation`, `audit_replay`,
+`refuse_stored_delivery`, the catalogue handlers) judge nothing and suppress
+nothing. They only add attribution to `ReadScope` (§3.3).
 
-**Reader key.** On HTTP the key is `caller_key` (handlers.rs:1529). On stdio
-it is the constant `stdio`: one process serves one client (stdio_nonce.rs:4-10),
-and `caller_key` is `None` there (server/mod.rs:3242, :3787). On the direct
-route it is `DirectCall.caller_key`. For a stored task, the key is the reader
-in front of the gateway: HTTP builds it from `RecoveryCaller`
-(tasks.rs:188-200, set where tasks.rs:237 has `None`), and stdio uses
-`stdio`. The admitting caller is never used. The firewall's session or
-per-backend fallbacks are never used either (handlers.rs:1295-1302;
-backend_handlers.rs:59-73). The task worker's own dispatch (worker.rs:353;
-context.rs:206) delivers to nobody, so it is not assessed.
+### 3.3 Attribution the wire does not show
 
-### 3.5 Records
+The request and the final result do not show every tenant a delivery reached.
+Three cases fill the gap:
 
-- **Live and cached tool calls:** the MIN.1 record gains `cross_tenant_read`
-  (`flagged` | `blocked` | `unattributable`), absent on `None`.
-- **#2472 replays, composite tools included:** a record is written whenever
-  attribution is non-empty, whatever the verdict. A single-tenant replay of A
-  therefore leaves evidence before a later flag. On a block, the replayed facts
-  (audit.rs:552-553) give way to `ReplayAudit::new(Denied, None)`.
-- **Stored task deliveries:** `refuse_stored_delivery` writes one attributed
-  invocation record under the reader's identity whenever attribution is
-  non-empty. It honours `FailClosed` like `write_invocation` (audit.rs:434-437),
-  and a failed write withholds the
-  delivery, so the ticket drops.
-- **Every other method (catch-all, §3.4; direct non-`tools/call`):** one
-  `log_invocation_attributed` record, with the method as the tool, when
-  attribution is non-empty.
-- **Not recorded:** `meta_refusal_audit.rs:89` (nothing delivered). The task
-  settlement keeps its own record (audit.rs:455). It is not a delivery.
+- **Inner dispatches in a live delivery.** Playbook and code-mode steps run as
+  `invoke_tool` calls on the request's own task (support.rs:391-398;
+  invoke.rs:3991-4020). Each step's `audit_invocation` already builds that
+  step's attribution: its request tenants, its raw response tenants, and its
+  `uninspected` flag (audit.rs:186-236, :348). It adds them to `ReadScope`.
+  A step whose arguments come from the playbook definition, or whose raw
+  response is mapped away, still counts. An output mapping that introduces a
+  new tenant is caught by the final-result scan.
+- **Replays** (#2472). An incoming replay request is the original request, so
+  its own tenants are walked live. The inner-step attribution is not visible,
+  though. `StoredDelivery` (admission.rs:100-108) gains `read: Option<{
+  tenants, uninspected }>`, written from `ReadScope` at `complete_delivery`
+  (handlers.rs:1829-1831). A replay adds the stored `read` to `ReadScope`. A
+  record from before the field existed (`None`) adds `uninspected`. Persisting
+  this is needed because a composite replay's result alone cannot carry its
+  steps' request-only tenants.
+- **Stored task results.** The incoming request is `tasks/get` or
+  `tasks/result` with only a task id, so the original arguments are absent.
+  Settlement stores `read_tenants` and `read_uninspected` on the task row in
+  the same write as the payload, with a version bump next to `TARGET_VERSION`
+  (record.rs:35-38; precedent store_targets.rs:118-196). The stored values are
+  the admitted request's tenants plus the dispatch's attribution, instead of
+  the empty set passed today (audit.rs:475). Delivery adds them to
+  `ReadScope`. A row without the field adds `uninspected`, which fails closed;
+  the result's visible tenants are scanned at the boundary anyway.
 
-"Entries for both the read and the verdict" is asserted as two records: the A
-read (`tenants=[h(A)]`, no `cross_tenant_read`) and the B read (`[h(B)]`, with
-the field). A flagged read also emits `tracing::warn!` with server, tool and
-distinct count, never tenant ids.
+Cached deliveries need nothing extra: the cached value is the final result,
+and the incoming request is the caller's own.
 
-### 3.6 Task attribution persistence
+### 3.4 Records
 
-Settlement carries the request tenants from admission instead of the empty set
-(audit.rs:475), together with the response tenants and `uninspected`. They are
-stored as hashed `read_tenants` on the task row, with a version bump next to
-`TARGET_VERSION` (record.rs:35-38). The invariant: every row write that stores
-or replaces a deliverable payload writes the payload's `read_tenants` in the
-same write. That covers completion, a parked `input_required` round, the
-completion of a resumed task, and upstream recovery. The precedent is
-`store_targets.rs:118-196`, which writes `targets` with the record. A row
-without the field, from an older version or an unrecorded path, is judged on
-`ReadAttribution { tenants: response_tenants(stored payload), uninspected:
-true }`. That is its visible tenants plus `U`. The stored payload is the
-task's output or its pending input requests (`CommittedTask.task`,
-record.rs:322; task_replay.rs:18-22). A first delivery that visibly names A
-and B is therefore flagged even when there is no history, and request-only
-tenants that could not be recovered are covered by `U`. This applies only when
-attribution is configured.
+On meta and stdio, every delivery already writes one immutable
+`response_delivery_attempt` event in finalization (response_security.rs:263,
+:284-330). When attribution is configured and the delivery has tenants, `U`,
+or a verdict, that event gains three fields: `tenants` (hashed), `attribution`
+(`uninspected` when it applies), and `cross_tenant_read` (`flagged` |
+`blocked` | `unattributable`). It honours `FailClosed`, and a failed write
+withholds the answer, so nothing commits. On the direct route, `record`
+(direct_audit.rs:123) writes the same fields. `DirectCall::of`
+(direct_audit.rs:42-73) returns a call for every method, and a
+non-`tools/call` call is recorded only when it carries those fields. The MIN.1
+invocation record stays the per-dispatch execution record.
 
-**Cached deliveries and replays** are reads. The caller receives the data
-whoever fetched it first. A repeat read of the same tenant only refreshes its
-committed time.
+"Audit entries for both the read and the verdict" are then asserted as two
+delivery events: A's, with `tenants=[h(A)]` and no verdict, and B's, with
+`tenants=[h(B)]` and `cross_tenant_read`.
 
-**Tenant ids** are compared as strings across every backend and every
-`arg_keys` key. Operators whose backends reuse local ids must namespace them;
-UPGRADING says so (§6).
+**Tenant ids** are compared as strings across all backends and keys.
+Operators whose backends reuse local ids must namespace them (§6).
 
-### 3.7 Increment split
+### 3.5 Increment split
 
-If 4.0 needs it smaller, §3.6 can ship as a second increment with no bypass.
-Until it lands, every stored task delivery has no `read_tenants`, so it is
-judged on its visible tenants plus `U` (§3.6). The result is fail-closed and
-over-flagging, never under. The
-rest is one increment, because each part closes a bypass the others depend
-on: the model, the history, the generic direct funnel, the commit points and
-the records.
+The task-row fields (§3.3, third bullet) can ship later without a bypass.
+Until then every stored task delivery adds `U`, which over-flags and never
+under-flags. The rest ships together.
 
 ## 4. MIN.4: fixture corpus and false-positive measurement
 
-**Corpus.** `tests/fixtures/tenant-reads-corpus.jsonl` holds one line per
-read: `{"session","principal","t_secs","tenants":[...],"uninspected","pattern"}`.
-The tenant ids are synthetic. Sessions are generated from named patterns, and
-each pattern carries its label: `legitimate` or `cross_tenant`. The label
-comes from the pattern that generated the session, never from running the
-guard. The header line records each pattern's session count (its weight), so
-the pinned rate can be read against the mix. The patterns are:
+**Corpus.** The corpus is `tests/fixtures/tenant-reads-corpus.jsonl`, one
+line per delivery. Each line holds `session`, `principal`, `t_secs`,
+`pattern`, the raw `request` params and the raw `result`. Tenants are not
+pre-attributed: the test passes each line through `request_tenants`,
+`response_tenants` and `response_uninspected`, so a regression in extraction
+also moves the measurement. A header line gives each pattern's session count.
+Each session's label comes from the pattern that generated it, never from
+running the guard.
 
 | Pattern | Label | Shape |
 |---|---|---|
-| `single_tenant` | legitimate | one principal, 1 tenant, 5-40 reads over 1-60 min |
-| `support_handoff_slow` | legitimate | tenant A, then B more than `window_secs` later |
-| `support_handoff_fast` | legitimate | tenant A, then B inside the window (a known FP) |
-| `window_boundary` | legitimate | A, then B at exactly `window_secs` and at `window_secs + 1` |
-| `admin_sweep` | legitimate | one response, or a burst, naming 3-20 tenants |
-| `retry_same_tenant` | legitimate | the same A read repeated as cached deliveries |
+| `single_tenant` | legitimate | 1 tenant, 5-40 deliveries over 1-60 min |
+| `retry_same_tenant` | legitimate | the same A delivery, repeated |
 | `mixed_workload` | legitimate | many principals interleaved, each single-tenant |
-| `large_single_tenant` | legitimate | A, then an uninspected page of A (a known FP under §3.1: the unread part is `U`) |
-| `opaque_only` | legitimate | one uninspected read, no other read in the window |
-| `a_then_b` | cross_tenant | A read, then B read inside the window |
-| `a_then_b_unkeyed` | cross_tenant | B named only in the request, response unkeyed |
-| `a_then_opaque` | cross_tenant | A, then an uninspected read with no request tenant key |
-| `opaque_then_b` | cross_tenant | an uninspected read, then B inside the window |
+| `opaque_only` | legitimate | one unreadable result, nothing else in the window |
+| `support_handoff_slow` | legitimate | A, then B after more than `window_secs` |
+| `window_boundary` | legitimate | A, then B at exactly `window_secs` and at `window_secs + 1` |
+| `support_handoff_fast` | legitimate, known FP | A, then B inside the window |
+| `admin_sweep` | legitimate, known FP | one result, or a burst, naming 3-20 tenants |
+| `large_single_tenant` | legitimate, known FP | A, then an unreadable page of A |
+| `a_then_b` | cross_tenant | A, then B inside the window |
+| `a_then_b_request_only` | cross_tenant | B named only in the request, result unkeyed |
+| `a_then_opaque`, `opaque_then_b` | cross_tenant | an unreadable result, in either order |
 
-**Measurement.** This is an ordinary unit test with no network,
-`src/security/firewall/tenant_read_corpus_tests.rs`, wired in as
-`tenant_attribution_tests.rs` is (PR:282-284). It reads the corpus through
-`include_str!` and builds `TenantGuard::new(TenantGuardConfig { arg_keys,
-..Default::default() })`, so the default window and default mode are under
-test. It replays each line through `assess_read_at` with `now = base +
-t_secs` and commits every ticket, since observe mode delivers. The unit of
-count is the principal-session, matching the MIN.KILL "sessions that would
-have been blocked". The test prints and asserts three gates:
+**Measurement.** The measurement is an ordinary unit test with no network,
+`src/security/firewall/tenant_read_corpus_tests.rs`, wired in like
+`tenant_attribution_tests.rs` (PR:282-284). It builds
+`TenantGuard::new(TenantGuardConfig { arg_keys, ..Default::default() })`,
+replays every line through `assess_read_at` at `base + t_secs`, and commits
+each ticket. It counts per principal-session, which is the MIN.KILL unit, and
+asserts three gates:
 
-- **Gate 1:** zero flags on `single_tenant`, `retry_same_tenant`,
-  `mixed_workload` and `opaque_only` sessions.
-- **Gate 2:** every `cross_tenant` session is flagged (recall 1.0).
-- **Gate 3:** exact pinned counts per pattern, plus the overall FP rate (flagged
-  legitimate sessions over legitimate sessions), following
-  tests/provenance_eval_binary.rs:26-32. A guard or default change then
-  re-measures visibly.
+1. No flags on the first six patterns.
+2. Every `cross_tenant` session is flagged.
+3. The exact counts per pattern and the overall FP rate match pinned values
+   (the pattern of tests/provenance_eval_binary.rs:26-32).
 
-There is no ceiling on the overall FP rate. A one-tenant rule flags
-`admin_sweep` and `support_handoff_fast` by construction, so a ceiling would
-either fail or invite tuning the corpus until it passes. The pinned rate is the
-4.0.0 measurement MIN.4 asks for. The corpus is synthetic, so the deployment
-number comes from the MIN.KILL week, and the admin-sweep remedy is MIN.3
-(MIK-7627).
+There is no ceiling on the FP rate. The one-tenant rule flags the known-FP
+patterns by construction. The deployment number comes from the MIN.KILL week,
+and the admin-sweep remedy is MIN.3 (MIK-7627).
 
 ## 5. Tests (red first)
 
-Every row is written and seen failing before the code it covers. A row named
-for a mutant must go red with that mutant applied.
+Each row is seen failing before its code exists, and goes red under the named
+mutant.
 
-| Test | Asserts | Mutant that turns it red |
+| Test | Asserts | Mutant |
 |---|---|---|
-| `meta_a_then_b_observe_flags_and_records_both` | two records; A: `tenants=[h(A)]`, no `cross_tenant_read`; B: `tenants=[h(B)]`, `cross_tenant_read="flagged"`, outcome ok, data returned | threshold `> 2`; field not written; keyed on session |
-| `meta_a_then_b_block_withholds` | B answer is `ResponseFirewallRefused`; B record `blocked`, outcome denied, tenants keep `h(B)` | swap skipped; attribution after the swap |
-| `meta_block_without_transparency_log_still_refuses` | no log; B refused | assess below the `let Some(log)` return |
-| `direct_a_then_b_block_withholds` | 200 delivery refusal body; record `blocked`, tenants `h(B)` (no outcome-class assertion) | direct writer not judged |
-| `blocked_cache_hit_keeps_response_only_tenants` (meta and direct) | blocked cached B whose tenant is only in the response: record tenants `h(B)` | attribution computed from the swapped answer |
-| `blocked_replay_records_denied_facts` | blocked #2472 replay: record outcome denied, no response hash | first-run facts reused |
-| `composite_replay_is_judged` (HTTP and stdio) | `gateway_execute` replay delivering B after A: flagged / refused | assess after audit.rs:546 return |
-| `resource_read_after_tool_read_flagged` | tool read A, then `resources/read` of B (meta and direct): flagged, record written | resource path not judged |
-| `prompt_get_after_tool_read_flagged` | as above for `prompts/get` | prompt path not judged |
-| `meta_then_direct_share_one_window` | A on `/mcp`, B on `/mcp/{backend}`, same API key: B flagged | direct key from `direct_control_identity`, or a second guard |
-| `unkeyed_response_read_counts_request_tenant` | request names B, response has no key: flagged | response tenants only |
-| `task_result_judged_on_reader` | task admitted under credential K by subject S1 holding A; subject S2 on K reads B result: judged against S2's history, and against S1's when S1 reads it | key taken from the admitting caller |
-| `task_request_only_tenant_survives_settlement` | task naming B only in request, unkeyed upstream result: a later `tasks/result` after an A read is flagged | settlement passes the empty set (audit.rs:475) |
-| `legacy_task_row_fails_closed` | row without `read_tenants`, after an A read: flagged / refused | missing field read as empty |
-| `legacy_task_first_delivery_a_and_b` | row without `read_tenants` whose stored output names A and B, no history: flagged / refused | legacy row judged on `U` alone |
-| `direct_no_log_retains_history` | direct route, no transparency log: A then B flagged | commit only on the `Ok(())` write branch |
-| `direct_nonfatal_write_failure_retains_history` | direct route, write fails under the non-fatal policy: A then B flagged | same |
-| `direct_failclosed_write_failure_no_history` | write fails under `FailClosed`: 503, then B unflagged | committing before the policy resolves |
-| `catalogue_delivery_is_judged` | tool read A, then `prompts/list` whose description is JSON naming `customer_id` B (HTTP, stdio, and cached catalogue): flagged / refused, record written | catch-all assessment missing |
-| `pending_storage_is_bounded` | 300 open tickets and one 1,000-tenant read held before commit: stored hashes ≤ 256, tickets ≤ 256, the excess reads flagged; drop restores | no bound on pending |
-| `hash_once_live_matches_stored` | a task row's `read_tenants` equals the live record's `tenants` for the same id | double hashing |
-| `uninspected_is_unknown_tenant_both_orders` | A then opaque; opaque then B; opaque then opaque; one opaque read whose inspected part names held A: each flagged / refused. A lone opaque read: `None` | empty-set return before the `U` step; `U` equal to A; `U` not stored |
-| `finalization_refusal_records_no_history` | B refused at finalization (response firewall, signing failure, fail-closed delivery-attempt audit), then A read: not flagged; stdio and direct-route fail-closed write likewise | commit before handlers.rs:1826-1828 / server/mod.rs:3050 / direct_audit.rs:193 |
-| `refused_retry_keeps_committed_a` | A committed; a repeat A read refused at finalization; then B: still flagged | Drop removing the committed entry |
-| `refused_floods_do_not_evict` | 5,000 refused B reads after A (block), then B: still refused; A still readable | `PrincipalWindow` reuse; recording refused reads |
-| `observe_overflow_is_bounded` | observe mode, 10,000 distinct tenants for one principal: `committed` length stays 256, `overflow_until` set, every read past the cap flagged; after the window, clean | inserting past the cap; no overflow marker |
-| `principal_map_full_fails_closed` | full principal map with live entries: new principal `unattributable`, no live entry removed | evicting live history |
-| `overlapping_assessment_sees_pending` | read A assessed and held before commit (a barrier between assess and commit), read B assessed, then A commits: B flagged | commit-only history (no pending entry) |
-| `direct_every_method_is_judged` | A via `tools/call`, then B via `completion/complete` on `/mcp/{backend}`: flagged, record written | method allow-list in `DirectCall::of` |
-| `stored_task_delivery_writes_reader_record` | B task result read after A: one record under the reader with `tenants=[h(B)]` and the verdict; under `FailClosed` a failed write withholds it and leaves no history | no delivery-time record |
-| `single_tenant_composite_replay_is_recorded` | composite replay of A, verdict `None`: record with `tenants=[h(A)]` | record only on non-`None` |
-| `no_arg_keys_legacy_row_is_noop` | `arg_keys` empty, legacy task row: no field, no refusal in block mode | legacy-row rule before the attribution check |
-| `principal_not_session_key` | one API key across two `mcp-session-id`s: A then B flagged; two keys sharing one session: not flagged | key taken from session |
-| `single_tenant_never_flagged` | 50 reads of A, none flagged | `>=` for `>` |
-| `window_expiry_clears` | A, then B after `window_secs + 1` via `assess_read_at`: none | window not applied |
-| `cached_replay_is_judged` | idempotent replay of A after a B read: flagged | `cached` notes skipped |
-| `anonymous_read_is_unattributable` | no caller key, with a session id present: `unattributable`; block refuses | session-id fallback |
-| `stdio_reads_keyed_on_process` | stdio A then B: flagged, not unattributable | stdio key left `None` |
-| `off_mode_writes_no_field` / `no_arg_keys_no_field` | no `cross_tenant_read` field | unconditional write |
-| `refused_call_is_not_a_read` | a gate-refused B call adds nothing: later A read unflagged | judging `Err` results |
-| `config_mode_parses_and_defaults_observe` | `observe` default; `"Block"` and `true` rejected | bool, or default `block` |
-| `tenant_read_corpus_fp_measurement` | §4 gates 1-3 | default window, threshold, mode default |
-
-The meta tests extend `audit_record_tests/tenants.rs` with a context whose
-`caller_key` is set (today `None`, audit_record_tests.rs:142). The direct tests
-use `Caller::Key` (direct_audit_tests.rs:235-252).
+| `a_then_b_observe_two_delivery_events` (HTTP, stdio, direct) | A event `tenants=[h(A)]`, no verdict; B event with `cross_tenant_read=flagged`, data delivered | threshold `> 2`; field not written; keyed on session |
+| `a_then_b_block_refuses` (each route) | B answered with the delivery refusal; event `blocked`; tenants keep `h(B)` | verdict computed but not applied |
+| `request_only_tenant_any_method` | A, then `prompts/get` with `customer_id: B` in arguments and an unkeyed result: flagged | boundary scans only the result |
+| `catalogue_delivery_is_judged` | A, then `prompts/list` whose description is JSON naming B (HTTP, stdio, cached): flagged | catalogue methods skipped |
+| `playbook_step_tenant_counts` | live playbook whose step arguments (from the definition) name B, unkeyed output, after A: flagged | inner attribution not added to `ReadScope` |
+| `playbook_mapping_introduces_b` | step result unattributed; output mapping produces `customer_id: B`: flagged | judged at a writer, not on the final result |
+| `playbook_replay_keeps_step_tenants` | replay of that playbook after A: flagged; a pre-field `StoredDelivery` adds `U` | replay judged on the result alone |
+| `task_result_judged_on_reader` | subjects S1 and S2 share credential K; S2 holds A and reads B's task result: flagged against S2 | admitting caller's key |
+| `task_request_only_tenant` | task naming B only in its request, unkeyed result, read after A: flagged; a row without the field adds `U` | settlement passes the empty set |
+| `finalization_refusal_no_history` | B refused in finalization (firewall, signing, fail-closed event), then A: not flagged | commit before finalization |
+| `direct_every_audit_policy_commits` | no log, non-fatal failure: history kept; `FailClosed` failure: 503, no history | commit tied to one `record` branch |
+| `uninspected_both_orders` | A then opaque, opaque then B, opaque then opaque, and an opaque read naming held A: all flagged; a lone opaque read: `None` | `U` equal to a tenant, or not stored |
+| `overlapping_tickets` | barrier: A assessed and held, B assessed, then A commits: B flagged; two A tickets, one drops: A still pending | commit-only history; drop clears another's count |
+| `history_bounds` | 10,000 tenants in observe mode: stored hashes ≤ 256, overflow flags; 300 open tickets: ≤ 256; full principal map: `unattributable`, no eviction | unbounded storage; eviction |
+| `refused_retry_keeps_committed_a` | A committed, a repeat A refused, then B: flagged | drop erasing committed |
+| `window_expiry_clears` | A, then B after `window_secs + 1`: `None` | window ignored |
+| `principal_not_session` | one key across two sessions: flagged; two keys sharing one session: not | session key |
+| `anonymous_is_unattributable` | no caller key, session present: `unattributable`; block refuses | session fallback |
+| `unconfigured_is_noop` | `arg_keys` empty, including a legacy task row: no fields, no refusal | judge before the attribution check |
+| `config_mode` | `observe` default; `"Block"` and `true` rejected | bool, or default `block` |
+| `tenant_read_corpus_fp_measurement` | §4 gates 1-3 | default window, threshold or mode changed |
 
 ## 6. UPGRADING-4.0.md
 
-Add one row next to row 110 (UPGRADING-4.0.md:137). The row number is assigned
-at merge. The row reads:
+Add a row next to row 110 (UPGRADING-4.0.md:137); its number is assigned at
+merge. Proposed text:
 
-"With `tenant_guard.arg_keys` set, a caller that reads data attributed to more
-than one tenant inside `window_secs` is flagged on its invocation record as
-`cross_tenant_read: flagged` (or `unattributable` with no caller identity).
-This covers every delivered backend result: tool calls, replays, resources,
-prompts, completions and task results. A non-tool read that names a tenant now
-writes a record. A response the gateway could not fully read counts as an
-unknown tenant that conflicts with any other tenant. New
-key `tenant_guard.cross_tenant_reads` (`off|observe|block`, default
-`observe`). `block` refuses the read with the response-firewall refusal.
-Tenant ids are compared across all backends: namespace ids that backends
-reuse. Action: none. To silence it, set `off`. Read the flags before choosing
-`block`."
+"With `tenant_guard.arg_keys` set, every delivery event names the tenants it
+reached (hashed). A caller whose deliveries name more than one tenant inside
+`window_secs` is marked `cross_tenant_read: flagged`, or `unattributable`
+when it has no caller identity. A response the gateway could not fully read
+counts as an unknown tenant. New key: `tenant_guard.cross_tenant_reads`
+(`off|observe|block`, default `observe`). `block` refuses with the
+response-firewall refusal. Tenant ids are compared across all backends, so
+namespace any ids that backends reuse. Action: none. Set `off` to silence it,
+and read the flags before choosing `block`."
 
-## 7. Decisions taken (lead rulings 2026-10-01: security findings are fixed in 4.0; fail closed)
+## 7. Decisions taken
 
-1. **Task paths are judged at delivery, keyed on the reader.** Settlement
-   stores the full read attribution on the task row (§3.6). Every stored-result
-   delivery is judged against, and recorded under, whoever is reading (§3.4,
-   §3.5). The admitting key keys only the worker's execution record.
-2. **An uninspected read is an unknown tenant `U`** that conflicts with any
-   other entry, in both orders (§3.1). Legacy task rows are `U`, but only when
-   attribution is configured.
-3. **History is recorded at one commit point per route**, after finalization
-   (§3.4). Committed and pending entries are kept apart, and a ticket's `Drop`
-   removes only its own reservation.
-4. **The threshold is fixed at 1.** Whether MIK-7627 needs its own knob is a
-   MIN.KILL question. The design adds none.
+1. Security findings are fixed in 4.0, and the guard fails closed (lead
+   ruling, 2026-10-01).
+2. The task-row fields are accepted. Resources, prompts and catalogues are
+   judged.
+3. The 256 cap is a constant. `large_single_tenant` is a deliberate,
+   measured FP.
+4. Round 4 (merge lane): one judgement point per route at the final delivery
+   boundary, with no per-writer assessment. Delivery records reuse the
+   existing `response_delivery_attempt` event.
+5. The threshold is fixed at 1. Whether a separate knob is needed is a
+   MIN.KILL question.
 
-### Review dispositions (first review seat)
+### Review dispositions
 
-All nine findings were confirmed at source and are fixed above:
-- Composite replays: early return at audit.rs:546.
-- Resource and prompt reads: resources.rs:394, protocol.rs:281,
-  backend_handlers.rs:451.
-- Window eviction: principal_window.rs:109-112, :173-180.
-- Reader versus admitting caller: tasks.rs:45-58 owner versus tasks.rs:188-200
-  reader.
-- Request-only tenants lost at settlement: audit.rs:475.
-- Judge API lacked `uninspected`: the earlier §3 judge.
-- Cache swap lost tenants: direct_audit.rs:148, audit.rs:193-197.
-- Replay facts reused: audit.rs:552-553.
-- History recorded before the outer firewall: invoke.rs:1228 before
-  handlers.rs:1661-1675.
+Rounds 1-3 raised 21 findings. All were confirmed and fixed; their fixes are
+part of the structure above. The round-4 findings are closed by construction:
 
-Both improvements were taken: tenant-id scope (§3, §6) and corpus weights plus
-boundary and mixed fixtures (§4). None was refuted.
+| Round-4 finding | Closed by |
+|---|---|
+| `prompts/get` request-only B | The boundary walks the incoming `params` for every method (§2; PR:154-158). Test `request_only_tenant_any_method`. |
+| Playbook replay loses step tenants | `StoredDelivery.read` (admission.rs:100-108), written at `complete_delivery` (handlers.rs:1829-1831); a missing field adds `U`. Test `playbook_replay_keeps_step_tenants`. |
+| Writer suppresses the final assessment | No writer assesses or suppresses. The boundary scans the final assembled result (handlers.rs:1826; server/mod.rs:3050; direct_audit.rs:114-118). Test `playbook_mapping_introduces_b`. |
 
-**Decisions on the two points the revision raised (merge lane, under the fail-closed ruling):**
-- The read attribution is stored as a versioned field on the existing task row. That adds a field to a durable record, with precedent in `targets` / `targets_recorded`; it is not a new store.
-- `resources/read` and `prompts/get` are reads of tenant data, so they are judged and recorded when attribution is on. This widens the record set beyond `tools/call` on purpose; UPGRADING states it.
+Both round-4 improvements were taken: ticket ownership (§3.1) and raw
+fixtures (§4).
 
-### Review dispositions (second round)
-
-All eight findings were confirmed and are fixed:
-1. **Opaque reads hid B.** Confirmed against the earlier judge step 3. Fixed
-   by the `U` model (§3.1).
-2. **A refused retry erased committed A.** Confirmed: one map held both
-   committed and pending entries. Fixed by separating them (§3.2).
-3. **Direct forwards outside the method list.** Confirmed: `completion/complete`
-   is forwarded (backend_handlers.rs:222) through the single funnel
-   (backend_handlers.rs:431-458). Fixed by judging every method (§3.4).
-4. **Commit before finalization.** Confirmed: finalization can still refuse
-   (response_security.rs:176-276), and it runs at handlers.rs:1826-1828 and
-   server/mod.rs:3050. Fixed by one commit point per route (§3.4).
-5. **Unbounded history in observe mode.** Confirmed: flagged reads committed
-   without limit. Fixed by the 256-entry cap and the `overflow_until` marker
-   (§3.2).
-6. **No delivery-time record for task results.** Confirmed. Fixed by a record
-   under the reader, with `FailClosed` honoured (§3.5).
-7. **Unrecorded single-tenant composite replay.** Confirmed. Fixed: a record is
-   written whenever attribution is non-empty (§3.5).
-8. **Legacy rows without `arg_keys`.** Confirmed. Fixed: attribution
-   unconfigured means `None` first (§3.1, judge step 1).
-
-Both improvements were taken: an overlap barrier and two-session key tests
-(§5), and the `read_tenants` write invariant (§3.6). None was refuted.
-
-**Round 2 decisions (merge lane):** the per-principal cap stays a constant (256); a knob waits for a measured need. `large_single_tenant` (A, then an unreadable page of A) is a deliberate false positive of failing closed, measured by the corpus and carried into the post-release MIN.KILL week. The stdio stored-task finalize path is checked at implementation.
-
-### Review dispositions (third round)
-
-All four findings were confirmed and are fixed:
-1. **Direct history lost on no-log and non-fatal paths.** Confirmed: `record`
-   returns early at direct_audit.rs:141-143 and again at :204-207. Fixed by
-   moving the commit to the single return of `audited_call` (§3.4).
-2. **Catalogue deliveries were not assessed.** Confirmed: `prompts/list`,
-   `resources/list` and templates are assembled without `forward_for_caller`
-   (protocol.rs:150, resources.rs:294; stdio_catalogue.rs:60-75). Fixed by the
-   catch-all assessment before finalization (§3.4).
-3. **Legacy task row judged on `U` alone.** Confirmed against the earlier
-   §3.6. Fixed: visible tenants plus `U` (§3.6).
-4. **Pending reservations were unbounded.** Confirmed against the earlier
-   §3.2. Fixed: one bound covering committed and pending entries, plus a
-   ticket cap with overflow reservations (§3.2).
-
-Both improvements were taken: hash-once ids and a boolean `read_uninspected`
-(§3.3), and the named witnesses in §5.
+**Round 4 decisions (merge lane):** one judgement point per route, at the final delivery boundary, replaces per-writer assessment. The delivery event records the caller key beside the display name, so the verdict names its actor exactly. Inner playbook steps must stay on the request task; `playbook_step_tenant_counts` fails if a future spawn drops step attribution.
