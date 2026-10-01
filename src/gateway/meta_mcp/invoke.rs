@@ -210,6 +210,9 @@ fn apply_capability_projection(
 /// zero-cost outside the experiment.
 fn emit_projection_ab_event(
     session_id: Option<&str>,
+    // The experiment key the arm was drawn from, logged as a fingerprint so a
+    // modern call (no session) can still be joined to its caller.
+    arm_key: &str,
     server: &str,
     tool: &str,
     rec: crate::projection::AbRecord,
@@ -237,9 +240,12 @@ fn emit_projection_ab_event(
     .record(f64::from(u32::try_from(response_bytes).unwrap_or(u32::MAX)));
     tracing::info!(
         target: "projection_ab",
-        // Un-sessioned calls log "none" and are always control (see
-        // projection_decision); exclude them when joining arm -> task outcome.
-        session_id = %session_id.map_or_else(|| "none".to_string(), crate::gateway::session_id::session_fp),
+        // A modern call has no session and logs "none"; its arm is its
+        // caller's (G4). A keyless call emits no event at all.
+        session_id = %session_id
+            .filter(|sid| !sid.is_empty())
+            .map_or_else(|| "none".to_string(), crate::gateway::session_id::session_fp),
+        caller = %crate::gateway::session_id::session_fp(arm_key),
         server = server,
         tool = tool,
         arm = rec.arm,
@@ -747,6 +753,7 @@ struct BridgeDispatcher<'a> {
     inbound_meta: Option<&'a Value>,
     want_full: bool,
     session_id: Option<&'a str>,
+    arm_key: Option<&'a str>,
     caller_identity: Option<&'a GrantSubject>,
     caller_proof: CallerProof<'a>,
     headers: &'a [(String, String)],
@@ -888,6 +895,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.inbound_meta,
                 self.want_full,
                 self.session_id,
+                self.arm_key,
                 self.caller_identity,
                 self.caller_proof,
                 self.headers,
@@ -1576,8 +1584,11 @@ impl MetaMcp {
         // arm is isolated while still deduping within itself — preserving
         // idempotency's double-execution protection per arm. `off`/`on` add no
         // suffix, so their keys are byte-identical to before.
+        // G4: the arm keys on the caller, never on the "" every modern caller
+        // shares; a keyless caller gets the control arm and is not counted.
+        let arm_key = caller.experiment_key(session_id);
         let projection_key_suffix =
-            crate::projection::projection_key_suffix(self.projection_mode, session_id);
+            crate::projection::projection_key_suffix(self.projection_mode, arm_key);
 
         tracing::Span::current().record("trace_id", trace_id);
 
@@ -1772,7 +1783,7 @@ impl MetaMcp {
                     )
                     .increment(1);
                     let predictions =
-                        self.record_and_predict(session_id, &tool_key, caller.scope());
+                        self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
                     return Ok(GuardedValue::from_cache(cached).augment(|v| {
                         let v =
                             augment_with_trace(augment_with_predictions(v, predictions), trace_id);
@@ -1887,7 +1898,8 @@ impl MetaMcp {
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.complete(&cached);
             }
-            let predictions = self.record_and_predict(session_id, &tool_key, caller.scope());
+            let predictions =
+                self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
             return Ok(GuardedValue::from_cache(cached).augment(|v| {
                 let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
                 self.maybe_stamp_provenance(
@@ -2019,6 +2031,7 @@ impl MetaMcp {
             args.get("_meta"),
             want_full,
             session_id,
+            arm_key,
             caller_identity,
             caller_proof,
             &caller_credential.headers,
@@ -2220,6 +2233,7 @@ impl MetaMcp {
                     inbound_meta: args.get("_meta"),
                     want_full,
                     session_id,
+                    arm_key,
                     caller_identity,
                     caller_proof,
                     headers: &caller_credential.headers,
@@ -2543,7 +2557,7 @@ impl MetaMcp {
             );
         }
 
-        let predictions = self.record_and_predict(session_id, &tool_key, caller.scope());
+        let predictions = self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
 
         // SEP-1862 dynamic promotion: auto-surface this tool in the session's
         // tools/list after a successful invocation so the LLM can call it
@@ -2637,22 +2651,28 @@ impl MetaMcp {
         }
     }
 
-    /// Record the session transition and return predictions for the current tool.
+    /// Record the caller's transition and return predictions for the current tool.
+    ///
+    /// `key` is [`super::MetaMcpCallerContext::experiment_key`]: `None` (a
+    /// keyless modern caller) records nothing and is served no hints (G4).
     ///
     /// Side-effects:
-    /// - Records `session_id → tool_key` in the `TransitionTracker`.
+    /// - Records `key → tool_key` in the `TransitionTracker`.
     /// - If a `ToolRegistry` is attached, triggers schema prefetching for the
     ///   top-N predicted successors (see [`crate::tool_registry::ToolRegistry::prefetch_after`]).
     pub(super) fn record_and_predict(
         &self,
+        // The session the visibility check reads (routing profile), and the
+        // key the transition is recorded under.
         session_id: Option<&str>,
+        key: Option<&str>,
         tool_key: &str,
         scope: super::InvokeScope<'_>,
     ) -> Vec<Value> {
         let Some(tracker) = self.get_transition_tracker() else {
             return Vec::new();
         };
-        let Some(sid) = session_id else {
+        let Some(sid) = key else {
             return Vec::new();
         };
 
@@ -3289,6 +3309,8 @@ impl MetaMcp {
         inbound_meta: Option<&Value>,
         want_full: bool,
         session_id: Option<&str>,
+        // Who the A/B arm keys on (`MetaMcpCallerContext::experiment_key`).
+        arm_key: Option<&str>,
         caller_identity: Option<&GrantSubject>,
         // The VERIFIED end-user identity, carried for the capability route
         // whose account boundary is inside the executor. Pass-through only.
@@ -3318,6 +3340,7 @@ impl MetaMcp {
                 inbound_meta,
                 want_full,
                 session_id,
+                arm_key,
                 caller_identity,
                 caller_proof,
                 propagated_headers,
@@ -3349,7 +3372,7 @@ impl MetaMcp {
             if cached_tokens > 0
                 && let Some(ref stats) = self.stats
             {
-                stats.record_cached_tokens(server, session_id, cached_tokens);
+                stats.record_cached_tokens(server, cached_tokens);
                 debug!(
                     server,
                     tool, cached_tokens, trace_id, "Prompt cache hit recorded"
@@ -3392,6 +3415,9 @@ impl MetaMcp {
         inbound_meta: Option<&Value>,
         want_full: bool,
         session_id: Option<&str>,
+        // Who the A/B arm keys on (`MetaMcpCallerContext::experiment_key`):
+        // `None` is the control shape and no A/B event (G4).
+        arm_key: Option<&str>,
         // Identity that reaches the capability executor. The grant that admits
         // it was decided at the authorization chokepoint, so nothing here
         // re-decides it — this is the value the call is made *with*, not the
@@ -3506,7 +3532,7 @@ impl MetaMcp {
             // all: `off` (default) never projects — a declared spec changes no
             // contract; `on` always projects; `experimental` projects only the
             // treatment arm of a sticky per-session A/B split.
-            let decision = crate::projection::projection_decision(self.projection_mode, session_id);
+            let decision = crate::projection::projection_decision(self.projection_mode, arm_key);
             let spec_present = cap_def.projection.is_some();
             let final_result = if decision.project
                 && let Some(spec) = cap_def.projection.as_ref()
@@ -3519,13 +3545,15 @@ impl MetaMcp {
             // A/B telemetry (MIK-5877, PROJ-ROLLOUT.3): one structured event per
             // eligible invocation so the experiment is measurable. No-op outside
             // `experimental` mode / spec-less tools.
-            if let Some(rec) = crate::projection::ab_classification(
-                self.projection_mode,
-                session_id,
-                want_full,
-                spec_present,
-            ) {
-                emit_projection_ab_event(session_id, server, tool, rec, &final_result);
+            if let Some(key) = arm_key
+                && let Some(rec) = crate::projection::ab_classification(
+                    self.projection_mode,
+                    Some(key),
+                    want_full,
+                    spec_present,
+                )
+            {
+                emit_projection_ab_event(session_id, key, server, tool, rec, &final_result);
             }
             return Ok(final_result);
         }
@@ -5236,6 +5264,7 @@ mod identity_propagation_enforcement_tests {
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             stdio_nonce: None,
+            caller_key: None,
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
@@ -5315,6 +5344,7 @@ mod identity_propagation_enforcement_tests {
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             stdio_nonce: None,
+            caller_key: None,
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
@@ -5401,6 +5431,7 @@ mod identity_propagation_enforcement_tests {
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             stdio_nonce: None,
+            caller_key: None,
             verified_identity: None,
             api_key_name: None,
             agent_id: None,
@@ -5453,6 +5484,7 @@ mod identity_propagation_enforcement_tests {
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             stdio_nonce: None,
+            caller_key: None,
             verified_identity: Some(&id),
             api_key_name: None,
             agent_id: None,
@@ -5499,6 +5531,7 @@ mod identity_propagation_enforcement_tests {
             agent_declared: None,
             grant_subject: None,
             stdio_nonce: None,
+            caller_key: None,
             verified_identity: None,
             is_admin: false,
             input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -5542,6 +5575,7 @@ mod identity_propagation_enforcement_tests {
             protocol_revision: None,
             authorizer: &ALLOW_ALL_INVOKE,
             stdio_nonce: None,
+            caller_key: None,
             verified_identity: Some(&id),
             api_key_name: None,
             agent_id: None,

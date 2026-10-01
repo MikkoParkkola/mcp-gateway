@@ -170,6 +170,7 @@ async fn call(meta: &MetaMcp, client: &Client) -> crate::Result<Value> {
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: None,
         api_key_name: None,
         agent_id: None,

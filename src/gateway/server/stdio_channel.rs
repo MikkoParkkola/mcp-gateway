@@ -318,4 +318,23 @@ mod tests {
             "the refused prompt left its pending entry behind"
         );
     }
+
+    /// MIK-7324.COV.3: an id that is neither a string nor a number names no
+    /// request of ours, so the frame is not a reply.
+    #[test]
+    fn an_id_that_is_neither_string_nor_number_is_not_a_reply() {
+        for id in [json!(true), json!(null), json!({"k": 1}), json!([1])] {
+            let frame = json!({"jsonrpc": "2.0", "id": id, "result": {}});
+            assert_eq!(StdioClientChannel::reply_id(&frame), None, "{frame}");
+        }
+    }
+
+    /// A late answer for a prompt nobody waits on any more resolves nothing
+    /// and is not an error.
+    #[test]
+    fn resolving_an_id_nothing_waits_on_returns_false() {
+        let (tx, _rx) = mpsc::channel(1);
+        let channel = StdioClientChannel::new(tx);
+        assert!(!channel.resolve("elicit-gone", json!({"result": {}})));
+    }
 }

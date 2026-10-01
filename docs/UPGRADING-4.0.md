@@ -100,7 +100,7 @@ backend" and "fails a capability file" first.**
 | 73 | A task-augmented call to a surfaced tool is confirmed when its tool entry is destructive or cannot be read from the slot the call runs on: always for verified callers on identity-propagating backends, and otherwise while the tool is missing from the shared tool list | Declare the `elicitation` capability to answer the prompt, or call without `task` |
 | 74 | With cost governance on, a stdio gateway saves `costs.json` when the client closes stdin and every 5 minutes, so a restart keeps today's spend | None; give stdio gateways that must keep separate budgets their own `MCP_GATEWAY_CONFIG_DIR` |
 | 75 | A backend tool whose description fails the tool-poisoning check is withheld from every tool list and refused by name; `allow_flagged_tools` serves one explicitly; `BackendConfig` gains a field; `security::scope_collision::detect_collisions` is removed | Read the `Tool withheld` warnings; pin a tool you trust; add `allow_flagged_tools` to any `BackendConfig` struct literal; drop calls to `detect_collisions` |
-| 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5 and drop rules that softened anomaly blocks |
+| 76 | Opt-in anomaly detection learns from admitted calls, warms up before scoring, scores never-seen transitions 1.0, and its blocks cannot be downgraded by a rule; out-of-range anomaly thresholds, or an HTTP start where no caller can have a caller key, refuse the start when detection is on | With `anomaly_detection: true`, keep `anomaly_threshold` above 0.5, enable a caller identity source on HTTP, and drop rules that softened anomaly blocks |
 | 77 | Capability calls, spec imports and discovery ignore `HTTP_PROXY`/`HTTPS_PROXY`; `capabilities.egress_proxy` names a proxy for capability calls | Set `capabilities.egress_proxy` if capability calls must leave through a proxy |
 | 78 | A stdio gateway serves a `personal_managed` account to its local operator whatever `auth` says | None; to keep an account off a stdio gateway, do not declare it in that gateway's config |
 | 79 | Identity grant changes (CLI, direct edits, the grants each start serves) are governance audit records with actor `unknown`; with auth on and grants on, a governance store that cannot open refuses the start | Set `control_plane.store_dir` to a writable directory; keep `<grant file>.journal.jsonl` beside the grant file |
@@ -140,6 +140,7 @@ backend" and "fails a capability file" first.**
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 | 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
 | 115 | A legacy session now expires after `streaming.session_ttl` of inactivity, not at that age; when it ends (an owned `DELETE /mcp` or the reaper), its routing profile, workflow state, cost bucket and other per-session state are reclaimed, and its cost stays in the aggregate | None. A client that kept a session open across the 30-minute mark keeps it, and its profile, while it stays active |
+| 116 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -2331,7 +2332,7 @@ trust. If you build `BackendConfig` with a full struct literal, add `allow_flagg
 
 ## 76. Anomaly detection now learns, and its blocks stand
 
-**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `anomaly_detection` on and an out-of-range anomaly threshold
+**Startup:** no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `anomaly_detection` on and an out-of-range anomaly threshold, or on HTTP with no source of a caller key
 
 `security.firewall.anomaly_detection` was accepted and did nothing. The firewall scored every call
 against a transition record that nothing wrote to, so every call scored a neutral 0.5 and no
@@ -2353,6 +2354,17 @@ calls together.
 - With `anomaly_detection: true`, the gateway refuses to start when `anomaly_threshold` is not
   above 0.5 and at most 1.0, when `anomaly_block_threshold` is not above `anomaly_threshold` and
   at most 1.0, or when `anomaly_min_observations` is 0. With detection off nothing is checked.
+- With the firewall and `anomaly_detection` on, an HTTP start is also refused when no caller can
+  carry a caller key: `auth.enabled`, `mtls.enabled` and `agent_auth.enabled` all false and
+  `security.caller_identity.mode: off`. Every such call would arrive with an empty key, and the
+  detector refuses a call it cannot attribute, so the gateway would refuse every call that has no
+  session. The error names `anomaly_detection` and `auth.enabled`. Stdio is not checked. Any one
+  of those sources passes the check even if it is optional, such as `mtls.require_client_cert:
+  false`; a caller that then presents no key is still refused per call, unless it holds a legacy
+  session, whose id stands in for the key.
+- A caller with no caller key has no A/B projection arm of its own (it gets the control arm) and
+  no prefetch hints: neither is recorded or served for it, and its calls emit no A/B event. Arms
+  are now derived from the caller key, so restart any A/B measurement window at the upgrade.
 - The default config has no behaviour change: `anomaly_detection` and `anomaly_block_threshold`
   are off by default.
 - Known limit: the model is shared, so while a tool is still warming up (its first 20 recorded
@@ -2361,7 +2373,8 @@ calls together.
 
 **Action:** if you set `anomaly_detection: true`, expect real scores and, with a block threshold,
 real refusals once each tool has 20 recorded transitions. Check that `anomaly_threshold` is above
-0.5, and drop any firewall rule you relied on to soften anomaly blocks.
+0.5, and drop any firewall rule you relied on to soften anomaly blocks. On HTTP, turn on
+`auth.enabled` (or another caller identity source) or turn `anomaly_detection` off.
 
 ## 77. Capability calls, imports and discovery ignore `HTTP_PROXY` and `HTTPS_PROXY`
 
@@ -3314,6 +3327,31 @@ call that runs longer than that (a backend `timeout` above two minutes) can stil
 
 **Action:** none. A client that relied on a session being replaced after 30 minutes should send
 `DELETE /mcp` instead.
+
+## 116. Key-server OIDC URLs must be HTTPS off this machine
+
+**Startup:** refuses to start, only when a `key_server.oidc` issuer, `jwks_uri` or `discovery_url` is `http://` to a host that is not loopback
+
+The gateway fetches each provider's discovery document and signing keys from these URLs. Over
+cleartext, anyone on the path can swap the keys and mint tokens the key server accepts. The
+issuer check only logged a warning; it now refuses.
+
+- `key_server.oidc[N] issuer '...' is non-HTTPS and off this machine` (or
+  `key_server.oidc[N].jwks_uri` / `.discovery_url`) at load. The `jwks_uri` and
+  `discovery_url` are not echoed.
+- A token whose `iss` names such an issuer is refused at verification too.
+- An https issuer's discovery document that names an `http://` `jwks_uri`, loopback included,
+  is refused, as before.
+- `http://` to `localhost`, `127.0.0.0/8` or `::1` is allowed, as for backend credentials. It
+  was refused at fetch time before, so a loopback `jwks_uri` such as the one in
+  `examples/token-exchange-live.yaml` now works. A loopback issuer's discovery document may
+  name a loopback `jwks_uri`.
+- An issuer that is not a URL (the gateway's own `mcp-gateway`) is unaffected; only its
+  explicit `jwks_uri` is fetched and checked.
+- A redirect while fetching keys or discovery may only move to `https://`, and a loopback
+  fetch follows no redirect and never uses a proxy.
+
+**Action:** use `https://` for every `key_server.oidc` URL, or a loopback host for local testing.
 
 ## Upgrading from 3.5.x: a walkthrough
 
