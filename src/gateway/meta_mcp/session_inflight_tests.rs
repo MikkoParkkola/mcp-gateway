@@ -146,6 +146,11 @@ async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_
     let cost = || meta.cost_tracker.session_snapshot(SESSION).is_some();
     assert!(cost(), "the call wrote its cost under the ended session");
     assert_eq!(tracker.key_count(), 1, "and its last tool");
+    #[cfg(feature = "spec-preview")]
+    assert!(
+        meta.session_promoted.contains_key(SESSION),
+        "and its promoted tool"
+    );
 
     lifecycle.reap(now_unix());
     assert!(cost(), "the grace pass waits for its deadline");
@@ -153,4 +158,9 @@ async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_
     lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
     assert!(!cost(), "the grace pass took the late cost bucket");
     assert_eq!(tracker.key_count(), 0, "and the late last tool");
+    #[cfg(feature = "spec-preview")]
+    assert!(
+        !meta.session_promoted.contains_key(SESSION),
+        "and the late promoted tool"
+    );
 }
