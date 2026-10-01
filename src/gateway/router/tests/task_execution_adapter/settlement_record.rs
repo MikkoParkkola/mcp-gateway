@@ -352,14 +352,30 @@ impl Fixture {
         (id, fetched)
     }
 
-    /// Every record naming a `tool`, in log order.
-    fn records(&self) -> Vec<Value> {
+    /// Every entry in the log, in order.
+    fn entries(&self) -> Vec<Value> {
         std::fs::read_to_string(self.log_dir.path().join("audit.jsonl"))
             .unwrap_or_default()
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|entry| entry.get("tool").is_some())
             .collect()
+    }
+
+    /// Invocation records only: entries naming a `route`. A `tasks/get`
+    /// also writes a `response_delivery_attempt` event, which is not one.
+    fn records(&self) -> Vec<Value> {
+        self.entries()
+            .into_iter()
+            .filter(|entry| entry.get("route").is_some())
+            .collect()
+    }
+
+    /// How many `response_delivery_attempt` events the log holds.
+    fn deliveries(&self) -> usize {
+        self.entries()
+            .iter()
+            .filter(|entry| entry["event"] == "response_delivery_attempt")
+            .count()
     }
 
     fn settlement_records(&self) -> Vec<Value> {
@@ -569,16 +585,19 @@ async fn r6_a_failed_write_under_fail_closed_withholds_the_result() {
         let mut setup = Setup::answering(Terminal::Completed(result_naming_cust9("")));
         setup.policy = AuditFailurePolicy::FailClosed;
         let fx = fixture(setup, path).await;
-        let (_, fetched) = fx
+        let (id, _) = fx
             .settle(path, |fx| fx.log.set_append_failure_for_test(true))
             .await;
+        // The read above wrote a delivery event too, and was withheld for it.
+        // With the log healthy again, read what the settlement committed.
         fx.log.set_append_failure_for_test(false);
+        let fetched = get_task(&fx.state, "key-a", &id).await;
         std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
         let body = fetched.to_string();
         std::assert!(body.contains("-32005"), "{path:?}: {body}");
         std::assert!(
             !body.contains("cust-9"),
-            "{path:?}: recovered content delivered: {body}"
+            "{path:?}: recovered content was committed: {body}"
         );
     }
 }
@@ -593,16 +612,24 @@ async fn r7_a_failed_write_under_best_effort_commits_the_result() {
             path,
         )
         .await;
-        let failures = fx.log.append_failures();
+        let (failures, deliveries) = (fx.log.append_failures(), fx.deliveries());
+        // One append fails: the first one after the terminal answer, which is
+        // the settlement record. The read's delivery event after it is written.
         let (_, fetched) = fx
-            .settle(path, |fx| fx.log.set_append_failure_for_test(true))
+            .settle(path, |fx| fx.log.fail_next_append_for_test())
             .await;
-        fx.log.set_append_failure_for_test(false);
         std::assert_eq!(status_of(&fetched), "completed", "{path:?}: {fetched}");
-        std::assert!(
-            fx.log.append_failures() > failures,
-            "{path:?}: the settlement write was attempted and its failure counted"
+        std::assert_eq!(
+            fx.log.append_failures(),
+            failures + 1,
+            "{path:?}: one failed append"
         );
+        std::assert!(
+            fx.deliveries() > deliveries,
+            "{path:?}: the failed append was the read's delivery event, not a \
+             settlement record written before the commit"
+        );
+        std::assert!(fx.settlement_records().is_empty(), "{:?}", fx.records());
     }
 }
 
