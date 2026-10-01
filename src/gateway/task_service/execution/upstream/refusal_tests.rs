@@ -62,7 +62,7 @@ fn executor_over(service: &Arc<TaskService>) -> Arc<TaskExecutor> {
     )
 }
 
-/// A working row, dispatched, with no upstream descriptor yet.
+/// A freshly created working row with no upstream descriptor yet.
 async fn fixture() -> Fixture {
     let dir = tempfile::tempdir().expect("a fixture store root");
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
