@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7211.PARENT.6 test 4: the `tasks/get` envelope's `result` slot.
 
-use super::task_envelope;
+use crate::gateway::task_route::task_envelope;
 use crate::protocol::tasks::Task;
 use serde_json::json;
 

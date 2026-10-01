@@ -10,7 +10,14 @@ use serde_json::json;
 fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
     let mut task = Task::create("probe");
     task.complete(json!({"content": [], "cacheScope": "public"}));
-    let stored = CommittedTask { task, revision: 3 };
+    let stored = CommittedTask {
+        task,
+        revision: 3,
+        backend: "probe".to_owned(),
+        targets: Vec::new(),
+        targets_recorded: true,
+        output_free: false,
+    };
 
     let response = BeginOutcome::Existing(stored).into_response(RequestId::Number(9));
 
