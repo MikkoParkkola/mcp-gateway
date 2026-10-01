@@ -655,6 +655,37 @@ TAG_INPUT = r"inputs\s*(?:\.\s*tag\b|\[\s*['\"]tag['\"]\s*\])"
 TAG_EXPRESSION = re.compile(r"\$\{\{[^}]*" + TAG_INPUT + r"[^}]*\}\}")
 
 
+RELEASE_LINE_ONLY = (
+    "github.event_name == 'push' && "
+    "github.ref == 'refs/heads/docs/ranking-1-release-line'"
+)
+
+
+def is_release_line_export(block):
+    """True for a step that hands verifiers an image and publishes nothing.
+
+    Safe by what it does, never by what it is called: its own `if:` is exactly
+    the release-line push condition (so it cannot run on main or a tag), and
+    its artifact is not under `image-digest-`, the prefix the manifest job
+    consumes to create tags.
+    """
+    conditions = [
+        " ".join(line.split(":", 1)[1].split())
+        for line in block
+        if re.match(r"^\s*if:", line)
+    ]
+    names = [
+        match.group(1)
+        for line in block
+        if (match := re.match(r"^\s+name:\s*(\S+)", line))
+    ]
+    return (
+        conditions == [RELEASE_LINE_ONLY]
+        and bool(names)
+        and not any(name.startswith("image-digest-") for name in names)
+    )
+
+
 def job_if(workflow, job):
     """A job's own `if:` scalar, folded to one line.
 
@@ -1653,6 +1684,30 @@ class WorkflowWiring(unittest.TestCase):
                     f"{workflow}: {block[0].strip()} does not build {want}",
                 )
 
+    def test_the_release_line_export_exemption_is_keyed_on_what_makes_it_safe(self):
+        # A step name is a free-text label: keying the exemption on it would
+        # let any future step walk past the main-only rule by copying it.
+        guard = f"if: {RELEASE_LINE_ONLY}"
+        export = [
+            "- name: Upload the scanned image (release-line push only)",
+            f"  {guard}",
+            "  uses: actions/upload-artifact@x",
+            "    name: image-${{ matrix.arch }}-${{ github.sha }}",
+        ]
+        self.assertTrue(is_release_line_export(export))
+        # Old exempt name, main-only condition, digest artifact: still held.
+        impostor = [
+            export[0],
+            "  if: github.ref == 'refs/heads/main'",
+            export[2],
+            "    name: image-digest-${{ matrix.arch }}",
+        ]
+        self.assertFalse(is_release_line_export(impostor))
+        # Right condition but the manifest chain's artifact prefix: still held.
+        self.assertFalse(
+            is_release_line_export(export[:3] + ["    name: image-digest-amd64"])
+        )
+
     def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
         # A regression lock, green today: docker.yml handed :VERSION over, and
         # this condition is the only thing keeping the second publisher from
@@ -1670,9 +1725,7 @@ class WorkflowWiring(unittest.TestCase):
             block
             for block in steps("docker.yml", "build")
             for line in block
-            # The release-line image export is an artifact for verifiers, not
-            # a publisher: nothing reachable by name leaves the build job.
-            if "(release-line push only)" not in block[0]
+            if not is_release_line_export(block)
             if re.search(r"\bpush\s*=\s*true\b", line)
             or re.match(r"^\s*push:\s*\$\{\{", line)
             or re.match(r"^\s*uses:\s*actions/upload-artifact@", line)
