@@ -62,6 +62,7 @@ pub mod session_lifecycle;
 pub mod state;
 pub mod streaming;
 pub mod subscription_registry;
+pub(crate) mod task_route;
 pub(crate) mod task_service;
 pub mod trace;
 #[cfg(feature = "webui")]
