@@ -1,0 +1,13 @@
+diff --git a/src/backend/repin.rs b/src/backend/repin.rs
+index 2a0c48048..d1bd350f7 100644
+--- a/src/backend/repin.rs
++++ b/src/backend/repin.rs
+@@ -60,7 +60,7 @@ impl Backend {
+         // holds no child process, and its connections close with it.
+         if tokio::runtime::Handle::try_current().is_ok() {
+             for old in retired {
+-                self.close_after_last_owner(old);
++                drop(old);
+             }
+         } else {
+             debug!(backend = %self.name, "No runtime: retired transports dropped, not closed");

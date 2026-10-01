@@ -1,0 +1,13 @@
+diff --git a/src/backend/mod.rs b/src/backend/mod.rs
+index 218d8d2c9..65013d21f 100644
+--- a/src/backend/mod.rs
++++ b/src/backend/mod.rs
+@@ -226,7 +226,7 @@ impl Backend {
+     /// backend started before: they were built under the unstamped
+     /// `Configured` policy (MIK-7700).
+     pub(crate) fn restamp(&self, policy: crate::security::ssrf::DestinationPolicy) {
+-        if self.stamp_destination(policy) && self.destination_bound() {
++        if self.stamp_destination(policy) {
+             self.retire_started_transports();
+         }
+     }

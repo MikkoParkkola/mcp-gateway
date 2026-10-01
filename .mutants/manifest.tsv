@@ -1,0 +1,7 @@
+head_sha	c20d9698bfe0a3c1dc4672fac623e33dc4df6977
+# MIK-7700 PR 2597
+RETIRE	linux	retire.patch	--lib backend::destination_tests::hardened_pairing_retires_a_started_unpinned_transport -- --exact
+STDIO	linux	stdio.patch	--lib backend::destination_tests::hardened_pairing_keeps_a_started_stdio_transport -- --exact
+PUBLISH	linux	publish.patch	--lib backend::destination_tests::a_start_built_before_the_stamp_is_not_published -- --exact
+REGISTER	linux	register.patch	--lib backend::destination_tests::registering_a_started_backend_into_a_hardened_registry_retires_it -- --exact
+NOCLOSE	linux	noclose.patch	--lib backend::destination_tests::hardened_pairing_retires_a_started_unpinned_transport -- --exact
