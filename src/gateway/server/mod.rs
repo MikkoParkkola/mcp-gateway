@@ -356,6 +356,9 @@ struct StdioClient<'a> {
     handshake_capabilities: crate::protocol::meta::Declared,
     /// The session's task store; `None` serves no `tasks/*` (MIK-7272.OWNER.2).
     tasks: Option<&'a stdio_tasks::StdioTasks>,
+    /// `server.modern_protocol` at stdio start: whether `server/discover`
+    /// lists 2026-07-28 (MIK-7217.STDIO.1, design D7).
+    modern: bool,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -2311,6 +2314,8 @@ impl Gateway {
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
         let task_store =
             stdio_tasks::open(&self.config, self.env.startup(), &meta_mcp, &tool_policy).await;
+        // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
+        let modern = self.config.server.modern_protocol;
 
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -2624,6 +2629,7 @@ impl Gateway {
                                 channel: &*channel,
                                 handshake_capabilities,
                                 tasks: tasks.as_deref(),
+                                modern,
                             },
                             &telemetry,
                         )),
@@ -2858,6 +2864,7 @@ impl Gateway {
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
                 tasks: None,
+                modern: false,
             },
             &StdioTelemetry::default(),
         )
@@ -2979,13 +2986,15 @@ impl Gateway {
             (
                 match method.as_str() {
                     // 2026-07-28 MUST, answered without a handshake: on stdio it is
-                    // also the backward-compatibility probe. Always the legacy list:
-                    // this dispatcher has no running config, and the stateless
-                    // revision is specified over streamable HTTP (a limitation, not
-                    // a decision that stdio is excluded).
+                    // also the backward-compatibility probe. It lists 2026-07-28 when
+                    // `server.modern_protocol` was on at stdio start (MIK-7217.STDIO.1);
+                    // a batch is a legacy shape and always gets the legacy list.
                     "server/discover" => stdio_tasks::advertised(
                         client.tasks,
-                        JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false)),
+                        JsonRpcResponse::success_serialized(
+                            id,
+                            meta_mcp.discover_document(client.modern),
+                        ),
                     ),
                     "initialize" => stdio_tasks::advertised(
                         client.tasks,
@@ -3477,6 +3486,7 @@ impl Gateway {
                     handshake_capabilities: crate::protocol::meta::Declared::NONE,
                     // A batch is a legacy shape; it serves no `tasks/*`.
                     tasks: None,
+                    modern: false,
                 },
                 protocol_telemetry_sink,
             ))
@@ -4201,6 +4211,7 @@ mod tests {
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
                 tasks: None,
+                modern: false,
             },
             &sink,
         )

@@ -171,6 +171,7 @@ async fn dispatch(stdio: &Stdio, policy: &Arc<ToolPolicy>, request: Value) -> Va
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
+            modern: false,
         },
         &super::super::StdioTelemetry::default(),
     )

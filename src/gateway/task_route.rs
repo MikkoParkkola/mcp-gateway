@@ -65,9 +65,9 @@ pub(crate) fn task_id_param(params: Option<&Value>) -> Option<&str> {
 /// The one answer a caller gets for a task that is absent, or that belongs to
 /// another principal.
 ///
-/// Deliberately carries no id: a message naming the task would let a caller
-/// tell "not yours" from "never existed", which is the whole disclosure the
-/// ownership rule exists to prevent.
+/// Deliberately names no task (the JSON-RPC id is still echoed): a message
+/// naming the task would let a caller tell "not yours" from "never existed",
+/// which is the whole disclosure the ownership rule exists to prevent.
 pub(crate) fn missing_task_error(id: RequestId) -> JsonRpcResponse {
     JsonRpcResponse::error(Some(id), -32602, "no such task")
 }
