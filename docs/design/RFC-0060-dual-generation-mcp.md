@@ -42,7 +42,7 @@ Three options. **Recommendation was B; U4 resolved it to C.** The original reaso
 
 **Why B was wrong.** It assumed the SDK could not dual-speak, so the negotiation logic had to live somewhere we controlled. U4 shows rmcp models every revision we care about, including the two-generation dispatch that is the entire difficulty. Building a shared crate would mean maintaining a worse copy of a solved problem.
 
-**The gateway remains the open question**, and it is a genuine one: rmcp is built for *servers*, and the gateway is a *proxy* that must forward a request whose protocol generation it did not choose. Whether rmcp's model types can be used for pass-through routing without paying a full deserialise-reserialise on every call is **U5**, below — and if the answer is no, the gateway alone stays hand-rolled while everything else converges. *(Answered 2026-10-01 for routing: see U5 below and RFC-0061 Decision 1.)*
+**The gateway was the open question**, and a genuine one: rmcp is built for *servers*, and the gateway is a *proxy* that must forward a request whose protocol generation it did not choose. Whether rmcp's model types can be used for pass-through routing without paying a full deserialise-reserialise on every call is **U5**, below — and if the answer is no, the gateway alone stays hand-rolled while everything else converges. *(Answered 2026-10-01 for routing: see U5 below and RFC-0061 Decision 1.)*
 
 ## Decision 2 — the compatibility window
 
@@ -98,7 +98,7 @@ This prevents uncertainty from making a revision look safe to remove. Revisions
 with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: started 2026-10-02 01:22:04 CEST, ends 2026-10-09 01:22 CEST** (live gateway 4.0.0-e2c34b78; baseline scrape sha256 87133a1c…; a restart invalidates it). The procedure below is how it was set up. Stop all gateway processes, archive any
+**Production window: started 2026-10-02 01:22:04 CEST, ends 2026-10-09 01:22:04 CEST (604,800 s)** (live gateway 4.0.0-e2c34b78; baseline scrape sha256 87133a1c…; a restart invalidates it). The procedure below is how it was set up. Stop all gateway processes, archive any
 earlier `protocol-revision-telemetry` directory, deploy, and then start the
 gateways. The new durable file's `started_at_unix_seconds` is the stdio baseline;
 take the HTTP baseline scrape after all bounded metric series have been
@@ -122,7 +122,7 @@ on partial data. Decision 2 stays unfrozen. No revision is retired.
 
 ## Unknowns, each with a fail-fast (§P1)
 
-An unknown without a scheduled check is a defect. Five. U3 and U4 resolved; U5 answered 2026-10-01; U2 moved out of 4.0.0 (MIK-7628); U1 outstanding:
+An unknown without a scheduled check is a defect. Seven. U3 and U4 resolved; U5 answered 2026-10-01; U7 answered by the session-keyed inventory (MIK-7211.PARENT.7); U2 moved out of 4.0.0 (MIK-7628); U1 and U6 outstanding:
 
 | # | Question | The check | Blocks |
 |---|---|---|---|
