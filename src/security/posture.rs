@@ -22,6 +22,10 @@
 //!   OAuth URLs are checked before use, and proxy environment variables are
 //!   ignored. The policy is stamped by the backend registry, so a backend
 //!   used with no config at all has no posture and none is enforced;
+//! - a backend named in `security.hardened.private_backends` connects under
+//!   [`crate::security::ssrf::DestinationPolicy::Private`] instead: loopback,
+//!   RFC 1918 and unique-local are reachable, link-local and the cloud metadata
+//!   addresses never; a listed name that is no configured backend refuses start;
 //! - message signing is on, so a start without a signing secret of at least
 //!   32 bytes is refused; every successful `tools/call` result on both routes
 //!   is signed;
@@ -50,6 +54,17 @@ pub enum SecurityPosture {
     Standard,
     /// Raise the controls listed in the module docs, whatever they are set to.
     Hardened,
+}
+
+/// Settings read only under `security.posture: hardened`
+/// (`security.hardened`). Restart-only.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HardenedConfig {
+    /// Backends that may reach loopback, RFC 1918 and unique-local addresses
+    /// (never link-local or the cloud metadata addresses). Every other backend
+    /// reaches public addresses only. Each name must be a configured backend.
+    pub private_backends: Vec<String>,
 }
 
 /// Whether this binary was built with the `firewall` feature.
@@ -88,6 +103,20 @@ pub(crate) fn resolve(config: &mut Config, build: FirewallBuild) -> Result<()> {
              without it; use a default build or set security.posture: standard"
                 .to_string(),
         ));
+    }
+    // Row 17: a listed name that is no configured backend is a typo or a stale
+    // entry, and either would silently leave the intended backend refused.
+    if let Some(missing) = config
+        .security
+        .hardened
+        .private_backends
+        .iter()
+        .find(|name| !config.backends.contains_key(name.as_str()))
+    {
+        return Err(Error::ConfigValidation(format!(
+            "security.hardened.private_backends names '{missing}', which is not a configured \
+             backend; list only backends under `backends`"
+        )));
     }
     // #1881: the egress proxy is a route out the destination policy cannot see.
     if config.capabilities.egress_proxy.is_some() {
@@ -143,8 +172,11 @@ fn force_anomaly_blocking(firewall: &mut crate::security::firewall::FirewallConf
 
 /// The reload refusal when `candidate` changes the running posture.
 pub(crate) fn reload_refusal(running: &Config, candidate: &Config) -> Option<String> {
-    (running.security.posture != candidate.security.posture)
-        .then(|| "config reload refused: security.posture requires restart".to_string())
+    if running.security.posture != candidate.security.posture {
+        return Some("config reload refused: security.posture requires restart".to_string());
+    }
+    (running.security.hardened != candidate.security.hardened)
+        .then(|| "config reload refused: security.hardened requires restart".to_string())
 }
 
 /// The warning for a multi-user deployment running the `standard` posture,
