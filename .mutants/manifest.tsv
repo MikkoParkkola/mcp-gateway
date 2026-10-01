@@ -1,0 +1,6 @@
+head_sha	8151cb5f892ffcd650d1ce2c2ae98a9d31599695
+# metadata wording reverts to the generic text
+c1-literal	linux	c1.patch	--lib metadata_literal_refusal_names_the_metadata_service
+c1-host	linux	c1.patch	--lib metadata_host_refusal_names_the_metadata_service
+# hardened resume drops the owner filter
+c2-owner	linux	c2.patch	--lib hardened_resume_refuses_another_owner

@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/mod.rs b/src/security/ssrf/mod.rs
+index 321af448f..32aed9b59 100644
+--- a/src/security/ssrf/mod.rs
++++ b/src/security/ssrf/mod.rs
+@@ -136,7 +136,7 @@ pub(crate) fn denied_address(addr: IpAddr) -> String {
+     if v4 == Some(std::net::Ipv4Addr::new(169, 254, 169, 254))
+         || destination::ALWAYS_DENIED.contains(&addr)
+     {
+-        format!("cloud metadata address {addr}")
++        format!("private/reserved address {addr}")
+     } else {
+         format!("private/reserved address {addr}")
+     }
