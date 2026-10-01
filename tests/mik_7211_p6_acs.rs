@@ -46,16 +46,46 @@ mod source_checks {
         }
     }
 
-    /// The production part of `path`: nothing after the first `#[cfg(test)]`,
-    /// and no test-only files.
+    /// `text` without the items gated by `#[cfg(test)]`.
+    fn production_text(text: &str) -> String {
+        text.split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// The production part of `path`, and nothing of test-only files.
     fn production_lines(path: &Path) -> Vec<String> {
         let name = path.to_string_lossy();
         if name.contains("tests") || name.ends_with("_tests.rs") || name.contains("/tests/") {
             return Vec::new();
         }
         let text = std::fs::read_to_string(path).expect("source reads");
-        let production = text.split("#[cfg(test)]").next().unwrap_or_default();
-        production.lines().map(str::to_owned).collect()
+        production_text(&text).lines().map(str::to_owned).collect()
+    }
+
+    /// The drift check must see a production writer that follows a
+    /// test-gated item; cutting the file at the first `#[cfg(test)]` hid it.
+    #[test]
+    fn a_writer_after_a_test_gated_item_is_still_production() {
+        let text = concat!(
+            "fn a() {}\n",
+            "#[cfg(test)]\n",
+            "mod t {\n    fn x() { let _ = \"cacheScope\"; }\n}\n",
+            "#[cfg(test)]\n",
+            "#[path = \"t_tests.rs\"]\n",
+            "mod t_tests;\n",
+            "fn b() { let _ = \"cacheScope\"; }\n",
+            "/// Mentions `#[cfg(test)]` in prose.\n",
+            "fn c() { let _ = \"cacheScope\"; }\n",
+        );
+        let production = production_text(text);
+        assert_eq!(
+            production.matches("\"cacheScope\"").count(),
+            2,
+            "{production}"
+        );
+        assert!(!production.contains("fn x()"), "{production}");
     }
 
     /// Test 7 (b). A drift check, and labelled as one: `"cacheScope"` is
