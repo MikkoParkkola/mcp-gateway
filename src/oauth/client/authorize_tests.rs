@@ -222,27 +222,43 @@ async fn authorize_redeems_a_code_only_after_the_callback_proves_state_and_issue
 }
 
 // An authorization code is a credential: no log line may carry it, at any
-// level up to DEBUG, anywhere in the flow that receives and redeems it.
+// level up to DEBUG, anywhere in the flow that receives and redeems it, on
+// success or on either refusal after the code has arrived.
 #[tokio::test]
 async fn the_authorization_code_never_reaches_the_log() {
-    let (guard, buffer) = crate::oauth::callback::tests::capture();
-    let dir = tempfile::tempdir().unwrap();
-    let (issuer, _forms) = token_endpoint(Some("access-a")).await;
-    let mut client = client(dir.path(), Some(&issuer));
+    enum Path {
+        Redeemed,
+        RedemptionRefused,
+        AnotherIssuer,
+    }
+    for path in [Path::Redeemed, Path::RedemptionRefused, Path::AnotherIssuer] {
+        let (guard, buffer) = crate::oauth::callback::tests::capture();
+        let dir = tempfile::tempdir().unwrap();
+        let answer = match path {
+            Path::RedemptionRefused => None,
+            _ => Some("access-a"),
+        };
+        let (issuer, _forms) = token_endpoint(answer).await;
+        let mut client = client(dir.path(), Some(&issuer));
+        let iss = match path {
+            Path::AnotherIssuer => "https://other-as.example".to_string(),
+            _ => issuer.clone(),
+        };
 
-    let (outcome, _query) = approve(&mut client, &issuer).await;
-    drop(guard);
+        let (outcome, _query) = approve(&mut client, &iss).await;
+        drop(guard);
 
-    assert_eq!(outcome.expect("the flow completes"), "access-a");
-    let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
-    assert!(
-        log.contains("oauth.callback.success"),
-        "the capture saw the flow's DEBUG events: {log}"
-    );
-    assert!(
-        !log.contains(APPROVED_CODE),
-        "the authorization code was logged: {log}"
-    );
+        assert_eq!(outcome.is_ok(), matches!(path, Path::Redeemed));
+        let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert!(
+            log.contains("oauth.callback.success"),
+            "the capture saw the flow's DEBUG events: {log}"
+        );
+        assert!(
+            !log.contains(APPROVED_CODE),
+            "the authorization code was logged: {log}"
+        );
+    }
 }
 
 #[tokio::test]
