@@ -31,24 +31,51 @@ pullRequest(number:$n){reviewThreads(first:100,after:$after){pageInfo{hasNextPag
 nodes{comments(first:1){nodes{author{login __typename} url path line originalLine}}}}
 reviews(first:100){pageInfo{hasNextPage}
 nodes{author{login __typename} url body comments{totalCount}}}}}}"""
-# A review body stating this has nothing a thread could have missed.
-NO_FINDINGS = re.compile(r"\*\*Findings:\*\*\s*None\b")
+# Copilot's overview states how many findings it raised; Codex's summary is a
+# fixed template. A body matching neither is unaccounted for.
+COPILOT_OVERVIEW = "<!-- ccr-overview-v2 -->"
+COPILOT_FINDINGS = re.compile(r"\*\*Findings:\*\*\s*(None|\d+)")
+CODEX_TEMPLATE = (
+    "### 💡 Codex Review Here are some automated review suggestions for this pull request. "
+    "**Reviewed commit:** `SHA` <details> <summary>ℹ️ About Codex in GitHub</summary> <br/> "
+    "[Your team has set up Codex to review pull requests in this repo](URL Reviews are "
+    "triggered when you - Open a pull request for review - Mark a draft as ready - Comment "
+    "\"@codex review\". If Codex has suggestions, it will comment; otherwise it will react "
+    "with 👍. Codex can also answer questions or update the PR. Try commenting "
+    "\"@codex address that feedback\". </details>"
+)
+
+
+def _normalised(body: str) -> str:
+    body = re.sub(r"https?://\S+", "URL", body)
+    body = re.sub(r"(\*\*Reviewed commit:\*\* )`[0-9a-f]{7,40}`", r"\1`SHA`", body)
+    return re.sub(r"\s+", " ", body).strip()
+
+
+def _accounted_for(review: dict) -> bool:
+    """Whether every finding this review's body could carry is in its threads."""
+    body, inline = review["body"], review["comments"]["totalCount"]
+    if COPILOT_OVERVIEW in body:
+        stated = COPILOT_FINDINGS.findall(body)
+        if len(stated) != 1:
+            return False
+        return (0 if stated[0] == "None" else int(stated[0])) <= inline
+    return _normalised(body) == CODEX_TEMPLATE
 
 
 def body_findings(reviews: list[dict]) -> list[dict]:
     """Bot reviews whose summary body may hold a finding no inline thread carries.
 
-    A review with inline comments puts its findings in threads, which the sweep
-    reads. One with no inline comment and a non-empty body may have a finding
-    only there, unless the body says it has none.
+    Fails closed: a body is passed only when it is a Copilot overview whose one
+    stated findings count its inline comments cover, or the Codex summary
+    template unchanged. Anything else, a new template included, must be linked.
     """
     return [
         r
         for r in reviews
         if (r.get("author") or {}).get("__typename") == "Bot"
         and r["body"].strip()
-        and r["comments"]["totalCount"] == 0
-        and not NO_FINDINGS.search(r["body"])
+        and not _accounted_for(r)
     ]
 
 
