@@ -88,3 +88,35 @@ async fn a_late_cancel_does_not_silence_a_reused_id() {
         Some(json!("second"))
     );
 }
+
+/// Joining an answered dispatch clears only its own marks: the call that
+/// reused its id keeps its "answered" mark, so a third use of the id is
+/// still cancellable.
+#[tokio::test]
+async fn joining_a_predecessor_keeps_its_successors_marks() {
+    let mut dispatches = StdioDispatches::default();
+    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let first = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
+    let answered = tokio::time::timeout(BOUND, stdout.recv()).await;
+    assert_eq!(answered.expect("first answered"), Some(json!("first")));
+    let _second = answered_but_unreaped(&mut dispatches, &writer, json!("second")).await;
+    let answered = tokio::time::timeout(BOUND, stdout.recv()).await;
+    assert_eq!(answered.expect("second answered"), Some(json!("second")));
+
+    // Only the first dispatch can finish, so this joins exactly it.
+    drop(first);
+    let joined = tokio::time::timeout(BOUND, dispatches.join_next()).await;
+    assert!(matches!(joined, Ok(Some(Ok(())))), "the first dispatch joined");
+
+    let (alive, dropped) = oneshot::channel::<()>();
+    dispatches.spawn(Some(id()), async move {
+        let _alive = alive;
+        std::future::pending::<()>().await;
+    });
+    dispatches.cancel(&id());
+    let outcome = tokio::time::timeout(BOUND, dropped).await;
+    assert!(
+        outcome.is_ok(),
+        "joining the first dispatch cleared the second's marks; the third call kept running"
+    );
+}

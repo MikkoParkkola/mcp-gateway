@@ -100,14 +100,11 @@ impl StdioDispatches {
     }
 
     /// Record `id`'s dispatch as cancelled, then abort it. An id that is not in
-    /// flight, answered included, is ignored (MCP cancellation: MAY ignore).
+    /// flight is ignored (MCP cancellation: MAY ignore); one that has answered
+    /// but is not yet joined marks only its own finished task.
     pub(super) fn cancel(&mut self, id: &RequestId) {
         if let Some((task, handle)) = self.by_request.get(id) {
-            let mut marks = self.cancelled.0.lock();
-            if marks.answered.contains(task) {
-                return;
-            }
-            marks.cancelled.insert(*task);
+            self.cancelled.0.lock().cancelled.insert(*task);
             handle.abort();
         }
     }
