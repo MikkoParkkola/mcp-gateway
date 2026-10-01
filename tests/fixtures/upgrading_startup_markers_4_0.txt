@@ -65,7 +65,7 @@
 72	no notice
 73	no notice
 74	no notice
-76	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `anomaly_detection` on and an out-of-range anomaly threshold
+76	no notice, the start is refused with its own error, which names the setting or file; refuses to start, only with `anomaly_detection` on and an out-of-range anomaly threshold, or on HTTP with no source of a caller key
 77	no notice
 78	no notice
 80	no notice

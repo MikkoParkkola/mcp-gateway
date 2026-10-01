@@ -1557,6 +1557,174 @@
         "src/backend/era_stale_probe_tests.rs"
       ],
       "note": "MET: without a replacement a re-probe answer is committed and no record is emitted (without_a_restart_the_reprobe_answer_is_committed); a_contradiction_reprobes_and_the_whole_read_moves_with_it and a_reprobe_that_gets_no_answer_returns_the_era_to_assumed are unchanged and green in CI run 36681893146 on b929b2ad9 (Tests, Windows, macOS, clippy, fmt green)."
+    },
+    {
+      "id": "MIK-7630.EVENTS.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.4",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.6",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.7",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.EVENTS.8",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SOURCE.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SOURCE.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SOURCE.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.4",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.5",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.SAFETY.6",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.RELIABLE.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.RELIABLE.2",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.RELIABLE.3",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+    },
+    {
+      "id": "MIK-7630.DISCOVER.1",
+      "status": "pending",
+      "stage": "ungraded",
+      "blocked_on": "none",
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
     }
   ],
   "decisions": [
@@ -1698,6 +1866,20 @@
       "evidence": [
         "docs/design/RFC-0061-protocol-2026-07-28-release-scope.md",
         "docs/internal/requirements/RELEASE-4.0.0-scope-delivery.md",
+        "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
+      ]
+    },
+    {
+      "id": "mik_7630_events_scope",
+      "status": "resolved",
+      "resolved": "2026-10-01",
+      "authority": "operator chat approval 2026-10-01, relayed by the release coordinator (operator-decisions row C6), of the scope split the release coordinator proposed; recorded here as a maintainer decision under that delegated authority",
+      "selection": "MIK-7630 ships in 4.0.0 with the ticket's acceptance criteria plus backend MCP notifications and task settlement as event sources, the safety controls (response firewall scan, MIN.1 audit per delivery, visibility and tenant guard, rate limit and budget, SSRF destination policy, provenance), a durable store with dedupe, retry, dead letters and admin replay, and gateway_search discovery: criteria MIK-7630.EVENTS.1-8, SOURCE.1-3, SAFETY.1-6, RELIABLE.1-3, DISCOVER.1. REST capability watch, gateway operational events and scheduler time events go to 4.0.1 on the follow-up ticket.",
+      "rationale": "The ticket's own criteria cover inbound webhooks only; the extended sources reuse taps the gateway already has (SubscriptionRegistry, the task executor) and the safety controls reuse existing machinery, so they belong in the same increment train. The 4.0.1 sources plug into the adapter interface criterion SOURCE.3 delivers, so deferring them causes no rework.",
+      "consequence": "21 pending MIK-7630 criteria join the 4.0.0 tag gate. The 4.0.1 sources carry no 4.0.0 criterion.",
+      "evidence": [
+        "docs/design/2026-10-01-mik-7630-mcp-events.md",
+        "docs/design/2026-10-01-mik-7630-event-sources-4.0.1.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
       ]
     }

@@ -333,3 +333,17 @@ async fn an_unparseable_authorization_endpoint_is_refused_before_any_browser_ope
     );
     assert_eq!(*opened.lock().unwrap(), 0, "no browser is opened");
 }
+
+impl OAuthClient {
+    /// A live (one-hour) token in place, as a completed flow would leave it,
+    /// for a transport test that needs `get_token` to answer without a flow.
+    pub(crate) fn install_live_token_for_test(&self, access_token: &str) {
+        *self.current_token.write() = Some(TokenInfo::from_response(
+            access_token.to_string(),
+            Some("Bearer".to_string()),
+            None,
+            Some(3600),
+            None,
+        ));
+    }
+}

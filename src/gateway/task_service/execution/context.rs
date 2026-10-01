@@ -203,6 +203,7 @@ impl OwnedCallerContext {
             // principal and `LocalTransport` provenance survive the rebuild
             // (D6 rev 5 item 2). An HTTP host has none.
             stdio_nonce: host.stdio_nonce(),
+            caller_key: None,
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,

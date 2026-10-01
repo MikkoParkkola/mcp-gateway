@@ -17,6 +17,8 @@ mod cost_restart_tests;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+#[cfg(all(test, feature = "firewall"))]
+mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
 #[cfg(test)]
@@ -26,6 +28,7 @@ mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
+mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_dispatches;
@@ -602,7 +605,7 @@ impl Gateway {
         backends.enforce_destinations(
             DestinationPolicy::for_posture(config.security.posture),
             &config.security.hardened.private_backends,
-        );
+        )?;
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding
@@ -1283,6 +1286,7 @@ impl Gateway {
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
+        start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
                 .server
@@ -1609,7 +1613,7 @@ impl Gateway {
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
-                )
+                )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
                 .with_stop(reload_stop),
@@ -2295,7 +2299,7 @@ impl Gateway {
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
-                )
+                )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(grant_sink.clone()),
             );
@@ -3235,6 +3239,7 @@ impl Gateway {
             verified_identity: None,
             // The one client this process serves, for binding continuations.
             stdio_nonce: Some(StdioNonce::process()),
+            caller_key: None,
             // Same `RequestShape` the `initialize` arm advertises against.
             era: request_shape.era(),
             // The serve loop's own channel: a stdio client reads the same
@@ -3779,12 +3784,11 @@ fn stdio_caller_context<'a>(
         grant_subject: None,
         verified_identity: None,
         stdio_nonce: Some(StdioNonce::process()),
-        // stdio speaks to one process over two pipes and
-        // has no elicitation channel: there is no operator
-        // this transport can reach, so a destructive call
-        // it cannot confirm is refused rather than asked
-        // about. Not "found no session" -- no asker can
-        // exist here at all.
+        caller_key: None,
+        // stdio speaks to one process over two pipes and has no elicitation channel:
+        // there is no operator this transport can reach, so a destructive call it
+        // cannot confirm is refused rather than asked about. Not "found no session"
+        // -- no asker can exist here at all.
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     }
 }

@@ -50,6 +50,36 @@ impl FirewallConfig {
     }
 }
 
+const KEYLESS_HTTP: &str = "security.firewall.anomaly_detection is on but auth.enabled is off, \
+    and no client certificate, agent token or identity header can name a caller either: every \
+    HTTP call without a session would be refused unscored. Turn auth.enabled on, or \
+    anomaly_detection off";
+
+/// Refuse an HTTP start where anomaly detection is on and no caller can carry
+/// a caller key (MIK-7215.CONTROL.5, gap G5).
+///
+/// A caller key comes from authentication, a client certificate, an agent token
+/// or a trusted identity header. With all four off every HTTP caller's key is
+/// empty, and the detector refuses each call it cannot attribute, so the
+/// gateway would start and then refuse every meta call that has no session.
+/// Stdio is not checked: it serves the one local operator.
+///
+/// # Errors
+///
+/// A message naming `anomaly_detection` and `auth.enabled`.
+pub(crate) fn refuse_keyless_http_anomaly(config: &crate::config::Config) -> Result<(), String> {
+    let keyed = config.auth.enabled
+        || config.mtls.enabled
+        || config.agent_auth.enabled
+        || config.security.caller_identity.mode
+            != crate::security::caller_identity::CallerIdentityMode::Off;
+    let firewall = &config.security.firewall;
+    if firewall.enabled && firewall.anomaly_detection && !keyed {
+        return Err(KEYLESS_HTTP.to_owned());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
@@ -104,6 +134,53 @@ mod tests {
             "    anomaly_min_observations: 0\n",
         ] {
             assert!(load(line).is_ok(), "detection off: {line} must still load");
+        }
+    }
+
+    fn keyless() -> Config {
+        let mut config = Config::default();
+        config.auth.enabled = false;
+        config.security.firewall.enabled = true;
+        config.security.firewall.anomaly_detection = true;
+        config
+    }
+
+    #[test]
+    fn keyless_http_anomaly_detection_is_refused_naming_both_settings() {
+        let message = super::refuse_keyless_http_anomaly(&keyless())
+            .expect_err("no HTTP caller can have a key");
+        assert!(message.contains("anomaly_detection"), "{message}");
+        assert!(message.contains("auth.enabled"), "{message}");
+    }
+
+    #[test]
+    fn any_source_of_a_caller_key_lets_it_start() {
+        let mut auth = keyless();
+        auth.auth.enabled = true;
+        let mut mtls = keyless();
+        mtls.mtls.enabled = true;
+        let mut agent = keyless();
+        agent.agent_auth.enabled = true;
+        let mut header = keyless();
+        header.security.caller_identity.mode =
+            crate::security::caller_identity::CallerIdentityMode::TrustedProxy;
+        let mut off = keyless();
+        off.security.firewall.anomaly_detection = false;
+        // A disabled firewall scores nothing, so its detector flag is dormant.
+        let mut dormant = keyless();
+        dormant.security.firewall.enabled = false;
+        for (name, config) in [
+            ("auth", auth),
+            ("mtls", mtls),
+            ("agent_auth", agent),
+            ("caller_identity", header),
+            ("detection off", off),
+            ("firewall off", dormant),
+        ] {
+            assert!(
+                super::refuse_keyless_http_anomaly(&config).is_ok(),
+                "{name} must start"
+            );
         }
     }
 }

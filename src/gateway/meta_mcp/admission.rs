@@ -457,6 +457,8 @@ impl MetaMcp {
         // owner value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
         let owner_principal = caller.owner_principal();
         let retry = caller.retry;
+        // The arm the dispatch will use, so a retry's representation names it.
+        let arm_key = caller.experiment_key(session);
         if let Some((server, tool, mut operation_arguments)) =
             self.check_target_policy(caller, tool_name, arguments, session)?
         {
@@ -469,7 +471,7 @@ impl MetaMcp {
                 server,
                 tool,
                 &operation_arguments,
-                || self.meta_representation(tool_name, full, session),
+                || self.meta_representation(tool_name, full, session, arm_key),
                 id,
             );
         }
@@ -496,7 +498,7 @@ impl MetaMcp {
             // Handed over as a thunk to match the parameter; the saving on this
             // path is the callee's, not the caller's.
             || operation,
-            || self.meta_representation(tool_name, false, session),
+            || self.meta_representation(tool_name, false, session, arm_key),
             read_only,
             ("gateway", tool_name),
             id,
@@ -512,6 +514,8 @@ impl MetaMcp {
         tool_name: &str,
         full: bool,
         session: Option<&str>,
+        // `MetaMcpCallerContext::experiment_key`: the arm keys on the caller (G4).
+        arm_key: Option<&str>,
     ) -> Value {
         // `gateway_set_profile` changes the profile it would be bound to, so a
         // bound retry never matches its own stored result. Its output depends
@@ -526,7 +530,7 @@ impl MetaMcp {
             "route": "meta", "tool": tool_name, "full": full,
             "projection": format!("{:?}", self.projection_mode),
             "profile": profile,
-            "arm": crate::projection::projection_key_suffix(self.projection_mode, session),
+            "arm": crate::projection::projection_key_suffix(self.projection_mode, arm_key),
         })
     }
 
