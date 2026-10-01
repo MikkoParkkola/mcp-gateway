@@ -101,3 +101,244 @@ fn an_uppercase_https_public_url_names_the_code_page() {
     config.server.public_url = Some("http://gateway.example".to_string());
     assert!(dashboard_link_handoff(&config).is_none());
 }
+
+// --- serve_tls: the mTLS listener, served end to end over loopback ---------
+//
+// MIK-7324.COV.3: `serve_tls` and `PeerCertIdentityAcceptor::accept` enforce
+// who may connect and hand auth the certificate identity, so they carry the
+// Critical floor. Nothing else serves through them: the dashboard-link TLS
+// tests build their own listener.
+
+mod mtls_listener {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use axum::Extension;
+
+    use super::*;
+    use crate::mtls::{CaParams, CertGenerator, GeneratedCert, LeafCertParams, MtlsConfig};
+
+    fn ca(cn: &str) -> GeneratedCert {
+        CertGenerator::init_ca(&CaParams {
+            cn,
+            validity_days: 1,
+        })
+        .expect("CA")
+    }
+
+    fn leaf(ca: &GeneratedCert, cn: &str, san_dns: &[&str]) -> GeneratedCert {
+        CertGenerator::issue_leaf(
+            &LeafCertParams {
+                cn,
+                ou: None,
+                san_dns: san_dns.iter().map(ToString::to_string).collect(),
+                san_uris: vec![],
+                validity_days: 1,
+            },
+            &ca.cert_pem,
+            &ca.key_pem,
+        )
+        .expect("leaf")
+    }
+
+    /// Certificates on disk: `ca`, `server` (127.0.0.1), `client`
+    /// ("operator") and `auditor` from one CA; `stranger` from another.
+    struct Pki {
+        dir: tempfile::TempDir,
+    }
+
+    impl Pki {
+        fn new() -> Self {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = ca("listener CA");
+            let other = ca("other CA");
+            let write = |cert: &GeneratedCert, stem: &str| {
+                CertGenerator::write_to_dir(cert, dir.path(), stem).expect("cert files");
+            };
+            write(&root, "ca");
+            write(&leaf(&root, "gateway", &["127.0.0.1"]), "server");
+            write(&leaf(&root, "operator", &[]), "client");
+            write(&leaf(&root, "auditor", &[]), "auditor");
+            write(&leaf(&other, "stranger", &[]), "stranger");
+            Self { dir }
+        }
+
+        fn path(&self, name: &str) -> String {
+            self.dir.path().join(name).to_string_lossy().into_owned()
+        }
+
+        fn config(&self, require_client_cert: bool) -> MtlsConfig {
+            MtlsConfig {
+                enabled: true,
+                server_cert: self.path("server.crt"),
+                server_key: self.path("server.key"),
+                ca_cert: self.path("ca.crt"),
+                require_client_cert,
+                ..Default::default()
+            }
+        }
+
+        /// A client that trusts only this CA, presenting `stem` if given.
+        fn client(&self, stem: Option<&str>) -> reqwest::Client {
+            let roots = reqwest::Certificate::from_pem_bundle(
+                &std::fs::read(self.path("ca.crt")).expect("ca"),
+            )
+            .expect("roots");
+            let mut builder = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(20))
+                .tls_certs_only(roots);
+            if let Some(stem) = stem {
+                let mut pem = std::fs::read(self.path(&format!("{stem}.crt"))).expect("crt");
+                pem.push(b'\n');
+                pem.extend(std::fs::read(self.path(&format!("{stem}.key"))).expect("key"));
+                builder = builder.identity(reqwest::Identity::from_pem(&pem).expect("identity"));
+            }
+            builder.build().expect("client")
+        }
+    }
+
+    struct Served {
+        url: String,
+        hits: Arc<AtomicUsize>,
+        handle: axum_server::Handle<SocketAddr>,
+        task: tokio::task::JoinHandle<crate::Result<()>>,
+    }
+
+    /// `serve_tls` on a bound loopback listener. The handler answers with the
+    /// common name of the certificate identity it was handed, or "none".
+    async fn serve(config: MtlsConfig) -> Served {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&hits);
+        let app = axum::Router::new().route(
+            "/who",
+            axum::routing::get(move |identity: Option<Extension<CertIdentity>>| {
+                seen.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    identity
+                        .and_then(|Extension(id)| id.common_name)
+                        .unwrap_or_else(|| "none".to_owned())
+                }
+            }),
+        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("addr");
+        let handle = axum_server::Handle::new();
+        let served = handle.clone();
+        let task =
+            tokio::spawn(async move { serve_tls(app, listener, addr, &config, served).await });
+        handle.listening().await.expect("the listener came up");
+        Served {
+            url: format!("https://{addr}/who"),
+            hits,
+            handle,
+            task,
+        }
+    }
+
+    /// The peer certificate's identity reaches the handler, and a graceful
+    /// shutdown ends `serve_tls` with `Ok`.
+    #[tokio::test]
+    async fn serve_tls_hands_the_handler_the_client_certificate_identity() {
+        let pki = Pki::new();
+        let s = serve(pki.config(true)).await;
+
+        let response = pki
+            .client(Some("client"))
+            .get(&s.url)
+            .send()
+            .await
+            .expect("a trusted client is served");
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.expect("body"), "operator");
+        // Each connection carries its own peer's identity, not the first one.
+        let response = pki
+            .client(Some("auditor"))
+            .get(&s.url)
+            .send()
+            .await
+            .expect("a second trusted client is served");
+        assert_eq!(response.text().await.expect("body"), "auditor");
+        assert_eq!(s.hits.load(Ordering::SeqCst), 2);
+
+        s.handle.graceful_shutdown(Some(Duration::from_secs(5)));
+        let ended = tokio::time::timeout(Duration::from_secs(10), s.task)
+            .await
+            .expect("serve_tls returns after shutdown")
+            .expect("task joins");
+        assert!(ended.is_ok(), "{ended:?}");
+    }
+
+    /// With a client certificate required, no certificate and one from an
+    /// untrusted CA are both refused in the handshake: the handler never runs.
+    #[tokio::test]
+    async fn serve_tls_refuses_a_client_without_a_trusted_certificate() {
+        let pki = Pki::new();
+        let s = serve(pki.config(true)).await;
+
+        for stem in [None, Some("stranger")] {
+            let outcome = pki.client(stem).get(&s.url).send().await;
+            assert!(
+                outcome.is_err(),
+                "client {stem:?} must be refused, got {:?}",
+                outcome.map(|r| r.status())
+            );
+        }
+        assert_eq!(
+            s.hits.load(Ordering::SeqCst),
+            0,
+            "no refused client reaches the handler"
+        );
+        // Positive control: the same listener serves a trusted client, so the
+        // refusals above are the certificate policy, not a broken listener.
+        let response = pki
+            .client(Some("client"))
+            .get(&s.url)
+            .send()
+            .await
+            .expect("a trusted client is served");
+        assert_eq!(response.text().await.expect("body"), "operator");
+        assert_eq!(s.hits.load(Ordering::SeqCst), 1);
+        s.handle.shutdown();
+    }
+
+    /// Client certificates optional: an anonymous client is served, and the
+    /// handler is handed no identity rather than an empty one.
+    #[tokio::test]
+    async fn serve_tls_serves_an_anonymous_client_with_no_identity_when_not_required() {
+        let pki = Pki::new();
+        let s = serve(pki.config(false)).await;
+
+        let response = pki
+            .client(None)
+            .get(&s.url)
+            .send()
+            .await
+            .expect("an anonymous client is served");
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.text().await.expect("body"), "none");
+        s.handle.shutdown();
+    }
+
+    /// An unreadable server certificate fails `serve_tls` before it serves.
+    #[tokio::test]
+    async fn serve_tls_fails_before_serving_on_an_unreadable_server_certificate() {
+        let pki = Pki::new();
+        let mut config = pki.config(true);
+        config.server_cert = pki.path("absent.crt");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let addr = listener.local_addr().expect("addr");
+        let app = axum::Router::new();
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            serve_tls(app, listener, addr, &config, axum_server::Handle::new()),
+        )
+        .await
+        .expect("serve_tls returns instead of serving");
+        assert!(outcome.is_err(), "a missing server certificate must fail");
+    }
+}
