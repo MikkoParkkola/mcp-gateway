@@ -10,7 +10,7 @@ body; its coverage is the share of those with a non-zero count, over the union
 of the reports. Give one report per platform run (Linux and Windows), so a
 `#[cfg(windows)]` function is graded by the run that compiles it.
 
-Tracing macro arguments: a field expression on its own line inside
+Tracing macro arguments: a simple field expression on its own line inside
 `trace!`/`debug!`/`info!`/`warn!`/`error!`/`event!`/`span!` is compiled twice,
 once for the subscriber and once into tracing's log-fallback branch, and the
 instrument attributes such lines to a region that reads zero even when the
@@ -56,6 +56,18 @@ TRACING_MACRO = re.compile(
 )
 
 
+# One field per line and nothing that branches: `name = expr,`, `%expr,`,
+# `"message",` or a closing `);`. A line with a brace, a control keyword or a
+# statement can hold logic of its own, and stays graded.
+SIMPLE_ARGUMENT = re.compile(r"^[^{};]*(?:\);)?$")
+CONTROL_FLOW = re.compile(r"\b(?:if|else|match|loop|for|while|return)\b|=>|\?\s*$")
+
+
+def is_simple_argument(code):
+    code = code.strip()
+    return bool(SIMPLE_ARGUMENT.match(code)) and not CONTROL_FLOW.search(code)
+
+
 def macro_argument_lines(lines, lo, hi):
     """(head, argument lines) for each tracing macro call inside lo..hi."""
     calls = []
@@ -71,7 +83,15 @@ def macro_argument_lines(lines, lo, hi):
                 text = text[match.end() - 1 :]
             depth += text.count("(") - text.count(")")
             if depth <= 0:
-                calls.append((head, list(range(head + 1, n + 1))))
+                simple, braces = [], 0
+                for m in range(head + 1, n + 1):
+                    code = strip_literals(lines[m - 1])
+                    # Only a line at the argument list's own level: anything
+                    # inside a block is that block's logic, not a field.
+                    if braces == 0 and is_simple_argument(code):
+                        simple.append(m)
+                    braces += code.count("{") - code.count("}")
+                calls.append((head, simple))
                 break
     return calls
 
