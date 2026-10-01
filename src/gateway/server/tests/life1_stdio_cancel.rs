@@ -294,7 +294,8 @@ async fn initialize_is_not_cancelled() {
 }
 
 /// L5. Cancelling a finished call changes nothing (rule 4), and the id is free
-/// again: a later call reusing it can itself be cancelled.
+/// again: a later call reusing it can itself be cancelled, and one after that
+/// is answered.
 #[tokio::test]
 async fn cancelling_a_finished_call_changes_nothing() {
     let mut served = serve(1 << 20).await;
@@ -323,6 +324,11 @@ async fn cancelling_a_finished_call_changes_nothing() {
         "the reused id's call was cancelled, and the finished one was not answered twice: {frames:?}"
     );
     assert!(answers(&frames, &json!(6)).is_empty(), "{frames:?}");
+    // Both cancels for 5 were settled by a reap, so the id is answered again;
+    // a map entry outliving its task would leave 5 silenced for good.
+    send(&mut served.stdin, &list(5)).await;
+    let third = next_frame(&mut served.stdout).await;
+    assert_eq!(third["id"], json!(5), "{third}");
     served.task.abort();
 }
 
