@@ -50,6 +50,22 @@ impl FirewallConfig {
     }
 }
 
+/// Refuse an HTTP start where anomaly detection is on and no caller can carry
+/// a caller key (MIK-7215.CONTROL.5, gap G5).
+///
+/// A caller key comes from authentication, a client certificate, an agent token
+/// or a trusted identity header. With all four off every HTTP caller's key is
+/// empty, and the detector refuses each call it cannot attribute, so the
+/// gateway would start and then refuse every meta call that has no session.
+/// Stdio is not checked: its operator identity is a key.
+///
+/// # Errors
+///
+/// A message naming `anomaly_detection` and `auth.enabled`.
+pub(crate) fn refuse_keyless_http_anomaly(_config: &crate::config::Config) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::config::Config;
@@ -104,6 +120,48 @@ mod tests {
             "    anomaly_min_observations: 0\n",
         ] {
             assert!(load(line).is_ok(), "detection off: {line} must still load");
+        }
+    }
+
+    fn keyless() -> Config {
+        let mut config = Config::default();
+        config.auth.enabled = false;
+        config.security.firewall.anomaly_detection = true;
+        config
+    }
+
+    #[test]
+    fn keyless_http_anomaly_detection_is_refused_naming_both_settings() {
+        let message = super::refuse_keyless_http_anomaly(&keyless())
+            .expect_err("no HTTP caller can have a key");
+        assert!(message.contains("anomaly_detection"), "{message}");
+        assert!(message.contains("auth.enabled"), "{message}");
+    }
+
+    #[test]
+    fn any_source_of_a_caller_key_lets_it_start() {
+        let mut auth = keyless();
+        auth.auth.enabled = true;
+        let mut mtls = keyless();
+        mtls.mtls.enabled = true;
+        let mut agent = keyless();
+        agent.agent_auth.enabled = true;
+        let mut header = keyless();
+        header.security.caller_identity.mode =
+            crate::security::caller_identity::CallerIdentityMode::TrustedProxy;
+        let mut off = keyless();
+        off.security.firewall.anomaly_detection = false;
+        for (name, config) in [
+            ("auth", auth),
+            ("mtls", mtls),
+            ("agent_auth", agent),
+            ("caller_identity", header),
+            ("detection off", off),
+        ] {
+            assert!(
+                super::refuse_keyless_http_anomaly(&config).is_ok(),
+                "{name} must start"
+            );
         }
     }
 }

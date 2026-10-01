@@ -10,6 +10,8 @@ pub(crate) mod account_bindings;
 mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod keyless_anomaly_tests;
 mod cleartext;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
@@ -1280,6 +1282,9 @@ impl Gateway {
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
+        #[cfg(feature = "firewall")]
+        crate::security::firewall::anomaly_config::refuse_keyless_http_anomaly(&self.config)
+            .map_err(Error::Config)?;
         let addr = SocketAddr::new(
             self.config
                 .server
