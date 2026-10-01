@@ -301,3 +301,40 @@ async fn same_subject_other_presented_token_new_session() {
         "the subject lost its own session"
     );
 }
+
+/// MIK-7215.CONTROL.5, gap G2: the owner's DELETE ends the session, so the
+/// per-session stores keyed by its id are reclaimed, and another session's are
+/// not.
+#[tokio::test]
+async fn an_owned_delete_reclaims_the_per_session_stores() {
+    let (state, _store) = test_router_app_state().await;
+    let mut state = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("the test owns the state"));
+    let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+    crate::gateway::session_lifecycle::wire_meta_session_cleanup(&lifecycle, &state.meta_mcp);
+    state.session_lifecycle = Some(lifecycle);
+    let state = Arc::new(state);
+
+    let gone = mint(&state, caller(Some("agent-a"), None)).await;
+    let kept = mint(&state, caller(Some("agent-b"), None)).await;
+    for id in [&gone, &kept] {
+        state.meta_mcp.session_profiles().set_profile(id, "strict");
+        state
+            .meta_mcp
+            .cost_tracker()
+            .record(id, None, "backend", "tool", 10, 1.0);
+    }
+
+    let (status, _) = send(&state, request(caller(Some("agent-a"), None), "DELETE", Some(&gone))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    assert_eq!(
+        state.meta_mcp.session_profiles().get_profile_name(&gone, "default"),
+        "default"
+    );
+    assert!(state.meta_mcp.cost_tracker().session_snapshot(&gone).is_none());
+    assert_eq!(
+        state.meta_mcp.session_profiles().get_profile_name(&kept, "default"),
+        "strict"
+    );
+    assert!(state.meta_mcp.cost_tracker().session_snapshot(&kept).is_some());
+}

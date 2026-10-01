@@ -21,6 +21,11 @@ type CleanupFn = Box<dyn Fn(&str) + Send + Sync>;
 #[derive(Default)]
 pub struct SessionLifecycle {
     callbacks: RwLock<Vec<(String, Arc<CleanupFn>)>>,
+    /// Handlers for state keyed by a *session id*. They fire only when a
+    /// session really ends ([`Self::on_disconnect`]), never from the idle
+    /// deadline: a session quiet for [`IDLE_TTL`] is still a live session, and
+    /// reclaiming its profile or workflow state would silently reset it.
+    ended: RwLock<Vec<(String, Arc<CleanupFn>)>>,
     /// Keys awaiting reclamation, and the deadline each is reclaimed at.
     ///
     /// MCP 2026-07-28 removed protocol sessions, so `on_disconnect` has nothing
@@ -78,6 +83,18 @@ impl SessionLifecycle {
             .push((name.into(), Arc::new(Box::new(callback))));
     }
 
+    /// Register a handler for state keyed by a session id. It fires on a real
+    /// session end only; see the `ended` field for why not on idle reclaim.
+    pub fn register_session_end(
+        &self,
+        name: impl Into<String>,
+        callback: impl Fn(&str) + Send + Sync + 'static,
+    ) {
+        self.ended
+            .write()
+            .push((name.into(), Arc::new(Box::new(callback))));
+    }
+
     /// Fire all registered callbacks for the given session ID.
     ///
     /// Called by the notification multiplexer when a session is reaped
@@ -87,6 +104,14 @@ impl SessionLifecycle {
         // later reap cannot fire the handlers for it a second time.
         self.untrack(session_id);
         self.fire_cleanup(session_id);
+        for (name, cb) in self.ended.read().iter() {
+            cb(session_id);
+            debug!(
+                session_id = %crate::gateway::session_id::session_fp(session_id),
+                handler = %name,
+                "Session-end handler executed"
+            );
+        }
     }
 
     /// Run the cleanup handlers for a key whose deadline is already gone.
@@ -214,7 +239,7 @@ pub fn wire_meta_session_cleanup(
     meta: &Arc<crate::gateway::meta_mcp::MetaMcp>,
 ) {
     let meta = Arc::downgrade(meta);
-    lifecycle.register("meta-session-state", move |key| {
+    lifecycle.register_session_end("meta-session-state", move |key| {
         if let Some(meta) = meta.upgrade() {
             meta.forget_session(key);
         }
@@ -225,6 +250,27 @@ pub fn wire_meta_session_cleanup(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn an_idle_deadline_does_not_fire_a_session_end_handler() {
+        let lifecycle = SessionLifecycle::new();
+        let ended = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&ended);
+        lifecycle.register_session_end("ended", move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        lifecycle.track("quiet-session", 0);
+
+        assert_eq!(lifecycle.reap(1), 1);
+        assert_eq!(
+            ended.load(Ordering::SeqCst),
+            0,
+            "a session that is only idle is still live"
+        );
+
+        lifecycle.on_disconnect("quiet-session");
+        assert_eq!(ended.load(Ordering::SeqCst), 1, "a real end fires it once");
+    }
 
     #[test]
     fn a_refreshed_key_keeps_only_its_latest_deadline() {

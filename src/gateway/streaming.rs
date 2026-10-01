@@ -1106,6 +1106,34 @@ mod tests {
         );
     }
 
+    /// MIK-7215.CONTROL.5, gap G2: a session the reaper removes is a real end,
+    /// so the session-end handlers fire for its id.
+    #[tokio::test]
+    async fn the_reaper_fires_session_end_handlers_for_a_reaped_session() {
+        let lifecycle = Arc::new(crate::gateway::session_lifecycle::SessionLifecycle::new());
+        let ended = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&ended);
+        lifecycle.register_session_end("record", move |id| seen.lock().push(id.to_owned()));
+
+        let config = StreamingConfig {
+            session_reaper_interval: Duration::from_millis(20),
+            session_ttl: Duration::from_millis(1),
+            ..StreamingConfig::default()
+        };
+        let multiplexer = Arc::new(NotificationMultiplexer::new(
+            Arc::new(BackendRegistry::new()),
+            config,
+        ));
+        let (id, receiver) = multiplexer.get_or_create_session(None);
+        drop(receiver);
+
+        multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert!(!multiplexer.has_session(&id), "the session was reaped");
+        assert_eq!(ended.lock().as_slice(), [id], "its end was announced once");
+    }
+
     /// GIVEN the multiplexer dropped while reaper task is running
     /// WHEN the Arc is dropped
     /// THEN the reaper task exits cleanly (no panic, no leak)
