@@ -606,7 +606,7 @@ Decisions:
    - not a retry continuation;
    - a dispatchable tool;
    - an idempotency key, with refusal texts identical to HTTP's;
-   - the client declared Tasks on `initialize`.
+   - the request itself declares Tasks, read through HTTP's parser (as built in a83d94108).
 
    Each rule answers exactly as HTTP answers the same request: a refusal with the same code and
    text, or the ordinary synchronous path. The owner is `TaskOwnerText::LocalOperator`. The admission request uses the reserved owner, so

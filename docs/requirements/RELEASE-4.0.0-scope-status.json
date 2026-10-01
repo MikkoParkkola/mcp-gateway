@@ -1077,7 +1077,7 @@
         "scripts/release/test_check_tag_manifest.py",
         "scripts/release/test_workflow_wiring_mutations.py"
       ],
-      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-442, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
+      "note": "Met 2026-10-01. The last conjunct, re-checking the PUBLISHED release, is in place: .github/workflows/release.yml:448-457 ('Verify the published release's assets') runs after 'Publish the release' (:439-443, gh release edit --draft=false), downloads what the release serves into published-final and runs verify-release-assets.sh under set -euo pipefail (landed in #2389, ef8b58672). Wiring is pinned by W8 in scripts/release/test_check_tag_manifest.py (step after publish, downloads the release, stops on first failure, not swallowed) and, since #2520 (squash 46d999bc0), by mutation cases that delete the step or move it before publication: 242 cases agree. Earlier conjuncts unchanged: #2218 (59f802b19, CI 36505555255) ships per-binary SPDX SBOMs and keyless cosign bundles, verifies the DRAFT assets (:432-437) and refuses uploads onto a published release. NOT proven here: that the step passes against a real published release; that is observable only on a tag run, so a release run is the live check and a failure there reopens this row."
     },
     {
       "id": "GH1942.HARDEN.1",
@@ -1239,7 +1239,7 @@
         "docs/release/4.0.0-beta.2-notes.md",
         "docs/release/v4.0.0-release-notes-DRAFT.md"
       ],
-      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file and test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
+      "note": "Met 2026-10-01 (#2518, squash a280b0557). Checked at source: the README badge names MCP 2025-11-25 and 2026-07-28 and README 'What's new in 4.0' opens with 2026-07-28 then the multi-user scope; the beta.2 notes, the 4.0.0 draft notes and the CHANGELOG Unreleased Highlights lead the same way; docs/MULTI_USER.md opens with a 'New in 4.0' block on caller scoping, SSO admins, audit and key digests. Every highlight in all five now carries an Evidence line naming its file or test (19 distinct paths, all present; one independent review seat, SHIP-WITH-FIXES, both findings fixed in the PR). The review also corrected two wrong claims: Windows config files are checked by access list, and Helm serves by default only once the mcp-gateway-auth Secret exists. AC text taken from this row and docs/requirements/RELEASE-4.0.0-scope-update.md:129 (Linear MIK-7581 was not readable). Distinct from MIK-7570.DOCS.1."
     },
     {
       "id": "GH2294.AUDIT.1",
@@ -1302,11 +1302,15 @@
     },
     {
       "id": "MIK-7211.PARENT.7",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. MIK-7215.STATELESS.* rows are MET, and docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:433 counts 32 files, but no standalone inventory names each session-keyed behaviour and its replacement."
+      "evidence": [
+        "docs/design/2026-09-30-session-keyed-inventory.md:52",
+        "docs/design/2026-09-30-session-keyed-inventory.md:132",
+        "docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:273"
+      ],
+      "note": "Met 2026-10-01 by #2467 (merge 598b3650e). The standalone inventory is docs/design/2026-09-30-session-keyed-inventory.md: 28 rows (:52-83), each naming a replacement or stating that none is needed, each with a Built? citation, re-surveyed at e689b7a7c with every file:line re-read at that revision. RFC-0061 points to it as the governing list (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:273). Gaps it found are listed at :132 and held under MIK-7215.CONTROL.5, not this criterion. The criterion asks for the inventory and the names, not for the replacements to be built; unbuilt replacements are marked in the Built? column. Reviewed by one independent seat (SHIP, two small wording fixes applied). The 63 non-test files of the discovery set were not each read in full: files changed since the first survey were, the rest rely on the first survey. Earlier note: Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). PARTIAL. MIK-7215.STATELESS.* rows are MET, and docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:433 counts 32 files, but no standalone inventory names each session-keyed behaviour and its replacement."
     },
     {
       "id": "MIK-7217.SEARCH.1",

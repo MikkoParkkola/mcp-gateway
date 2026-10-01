@@ -320,3 +320,6 @@ unused_async = "allow"
 # Mechanically rewriting 50+ call sites risks subtle semantic confusion
 # (e.g. 3600 read as "an hour" vs "60 minutes" vs "magic number").
 duration_suboptimal_units = "allow"
+# New in Rust 1.99. The suggested `assert_eq!(x, [] as [T; 0])` names a type
+# for an empty slice and reads worse than `assert!(x.is_empty())`.
+assert_is_empty = "allow"

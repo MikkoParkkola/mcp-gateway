@@ -179,6 +179,8 @@ async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
                     })
             },
             move |error| error_policy.recover_task_error(BACKEND, TOOL, None, "trace", error),
+            // No transparency log here: the settlement record is a no-op.
+            |event, _notes| std::future::ready(event),
             Duration::from_secs(5),
         )
         .await;
