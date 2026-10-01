@@ -10,7 +10,7 @@ body; its coverage is the share of those with a non-zero count, over the union
 of the reports. Give one report per platform run (Linux and Windows), so a
 `#[cfg(windows)]` function is graded by the run that compiles it.
 
-Tracing macro arguments: a simple field expression on its own line inside
+Tracing macro arguments: a plain field (a literal, identifier or path value) on its own line inside
 `trace!`/`debug!`/`info!`/`warn!`/`error!`/`event!`/`span!` is compiled twice,
 once for the subscriber and once into tracing's log-fallback branch, and the
 instrument attributes such lines to a region that reads zero even when the
@@ -56,18 +56,20 @@ TRACING_MACRO = re.compile(
 )
 
 
-# One field per line and nothing that branches: `name = expr,`, `%expr,`,
-# `"message",` or a closing `);`. A line with a brace, a control keyword or a
-# statement can hold logic of its own, and stays graded.
-SIMPLE_ARGUMENT = re.compile(r"^[^{};]*(?:\);)?$")
-# A try operator follows an expression (`call()?`); tracing's debug sigil
-# precedes one (`?value`), so only the former counts as control flow.
-CONTROL_FLOW = re.compile(r"\b(?:if|else|match|loop|for|while|return)\b|=>|[\w)\]]\s*\?")
+# The only argument lines ever excluded (a whitelist; everything else stays
+# graded): exactly one field, `[name =] [%|?]value,`, where the value is a
+# literal, a bare identifier, or a field/path access (`a.b`, `a::b`). No call,
+# parenthesis, operator, postfix `?`, closure or macro. Literals are already
+# blanked by strip_literals, so a string or char shows as `""` / `''`.
+_PATH = r"[A-Za-z_]\w*(?:(?:\.|::)[A-Za-z_]\w*)*"
+_VALUE = r"(?:" + _PATH + r'|""|\'\'|-?\d[\w.]*)'
+PLAIN_FIELD = re.compile(
+    r"^(?:[A-Za-z_][\w.]*\s*=\s*)?[%?]?" + _VALUE + r"\s*,$"
+)
 
 
-def is_simple_argument(code):
-    code = code.strip()
-    return bool(SIMPLE_ARGUMENT.match(code)) and not CONTROL_FLOW.search(code)
+def is_plain_field(code):
+    return bool(PLAIN_FIELD.match(code.strip()))
 
 
 def macro_argument_lines(lines, lo, hi):
@@ -98,7 +100,7 @@ def macro_argument_lines(lines, lo, hi):
                     # with its comma. A continuation (`&& check(),`), a line
                     # left open (`flag = a`) or anything inside a nested
                     # block, call or array is logic, not a field.
-                    if nesting == 0 and fresh and text.endswith(",") and is_simple_argument(code):
+                    if nesting == 0 and fresh and is_plain_field(code):
                         simple.append(m)
                     nesting += sum(code.count(c) for c in "({[") - sum(code.count(c) for c in ")}]")
                     nesting = max(nesting, 0)

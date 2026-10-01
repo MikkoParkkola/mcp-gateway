@@ -127,7 +127,7 @@ class CriticalFunctionCoverage(unittest.TestCase):
 TRACED = """\
 fn logs(x: u8) -> bool {
     tracing::debug!(
-        value = x.count_ones(),
+        value = x,
         "seen"
     );
     x > 0
@@ -218,7 +218,7 @@ fn logs(x: u8) -> bool {
     tracing::debug!(
         allowed = x > 1
             && enforce(x),
-        count = x.count_ones(),
+        count = x,
         "seen"
     );
     x > 0
@@ -244,7 +244,7 @@ fn logs(x: u8) -> bool {
     tracing::debug!(
         event = "seen",
         // the count is the field the instrument mis-attributes
-        count = x.count_ones(),
+        count = x,
         "seen"
     );
     x > 0
@@ -294,6 +294,42 @@ fn logs(x: u8) -> Result<bool, u8> {
         self.assertEqual(result[0], "BELOW")
         self.assertEqual(result[4], [2, 3])
         self.assertEqual(result[8], [])
+
+
+class PlainFieldWhitelist(unittest.TestCase):
+    """Only a plain field line is ever excluded; every other shape stays graded."""
+
+    ALLOWED = [
+        'event = "",',
+        "count = x,",
+        "x,",
+        "%self.name,",
+        "?err,",
+        "kind = a::B,",
+        "n = -3,",
+        "flag = true,",
+    ]
+    REFUSED = [
+        "v = x.count_ones(),",
+        "v = a + b,",
+        "v = f()?,",
+        "v = x?,",
+        "v = !x,",
+        "v = |x| x,",
+        "v = m!(x),",
+        "v = (x),",
+        "v = x",
+        "v = x && y,",
+        "v = if a { b } else { c },",
+    ]
+
+    def test_the_table(self):
+        for shape in self.ALLOWED:
+            with self.subTest(allowed=shape):
+                self.assertTrue(cfc.is_plain_field(shape))
+        for shape in self.REFUSED:
+            with self.subTest(refused=shape):
+                self.assertFalse(cfc.is_plain_field(shape))
 
 
 class InventoryResolves(unittest.TestCase):
