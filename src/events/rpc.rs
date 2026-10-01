@@ -231,7 +231,7 @@ impl EventsHub {
             per_principal: self.config.max_subscriptions_per_principal,
             global: self.config.max_subscriptions,
         };
-        if self.store.get(&id).filter(|s| s.live(now)).is_none() {
+        if self.store.get(&id).as_ref().is_none_or(|s| !s.live(now)) {
             self.store
                 .would_admit(&principal, caps, now)
                 .map_err(cap_refusal)?;

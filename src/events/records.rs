@@ -65,6 +65,10 @@ impl Subscription {
 /// The recorded opt-in of one `(principal, url)`. `Debug` shows the
 /// callback host only: a path or query can carry a capability token.
 #[derive(Clone, Serialize, Deserialize)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "verified_at is the persisted field name the design fixes"
+)]
 pub(crate) struct Verified {
     pub v: u32,
     pub principal: String,
@@ -121,9 +125,34 @@ pub(crate) fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Write `value` to `dir/name` durably and owner-only. `Err` means the
-/// record was not put in place; the previous file, if any, is untouched.
-pub(crate) fn write_record<T: Serialize>(dir: &Path, name: &str, value: &T) -> std::io::Result<()> {
+/// Where a write left its record.
+#[derive(Debug)]
+pub(crate) enum Placed {
+    /// Renamed into place and the directory synced.
+    Durable,
+    /// Renamed into place, but the directory sync failed: the record is
+    /// visible and may not survive a crash.
+    NotSynced(std::io::Error),
+}
+
+impl Placed {
+    /// `Err` unless the write is durable.
+    pub(crate) fn durable(self) -> std::io::Result<()> {
+        match self {
+            Self::Durable => Ok(()),
+            Self::NotSynced(error) => Err(error),
+        }
+    }
+}
+
+/// Write `value` to `dir/name` owner-only, through a temp file and a rename.
+/// `Err` means the record was not put in place and the previous file, if
+/// any, is untouched; past the rename the outcome is a [`Placed`].
+pub(crate) fn write_record<T: Serialize>(
+    dir: &Path,
+    name: &str,
+    value: &T,
+) -> std::io::Result<Placed> {
     let bytes = serde_json::to_vec_pretty(value).map_err(std::io::Error::other)?;
     let temp = dir.join(format!(".{name}.{}.tmp", rand::random::<u64>()));
     let mut file = crate::config_persistence::create_new_private(&temp)?;
@@ -135,12 +164,10 @@ pub(crate) fn write_record<T: Serialize>(dir: &Path, name: &str, value: &T) -> s
         let _ = std::fs::remove_file(&temp);
     }
     staged?;
-    // Past the rename the record is in place: an error from here on would
-    // tell the caller it was not, so a failed directory sync is logged.
-    if let Err(error) = sync_dir(dir) {
-        tracing::warn!(%error, dir = %dir.display(), "events store: directory sync failed after rename");
-    }
-    Ok(())
+    Ok(match sync_dir(dir) {
+        Ok(()) => Placed::Durable,
+        Err(error) => Placed::NotSynced(error),
+    })
 }
 
 /// Remove `dir/name`; a missing file is already removed.
@@ -171,9 +198,10 @@ pub(crate) fn load_records<T: for<'de> Deserialize<'de>>(dir: &Path) -> Vec<(Pat
                     .is_some_and(|v| v <= u64::from(MAX_LOADABLE_VERSION))
             })
             .and_then(|v| serde_json::from_value::<T>(v).ok());
-        match parsed {
-            Some(record) => records.push((path, record)),
-            None => tracing::warn!(path = %path.display(), "events store record skipped"),
+        if let Some(record) = parsed {
+            records.push((path, record));
+        } else {
+            tracing::warn!(path = %path.display(), "events store record skipped");
         }
     }
     records

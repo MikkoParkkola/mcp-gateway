@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
 use super::records::{
-    Subscription, Verified, create_private_dir, load_records, remove_record, verified_file,
+    Placed, Subscription, Verified, create_private_dir, load_records, remove_record, verified_file,
     write_record,
 };
 
@@ -189,8 +189,9 @@ impl Store {
             })
             .collect();
         for (key, record) in ended {
-            write_record(&self.verified_dir, &key, &record)?;
+            let placed = write_record(&self.verified_dir, &key, &record)?;
             state.verified.insert(key, record);
+            placed.durable()?;
         }
         for id in expired {
             remove_record(&self.subs_dir, &format!("{id}.json"))?;
@@ -233,31 +234,28 @@ impl Store {
     ) -> std::io::Result<Result<(), CapHit>> {
         let mut state = self.state.lock();
         self.sweep(&mut state, now)?;
-        match state.subs.get(&sub.id) {
-            Some(old) => {
-                if old.secret == sub.secret {
-                    sub.previous_secret.clone_from(&old.previous_secret);
-                    sub.previous_until = old.previous_until;
-                } else {
-                    sub.previous_secret = Some(old.secret.clone());
-                    sub.previous_until = Some(now + grace);
-                }
-                sub.failed_since = old.failed_since;
-                sub.last_delivery_at = old.last_delivery_at;
-                sub.last_error.clone_from(&old.last_error);
+        if let Some(old) = state.subs.get(&sub.id) {
+            if old.secret == sub.secret {
+                sub.previous_secret.clone_from(&old.previous_secret);
+                sub.previous_until = old.previous_until;
+            } else {
+                sub.previous_secret = Some(old.secret.clone());
+                sub.previous_until = Some(now + grace);
             }
-            None => {
-                let mine = state
-                    .subs
-                    .values()
-                    .filter(|s| s.principal == sub.principal)
-                    .count();
-                if mine >= caps.per_principal {
-                    return Ok(Err(CapHit::PerPrincipal(caps.per_principal)));
-                }
-                if state.subs.len() >= caps.global {
-                    return Ok(Err(CapHit::Global(caps.global)));
-                }
+            sub.failed_since = old.failed_since;
+            sub.last_delivery_at = old.last_delivery_at;
+            sub.last_error.clone_from(&old.last_error);
+        } else {
+            let mine = state
+                .subs
+                .values()
+                .filter(|s| s.principal == sub.principal)
+                .count();
+            if mine >= caps.per_principal {
+                return Ok(Err(CapHit::PerPrincipal(caps.per_principal)));
+            }
+            if state.subs.len() >= caps.global {
+                return Ok(Err(CapHit::Global(caps.global)));
             }
         }
         // Judged on the clock at commit, not at request start: a tail can
@@ -281,31 +279,37 @@ impl Store {
             },
         };
         let prior = state.verified.get(&key).cloned();
-        write_record(&self.verified_dir, &key, &record)?;
+        let verified_placed = write_record(&self.verified_dir, &key, &record)?;
         state.verified.insert(key.clone(), record);
+        if let Placed::NotSynced(error) = verified_placed {
+            return Err(error);
+        }
         let name = format!("{}.json", sub.id);
-        if let Err(error) = write_record(&self.subs_dir, &name, &sub) {
-            // Not put in place (the previous row, if any, is intact): put
-            // the verification back as it was, so a failed commit neither
-            // leaves an extra record nor resets a tail.
-            let restored = match prior {
-                Some(prior) => {
-                    let restored = write_record(&self.verified_dir, &key, &prior);
+        let placed = match write_record(&self.subs_dir, &name, &sub) {
+            Ok(placed) => placed,
+            Err(error) => {
+                // Not put in place (the previous row, if any, is intact): put
+                // the verification back as it was, so a failed commit neither
+                // leaves an extra record nor resets a tail.
+                let restored = if let Some(prior) = prior {
+                    let restored = write_record(&self.verified_dir, &key, &prior).map(|_| ());
                     state.verified.insert(key, prior);
                     restored
-                }
-                None => {
+                } else {
                     let restored = remove_record(&self.verified_dir, &key);
                     state.verified.remove(&key);
                     restored
+                };
+                if let Err(restore) = restored {
+                    tracing::warn!(%restore, "events store: verification rollback failed");
                 }
-            };
-            if let Err(restore) = restored {
-                tracing::warn!(%restore, "events store: verification rollback failed");
+                return Err(error);
             }
-            return Err(error);
-        }
+        };
+        // In place: memory follows the disk even when the directory sync
+        // failed, and that failure is then reported.
         state.subs.insert(sub.id.clone(), sub);
+        placed.durable()?;
         self.trim_tails(&mut state, now, tail)?;
         Ok(Ok(()))
     }
@@ -358,8 +362,9 @@ impl Store {
             let key = verified_file(&sub.principal, &sub.url);
             if let Some(mut record) = state.verified.get(&key).cloned() {
                 record.last_subscription_ended_at = Some(now);
-                write_record(&self.verified_dir, &key, &record)?;
+                let placed = write_record(&self.verified_dir, &key, &record)?;
                 state.verified.insert(key, record);
+                placed.durable()?;
             }
         }
         self.trim_tails(&mut state, now, tail)?;
