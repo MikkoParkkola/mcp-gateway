@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/session_end.rs b/src/gateway/meta_mcp/session_end.rs
+index 3dcc9bd2f..834ca06bf 100644
+--- a/src/gateway/meta_mcp/session_end.rs
++++ b/src/gateway/meta_mcp/session_end.rs
+@@ -13,7 +13,7 @@ impl MetaMcpCallerContext<'_> {
+     pub(crate) fn experiment_key<'s>(&'s self, session_id: Option<&'s str>) -> Option<&'s str> {
+         self.caller_key
+             .filter(|key| !key.is_empty())
+-            .or_else(|| session_key(session_id))
++            .or(session_id)
+     }
+ }
+ 

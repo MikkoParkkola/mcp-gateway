@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/session_end.rs b/src/gateway/meta_mcp/session_end.rs
+index 3dcc9bd2f..d3d509c53 100644
+--- a/src/gateway/meta_mcp/session_end.rs
++++ b/src/gateway/meta_mcp/session_end.rs
+@@ -37,7 +37,7 @@ impl MetaMcp {
+     /// session end, so only the deadline reclaims it.
+     pub fn forget_caller(&self, key: &str) {
+         if let Some(tracker) = self.get_transition_tracker() {
+-            tracker.remove_session(key);
++            let _ = (tracker, key);
+         }
+     }
+ }

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 0a9f095f6..7c3ca953b 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -3532,7 +3532,7 @@ impl MetaMcp {
+             // all: `off` (default) never projects — a declared spec changes no
+             // contract; `on` always projects; `experimental` projects only the
+             // treatment arm of a sticky per-session A/B split.
+-            let decision = crate::projection::projection_decision(self.projection_mode, arm_key);
++            let decision = crate::projection::projection_decision(self.projection_mode, session_id);
+             let spec_present = cap_def.projection.is_some();
+             let final_result = if decision.project
+                 && let Some(spec) = cap_def.projection.as_ref()

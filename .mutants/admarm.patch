@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/admission.rs b/src/gateway/meta_mcp/admission.rs
+index 00524afc1..f89a8e32f 100644
+--- a/src/gateway/meta_mcp/admission.rs
++++ b/src/gateway/meta_mcp/admission.rs
+@@ -530,7 +530,7 @@ impl MetaMcp {
+             "route": "meta", "tool": tool_name, "full": full,
+             "projection": format!("{:?}", self.projection_mode),
+             "profile": profile,
+-            "arm": crate::projection::projection_key_suffix(self.projection_mode, arm_key),
++            "arm": crate::projection::projection_key_suffix(self.projection_mode, session),
+         })
+     }
+ 

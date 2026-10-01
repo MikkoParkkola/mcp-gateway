@@ -1,0 +1,13 @@
+diff --git a/src/projection/mode.rs b/src/projection/mode.rs
+index 6bca9e0f8..b47d43548 100644
+--- a/src/projection/mode.rs
++++ b/src/projection/mode.rs
+@@ -159,7 +159,7 @@ pub fn ab_classification(
+     if mode != ProjectionMode::Experimental || !spec_present {
+         return None;
+     }
+-    let key = key?;
++    let key = key.unwrap_or("");
+     let decision = projection_decision(mode, Some(key));
+     Some(AbRecord {
+         arm: decision.arm,

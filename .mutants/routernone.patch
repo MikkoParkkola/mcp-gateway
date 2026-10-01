@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index 2477fb97b..937ccf593 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -1526,7 +1526,7 @@ async fn meta_mcp_dispatch(
+                 agent_declared,
+                 grant_subject,
+                 stdio_nonce: None,
+-                caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
++                caller_key: None,
+                 verified_identity: verified_identity.as_ref(),
+                 is_admin: client.as_ref().is_some_and(|c| c.admin),
+                 input_capabilities: declared_capabilities,

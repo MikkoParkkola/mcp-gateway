@@ -1,0 +1,15 @@
+diff --git a/src/gateway/meta_mcp/session_end.rs b/src/gateway/meta_mcp/session_end.rs
+index 3dcc9bd2f..7c2c1f11d 100644
+--- a/src/gateway/meta_mcp/session_end.rs
++++ b/src/gateway/meta_mcp/session_end.rs
+@@ -11,9 +11,7 @@ impl MetaMcpCallerContext<'_> {
+     /// neither shared). A keyless modern caller has neither: no arm of its
+     /// own and no hints, never the empty id every such caller shares.
+     pub(crate) fn experiment_key<'s>(&'s self, session_id: Option<&'s str>) -> Option<&'s str> {
+-        self.caller_key
+-            .filter(|key| !key.is_empty())
+-            .or_else(|| session_key(session_id))
++        session_key(session_id)
+     }
+ }
+ 

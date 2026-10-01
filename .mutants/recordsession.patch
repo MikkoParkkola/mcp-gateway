@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 0a9f095f6..d32e4c66b 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2672,7 +2672,7 @@ impl MetaMcp {
+         let Some(tracker) = self.get_transition_tracker() else {
+             return Vec::new();
+         };
+-        let Some(sid) = key else {
++        let Some(sid) = session_id else {
+             return Vec::new();
+         };
+ 

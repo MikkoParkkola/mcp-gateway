@@ -1,0 +1,13 @@
+head_sha	b5e0a76edebc27372278959e65f6ef7e0d127831
+# MIK-7215.CONTROL.5 G4 PR 2591: arm, hints, reclaim
+EKSESSION	linux	eksession.patch	--lib gateway::router::tests::g4_caller_keyed
+EKNOFALLBACK	linux	eknofallback.patch	--lib gateway::router::tests::g4_caller_keyed
+EKRAW	linux	ekraw.patch	--lib gateway::router::tests::g4_caller_keyed
+ROUTERNONE	linux	routernone.patch	--lib gateway::router::tests::g4_caller_keyed
+TRACKOFF	linux	trackoff.patch	--lib gateway::router::tests::g4_caller_keyed
+ABNONE	linux	abnone.patch	--lib gateway::router::tests::g4_caller_keyed
+RECORDSESSION	linux	recordsession.patch	--lib gateway::router::tests::g4_caller_keyed
+DECISION	linux	decision.patch	--lib gateway::router::tests::g4_caller_keyed
+SUFFIX	linux	suffix.patch	--lib gateway::router::tests::g4_caller_keyed
+ADMARM	linux	admarm.patch	--lib gateway::router::tests::g4_caller_keyed
+IDLEOFF	linux	idleoff.patch	--lib gateway::meta_mcp::session_cleanup_tests::an_idle_caller_key_forgets_its_last_tool -- --exact

@@ -1,0 +1,16 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index 2477fb97b..07705e232 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -1504,10 +1504,7 @@ async fn meta_mcp_dispatch(
+             if let Some(ref lifecycle) = state.session_lifecycle
+                 && !caller_key.is_empty()
+             {
+-                lifecycle.track(
+-                    caller_key.clone(),
+-                    session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
+-                );
++                let _ = lifecycle;
+             }
+             let mut caller = MetaMcpCallerContext {
+                 // Built above, after every gate that can still refuse, and only

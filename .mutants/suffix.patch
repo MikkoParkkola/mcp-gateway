@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 0a9f095f6..7a321b8a4 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -1588,7 +1588,7 @@ impl MetaMcp {
+         // shares; a keyless caller gets the control arm and is not counted.
+         let arm_key = caller.experiment_key(session_id);
+         let projection_key_suffix =
+-            crate::projection::projection_key_suffix(self.projection_mode, arm_key);
++            crate::projection::projection_key_suffix(self.projection_mode, session_id);
+ 
+         tracing::Span::current().record("trace_id", trace_id);
+ 
