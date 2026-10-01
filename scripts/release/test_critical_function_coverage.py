@@ -367,6 +367,11 @@ class HeadLineCalls(unittest.TestCase):
             "    let q = '\"'; debug!(v = %clean(x), \"seen\");\n",
             '    let q = r"\\"; debug!(v = %clean(x), "seen");\n',
             '    /* " */ debug!(v = %clean(x), "seen");\n',
+            '    debug!(v = %x, "seen"); // clean(x)\n',
+            '    Err(e) => debug!(%e, "seen"),\n',
+            '    span!(Level::INFO, "work");\n',
+            '    debug!("a \\" b", clean(x));\n',
+            '    debug!("a", clean(x), "b");\n',
         ]
         for body in shapes:
             with self.subTest(body=body.strip()):
@@ -390,21 +395,30 @@ class HeadLineCalls(unittest.TestCase):
         self.assertIn("unverifiable tracing head line src/lib.rs:2 (head count 1): graded missed", out.getvalue())
 
     def test_plain_fields_on_the_head_line_stay_covered(self):
-        result = self.grade('    debug!(url = %x, kind = ?k, n = 3, "seen {}", x);\n', {2: 1})
-        self.assertEqual(result[0], "ok")
-        self.assertEqual(result[9], [])
+        shapes = [
+            '    debug!(url = %x, kind = ?k, n = 3, "seen {}", x);\n',
+            '    tracing::warn!(%error, path = %shown_path, "task record unreadable");\n',
+            '    ::tracing::info!(?reason, v = self.name, "seen")\n',
+            '    error!(\n',
+            '    debug!(url = %x,\n',
+        ]
+        for body in shapes:
+            with self.subTest(body=body.strip()):
+                result = self.grade(body, {2: 1})
+                self.assertEqual(result[9], [])
+                self.assertNotIn(2, result[4])
 
     def test_a_call_inside_the_message_literal_is_not_a_call(self):
         result = self.grade('    debug!("see clean(x) for {}", x);\n', {2: 1})
         self.assertEqual(result[0], "ok")
         self.assertEqual(result[9], [])
 
-    def test_a_call_before_the_macro_on_the_same_line_is_graded_by_its_count(self):
-        # Only the macro's own arguments are unverifiable: a statement that ends
-        # in a macro call is not a field of it.
+    def test_a_statement_before_the_macro_on_the_same_line_is_unverifiable(self):
+        # The whole line must be a plain head line; anything sharing it, even
+        # a statement before the macro, makes the line unverifiable.
         result = self.grade('    let y = f(x); debug!(y, "seen");\n', {2: 1})
-        self.assertEqual(result[0], "ok")
-        self.assertEqual(result[9], [])
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
 
     def test_an_unreached_one_line_macro_with_a_call_is_missed_and_listed(self):
         result = self.grade('    debug!(url = %clean(x), "seen");\n', {2: 0})
