@@ -78,7 +78,7 @@ single-occurrence and header/body mirroring checks (`handlers.rs:808-934`). That
 into one function both routes call, unchanged for `/mcp`, so the two cannot drift. A request whose era is
 `Legacy` is refused with the same 403 + `-32600`, unless it is an `initialize` declaring
 elicitation. This classification runs only under `hardened`; standard keeps today's path.
-Notifications from such a client are refused too (403 with `{}`, as the identity refusal).
+Notifications from such a client are refused too, with the same 403 and body; the gate runs before the notification branch.
 
 **Row 11.** At `handlers.rs:1523-1527` the policy is `for_modern()` when the request is modern
 *or* the posture is `hardened`, so an unconfirmable legacy destructive call is refused
@@ -115,6 +115,16 @@ key to pass row 8. Rows 10 and 11: the production router as in
 | 11 | `hardened_legacy_confirmation_policy_refuses` | legacy session, unconfirmable destructive call: `-32001` under hardened, WARN-and-proceed under standard | keep `for_legacy()` under hardened |
 | 16 | `standard_posture_applies_no_override` (extended) | standard: signing not forced, legacy without elicitation served on `/mcp` and the direct route | apply any override under standard |
 | 16 | `standard_signing_keeps_invoke_only_scope` | standard with signing explicitly enabled: non-invoke meta and direct results unsigned, `gateway_invoke` signed as before | widen capture without the posture check |
+
+As built. Four row 7 tests are unit tests against the production context and signer
+(`src/gateway/meta_mcp/signing_scope_tests.rs`), because the shipped binary cannot be driven
+into their state: `task_gate_answer_is_unsigned_and_keeps_its_nonce`,
+`gateway_invoke_with_two_nonces_refused`, `hardened_direct_signing_failure_fails_closed` (the
+inner gateway always answers an object, which the primitive signs), and
+`hardened_capture_signs_every_tool_call`, which carries the stored-copy mutant of
+`hardened_meta_stored_result_is_resigned`. `confirmation_follow_up_needs_a_fresh_nonce` is
+covered by `hardened_tool_call_nonce_replay_refused`: a follow-up resending a nonce is a
+replay. `hardened_direct_cached_result_is_signed` drives the direct cache exit end to end.
 
 ### Existing hardened fixtures
 

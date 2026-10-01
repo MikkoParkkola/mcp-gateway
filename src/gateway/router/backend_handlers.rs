@@ -640,6 +640,22 @@ async fn backend_handler_inner(
         );
     }
 
+    // Hardened (GH1942.HARDEN.1 row 10), before the backend lookup: this
+    // route keeps no handshake state, so it serves no legacy request other
+    // than an `initialize` that declares elicitation.
+    if super::hardened_elicitation::is_hardened(&state)
+        && let Some(refusal) = super::hardened_elicitation::direct_refusal(
+            &state,
+            &inbound_headers,
+            &json_request,
+            &method,
+            params.as_ref(),
+            &id,
+        )
+    {
+        return refusal;
+    }
+
     // Find backend
     let Some(backend) = state.backends.get(&name) else {
         return build_http_error_response(
@@ -755,6 +771,28 @@ async fn backend_handler_inner(
     let chain_nonce = crate::protocol::mrtr::take_chain_nonce_params(params.as_mut())
         .ok()
         .flatten();
+    // Hardened signs every `tools/call` here too (GH1942.HARDEN.1 row 7). Its
+    // nonce comes off the params before sanitization, checked as the meta
+    // route checks it.
+    let signs = method == "tools/call"
+        && state.meta_mcp.signing_enabled()
+        && super::hardened_elicitation::is_hardened(&state);
+    let signing_nonce = if signs {
+        match crate::gateway::meta_mcp::signing::take_direct_nonce(params.as_mut()) {
+            Ok(nonce) => nonce,
+            Err(e) => {
+                let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+                return build_http_error_response(
+                    Some(id.clone()),
+                    e.to_rpc_code(),
+                    message,
+                    StatusCode::BAD_REQUEST,
+                );
+            }
+        }
+    } else {
+        None
+    };
     // Then this dispatch's own challenge for a chained backend (ASI07 R7).
     let mut challenge = None;
     if let (Some(sent), "tools/call") = (params.as_mut(), method.as_str()) {
@@ -1030,6 +1068,32 @@ async fn backend_handler_inner(
     } else {
         None
     };
+    // Admitted once, here: after every refusal above, so a refused call
+    // consumes no nonce, and before the cache below, so a replayed result is
+    // signed against the replaying request's own nonce. The store is the one
+    // the meta route admits into.
+    if signs {
+        let principal = client
+            .as_ref()
+            .filter(|client| client.authenticated)
+            .and_then(|client| client.quota_principal.as_ref())
+            .map_or(
+                "anonymous",
+                crate::gateway::auth::QuotaPrincipal::as_store_key,
+            );
+        if let Err(e) = state
+            .meta_mcp
+            .admit_signing_nonce(signing_nonce.as_deref(), principal)
+        {
+            let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+            return build_http_error_response(
+                Some(id.clone()),
+                e.to_rpc_code(),
+                message,
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    }
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
     if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
@@ -1044,7 +1108,11 @@ async fn backend_handler_inner(
         ) {
             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
                 crate::gateway::meta_mcp::invoke::audit::note_cached();
-                let response = JsonRpcResponse::success(id.clone(), cached);
+                let mut response = JsonRpcResponse::success(id.clone(), cached);
+                if signs {
+                    let nonce = signing_nonce.as_deref();
+                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+                }
                 return build_http_response(&response, StatusCode::OK);
             }
             Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
@@ -1099,6 +1167,10 @@ async fn backend_handler_inner(
                 settle_direct_idempotency(idem_reservation.as_mut(), &response);
                 let nonce = chain_nonce.as_deref();
                 state.meta_mcp.finish_direct(&mut response, &method, nonce);
+                if signs {
+                    let nonce = signing_nonce.as_deref();
+                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+                }
                 build_http_response(&response, StatusCode::OK)
             }
             // Settled as terminal unless raised before dispatch
@@ -1171,6 +1243,10 @@ async fn backend_handler_inner(
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
             let nonce = chain_nonce.as_deref();
             state.meta_mcp.finish_direct(&mut response, &method, nonce);
+            if signs {
+                let nonce = signing_nonce.as_deref();
+                state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+            }
             build_http_response(&response, StatusCode::OK)
         }
         // Settled, never dropped: an unsettled reservation releases the key and

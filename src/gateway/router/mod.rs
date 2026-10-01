@@ -37,6 +37,7 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+mod hardened_elicitation;
 mod hardened_identity;
 mod identity;
 mod meta_refusal_audit;
