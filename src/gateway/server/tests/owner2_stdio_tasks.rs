@@ -240,6 +240,7 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
+            modern: false,
         },
         &super::super::StdioTelemetry::default(),
     )
@@ -423,6 +424,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
+            modern: false,
         },
     );
     let answer = fixture
