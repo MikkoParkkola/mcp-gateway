@@ -1,0 +1,18 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 39c97964b..fa91bee9f 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -517,12 +517,7 @@ impl InputBridge<'_> {
+             // here with the only fact that decides the key's fate.
+             self.gate
+                 .admit(&Self::challenge(&prompts))
+-                .map_err(|error| match error {
+-                    BridgeError::ChallengeRefused { .. } => {
+-                        BridgeError::ChallengeRefused { dispatched }
+-                    }
+-                    other => other,
+-                })?;
++                .map_err(|_| BridgeError::ChallengeRefused { dispatched })?;
+             let answers = self.ask(session_id, prompts, started).await?;
+             let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
+             let result = self.backend.invoke(retry).await?;

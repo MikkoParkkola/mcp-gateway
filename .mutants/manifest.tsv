@@ -1,0 +1,6 @@
+head_sha	fa259872eca4fffb42fc24a0e2453e9dce3b1ca6
+# batch 1 for #2619 on the head above (bridge run branches)
+M1	linux	m1.patch	--test mik_7212_mrtr7_bridge_acs -- cov3_run_branches
+M2	linux	m2.patch	--test mik_7212_mrtr7_bridge_acs -- cov3_run_branches
+M3	linux	m3.patch	--test mik_7212_mrtr7_bridge_acs -- cov3_run_branches
+M4	linux	m4.patch	--test mik_7212_mrtr7_bridge_acs -- cov3_run_branches

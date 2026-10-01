@@ -1,0 +1,14 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index 39c97964b..fae845102 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -503,9 +503,6 @@ impl InputBridge<'_> {
+         let mut dispatched = false;
+         let mut last = None;
+         for _ in 0..self.bounds.rounds {
+-            if started.elapsed() >= self.bounds.aggregate {
+-                return Err(BridgeError::Deadline);
+-            }
+             let prompts = Self::plan(&interim, declared, slice)?;
+             spent = spent.saturating_add(u32::try_from(prompts.len()).unwrap_or(u32::MAX));
+             if spent > self.bounds.requests {
