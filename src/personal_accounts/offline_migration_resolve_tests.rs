@@ -6,27 +6,28 @@
 use super::{OfflineMigrationError, resolve_legacy_backend_name};
 
 fn config(backends: &[(&str, &str)]) -> crate::config::Config {
-    let bound: String = backends
-        .iter()
-        .map(|(name, account)| {
-            format!(
-                "  {name}:\n    http_url: https://backend.fixture.test/mcp\n    account: {account}\n"
-            )
-        })
-        .collect();
-    let described: String = ["work", "home"]
-        .iter()
-        .map(|account| {
-            format!(
-                "    {account}:\n      mode: personal_managed\n      provider: fixture\n      \
-                 resource: https://api.fixture.test/\n      issuer: https://issuer.fixture.test\n      \
-                 authorization_endpoint: https://issuer.fixture.test/authorize\n      \
-                 token_endpoint: https://issuer.fixture.test/token\n      client_id: c\n      \
-                 redirect_uri: https://gateway.fixture.test/callback\n      scopes: [read]\n      \
-                 send_resource_parameter: true\n"
-            )
-        })
-        .collect();
+    use std::fmt::Write as _;
+    let mut bound = String::new();
+    for (name, account) in backends {
+        write!(
+            bound,
+            "  {name}:\n    http_url: https://backend.fixture.test/mcp\n    account: {account}\n"
+        )
+        .unwrap();
+    }
+    let mut described = String::new();
+    for account in ["work", "home"] {
+        write!(
+            described,
+            "    {account}:\n      mode: personal_managed\n      provider: fixture\n      \
+             resource: https://api.fixture.test/\n      issuer: https://issuer.fixture.test\n      \
+             authorization_endpoint: https://issuer.fixture.test/authorize\n      \
+             token_endpoint: https://issuer.fixture.test/token\n      client_id: c\n      \
+             redirect_uri: https://gateway.fixture.test/callback\n      scopes: [read]\n      \
+             send_resource_parameter: true\n"
+        )
+        .unwrap();
+    }
     let yaml = format!(
         "backends:\n{bound}accounts:\n  schema_version: accounts.v1\n  enabled: true\n  \
          deployment: single_process\n  instance_id: unit\n  store_dir: /unused/store\n  \
