@@ -124,6 +124,47 @@ class CriticalFunctionCoverage(unittest.TestCase):
 
 
 
+TRACED = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        value = x.count_ones(),
+        "seen"
+    );
+    x > 0
+}
+"""
+
+
+class TracingArgumentLines(unittest.TestCase):
+    """A reached macro's zero-count argument lines are excluded (and listed);
+    an unreached macro's are not, so an untested log call still fails."""
+
+    def grade(self, head_count):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(TRACED)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                f"SF:/repo/src/lib.rs\nDA:1,1\nDA:2,{head_count}\nDA:3,0\nDA:6,1\nDA:7,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def test_a_reached_macro_has_its_argument_lines_excluded_and_listed(self):
+        result = self.grade(head_count=1)
+        self.assertEqual(result[0], "ok")
+        self.assertEqual((result[5], result[6]), (4, 4))
+        self.assertEqual(result[8], ["src/lib.rs:3 (head 2=1)"])
+
+    def test_an_unreached_macro_keeps_its_argument_lines(self):
+        result = self.grade(head_count=0)
+        self.assertEqual(result[0], "BELOW")
+        self.assertEqual(result[4], [2, 3])
+        self.assertEqual(result[8], [])
+
+
 class InventoryResolves(unittest.TestCase):
     """Every row of the real inventory names a function that exists.
 
