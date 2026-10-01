@@ -1402,11 +1402,24 @@
     },
     {
       "id": "MIK-7272.LIFE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
+      "evidence": [
+        "src/gateway/server/tests/life1_stdio_cancel.rs:238",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:257",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:290",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:304",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:367",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:411",
+        "src/gateway/server/tests/life1_stdio_cancel.rs:431",
+        "src/gateway/server/mod.rs:2543",
+        "src/gateway/server/mod.rs:2491",
+        "src/gateway/server/mod.rs:2659",
+        "src/gateway/server/stdio_dispatches.rs:28",
+        "src/gateway/server/stdio_channel.rs:106"
+      ],
+      "note": "Met 2026-10-01 (#2519, squash bf5c901e3). Clause read, VERIFIED, under design D5 (docs/design/2026-09-30-sub4-stdio-owner.md). (1) 'cancelling it releases the held exchange': the read loop routes notifications/cancelled (src/gateway/server/mod.rs:2543) and aborts the dispatch; PendingRequestGuard drops the outbound prompt (src/gateway/server/stdio_channel.rs:106), so the client's late answer resolves nothing and the backend is never re-invoked (src/gateway/server/tests/life1_stdio_cancel.rs:238). (2) 'its waiter gets a terminal answer': the waiter is the gateway-side send_request future, dropped by the abort; its terminal outcome is the joined task's Cancelled result, observed by the completion arm (src/gateway/server/mod.rs:2491). No frame is written for the cancelled id: the cancel check and the enqueue run under one lock (src/gateway/server/stdio_dispatches.rs:28, src/gateway/server/mod.rs:2659). (3) 'nothing left pending': a cancelled call is joined and EOF returns Ok within bound (src/gateway/server/tests/life1_stdio_cancel.rs:257); a reaped id is free and answered again (src/gateway/server/tests/life1_stdio_cancel.rs:304); EOF with a non-reading client is bounded (src/gateway/server/tests/life1_stdio_cancel.rs:411); keyed calls cancelled while held or mid-backend settle with their result unavailable and are never re-executed (src/gateway/server/tests/life1_stdio_cancel.rs:367, :431). initialize is not cancellable (src/gateway/server/tests/life1_stdio_cancel.rs:290). CI run 36797384410 and feature combinations run 36797417150 green on head c584b8123. Mutant run 36798420278 (throwaway/mutants-25193): R0 (fix reverted) RED, 6 of 9 L tests fail; P1, P3, P4 RED, each at its named test. P2 and P5 are not killable at this level (#2519 body). Two review seats: SHIP-WITH-FIXES each, fixes applied; three pre-existing shutdown findings deferred to 4.0.1 as #2530, #2531, #2532.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row; the ticket calls it a blocking 4.0 requirement. No test or code names it; MIK-7311.LIFECYCLE.1 is the tasks lifecycle, not this."
     },
     {
       "id": "MIK-7324.COV.3",
