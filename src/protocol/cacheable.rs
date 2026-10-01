@@ -21,8 +21,11 @@ use serde_json::Value;
 /// does not depend on who asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheScope {
-    /// Reusable across authorization contexts. Requires proof of invariance.
-    Public,
+    /// Uninhabited until a method is proven invariant across authorization
+    /// contexts: no expression builds this value, so the gateway cannot claim
+    /// `public`. Allowing it one day means replacing the payload with a proof
+    /// type, a design change that review will see (MIK-7211.PARENT.6).
+    Public(std::convert::Infallible),
     /// Reusable only within the authorization context that fetched it.
     Private,
 }
@@ -32,22 +35,8 @@ impl CacheScope {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Public => "public",
+            Self::Public(never) => match never {},
             Self::Private => "private",
-        }
-    }
-
-    /// The scope for a list whose content did or did not depend on the caller.
-    ///
-    /// One argument, and it is the whole decision: if the assembly consulted
-    /// anything about who asked, the answer is private. Which methods this
-    /// gateway has answered that question for is [`scope_for_method`].
-    #[must_use]
-    pub const fn for_list(caller_dependent: bool) -> Self {
-        if caller_dependent {
-            Self::Private
-        } else {
-            Self::Public
         }
     }
 }
@@ -60,15 +49,14 @@ impl CacheScope {
 /// caller-dependent are the same silence, and a later `public` is a default
 /// nobody had to argue for rather than an edit someone has to make.
 const SCOPE_TABLE: &[(&str, CacheScope)] = &[
-    // Filtered by the presented credential's scope — an API key decides which
-    // backends, prompts and resources a caller is shown.
-    ("tools/list", CacheScope::for_list(true)),
-    ("prompts/list", CacheScope::for_list(true)),
-    ("resources/list", CacheScope::for_list(true)),
-    ("resources/templates/list", CacheScope::for_list(true)),
-    // Not a list, so not `for_list`: reachability of a URI is decided per
-    // caller, so the body is too. The bare value is the honest form here — a
-    // row that named the list rule would be citing a rule it was not decided by.
+    // Lists: filtered by the presented credential's scope — an API key decides
+    // which backends, prompts and resources a caller is shown.
+    ("tools/list", CacheScope::Private),
+    ("prompts/list", CacheScope::Private),
+    ("resources/list", CacheScope::Private),
+    ("resources/templates/list", CacheScope::Private),
+    // Not a list: reachability of a URI is decided per caller, so the body is
+    // too.
     ("resources/read", CacheScope::Private),
 ];
 
@@ -95,6 +83,91 @@ pub fn scope_for_method(method: &str) -> CacheScope {
         .iter()
         .find(|(name, _)| *name == method)
         .map_or(CacheScope::Private, |(_, scope)| *scope)
+}
+
+/// Whether one object carries a `cacheScope` that is not exactly `"private"`.
+fn scope_off(object: &Value) -> bool {
+    object
+        .get("cacheScope")
+        .is_some_and(|scope| scope.as_str() != Some("private"))
+}
+
+/// The retained-result slot of a raw task envelope: an object with a string
+/// `taskId` whose `result` is an object. Only this one slot is followed.
+fn task_result_slot(result: &Value) -> Option<&Value> {
+    result.get("taskId")?.as_str()?;
+    result.get("result").filter(|slot| slot.is_object())
+}
+
+/// Whether `result`, or the result a task envelope retains, claims a scope
+/// other than `"private"`.
+fn scope_needs_clamp(result: &Value) -> bool {
+    scope_off(result) || task_result_slot(result).is_some_and(scope_off)
+}
+
+/// Make a result about to leave the gateway claim no scope but `private`.
+///
+/// A `cacheScope` that is not `"private"` becomes `"private"`. For `"public"`
+/// that is a downgrade the specification permits; for `null`, a number or a
+/// string the specification does not define it normalizes a malformed field.
+/// A result with no such key is left alone (legacy results have none). Nested
+/// tool data is never touched; the one slot followed is the result a raw task
+/// envelope retains.
+pub(crate) fn clamp_delivered_scope(result: &mut Value) {
+    if scope_off(result)
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("cacheScope".to_owned(), Value::String("private".to_owned()));
+    }
+    if task_result_slot(result).is_some_and(scope_off)
+        && let Some(slot) = result.get_mut("result")
+    {
+        clamp_delivered_scope(slot);
+    }
+}
+
+/// `serialize_with` for a wire slot that carries a result: serializes the
+/// value as [`clamp_delivered_scope`] would leave it.
+#[expect(
+    clippy::ref_option,
+    reason = "serde's serialize_with passes the field as &Option<Value>"
+)]
+pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
+    result: &Option<Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    match result {
+        Some(value) if scope_needs_clamp(value) => {
+            let mut clamped = value.clone();
+            clamp_delivered_scope(&mut clamped);
+            clamped.serialize(serializer)
+        }
+        Some(value) => value.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Clamp the `result` of one JSON-RPC response; requests and notifications
+/// (no `id`) pass unchanged.
+fn clamp_response_envelope(payload: &mut Value) {
+    if payload.get("id").is_some()
+        && let Some(result) = payload.get_mut("result")
+    {
+        clamp_delivered_scope(result);
+    }
+}
+
+/// The SSE `data` of a `message` event: the payload as text, with the `result`
+/// of a JSON-RPC response, or of each response in a batch, clamped by
+/// [`clamp_delivered_scope`].
+pub(crate) fn message_event_data(payload: &Value) -> String {
+    let mut clamped = payload.clone();
+    match &mut clamped {
+        Value::Array(batch) => batch.iter_mut().for_each(clamp_response_envelope),
+        single => clamp_response_envelope(single),
+    }
+    clamped.to_string()
 }
 
 /// The `resultType` of a result, defaulting as the specification requires.
@@ -165,3 +238,6 @@ mod tests {
         assert!(!is_error(&json!([true])));
     }
 }
+
+#[cfg(test)]
+mod clamp_tests;

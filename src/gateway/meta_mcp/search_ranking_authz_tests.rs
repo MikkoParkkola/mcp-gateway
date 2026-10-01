@@ -1104,3 +1104,6 @@ mod glob_ordering;
 
 #[path = "search_ranking_authz_tests/per_user.rs"]
 mod per_user;
+
+#[path = "search_ranking_authz_tests/backend_name.rs"]
+mod backend_name;

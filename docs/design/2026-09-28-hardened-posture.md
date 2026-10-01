@@ -25,9 +25,12 @@ line listing the five forced controls and their effective values. When `hardened
 1. **Preset floor.** `monitor_only`/`local_developer`/`audit_only` become `team_shared`;
    `team_shared`/`enterprise_strict` are kept; `non_bypassable=true`.
 2. **Signing.** `message_signing.enabled` is forced; no secret refuses start. Every successful
-   `tools/call` result on both routes is signed with the v2 MAC (`sign_json_rpc_response_at`);
-   its nonce comes from `params._meta["io.mcp-gateway/nonce"]` and is checked before dispatch,
-   like `gateway_invoke`'s (`meta_mcp/signing.rs:48-60`). `require_nonce` stays operator choice.
+   `tools/call` result on both routes whose nonce was admitted is signed with the v2 MAC
+   (`sign_json_rpc_response_at`); its nonce comes from `params._meta["io.mcp-gateway/nonce"]` and
+   is checked before dispatch, like `gateway_invoke`'s (`meta_mcp/signing.rs:48-60`);
+   an answer given before admission (the task-augmented gate's challenge or refusal and, on the
+   direct route, a tool-policy or undeclared-key refusal) is delivered unsigned and leaves the
+   nonce unspent (increment 5, row 7). `require_nonce` stays operator choice.
 3. **Anomaly blocking.** `firewall.enabled` and `anomaly_detection` are forced; the block
    threshold is 1.0 unless set within `[0.9, 1.0]`. At 1.0 only a transition never seen after a
    warmed predecessor blocks; at 0.95 all 20 distinct successors of a diverse predecessor would.
@@ -162,6 +165,14 @@ CHANGELOG `[Unreleased]`; OWASP ASI03/ASI07/ASI10 cite this.
 | 15 | the WARN and doctor agree | `doctor_and_startup_share_unhardened_predicate` (table over auth shapes) | doctor passes `has_oidc=false` |
 | 16 | `standard` applies none of the posture overrides (rows 5-8, 10-14); row 9's `CallerKey` is posture-independent | `standard_posture_applies_no_override` | apply any override under standard |
 | 17 | each startup refusal fires: no firewall feature, short secret, no configured backend named, block threshold < 0.9 | `hardened_startup_refusals` (table) | drop any one check |
+
+As built (MIK-7633). Rows 3c and 4c run on the firewall a hardened `Config::load` produces
+(`src/security/firewall/anomaly_learning_tests.rs`). Row 15 is two tests over one table: the
+startup warning is crate-private and `doctor` lives in the binary, so one test cannot drive
+both. `src/security/posture_auth_shapes_tests.rs` is the single table, declared by `#[path]` from
+`posture.rs` and `commands/doctor/posture.rs`; it is read by `startup_warn_matches_unhardened_table`
+and `doctor_row_matches_unhardened_table`. Row 17's short secret is set under `enabled: false`,
+so only the posture's forcing makes it refuse.
 
 ## 7. Out of scope: forced `require_nonce`; tracker persistence, cross-replica state (new store);
 A2A; stdio identity; #1441; ASI04; the `direct:{backend}` fix itself (#1785; `CallerKey` is here).
