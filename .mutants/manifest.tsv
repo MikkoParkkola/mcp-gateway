@@ -1,0 +1,4 @@
+head_sha	24c304c29aad7c42e9dc438bd68cd63c9d367de2
+# batch 1 for #2566 on the head above (malformed nonce refused before the task gate)
+M1	linux	m1.patch	--test hardened_signing_e2e malformed_signing_nonce_refused_before_the_task_gate -- --exact
+M2	linux	m2.patch	--test hardened_signing_e2e malformed_signing_nonce_refused_before_the_task_gate -- --exact

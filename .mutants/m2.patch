@@ -1,0 +1,12 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index 6ca57cd43..c5d2c8776 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -691,6 +691,7 @@ async fn meta_mcp_dispatch(
+     if let Some(error) = signing_context
+         .as_ref()
+         .and_then(|context| context.refuse_malformed_nonce().err())
++        .filter(|_| false)
+     {
+         return build_error_response(
+             raw_id,

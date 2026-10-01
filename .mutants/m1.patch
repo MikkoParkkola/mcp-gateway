@@ -1,0 +1,15 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index 73f77e4ab..f27a12379 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -261,9 +261,7 @@ impl SigningInvocationContext {
+         if self.origin == Origin::Unsigned {
+             return Ok(());
+         }
+-        self.nonce_value()
+-            .map(drop)
+-            .inspect_err(|_| record_nonce_rejection(NONCE_REASON_INVALID))
++        Ok(())
+     }
+ 
+     /// How the response is delivered: a malformed nonce cannot deliver, and
