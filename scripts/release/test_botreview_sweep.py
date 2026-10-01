@@ -28,18 +28,53 @@ def review(body, comments=0, kind="Bot"):
     }
 
 
-def test_a_body_only_bot_review_without_a_no_findings_marker_is_flagged():
+CODEX = """
+### 💡 Codex Review
+
+Here are some automated review suggestions for this pull request.
+
+**Reviewed commit:** `8b6eb7146d`
+    
+
+<details> <summary>ℹ️ About Codex in GitHub</summary>
+<br/>
+
+[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you
+- Open a pull request for review
+- Mark a draft as ready
+- Comment "@codex review".
+
+If Codex has suggestions, it will comment; otherwise it will react with 👍.
+
+
+
+
+Codex can also answer questions or update the PR. Try commenting "@codex address that feedback".
+            
+</details>"""
+
+
+def overview(findings):
+    return "<!-- ccr-overview-v2 -->\n## Copilot review overview\n\n**Findings:** %s\n" % findings
+
+
+def test_a_body_that_may_hold_more_than_its_threads_is_flagged():
     finding = review("### Needs a closer look\n\nThe token is logged in clear.")
     error = review("Copilot encountered an error and was unable to review this pull request.")
-    assert sweep.body_findings([finding, error]) == [finding, error]
+    more_than_inline = review(overview("2"), comments=1)
+    two_counts = review(overview("None") + "\n**Findings:** 3\n")
+    codex_plus = review(CODEX + "\nAlso: the key is written to the log.", comments=2)
+    flagged = [finding, error, more_than_inline, two_counts, codex_plus]
+    assert sweep.body_findings(flagged) == flagged
 
 
-def test_reviews_that_cannot_hide_a_finding_are_not_flagged():
-    clean = review("## Copilot review overview\n\n**Findings:** None\n")
-    with_threads = review("Two suggestions inline.", comments=2)
+def test_bodies_whose_findings_are_all_in_threads_are_not_flagged():
+    none = review(overview("None"))
+    counted = review(overview("2"), comments=3)
+    codex = review(CODEX.replace("8b6eb7146d", "0123456789"), comments=1)
     empty = review("   ")
     human = review("Looks wrong to me.", kind="User")
-    assert sweep.body_findings([clean, with_threads, empty, human]) == []
+    assert sweep.body_findings([none, counted, codex, empty, human]) == []
 
 
 def test_a_linked_review_body_is_not_missing():
