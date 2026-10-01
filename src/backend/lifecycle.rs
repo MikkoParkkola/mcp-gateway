@@ -165,6 +165,7 @@ impl Backend {
             stopped: std::sync::atomic::AtomicBool::new(false),
             budgets: super::ShutdownBudgets::default(),
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
+            connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             destination: std::sync::OnceLock::new(),
         }
     }
@@ -356,6 +357,17 @@ impl Backend {
         }
 
         info!(backend = %self.name, ?key, "Starting backend transport");
+        // Read once, before anything connects, under the lock a pairing holds
+        // from its check to its stamp: either this start reads the stamp, or
+        // it marks the backend so that pairing refuses it.
+        let built_under = {
+            let _pairing = self.replaced_transport_cleanups.lock();
+            if self.destination.get().is_none() {
+                self.connected_unpinned
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            self.destination()
+        };
 
         // Whatever the reason for starting - a client request, a health-driven
         // force_restart, warm start - this slot is no longer stopped-for-idleness.
@@ -467,20 +479,11 @@ impl Backend {
         // traversal finds it, or shutdown latches first and this refuses. There
         // is no third case, which is what the previous check-then-publish could
         // not say.
-        let refused = {
-            let cleanups = self.replaced_transport_cleanups.lock();
-            if cleanups.stopping {
-                true
-            } else {
-                *entry.transport.write() = Some(Arc::clone(&transport));
-                false
-            }
-        };
-        if refused {
+        if let Err(refusal) = self.publish(entry, &transport, built_under) {
             warn!(
                 backend = %self.name,
-                "Backend shut down while this transport was starting; closing it \
-                 instead of publishing"
+                %refusal,
+                "Closing a transport instead of publishing it"
             );
             let _ = transport.close().await;
             return Err(Error::BackendUnavailable(self.name.clone()));

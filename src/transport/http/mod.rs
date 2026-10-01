@@ -1050,7 +1050,8 @@ impl HttpTransport {
             // a clean auth error, never panic the request path (MIK-6909).
             headers.insert(header::AUTHORIZATION, bearer_header_value(&token)?);
             if matches!(mode, HeaderMode::Sse) {
-                debug!(url = %sanitize_url_for_diagnostics(&self.base_url), "SSE connection with OAuth token");
+                let diagnostic_url = sanitize_url_for_diagnostics(&self.base_url);
+                debug!(url = %diagnostic_url, "SSE connection with OAuth token");
             }
         }
 
@@ -1196,7 +1197,8 @@ impl HttpTransport {
             headers.remove("MCP-Session-Id");
         }
 
-        debug!(url = %sanitize_url_for_diagnostics(&self.base_url), "Establishing SSE connection");
+        let diagnostic_url = sanitize_url_for_diagnostics(&self.base_url);
+        debug!(url = %diagnostic_url, "Establishing SSE connection");
 
         let response = self
             .client
