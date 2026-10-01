@@ -480,3 +480,135 @@ fn env_secrets_resolve_a_file_client_secret() {
     );
     assert_eq!(secrets.resolve("c9-literal"), None);
 }
+
+// Refusals the earlier groups never reached: each asserts the decision itself
+// and pairs it with the accepting control, so a deleted guard turns one red.
+
+use super::{validate, validate_secret_ref};
+
+#[test]
+fn a_relative_file_reference_is_refused_and_an_absolute_one_is_not() {
+    let mut relative = adapter("desk", "UNUSED");
+    relative.hmac_secret_ref = "file:secrets/hmac".to_string();
+    let error = validate(&[relative]).expect_err("a relative path is not a stable reference");
+    assert_eq!(
+        error,
+        AccountsConfigError::Adapter {
+            index: 0,
+            problem: "hmac_secret_ref file: reference must name an absolute path",
+        }
+    );
+
+    let absolute = std::env::temp_dir().join("hmac");
+    validate_secret_ref(3, &format!("file:{}", absolute.display()))
+        .expect("an absolute file: reference is shaped correctly");
+}
+
+#[test]
+fn a_literal_secret_is_refused_before_the_overlay_is_asked() {
+    let overlay = FakeOverlay::new(&[("anything", secret_32('z').as_str())]);
+    let mut literal = adapter("desk", "UNUSED");
+    literal.hmac_secret_ref = secret_32('z');
+
+    let error = resolve_secrets(&[literal], &overlay, &no_store_keys())
+        .expect_err("a literal secret in the file must never be used as material");
+
+    assert_eq!(
+        error,
+        AccountsConfigError::Adapter {
+            index: 0,
+            problem: "hmac_secret_ref must be an env: or file: reference, never a literal secret",
+        }
+    );
+    assert!(overlay.reads().is_empty(), "nothing may be resolved");
+}
+
+#[test]
+fn an_unnamed_api_key_is_reported_by_index_alone() {
+    let credential = |name| {
+        let error = validate_no_gateway_reference_alias(
+            &[adapter("desk", "SHARED_SECRET")],
+            &[GatewayCredential::ApiKeyDigest {
+                index: 2,
+                name,
+                spec: "env:SHARED_SECRET",
+            }],
+        )
+        .expect_err("the shared variable is refused either way");
+        gateway_reuse_credential(&error, 0)
+    };
+
+    assert_eq!(credential("  "), "auth.api_keys[2]");
+    assert_eq!(credential("ops"), "auth.api_keys[2] (name ops)");
+}
+
+#[test]
+fn a_literal_adapter_reference_is_left_to_the_shape_check_by_both_separation_halves() {
+    let mut literal = adapter("desk", "UNUSED");
+    literal.hmac_secret_ref = "plain-literal".to_string();
+    let overlay = FakeOverlay::new(&[("GATEWAY_BEARER", "plain-literal")]);
+    let credentials = [GatewayCredential::BearerToken("env:GATEWAY_BEARER")];
+
+    validate_no_gateway_reference_alias(std::slice::from_ref(&literal), &credentials)
+        .expect("a literal has no reference to alias");
+    validate_no_gateway_material_reuse(std::slice::from_ref(&literal), &overlay, &credentials)
+        .expect("a literal is not resolved, so it is not compared as material");
+    assert!(
+        overlay.reads().is_empty(),
+        "the literal must not be looked up as a variable"
+    );
+    assert!(validate(&[literal]).is_err(), "validate owns the refusal");
+}
+
+#[test]
+fn an_unresolvable_or_empty_credential_or_adapter_secret_is_skipped_not_matched() {
+    let shared = secret_32('m');
+    let overlay = FakeOverlay::new(&[
+        ("OPENWEBUI_HMAC", shared.as_str()),
+        ("EMPTY_BEARER", ""),
+        ("EMPTY_HMAC", ""),
+    ]);
+    let adapters = [adapter("desk", "OPENWEBUI_HMAC")];
+
+    // Absent and empty gateway credentials hold no material to reuse.
+    validate_no_gateway_material_reuse(
+        &adapters,
+        &overlay,
+        &[
+            GatewayCredential::BearerToken("env:ABSENT_BEARER"),
+            GatewayCredential::BearerToken("env:EMPTY_BEARER"),
+        ],
+    )
+    .expect("a credential with no material cannot be reused");
+
+    // An empty adapter secret equals an empty bearer only if empties were kept.
+    validate_no_gateway_material_reuse(
+        &[adapter("desk", "EMPTY_HMAC")],
+        &overlay,
+        &[GatewayCredential::BearerToken("env:EMPTY_BEARER")],
+    )
+    .expect("an empty credential is skipped, never compared");
+
+    // An adapter whose variable is absent is resolve_secrets' refusal to report.
+    let absent = [adapter("desk", "ABSENT_HMAC")];
+    validate_no_gateway_material_reuse(
+        &absent,
+        &overlay,
+        &[GatewayCredential::BearerToken("env:OPENWEBUI_HMAC")],
+    )
+    .expect("an unresolvable adapter secret is not this check's refusal");
+    assert!(matches!(
+        resolve_secrets(&absent, &overlay, &no_store_keys()),
+        Err(AccountsConfigError::AdapterSecretUnresolved { index: 0, .. })
+    ));
+
+    // Control: the same material under a resolvable credential IS refused.
+    assert!(
+        validate_no_gateway_material_reuse(
+            &adapters,
+            &overlay,
+            &[GatewayCredential::BearerToken("env:OPENWEBUI_HMAC")],
+        )
+        .is_err()
+    );
+}
