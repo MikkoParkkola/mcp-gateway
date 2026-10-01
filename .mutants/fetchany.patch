@@ -1,0 +1,13 @@
+diff --git a/src/key_server/oidc.rs b/src/key_server/oidc.rs
+index 0db5e0613..631ea7ff1 100644
+--- a/src/key_server/oidc.rs
++++ b/src/key_server/oidc.rs
+@@ -315,7 +315,7 @@ impl JwksCache {
+         } else if is_loopback_http_url(url) {
+             &self.loopback
+         } else {
+-            return Err(OidcError::InsecureFetch);
++            &self.http
+         };
+         client.as_ref().ok_or(OidcError::ClientUnavailable)
+     }

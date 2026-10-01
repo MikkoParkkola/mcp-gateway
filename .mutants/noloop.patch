@@ -1,0 +1,13 @@
+diff --git a/src/key_server/oidc.rs b/src/key_server/oidc.rs
+index 0db5e0613..4808981be 100644
+--- a/src/key_server/oidc.rs
++++ b/src/key_server/oidc.rs
+@@ -312,7 +312,7 @@ impl JwksCache {
+     fn client_for(&self, url: &str) -> Result<&reqwest::Client, OidcError> {
+         let client = if crate::gateway::auth::is_https_url(url) {
+             &self.http
+-        } else if is_loopback_http_url(url) {
++        } else if false {
+             &self.loopback
+         } else {
+             return Err(OidcError::InsecureFetch);

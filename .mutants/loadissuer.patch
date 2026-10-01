@@ -1,0 +1,13 @@
+diff --git a/src/config/features/key_server.rs b/src/config/features/key_server.rs
+index f572a7679..325549966 100644
+--- a/src/config/features/key_server.rs
++++ b/src/config/features/key_server.rs
+@@ -176,7 +176,7 @@ impl KeyServerConfig {
+             }
+             // MIK-7704: discovery and keys come from these URLs; over cleartext
+             // anyone on the path can swap the keys and mint accepted tokens.
+-            if crate::key_server::oidc::is_cleartext_url(&provider.issuer) {
++            if false && crate::key_server::oidc::is_cleartext_url(&provider.issuer) {
+                 return Err(Error::ConfigValidation(format!(
+                     "key_server.oidc[{idx}] issuer '{}' is non-HTTPS and off this machine; \
+                      use https://, or http:// only to a loopback host",

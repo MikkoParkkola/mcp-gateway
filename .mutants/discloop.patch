@@ -1,0 +1,13 @@
+diff --git a/src/key_server/oidc.rs b/src/key_server/oidc.rs
+index 0db5e0613..84078c2e2 100644
+--- a/src/key_server/oidc.rs
++++ b/src/key_server/oidc.rs
+@@ -764,7 +764,7 @@ fn validate_discovery_document(
+     // The document is remote input: it may keep a loopback issuer's keys on
+     // loopback, but may not point an https issuer at a cleartext URL.
+     let loopback_to_loopback =
+-        is_loopback_http_url(requested_issuer) && is_loopback_http_url(&doc.jwks_uri);
++        is_loopback_http_url(&doc.jwks_uri);
+     if !crate::gateway::auth::is_https_url(&doc.jwks_uri) && !loopback_to_loopback {
+         return Err(OidcError::InsecureJwksUri(doc.jwks_uri));
+     }

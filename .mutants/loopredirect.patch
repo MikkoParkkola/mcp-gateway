@@ -1,0 +1,13 @@
+diff --git a/src/key_server/oidc.rs b/src/key_server/oidc.rs
+index 0db5e0613..41d3840ff 100644
+--- a/src/key_server/oidc.rs
++++ b/src/key_server/oidc.rs
+@@ -294,7 +294,7 @@ impl JwksCache {
+         // leave unproxied, and nothing legitimate needs one.
+         let loopback = reqwest::Client::builder()
+             .redirect(reqwest::redirect::Policy::custom(|attempt| {
+-                attempt.error("OIDC refuses a redirect from a loopback fetch")
++                attempt.follow()
+             }))
+             .no_proxy()
+             .timeout(Duration::from_secs(10));

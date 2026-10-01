@@ -1,0 +1,13 @@
+diff --git a/src/key_server/oidc.rs b/src/key_server/oidc.rs
+index 0db5e0613..e417bc05a 100644
+--- a/src/key_server/oidc.rs
++++ b/src/key_server/oidc.rs
+@@ -765,7 +765,7 @@ fn validate_discovery_document(
+     // loopback, but may not point an https issuer at a cleartext URL.
+     let loopback_to_loopback =
+         is_loopback_http_url(requested_issuer) && is_loopback_http_url(&doc.jwks_uri);
+-    if !crate::gateway::auth::is_https_url(&doc.jwks_uri) && !loopback_to_loopback {
++    if !crate::gateway::auth::is_https_url(&doc.jwks_uri) {
+         return Err(OidcError::InsecureJwksUri(doc.jwks_uri));
+     }
+     Ok(doc.jwks_uri)

@@ -1,0 +1,13 @@
+diff --git a/src/key_server/oidc.rs b/src/key_server/oidc.rs
+index 0db5e0613..c1bebc6a2 100644
+--- a/src/key_server/oidc.rs
++++ b/src/key_server/oidc.rs
+@@ -743,7 +743,7 @@ fn is_secure_fetch_url(url: &str) -> bool {
+ /// its explicit `jwks_uri` is, and that is checked on its own. A malformed
+ /// fetch URL is left to `client_for`, which refuses it at fetch time.
+ pub(crate) fn is_cleartext_url(value: &str) -> bool {
+-    url::Url::parse(value).is_ok() && !is_secure_fetch_url(value)
++    !is_secure_fetch_url(value)
+ }
+ 
+ /// Validate a fetched OIDC discovery document and extract a trusted `jwks_uri`.

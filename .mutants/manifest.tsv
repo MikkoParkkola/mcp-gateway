@@ -1,0 +1,14 @@
+head_sha	2f7057c170000ef671cd27914e2cfd3615d69848
+# MIK-7704 PR 2590: one row per refusal and carve-out
+ISSUER	linux	issuer.patch	--lib key_server::identity_rules_tests::token_from_an_uppercase_https_or_loopback_issuer_verifies -- --exact
+VERIFYBYPASS	linux	verifybypass.patch	--lib key_server::identity_rules_tests::token_from_a_cleartext_issuer_is_refused -- --exact
+LOADISSUER	linux	loadissuer.patch	--lib config::features::key_server::tests::http_issuer_off_this_machine_is_refused_at_load -- --exact
+LOADFIELDS	linux	loadfields.patch	--lib config::features::key_server::tests::http_jwks_uri_or_discovery_url_off_this_machine_is_refused_at_load -- --exact
+OPAQUE	linux	opaque.patch	--lib config::features::key_server::tests::opaque_issuer_with_explicit_jwks_uri_loads -- --exact
+FETCHANY	linux	fetchany.patch	--lib key_server::oidc::tests::production_client_refuses_cleartext_fetches_and_hops -- --exact
+LOOPPROXY	linux	loopproxy.patch	--lib key_server::oidc::tests::production_client_fetches_loopback_jwks_without_a_proxy -- --exact
+NOLOOP	linux	noloop.patch	--lib key_server::oidc::tests::production_client_fetches_loopback_jwks_without_a_proxy -- --exact
+REDIRECT	linux	redirect.patch	--lib key_server::oidc::tests::remote_redirects_may_only_move_to_https -- --exact
+LOOPREDIRECT	linux	loopredirect.patch	--lib key_server::oidc::tests::production_client_refuses_cleartext_fetches_and_hops -- --exact
+DISCLOOP	linux	discloop.patch	--lib key_server::oidc::tests::validate_discovery_keeps_loopback_keys_to_a_loopback_issuer -- --exact
+DISCNOLOOP	linux	discnoloop.patch	--lib key_server::oidc::tests::validate_discovery_keeps_loopback_keys_to_a_loopback_issuer -- --exact

@@ -1,0 +1,13 @@
+diff --git a/src/key_server/oidc.rs b/src/key_server/oidc.rs
+index 0db5e0613..614df963d 100644
+--- a/src/key_server/oidc.rs
++++ b/src/key_server/oidc.rs
+@@ -481,7 +481,7 @@ impl OidcVerifier {
+ 
+         // Refused here as well as at load: a verifier built without config
+         // validation must not trust keys fetched over cleartext.
+-        if is_cleartext_url(&provider.issuer) {
++        if !provider.issuer.starts_with("https://") {
+             return Err(OidcError::InsecureIssuer(provider.issuer.clone()));
+         }
+ 

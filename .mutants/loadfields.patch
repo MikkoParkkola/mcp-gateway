@@ -1,0 +1,13 @@
+diff --git a/src/config/features/key_server.rs b/src/config/features/key_server.rs
+index f572a7679..e91f5ade0 100644
+--- a/src/config/features/key_server.rs
++++ b/src/config/features/key_server.rs
+@@ -190,7 +190,7 @@ impl KeyServerConfig {
+                 // The URL is not echoed: an operator-written one may carry a query.
+                 if url
+                     .as_deref()
+-                    .is_some_and(crate::key_server::oidc::is_cleartext_url)
++                    .is_some_and(|_| false)
+                 {
+                     return Err(Error::ConfigValidation(format!(
+                         "key_server.oidc[{idx}].{field} is non-HTTPS and off this machine; \
