@@ -41,7 +41,7 @@ struct Served {
     stdout: Stdout,
     /// `tools/call` rounds the backend has received.
     rounds: Arc<AtomicUsize>,
-    task: JoinHandle<()>,
+    task: JoinHandle<crate::Result<()>>,
     _dir: tempfile::TempDir,
 }
 
@@ -118,9 +118,7 @@ async fn serve(output_capacity: usize) -> Served {
         .with_data_dir(dir.path().to_path_buf());
     let (stdin, input) = tokio::io::duplex(64 * 1024);
     let (output, reader) = tokio::io::duplex(output_capacity);
-    let task = tokio::spawn(async move {
-        drop(gateway.run_stdio_on(input, output, None).await);
-    });
+    let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
     let mut served = Served {
         stdin,
         stdout: BufReader::new(reader).lines(),
@@ -136,6 +134,16 @@ async fn serve(output_capacity: usize) -> Served {
         "the handshake is answered first: {answered}"
     );
     served
+}
+
+/// Wait up to `bound` for `run_stdio_on` to return, and require that it
+/// returned `Ok`: a panic or an error is not a clean shutdown.
+async fn returns_within(task: &mut JoinHandle<crate::Result<()>>, bound: Duration) {
+    timeout(bound, task)
+        .await
+        .unwrap_or_else(|_| panic!("run_stdio_on must return within {bound:?} of EOF"))
+        .expect("the serve task does not panic")
+        .expect("run_stdio_on returns Ok");
 }
 
 async fn send(stdin: &mut DuplexStream, line: &str) {
@@ -254,12 +262,8 @@ async fn a_cancelled_call_is_joined_before_eof_returns() {
     // Let the loop read the cancel before stdin closes.
     let before = frames_within(&mut served.stdout, Duration::from_millis(500)).await;
     drop(served.stdin);
-    let returned = timeout(ARRIVAL, &mut served.task).await;
+    returns_within(&mut served.task, ARRIVAL).await;
     let after = frames_within(&mut served.stdout, Duration::from_millis(500)).await;
-    assert!(
-        returned.is_ok(),
-        "run_stdio_on must return within {ARRIVAL:?} of EOF"
-    );
     let frames = [before, after].concat();
     assert!(answers(&frames, &held).is_empty(), "{frames:?}");
 }
@@ -416,13 +420,9 @@ async fn eof_is_bounded_when_the_client_stops_reading() {
     tokio::time::sleep(Duration::from_secs(1)).await;
     drop(served.stdin);
     let bound = super::super::STDIO_DRAIN_TIMEOUT + Duration::from_secs(10);
-    let returned = timeout(bound, &mut served.task).await;
+    returns_within(&mut served.task, bound).await;
     // Kept open until here: a dropped reader would unblock the writer.
     drop(served.stdout);
-    assert!(
-        returned.is_ok(),
-        "run_stdio_on must return within {bound:?} of EOF"
-    );
 }
 
 /// L9. A keyed call cancelled while its backend call is in flight settles as

@@ -9,20 +9,32 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use serde_json::Value;
+use tokio::sync::mpsc::Permit;
 use tokio::task::{AbortHandle, Id, JoinError, JoinSet};
 use tracing::warn;
 
 use crate::protocol::RequestId;
 
-/// Ids cancelled and not yet joined. A dispatch checks it immediately before
-/// queueing its response, so no frame for the id is queued after the cancel
-/// was processed: `abort` does not stop a task that is already being polled.
+/// Ids cancelled and not yet joined. Needed because `abort` does not stop a
+/// task that is already being polled.
 #[derive(Clone, Default)]
 pub(super) struct Cancelled(Arc<Mutex<HashSet<RequestId>>>);
 
 impl Cancelled {
-    pub(super) fn contains(&self, id: &RequestId) -> bool {
-        self.0.lock().contains(id)
+    /// Queue `frame` on `permit` unless `id` was cancelled. The check and the
+    /// enqueue run under the lock `cancel` records under, so no frame for the
+    /// id is queued after the cancel was processed.
+    pub(super) fn send_unless_cancelled(
+        &self,
+        id: Option<&RequestId>,
+        permit: Permit<'_, Value>,
+        frame: Value,
+    ) {
+        let cancelled = self.0.lock();
+        if !id.is_some_and(|id| cancelled.contains(id)) {
+            permit.send(frame);
+        }
     }
 }
 

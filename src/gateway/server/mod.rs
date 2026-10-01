@@ -2650,13 +2650,13 @@ impl Gateway {
                     if let Some(gate) = gate {
                         drop(gate.acquire().await);
                     }
-                    // Checked last, just before queueing: a cancel processed
-                    // after this check can no longer keep the frame out, and
-                    // the spec lets the client ignore it.
+                    // Room first, then the cancel check and the enqueue under
+                    // one lock: no frame for the id is queued after its cancel
+                    // was processed, however long the queue was full.
                     if let Some(response) = response
-                        && !answers.as_ref().is_some_and(|id| cancelled.contains(id))
+                        && let Ok(permit) = writer.reserve().await
                     {
-                        send_frame(&writer, response).await;
+                        cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                     }
                 }
             };
@@ -2714,8 +2714,9 @@ impl Gateway {
         // is refused rather than left waiting out the bridge's own timeout.
         channel.close();
         // One deadline for the drain and the writer join (MIK-7272.LIFE.1):
-        // a client that stops reading stdout blocks the writer, and EOF must
-        // still return within one `STDIO_DRAIN_TIMEOUT`, not two.
+        // a client that stops reading stdout blocks the writer, and the two
+        // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. The
+        // teardown after the join is not bounded here.
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
         if tokio::time::timeout_at(deadline, async {
             while let Some(joined) = dispatches.join_next().await {
