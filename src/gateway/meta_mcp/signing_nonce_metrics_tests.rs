@@ -58,6 +58,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         agent_declared: None,
         grant_subject: None,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,

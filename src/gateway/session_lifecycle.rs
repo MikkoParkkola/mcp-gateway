@@ -267,10 +267,17 @@ pub fn wire_meta_session_cleanup(
     lifecycle: &Arc<SessionLifecycle>,
     meta: &Arc<crate::gateway::meta_mcp::MetaMcp>,
 ) {
-    let meta = Arc::downgrade(meta);
+    let ended = Arc::downgrade(meta);
     lifecycle.register_session_end("meta-session-state", move |key| {
-        if let Some(meta) = meta.upgrade() {
+        if let Some(meta) = ended.upgrade() {
             meta.forget_session(key);
+        }
+    });
+    // Hints key on the caller key, which never ends; its idle deadline does.
+    let idle = Arc::downgrade(meta);
+    lifecycle.register("meta-caller-hints", move |key| {
+        if let Some(meta) = idle.upgrade() {
+            meta.forget_caller(key);
         }
     });
 }
