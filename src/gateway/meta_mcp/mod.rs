@@ -85,6 +85,7 @@ mod direct_route;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
+mod effects;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
