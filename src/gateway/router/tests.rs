@@ -109,7 +109,9 @@ fn test_subscriptions(
 
 type Fixture = (Arc<AppState>, tempfile::TempDir);
 
-async fn test_router_app_state_with_streaming(streaming_config: StreamingConfig) -> Fixture {
+pub(super) async fn test_router_app_state_with_streaming(
+    streaming_config: StreamingConfig,
+) -> Fixture {
     test_router_app_state_with(streaming_config, crate::config::Config::default()).await
 }
 

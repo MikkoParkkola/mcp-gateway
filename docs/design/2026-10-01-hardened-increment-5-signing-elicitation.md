@@ -31,8 +31,10 @@ through the existing `resolve_key` error. No new check. An operator-set `enabled
 overridden silently, like the other forced controls (`ssrf_protection`, the preset floor), and
 the startup info line names it.
 
-**Row 7.** Every successful `tools/call` result on both routes carries the v2 `_signature`
-(`sign_json_rpc_response_at`).
+**Row 7.** Every successful `tools/call` result on both routes whose nonce was admitted carries
+the v2 `_signature` (`sign_json_rpc_response_at`). An answer given before admission is delivered
+unsigned and leaves the nonce unspent; the cases are listed under *Sign only what was admitted*
+and *Direct route* below.
 - *Nonce source.* `params._meta["io.mcp-gateway/nonce"]` (M1), taken off the request at
   capture, before sanitisation, like the chain nonce. Same validity rule as today's
   `gateway_invoke` nonce (non-empty string, at most 256 bytes; else `-32602 "Invalid signing
@@ -42,10 +44,15 @@ the startup info line names it.
   `check_invocation_policy` (it needs `server`/`tool`, which only `gateway_invoke` has) and
   runs the nonce-store admission and `require_nonce` exactly as for `gateway_invoke`, keyed on
   the same quota principal. `prepared_target` stays `None`, as it is today for these calls.
-- *One nonce, one request.* Admission consumes the nonce. A confirmation follow-up (after an
-  in-band challenge from either destructive gate) is a new request and carries a new nonce; a
-  follow-up resending the first nonce is a replay by construction and is refused `-32001`, as
-  a replayed `gateway_invoke` nonce is today. Clients already send one nonce per request.
+- *One nonce, one request.* Admission consumes the nonce. A confirmation follow-up after the
+  ordinary gate's in-band challenge (which runs after admission) is a new request and carries a
+  new nonce; a follow-up resending the first nonce is a replay by construction and is refused
+  `-32001`, as a replayed `gateway_invoke` nonce is today. The task-augmented gate answers before
+  admission, so after its challenge the first nonce is still unspent and the follow-up may carry
+  it (row 104). Clients already send one nonce per request.
+- *A malformed nonce is refused first.* Its format is checked as soon as it is taken off the
+  request, before either gate, so it is refused `-32602` even where the task-augmented gate would
+  otherwise answer before admission.
 - *Sign only what was admitted.* A response is signed only when its context passed admission.
   The task-augmented gate's `Answer` (`handlers.rs:1472-1514`) exits before admission and is
   delivered unsigned; the ordinary gate (`meta_mcp/mod.rs:2205`) runs inside dispatch, after
@@ -57,6 +64,12 @@ the startup info line names it.
 - *Direct route.* `tools/call` takes the same `_meta` nonce off the params (and refuses a
   malformed one with `-32602`), admits it through `state.meta_mcp` before dispatch, and signs
   the success at both `finish_direct` sites and at the idempotency `CachedResult` exit.
+  Admission runs after the route's own refusals (the direct-route guards, tool policy and the
+  undeclared-key check, `backend_handlers.rs`), so a refused call spends no nonce and its answer,
+  an `isError` result or an error, is unsigned: no backend ran, and a forged refusal can only
+  withhold service, which dropping the response already does. On the meta route the same
+  undeclared-key refusal runs inside dispatch, after admission, so it is signed and spends the
+  nonce.
 - Under `standard`, nothing changes: contexts are still made only for `gateway_invoke`.
 
 **Row 10 (meta route).** Sessions are in memory and posture is restart-only, so it suffices
