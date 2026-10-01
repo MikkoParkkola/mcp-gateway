@@ -36,6 +36,9 @@ pub(crate) struct Caps {
 pub(crate) enum CapHit {
     PerPrincipal(usize),
     Global(usize),
+    /// The caller skipped the challenge on a cached opt-in that is gone or
+    /// past its tail by commit time: it must verify again.
+    Unverified,
 }
 
 /// A `(principal, url)` pair, the unit a verification belongs to.
@@ -72,6 +75,35 @@ impl State {
             }
         }
         index
+    }
+
+    /// Whether the pair holds a usable opt-in: a verification record held
+    /// by a live subscription, or one whose tail has not run out.
+    fn verified_usable(
+        &self,
+        principal: &str,
+        url: &str,
+        now: DateTime<Utc>,
+        tail: TailPolicy,
+    ) -> bool {
+        let Some(record) = self.verified.get(&verified_file(principal, url)) else {
+            return false;
+        };
+        if self.pair_live(principal, url, now) {
+            return true;
+        }
+        let latest = self
+            .subs
+            .values()
+            .filter(|s| s.principal == principal && s.url == url)
+            .filter_map(|s| s.expires_at)
+            .max();
+        let ended = record
+            .last_subscription_ended_at
+            .or(latest)
+            .unwrap_or(record.verified_at);
+        let ttl = chrono::Duration::from_std(tail.ttl).unwrap_or(chrono::Duration::MAX);
+        now - ended < ttl
     }
 
     fn pair_live(&self, principal: &str, url: &str, now: DateTime<Utc>) -> bool {
@@ -180,25 +212,7 @@ impl Store {
         now: DateTime<Utc>,
         tail: TailPolicy,
     ) -> bool {
-        let state = self.state.lock();
-        let Some(record) = state.verified.get(&verified_file(principal, url)) else {
-            return false;
-        };
-        if state.pair_live(principal, url, now) {
-            return true;
-        }
-        let latest = state
-            .subs
-            .values()
-            .filter(|s| s.principal == principal && s.url == url)
-            .filter_map(|s| s.expires_at)
-            .max();
-        let ended = record
-            .last_subscription_ended_at
-            .or(latest)
-            .unwrap_or(record.verified_at);
-        let ttl = chrono::Duration::from_std(tail.ttl).unwrap_or(chrono::Duration::MAX);
-        now - ended < ttl
+        self.state.lock().verified_usable(principal, url, now, tail)
     }
 
     /// Cap check, rotation and commit as one step under the store lock,
@@ -245,6 +259,9 @@ impl Store {
                     return Ok(Err(CapHit::Global(caps.global)));
                 }
             }
+        }
+        if !verified_now && !state.verified_usable(&sub.principal, &sub.url, now, tail) {
+            return Ok(Err(CapHit::Unverified));
         }
         let key = verified_file(&sub.principal, &sub.url);
         let record = match state.verified.get(&key) {

@@ -62,8 +62,9 @@ impl Subscription {
     }
 }
 
-/// The recorded opt-in of one `(principal, url)`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The recorded opt-in of one `(principal, url)`. `Debug` shows the
+/// callback host only: a path or query can carry a capability token.
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Verified {
     pub v: u32,
     pub principal: String,
@@ -71,6 +72,23 @@ pub(crate) struct Verified {
     pub verified_at: DateTime<Utc>,
     /// When the pair's last subscription ended; `None` while one is live.
     pub last_subscription_ended_at: Option<DateTime<Utc>>,
+}
+
+impl std::fmt::Debug for Verified {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let host = url::Url::parse(&self.url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned));
+        f.debug_struct("Verified")
+            .field("principal", &self.principal)
+            .field("host", &host)
+            .field("verified_at", &self.verified_at)
+            .field(
+                "last_subscription_ended_at",
+                &self.last_subscription_ended_at,
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 /// The file name of a `(principal, url)` verification record.

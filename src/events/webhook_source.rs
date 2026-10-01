@@ -6,11 +6,30 @@
 
 use serde_json::{Map, Value, json};
 
+use std::sync::Arc;
+
+use super::EventSource;
 use super::types::{EventDescriptor, SourceKind, Visibility};
 use crate::gateway::WebhookRegistry;
 
+/// The webhook-route source: its catalogue follows the live registry, so a
+/// capability reload changes it.
+pub(crate) struct WebhookSource {
+    pub registry: Arc<parking_lot::RwLock<WebhookRegistry>>,
+}
+
+impl EventSource for WebhookSource {
+    fn kind(&self) -> SourceKind {
+        SourceKind::Webhook
+    }
+
+    fn descriptors(&self) -> Vec<EventDescriptor> {
+        descriptors(&self.registry.read())
+    }
+}
+
 /// The descriptors `registry` currently derives, sorted by name.
-pub(crate) fn descriptors(registry: &WebhookRegistry) -> Vec<EventDescriptor> {
+fn descriptors(registry: &WebhookRegistry) -> Vec<EventDescriptor> {
     let backend = registry.backend().to_owned();
     registry
         .event_routes()

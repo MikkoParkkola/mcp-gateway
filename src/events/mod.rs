@@ -35,7 +35,18 @@ pub(crate) struct EventsHub {
     store: Arc<store::Store>,
     client: client::CallbackClient,
     verify_limit: limiter::HostLimiter,
-    webhooks: RwLock<Option<Arc<parking_lot::RwLock<WebhookRegistry>>>>,
+    sources: RwLock<Vec<Arc<dyn EventSource>>>,
+}
+
+/// One producer of events (design §4). The core knows sources only through
+/// this trait. I1 has the webhook-route catalogue; `authorize`, `matches`
+/// and the lifecycle hooks join as the increments that use them land.
+pub(crate) trait EventSource: Send + Sync {
+    /// What kind of producer this is.
+    #[allow(dead_code, reason = "read by the delivery audit record (I2)")]
+    fn kind(&self) -> types::SourceKind;
+    /// The event types this source offers now.
+    fn descriptors(&self) -> Vec<EventDescriptor>;
 }
 
 /// Distinct callback hosts the verification limiter tracks before it sheds
@@ -66,13 +77,15 @@ impl EventsHub {
                 config.verification_per_host_per_minute,
                 MAX_TRACKED_HOSTS,
             ),
-            webhooks: RwLock::new(None),
+            sources: RwLock::new(Vec::new()),
         }))
     }
 
     /// Attach the webhook registry whose `event:` routes are a source.
     pub(crate) fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {
-        *self.webhooks.write() = Some(registry);
+        self.sources
+            .write()
+            .push(Arc::new(webhook_source::WebhookSource { registry }));
     }
 
     /// Take one verification slot for `host`.
@@ -82,10 +95,12 @@ impl EventsHub {
 
     /// Every descriptor any source offers now, sorted by name.
     fn catalogue(&self) -> Vec<EventDescriptor> {
-        let mut all = Vec::new();
-        if let Some(registry) = self.webhooks.read().as_ref() {
-            all.extend(webhook_source::descriptors(&registry.read()));
-        }
+        let mut all: Vec<EventDescriptor> = self
+            .sources
+            .read()
+            .iter()
+            .flat_map(|source| source.descriptors())
+            .collect();
         all.sort_by(|a, b| a.name.cmp(&b.name));
         all
     }

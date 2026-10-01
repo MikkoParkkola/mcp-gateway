@@ -106,6 +106,9 @@ fn cap_refusal(hit: CapHit) -> RpcError {
         CapHit::PerPrincipal(max) | CapHit::Global(max) => {
             RpcError::exhausted("subscriptions", Some(max))
         }
+        // Only reachable for a fresh opt-in, which the store never refuses
+        // as unverified.
+        CapHit::Unverified => RpcError::internal(),
     }
 }
 
@@ -200,21 +203,7 @@ impl EventsHub {
         }
 
         let tail = super::tail_policy(&self.config);
-        let verified = self.store.is_verified(&principal, url.as_str(), now, tail);
-        if !verified {
-            let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
-            self.client
-                .check_literal(&url)
-                .map_err(RpcError::callback)?;
-            if !self.host_admitted(&host) {
-                return Err(RpcError::exhausted("verifications", None));
-            }
-            self.client
-                .verify(&url, &id, &key)
-                .await
-                .map_err(RpcError::callback)?;
-        }
-
+        let mut verified = self.store.is_verified(&principal, url.as_str(), now, tail);
         let existing = self.store.get(&id).filter(|s| s.live(now));
         let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
             .unwrap_or_else(|_| chrono::Duration::zero());
@@ -238,11 +227,25 @@ impl EventsHub {
             last_delivery_at: None,
             last_error: None,
         };
-        blocking(self, move |store| {
-            store.admit(record, !verified, caps, grace, now, tail)
-        })
-        .await?
-        .map_err(cap_refusal)?;
+        // At most two passes: a cached opt-in can vanish (tail eviction)
+        // between the read above and the commit; the store then refuses
+        // and the callback is challenged before a second commit.
+        loop {
+            if !verified {
+                self.challenge(&url, &id, &key).await?;
+            }
+            let attempt = record.clone();
+            let fresh = !verified;
+            match blocking(self, move |store| {
+                store.admit(attempt, fresh, caps, grace, now, tail)
+            })
+            .await?
+            {
+                Ok(()) => break,
+                Err(CapHit::Unverified) if verified => verified = false,
+                Err(hit) => return Err(cap_refusal(hit)),
+            }
+        }
         let mut answer = json!({
             "id": id,
             "refreshBefore": to_wire_time(expires_at),
@@ -256,6 +259,20 @@ impl EventsHub {
             });
         }
         Ok(answer)
+    }
+
+    /// Challenge the callback once: literal check, per-host limit, then the
+    /// verification POST.
+    async fn challenge(&self, url: &url::Url, id: &str, key: &[u8]) -> Result<(), RpcError> {
+        self.client.check_literal(url).map_err(RpcError::callback)?;
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        if !self.host_admitted(&host) {
+            return Err(RpcError::exhausted("verifications", None));
+        }
+        self.client
+            .verify(url, id, key)
+            .await
+            .map_err(RpcError::callback)
     }
 
     /// `events/unsubscribe`: `{}` whether or not the caller's key existed
