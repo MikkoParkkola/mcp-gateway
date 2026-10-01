@@ -327,7 +327,7 @@ impl BackendRegistry {
             .collect();
         // One global lock order (by address): a backend shared by two
         // registries paired at once cannot have its lock taken in two orders.
-        members.sort_by_key(|b| Arc::as_ptr(b));
+        members.sort_by_key(Arc::as_ptr);
         // Every member's publish lock is held from the check until its stamp
         // lands: a start that publishes first is seen by the check, and one
         // that publishes after finds the stamp and is refused (`publish`).
