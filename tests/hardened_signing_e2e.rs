@@ -17,7 +17,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use signing_gateway::{BACKEND, BackendFixture, HttpGateway, KEY, TOOL};
+use signing_gateway::{BACKEND, BackendFixture, HttpGateway, KEY, TOOL, fixture_config};
 use tokio::io::AsyncWriteExt as _;
 
 /// The outer gateway's stdio backend.
@@ -49,6 +49,7 @@ fn inner_config(directory: &std::path::Path, backend_url: &str) -> std::path::Pa
 }
 
 /// The hardened outer gateway. `enabled` is not set: the posture forces it.
+/// Auth on requires the audit log (UPGRADING item 43).
 fn outer_config(inner: &std::path::Path, inner_home: &std::path::Path) -> Value {
     let command = format!(
         "\"{}\" --config \"{}\" serve --stdio",
@@ -73,7 +74,8 @@ fn outer_config(inner: &std::path::Path, inner_home: &std::path::Path) -> Value 
         }},
         "security": {
             "posture": "hardened",
-            "message_signing": {"shared_secret": KEY, "key_id": "signing-test-current"}
+            "message_signing": {"shared_secret": KEY, "key_id": "signing-test-current"},
+            "transparency_log": {"enabled": true, "path": inner_home.join("audit").join("log.jsonl")}
         }
     })
 }
@@ -282,5 +284,81 @@ async fn malformed_signing_nonce_refused() {
         stack.backend.calls().len(),
         0,
         "a malformed nonce dispatched"
+    );
+}
+
+/// Row 16: `standard` with signing explicitly on keeps today's scope: a
+/// non-invoke meta call and a direct call are delivered unsigned, and
+/// `gateway_invoke` is signed as before.
+#[tokio::test]
+async fn standard_signing_keeps_invoke_only_scope() {
+    let backend = BackendFixture::start(backend_result()).await;
+    let mut config = fixture_config(&backend.url);
+    // Each call below carries a nonce; requiring one would only add refusals.
+    config["security"]["message_signing"]["require_nonce"] = json!(false);
+    let stack = Stack {
+        gateway: HttpGateway::start(config).await,
+        backend,
+        _inner: tempfile::tempdir().expect("unused directory"),
+    };
+
+    let wire = post(&stack, "/mcp", &meta_call(41, Some("standard-meta"))).await;
+    let response = parse(&wire);
+    assert!(response.get("error").is_none(), "{response}");
+    assert!(
+        response["result"].get("_signature").is_none(),
+        "standard signed a non-invoke meta call: {response}"
+    );
+
+    let path = format!("/mcp/{BACKEND}");
+    let request = modern_call(42, TOOL, &json!({}), Some("standard-direct"));
+    let wire = post(&stack, &path, &request).await;
+    let response = parse(&wire);
+    assert_eq!(
+        stack.backend.calls().len(),
+        1,
+        "direct call dispatched: {response}"
+    );
+    assert!(
+        response["result"].get("_signature").is_none(),
+        "standard signed a direct call: {response}"
+    );
+
+    let invoke = modern_call(
+        43,
+        "gateway_invoke",
+        &json!({"server": BACKEND, "tool": TOOL, "arguments": {}, "nonce": "standard-invoke"}),
+        None,
+    );
+    let wire = post(&stack, "/mcp", &invoke).await;
+    assert_signed(&wire, "standard-invoke", "standard gateway_invoke");
+}
+
+const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
+
+/// Row 7: a direct-route idempotent replay is served from the cache (the
+/// backend still saw one call) and signed over the replaying request's nonce.
+#[tokio::test]
+async fn hardened_direct_cached_result_is_signed() {
+    let stack = stack().await;
+    let path = format!("/mcp/{INNER}");
+    let keyed = |id: u64, nonce: &str| {
+        let mut request = direct_call(id, Some(nonce));
+        request["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!("hardened-direct-replay");
+        request
+    };
+    let first = post(&stack, &path, &keyed(51, "cached-first")).await;
+    assert_signed(&first, "cached-first", "the first keyed call");
+    let second = post(&stack, &path, &keyed(52, "cached-second")).await;
+    assert_eq!(
+        stack.backend.calls().len(),
+        1,
+        "the second call must be a replay, or this proves nothing: {second}"
+    );
+    assert_signed(&second, "cached-second", "the replayed call");
+    let id = json!({"kind": "number", "value": "52"});
+    assert!(
+        oracle_accepts(&second, &id, "cached-second").await,
+        "the replay's MAC must verify for its own nonce: {second}"
     );
 }
