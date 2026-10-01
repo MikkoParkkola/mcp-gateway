@@ -38,6 +38,9 @@ async fn startup(invalid_account: bool) -> (std::process::Output, bool) {
             command.env_remove(name);
         }
     }
+    // Windows resolves home through the Known Folder API, not HOME: the
+    // debug build's override isolates the child's default task store too.
+    command.env("MCP_GATEWAY_TEST_HOME_DIR", temp.path());
     let mut child = command.spawn().expect("spawn shipped binary");
     let request = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"stdio-account-test","version":"1"}}});
     let mut stdin = child.stdin.take().unwrap();

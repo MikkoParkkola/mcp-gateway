@@ -28,6 +28,14 @@ pub(super) async fn open(
     meta_mcp: &MetaMcp,
     managed: &[String],
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
+    // A test must never open the operator's real store: it could take a live
+    // gateway's lease or write into its records.
+    #[cfg(test)]
+    assert!(
+        !dir.starts_with(super::expand_home_path("~/.mcp-gateway")),
+        "a test opened the real task store at {}; give it a temp tasks.store_dir",
+        dir.display()
+    );
     crate::gateway::task_service::open_runtime_with_recovery(
         dir,
         config.tasks.max_workers,

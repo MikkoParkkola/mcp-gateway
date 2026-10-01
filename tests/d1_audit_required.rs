@@ -70,6 +70,9 @@ async fn stdio_serve_obeys_audit_required() {
             command.env_remove(name);
         }
     }
+    // Windows resolves home through the Known Folder API, not HOME: the
+    // debug build's override isolates the child's default task store too.
+    command.env("MCP_GATEWAY_TEST_HOME_DIR", dir.path());
     let mut child = command.spawn().expect("spawn shipped binary");
     let _stdin = child.stdin.take();
     let output = tokio::time::timeout(Duration::from_secs(30), child.wait_with_output())
