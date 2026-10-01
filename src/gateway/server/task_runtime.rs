@@ -32,7 +32,7 @@ pub(super) async fn open(
     // gateway's lease or write into its records.
     #[cfg(test)]
     assert!(
-        !dir.starts_with(super::expand_home_path("~/.mcp-gateway")),
+        !is_real_store(dir),
         "a test opened the real task store at {}; give it a temp tasks.store_dir",
         dir.display()
     );
@@ -82,5 +82,24 @@ pub(super) async fn shutdown(
     }
     if let Err(error) = service.shutdown().await {
         warn!(%error, "Task store did not release its lease cleanly");
+    }
+}
+
+/// Whether `dir` lies under the operator's real `~/.mcp-gateway`.
+#[cfg(test)]
+fn is_real_store(dir: &Path) -> bool {
+    dir.starts_with(super::expand_home_path("~/.mcp-gateway"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_real_store;
+
+    #[test]
+    fn the_real_store_is_refused_and_a_temp_store_is_not() {
+        let real = super::super::expand_home_path("~/.mcp-gateway/tasks/stdio");
+        assert!(is_real_store(&real), "{}", real.display());
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(!is_real_store(&temp.path().join("tasks")));
     }
 }

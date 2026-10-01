@@ -16,24 +16,37 @@ use tracing::warn;
 
 use crate::protocol::RequestId;
 
-/// Ids cancelled and not yet joined. Needed because `abort` does not stop a
-/// task that is already being polled.
+/// Dispatches, by task, that were cancelled or have answered, and are not yet
+/// joined. Keyed by task rather than request id because a client may reuse an
+/// id once it has its answer, before the serve loop reaps that dispatch.
+#[derive(Default)]
+struct Marks {
+    /// Needed because `abort` does not stop a task that is already being polled.
+    cancelled: HashSet<Id>,
+    answered: HashSet<Id>,
+}
+
 #[derive(Clone, Default)]
-pub(super) struct Cancelled(Arc<Mutex<HashSet<RequestId>>>);
+pub(super) struct Cancelled(Arc<Mutex<Marks>>);
 
 impl Cancelled {
-    /// Queue `frame` on `permit` unless `id` was cancelled. The check and the
-    /// enqueue run under the lock `cancel` records under, so no frame for the
-    /// id is queued after the cancel was processed.
+    /// Queue `frame` on `permit` unless this dispatch was cancelled, and mark
+    /// it answered. The check and the enqueue run under the lock `cancel`
+    /// records under, so no frame is queued after the cancel was processed.
+    /// Called from inside the dispatch's own task, which is what names it.
     pub(super) fn send_unless_cancelled(
         &self,
         id: Option<&RequestId>,
         permit: Permit<'_, Value>,
         frame: Value,
     ) {
-        let cancelled = self.0.lock();
-        if !id.is_some_and(|id| cancelled.contains(id)) {
+        let mut marks = self.0.lock();
+        let task = tokio::task::try_id();
+        if !task.is_some_and(|task| marks.cancelled.contains(&task)) {
             permit.send(frame);
+        }
+        if let (Some(_), Some(task)) = (id, task) {
+            marks.answered.insert(task);
         }
     }
 }
@@ -55,9 +68,11 @@ impl StdioDispatches {
         self.tasks.is_empty()
     }
 
-    /// Spawn the dispatch answering `id`. A client that reuses an id still in
-    /// flight keeps its first mapping: the second dispatch runs, but cannot be
-    /// cancelled by id. It is not refused, which could break a lenient client.
+    /// Spawn the dispatch answering `id`. An id whose dispatch has answered or
+    /// was cancelled is free to reuse, joined or not. A client that reuses an
+    /// id still in flight keeps its first mapping: the second dispatch runs,
+    /// but cannot be cancelled by id. It is not refused, which could break a
+    /// lenient client.
     pub(super) fn spawn(
         &mut self,
         id: Option<RequestId>,
@@ -66,8 +81,16 @@ impl StdioDispatches {
         let handle = self.tasks.spawn(task);
         let Some(id) = id else { return };
         match self.by_request.entry(id) {
-            Entry::Occupied(entry) => {
-                warn!(id = %entry.key(), "stdio: request id reused while in flight; it cannot be cancelled");
+            Entry::Occupied(mut entry) => {
+                let marks = self.cancelled.0.lock();
+                let (old, _) = entry.get();
+                if marks.answered.contains(old) || marks.cancelled.contains(old) {
+                    drop(marks);
+                    self.by_task.insert(handle.id(), entry.key().clone());
+                    entry.insert((handle.id(), handle));
+                } else {
+                    warn!(id = %entry.key(), "stdio: request id reused while in flight; it cannot be cancelled");
+                }
             }
             Entry::Vacant(entry) => {
                 self.by_task.insert(handle.id(), entry.key().clone());
@@ -76,11 +99,15 @@ impl StdioDispatches {
         }
     }
 
-    /// Record `id` as cancelled, then abort its dispatch. An id that is not in
-    /// flight is ignored (MCP cancellation: MAY ignore).
+    /// Record `id`'s dispatch as cancelled, then abort it. An id that is not in
+    /// flight, answered included, is ignored (MCP cancellation: MAY ignore).
     pub(super) fn cancel(&mut self, id: &RequestId) {
-        if let Some((_, handle)) = self.by_request.get(id) {
-            self.cancelled.0.lock().insert(id.clone());
+        if let Some((task, handle)) = self.by_request.get(id) {
+            let mut marks = self.cancelled.0.lock();
+            if marks.answered.contains(task) {
+                return;
+            }
+            marks.cancelled.insert(*task);
             handle.abort();
         }
     }
@@ -103,8 +130,11 @@ impl StdioDispatches {
             {
                 self.by_request.remove(&request);
             }
-            self.cancelled.0.lock().remove(&request);
         }
+        let mut marks = self.cancelled.0.lock();
+        marks.cancelled.remove(&task);
+        marks.answered.remove(&task);
+        drop(marks);
         Some(joined.map(|_| ()))
     }
 
