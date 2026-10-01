@@ -168,3 +168,52 @@ fn prose_and_plain_values_are_inspected() {
         assert!(!g.response_uninspected(&text_block(text)), "{text}");
     }
 }
+
+/// Review (gap 3): a byte-order mark before JSON does not hide it.
+#[test]
+fn bom_led_json_text_is_read() {
+    let g = guard(false, 1);
+    let result = text_block("\u{feff}{\"customer_id\":\"cust-9\"}");
+    assert_eq!(g.response_tenants(&result), set(&["cust-9"]));
+    assert!(!g.response_uninspected(&result));
+    assert!(g.response_uninspected(&text_block("\u{feff}{\"customer_id\":")));
+}
+
+/// Review (gap 3): a JSON document under a tenant key is also read, and an
+/// unparseable one is unread.
+#[test]
+fn json_under_a_tenant_key_is_read() {
+    let g = guard(false, 1);
+    let keyed = json!({"structuredContent": {"customer_id": "{\"customer_id\":\"cust-7\"}"}});
+    assert!(g.response_tenants(&keyed).contains("cust-7"));
+    assert!(!g.response_uninspected(&keyed));
+    let broken = json!({"structuredContent": {"customer_id": "{"}});
+    assert!(g.response_uninspected(&broken));
+}
+
+/// Review (gap 3): three encoding layers are read; a fourth is unread.
+#[test]
+fn three_encoding_layers_are_read_and_four_are_not() {
+    let g = guard(false, 1);
+    let encode = |layers: usize| {
+        let mut text = r#"{"customer_id":"cust-9"}"#.to_string();
+        for _ in 0..layers {
+            text = serde_json::to_string(&text).unwrap();
+        }
+        text_block(&text)
+    };
+    assert_eq!(g.response_tenants(&encode(3)), set(&["cust-9"]));
+    assert!(!g.response_uninspected(&encode(3)));
+    assert!(g.response_uninspected(&encode(4)));
+}
+
+/// Prose over the parse bound holds no keyed tenant and is not marked; the
+/// request walk does not decode strings (only the response scan does).
+#[test]
+fn oversize_prose_is_not_marked_and_requests_are_not_decoded() {
+    let g = guard(false, 1);
+    let prose = "word ".repeat(300_000);
+    assert!(!g.response_uninspected(&text_block(&prose)));
+    let args = json!({"rows": "{\"customer_id\":\"cust-9\"}"});
+    assert!(g.request_tenants(&args).is_empty());
+}
