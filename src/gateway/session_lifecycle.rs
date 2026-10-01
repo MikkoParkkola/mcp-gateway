@@ -195,8 +195,7 @@ impl SessionLifecycle {
         // The second pass for sessions that ended a grace period ago.
         let due: Vec<String> = {
             let mut pending = self.ended_pending.write();
-            let (due, later): (Vec<_>, Vec<_>) =
-                pending.drain(..).partition(|(_, at)| now > *at);
+            let (due, later): (Vec<_>, Vec<_>) = pending.drain(..).partition(|(_, at)| now > *at);
             *pending = later;
             due.into_iter().map(|(id, _)| id).collect()
         };

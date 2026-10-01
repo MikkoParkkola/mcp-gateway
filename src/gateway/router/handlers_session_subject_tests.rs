@@ -324,19 +324,41 @@ async fn an_owned_delete_reclaims_the_per_session_stores() {
             .record(id, None, "backend", "tool", 10, 1.0);
     }
 
-    let (status, _) = send(&state, request(caller(Some("agent-a"), None), "DELETE", Some(&gone))).await;
+    let (status, _) = send(
+        &state,
+        request(caller(Some("agent-a"), None), "DELETE", Some(&gone)),
+    )
+    .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
     assert_eq!(
-        state.meta_mcp.session_profiles().get_profile_name(&gone, "default"),
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&gone, "default"),
         "default"
     );
-    assert!(state.meta_mcp.cost_tracker().session_snapshot(&gone).is_none());
+    assert!(
+        state
+            .meta_mcp
+            .cost_tracker()
+            .session_snapshot(&gone)
+            .is_none()
+    );
     assert_eq!(
-        state.meta_mcp.session_profiles().get_profile_name(&kept, "default"),
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&kept, "default"),
         "strict"
     );
-    assert!(state.meta_mcp.cost_tracker().session_snapshot(&kept).is_some());
+    assert!(
+        state
+            .meta_mcp
+            .cost_tracker()
+            .session_snapshot(&kept)
+            .is_some()
+    );
 }
 
 /// The idle deadline is not a session end: a legacy session that is only quiet
@@ -351,7 +373,10 @@ async fn a_live_session_keeps_its_stores_through_the_idle_reclaim() {
     let state = Arc::new(state);
 
     let live = mint(&state, caller(Some("agent-a"), None)).await;
-    state.meta_mcp.session_profiles().set_profile(&live, "strict");
+    state
+        .meta_mcp
+        .session_profiles()
+        .set_profile(&live, "strict");
     state
         .meta_mcp
         .cost_tracker()
@@ -361,13 +386,25 @@ async fn a_live_session_keeps_its_stores_through_the_idle_reclaim() {
 
     assert_eq!(lifecycle.reap(1), 1, "the deadline passed and was swept");
 
-    assert!(state.multiplexer.has_session(&live), "the session is still open");
+    assert!(
+        state.multiplexer.has_session(&live),
+        "the session is still open"
+    );
     assert_eq!(
-        state.meta_mcp.session_profiles().get_profile_name(&live, "default"),
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&live, "default"),
         "strict",
         "an idle sweep must not reset a live session's profile"
     );
-    assert!(state.meta_mcp.cost_tracker().session_snapshot(&live).is_some());
+    assert!(
+        state
+            .meta_mcp
+            .cost_tracker()
+            .session_snapshot(&live)
+            .is_some()
+    );
 }
 
 /// A legacy session that only POSTs holds no stream, so it is always "without
@@ -387,7 +424,10 @@ async fn a_session_older_than_the_ttl_that_stays_active_keeps_its_profile() {
     state.multiplexer.spawn_reaper_on(Arc::clone(&lifecycle));
 
     let live = mint(&state, caller(Some("agent-a"), None)).await;
-    state.meta_mcp.session_profiles().set_profile(&live, "strict");
+    state
+        .meta_mcp
+        .session_profiles()
+        .set_profile(&live, "strict");
 
     // Three times the TTL, never quiet for longer than a quarter of it.
     for round in 0..12 {
@@ -398,7 +438,10 @@ async fn a_session_older_than_the_ttl_that_stays_active_keeps_its_profile() {
         );
     }
     assert_eq!(
-        state.meta_mcp.session_profiles().get_profile_name(&live, "default"),
+        state
+            .meta_mcp
+            .session_profiles()
+            .get_profile_name(&live, "default"),
         "strict"
     );
 }

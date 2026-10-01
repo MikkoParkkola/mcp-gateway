@@ -1806,10 +1806,7 @@ impl Gateway {
         }
 
         // The per-session stores `meta_mcp` owns are reclaimed the same way.
-        crate::gateway::session_lifecycle::wire_meta_session_cleanup(
-            &session_lifecycle,
-            &meta_mcp,
-        );
+        crate::gateway::session_lifecycle::wire_meta_session_cleanup(&session_lifecycle, &meta_mcp);
 
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).

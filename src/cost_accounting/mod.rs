@@ -616,14 +616,13 @@ impl CostTracker {
         let Some((_, session)) = self.per_session.remove(session_id) else {
             return;
         };
-        let snapshot = session.snapshot();
-        let micro = (snapshot.total_cost_usd * 1_000_000.0) as u64;
-        for (total, add) in self
-            .sessionless
-            .iter()
-            .zip([snapshot.call_count, snapshot.total_tokens, micro])
-        {
-            total.fetch_add(add, Ordering::Relaxed);
+        let ended = [
+            &session.call_count,
+            &session.total_tokens,
+            &session.total_cost_micro_usd,
+        ];
+        for (total, add) in self.sessionless.iter().zip(ended) {
+            total.fetch_add(add.load(Ordering::Relaxed), Ordering::Relaxed);
         }
     }
 }
