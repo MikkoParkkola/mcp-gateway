@@ -51,7 +51,7 @@ Only `security.posture: hardened` changes; under `standard` the key is accepted 
 | 13 | `listed_private_backend_oauth_policy` | the OAuth client of a listed backend reaches a loopback authorization server, while a metadata or link-local literal in a discovered endpoint, a redirect hop, and a name resolving to fd00:ec2::254 are refused with 0 connections | build the OAuth client `Public` / skip a hop |
 | reload | `reload_stamps_listed_backends_private` | with the list unchanged, a reload-added listed backend is `Private` and a reload-modified unlisted one stays `Public`, on the gateway's registry and on a caller-built one | stamp only at startup |
 | 13 | `listed_private_backend_tool_call_passes_proxy_check` | under hardened, a tool call to a listed loopback backend is served (backend saw it); an unlisted one is refused | keep the generic literal check |
-| 17 | `hardened_refuses_unknown_private_backend` | start refused, naming the unknown name | drop the check |
+| 17 | `hardened_refuses_missing_private_backend` | start refused, naming the unknown name | drop the check |
 | 16 | `standard_ignores_private_backends` | under standard the key is accepted and no backend is stamped | stamp under standard |
 | reload | `reload_refuses_private_backends_change` | changing the list on reload is refused | drop the diff |
 | T14 | `pinned_websocket_connect_times_out_whole` | a listed `ws://` backend whose loopback server accepts TCP and never answers the upgrade, and a listed `wss://` backend whose server never answers the TLS handshake, each fail with "WebSocket connect timed out" within the configured timeout plus slack | drop the timeout |

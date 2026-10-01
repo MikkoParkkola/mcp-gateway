@@ -27,7 +27,7 @@ pub mod policy;
 pub(crate) mod posture;
 /// The `security.posture` value and the multi-user warning `doctor` shows;
 /// the rest of the posture module is crate-private.
-pub use posture::{SecurityPosture, unhardened_multi_user_warning};
+pub use posture::{HardenedConfig, SecurityPosture, unhardened_multi_user_warning};
 pub mod remote_provenance;
 pub mod response_contract;
 pub mod response_inspect;
