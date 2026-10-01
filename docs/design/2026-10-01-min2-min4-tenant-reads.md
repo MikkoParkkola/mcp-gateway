@@ -95,128 +95,172 @@ opt-in, as decision `mik_7116_min_kill_gate` requires. The key lives on the
 serde struct. The unknown-key check (UPGRADING-4.0.md §29, :778) must accept
 it: verify this at implementation.
 
-**History.** `PrincipalWindow` is not reused for reads. Its per-principal
-deque drops the oldest observation at 4,096 (principal_window.rs:109-112), so
-4,096 repeated B reads would evict a live A and let B pass. When full, it
-evicts an arbitrary principal's whole history (:173-180). Either way the guard
-fails open. `TenantGuard` instead gains `reads: ReadHistory`, a
-`DashMap<String, HashMap<String, Instant>>` that maps principal to hashed
-tenant id (`hash_argument`, as on the record) to last delivery. It uses the
-same `window_secs`, and expiry is by time alone. A repeat read of a tenant
-refreshes its entry instead of growing the map, so the size is bounded by
-distinct tenants, not reads. Saturation fails closed:
-- A principal holding more than 4,096 live tenants judges every further read
-  as `Flagged`/`Blocked`.
-- With 100,000 principals tracked, expired entries are swept first. If the map
-  is still full, a new principal's read is `Unattributable` (refused in
-  block). Live history is never evicted.
+### 3.1 The model
 
-**Judge API.** One input type carries everything the policy needs, and both
-production and the corpus call the same two functions:
+The rule has one sentence and one exception class.
+
+- **Rule:** the reads a principal had delivered inside `window_secs` may name
+  at most one tenant. The read being judged counts.
+- **Unknown tenant:** a read whose attribution is `uninspected` contributes a
+  fresh unknown tenant `U`. `U` is distinct from every other entry, including
+  any other `U`. So one rule covers every case: A then opaque, opaque then A,
+  opaque then opaque, and an opaque read whose inspected part names A. A read is
+  single-tenant only when its attribution is complete. An opaque read with no
+  other history passes, but it leaves `U` in the window, so the next read of
+  anything conflicts. This is fail-closed in both orders, with no special case
+  in the judge.
+- **Off switch:** when attribution is unconfigured (`arg_keys` empty,
+  `TenantGuard::attributes` is false, PR:168-170), the judge returns `None`
+  before anything else, legacy task rows included. A deployment without
+  `arg_keys` keeps its behaviour and its record schema.
+
+### 3.2 History (`ReadHistory`)
+
+`PrincipalWindow` is not reused. It drops the oldest observation at 4,096
+(principal_window.rs:109-112) and evicts an arbitrary principal's whole history
+when full (:173-180). Both fail open. `TenantGuard` instead gains `reads:
+ReadHistory`. For each principal (the key is in §3.4) it holds three things:
+
+- `committed: HashMap<TenantHash, Instant>`: the last delivery time of each
+  hashed tenant (`hash_argument`, as on the record). `U` entries use a fresh
+  random id.
+- `pending: HashMap<TicketId, Vec<TenantHash>>`: reservations owned by
+  unfinished reads. A pending tenant counts as live.
+- `overflow_until: Option<Instant>`: set when `committed` would exceed 256
+  entries. The tenant is then not inserted. Instead `overflow_until` becomes
+  `max(overflow_until, now + window)`, and while it is in the future it counts
+  as one extra distinct tenant. Memory per principal is therefore bounded in
+  both modes, and an overflowing principal is flagged or refused, never
+  silently trimmed.
+
+Expiry is by time alone. A committed entry is never removed by anything except
+expiry, so a refused retry of A cannot erase A. Dropping an uncommitted ticket
+removes only that ticket's `pending` entry. The principal map is capped at
+100,000. When it is full, expired principals are swept first. If it is still
+full, a new principal's read is `Unattributable` (refused in block mode). Live
+history is never evicted.
+
+### 3.3 Judge API
 
 ```rust
 pub(crate) struct ReadAttribution { tenants: BTreeSet<String>, uninspected: bool }
 pub(crate) fn assess_read_at(&self, principal: Option<&str>,
-    read: &ReadAttribution, now: Instant) -> (ReadVerdict, ReadTicket)
+    read: &ReadAttribution, now: Instant) -> (ReadVerdict, Option<ReadTicket>)
 // ReadVerdict { None, Flagged { distinct }, Blocked { distinct }, Unattributable }
-// ReadTicket::commit(self, now) records the read; dropping it uncommitted records nothing
+// ReadTicket::commit(self, now): pending -> committed. Drop: removes its own pending entry.
 ```
 
-`assess_read_at` checks, in this order:
-1. Mode `off` returns `None`.
-2. No principal, with any tenant or `uninspected` set, returns `Unattributable`.
-3. `uninspected` is evaluated before the empty-tenant test: an uninspected read
-   by a principal holding a live tenant other than this read's is `Flagged` or
-   `Blocked`, because the unread part may name any tenant (§7.2). An
-   uninspected read with no other tenant held is `None`.
-4. An empty tenant set returns `None`.
-5. The read's tenants plus the principal's live tenants: `distinct > 1` is
-   `Flagged` or `Blocked`, by mode.
+The judge applies these steps in order. Steps 4 and 5 run under the
+principal's map-entry lock, so two concurrent reads see each other's
+reservations, and the second is judged against the first (fail closed):
 
-**Recording after the last refusal point.** `assess_read_at` writes the read's
-tenants into the principal's entry as pending, under the entry lock, so two
-concurrent reads of A and B see each other and the second is judged
-cross-tenant. A pending entry counts as live. `ReadTicket::commit` makes the
-entry durable, and dropping the ticket removes it. This is the
-release-on-`Drop` shape the idempotency reservation uses
-(invoke.rs:1738-1740). A ticket is committed only where the answer can no
-longer be refused (§3 table). So a refused read, whether refused by this
-verdict, the outer response firewall, or a fail-closed audit write, leaves no
-history. A flood of refused B reads therefore cannot lock the principal out of
-A, and observe-mode counts match block-mode refusals.
+1. Mode `off`, or attribution unconfigured: `None`, no ticket.
+2. Empty tenants and not uninspected: `None`, no ticket (nothing tenant-bearing
+   was read).
+3. No principal: `Unattributable`, no ticket.
+4. Distinct is computed over live committed entries, live pending entries,
+   `overflow_until`, and this read's tenants (plus a fresh `U` if
+   `uninspected`). `distinct > 1` gives `Flagged` or `Blocked`, by mode.
+5. Unless the verdict is `Blocked`, this read's entries go into `pending`
+   under a new ticket. A blocked read reserves nothing.
 
-**Where it runs.** There is one helper per writer, `MetaMcp::assess_read(key,
-&notes, request_tenants, delivered) -> (ReadVerdict, ReadTicket,
-Map<String, Value>)`. It computes the attribution fields first, from the
-undelivered value, and only then judges. When a block replaces the result, the
-record still carries the tenants found only in a cached or replayed response
-(audit.rs:193-197). On a block, the refusal is the existing
-`Error::ResponseFirewallRefused`. The assessment runs before the D4 denial
-count and before any `let Some(log)` early return, so `block` also works
-without a transparency log. Every path that delivers backend data is covered:
+### 3.4 Where it runs, and the one commit point per route
 
-| Path | Assess at | Reader key | Commit after |
-|---|---|---|---|
-| HTTP meta `tools/call`, live/cached | `audit_invocation` start (audit.rs:324, before :334/:338) | `caller.caller_key` (handlers.rs:1529) | outer response pass (handlers.rs:1661-1675) returns no refusal |
-| stdio meta `tools/call` | same | `stdio` per process (server/mod.rs:3242, :3787; stdio_nonce.rs:4-10) | record written (no outer pass, server/mod.rs:3425-3434) |
-| #2472 replay, every tool incl. `gateway_execute`/`gateway_run_playbook` | `audit_replay`, before both early returns (audit.rs:539, :546) | as the route above (handlers.rs:1635; server/mod.rs:3410) | as the route above |
-| Direct `tools/call` | `record`, before :133/:141 (direct_audit.rs) | `DirectCall.caller_key` from `identity::caller_key`, fed `cert_identity` (backend_handlers.rs:515, :615) | record written |
-| Meta `resources/read`, `prompts/get` | before returning `forward_for_caller` (resources.rs:394; protocol.rs:281) | as the route (HTTP handlers.rs:1686-1713; stdio stdio_catalogue.rs:62-65) | as the route |
-| Direct non-`tools/call` reads | at the generic forward (backend_handlers.rs:451), `resources/read`/`prompts/get` only | as direct `tools/call` | answer built |
-| Stored task result (`tasks/get`, `tasks/result`) | `refuse_stored_delivery` (task_replay.rs:24; HTTP tasks.rs:265, stdio stdio_tasks.rs:275, meta mod.rs:2276) | the reader in front of the gateway, not the admitting caller: HTTP `identity::caller_key` over `RecoveryCaller` (tasks.rs:188-200), set where tasks.rs:237 has `None`; stdio `stdio` | answer built |
+**Assessment** runs where the delivered value and the reader are both known.
+The writer computes the attribution fields first, from the value before any
+swap, so a blocked cache hit still records the tenants that exist only in its
+response (audit.rs:193-197; direct_audit.rs:148). On `Blocked`, the result
+becomes the existing `Error::ResponseFirewallRefused`. Assessment runs before
+the D4 count and before any `let Some(log)` return, so `block` works without a
+transparency log. The ticket is parked in a request-scoped task-local,
+`ReadTickets`, which uses the same `tokio::task_local!` scope shape as
+`DispatchNotes` (audit.rs:75-78, :147-156).
 
-Several rows need more detail:
-- **Replay facts.** `audit_replay` reuses the first run's outcome and response
-  hash (audit.rs:552-553). A blocked replay replaces those facts with
-  `ReplayAudit::new(Denied, None)`, so the signed record describes the refusal
-  the caller received. The first run's own record keeps its own facts.
-- **Composite replays** used to be unrecorded (audit.rs:546). With
-  attribution on, a non-`None` verdict now writes a record over the arguments,
-  with the tool name as the target.
-- **Resource and prompt reads** have no invocation record today (D2 records
-  `tools/call` only, direct_audit.rs:47). Their attribution reads `uri`/`name`
-  and `arguments` as request tenants. When attribution yields a tenant or
-  `uninspected`, they write one `log_invocation_attributed` record with the
-  method as the tool. A tenantless read writes nothing, keeping the T9/T10
-  schema property.
-- **Tasks.** Settlement (audit.rs:455, worker.rs:394, tasks.rs:357) is not a
-  delivery and is not judged. It now stores the read's attribution: the request
-  tenants are carried from admission instead of the empty set (audit.rs:475),
-  together with the response tenants and `uninspected`. They are stored as
-  hashed ids in a versioned `read_tenants` field on the task row, following
-  `targets`/`targets_recorded` (record.rs:328-346). Judging happens at each
-  delivery, keyed on whoever reads. A row from before the field existed is
-  judged as `uninspected`, which fails closed.
-- **Not judged.** `meta_refusal_audit.rs:89`: nothing was delivered. The
-  task worker's own dispatch (worker.rs:353; context.rs:206) is not judged
-  either: it executes but delivers to nobody. It carries the admitting
-  `caller_key` for its record only, never for read history.
+**Commit** happens at exactly one point per route. That point sits after the
+last code that can still turn the answer into a refusal. Tickets commit only
+if the final answer carries a `result` and no `error`. Otherwise the scope ends
+and every ticket drops. The table below lists each route; the "last refusal
+before it" column names what can still refuse before the commit point.
 
-The reader key is always `identity::caller_key` (identity.rs:350) or the stdio
-constant. The firewall's session or per-backend fallback is never used: under
-stateless transport it is not an identity, and on the direct route it pools
-every anonymous caller (handlers.rs:1295-1302; backend_handlers.rs:59-73).
+| Route | Methods | Assessed at | Single commit point | Last refusal before it |
+|---|---|---|---|---|
+| HTTP `/mcp` | all, matched at handlers.rs:1011 | tool calls: `audit_invocation` (audit.rs:324), `audit_replay` (:530, before :539/:546); other forwards: `forward_for_caller` (caller_forward.rs:123); stored tasks: `refuse_stored_delivery` (task_replay.rs:24) | right after `finalize_response_after_inspection` returns (handlers.rs:1826-1828), beside `complete_delivery` (:1829-1831) | finalization: response firewall, signing failure, fail-closed delivery-attempt audit (response_security.rs:168-276) |
+| stdio | all | as HTTP (stdio_catalogue.rs:62-65, stdio_tasks.rs:275) | right after `finalize_response_for_delivery` returns (server/mod.rs:3050) | same finalization |
+| Direct `/mcp/{backend}` | **every** forwarded method; one funnel, `dispatch_in_scope` (backend_handlers.rs:431-458) | `audited_call` (direct_audit.rs:102-119) on the inner answer, for every method | end of `record`, on the `Ok(())` write branch (direct_audit.rs:193) | fail-closed record write (direct_audit.rs:194-203); signing and response firewall already ran inside (backend_handlers.rs:1121; direct_guards.rs:91-92) |
+
+The direct route is judged generically. `DirectCall::of` (direct_audit.rs:42-73)
+returns a call for every method, not only `tools/call`. It carries
+`caller_key` from `identity::caller_key` (identity.rs:350), fed `cert_identity`
+(backend_handlers.rs:515, :615). It attributes `result` whatever the method,
+so `completion/complete` (backend_handlers.rs:222) and any future method are
+covered without a list. A non-`tools/call` answer writes a record only when
+attribution is non-empty, so the record set does not change for tenantless
+traffic.
+
+**Reader key.** On HTTP the key is `caller_key` (handlers.rs:1529). On stdio
+it is the constant `stdio`: one process serves one client (stdio_nonce.rs:4-10),
+and `caller_key` is `None` there (server/mod.rs:3242, :3787). On the direct
+route it is `DirectCall.caller_key`. For a stored task, the key is the reader
+in front of the gateway: HTTP builds it from `RecoveryCaller`
+(tasks.rs:188-200, set where tasks.rs:237 has `None`), and stdio uses
+`stdio`. The admitting caller is never used. The firewall's session or
+per-backend fallbacks are never used either (handlers.rs:1295-1302;
+backend_handlers.rs:59-73). The task worker's own dispatch (worker.rs:353;
+context.rs:206) delivers to nobody, so it is not assessed.
+
+### 3.5 Records
+
+- **Live and cached tool calls:** the MIN.1 record gains `cross_tenant_read`
+  (`flagged` | `blocked` | `unattributable`), absent on `None`.
+- **#2472 replays, composite tools included:** a record is written whenever
+  attribution is non-empty, whatever the verdict. A single-tenant replay of A
+  therefore leaves evidence before a later flag. On a block, the replayed facts
+  (audit.rs:552-553) give way to `ReplayAudit::new(Denied, None)`.
+- **Stored task deliveries:** `refuse_stored_delivery` writes one attributed
+  invocation record under the reader's identity whenever attribution is
+  non-empty. It honours `FailClosed` like `write_invocation` (audit.rs:434-437),
+  and a failed write withholds the
+  delivery, so the ticket drops.
+- **Resource, prompt and other forwards:** one `log_invocation_attributed`
+  record, with the method as the tool, when attribution is non-empty.
+- **Not recorded:** `meta_refusal_audit.rs:89` (nothing delivered). The task
+  settlement keeps its own record (audit.rs:455). It is not a delivery.
+
+"Entries for both the read and the verdict" is asserted as two records: the A
+read (`tenants=[h(A)]`, no `cross_tenant_read`) and the B read (`[h(B)]`, with
+the field). A flagged read also emits `tracing::warn!` with server, tool and
+distinct count, never tenant ids.
+
+### 3.6 Task attribution persistence
+
+Settlement carries the request tenants from admission instead of the empty set
+(audit.rs:475), together with the response tenants and `uninspected`. They are
+stored as hashed `read_tenants` on the task row, with a version bump next to
+`TARGET_VERSION` (record.rs:35-38). The invariant: every row write that stores
+or replaces a deliverable payload writes the payload's `read_tenants` in the
+same write. That covers completion, a parked `input_required` round, the
+completion of a resumed task, and upstream recovery. The precedent is
+`store_targets.rs:118-196`, which writes `targets` with the record. A row
+without the field, from an older version or an unrecorded path, is judged as
+`uninspected`, that is `U`. It fails closed under §3.1, and only when
+attribution is configured.
 
 **Cached deliveries and replays** are reads. The caller receives the data
-whoever fetched it first. Re-reading the same tenant only refreshes its entry,
-so honest retries are never flagged. A stored success whose live delivery was
-blocked replays as blocked while the window holds. After the window passes it
-is allowed, which is exactly what a fresh read would get then.
+whoever fetched it first. A repeat read of the same tenant only refreshes its
+committed time.
 
 **Tenant ids** are compared as strings across every backend and every
-`arg_keys` key. `cust-1` on two backends is one tenant. Operators whose
-backends reuse local ids must namespace them, or reads of unrelated tenants
-merge and go unflagged. UPGRADING says so (§6).
+`arg_keys` key. Operators whose backends reuse local ids must namespace them;
+UPGRADING says so (§6).
 
-**Audit.** The read is the MIN.1 invocation record. The verdict is one more
-field on that same record, `cross_tenant_read`, with the value `flagged`,
-`blocked` or `unattributable`. It is absent when the verdict is `None`, so a
-deployment without `arg_keys` keeps its schema (the T9/T10 property). Writing
-the verdict on the record that carries the read's `tenants` puts both in the
-signed chain in one line, with no join key to keep. A test then asserts "both"
-as two records: the A read (tenants `[h(A)]`, no `cross_tenant_read`) and the B
-read (tenants `[h(B)]`, `cross_tenant_read` set). A flagged read also emits a
-`tracing::warn!` with server, tool and distinct count, never tenant ids.
+### 3.7 Increment split
+
+If 4.0 needs it smaller, §3.6 can ship as a second increment with no bypass.
+Until it lands, every stored task delivery has no `read_tenants`, so it is
+judged as `U`. The result is fail-closed and over-flagging, never under. The
+rest is one increment, because each part closes a bypass the others depend
+on: the model, the history, the generic direct funnel, the commit points and
+the records.
 
 ## 4. MIN.4: fixture corpus and false-positive measurement
 
@@ -237,10 +281,12 @@ the pinned rate can be read against the mix. The patterns are:
 | `admin_sweep` | legitimate | one response, or a burst, naming 3-20 tenants |
 | `retry_same_tenant` | legitimate | the same A read repeated as cached deliveries |
 | `mixed_workload` | legitimate | many principals interleaved, each single-tenant |
-| `large_single_tenant` | legitimate | A, then an uninspected read, no other tenant held |
+| `large_single_tenant` | legitimate | A, then an uninspected page of A (a known FP under §3.1: the unread part is `U`) |
+| `opaque_only` | legitimate | one uninspected read, no other read in the window |
 | `a_then_b` | cross_tenant | A read, then B read inside the window |
 | `a_then_b_unkeyed` | cross_tenant | B named only in the request, response unkeyed |
 | `a_then_opaque` | cross_tenant | A, then an uninspected read with no request tenant key |
+| `opaque_then_b` | cross_tenant | an uninspected read, then B inside the window |
 
 **Measurement.** This is an ordinary unit test with no network,
 `src/security/firewall/tenant_read_corpus_tests.rs`, wired in as
@@ -253,7 +299,7 @@ count is the principal-session, matching the MIN.KILL "sessions that would
 have been blocked". The test prints and asserts three gates:
 
 - **Gate 1:** zero flags on `single_tenant`, `retry_same_tenant`,
-  `mixed_workload` and `large_single_tenant` sessions.
+  `mixed_workload` and `opaque_only` sessions.
 - **Gate 2:** every `cross_tenant` session is flagged (recall 1.0).
 - **Gate 3:** exact pinned counts per pattern, plus the overall FP rate (flagged
   legitimate sessions over legitimate sessions), following
@@ -288,15 +334,22 @@ for a mutant must go red with that mutant applied.
 | `task_result_judged_on_reader` | task admitted under credential K by subject S1 holding A; subject S2 on K reads B result: judged against S2's history, and against S1's when S1 reads it | key taken from the admitting caller |
 | `task_request_only_tenant_survives_settlement` | task naming B only in request, unkeyed upstream result: a later `tasks/result` after an A read is flagged | settlement passes the empty set (audit.rs:475) |
 | `legacy_task_row_fails_closed` | row without `read_tenants`, after an A read: flagged / refused | missing field read as empty |
-| `uninspected_after_a_fails_closed` | A, then an oversize reply with no tenant key: flagged / refused | empty-set return before the uninspected test |
-| `outer_firewall_refusal_records_no_history` | B refused by the outer response pass, then A read: not flagged | commit before handlers.rs:1661-1675 |
+| `uninspected_is_unknown_tenant_both_orders` | A then opaque; opaque then B; opaque then opaque; one opaque read whose inspected part names held A: each flagged / refused. A lone opaque read: `None` | empty-set return before the `U` step; `U` equal to A; `U` not stored |
+| `finalization_refusal_records_no_history` | B refused at finalization (response firewall, signing failure, fail-closed delivery-attempt audit), then A read: not flagged; stdio and direct-route fail-closed write likewise | commit before handlers.rs:1826-1828 / server/mod.rs:3050 / direct_audit.rs:193 |
+| `refused_retry_keeps_committed_a` | A committed; a repeat A read refused at finalization; then B: still flagged | Drop removing the committed entry |
 | `refused_floods_do_not_evict` | 5,000 refused B reads after A (block), then B: still refused; A still readable | `PrincipalWindow` reuse; recording refused reads |
-| `history_saturation_fails_closed` | principal with 4,097 live tenants: next read flagged; full principal map: new principal `unattributable` | evicting live history |
-| `concurrent_a_and_b_one_flagged` | two parallel reads A and B, no prior history: exactly one flagged | commit-only history (no pending entry) |
+| `observe_overflow_is_bounded` | observe mode, 10,000 distinct tenants for one principal: `committed` length stays 256, `overflow_until` set, every read past the cap flagged; after the window, clean | inserting past the cap; no overflow marker |
+| `principal_map_full_fails_closed` | full principal map with live entries: new principal `unattributable`, no live entry removed | evicting live history |
+| `overlapping_assessment_sees_pending` | read A assessed and held before commit (a barrier between assess and commit), read B assessed, then A commits: B flagged | commit-only history (no pending entry) |
+| `direct_every_method_is_judged` | A via `tools/call`, then B via `completion/complete` on `/mcp/{backend}`: flagged, record written | method allow-list in `DirectCall::of` |
+| `stored_task_delivery_writes_reader_record` | B task result read after A: one record under the reader with `tenants=[h(B)]` and the verdict; under `FailClosed` a failed write withholds it and leaves no history | no delivery-time record |
+| `single_tenant_composite_replay_is_recorded` | composite replay of A, verdict `None`: record with `tenants=[h(A)]` | record only on non-`None` |
+| `no_arg_keys_legacy_row_is_noop` | `arg_keys` empty, legacy task row: no field, no refusal in block mode | legacy-row rule before the attribution check |
+| `principal_not_session_key` | one API key across two `mcp-session-id`s: A then B flagged; two keys sharing one session: not flagged | key taken from session |
 | `single_tenant_never_flagged` | 50 reads of A, none flagged | `>=` for `>` |
 | `window_expiry_clears` | A, then B after `window_secs + 1` via `assess_read_at`: none | window not applied |
 | `cached_replay_is_judged` | idempotent replay of A after a B read: flagged | `cached` notes skipped |
-| `anonymous_read_is_unattributable` | no caller key: `unattributable`; block refuses | session-id fallback |
+| `anonymous_read_is_unattributable` | no caller key, with a session id present: `unattributable`; block refuses | session-id fallback |
 | `stdio_reads_keyed_on_process` | stdio A then B: flagged, not unattributable | stdio key left `None` |
 | `off_mode_writes_no_field` / `no_arg_keys_no_field` | no `cross_tenant_read` field | unconditional write |
 | `refused_call_is_not_a_read` | a gate-refused B call adds nothing: later A read unflagged | judging `Err` results |
@@ -315,8 +368,10 @@ at merge. The row reads:
 "With `tenant_guard.arg_keys` set, a caller that reads data attributed to more
 than one tenant inside `window_secs` is flagged on its invocation record as
 `cross_tenant_read: flagged` (or `unattributable` with no caller identity).
-This covers tool calls, replays, `resources/read`, `prompts/get` and task
-results. Resource and prompt reads that name a tenant now write a record. New
+This covers every delivered backend result: tool calls, replays, resources,
+prompts, completions and task results. A non-tool read that names a tenant now
+writes a record. A response the gateway could not fully read counts as an
+unknown tenant that conflicts with any other tenant. New
 key `tenant_guard.cross_tenant_reads` (`off|observe|block`, default
 `observe`). `block` refuses the read with the response-firewall refusal.
 Tenant ids are compared across all backends: namespace ids that backends
@@ -326,14 +381,15 @@ reuse. Action: none. To silence it, set `off`. Read the flags before choosing
 ## 7. Decisions taken (lead rulings 2026-10-01: security findings are fixed in 4.0; fail closed)
 
 1. **Task paths are judged at delivery, keyed on the reader.** Settlement
-   stores the full read attribution on the task row. Every stored-result
-   delivery is judged against the history of whoever is reading (§3 table).
-   The admitting key keys only the worker's execution record.
-2. **`uninspected` fails closed.** It is an input to the judge, and an
-   uninspected read is refused when the principal holds another tenant (§3,
-   judge step 3). Legacy task rows count as uninspected.
-3. **History is recorded only after the last refusal point**, through
-   `ReadTicket`. Pending entries make concurrent reads fail closed.
+   stores the full read attribution on the task row (§3.6). Every stored-result
+   delivery is judged against, and recorded under, whoever is reading (§3.4,
+   §3.5). The admitting key keys only the worker's execution record.
+2. **An uninspected read is an unknown tenant `U`** that conflicts with any
+   other entry, in both orders (§3.1). Legacy task rows are `U`, but only when
+   attribution is configured.
+3. **History is recorded at one commit point per route**, after finalization
+   (§3.4). Committed and pending entries are kept apart, and a ticket's `Drop`
+   removes only its own reservation.
 4. **The threshold is fixed at 1.** Whether MIK-7627 needs its own knob is a
    MIN.KILL question. The design adds none.
 
@@ -359,3 +415,31 @@ boundary and mixed fixtures (§4). None was refuted.
 **Decisions on the two points the revision raised (merge lane, under the fail-closed ruling):**
 - The read attribution is stored as a versioned field on the existing task row. That adds a field to a durable record, with precedent in `targets` / `targets_recorded`; it is not a new store.
 - `resources/read` and `prompts/get` are reads of tenant data, so they are judged and recorded when attribution is on. This widens the record set beyond `tools/call` on purpose; UPGRADING states it.
+
+### Review dispositions (second round)
+
+All eight findings were confirmed and are fixed:
+1. **Opaque reads hid B.** Confirmed against the earlier judge step 3. Fixed
+   by the `U` model (§3.1).
+2. **A refused retry erased committed A.** Confirmed: one map held both
+   committed and pending entries. Fixed by separating them (§3.2).
+3. **Direct forwards outside the method list.** Confirmed: `completion/complete`
+   is forwarded (backend_handlers.rs:222) through the single funnel
+   (backend_handlers.rs:431-458). Fixed by judging every method (§3.4).
+4. **Commit before finalization.** Confirmed: finalization can still refuse
+   (response_security.rs:176-276), and it runs at handlers.rs:1826-1828 and
+   server/mod.rs:3050. Fixed by one commit point per route (§3.4).
+5. **Unbounded history in observe mode.** Confirmed: flagged reads committed
+   without limit. Fixed by the 256-entry cap and the `overflow_until` marker
+   (§3.2).
+6. **No delivery-time record for task results.** Confirmed. Fixed by a record
+   under the reader, with `FailClosed` honoured (§3.5).
+7. **Unrecorded single-tenant composite replay.** Confirmed. Fixed: a record is
+   written whenever attribution is non-empty (§3.5).
+8. **Legacy rows without `arg_keys`.** Confirmed. Fixed: attribution
+   unconfigured means `None` first (§3.1, judge step 1).
+
+Both improvements were taken: an overlap barrier and two-session key tests
+(§5), and the `read_tenants` write invariant (§3.6). None was refuted.
+
+**Round 2 decisions (merge lane):** the per-principal cap stays a constant (256); a knob waits for a measured need. `large_single_tenant` (A, then an unreadable page of A) is a deliberate false positive of failing closed, measured by the corpus and carried into the post-release MIN.KILL week. The stdio stored-task finalize path is checked at implementation.
