@@ -390,6 +390,9 @@ jobs:
         run: deploy/kubernetes/enterprise-alpha/scripts/kind-rollback-smoke.sh
       - name: Validate helm kind lifecycle script
         run: bash -n scripts/dev/helm-kind-lifecycle.sh
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Helm install, upgrade, and rollback on the real cluster
         env:
           MCP_GATEWAY_KIND_CLUSTER: mcp-gateway-rollback-smoke
