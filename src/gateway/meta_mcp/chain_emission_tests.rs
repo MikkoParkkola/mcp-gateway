@@ -527,3 +527,20 @@ async fn origin_link_covers_the_clamped_scope() {
     let digest = content_digest(result_of(&out)).expect("digest of the delivered result");
     verify_self(chain, &digest, NONCE).expect("link verifies against the delivered bytes");
 }
+
+/// The direct route links in `finish_direct`; it too settles the scope first.
+#[test]
+fn direct_origin_link_covers_the_clamped_scope() {
+    let mut response = JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({"content": [], "cacheScope": "public"}),
+    );
+    response.chain_source = ChainSource::Backend;
+
+    meta(Some(ChainEmit::OnRequest)).finish_direct(&mut response, "tools/call", Some(NONCE));
+
+    assert_eq!(result_of(&response)["cacheScope"], "private");
+    let chain = chain_of(result_of(&response)).expect("chain emitted");
+    let digest = content_digest(result_of(&response)).expect("digest");
+    verify_self(chain, &digest, NONCE).expect("link verifies against the delivered bytes");
+}
