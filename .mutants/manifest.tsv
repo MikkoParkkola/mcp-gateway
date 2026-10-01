@@ -1,0 +1,3 @@
+head_sha	df39282f9ab1f1c77e72d67862a32fe7659b42af
+# b4 rerun: the bound test reaches the last tool by both lifecycle classes; the grace pass fires session-end only.
+b4-last-tool	linux	b4-last-tool.patch	--lib gateway::meta_mcp::session_inflight_tests

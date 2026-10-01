@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/session_end.rs b/src/gateway/meta_mcp/session_end.rs
+index 3dcc9bd2f..2e0447944 100644
+--- a/src/gateway/meta_mcp/session_end.rs
++++ b/src/gateway/meta_mcp/session_end.rs
+@@ -27,9 +27,6 @@ impl MetaMcp {
+         self.session_profiles.remove_session(session_id);
+         self.session_state.remove_session(session_id);
+         self.cost_tracker.remove_session(session_id);
+-        if let Some(tracker) = self.get_transition_tracker() {
+-            tracker.remove_session(session_id);
+-        }
+     }
+ 
+     /// Forget the last tool recorded under a caller key whose idle deadline
