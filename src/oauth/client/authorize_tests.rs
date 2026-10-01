@@ -137,11 +137,12 @@ async fn approve_via(
             .await
             .expect("authorize opens the browser")
             .expect("an authorization URL");
-        let query: HashMap<String, String> = Url::parse(&opened)
+        let mut query: HashMap<String, String> = Url::parse(&opened)
             .unwrap()
             .query_pairs()
             .into_owned()
             .collect();
+        query.insert("__url".to_string(), opened.clone());
         let redirect = Url::parse(&query["redirect_uri"]).unwrap();
         let callback = Url::parse_with_params(
             &format!(
@@ -190,6 +191,11 @@ async fn authorize_redeems_a_code_only_after_the_callback_proves_state_and_issue
 
     assert_eq!(outcome.expect("the flow completes"), "access-a");
     assert_eq!(query["response_type"], "code");
+    assert!(
+        query["__url"].starts_with(&format!("{issuer}/authorize?")),
+        "the browser is sent to the configured authorization endpoint: {}",
+        query["__url"]
+    );
     assert_eq!(query["client_id"], CLIENT_ID);
     assert_eq!(query["code_challenge_method"], "S256");
     assert!(!query["state"].is_empty(), "a CSRF state is sent");
