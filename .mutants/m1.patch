@@ -1,0 +1,13 @@
+diff --git a/src/oauth/callback.rs b/src/oauth/callback.rs
+index 389e58f9f..4481e6a34 100644
+--- a/src/oauth/callback.rs
++++ b/src/oauth/callback.rs
+@@ -124,7 +124,7 @@ fn loopback_literal(host: &str, dual_bind: bool) -> Option<IpAddr> {
+ fn url_host(loopback_ip: Option<IpAddr>) -> String {
+     match loopback_ip {
+         Some(IpAddr::V6(v6)) => format!("[{v6}]"),
+-        Some(IpAddr::V4(v4)) => v4.to_string(),
++        Some(IpAddr::V4(_)) => "localhost".to_string(),
+         None => "localhost".to_string(),
+     }
+ }

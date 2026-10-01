@@ -1,0 +1,5 @@
+head_sha	ccde2cded3621104462e21fb9b779302f9c802c5
+# batch 1 for #2582 on the head above (#2578 callback host)
+M1	linux	m1.patch	--lib -- oauth::callback
+M2	linux	m2.patch	--lib -- oauth::callback
+M3	linux	m3.patch	--lib -- oauth::callback

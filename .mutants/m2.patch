@@ -1,0 +1,13 @@
+diff --git a/src/oauth/callback.rs b/src/oauth/callback.rs
+index 389e58f9f..7f04c9bc3 100644
+--- a/src/oauth/callback.rs
++++ b/src/oauth/callback.rs
+@@ -155,7 +155,7 @@ pub async fn start_callback_server(
+     // Bind the primary address first so we can learn the kernel-assigned
+     // port when `port` is `None`.
+     let primary_addr = SocketAddr::new(
+-        loopback_ip.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)),
++        if false { loopback_ip.unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST)) } else { IpAddr::V4(Ipv4Addr::LOCALHOST) },
+         port.unwrap_or(0),
+     );
+     let primary_listener = TcpListener::bind(primary_addr).await.map_err(|e| {
