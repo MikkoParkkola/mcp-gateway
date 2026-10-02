@@ -426,10 +426,12 @@ async fn a_wide_last_round_is_held_to_the_request_budget() {
 }
 
 /// A backend that asks on its first `tools/call` and answers the retry.
+#[cfg(feature = "firewall")]
 struct AsksThenAnswers {
     calls: parking_lot::Mutex<usize>,
 }
 
+#[cfg(feature = "firewall")]
 #[async_trait::async_trait]
 impl crate::transport::Transport for AsksThenAnswers {
     async fn request(
