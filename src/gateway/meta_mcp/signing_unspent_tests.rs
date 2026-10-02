@@ -124,15 +124,14 @@ async fn dispatch_refuses_a_signed_call_left_unadmitted() {
     let (context, arguments) = captured("gateway_list_servers", json!({}), "never-admitted");
     let mut caller = ctx(&AllowAll);
     caller.signing = Some(&context);
-    let response = meta
-        .handle_tools_call(
-            crate::protocol::RequestId::Number(7),
-            "gateway_list_servers",
-            arguments,
-            None,
-            caller,
-        )
-        .await;
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(7),
+        "gateway_list_servers",
+        arguments,
+        None,
+        caller,
+    ))
+    .await;
     let wire = serde_json::to_value(&response).expect("a response serializes");
     assert_eq!(wire["error"]["code"], -32603, "{wire}");
     assert!(wire.get("result").is_none(), "{wire}");
