@@ -4,7 +4,7 @@
 //! oversize cap on the secrets it carries, and a record with no owner.
 
 use super::{CALLBACK_SECRET_MAX, JourneyError, JourneyRefusal, admitted, within_cap};
-use crate::personal_accounts::journey::tests::{fresh, limits, maximal_record, refused};
+use super::super::tests::{fresh, limits, maximal_record, refused};
 
 /// Mutant: an oversized state or binding reaches the store, or either side of
 /// the cap is off by one.
