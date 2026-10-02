@@ -86,6 +86,17 @@ mod custody {
     }
 
     #[test]
+    fn create_directory_reports_a_name_the_filesystem_rejects() {
+        // `<` is not a valid file-name character: the lookup fails with an
+        // error that is not "not found", so nothing is created.
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            create_directory(&root.path().join("bad<name")),
+            Err(AccountError::StorageUnavailable)
+        );
+    }
+
+    #[test]
     fn private_directory_refuses_an_absent_path_a_file_and_a_shared_directory() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(
