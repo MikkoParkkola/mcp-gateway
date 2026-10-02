@@ -46,7 +46,7 @@ mod caller_proof;
 mod token_exchange;
 
 pub(crate) use account_strategies::{
-    AccountCredential, AccountStrategyRegistry, InstalledAccount, PreparedAccountCredential,
+    AccountCredential, AccountStrategyRegistry, InstalledAccount, Minter, PreparedAccountCredential,
 };
 pub(crate) use caller_proof::{CallerProof, CallerProvenance};
 pub use token_exchange::TokenExchangeStrategy;

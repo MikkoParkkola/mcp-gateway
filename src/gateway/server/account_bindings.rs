@@ -21,7 +21,7 @@ use crate::config::account_bindings::{CompiledDescriptor, compile, compile_descr
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::GatewayKeyPair;
 use crate::identity_propagation::{
-    AccountStrategyRegistry, IdentityPropagation, InstalledAccount, PropagationStrategyKind,
+    AccountStrategyRegistry, InstalledAccount, Minter, PropagationStrategyKind,
 };
 use crate::personal_accounts::{AccountCustody, VaultStrategy};
 use crate::{Error, Result};
@@ -191,7 +191,7 @@ pub(crate) fn install_account_strategies(
                 )),
             });
         };
-        meta_mcp.set_backend_identity_propagation(backend, Arc::clone(&installed.strategy));
+        meta_mcp.set_backend_identity_propagation(backend, installed.minter.strategy());
         tracing::info!(
             backend,
             account = %bound.descriptor_id,
@@ -227,8 +227,7 @@ fn install_descriptor(
     // (which `IdentityPropagation` cannot express), and the MCP backend map
     // needs the trait object. One instance, so one key, one resolver and one
     // store serve both consumers.
-    let mut managed: Option<Arc<VaultStrategy>> = None;
-    let strategy: Arc<dyn IdentityPropagation> = match propagation.strategy {
+    let minter = match propagation.strategy {
         PropagationStrategyKind::Vault => {
             let (Some(custody), Some((descriptor, revision))) = (custody, compiled.account.clone())
             else {
@@ -249,21 +248,20 @@ fn install_descriptor(
                 revision,
                 sole_operator,
             ));
-            managed = Some(Arc::clone(&vault));
-            vault
+            Minter::Managed(vault)
         }
-        PropagationStrategyKind::SignedAssertion => {
-            Arc::new(crate::identity_propagation::SignedAssertionStrategy::new(
+        PropagationStrategyKind::SignedAssertion => Minter::External(Arc::new(
+            crate::identity_propagation::SignedAssertionStrategy::new(
                 Arc::clone(gateway_key_pair),
                 ASSERTION_TTL_SECS,
-            ))
-        }
-        PropagationStrategyKind::TokenExchange => {
-            Arc::new(crate::identity_propagation::TokenExchangeStrategy::new(
+            ),
+        )),
+        PropagationStrategyKind::TokenExchange => Minter::External(Arc::new(
+            crate::identity_propagation::TokenExchangeStrategy::new(
                 Arc::clone(gateway_key_pair),
                 ASSERTION_TTL_SECS,
-            ))
-        }
+            ),
+        )),
         // Mints no credential. Left uninstalled so the bound-backend loop
         // above turns it into the startup refusal it has always been.
         PropagationStrategyKind::Passthrough => return,
@@ -276,8 +274,7 @@ fn install_descriptor(
             required: propagation.required,
             token_exchange_endpoint: propagation.token_exchange_endpoint.clone(),
             token_exchange_scope: propagation.token_exchange_scope.clone(),
-            strategy,
-            managed,
+            minter,
         },
         compiled.mode,
     );
