@@ -4,8 +4,12 @@ Status: DRAFT for review. Ticket: MIK-7787 (ACs MIK-REG.FIX.1, ADD.1, AUTH.1, SA
 
 ## Problem
 
-- `mcp-gateway add <name>` writes what `src/registry/server_registry.rs` says. On 2026-10-02, 45 of
-  its 46 entries did not resolve to a pinned, existing, non-deprecated package (`scripts/dev/check-registry-packages.py`).
+- `mcp-gateway add <name>` writes what `src/registry/server_registry.rs` says. On 2026-10-02, of its 45
+  npm packages 30 were 404 and 7 deprecated; none of the 45 was pinned to a version
+  (`scripts/dev/check-registry-packages.py`: 1 of 46 entries passes, the hosted context7).
+- `add` of a stdio entry writes no `env:`. The child environment is cleared and rebuilt from PATH, HOME,
+  TMPDIR and the backend's own `env:` (`src/transport/stdio.rs`, `configure_child_environment`), so
+  `add tavily` yields a backend without its key while `add` prints `TAVILY_API_KEY set`.
 - A registry entry can say "stdio command" or "HTTP URL", nothing else. Vendor-hosted servers need an
   OAuth login (Notion, Atlassian, Sentry, Supabase, GitLab, Linear, Asana, Cloudflare) or a bearer
   header (GitHub, HubSpot, Stripe). The gateway already does both for a hand-written backend:
@@ -28,6 +32,7 @@ Status: DRAFT for review. Ticket: MIK-7787 (ACs MIK-REG.FIX.1, ADD.1, AUTH.1, SA
 | Turn a server off/on again | `enabled:` on the backend; UI `PATCH` via `BackendUpdate.enabled`; `mcp-gateway remove` |
 | See configured servers | `mcp-gateway list`, `get` |
 | Login for a hosted server | `oauth:` stanza -> existing OAuth client, DCR, token store under `~/.mcp-gateway/oauth/` |
+| Stdio secret | `env:` with `${VAR}`; same expansion and C4 rule as `headers:` |
 | Bearer header | `headers:` with `${VAR}`; an unset `${VAR}` on an enabled backend refuses the config load (C4), a disabled backend keeps it verbatim |
 | Capability needs a login | `auth.required: true` + `auth.key` in the YAML (`src/capability/definition/mod.rs` `AuthConfig`) |
 
@@ -70,7 +75,10 @@ keep sharing it. For a registry entry it fills:
   OAuth path.
 - `Auth::Header` -> `headers: { name: value }`, the `${VAR}` template written verbatim; expansion stays
   in `expand_env_vars`.
-- HTTP entries get `streamable_http: true` (every hosted target in this list speaks Streamable HTTP).
+- Every `required_env` name -> `env: { NAME: "${NAME}" }`, unless `-e NAME=...` supplied a value. This
+  fixes the scrubbed-environment bug above with the existing expansion.
+- HTTP entries: `streamable_http` is `false` only when the URL path ends in `/sse` (Asana), `true`
+  otherwise. `false` means the legacy SSE handshake (`src/transport/http/mod.rs`).
 - `enabled`: `true`, except (a) `Reach::Arbitrary` -> `false`, printed with its reason and the switch
   (`enabled: true` in gateway.yaml, or the UI toggle); (b) a `${VAR}` in `headers` or a `required_env`
   name that is unset in both the process env and `-e` -> `false`, printed with the variable name. Rule
@@ -87,15 +95,20 @@ Explicit `--command`/`--url` keep today's behaviour (enabled, no auth fields).
 - UI: `RegistryEntryJson` gains `auth`, `needs_login`, `default_enabled`, `reach_reason`; the registry
   tab shows them. No new endpoint.
 
-### D4 "No-login entries on by default"
+### D4 "No-login entries on by default" (OPEN QUESTION for the lead/operator)
 
-- Servers: `mcp-gateway init` writes every `default_enabled()` registry entry into the starter config,
+"Stay enabled" describes capabilities (keyless ones are served today). No server is enabled by default
+today, so "on by default" for servers is an interpretation; the proposal below is labelled as such.
+
+- Servers (proposal): `mcp-gateway init` writes every `default_enabled()` registry entry into the starter config,
   enabled. Today that is memory, sequential-thinking, context7 and time (git and filesystem need a path
   argument, so they are not zero-configuration and stay `add`-only). Login-needing entries are not
   copied into the config: the registry is the library, `add` turns one on. Existing configs are not
   touched (no upgrade migration adds backends to a user's file).
 - Capabilities (shared with MIK-7782 / CAP-EXEC): a capability is served only when its requirements are
-  met. For `auth.required: true` the requirement is that `auth.key` resolves at load; CAP-EXEC adds the
+  met. For `auth.required: true` the requirement is that an `env:` `auth.key` resolves through the
+  config's `EnvOverlay` (env_files included) with the existing `SecretRef::parse(..).resolve(..)`
+  (`src/config/secret_ref.rs`), not `std::env`; `keychain:`/file keys are not decided at load (R2); CAP-EXEC adds the
   "binary present" requirement for `cli` capabilities through the same predicate. An unmet capability is
   listed by `mcp-gateway cap list` as `off: needs <X>` and is not exposed to clients. The user turns it
   on by providing the credential. Keyless capabilities stay on. An upgrade sees no change for any
@@ -110,9 +123,10 @@ Explicit `--command`/`--url` keep today's behaviour (enabled, no auth fields).
 Playwright, Chrome DevTools and fetch are `Reach::Arbitrary`. The private-network egress guard
 (`validate_url_not_ssrf`) runs only on REST capability calls; a stdio backend does its own egress, so
 the gateway cannot stop it reaching localhost, the LAN or cloud metadata. Default: off, with that
-reason printed by `add` and shown by `list --available`. The switch is one line either way: the user's
-`enabled: true`, or the operator flipping the entry to `Reach::Bounded`-equivalent default in the
-registry.
+reason printed by `add` and shown by `list --available`. The switches are one line each:
+- per user: `enabled: true` under the backend in gateway.yaml (or the UI toggle);
+- for the product, if the operator rules them on: in `server_registry.rs`, change the entry's
+  `reach: Reach::Arbitrary { reason: ... }` to `reach: Reach::Bounded`.
 
 ### D6 Removals and repoints
 
