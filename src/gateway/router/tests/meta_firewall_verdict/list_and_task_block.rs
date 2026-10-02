@@ -235,11 +235,23 @@ async fn discovery_inspection_reads_the_unescaped_value() {
     }
 }
 
-/// #2351: a task whose result the firewall blocks settles on the refusal, so
-/// `tasks/get` never serves the result.
-#[tokio::test]
-async fn a_blocked_task_result_is_refused_on_tasks_get() {
-    let (state, _handler, _meta, _store) = leaky_list_state().await;
+/// Warm the catalogue, so the read-only annotation classifies the tool as
+/// harmless and a task needs no confirmation. A listing that carries a
+/// credential is refused after the fetch; the warm-up needs only the fetch.
+async fn warm_catalogue(state: &Arc<crate::gateway::router::AppState>) {
+    let warm = json!({
+        "jsonrpc": "2.0", "id": 0, "method": "tools/call",
+        "params": {"name": "gateway_list_tools", "arguments": {"server": "demo"}}
+    });
+    let _ = post(state, "/mcp", &[], &warm).await;
+}
+
+/// Run `tool` as a task and return the first settled `tasks/get` body.
+async fn settled_task(
+    state: &Arc<crate::gateway::router::AppState>,
+    tool: &str,
+    args: Value,
+) -> Value {
     let modern = |id: i64, method: &str, mut params: Value| {
         params["_meta"] = json!({
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -262,26 +274,18 @@ async fn a_blocked_task_result_is_refused_on_tasks_get() {
         ]
     };
     let send = |h: Vec<(&'static str, String)>, body: Value| {
-        let state = Arc::clone(&state);
+        let state = Arc::clone(state);
         async move {
             let h: Vec<(&str, &str)> = h.iter().map(|(k, v)| (*k, v.as_str())).collect();
             post(&state, "/mcp", &h, &body).await.1
         }
     };
-    // Warm the catalogue, so the read-only annotation classifies the tool as
-    // harmless and the task needs no confirmation. The listing itself is
-    // refused (its description carries the credential), after the fetch.
-    let warm = json!({
-        "jsonrpc": "2.0", "id": 0, "method": "tools/call",
-        "params": {"name": "gateway_list_tools", "arguments": {"server": "demo"}}
-    });
-    let _ = post(&state, "/mcp", &[], &warm).await;
     let created = send(
-        headers("tools/call", TOOL.to_string()),
+        headers("tools/call", tool.to_string()),
         modern(
             1,
             "tools/call",
-            json!({"name": TOOL, "arguments": {}, "task": {}}),
+            json!({"name": tool, "arguments": args, "task": {}}),
         ),
     )
     .await;
@@ -301,22 +305,57 @@ async fn a_blocked_task_result_is_refused_on_tasks_get() {
         assert!(got.get("error").is_none(), "tasks/get failed: {got}");
         let status = got.pointer("/result/status").and_then(Value::as_str);
         if matches!(status, Some("completed" | "failed" | "cancelled")) {
-            // Settled on the refusal: every read serves it, never the result.
-            assert_eq!(status, Some("failed"), "{got}");
-            assert_eq!(
-                got.pointer("/result/error/message").and_then(Value::as_str),
-                Some("Response blocked by security firewall"),
-                "{got}"
-            );
-            assert!(
-                !got.to_string().contains(CANARY),
-                "credential leaked: {got}"
-            );
-            break;
+            return got;
         }
         assert!(std::time::Instant::now() < deadline, "task never settled");
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+}
+
+/// #2351: a task whose result the firewall blocks settles on the refusal, so
+/// `tasks/get` never serves the result.
+#[tokio::test]
+async fn a_blocked_task_result_is_refused_on_tasks_get() {
+    let (state, _handler, _meta, _store) = leaky_list_state().await;
+    warm_catalogue(&state).await;
+    let got = settled_task(&state, TOOL, json!({})).await;
+    // Settled on the refusal: every read serves it, never the result.
+    assert_eq!(
+        got.pointer("/result/status").and_then(Value::as_str),
+        Some("failed"),
+        "{got}"
+    );
+    assert_eq!(
+        got.pointer("/result/error/message").and_then(Value::as_str),
+        Some("Response blocked by security firewall"),
+        "{got}"
+    );
+    assert!(
+        !got.to_string().contains(CANARY),
+        "credential leaked: {got}"
+    );
+}
+
+/// MIK-7707.GH2431.2: a discovery call run as a task settles with exactly one
+/// inspection, the canonical one in the Meta-MCP. The marker on its response
+/// makes the settlement pass skip it; were the marker ignored, the result
+/// would be scanned twice.
+#[tokio::test]
+async fn a_task_mode_discovery_settles_with_one_inspection() {
+    let (state, _handler, meta, _store) = listing_state("echo".to_string(), Vec::new()).await;
+    warm_catalogue(&state).await;
+    let before = inspections(&meta);
+    let got = settled_task(&state, "gateway_search_tools", json!({"query": "echo"})).await;
+    assert_eq!(
+        got.pointer("/result/status").and_then(Value::as_str),
+        Some("completed"),
+        "{got}"
+    );
+    assert_eq!(
+        inspections(&meta) - before,
+        1,
+        "one inspection of the discovery result"
+    );
 }
 
 /// MIK-7708: a direct listing the firewall refuses is not a client success, so

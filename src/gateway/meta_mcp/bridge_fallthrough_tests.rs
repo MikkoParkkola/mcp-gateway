@@ -424,3 +424,133 @@ async fn a_wide_last_round_is_held_to_the_request_budget() {
         "a last round past the request budget must not be handed back: {outcome:?}"
     );
 }
+
+/// A backend that asks on its first `tools/call` and answers the retry.
+struct AsksThenAnswers {
+    calls: parking_lot::Mutex<usize>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for AsksThenAnswers {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let first = method == "tools/call" && {
+            let mut calls = self.calls.lock();
+            *calls += 1;
+            *calls == 1
+        };
+        let result = if first {
+            json!({
+                "resultType": "input_required",
+                "inputRequests": {"k1": {"method": "roots/list"}},
+                "requestState": "round-1",
+            })
+        } else {
+            json!({"content": [{"type": "text", "text": "answered"}], "isError": false})
+        };
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            crate::protocol::RequestId::Number(1),
+            result,
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// MIK-7707.GH2431.1: a retry minted for a backend tool that shares a
+/// discovery name takes the direct-backend route, so the Meta-MCP never marks
+/// its response as already inspected and the delivery pass inspects it once.
+/// Were the marker set on that route, the pass would skip it and nothing would
+/// have scanned the result.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() {
+    use crate::gateway::meta_mcp::response_security::{
+        ChainSource, ResponseCorrelation, ResponseDeliveryContext,
+    };
+    use crate::security::firewall::{Firewall, FirewallConfig};
+
+    let (mut m, _calls) = meta_that_always_asks(ROOTS);
+    m.backends
+        .get("asks")
+        .expect("the fixture registers asks")
+        .set_transport_for_test(Arc::new(AsksThenAnswers {
+            calls: parking_lot::Mutex::new(0),
+        }));
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    m.set_firewall(Some(Arc::clone(&firewall)));
+
+    let channel = NoSessionCounted::default();
+    let first = json!({"server": "asks", "tool": "gateway_list_tools", "arguments": {}});
+    let caller = legacy_caller(&channel, &crate::protocol::mrtr::NO_RETRY);
+    let asked = m
+        .invoke_tool(&first, Some("session-1"), &caller)
+        .await
+        .expect("the first call mints a continuation");
+    let resume = crate::protocol::mrtr::RetryFields {
+        request_state: Some(envelope(&asked)),
+        input_responses: Some(json!({"k1": {"roots": []}})),
+        ..Default::default()
+    };
+    let caller = legacy_caller(&channel, &resume);
+    let before = firewall.response_inspection_counts().inspections;
+
+    let response = m
+        .dispatch_below_gate(
+            crate::protocol::RequestId::Number(2),
+            "gateway_list_tools",
+            json!({}),
+            Some("session-1"),
+            &caller,
+            false,
+        )
+        .await;
+    assert!(response.error.is_none(), "{response:?}");
+    assert!(
+        !response.discovery_inspected,
+        "a retry routed to its origin backend is never marked inspected"
+    );
+    let delivered = m
+        .finalize_response_for_delivery(
+            response,
+            &ResponseDeliveryContext {
+                method: "tools/call",
+                targets: &[],
+                correlation: ResponseCorrelation {
+                    session_id: "session-1",
+                    caller: "known-caller",
+                    external_server: "gateway",
+                    external_tool: "gateway_list_tools",
+                },
+                mutation: crate::security::response_policy::ResponseMutationPolicy::Redact,
+                signing: None,
+                chain_source: ChainSource::NotEligible,
+                chain_nonce: None,
+            },
+        )
+        .await;
+    assert!(delivered.error.is_none(), "{delivered:?}");
+    assert_eq!(
+        firewall.response_inspection_counts().inspections - before,
+        1,
+        "the delivery pass inspects the retry's result exactly once"
+    );
+}
