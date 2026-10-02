@@ -148,15 +148,18 @@ pub(super) async fn key_server_credential(
     token: &str,
 ) -> Option<(AuthenticatedClient, KeyServerSubject, &'static str)> {
     let ks = state.key_server.as_ref()?;
-    let (mut client, identity, exp, via) =
+    let (mut client, identity, exp, jti, issued_at, via) =
         if let Some((client, temporary)) = ks.validate_token(token).await {
-            let exp = Some(temporary.exp);
-            (client, temporary.identity.clone(), exp, "temporary token")
+            let (exp, jti) = (Some(temporary.exp), Some(temporary.jti.clone()));
+            let identity = temporary.identity.clone();
+            (client, identity, exp, jti, None, "temporary token")
         } else if ks.config.delegated_bearer && super::looks_like_jwt(token) {
             // Gated on config and a cheap JWT-shape check so JWKS verification
             // never runs on an opaque or static token.
             let (client, identity) = ks.verify_bearer_identity(token).await?;
-            (client, identity, jwt_exp(token), "delegated OIDC bearer")
+            let exp = bearer_deadline(token, ks.config.max_oidc_token_age_secs);
+            let iat = jwt_claim(token, "iat");
+            (client, identity, exp, None, iat, "delegated OIDC bearer")
         } else {
             return None;
         };
@@ -166,42 +169,72 @@ pub(super) async fn key_server_credential(
     client.admin = config.control_plane.role_mapping.grants_admin(&identity);
     let expires_at = exp
         .and_then(|s| i64::try_from(s).ok())
-        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
-        .map(CredentialExpiry);
+        .and_then(|s| chrono::DateTime::from_timestamp(s, 0));
     Some((
         client,
         KeyServerSubject {
+            facts: CredentialFacts {
+                expires_at,
+                jti,
+                issued_at,
+                provider_sha256: provider_fingerprint(ks, &identity.issuer),
+            },
             identity,
-            expires_at,
         },
         via,
     ))
 }
 
-/// When the credential a request presented stops being valid, where the
-/// credential says: a key-server token's `exp` or a delegated bearer's. MCP
-/// Events caps a subscription made with it at this instant (MIK-7630).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CredentialExpiry(pub chrono::DateTime<chrono::Utc>);
+/// What MCP Events binds a subscription to for a key-server credential
+/// (MIK-7630, MIK-7769): when the credential stops being valid, and a
+/// temporary token's `jti`, which every delivery attempt looks up. Never the
+/// token itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CredentialFacts {
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub jti: Option<String>,
+    /// A delegated bearer's `iat`, re-checked against the running max age.
+    pub issued_at: Option<u64>,
+    /// The verifying provider's configuration digest: a delivery re-check
+    /// refuses the binding once a restart changes what that provider accepts.
+    pub provider_sha256: Option<String>,
+}
 
-/// The verified subject behind a key-server credential, and its expiry.
+/// SHA-256 of the configuration of the provider that verifies `issuer`.
+pub(crate) fn provider_fingerprint(
+    ks: &crate::key_server::KeyServer,
+    issuer: &str,
+) -> Option<String> {
+    let provider = ks.config.oidc.iter().find(|p| p.issuer == issuer)?;
+    let bytes = serde_json::to_vec(provider).ok()?;
+    Some(crate::hashing::sha256_hex(&bytes))
+}
+
+/// The verified subject behind a key-server credential, and its facts.
 pub(super) struct KeyServerSubject {
     identity: crate::key_server::oidc::VerifiedIdentity,
-    expires_at: Option<CredentialExpiry>,
+    facts: CredentialFacts,
 }
 
 impl KeyServerSubject {
-    /// Bind the subject, and its expiry when known, into `extensions`.
+    /// Bind the subject and its facts into `extensions`.
     pub(super) fn insert_into(self, extensions: &mut axum::http::Extensions) {
         extensions.insert(self.identity);
-        if let Some(expires_at) = self.expires_at {
-            extensions.insert(expires_at);
-        }
+        extensions.insert(self.facts);
     }
 }
 
-/// The `exp` claim of a JWT the key server has already verified.
-fn jwt_exp(token: &str) -> Option<u64> {
+/// When a delegated bearer the key server has already verified stops being
+/// accepted: its `exp`, or `iat + max_age` when that is sooner (the
+/// verifier's own replay bound, `TokenAgeCap::MaxIat`).
+fn bearer_deadline(token: &str, max_age: u64) -> Option<u64> {
+    let exp = jwt_claim(token, "exp")?;
+    let aged = jwt_claim(token, "iat").map(|iat| iat.saturating_add(max_age));
+    Some(aged.map_or(exp, |aged| exp.min(aged)))
+}
+
+/// A numeric claim of a JWT the key server has already verified.
+fn jwt_claim(token: &str, claim: &str) -> Option<u64> {
     use base64::Engine as _;
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -209,7 +242,7 @@ fn jwt_exp(token: &str) -> Option<u64> {
         .ok()?;
     serde_json::from_slice::<serde_json::Value>(&bytes)
         .ok()?
-        .get("exp")?
+        .get(claim)?
         .as_u64()
 }
 
@@ -219,19 +252,23 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn jwt_exp_reads_the_verified_tokens_expiry() {
+    fn bearer_deadline_is_exp_or_the_age_bound_whichever_is_first() {
         use base64::Engine as _;
         let encode = |v: &serde_json::Value| {
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
         };
         let header = encode(&serde_json::json!({"alg": "RS256"}));
         let token = |claims| format!("{header}.{}.sig", encode(&claims));
+        let late = token(serde_json::json!({"exp": 2_000, "iat": 1_000}));
+        assert_eq!(bearer_deadline(&late, 300), Some(1_300), "the age bound");
+        assert_eq!(bearer_deadline(&late, 5_000), Some(2_000), "exp");
+        let no_iat = token(serde_json::json!({"exp": 2_000}));
+        assert_eq!(bearer_deadline(&no_iat, 300), Some(2_000));
         assert_eq!(
-            jwt_exp(&token(serde_json::json!({"exp": 1_900_000_000_u64}))),
-            Some(1_900_000_000)
+            bearer_deadline(&token(serde_json::json!({"sub": "a"})), 300),
+            None
         );
-        assert_eq!(jwt_exp(&token(serde_json::json!({"sub": "a"}))), None);
-        assert_eq!(jwt_exp("not-a-jwt"), None);
+        assert_eq!(bearer_deadline("not-a-jwt", 300), None);
     }
 
     fn bearer(token: &str) -> Option<HeldCredential> {
