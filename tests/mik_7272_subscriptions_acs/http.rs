@@ -224,11 +224,57 @@ async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
     let ack = next_data(&mut stream)
         .await
         .expect("the ack opens the stream");
+    // MIK-7766: a notification, never a response. A JSON-RPC response to the
+    // listen request is how a server ENDS a subscription, so a client reading
+    // one first sees its stream close as it opens.
     assert_eq!(
-        ack["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"], ack["id"],
+        ack["method"], "notifications/subscriptions/acknowledged",
+        "the first message is the acknowledgement notification: {ack}"
+    );
+    assert!(
+        ack.get("id").is_none() && ack.get("result").is_none(),
+        "a response on the stream signals the end of the subscription: {ack}"
+    );
+    assert_eq!(
+        ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"],
+        json!(1),
         "the subscription id is the request's own id, so the client can \
          correlate every notification with the subscription that asked for \
          it: {ack}"
+    );
+    assert_eq!(
+        ack["params"]["notifications"],
+        json!({ "toolsListChanged": true }),
+        "the acknowledgement names the filter the server honours: {ack}"
+    );
+}
+
+/// MIK-7766: the honoured filter echoes what was asked for and the server
+/// serves, and drops what it does not recognise.
+#[tokio::test]
+async fn ac_sub_1_the_acknowledgement_names_the_honoured_filter() {
+    let (state, _store_dir) = state(true).await;
+    let (status, _, mut stream) = open_listen(
+        &state,
+        json!({ "notifications": {
+            "promptsListChanged": true,
+            "resourcesListChanged": false,
+            "resourceSubscriptions": ["file:///project/config.json"],
+            "someFutureKind": true,
+        } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let ack = next_data(&mut stream)
+        .await
+        .expect("the ack opens the stream");
+    assert_eq!(
+        ack["params"]["notifications"],
+        json!({
+            "promptsListChanged": true,
+            "resourceSubscriptions": ["file:///project/config.json"],
+        }),
+        "{ack}"
     );
 }
 
@@ -245,7 +291,7 @@ async fn ac_sub_1_a_notification_reaches_a_listener_tagged_with_its_subscription
     let ack = next_data(&mut stream)
         .await
         .expect("the ack opens the stream");
-    let subscription = ack["result"]["_meta"]["io.modelcontextprotocol/subscriptionId"].clone();
+    let subscription = ack["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"].clone();
 
     state.announce_tools_changed("any").await;
 
