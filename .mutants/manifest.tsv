@@ -1,0 +1,6 @@
+head_sha	ab653c74144b1d455061ba3a380065290d3091c3
+m1	linux	m1.patch	--test mik_7272_subscriptions_acs
+m2	linux	m2.patch	--lib -- a_nested_task_filter_is_narrowed_like_the_root_one
+m3	linux	m3.patch	--lib -- caller_b_task_subscription_never_reaches_backend
+m4	linux	m4.patch	--test mik_7272_task_1_acs -- ac_task_1_13_an_undeclared_nested_task_filter_is_refused
+m5	linux	m5.patch	--test mik_7272_task_1_acs -- ac_task_1_13_an_undeclared_nested_task_filter_is_refused

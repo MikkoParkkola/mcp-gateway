@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index a807229a3..1075bb112 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -82,7 +82,7 @@ fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
+         "tools/call" => params.is_some_and(|p| p.get("task").is_some()),
+         "tasks/get" | "tasks/update" | "tasks/cancel" => true,
+         "subscriptions/listen" => {
+-            params.is_some_and(crate::protocol::subscriptions::names_task_ids)
++            params.is_some_and(|p| p.get("taskIds").is_some())
+         }
+         _ => false,
+     }

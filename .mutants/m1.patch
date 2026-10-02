@@ -1,0 +1,13 @@
+diff --git a/src/protocol/subscriptions.rs b/src/protocol/subscriptions.rs
+index 318a5a0d4..09380b445 100644
+--- a/src/protocol/subscriptions.rs
++++ b/src/protocol/subscriptions.rs
+@@ -109,7 +109,7 @@ pub fn named_task_ids(params: &Value) -> Vec<String> {
+     let mut ids: Vec<String> = Vec::new();
+     for list in [
+         params.get(key),
+-        params.get("notifications").and_then(|f| f.get(key)),
++        None,
+     ] {
+         for id in list.and_then(Value::as_array).into_iter().flatten() {
+             if let Some(id) = id.as_str()
