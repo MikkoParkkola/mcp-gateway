@@ -351,13 +351,18 @@ impl MetaMcp {
         }
         let facts =
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of));
-        // #2472: a replay of this execution is recorded with these facts.
-        if let Some(lease) = caller.execution {
-            lease.note_audit(facts.clone());
+        let written = self
+            .write_invocation(log, args, session_id, caller, trace_id, &facts, attribution)
+            .await;
+        // #2472: a replay of this execution is recorded with these facts, but
+        // only once they describe what was delivered (#2521): a failed write
+        // withholds the value, so a replay must not record it as delivered.
+        if written.is_ok()
+            && let Some(lease) = caller.execution
+        {
+            lease.note_audit(facts);
         }
-        self.write_invocation(log, args, session_id, caller, trace_id, &facts, attribution)
-            .await
-            .and(result)
+        written.and(result)
     }
 
     /// Write one meta invocation record with `facts` (outcome and response

@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::warn;
 
-use super::rotation::{EV_EXPIRED, EV_HWM_MISSING, EV_OPENED, EV_SEALED, HWM_MISSING_AT};
+use super::rotation::{
+    EV_EXPIRED, EV_HWM_MISSING, EV_OPENED, EV_SEALED, EV_TORN, HWM_MISSING_AT, TORN_COMMITTED,
+};
 use super::segments::{self, HighWater};
 use super::{
     MAX_AUDIT_READ_BYTES, TransparencyLogConfig, bounded_read_to_string, recompute_entry_hash,
@@ -325,6 +327,10 @@ struct Stream<'a> {
     genesis_open: bool,
     /// Earliest counter at which a restart found `.hwm` missing (#2294).
     hwm_missing: Option<u64>,
+    /// `.hwm`'s counter, and the entry hash of the record walked there
+    /// (MIK-7712): the mark names a record, not only a count.
+    mark_counter: Option<u64>,
+    at_mark: Option<String>,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -355,6 +361,8 @@ impl<'a> Stream<'a> {
             opened_oldest: false,
             genesis_open: false,
             hwm_missing: None,
+            mark_counter: None,
+            at_mark: None,
         }
     }
 
@@ -364,6 +372,7 @@ impl<'a> Stream<'a> {
         hw: Option<&HighWater>,
         mode: VerifyMode,
     ) -> io::Result<VerifyResult> {
+        self.mark_counter = hw.map(|h| h.counter);
         let verdict = match self.stream(files)? {
             Ok(()) => self.finish(files, hw, mode),
             failed => failed,
@@ -425,6 +434,11 @@ impl<'a> Stream<'a> {
                             Some(field_u64(&entry, "next_segment_seq").unwrap_or(expected + 1));
                     }
                     Some(EV_HWM_MISSING) => self.note_hwm_missing(counter),
+                    Some(EV_TORN)
+                        if entry.get(TORN_COMMITTED).and_then(Value::as_bool) == Some(true) =>
+                    {
+                        self.note_hwm_missing(counter);
+                    }
                     Some(EV_OPENED) => {
                         if let Some(at) = field_u64(&entry, HWM_MISSING_AT) {
                             self.note_hwm_missing(at);
@@ -660,6 +674,9 @@ impl Stream<'_> {
         {
             return Ok(Err((Some(counter), format!("entry {counter}: {msg}"))));
         }
+        if self.mark_counter == Some(counter) {
+            self.at_mark = Some(stored.to_string());
+        }
         self.prev = Some((counter, stored.to_string()));
         self.result.entries_checked += 1;
         Ok(Ok(()))
@@ -727,6 +744,13 @@ impl Stream<'_> {
                 last + 1,
                 h.counter
             )),
+            Some(h) if self.at_mark.as_ref().is_some_and(|at| *at != h.entry_hash) => {
+                Some(format!(
+                    "high-water mark hash mismatch at counter {}: the record there is not \
+                     the one the mark recorded",
+                    h.counter
+                ))
+            }
             _ => None,
         };
         match (gap, mode) {

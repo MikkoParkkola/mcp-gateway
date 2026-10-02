@@ -129,18 +129,20 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
-| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record. Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
+| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record, unless it repeats the last one written for that task, caller and target within 10 minutes (item 117). Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 | 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
 | 108 | A `cacheScope` the gateway delivers is always `private`: a backend's `public` (or a malformed value) is rewritten on every route, and `CacheScope::Public` can no longer be built | A cache in front of the gateway that relied on a backend's `public` no longer shares across callers; that sharing was never safe. Rust users of the library: `CacheScope::Public` now holds `std::convert::Infallible` and `CacheScope::for_list` is removed; use `CacheScope::Private` |
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
-| 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: text over 1 MiB, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
+| 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: JSON text over 1 MiB, JSON-shaped text that fails to parse or nests too deep, encoding nested past three layers, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 | 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
 | 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result whose nonce was admitted, on `/mcp` and `/mcp/{backend}`, is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]` (answers given before admission are unsigned); a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 | 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
 | 115 | A legacy session now expires after `streaming.session_ttl` of inactivity, not at that age; when it ends (an owned `DELETE /mcp` or the reaper), its routing profile, workflow state, cost bucket and other per-session state are reclaimed, and its cost stays in the aggregate | None. A client that kept a session open across the 30-minute mark keeps it, and its profile, while it stays active |
 | 116 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
+| 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp, writes no new `identity_grant_decision` record for 10 minutes; a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
+| 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1559,9 +1561,10 @@ agent's credentials, not only full host control) can delete every segment and th
 together. `audit verify` on the emptied path reports that nothing exists to read; once the
 gateway restarts and starts a fresh log, verify passes on it, and nothing in the directory
 shows an earlier log existed. A log stored only in that directory cannot prove it existed.
-Forward audit records off-host (for example through `control_plane.export` to a SIEM where the
-gateway account cannot delete or alter records already landed). An off-host anchor is not built
-in 4.0.
+Forward audit records off-host: `control_plane.export` writes a local NDJSON file, and the
+protection holds only once an agent running as another account ships that file to a store (a
+SIEM, for example) where the gateway account cannot delete or alter records already landed. An
+off-host anchor is not built in 4.0.
 
 A log written before this release is read as segment 0 and verifies unchanged. If it is over
 256 MiB, verify still refuses it; archive it before upgrading.
@@ -2617,7 +2620,8 @@ connects only to those checked addresses, as capability calls and `cap import` o
 by URL already do:
 
 - A base URL whose host resolves to a blocked address fails with
-  `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to private/reserved address <ip>`.
+  `SSRF check failed for base URL: SSRF blocked: '<host>' resolves to a private/reserved address`.
+  The address it resolved to is not named, so the error answers no internal DNS.
 - A redirect to such a name is not followed.
 - Public names are unaffected. Environment proxies stay ignored (item 77).
 
@@ -3188,9 +3192,11 @@ The `attribution` field says how far that list reaches:
 - absent: the response was attributed as the backend returned it, before the gates;
 - `cached_delivery`: the value was served past the gates, from a cache or an idempotent replay,
   so it is attributed from what was delivered, and carries no `data_classes`;
-- `uninspected`: some of the response was not read for tenants, because a `content[].text` block
-  was over the 1 MiB parse bound or the reply was refused for its signature chain before it was
-  read. `tenants` still lists what was read. The record carries this even when `tenants` is empty;
+- `uninspected`: some of the response was not read for tenants. Any string in the response that
+  opens like JSON (`{` or `[`) is parsed; it is unread when it is over the 1 MiB parse bound or
+  fails to parse, including nesting past the parser's depth limit and bracket-led prose. A
+  double-encoded JSON string is decoded and read, up to three layers; deeper encoding is unread.
+  A reply refused for its signature chain is also unread. `tenants` still lists what was read. The record carries this even when `tenants` is empty;
 - `cached_delivery_uninspected`: both.
 
 **Action:** none unless you consume these records. Under `uninspected`, treat `tenants` as a
@@ -3352,6 +3358,36 @@ issuer check only logged a warning; it now refuses.
   fetch follows no redirect and never uses a proxy.
 
 **Action:** use `https://` for every `key_server.oidc` URL, or a loopback host for local testing.
+
+## 117. An unchanged grant decision on a polled finished task is written once per window
+
+**Startup:** no notice, the audit log holds fewer `identity_grant_decision` records, only for repeated reads of a finished task
+
+A read of a finished task (`tasks/get`, or a repeat of a task-augmented call) re-checks the
+grants of the calls that produced it (item 105). Each read used to write a decision record, so a
+client polling once a second wrote about 86,400 identical records a day for one task.
+
+- A re-check writes no record when the last record written for the same task, caller and
+  target is identical in every field but its timestamp and is less than 10 minutes old.
+- Any change is written at once: a revoked grant, another reason, another grant id.
+- An unchanged decision is written again once 10 minutes have passed, so polling stays visible.
+- Decisions made while dispatching a call are never suppressed.
+
+**Action:** a SIEM rule that counted one decision record per poll should count decision changes.
+
+## 118. The audit log keeps a cut or interrupted high-water finding
+
+**Startup:** no notice, a restart and Live verify report a new `audit_segment_hwm_missing` finding where a tail was lost below `.hwm`
+
+- A restart that finds the newest surviving record below the signed `.hwm` writes
+  `audit_segment_hwm_missing`, whether the active file was torn, cut at a line, emptied or
+  deleted. The replacement open record carries the finding too, so a crash before the marker
+  cannot lose it.
+- A torn-tail repair record (`audit_segment_torn_tail_dropped`) whose dropped line `.hwm` had
+  already counted carries `committed: true` and is a finding in its own right.
+- Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded.
+
+**Action:** none for a healthy log. Investigate a new finding as tail loss or an edit.
 
 ## Upgrading from 3.5.x: a walkthrough
 

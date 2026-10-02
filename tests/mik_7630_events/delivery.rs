@@ -48,11 +48,12 @@ pub async fn start(root: &Path, receiver: &Receiver, events: Value) -> Gateway {
 }
 
 pub fn params(url: &str, secret: &str, arguments: Value) -> Value {
-    json!({
+    let mut params = json!({
         "name": EVENT,
-        "arguments": arguments,
         "delivery": {"mode": "webhook", "url": url, "secret": secret},
-    })
+    });
+    params["arguments"] = arguments;
+    params
 }
 
 /// Subscribe and return the subscription id (panics on an error answer).
