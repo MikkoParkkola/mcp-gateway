@@ -97,3 +97,88 @@ pub(crate) fn sse_message(frame: &OutboundFrame) -> Option<String> {
     frame.written();
     Some(format!("event: message\ndata: {data}\n\n"))
 }
+
+/// The judge of the GET session streams (H7): installed on the multiplexer
+/// once the router is built, so every fan-out judges each session's copy for
+/// that session's caller at enqueue.
+pub(crate) struct SessionJudge {
+    guard: Arc<Guard>,
+    audit: Arc<RejectionAudit>,
+    log: Option<Arc<TransparencyLogger>>,
+}
+
+impl std::fmt::Debug for SessionJudge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionJudge").finish_non_exhaustive()
+    }
+}
+
+/// One session-stream item's judgement: the reservation the stream commits
+/// when it writes the item, and the evidence it records then. A clone is a
+/// copy of the same item.
+#[derive(Debug, Clone)]
+pub(crate) struct StreamMark(OutboundFrame);
+
+impl StreamMark {
+    /// The stream is writing the item now: record the judgement, then
+    /// commit. A record that fails under `FailClosed` withholds the item.
+    pub(crate) async fn written(&self, judge: Option<&SessionJudge>) -> bool {
+        let log = judge.and_then(|j| j.log.as_ref());
+        if !super::audit::record(&self.0, log).await {
+            return false;
+        }
+        self.0.written();
+        true
+    }
+}
+
+impl SessionJudge {
+    /// A judge over `guard`'s tenant guard and read history, or `None` when
+    /// it judges nothing (the default config).
+    pub(crate) fn new(
+        guard: Option<Arc<Guard>>,
+        audit: Arc<RejectionAudit>,
+        log: Option<Arc<TransparencyLogger>>,
+    ) -> Option<Self> {
+        let guard = guard.filter(|g| judges(Some(g)))?;
+        Some(Self { guard, audit, log })
+    }
+
+    /// The attribution of a raw inbound value before a transform drops
+    /// fields (a webhook body, §4.4).
+    pub(crate) fn raw(
+        &self,
+        value: &serde_json::Value,
+    ) -> Option<crate::security::tenant_reads::ReadAttribution> {
+        super::raw_attribution(Some(&self.guard), value)
+    }
+
+    /// Judge one session's copy of an item for that session's caller. `Err`
+    /// when it is withheld; the rejection is then audited, bounded.
+    pub(crate) fn judge(
+        &self,
+        key: Option<&str>,
+        data: &serde_json::Value,
+        event_type: &str,
+        hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
+    ) -> Result<Option<StreamMark>, ()> {
+        #[cfg(feature = "firewall")]
+        {
+            match super::judge::admit_stream_item(&self.guard, key, data, event_type, hidden) {
+                Admission::Admitted(frame) if frame.assessment.is_some() => {
+                    Ok(Some(StreamMark(frame)))
+                }
+                Admission::Admitted(_) => Ok(None),
+                Admission::Blocked(evidence) => {
+                    self.audit.submit(evidence);
+                    Err(())
+                }
+            }
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            let _ = (key, data, event_type, hidden);
+            Ok(None)
+        }
+    }
+}

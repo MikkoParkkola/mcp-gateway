@@ -5,7 +5,7 @@
 
 use tokio::sync::broadcast;
 
-use super::{NotificationMultiplexer, TaggedNotification};
+use super::{NotificationMultiplexer, SessionFrame};
 use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::SessionOwner;
 
@@ -29,7 +29,7 @@ impl NotificationMultiplexer {
         session_id: Option<&str>,
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
-    ) -> Option<(String, broadcast::Receiver<TaggedNotification>)> {
+    ) -> Option<(String, broadcast::Receiver<SessionFrame>)> {
         let sessions = self.sessions.read();
         let session = sessions
             .get(session_id?)

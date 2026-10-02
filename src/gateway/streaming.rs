@@ -47,13 +47,42 @@ pub struct TaggedNotification {
     pub event_id: Option<String>,
 }
 
+/// One session's copy of a [`TaggedNotification`] on its stream, with the
+/// cross-tenant read judgement made for that session's caller when it was
+/// queued (MIK-7116.MIN.2, H7). The stream commits it when it writes it; a
+/// copy dropped unwritten (a lagging subscriber) commits nothing.
+#[derive(Debug, Clone)]
+pub struct SessionFrame {
+    note: TaggedNotification,
+    mark: Option<crate::gateway::outbound::StreamMark>,
+}
+
+impl std::ops::Deref for SessionFrame {
+    type Target = TaggedNotification;
+
+    fn deref(&self) -> &TaggedNotification {
+        &self.note
+    }
+}
+
+impl SessionFrame {
+    /// The notification, without its judgement.
+    #[must_use]
+    pub fn into_inner(self) -> TaggedNotification {
+        self.note
+    }
+}
+
 /// Client session state
 #[derive(Debug)]
 struct ClientSession {
     /// Session ID; prints as its fingerprint.
     id: SessionId,
     /// Notification sender
-    tx: broadcast::Sender<TaggedNotification>,
+    tx: broadcast::Sender<SessionFrame>,
+    /// The `caller_key` this session's stream writes to, bound when the
+    /// stream opens (MIK-7116.MIN.2); every queued copy is judged for it.
+    read_key: RwLock<Option<String>>,
     /// Last event ID received (for resumability)
     last_event_id: RwLock<Option<String>>,
     /// Subscribed backends
@@ -114,6 +143,9 @@ pub struct NotificationMultiplexer {
     event_counter: std::sync::atomic::AtomicU64,
     /// The live authorizer scoped delivery asks; unset means no delivery.
     authorizer: RwLock<Option<AuthState>>,
+    /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
+    /// unset when the verdict is off, which is the plain fast path.
+    reads: std::sync::OnceLock<crate::gateway::outbound::SessionJudge>,
 }
 
 impl NotificationMultiplexer {
@@ -130,7 +162,50 @@ impl NotificationMultiplexer {
             config,
             event_counter: std::sync::atomic::AtomicU64::new(1),
             authorizer: RwLock::new(None),
+            reads: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Install the cross-tenant read judge (once; the router does it).
+    pub(crate) fn set_read_judge(&self, judge: crate::gateway::outbound::SessionJudge) {
+        let _ = self.reads.set(judge);
+    }
+
+    /// Whether session streams are judged at all.
+    pub(crate) fn judges_reads(&self) -> bool {
+        self.reads.get().is_some()
+    }
+
+    /// Bind the caller session `session_id`'s stream writes to.
+    pub(crate) fn bind_session_reader(&self, session_id: &str, key: String) {
+        if let Some(session) = self.sessions.read().get(session_id) {
+            *session.read_key.write() = Some(key);
+        }
+    }
+
+    /// Queue one copy of `notification` on `tx`, judged for `key`. `false`
+    /// when it is withheld or nobody is listening.
+    fn enqueue(
+        &self,
+        tx: &broadcast::Sender<SessionFrame>,
+        key: Option<&str>,
+        notification: TaggedNotification,
+        hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
+    ) -> bool {
+        let mark = match self.reads.get() {
+            None => None,
+            Some(judge) => {
+                match judge.judge(key, &notification.data, &notification.event_type, hidden) {
+                    Ok(mark) => mark,
+                    Err(()) => return false,
+                }
+            }
+        };
+        tx.send(SessionFrame {
+            note: notification,
+            mark,
+        })
+        .is_ok()
     }
 
     /// Install the authorizer that scoped delivery re-validates sessions against.
@@ -222,7 +297,7 @@ impl NotificationMultiplexer {
     pub fn get_or_create_session(
         &self,
         session_id: Option<&str>,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
+    ) -> (String, broadcast::Receiver<SessionFrame>) {
         self.get_or_create_session_for(session_id, &SessionOwner::Anonymous)
     }
 
@@ -238,7 +313,7 @@ impl NotificationMultiplexer {
         &self,
         session_id: Option<&str>,
         owner: &SessionOwner,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
+    ) -> (String, broadcast::Receiver<SessionFrame>) {
         let mut sessions = self.sessions.write();
         if let Some(session) = session_id.and_then(|id| sessions.get(id))
             && session.owner == *owner
@@ -261,12 +336,13 @@ impl NotificationMultiplexer {
         sessions: &mut HashMap<SessionId, Arc<ClientSession>>,
         id: &str,
         owner: SessionOwner,
-    ) -> broadcast::Receiver<TaggedNotification> {
+    ) -> broadcast::Receiver<SessionFrame> {
         let (tx, rx) = broadcast::channel(self.config.buffer_size);
         let id = SessionId::new(id);
         let session = ClientSession {
             id: id.clone(),
             tx,
+            read_key: RwLock::new(None),
             last_event_id: RwLock::new(None),
             subscribed_backends: RwLock::new(Vec::new()),
             last_active: RwLock::new(Instant::now()),
@@ -283,7 +359,7 @@ impl NotificationMultiplexer {
         session_id: Option<&str>,
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
+    ) -> (String, broadcast::Receiver<SessionFrame>) {
         let (id, rx) = self.get_or_create_session_for(session_id, owner);
         if let Some(session) = self.sessions.read().get(id.as_str()) {
             *session.credential.write() = credential;
@@ -294,7 +370,7 @@ impl NotificationMultiplexer {
     /// Test seam: an anonymous session under a chosen id, which production
     /// never creates (every production id is minted, F9).
     #[cfg(test)]
-    pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<TaggedNotification> {
+    pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<SessionFrame> {
         self.insert_session(&mut self.sessions.write(), id, SessionOwner::Anonymous)
     }
 
@@ -307,6 +383,20 @@ impl NotificationMultiplexer {
         notification: &TaggedNotification,
         backend: &str,
     ) -> usize {
+        self.broadcast_to_backend_raw(notification, backend, None)
+            .await
+    }
+
+    /// [`Self::broadcast_to_backend`] for an item transformed from a raw
+    /// inbound value (a webhook body): each copy is also judged on what
+    /// `raw` named before the transform dropped it (MIK-7116.MIN.2, §4.4).
+    pub(crate) async fn broadcast_to_backend_raw(
+        &self,
+        notification: &TaggedNotification,
+        backend: &str,
+        raw: Option<&Value>,
+    ) -> usize {
+        let hidden = raw.and_then(|raw| self.reads.get().and_then(|judge| judge.raw(raw)));
         let Some(authorizer) = self.authorizer.read().clone() else {
             return 0;
         };
@@ -315,13 +405,21 @@ impl NotificationMultiplexer {
             .sessions
             .read()
             .values()
-            .map(|s| (s.tx.clone(), s.credential.read().clone()))
+            .map(|s| {
+                (
+                    s.tx.clone(),
+                    s.credential.read().clone(),
+                    s.read_key.read().clone(),
+                )
+            })
             .collect();
         let mut reached = 0;
-        for (tx, credential) in targets {
+        for (tx, credential, key) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
-            if verdict == Delivery::Deliver && tx.send(notification.clone()).is_ok() {
+            if verdict == Delivery::Deliver
+                && self.enqueue(&tx, key.as_deref(), notification.clone(), hidden.as_ref())
+            {
                 reached += 1;
             }
         }
@@ -385,13 +483,12 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            match session.tx.send(notification) {
-                Ok(_) => true,
-                Err(e) => {
-                    debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
-                    false
-                }
+            let key = session.read_key.read().clone();
+            let sent = self.enqueue(&session.tx, key.as_deref(), notification, None);
+            if !sent {
+                debug!(session_id = %session_fp(session_id), "Notification not queued");
             }
+            sent
         } else {
             false
         }
@@ -402,7 +499,8 @@ impl NotificationMultiplexer {
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let _ = session.tx.send(notification.clone());
+            let key = session.read_key.read().clone();
+            self.enqueue(&session.tx, key.as_deref(), notification.clone(), None);
         }
     }
 
@@ -481,6 +579,7 @@ pub fn create_sse_response(
 
     let mut rx = session.tx.subscribe();
     let session_id_owned = session_id;
+    drop(sessions);
 
     // Create the stream with owned data
     let stream = stream! {
@@ -491,7 +590,15 @@ pub fn create_sse_response(
 
         loop {
             match rx.recv().await {
-                Ok(notification) => {
+                Ok(item) => {
+                    // MIN.2: recorded and committed as it is written; an item
+                    // whose record fails closed is withheld.
+                    if let Some(mark) = &item.mark
+                        && !mark.written(multiplexer.reads.get()).await
+                    {
+                        continue;
+                    }
+                    let notification = &item.note;
                     // MCP-standard events (event_type == "message") send raw
                     // JSON-RPC as data so compliant clients (e.g. Claude Code)
                     // can parse them as server-to-client requests.
@@ -502,7 +609,7 @@ pub fn create_sse_response(
                     } else {
                         Event::default()
                             .event(&notification.event_type)
-                            .data(serde_json::to_string(&notification).unwrap_or_default())
+                            .data(serde_json::to_string(notification).unwrap_or_default())
                     };
 
                     // Add event ID if present

@@ -30,7 +30,7 @@ pub(crate) use callback::{CallbackSend, send_callback};
 pub(crate) use http::to_http;
 #[cfg(feature = "firewall")]
 pub(crate) use judge::{admit, attribute, callback_frame, delivered};
-pub(crate) use stream::{StreamJudge, sse_message};
+pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_message};
 
 /// The firewall that carries the tenant guard and the read history. Without
 /// the `firewall` feature nothing is judged, and this has no values.

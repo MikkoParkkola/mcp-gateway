@@ -214,10 +214,23 @@ pub(super) async fn mcp_sse_handler(
     }
     // The owner the POST that minted the session used, so a subject resumes
     // its own stream and nobody else's.
-    let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
-        Ok((_, owner)) => owner,
-        Err(refusal) => return refusal,
-    };
+    let (subject, owner) =
+        match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
+            Ok(resolved) => resolved,
+            Err(refusal) => return refusal,
+        };
+    // MIN.2: the caller this stream writes to, keyed as on POST (H7, §4.2).
+    let read_key = state
+        .multiplexer
+        .judges_reads()
+        .then(|| {
+            super::identity::caller_key(
+                subject.as_ref(),
+                extensions.get::<CertIdentity>(),
+                client.as_ref(),
+            )
+        })
+        .filter(|key| !key.is_empty());
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
         return build_http_error_response(
@@ -269,6 +282,9 @@ pub(super) async fn mcp_sse_handler(
             .get_or_create_session_scoped(existing_session_id.as_deref(), &owner, held)
     };
 
+    if let Some(key) = read_key {
+        state.multiplexer.bind_session_reader(&session_id, key);
+    }
     // Computed before the macro so its count is graded (MIK-7725).
     let session = session_fp(&session_id);
     info!(session_id = %session, "Client connected to SSE stream");

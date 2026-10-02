@@ -572,7 +572,7 @@ fn open_session(
     multiplexer: &NotificationMultiplexer,
     id: &str,
     bearer: Option<&str>,
-) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::TaggedNotification> {
+) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::SessionFrame> {
     let owner = crate::gateway::session_id::SessionOwner::Credential(id.to_string());
     multiplexer
         .get_or_create_session_scoped(Some(id), &owner, bearer.and_then(held))

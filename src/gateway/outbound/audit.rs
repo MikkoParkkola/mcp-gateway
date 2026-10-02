@@ -46,55 +46,61 @@ impl Assessment {
     }
 }
 
-/// Write `frame`'s `tenant_read` event, if its judgement names anything,
-/// before a sink writes it. Under `FailClosed` a failed write turns the frame
-/// into the audit-unavailable refusal, which drops its reservation; the
-/// refusal itself is not audited again, so this always terminates.
-pub(crate) async fn recorded(
-    frame: OutboundFrame,
-    log: Option<&Arc<TransparencyLogger>>,
-) -> OutboundFrame {
+/// Write `frame`'s `tenant_read` event, if its judgement names anything.
+/// `false` only when the write failed under `FailClosed`: the frame must
+/// not be written then.
+pub(super) async fn record(frame: &OutboundFrame, log: Option<&Arc<TransparencyLogger>>) -> bool {
     let (Some(log), Some(assessment)) = (log, frame.assessment()) else {
-        return frame;
+        return true;
     };
     let fields = assessment.record_fields(frame.key.as_deref());
     if fields.is_empty() {
-        return frame;
+        return true;
     }
     let envelope = AuditEnvelope::gateway();
     let written = log
         .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
         .await;
     match written {
-        Ok(()) => frame,
+        Ok(()) => true,
         Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
             tracing::warn!(%error, "tenant_read audit failed; the frame is withheld");
-            if !frame.is_answer() {
-                return frame.withheld();
-            }
-            let refusal = frame.answer_id().map_or_else(
-                || {
-                    let error = crate::Error::AuditUnavailable;
-                    crate::protocol::JsonRpcResponse::error(
-                        None,
-                        error.to_rpc_code(),
-                        error.to_string(),
-                    )
-                },
-                |id| {
-                    crate::gateway::meta_mcp::error_response_preserving_status(
-                        id,
-                        &crate::Error::AuditUnavailable,
-                    )
-                },
-            );
-            frame.replaced_by(refusal)
+            false
         }
         Err(error) => {
             tracing::warn!(%error, "tenant_read audit failed; best effort, delivered");
-            frame
+            true
         }
     }
+}
+
+/// [`record`] `frame` before a sink writes it. Under `FailClosed` a failed
+/// write turns an answer into the audit-unavailable refusal and withholds
+/// anything else; either drops the reservation. The refusal itself is not
+/// audited again, so this always terminates.
+pub(crate) async fn recorded(
+    frame: OutboundFrame,
+    log: Option<&Arc<TransparencyLogger>>,
+) -> OutboundFrame {
+    if record(&frame, log).await {
+        return frame;
+    }
+    if !frame.is_answer() {
+        return frame.withheld();
+    }
+    let refusal = frame.answer_id().map_or_else(
+        || {
+            let error = crate::Error::AuditUnavailable;
+            crate::protocol::JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string())
+        },
+        |id| {
+            crate::gateway::meta_mcp::error_response_preserving_status(
+                id,
+                &crate::Error::AuditUnavailable,
+            )
+        },
+    );
+    frame.replaced_by(refusal)
 }
 
 /// The fields of one `tenant_read` rejection record.

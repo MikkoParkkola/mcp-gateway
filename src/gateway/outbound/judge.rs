@@ -193,6 +193,45 @@ pub(crate) fn admit(
     })
 }
 
+/// Judge a session-stream item (H7) for one session's caller, without
+/// moving it: the item is a `data` document under an SSE event name, both
+/// scanned (minus the document's `jsonrpc` and `id`). Admitted, the frame
+/// carries no payload, only the judgement and the reservation the stream
+/// commits when it writes the item.
+pub(crate) fn admit_stream_item(
+    firewall: &Firewall,
+    key: Option<&str>,
+    data: &Value,
+    event_type: &str,
+    hidden: Option<&ReadAttribution>,
+) -> Admission {
+    let Some((guard, mode)) = judging(firewall) else {
+        return Admission::Admitted(OutboundFrame::unjudged(Payload::Withheld));
+    };
+    let block = mode == CrossTenantReads::Block;
+    let (tenants, uninspected) = guard.scan_document(data, &["jsonrpc", "id"]);
+    let mut attribution = ReadAttribution::of(tenants, uninspected);
+    let (tenants, uninspected) = guard.scan_frame(&[], &[event_type]);
+    attribution.extend(&ReadAttribution::of(tenants, uninspected));
+    if let Some(hidden) = hidden {
+        attribution.extend(hidden);
+    }
+    let (assessment, ticket) = assess(firewall, guard, block, key, attribution);
+    if withholds(assessment.verdict, block) {
+        return Admission::Blocked(RejectionEvidence {
+            caller_key: key.map(str::to_owned),
+            verdict: assessment.verdict.unwrap_or(ReadVerdict::Blocked),
+            attribution: assessment.attribution,
+        });
+    }
+    Admission::Admitted(OutboundFrame {
+        payload: Payload::Withheld,
+        assessment: Some(assessment),
+        ticket,
+        key: key.map(Arc::from),
+    })
+}
+
 /// E1: judge a MIK-7630 event delivery for the subscription principal.
 /// `attribution` is what the outbox record carries from before the event
 /// firewall's redaction; a record without it counts as unread.
