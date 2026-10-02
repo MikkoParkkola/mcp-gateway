@@ -20,7 +20,9 @@ use super::authorization::{
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
 use super::hardened_identity::hardened_identity_refusal;
-use super::helpers::{build_http_error_response, build_http_response, parse_request};
+use super::helpers::{
+    bodiless_accepted, build_http_error_response, build_http_response, parse_request,
+};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
@@ -478,15 +480,15 @@ pub(super) async fn backend_handler(
         && log.admit().await.is_err()
     {
         let error = crate::Error::AuditUnavailable;
-        return build_http_error_response(
+        return bodiless_accepted(build_http_error_response(
             None,
             error.to_rpc_code(),
             error.to_string(),
             StatusCode::SERVICE_UNAVAILABLE,
-        );
+        ));
     }
 
-    direct_audit::audited_call(Arc::clone(&state), name, request).await
+    bodiless_accepted(direct_audit::audited_call(Arc::clone(&state), name, request).await)
 }
 
 #[allow(clippy::too_many_lines)]

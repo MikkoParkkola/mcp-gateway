@@ -113,6 +113,7 @@ fn assert_tools_call(response: &Value) {
 struct HttpReply {
     /// MIK-7759: raw body bytes, so a 202 can be held to "no body".
     body_len: usize,
+    content_type: Option<String>,
     status: StatusCode,
     session: Option<String>,
     /// The JSON-RPC message carrying the request's id, from a JSON body or
@@ -149,6 +150,11 @@ async fn http_post(
         .get("mcp-session-id")
         .and_then(|v| v.to_str().ok())
         .map(String::from);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("body must read");
@@ -165,6 +171,7 @@ async fn http_post(
         .find(|m| want.is_some() && m.get("id") == want.as_ref());
     HttpReply {
         body_len: bytes.len(),
+        content_type,
         status,
         session,
         message,
@@ -211,6 +218,10 @@ async fn http_full_session(version: &str) {
     assert_eq!(
         ack.body_len, 0,
         "MIK-7759: an accepted notification is answered 202 with no body"
+    );
+    assert_eq!(
+        ack.content_type, None,
+        "MIK-7759: a bodiless 202 has no content type"
     );
 
     // 3-5. tools/list, tools/call, ping: on the same session throughout.
