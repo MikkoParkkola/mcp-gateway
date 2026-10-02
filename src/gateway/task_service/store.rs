@@ -59,6 +59,10 @@ pub(crate) enum StoreError {
     Unavailable,
     #[error("unsafe task store")]
     UnsafeStore,
+    /// The store directory or lease could not be inspected (not absent, not
+    /// unsafe): a failure to look, distinct from `Unavailable`.
+    #[error("task store path could not be inspected")]
+    Uninspectable,
     #[error("corrupt task record")]
     CorruptRecord,
     #[error("task store is already owned")]
@@ -678,10 +682,11 @@ fn open_blocking(
 }
 
 fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
+    let shown_path = dir.display();
     match fs::symlink_metadata(dir) {
         Ok(meta) => {
             if !meta.is_dir() || !has_mode(&meta, STORE_MODE) {
-                tracing::warn!(path = %dir.display(), "task store directory is not a private directory");
+                tracing::warn!(path = %shown_path, "task store directory is not a private directory");
                 return Err(StoreError::UnsafeStore);
             }
             judge_store_dir(dir)
@@ -691,24 +696,25 @@ fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
             create_private_dir(dir).and_then(|()| judge_store_dir(dir))
         }
         Err(error) => {
-            tracing::warn!(%error, path = %dir.display(), "task store directory unreadable");
-            Err(StoreError::Unavailable)
+            tracing::warn!(%error, path = %shown_path, "task store directory unreadable");
+            Err(StoreError::Uninspectable)
         }
     }
 }
 
 fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
+    let shown_path = lease.display();
     match fs::symlink_metadata(lease) {
         Ok(meta) => {
             if !meta.is_file() || !has_mode(&meta, RECORD_MODE) {
-                tracing::warn!(path = %lease.display(), "task store lease is not a private regular file");
+                tracing::warn!(path = %shown_path, "task store lease is not a private regular file");
                 return Err(StoreError::UnsafeStore);
             }
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
-            tracing::warn!(%error, path = %lease.display(), "task store lease unreadable");
-            return Err(StoreError::Unavailable);
+            tracing::warn!(%error, path = %shown_path, "task store lease unreadable");
+            return Err(StoreError::Uninspectable);
         }
     }
     ExclusiveFileLock::try_acquire(lease).map_err(|error| {
@@ -719,12 +725,12 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
         // makes above with `has_mode`; a lease that is not private is unsafe.
         #[cfg(windows)]
         if error.kind() == io::ErrorKind::PermissionDenied {
-            tracing::warn!(%error, path = %lease.display(), "task store lease is not private");
+            tracing::warn!(%error, path = %shown_path, "task store lease is not private");
             return StoreError::UnsafeStore;
         }
         // Includes the platforms with no tested exclusion primitive: they refuse
         // custody outright rather than pretend to hold it.
-        tracing::warn!(%error, path = %lease.display(), "task store lease not acquired");
+        tracing::warn!(%error, path = %shown_path, "task store lease not acquired");
         StoreError::Unavailable
     })
 }
@@ -748,6 +754,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             continue;
         };
         let path = entry.path();
+        let shown_path = path.display();
         // Open first, then judge the OPEN HANDLE. Checking the path and then
         // opening it are two different files if anything swaps the name in
         // between, and a symlink is refused by the open itself rather than by a
@@ -755,32 +762,33 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
         let mut file = open_record(&path)?;
         let meta = file.metadata().map_err(|_| StoreError::Unavailable)?;
         if !meta.is_file() || !has_mode(&meta, RECORD_MODE) {
-            tracing::warn!(path = %path.display(), "task record is not a private regular file");
+            tracing::warn!(path = %shown_path, "task record is not a private regular file");
             return Err(StoreError::UnsafeStore);
         }
         fits(limits, entries.len())?;
         let bytes = read_bounded(&mut file, limits.record_bytes).inspect_err(|error| {
             if *error == StoreError::Capacity {
-                tracing::warn!(path = %path.display(), "task record exceeds the record budget");
+                tracing::warn!(path = %shown_path, "task record exceeds the record budget");
             }
         })?;
         let record: Record = serde_json::from_slice(&bytes).map_err(|error| {
-            tracing::warn!(%error, path = %path.display(), "task record does not parse");
+            tracing::warn!(%error, path = %shown_path, "task record does not parse");
             StoreError::CorruptRecord
         })?;
         if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
-            tracing::warn!(path = %path.display(), version = record.version, "unsupported task record version");
+            let version = record.version;
+            tracing::warn!(path = %shown_path, version, "unsupported task record version");
             return Err(StoreError::CorruptRecord);
         }
         let task = Task::from_snapshot(record.model.clone()).map_err(|error| {
-            tracing::warn!(%error, path = %path.display(), "task record does not restore");
+            tracing::warn!(%error, path = %shown_path, "task record does not restore");
             StoreError::CorruptRecord
         })?;
         // A record living under another task's name would let a rename rebind it.
         if record_name(task.id()) != name
             || !identities.insert(record.admission.identity_digest.clone())
         {
-            tracing::warn!(path = %path.display(), "task record identity or name is not its own");
+            tracing::warn!(path = %shown_path, "task record identity or name is not its own");
             return Err(StoreError::CorruptRecord);
         }
         let held = principals
@@ -788,7 +796,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, Stor
             .or_default();
         *held += 1;
         if *held > limits.per_principal {
-            tracing::warn!(path = %path.display(), "stored tasks exceed the per-principal cap");
+            tracing::warn!(path = %shown_path, "stored tasks exceed the per-principal cap");
             return Err(StoreError::Capacity);
         }
         entries.insert(task.id().to_owned(), Entry { task, record });
@@ -820,12 +828,13 @@ pub(super) fn read_bounded(file: &mut fs::File, cap: usize) -> Result<Vec<u8>, S
 #[cfg(unix)]
 fn open_record(path: &Path) -> Result<fs::File, StoreError> {
     use std::os::unix::fs::OpenOptionsExt as _;
+    let shown_path = path.display();
     fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|error| {
-            tracing::warn!(%error, path = %path.display(), "task record could not be opened as a private regular file");
+            tracing::warn!(%error, path = %shown_path, "task record could not be opened as a private regular file");
             StoreError::UnsafeStore
         })
 }

@@ -35,6 +35,7 @@ fn context_on(registry: Arc<BackendRegistry>) -> ReloadContext {
         crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
     )
+    .expect("the registry pairs with the config")
 }
 
 /// Block this thread for good; a stalled NFS read, as far as the caller can tell.

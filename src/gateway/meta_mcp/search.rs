@@ -119,7 +119,7 @@ impl MetaMcp {
         if use_glob {
             tool_matches_glob(tool, query) || tool_name_matches_glob(&tool_ref, query)
         } else {
-            tool_matches_query(tool, query) || tool_ref.contains(query)
+            tool_matches_query(server, tool, query) || tool_ref.contains(query)
         }
     }
 
@@ -257,7 +257,7 @@ impl MetaMcp {
                     continue;
                 }
                 collect_tool_tags(&tool, all_tags);
-                if tool_matches_query(&tool, query) {
+                if tool_matches_query(&cap.name, &tool, query) {
                     // A chain target is a name too: only admitted ones (A3).
                     let chains: Vec<String> = capability
                         .metadata
@@ -320,7 +320,7 @@ impl MetaMcp {
                     collect_tool_tags(tool, all_tags);
                 }
                 for tool in enriched {
-                    if tool_matches_query(&tool, query) {
+                    if tool_matches_query(&backend.name, &tool, query) {
                         let mut entry = build_match_json(&backend.name, &tool);
                         if backend_killed {
                             entry["status"] = json!("disabled");

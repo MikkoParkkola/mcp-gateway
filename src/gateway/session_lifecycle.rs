@@ -21,6 +21,17 @@ type CleanupFn = Box<dyn Fn(&str) + Send + Sync>;
 #[derive(Default)]
 pub struct SessionLifecycle {
     callbacks: RwLock<Vec<(String, Arc<CleanupFn>)>>,
+    /// Handlers for state keyed by a *session id*. They fire only when a
+    /// session really ends ([`Self::on_disconnect`]), never from the idle
+    /// deadline: a session quiet for [`IDLE_TTL`] is still a live session, and
+    /// reclaiming its profile or workflow state would silently reset it.
+    ended: RwLock<Vec<(String, Arc<CleanupFn>)>>,
+    /// Ids whose session-end handlers fire a second time at the given Unix
+    /// second. A call already in flight when its session ended can write state
+    /// under the dead id after the first pass; the second pass, one
+    /// [`END_GRACE`] later, takes what it left. Without it a client looping
+    /// create, long call, DELETE grows the stores by one entry per round.
+    ended_pending: RwLock<Vec<(String, u64)>>,
     /// Keys awaiting reclamation, and the deadline each is reclaimed at.
     ///
     /// MCP 2026-07-28 removed protocol sessions, so `on_disconnect` has nothing
@@ -34,6 +45,11 @@ pub struct SessionLifecycle {
     /// changes is that something still fires them.
     tracked: RwLock<std::collections::HashMap<String, u64>>,
 }
+
+/// How long after a session ends its in-flight calls may still write state
+/// under its id. Longer than the backend request timeout, so a call that began
+/// before the end has finished by the second cleanup pass.
+pub const END_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// How long an identity's derived state outlives its last observed request.
 ///
@@ -78,6 +94,18 @@ impl SessionLifecycle {
             .push((name.into(), Arc::new(Box::new(callback))));
     }
 
+    /// Register a handler for state keyed by a session id. It fires on a real
+    /// session end only; see the `ended` field for why not on idle reclaim.
+    pub fn register_session_end(
+        &self,
+        name: impl Into<String>,
+        callback: impl Fn(&str) + Send + Sync + 'static,
+    ) {
+        self.ended
+            .write()
+            .push((name.into(), Arc::new(Box::new(callback))));
+    }
+
     /// Fire all registered callbacks for the given session ID.
     ///
     /// Called by the notification multiplexer when a session is reaped
@@ -87,6 +115,22 @@ impl SessionLifecycle {
         // later reap cannot fire the handlers for it a second time.
         self.untrack(session_id);
         self.fire_cleanup(session_id);
+        self.fire_ended(session_id);
+        self.ended_pending
+            .write()
+            .push((session_id.to_owned(), now_unix() + END_GRACE.as_secs()));
+    }
+
+    /// Run the session-end handlers for `session_id`.
+    fn fire_ended(&self, session_id: &str) {
+        for (name, cb) in self.ended.read().iter() {
+            cb(session_id);
+            debug!(
+                session_id = %crate::gateway::session_id::session_fp(session_id),
+                handler = %name,
+                "Session-end handler executed"
+            );
+        }
     }
 
     /// Run the cleanup handlers for a key whose deadline is already gone.
@@ -148,6 +192,16 @@ impl SessionLifecycle {
     /// own defect. The count is the keys removed, not the keys examined, so a
     /// caller logging a sweep can tell an idle sweep from a busy one.
     pub fn reap(&self, now: u64) -> usize {
+        // The second pass for sessions that ended a grace period ago.
+        let due: Vec<String> = {
+            let mut pending = self.ended_pending.write();
+            let (due, later): (Vec<_>, Vec<_>) = pending.drain(..).partition(|(_, at)| now > *at);
+            *pending = later;
+            due.into_iter().map(|(id, _)| id).collect()
+        };
+        for id in due {
+            self.fire_ended(&id);
+        }
         let expired: Vec<String> = {
             let mut tracked = self.tracked.write();
             let expired: Vec<String> = tracked
@@ -203,10 +257,79 @@ pub fn wire_session_lifecycle(
     });
 }
 
+/// Register the per-session stores `MetaMcp` owns with a lifecycle registry.
+///
+/// Held as a `Weak` for the reason [`wire_session_lifecycle`] gives. Without
+/// this registration the profile, FSM state, cost, transition and promoted-tool
+/// stores gain an entry per legacy session and never lose it (MIK-7215.CONTROL.5,
+/// gap G2). Transition entries keyed on a caller key go on its idle deadline.
+pub fn wire_meta_session_cleanup(
+    lifecycle: &Arc<SessionLifecycle>,
+    meta: &Arc<crate::gateway::meta_mcp::MetaMcp>,
+) {
+    let ended = Arc::downgrade(meta);
+    lifecycle.register_session_end("meta-session-state", move |key| {
+        if let Some(meta) = ended.upgrade() {
+            meta.forget_session(key);
+        }
+    });
+    // Hints key on the caller key, which never ends; its idle deadline does.
+    let idle = Arc::downgrade(meta);
+    lifecycle.register("meta-caller-hints", move |key| {
+        if let Some(meta) = idle.upgrade() {
+            meta.forget_caller(key);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn an_idle_deadline_does_not_fire_a_session_end_handler() {
+        let lifecycle = SessionLifecycle::new();
+        let ended = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&ended);
+        lifecycle.register_session_end("ended", move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+        lifecycle.track("quiet-session", 0);
+
+        assert_eq!(lifecycle.reap(1), 1);
+        assert_eq!(
+            ended.load(Ordering::SeqCst),
+            0,
+            "a session that is only idle is still live"
+        );
+
+        lifecycle.on_disconnect("quiet-session");
+        assert_eq!(ended.load(Ordering::SeqCst), 1, "a real end fires it once");
+    }
+
+    #[test]
+    fn a_session_end_is_cleaned_a_second_time_after_the_grace_period() {
+        let lifecycle = SessionLifecycle::new();
+        let fired = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&fired);
+        lifecycle.register_session_end("count", move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        });
+
+        lifecycle.on_disconnect("ended");
+        assert_eq!(fired.load(Ordering::SeqCst), 1);
+
+        // A call in flight at the end writes after the first pass.
+        lifecycle.reap(now_unix());
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "not before the grace");
+
+        lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
+        assert_eq!(fired.load(Ordering::SeqCst), 2, "the second pass");
+
+        lifecycle.reap(now_unix() + 2 * END_GRACE.as_secs());
+        assert_eq!(fired.load(Ordering::SeqCst), 2, "and only once");
+    }
 
     #[test]
     fn a_refreshed_key_keeps_only_its_latest_deadline() {

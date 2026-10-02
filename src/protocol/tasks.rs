@@ -105,7 +105,10 @@ struct TaskWire {
     status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     status_message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::protocol::cacheable::serialize_delivered_result"
+    )]
     result: Option<Value>,
     #[serde(
         default,
@@ -441,3 +444,6 @@ mod lifecycle_tests;
 
 #[cfg(test)]
 mod snapshot_tests;
+
+#[cfg(test)]
+mod scope_clamp_tests;

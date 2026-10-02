@@ -31,6 +31,7 @@ pub(super) fn make_definition(notify: bool) -> WebhookDefinition {
         signature_header: None,
         notify,
         transform: WebhookTransform::default(),
+        event: None,
     }
 }
 
@@ -231,6 +232,7 @@ pub(super) fn make_capability_with_webhooks(
                 secret: None,
                 signature_header: None,
                 notify: *notify,
+                event: None,
                 transform: WebhookTransform::default(),
             },
         );
@@ -762,3 +764,6 @@ async fn a_dashboard_session_receives_webhook_data_only_on_an_issued_handle() {
         "a handle this process never issued authenticates nobody"
     );
 }
+
+#[path = "message_clamp_tests.rs"]
+mod message_clamp;

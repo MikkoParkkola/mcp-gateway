@@ -13,7 +13,6 @@ use axum::http::{HeaderMap, StatusCode};
 use tracing::warn;
 
 use crate::config::KeyServerOidcConfig;
-#[cfg(feature = "firewall")]
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::identity_grants::GrantSubject;
@@ -118,7 +117,9 @@ pub(super) async fn caller_grant_subject(
             "reason" => refusal.reason()
         )
         .increment(1);
-        warn!(mode = ?config.mode, reason = refusal.reason(), "caller identity header refused");
+        // Computed before the macro so its count is graded (MIK-7725).
+        let (mode, reason) = (&config.mode, refusal.reason());
+        warn!(mode = ?mode, reason, "caller identity header refused");
     })?;
 
     if let Some(verified) = verified_identity.and_then(grant_subject_from_verified_identity) {
@@ -341,12 +342,13 @@ pub(super) fn subject_key(
 /// `Credential(digest)` for an authenticated API key, else empty (no identity;
 /// the firewall refuses rather than pools). A subject outranks the credential,
 /// so one person keeps one bucket across credentials and token exchanges.
+/// The meta route's A/B arm and prefetch hints key on it too (G4), so it
+/// exists in every build.
 ///
 /// Length-prefixed, with a tag per variant, so no two distinct callers can
 /// encode to one key. A certificate subject is re-derived from the certificate
 /// itself so the display-name fallback `caller_grant_subject` keeps for
 /// authorization can never become a shared key.
-#[cfg(feature = "firewall")]
 pub(super) fn caller_key(
     subject: Option<&GrantSubject>,
     cert: Option<&CertIdentity>,
