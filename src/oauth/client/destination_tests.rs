@@ -362,3 +362,95 @@ async fn a_refused_oauth_redirect_is_typed_ssrf_blocked() {
         assert_eq!(error.to_rpc_code(), -32600, "{context}: {error}");
     }
 }
+
+/// Serve a protected-resource document that redirects to the link-local
+/// metadata address, beside a reachable authorization-server document whose
+/// registration endpoint is `registration`.
+async fn serve_with_refused_resource(registration: String) -> u16 {
+    use axum::{Router, response::Redirect, routing::get};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let base = format!("http://127.0.0.1:{port}");
+    let server = json!({
+        "issuer": base,
+        "authorization_endpoint": format!("{base}/authorize"),
+        "token_endpoint": format!("{base}/token"),
+        "registration_endpoint": registration,
+    });
+    let app = Router::new()
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(|| async { Redirect::temporary("http://169.254.169.254/latest") }),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(move || {
+                let body = server.clone();
+                async move { axum::Json(body) }
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    port
+}
+
+fn private_client(port: u16, storage: Arc<TokenStorage>) -> OAuthClient {
+    OAuthClient::with_destination(
+        DestinationPolicy::Private,
+        super::http_client(DestinationPolicy::Private).unwrap(),
+        "listed-backend".to_string(),
+        format!("http://127.0.0.1:{port}/mcp"),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    )
+}
+
+/// The protected-resource discovery falls back to the base URL when the
+/// document is missing, but a policy refusal is not a missing document: it is
+/// surfaced, not walked past.
+#[tokio::test]
+async fn a_refused_protected_resource_redirect_is_not_walked_past() {
+    let port = serve_with_refused_resource("http://127.0.0.1:1/register".to_string()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let error = private_client(port, storage)
+        .initialize()
+        .await
+        .expect_err("a refused discovery hop must surface");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+}
+
+/// Dynamic registration falls back to a generated client id when the
+/// endpoint fails, but not when the destination policy refused it.
+#[tokio::test]
+async fn a_refused_registration_redirect_is_not_walked_past() {
+    let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
+    let port = {
+        // A reachable resource document this time, so initialize succeeds.
+        let advertised = Advertised {
+            authorization_server: REACHABLE,
+            token: "http://localhost:{port}/token",
+            registration: Box::leak(
+                format!("http://127.0.0.1:{refused}/register").into_boxed_str(),
+            ),
+        };
+        serve(&advertised).await
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let mut client = OAuthClient::with_destination(
+        DestinationPolicy::Private,
+        super::http_client(DestinationPolicy::Private).unwrap(),
+        "listed-backend".to_string(),
+        format!("http://localhost:{port}/mcp"),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    client.initialize().await.expect("discovery is reachable");
+    let error = client
+        .ensure_client_id_with_redirect("http://localhost:1/callback")
+        .await
+        .expect_err("a refused registration hop must surface");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+}
