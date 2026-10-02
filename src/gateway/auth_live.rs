@@ -146,20 +146,17 @@ pub(crate) async fn delivery(
 pub(super) async fn key_server_credential(
     state: &AuthState,
     token: &str,
-) -> Option<(
-    AuthenticatedClient,
-    crate::key_server::oidc::VerifiedIdentity,
-    &'static str,
-)> {
+) -> Option<(AuthenticatedClient, KeyServerSubject, &'static str)> {
     let ks = state.key_server.as_ref()?;
-    let (mut client, identity, via) =
+    let (mut client, identity, exp, via) =
         if let Some((client, temporary)) = ks.validate_token(token).await {
-            (client, temporary.identity.clone(), "temporary token")
+            let exp = Some(temporary.exp);
+            (client, temporary.identity.clone(), exp, "temporary token")
         } else if ks.config.delegated_bearer && super::looks_like_jwt(token) {
             // Gated on config and a cheap JWT-shape check so JWKS verification
             // never runs on an opaque or static token.
             let (client, identity) = ks.verify_bearer_identity(token).await?;
-            (client, identity, "delegated OIDC bearer")
+            (client, identity, jwt_exp(token), "delegated OIDC bearer")
         } else {
             return None;
         };
@@ -167,13 +164,75 @@ pub(super) async fn key_server_credential(
     // site stores it, so a reload that removes the rule revokes it.
     let config = state.live_config.get();
     client.admin = config.control_plane.role_mapping.grants_admin(&identity);
-    Some((client, identity, via))
+    let expires_at = exp
+        .and_then(|s| i64::try_from(s).ok())
+        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+        .map(CredentialExpiry);
+    Some((
+        client,
+        KeyServerSubject {
+            identity,
+            expires_at,
+        },
+        via,
+    ))
+}
+
+/// When the credential a request presented stops being valid, where the
+/// credential says: a key-server token's `exp` or a delegated bearer's. MCP
+/// Events caps a subscription made with it at this instant (MIK-7630).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CredentialExpiry(pub chrono::DateTime<chrono::Utc>);
+
+/// The verified subject behind a key-server credential, and its expiry.
+pub(super) struct KeyServerSubject {
+    identity: crate::key_server::oidc::VerifiedIdentity,
+    expires_at: Option<CredentialExpiry>,
+}
+
+impl KeyServerSubject {
+    /// Bind the subject, and its expiry when known, into `extensions`.
+    pub(super) fn insert_into(self, extensions: &mut axum::http::Extensions) {
+        extensions.insert(self.identity);
+        if let Some(expires_at) = self.expires_at {
+            extensions.insert(expires_at);
+        }
+    }
+}
+
+/// The `exp` claim of a JWT the key server has already verified.
+fn jwt_exp(token: &str) -> Option<u64> {
+    use base64::Engine as _;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()?
+        .get("exp")?
+        .as_u64()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn jwt_exp_reads_the_verified_tokens_expiry() {
+        use base64::Engine as _;
+        let encode = |v: &serde_json::Value| {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(v.to_string())
+        };
+        let header = encode(&serde_json::json!({"alg": "RS256"}));
+        let token = |claims| format!("{header}.{}.sig", encode(&claims));
+        assert_eq!(
+            jwt_exp(&token(serde_json::json!({"exp": 1_900_000_000_u64}))),
+            Some(1_900_000_000)
+        );
+        assert_eq!(jwt_exp(&token(serde_json::json!({"sub": "a"}))), None);
+        assert_eq!(jwt_exp("not-a-jwt"), None);
+    }
 
     fn bearer(token: &str) -> Option<HeldCredential> {
         let mut headers = axum::http::HeaderMap::new();

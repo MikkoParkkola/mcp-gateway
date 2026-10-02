@@ -5,13 +5,13 @@
 //! `schema_version`, `trace_id`, `outcome`, `error_code` and `who` are written
 //! by the logger, not by each writer, so no writer can leave them out.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// How the caller's credential was presented. Never any part of the secret.
 ///
 /// No `Default`: a mint site that forgets to say which kind it minted does not
 /// compile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialKind {
     /// Nothing was presented (auth off, or a public path).
@@ -261,6 +261,8 @@ pub enum InvocationRoute {
     Meta,
     /// `tools/call` on `POST /mcp/{name}`.
     Direct,
+    /// One MCP Events delivery attempt to a subscriber's callback (MIK-7630).
+    EventDelivery,
 }
 
 impl InvocationRoute {
@@ -270,6 +272,7 @@ impl InvocationRoute {
         match self {
             Self::Meta => "meta",
             Self::Direct => "direct",
+            Self::EventDelivery => "event_delivery",
         }
     }
 }

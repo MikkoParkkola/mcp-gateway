@@ -51,6 +51,8 @@ pub(crate) use http::GatewayProviderHttp;
 pub(in crate::personal_accounts) use grant_flow::{ProviderRevocation, TokenTypeHint};
 
 #[cfg(test)]
+mod provider_accept_tests;
+#[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
 mod wire_tests;

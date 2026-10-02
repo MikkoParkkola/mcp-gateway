@@ -319,6 +319,88 @@ async fn a_blocked_task_result_is_refused_on_tasks_get() {
     }
 }
 
+/// MIK-7707.GH2431.2: a discovery call run as a task settles with exactly one
+/// inspection, the canonical one in the Meta-MCP. The marker on its response
+/// makes the settlement pass skip it; were the marker ignored, the result
+/// would be scanned twice.
+///
+/// `gateway_search_tools` is not task-dispatchable over HTTP or stdio (see
+/// `is_task_dispatchable`), so no request reaches the worker with it. The task
+/// is begun on the executor directly, as the router does for a dispatchable
+/// tool, which is the one way to put a marked response in front of the worker's
+/// settlement pass.
+#[tokio::test]
+async fn a_task_mode_discovery_settles_with_one_inspection() {
+    use crate::gateway::task_service::execution::{BeginOutcome, TaskCall, TaskIntent};
+    use crate::protocol::tasks::{Task, TaskOptions, TaskStatus};
+
+    const OWNER: &str = "local:auth-disabled:tasks:v1";
+    let (state, _handler, meta, _store) = listing_state("echo".to_string(), Vec::new()).await;
+    let options = TaskOptions {
+        ttl_ms: Some(86_400_000),
+        poll_interval_ms: Some(1_000),
+    };
+    let arguments = json!({"query": "echo"});
+    let intent = TaskIntent {
+        executor: Arc::clone(&state.task_executor),
+        owned: crate::gateway::task_service::execution::OwnedCallerContext::new(
+            crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(&state)),
+            crate::gateway::router::OwnedRouterAuthorizer::capture(None, None, None),
+            None,
+            None,
+            None,
+            None,
+            None,
+            OWNER.to_owned(),
+            crate::gateway::meta_mcp::Authentication::Anonymous,
+            crate::security::audit::CredentialKind::None,
+            false,
+            crate::protocol::meta::Declared::NONE,
+            None,
+            None,
+            None,
+        ),
+        request: crate::gateway::meta_mcp::task_admission_request(
+            OWNER.to_owned(),
+            "t7707".to_owned(),
+            "gateway_search_tools",
+            &arguments,
+        ),
+        options,
+    };
+    let task = Task::create_at("gateway_search_tools", chrono::Utc::now(), options);
+    let id = task.id().to_owned();
+    let call = TaskCall {
+        tool: "gateway_search_tools".to_owned(),
+        arguments,
+    };
+    let before = inspections(&meta);
+
+    let begun = state
+        .task_executor
+        .begin(intent, task, "gateway".to_owned(), call)
+        .await
+        .expect("the executor admits the task");
+    assert!(matches!(begun, BeginOutcome::Created(_)));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let settled = loop {
+        if let Ok(committed) = state.tasks.get(OWNER, &id)
+            && !matches!(committed.task.status(), TaskStatus::Working)
+        {
+            break committed.task;
+        }
+        assert!(std::time::Instant::now() < deadline, "task never settled");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+
+    assert_eq!(settled.status(), TaskStatus::Completed, "{settled:?}");
+    assert_eq!(
+        inspections(&meta) - before,
+        1,
+        "one inspection of the discovery result"
+    );
+}
+
 /// MIK-7708: a direct listing the firewall refuses is not a client success, so
 /// it does not reset the caller's consecutive-failure count. With a threshold
 /// of two, failure + refused listing + failure opens the circuit.

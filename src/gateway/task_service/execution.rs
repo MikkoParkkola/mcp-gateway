@@ -25,7 +25,8 @@ pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 pub(crate) use expiry::ExpirySweep;
 pub(crate) use input_round::InputOutcome;
 pub(crate) use observe::{
-    CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+    CancelOutcome, CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle,
+    UpstreamRecovery,
 };
 use observe::{Handoff, HandoffRegistry};
 pub(crate) use upstream::UpstreamCapture;
@@ -156,6 +157,9 @@ pub struct TaskExecutor {
     /// the second would find a revision that moved.
     query_gate: tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
+    /// Cancelled once, by a shutdown whose drain ran out; every worker runs
+    /// under it ([`Self::spawn_worker`]).
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl TaskExecutor {
@@ -174,6 +178,7 @@ impl TaskExecutor {
             recovery: std::sync::OnceLock::new(),
             query_gate: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             observer: Mutex::new(None),
+            shutdown: tokio_util::sync::CancellationToken::new(),
         })
     }
 
@@ -208,7 +213,7 @@ impl TaskExecutor {
         let (handoff, cancel_rx) =
             Handoff::try_accept(self, task.id()).ok_or(ServiceError::Unavailable)?;
         let (tx, rx) = oneshot::channel();
-        tokio::spawn(commit_and_run(
+        self.spawn_worker(commit_and_run(
             handoff, intent, task, backend, call, cancel_rx, tx,
         ));
         rx.await.map_err(|_| ServiceError::Unavailable)?
@@ -369,6 +374,30 @@ impl TaskExecutor {
                     .saturating_sub(self.workers.available_permits()),
             },
         }
+    }
+
+    /// Cancel every worker still running and wait, up to `bound`, for each of
+    /// them to end.
+    ///
+    /// Terminal for this executor: the token is never reset, so a worker
+    /// spawned afterwards is dropped before its first step and its `begin`
+    /// answers `Unavailable`. A cancelled worker's future is dropped at the
+    /// await it is parked on; its handoff and permit go with it, which is what
+    /// the join observes. A store write it had started runs to its end inside
+    /// `spawn_blocking`, and closing the store joins it.
+    pub(crate) async fn cancel_remaining(&self, bound: Duration) -> CancelOutcome {
+        let cancelled = self.handoffs.len();
+        self.shutdown.cancel();
+        let stopped = tokio::time::timeout(bound, self.handoffs.join())
+            .await
+            .is_ok();
+        CancelOutcome { cancelled, stopped }
+    }
+
+    /// Spawn a task worker under the shutdown token. Every worker goes through
+    /// here, so none can outlive a shutdown that cancelled the rest.
+    fn spawn_worker(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
+        tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
     }
 
     fn cancel_signal(&self, id: &str) {

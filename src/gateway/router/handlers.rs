@@ -99,20 +99,6 @@ fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The owner key of a stateless task: the validated API-key credential. Only
-/// `route_task_owner` reads it (the firewall keys on `identity::caller_key`);
-/// tasks keep this encoding so an upgrade does not orphan stored ones. Empty
-/// when the caller is unauthenticated: that is not an identity.
-fn session_owner_key(client: Option<&AuthenticatedClient>) -> String {
-    client.map_or_else(String::new, |c| {
-        if c.authenticated && !c.principal.is_empty() {
-            format!("credential:{}", c.principal)
-        } else {
-            String::new()
-        }
-    })
-}
-
 /// The stateless path's answer to a protocol version this build cannot serve.
 ///
 /// The client is told which revisions it *could* retry on rather than left to
@@ -496,6 +482,11 @@ async fn meta_mcp_dispatch(
         .get::<OAuthAgentIdentity>()
         .cloned();
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
+    // MCP Events caps a subscription at the credential's own expiry.
+    let credential_expiry = http_request
+        .extensions()
+        .get::<crate::gateway::auth::live::CredentialExpiry>()
+        .copied();
 
     // === OWASP ASI03: per-agent identity ===
     //
@@ -604,22 +595,24 @@ async fn meta_mcp_dispatch(
     // Get or create session for this client
     let existing_session_id = session_id_header(&headers).map(String::from);
 
-    let (session_id, session_rx) = if declares_modern_by_header {
+    // Not a stream reader, so no branch subscribes: a held subscription
+    // fakes a deliverable prompt.
+    let session_id = if declares_modern_by_header {
         // No session, and none minted. Minting one per request grew a table of
         // sessions nothing could reach, and handed the sequence-anomaly
         // detector a fresh identity every call — a detector that sees a first
         // request every time keeps running and stops protecting.
-        (String::new(), None)
+        String::new()
     } else {
         // The identity that owns the session. A caller with neither a subject
         // nor a credential is "anonymous", so a single-user gateway behaves
         // exactly as before.
         let held = crate::gateway::auth::live::held_credential(&headers);
         let existing = existing_session_id.as_deref();
-        let (id, rx) = if !super::hardened_elicitation::is_hardened(&state) {
+        if !super::hardened_elicitation::is_hardened(&state) {
             state
                 .multiplexer
-                .get_or_create_session_scoped(existing, &caller_owner, held)
+                .get_or_create_session_id_scoped(existing, &caller_owner, held)
         } else if super::hardened_elicitation::is_initialize(&request) {
             // Hardened (row 10): refused before anything is minted.
             if !super::hardened_elicitation::declares_elicitation(&request) {
@@ -627,21 +620,18 @@ async fn meta_mcp_dispatch(
             }
             state
                 .multiplexer
-                .get_or_create_session_scoped(existing, &caller_owner, held)
+                .get_or_create_session_id_scoped(existing, &caller_owner, held)
         } else {
             // Hardened: only a declaring `initialize` opens a legacy session.
             match state
                 .multiplexer
-                .resume_session_scoped(existing, &caller_owner, held)
+                .resume_session_id_scoped(existing, &caller_owner, held)
             {
-                Some(resumed) => resumed,
+                Some(id) => id,
                 None => return super::hardened_elicitation::refusal().into_response(),
             }
-        };
-        (id, Some(rx))
+        }
     };
-    // Not a stream reader: a held subscription fakes a deliverable prompt.
-    drop(session_rx);
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
@@ -897,7 +887,7 @@ async fn meta_mcp_dispatch(
     let owner = tasks::route_task_owner(
         &state,
         verified_identity.as_ref(),
-        &session_owner_key(client.as_ref()),
+        &tasks::session_owner_key(client.as_ref()),
     );
 
     // An empty owner key is not an identity — `session_owner_key` says so in
@@ -1109,10 +1099,7 @@ async fn meta_mcp_dispatch(
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
                 principal: events::principal(&owner, state.auth_config.enabled),
-                api_key_name: client
-                    .as_ref()
-                    .filter(|c| c.authenticated)
-                    .map(|c| c.name.clone()),
+                credential: events::credential(client.as_ref(), credential_expiry, &state),
                 visible_backends: hub
                     .scope_backends()
                     .into_iter()
@@ -1356,7 +1343,7 @@ async fn meta_mcp_dispatch(
                     if !verdict.allowed {
                         // OWASP ASI10 (Rogue Agents): anomaly blocks use -32002;
                         // all other firewall blocks use -32600 (invalid request).
-                        let (code, reason) = if verdict.is_anomaly_block() {
+                        let (code, reason) = if verdict.is_asi10_block() {
                             let desc = verdict.findings.first().map_or(
                                 "Anomaly detection triggered: unusual tool sequence blocked",
                                 |f| f.description.as_str(),
@@ -1590,8 +1577,9 @@ async fn meta_mcp_dispatch(
                 },
             };
             if let Some(context) = signing_context.as_mut()
-                && let Err(error) = state.meta_mcp.prepare_signing_invocation(
+                && let Err(error) = state.meta_mcp.prepare_signing_for_call(
                     context,
+                    tool_name,
                     &arguments,
                     Some(&session_id),
                     &caller,
@@ -1615,7 +1603,7 @@ async fn meta_mcp_dispatch(
             // backend work, and the invocation policy the sync admission would
             // have pre-applied is applied again at the dispatch chokepoint that
             // the worker's own call goes through.
-            let admission = if caller.task.is_some() {
+            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected)
             } else {
                 state.meta_mcp.admit_meta_sync(
