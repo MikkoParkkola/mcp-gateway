@@ -31,7 +31,7 @@ use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 
 pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, recorded};
-pub(crate) use http::{HeldAnswerId, emit_http, to_http};
+pub(crate) use http::{HeldAnswerId, carry_record, emit_http, to_http};
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, callback_frame, delivered};
 pub(crate) use stdio::StdioReads;

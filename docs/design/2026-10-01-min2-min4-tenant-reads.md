@@ -835,11 +835,11 @@ a stated gap.
 | Item | Design | Implemented | Note |
 |---|---|---|---|
 | History | one `Arc<ReadHistory>`, a required `from_config` argument (2ad) | one per process: `Gateway` builds it and `response_firewall` gives it to both firewalls (`with_reads`) | `from_config` keeps two arguments: 63 call sites, all tests but one. The production constructor is the only one and shares it. Row 2b proves the share on the router |
-| Records | responses on meta/stdio in `response_delivery_attempt` | every judged frame writes one `tenant_read` event (§8 open question a, draft decision) | `response_delivery_attempt` keeps its meaning |
+| Records | responses on meta/stdio in `response_delivery_attempt` | every judged frame writes one `tenant_read` event (§8 open question a, draft decision); an HTTP answer's is written after `slot_http` (`emit_http`) | `response_delivery_attempt` keeps its meaning; with the transparency log on and `arg_keys` set this costs one more record per call (+82 us/call measured) |
 | H1-H4 POST | `OutboundReply` through `mcp_route` | judged after finalization, recorded, written by `outbound::to_http`; the body commits when read (F3) | early returns before dispatch are gateway refusals with no backend content; `mcp_route` and the compile-time guarantee are not built |
 | H5/H6 POST-SSE | notification channel carries frames | judged in `send_or_count` as queued; written by `sse_message` | as designed |
 | H7 GET stream | moved payload | each session's copy judged at enqueue for the session's `caller_key`; a `StreamMark` beside the note carries the ticket | the note stays a `TaggedNotification`; webhook items also judged on the raw body |
-| H8 listen | `OutboundReply::Stream` | each event judged for the listener's caller as written | row 11 |
+| H8 listen | `OutboundReply::Stream` | the acknowledgement judged as the listen request's answer (with its params), each event judged for the listener's caller as written | rows 11, 2k |
 | H9 direct | `OutboundHttp` | every answer judged in `audited_call` and written by `to_http` | |
 | S1/S2 stdio | queue of frames | as designed; key `stdio`; batch items judged and committed after the array | rows 3/4 stdio |
 | Bridged stdio requests | refusal to the waiter | judged; a withheld one returns `NoSession` at once, audited first | |

@@ -237,17 +237,19 @@ async fn open_listen(router: &axum::Router) -> Stream {
 
 /// [`open_listen`] whose request params also name `tenant`.
 async fn open_listen_naming(router: &axum::Router, tenant: Option<&str>) -> Stream {
-    let body = json!({
+    let mut body = json!({
         "jsonrpc": "2.0", "id": 9, "method": "subscriptions/listen",
         "params": {
             "notifications": { "toolsListChanged": true },
-            "customer_id": tenant,
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientCapabilities": {},
             },
         },
     });
+    if let Some(tenant) = tenant {
+        body["params"]["customer_id"] = json!(tenant);
+    }
     let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")

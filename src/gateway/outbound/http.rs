@@ -65,7 +65,27 @@ pub(crate) async fn emit_http(
             )
         },
     );
-    (StatusCode::SERVICE_UNAVAILABLE, axum::Json(refusal)).into_response()
+    let mut refused = (StatusCode::SERVICE_UNAVAILABLE, axum::Json(refusal)).into_response();
+    // The refusal keeps the answer's session header, so a legacy client keeps
+    // its session across it.
+    if let Some(session) = response.headers().get("mcp-session-id") {
+        refused
+            .headers_mut()
+            .insert("mcp-session-id", session.clone());
+    }
+    refused
+}
+
+/// A late replacer swapping `from` for `to`: the original's pending read
+/// record moves to the replacement, so [`emit_http`] still records the
+/// original assessment (design §4.6), and `from`'s body is dropped unread.
+pub(crate) fn carry_record(from: &mut axum::response::Response, to: &mut axum::response::Response) {
+    if let Some(record) = from.extensions_mut().remove::<PendingRecord>() {
+        to.extensions_mut().insert(record);
+    }
+    if let Some(id) = from.extensions_mut().remove::<HeldAnswerId>() {
+        to.extensions_mut().insert(id);
+    }
 }
 
 /// Write an answer frame as the HTTP response, with the session header when

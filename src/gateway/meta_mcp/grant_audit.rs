@@ -466,24 +466,32 @@ pub(crate) async fn slot_http<'a, R: axum::response::IntoResponse + Send + 'a>(
     };
     let response = response.into_response();
     // A judged answer holding a read reservation names its id beside the
-    // body: dropped unread, it commits nothing (MIK-7116.MIN.2 row 8).
-    let id = if let Some(held) = response
+    // body: dropped unread, it commits nothing (MIK-7116.MIN.2 row 8), and
+    // its pending read record moves to the refusal.
+    let held = response
         .extensions()
         .get::<crate::gateway::outbound::HeldAnswerId>()
-    {
-        held.0.clone()
+        .map(|held| held.0.clone());
+    let (id, judged) = if let Some(id) = held {
+        (id, Some(response))
     } else {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX).await;
-        body.ok()
+        let id = body
+            .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .and_then(|answer| serde_json::from_value::<RequestId>(answer["id"].clone()).ok())
+            .and_then(|answer| serde_json::from_value::<RequestId>(answer["id"].clone()).ok());
+        (id, None)
     };
     let body = JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string());
-    (
+    let mut replacement = (
         axum::http::StatusCode::SERVICE_UNAVAILABLE,
         axum::Json(body),
     )
-        .into_response()
+        .into_response();
+    if let Some(mut judged) = judged {
+        crate::gateway::outbound::carry_record(&mut judged, &mut replacement);
+    }
+    replacement
 }
 
 impl super::MetaMcp {

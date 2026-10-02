@@ -735,21 +735,21 @@ pub(crate) fn subscription_stream(
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;
 
-    // MIN.2: the acknowledgement is judged as the listen request's answer
-    // (its params can name a tenant); a refused one ends the stream.
-    let opened = acknowledgement
-        .response()
-        .is_some_and(|ack| ack.error.is_none());
-
     let stream = stream! {
         // The acknowledgement rides the stream it opens, so a client has one
         // thing to read rather than a body and then a stream.
         // Annotated because this function erases the stream into a
         // `Response`, so nothing else pins the error type.
-        if let Some(ack) = sse_data(&judge.record(acknowledgement).await) {
+        // MIN.2: the acknowledgement is judged as the listen request's answer
+        // (its params can name a tenant) and recorded; a refused one, or one
+        // its record replaced, ends the stream.
+        let acknowledgement = judge.record(acknowledgement).await;
+        let opened = acknowledgement
+            .response()
+            .is_some_and(|ack| ack.error.is_none());
+        if let Some(ack) = sse_data(&acknowledgement) {
             yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
         }
-
         if !opened {
             return;
         }
