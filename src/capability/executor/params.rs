@@ -458,3 +458,7 @@ fn detect_xml_format(headers: &reqwest::header::HeaderMap, response_format: &str
         false
     }
 }
+
+#[cfg(test)]
+#[path = "params_secret_tests.rs"]
+mod secret_tests;
