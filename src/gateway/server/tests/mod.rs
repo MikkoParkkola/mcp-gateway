@@ -74,3 +74,6 @@ mod response_firewall_anomaly;
 
 #[cfg(feature = "firewall")]
 mod hardened_destination;
+
+// MIK-7685 (#2530): stdio EOF teardown is bounded.
+mod stdio_teardown_bound;

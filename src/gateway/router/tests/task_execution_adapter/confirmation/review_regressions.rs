@@ -344,3 +344,69 @@ async fn c_cancel_that_loses_to_settlement_is_answered_from_the_committed_view()
         "an absent task stays NotFound"
     );
 }
+
+/// C2: a `cancel` behind a non-terminal move is retried once at the revision it
+/// re-reads, and only that retry cancels.
+///
+/// Mutant: the retry reuses the stale revision, or answers the stale view
+/// without cancelling, and the owner's task keeps working after a cancel it
+/// was told succeeded.
+#[tokio::test]
+async fn c2_a_cancel_behind_a_non_terminal_move_is_retried_at_the_current_revision() {
+    use crate::gateway::task_service::TaskTransition;
+    use crate::gateway::task_service::execution::TaskWrite;
+
+    let (mock, mut gate) = MockBackend::holding(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let owner = alice();
+
+    let created = post(
+        &state,
+        "key-a",
+        task_invoke(2, "cancel-retry", json!({ "read": true })),
+    )
+    .await;
+    let id = task_id(&created);
+    gate.wait_for_dispatch().await;
+    let captured = state
+        .tasks
+        .get(&owner, &id)
+        .expect("the working record is readable by its own owner")
+        .revision;
+
+    // Move the record without settling it: the cancel's revision is now stale
+    // while the task is still working.
+    state
+        .task_executor
+        .commit(TaskWrite::Settle {
+            principal: &owner,
+            id: &id,
+            revision: captured,
+            event: TaskTransition::StatusMessage(Some("moved".into())),
+            targets: None,
+        })
+        .await
+        .unwrap_or_else(|_| panic!("a status message commits on the working row"));
+    let moved = state.tasks.get(&owner, &id).unwrap();
+    assert!(
+        moved.revision > captured,
+        "the record moved past the capture"
+    );
+    std::assert_eq!(moved.task.status(), TaskStatus::Working);
+
+    let answer = state
+        .task_executor
+        .cancel(&owner, &id, captured)
+        .await
+        .expect("a cancel behind a non-terminal move is retried, not refused");
+    std::assert_eq!(answer.task.status(), TaskStatus::Cancelled);
+    assert!(
+        answer.revision > moved.revision,
+        "the retry wrote the cancel"
+    );
+    let after = state.tasks.get(&owner, &id).unwrap();
+    std::assert_eq!(after.task.status(), TaskStatus::Cancelled);
+    std::assert_eq!(after.revision, answer.revision);
+
+    gate.release_all();
+}
