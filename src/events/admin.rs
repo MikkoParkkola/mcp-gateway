@@ -25,6 +25,7 @@ pub(crate) enum ReplayRefusal {
     FirewallBlocked,
     TooLarge,
     OutboxFull,
+    AlreadyPending,
     /// The pipeline is not running or the store failed.
     Unavailable,
 }
@@ -38,6 +39,7 @@ impl ReplayRefusal {
             Self::FirewallBlocked => "firewall_blocked",
             Self::TooLarge => "too_large",
             Self::OutboxFull => "outbox_full",
+            Self::AlreadyPending => "already_pending",
             Self::Unavailable => "unavailable",
         }
     }
@@ -65,19 +67,19 @@ impl EventsHub {
         reason: Option<&str>,
     ) -> Vec<Value> {
         self.store
-            .dead_letters()
+            .dead_summaries()
             .into_iter()
-            .filter(|(d, _)| subscription.is_none_or(|s| d.record.subscription_id == s))
-            .filter(|(d, _)| reason.is_none_or(|r| d.reason == r))
-            .map(|(d, size)| {
+            .filter(|d| subscription.is_none_or(|s| d.subscription_id == s))
+            .filter(|d| reason.is_none_or(|r| d.reason == r))
+            .map(|d| {
                 json!({
-                    "eventId": d.record.event_id,
-                    "subscriptionId": d.record.subscription_id,
-                    "name": d.record.name,
+                    "eventId": d.event_id,
+                    "subscriptionId": d.subscription_id,
+                    "name": d.name,
                     "reason": d.reason,
                     "deadAt": d.dead_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                    "sizeBytes": size,
-                    "attempts": d.record.attempt,
+                    "sizeBytes": d.size,
+                    "attempts": d.attempts,
                 })
             })
             .collect()
@@ -93,10 +95,7 @@ impl EventsHub {
             .ok_or(ReplayRefusal::Unavailable)?;
         let dead = self
             .store
-            .dead_letters()
-            .into_iter()
-            .map(|(d, _)| d)
-            .find(|d| d.record.event_id == event_id)
+            .dead_letter_by_id(event_id)
             .ok_or(ReplayRefusal::NotFound)?;
         let now = Utc::now();
         let sub = self
@@ -145,7 +144,7 @@ impl EventsHub {
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);
         let id = event_id.to_owned();
         match self
-            .blocking(move |store| store.revive(&id, dead_at, record, caps))
+            .blocking(move |store| store.revive(&id, dead_at, record, caps, now))
             .await
         {
             Some(Revived::Written) => {
@@ -154,6 +153,7 @@ impl EventsHub {
             }
             Some(Revived::NoSubscription) => Err(ReplayRefusal::SubscriptionGone),
             Some(Revived::Full) => Err(ReplayRefusal::OutboxFull),
+            Some(Revived::AlreadyPending) => Err(ReplayRefusal::AlreadyPending),
             Some(Revived::Missing) => Err(ReplayRefusal::NotFound),
             None => Err(ReplayRefusal::Unavailable),
         }

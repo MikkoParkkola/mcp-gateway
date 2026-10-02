@@ -568,42 +568,61 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
     let stale = now + chrono::Duration::seconds(1);
     assert_eq!(
         store
-            .revive("e1", stale, fresh("e1", "s1"), roomy)
+            .revive("e1", stale, fresh("e1", "s1"), roomy, now)
             .expect("io"),
         Revived::Missing,
         "a dead letter buried again since the scan is not revived"
     );
     assert_eq!(
         store
-            .revive("e2", now, fresh("e2", "gone"), roomy)
+            .revive("e2", now, fresh("e2", "gone"), roomy, now)
             .expect("io"),
         Revived::NoSubscription
     );
+    let later = now + chrono::Duration::hours(2);
+    assert_eq!(
+        store
+            .revive("e1", now, fresh("e1", "s1"), roomy, later)
+            .expect("io"),
+        Revived::NoSubscription,
+        "an expired subscription takes no replay before its sweep"
+    );
+    store.enqueue(record("e3", "s1", now), roomy).expect("io");
+    assert_eq!(
+        store
+            .revive("e3", now, fresh("e3", "s1"), roomy, now)
+            .expect("io"),
+        Revived::AlreadyPending,
+        "a record already pending under the id is not a replay"
+    );
+    store
+        .settle("e3", now, Settle::Delivered, now, ROOMY)
+        .expect("io");
     let full = OutboxCaps {
         global: 0,
         per_subscription: 0,
     };
     assert_eq!(
         store
-            .revive("e3", now, fresh("e3", "s1"), full)
+            .revive("e3", now, fresh("e3", "s1"), full, now)
             .expect("io"),
         Revived::Full
     );
     assert_eq!(
-        store.dead_letters().len(),
+        store.dead_summaries().len(),
         3,
         "every refusal keeps its letter"
     );
     assert_eq!(
         store
-            .revive("e1", now, fresh("e1", "s1"), roomy)
+            .revive("e1", now, fresh("e1", "s1"), roomy, now)
             .expect("io"),
         Revived::Written
     );
     let left: Vec<String> = store
-        .dead_letters()
+        .dead_summaries()
         .into_iter()
-        .map(|(d, _)| d.record.event_id)
+        .map(|d| d.event_id)
         .collect();
     assert_eq!(left, ["e2", "e3"], "only the revived letter left dead/");
     assert!(!dir.path().join("dead/e1.json").exists(), "and its file");

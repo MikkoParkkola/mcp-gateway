@@ -96,6 +96,18 @@ fn dead_size(dead: &DeadLetter) -> u64 {
     serde_json::to_vec_pretty(dead).map_or(0, |b| u64::try_from(b.len()).unwrap_or(u64::MAX))
 }
 
+/// A dead letter without its body, for the admin listing.
+#[derive(Debug, Clone)]
+pub(crate) struct DeadSummary {
+    pub event_id: String,
+    pub subscription_id: String,
+    pub name: String,
+    pub reason: String,
+    pub dead_at: DateTime<Utc>,
+    pub size: u64,
+    pub attempts: u32,
+}
+
 /// What [`Store::revive`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Revived {
@@ -104,6 +116,8 @@ pub(crate) enum Revived {
     NoSubscription,
     /// The outbox is at a cap.
     Full,
+    /// The outbox already holds this event id.
+    AlreadyPending,
     /// The dead letter was swept, evicted or replayed meanwhile.
     Missing,
 }
@@ -160,14 +174,30 @@ impl Store {
         Ok(Enqueued::Written)
     }
 
-    /// Every dead letter with its file size, oldest first.
-    pub(crate) fn dead_letters(&self) -> Vec<(DeadLetter, u64)> {
+    /// Every dead letter's metadata, oldest first: never a body, so a full
+    /// directory is listed without copying it.
+    pub(crate) fn dead_summaries(&self) -> Vec<DeadSummary> {
         let state = self.state.lock();
-        let mut all: Vec<(DeadLetter, u64)> = state.dead.values().cloned().collect();
-        all.sort_by(|a, b| {
-            (a.0.dead_at, &a.0.record.event_id).cmp(&(b.0.dead_at, &b.0.record.event_id))
-        });
+        let mut all: Vec<DeadSummary> = state
+            .dead
+            .values()
+            .map(|(d, size)| DeadSummary {
+                event_id: d.record.event_id.clone(),
+                subscription_id: d.record.subscription_id.clone(),
+                name: d.record.name.clone(),
+                reason: d.reason.clone(),
+                dead_at: d.dead_at,
+                size: *size,
+                attempts: d.record.attempt,
+            })
+            .collect();
+        all.sort_by(|a, b| (a.dead_at, &a.event_id).cmp(&(b.dead_at, &b.event_id)));
         all
+    }
+
+    /// Dead letter `event_id`, body included.
+    pub(crate) fn dead_letter_by_id(&self, event_id: &str) -> Option<DeadLetter> {
+        self.state.lock().dead.get(event_id).map(|(d, _)| d.clone())
     }
 
     /// Move dead letter `event_id` back to the outbox as `record` (the same
@@ -181,6 +211,7 @@ impl Store {
         dead_at: DateTime<Utc>,
         record: OutboxRecord,
         caps: OutboxCaps,
+        now: DateTime<Utc>,
     ) -> std::io::Result<Revived> {
         let mut state = self.state.lock();
         if state
@@ -190,6 +221,19 @@ impl Store {
         {
             return Ok(Revived::Missing);
         }
+        // An expired subscription takes nothing, even before its sweep.
+        if !state
+            .subs
+            .get(&record.subscription_id)
+            .is_some_and(|s| s.live(now))
+        {
+            return Ok(Revived::NoSubscription);
+        }
+        // The same occurrence is already pending: nothing to place, and the
+        // dead letter is not dropped for a record that is not the replay.
+        if state.outbox.contains_key(event_id) {
+            return Ok(Revived::AlreadyPending);
+        }
         match self.enqueue_locked(&mut state, record, caps)? {
             Enqueued::Written => {}
             Enqueued::NoSubscription => return Ok(Revived::NoSubscription),
@@ -197,7 +241,15 @@ impl Store {
                 return Ok(Revived::Full);
             }
         }
-        remove_record_durable(&self.dead_dir, &OutboxRecord::file(event_id))?;
+        // The dead file must go before the replay counts: a failed unlink
+        // rolls the new record back, so exactly one of the two stands.
+        // ponytail: a failed rollback unlink leaves a stray outbox file; the
+        // next claim of the same id finds it and delivers it once.
+        if let Err(error) = remove_record_durable(&self.dead_dir, &OutboxRecord::file(event_id)) {
+            state.outbox.remove(event_id);
+            let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
+            return Err(error);
+        }
         state.dead.remove(event_id);
         Ok(Revived::Written)
     }

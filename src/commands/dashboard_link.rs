@@ -216,6 +216,9 @@ pub(crate) async fn admin_call(
             .unwrap_or("no reason given");
         return Err(format!("the gateway answered {status}: {reason}"));
     }
+    if body.is_null() {
+        return Err(format!("the gateway answered {status} with no JSON body"));
+    }
     Ok(body)
 }
 
