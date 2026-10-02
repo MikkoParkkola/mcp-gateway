@@ -31,10 +31,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-pub(crate) use records::{ApiKeyRef, Credential};
+pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
-pub(crate) use services::Services;
+pub(crate) use services::{LiveCredentials, Services};
 pub(crate) use types::RpcError;
 pub(crate) use webhook_source::Inbound;
 
