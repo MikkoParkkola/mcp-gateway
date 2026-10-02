@@ -607,7 +607,25 @@ async fn a_refused_registration_releases_the_callback_listener() {
 #[tokio::test]
 async fn background_renewal_stops_at_a_refused_refresh() {
     let dir = tempfile::tempdir().unwrap();
+    assert_renewal_stops_at_the_refusal(client_with_refused_refresh(dir.path()).await).await;
+}
+
+/// The headless `client_credentials` fallback, taken when no refresh token is
+/// held, stops at the same refusal.
+#[tokio::test]
+async fn background_renewal_stops_at_a_refused_client_credentials_grant() {
+    let dir = tempfile::tempdir().unwrap();
     let mut client = client_with_refused_refresh(dir.path()).await;
+    if let Some(token) = client.current_token.write().as_mut() {
+        token.refresh_token = None;
+    }
+    if let Some(meta) = client.auth_metadata.as_mut() {
+        meta.grant_types_supported = vec!["client_credentials".to_string()];
+    }
+    assert_renewal_stops_at_the_refusal(client).await;
+}
+
+async fn assert_renewal_stops_at_the_refusal(mut client: OAuthClient) {
     client.token_refresh_buffer_secs = 300;
     let (guard, buffer) = crate::oauth::callback::tests::capture();
     let ended = tokio::time::timeout(
@@ -623,7 +641,7 @@ async fn background_renewal_stops_at_a_refused_refresh() {
     let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
     assert!(
         ended.is_ok(),
-        "the task kept retrying a refused refresh: {log}"
+        "the task kept retrying a refused renewal: {log}"
     );
     assert!(log.contains("SSRF blocked"), "the refusal is logged: {log}");
     assert!(

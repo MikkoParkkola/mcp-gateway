@@ -363,6 +363,30 @@ mod tests {
         }
     }
 
+    /// A discovery document that is not JSON names the category too: reqwest
+    /// attaches the request URL to a decode error as well as to a send error.
+    #[tokio::test]
+    async fn an_unparsable_discovery_document_does_not_echo_the_url() {
+        use axum::{Router, routing::get};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let authority = listener.local_addr().unwrap().to_string();
+        let app = Router::new().fallback(get(|| async { "not json" }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let base = format!("http://{authority}");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let server = AuthorizationServerMetadata::discover(&client, &base, IssuerSource::Origin)
+            .await
+            .expect_err("the body is not JSON");
+        let resource = ProtectedResourceMetadata::discover(&client, &base)
+            .await
+            .expect_err("the body is not JSON");
+        for error in [server, resource] {
+            let text = error.to_string();
+            assert!(!text.contains(&authority), "the URL is echoed: {text}");
+            assert!(text.ends_with(": response parse failed"), "{text}");
+        }
+    }
+
     #[tokio::test]
     async fn an_advertised_issuer_is_held_to_the_rfc_s_identical() {
         // The resource server advertised this identifier, so every character
