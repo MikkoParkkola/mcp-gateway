@@ -255,12 +255,10 @@ thread_local! {
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-async fn fixture_inner(
-    answer: Answer,
-    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    let auth = AuthConfig {
+/// The auth the fixture serves: four keys, plus a client breaker when asked.
+fn fixture_auth() -> AuthConfig {
+    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
+    let mut auth = AuthConfig {
         enabled: true,
         api_keys: vec![
             key("k-std"),
@@ -277,18 +275,22 @@ async fn fixture_inner(
         ..Default::default()
     };
     #[cfg(feature = "firewall")]
-    let auth = if CLIENT_BREAKER.with(std::cell::Cell::get) {
-        AuthConfig {
-            client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
-                enabled: true,
-                failure_threshold: 1,
-                ..crate::config::CircuitBreakerConfig::default()
-            }),
-            ..auth
-        }
-    } else {
-        auth
-    };
+    if CLIENT_BREAKER.with(std::cell::Cell::get) {
+        auth.client_circuit_breaker = Some(crate::config::CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 1,
+            ..crate::config::CircuitBreakerConfig::default()
+        });
+    }
+    auth
+}
+
+async fn fixture_inner(
+    answer: Answer,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    let auth = fixture_auth();
     let (mut state, store) = if HARDENED.with(std::cell::Cell::get) {
         let mut config = crate::config::Config::default();
         config.security.posture = crate::security::SecurityPosture::Hardened;
