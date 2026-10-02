@@ -294,7 +294,13 @@ fn answer(state: &State, frame: Value) -> Response {
                 .insert("mcp-session-id", SESSION.parse().expect("header"));
             response
         }
-        "subscriptions/listen" if modern => listen(state, &id, &frame),
+        "subscriptions/listen"
+            if modern
+                && frame["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]
+                    .is_string() =>
+        {
+            listen(state, &id, &frame)
+        }
         "resources/subscribe" | "resources/unsubscribe" if !modern => {
             let uri = frame["params"]["uri"]
                 .as_str()
@@ -411,7 +417,7 @@ def handle(frame):
                   "serverInfo": {"name": "peer", "version": "0"}})
     elif m == "initialize" and not modern:
         reply(i, {"protocolVersion": "2025-06-18", "capabilities": CAPS, "serverInfo": {"name": "peer", "version": "0"}})
-    elif m == "subscriptions/listen" and modern:
+    elif m == "subscriptions/listen" and modern and "io.modelcontextprotocol/protocolVersion" in p.get("_meta", {}):
         listens[i] = p
         out({"jsonrpc": "2.0", "method": "notifications/subscriptions/acknowledged",
              "params": {"notifications": p.get("notifications", {}), "_meta": {"io.modelcontextprotocol/subscriptionId": i}}})
@@ -434,6 +440,8 @@ while True:
             with open(path) as f: note = json.load(f)
             os.remove(path)
             if note["method"] == "__exit__": sys.exit(0)
+            if note["method"] == "__raw__":
+                out(note["params"]); continue
             push(note["method"], note.get("params", {}))
 "#;
 

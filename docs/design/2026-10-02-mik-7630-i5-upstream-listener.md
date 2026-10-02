@@ -87,29 +87,31 @@ depends on the transport and on `cached_era()` read at each (re)connect:
 
 | Backend | Era | Upstream channel | Resource interest | Close |
 |---|---|---|---|---|
-| HTTP (`http_url`, streamable or plain) | Modern | `POST subscriptions/listen`, SSE body read until it ends | `resourceSubscriptions` in the filter | drop the body stream |
-| HTTP (streamable or plain) | Legacy | `GET` on the base URL with `Accept: text/event-stream` and the shared bucket's `Mcp-Session-Id` | `resources/subscribe` per URI on that same session | `resources/unsubscribe` per URI, then drop the GET |
+| HTTP, `streamable_http: true` | Modern | `POST subscriptions/listen`, SSE body read until it ends | `resourceSubscriptions` in the filter | drop the body stream |
+| HTTP, `streamable_http: true` | Legacy | `GET` on the base URL with `Accept: text/event-stream` and the shared bucket's `Mcp-Session-Id` (a new `HeaderMode::SessionStream`; the existing `HeaderMode::Sse` deliberately omits the session, `http/mod.rs:1078`) | `resources/subscribe` per URI on that same session | `resources/unsubscribe` per URI, then drop the GET |
 | stdio | Modern | `subscriptions/listen` written as a request; the reader routes frames tagged with its id to the listener | `resourceSubscriptions` in the filter | `notifications/cancelled` naming the listen id |
 | stdio | Legacy | the reader's out-of-request notifications | `resources/subscribe` per URI | `resources/unsubscribe` per URI |
 | WebSocket | Legacy only | as stdio legacy | as stdio legacy | as stdio legacy |
-| HTTP+SSE handshake (`http_url` ending `/sse`), A2A | — | none: no b2 descriptors (§6) | — | — |
+| HTTP without `streamable_http: true` (the SSE handshake path, `http/mod.rs:765`), A2A | — | none: no b2 descriptors (§6) | — | — |
 
 **Filter changes.** Modern: the filter is fixed per listen request, so a change
 (first subscriber of a new URI or kind, last subscriber of one) opens a new
 listen with the new filter, waits for its acknowledgement, then closes the old
-one (make before break), so no notification falls into the gap. Overlap rule:
-until the new listen is acknowledged, frames are taken from the old stream
-only; from the acknowledgement on, from the new stream only, and anything still
-arriving on the old one is discarded. A change that arrives while both are open
-is therefore emitted once, by construction, not by the coalescer. Legacy: one
+one (make before break). Overlap rule: while both are open, frames from
+**both** are accepted, and the old stream is drained until it ends. Nothing
+is lost to the switch; a change sent on both streams may be emitted twice if
+the copies fall in different coalescing windows. That is the chosen trade: a
+change event means "re-read the resource", so a duplicate costs one extra read
+and a gap costs a missed change. Legacy: one
 `resources/subscribe` or `resources/unsubscribe` on the existing channel; the
 list-changed kinds need nothing upstream, they are filtered locally.
 
-**Legacy HTTP session order.** The GET must name a session that exists, so
-the listener first ensures the shared bucket has one (the transport mints it
-on the first request; `resources/subscribe` for the first URI, or a
-`resources/list` when only list kinds are needed), then opens the GET with that
-`Mcp-Session-Id`. A 404 on the GET or on a subscribe means the session expired:
+**Legacy HTTP session order.** A session-bound GET must name a session that
+exists, so the listener first makes one request on the shared bucket
+(`resources/subscribe` for the first URI, or `resources/list` when only list
+kinds are needed), then opens the GET with the bucket's `Mcp-Session-Id`, or
+without one when the backend assigned none (sessionless servers are
+conforming). A 404 on the GET or on a subscribe means the session expired:
 the transport re-establishes it as it does today for requests, and the listener
 reopens the GET and re-sends the whole URI set.
 
@@ -118,9 +120,18 @@ reopens the GET and re-sends the whole URI set.
 A kind or URI the acknowledgement omits is recorded as unsupported for that
 backend (counter + one `warn` per change of the acknowledged set); the listener
 stays open for what was honoured and does not reconnect to retry the omission.
-A peer that acknowledges with a non-`complete` JSON-RPC response as its first
-frame (this gateway does, today; §11) is accepted as acknowledged with the full
-filter, so a gateway behind a gateway works.
+A peer that acknowledges with a JSON-RPC success response as its first frame
+is accepted as acknowledged with the full filter only in the exact shape this
+gateway sends today (§11): `id` equal to the listen id, a result holding only
+`_meta` with that subscription id, and no `resultType: "complete"`. Any other
+response, and any later response, is the graceful end; a first-frame response
+in that shape is the acknowledgement only and does not end the stream. This
+keeps a gateway behind a gateway working without a reconnect loop.
+
+**Request shape (modern).** The listen request carries the modern
+`_meta` envelope (`protocolVersion`, `clientInfo`, `clientCapabilities`) the
+transport already adds to every 2026 request (`with_modern_meta`,
+`http/mod.rs:430`); the mock peers refuse a listen without it.
 
 **Legacy refusals.** `resources/subscribe` answered `-32601` (or the backend
 lacks `resources.subscribe`) marks that backend's resource interest
@@ -155,16 +166,26 @@ async fn unsolicited(&self) -> Result<FrameStream> { Err(Error::Protocol("not su
 
 - **HTTP.** Both methods clone the transport's own `reqwest::Client`, so the
   backend's destination pinning and redirect policy apply unchanged, and run
-  the body read on a spawned task that holds no `Arc` of the transport.
+  the body read on a spawned task that holds no `Arc` of the transport. The
+  transport owns a cancellation token those tasks select on, and `close()`
+  cancels it, so a restart or stop ends the streams at once instead of waiting
+  for the server or the hourly recycle.
   Headers come from `build_mcp_headers` (+ `finalise_modern_headers` for
   `listen`), shared bucket only (`identity_key = None`). The body is decoded
   with `SseDecoder::new(64 KiB)`, not the 10 MiB request cap: a notification
   is small, and a frame over the cap ends the stream (and reconnects). The
   client's total timeout would cut a long stream, so these requests set a
   per-request timeout of 1 h: the stream is recycled hourly. Modern recycles
-  make before break. Legacy opens the new GET on the same session before the old
-  one is dropped; the session's subscriptions are server-side and survive, so
-  nothing is re-sent and there is no gap.
+  make before break. Legacy keeps one GET at a time (a legacy server sends each
+  message on one stream only, so two GETs would split them): the recycle is an
+  ordinary reconnect with a gap of one round trip, inside the emit-only
+  contract. The session's subscriptions are server-side, so nothing is re-sent
+  unless the session expired.
+- **What crosses a channel.** Never a whole backend frame. The producing side
+  (HTTP body task or reader loop) projects each accepted frame to a small
+  `UpstreamNote { kind, uri: Option<String>, subscription_id: Option<Value> }`
+  and drops (and counts) a frame whose `uri` exceeds 2 048 bytes, so 64 queued
+  notes are a few hundred KiB at most whatever the backend sends.
 - **stdio / WebSocket.** The reader loop gains one routing step before the
   "Ignoring" arm: a frame tagged with a registered listen id goes to that
   listen's sender; otherwise one of the three §1 methods goes to the
@@ -203,7 +224,9 @@ Need(backend) = { kinds: {resources_changed?, prompts_changed?},
 `on_first_subscriber(key, …, name, arguments)` parses `(backend, kind, uri)`
 from the name and arguments, adds it to `Need`, and, if `Need` went from empty
 to non-empty, starts the listener task. `on_last_subscriber(key)` re-parses the
-key (it is the JCS of name and arguments, so nothing extra is stored), removes
+key (it is the JCS of name and arguments, so nothing extra is stored; the
+name is split as `backend.` + backend + `.` + one of the three known kind
+suffixes, so a dotted backend name round-trips), removes
 it, and, when `Need` is empty, stops the task. Each change in `Need` is sent to
 the task on a `watch` channel; the task applies it as in §3 (make before break,
 or one subscribe/unsubscribe). With the default key two principals subscribing
@@ -229,6 +252,8 @@ loop {
   stream = open per §3 (listen | unsolicited + resources/subscribe per URI)
   drop(transport)                             // never hold the Arc across the read
   read frames → coalesce → emit, applying Need changes, until the stream ends
+  // each control RPC (a new listen, resources/(un)subscribe) re-acquires the
+  // transport through ensure_entry_started for that call only
 }
 ```
 
@@ -252,16 +277,19 @@ refusing (`stopping` latched) and exits.
 
 A backend offers the three descriptors when all hold:
 
-1. Its transport is stdio, WebSocket, or HTTP without the `/sse` handshake.
-   HTTP+SSE (2024-11-05) needs a second initialised session on its own GET
-   stream, and A2A has no MCP notifications; neither gets descriptors in 4.0.
-2. Its catalogue is the shared one: `catalogue_credential_for` admits an
-   identity-free caller with binding `None`. The listener runs on the shared
-   slot under the gateway's own upstream credential. For a backend with
-   identity propagation or per-caller isolation that credential is not the
-   subscriber's, and notifications seen under it could name resources the
-   subscriber cannot read. Those backends get no b2 descriptors (stated limit,
-   §10).
+1. Its transport is stdio, WebSocket, or HTTP with `streamable_http: true`.
+   Any other `http_url` backend takes the SSE handshake path
+   (`http/mod.rs:765`, whatever the URL suffix); listening there needs the
+   handshake GET kept open (§11 D2). A2A has no MCP notifications. Neither
+   gets descriptors in 4.0.
+2. It has no `identity_propagation` block at all (`required: false`
+   included) and is not isolated per caller on the meta route
+   (`meta_route_isolation_refused_for_caller`). Both are read from config
+   explicitly, not inferred from what an identity-free caller is admitted to.
+   The listener runs on the shared slot under the gateway's own upstream
+   credential; for such a backend that is not the subscriber's credential, and
+   notifications seen under it could name resources the subscriber cannot
+   read. Those backends get no b2 descriptors (stated limit, §11 D3).
 3. The events source config `sources.backend_notifications` is true (parent §9).
 
 Eligibility is computed from config, not from the backend's runtime
@@ -284,8 +312,13 @@ every fan-out, parent §4) for a b2 name:
   only through a resource template are refused, as `resources/read` refuses
   them.
 
-Subscribe-time `authorize` may fill the catalogue (it runs on the subscribe
-request, bounded by the fill budget). The fan-out re-check never does: a fill
+Subscribe-time `authorize` reads the catalogue, filling it if needed (it runs
+on the subscribe request, bounded by the fill budget). If the catalogue cannot
+be read (the backend is down), the subscribe is admitted, as the parent's
+offline rule requires (§3.3); if it is read and lacks the URI, `-32012`. The
+listener emits nothing for a backend until it holds a good snapshot, so a URI
+admitted while the backend was down is checked before any event is sent, and
+revoked then if absent. The fan-out re-check never does: a fill
 can start the backend and wait on `resources/list`, and fan-out is one task for
 every source, so a slow backend would stall webhook and task events too.
 Instead the listener keeps the backend's last successfully read URI set (read
@@ -298,6 +331,22 @@ fan-out reads only that snapshot:
 - a successfully read snapshot that lacks the URI → revoke (parent F9).
 
 A transient catalogue failure therefore never deletes subscriptions.
+
+**Keeping the snapshot current.** Whenever a backend has any `resource_updated`
+interest the listener asks upstream for `resources/list_changed` too, whether
+or not anyone subscribed to `resources_changed` (that event is emitted only
+when someone did), re-reads the catalogue on each one, and also re-reads it
+every catalogue cache TTL. A failed re-read is retried with the listener's
+backoff and keeps the previous snapshot, so a removal takes effect at the next
+successful read.
+
+**Every attempt, not only fan-out.** The parent design re-runs the access check
+before every delivery attempt (§3.2 step 7), `EventSource::authorize` included.
+I2's worker checks backend admission only, because `authorize` arrives with
+I4. I5 requires the attempt path to call `authorize` (I4 wiring, coordinated
+with L8), and b2's `authorize` reads the same snapshot synchronously: URI
+absent from a good snapshot cancels the subscription's pending records; no
+good snapshot defers the attempt, as a missing rate token does.
 
 **Kept out of `SubscriptionRegistry`.** b2 notifications go only to
 `EventsHub::emit`; nothing in I5 calls `publish` or `publish_for_backend`, so
@@ -326,10 +375,10 @@ list.
 
 | Limit | Value | Over it |
 |---|---|---|
-| URIs per backend listener | 1 024 (const) | subscribe answers `-32013`, `data.limit = "upstream_uris"` |
+| URIs per backend listener | 1 024 and 32 KiB encoded (consts) | subscribe answers `-32013`, `data.limit = "upstream_uris"` |
 | URI length | 2 048 bytes | `-32602`, `data.field = "arguments.uri"` |
 | Listeners | one per eligible backend | — (bounded by config) |
-| SSE frame | 64 KiB | stream ends, reconnect |
+| SSE frame | 64 KiB (twice the URI budget, so an acknowledgement echoing the whole filter always fits) | stream ends, reconnect |
 | Tap channel | 64 frames | drop and count |
 
 Per-principal and global subscription caps (I1) already bound how many keys
@@ -372,16 +421,17 @@ emitted event: upstream notifications carry no stable id.
 | `-32601` / 405 / omitted in acknowledgement | mark unsupported (§3); no fast retry |
 | Backend restarted (new process or session) | old stream closes; reconnect re-sends the whole `Need` (the spec: the server keeps no subscription state across reconnects) |
 | Backend removed from config | the core deletes its subscriptions (parent F10) → `on_last_subscriber` → task stops |
-| Hourly recycle | modern: make before break; legacy: new GET on the same session before the old one drops; no backoff |
+| Hourly recycle | modern: make before break; legacy: ordinary reconnect, one GET at a time; no backoff |
+| Backend restarted while the old transport is kept alive for a busy caller | the task holds a `Weak` of the transport it opened on and compares it with the slot's current one every 5 s and on every frame; on a change it drops its stream and reconnects. The `Weak` does not count toward the strong count `force_restart` waits on |
 
 Backoff is jittered exponential, 1 s doubling to a 5 min cap (`backon`, as
 `src/failsafe/retry.rs` uses it), reset once a stream has been acknowledged
 (modern) or has stayed open 60 s (legacy). Unsupported waits at the cap.
 
 Notifications sent while disconnected are lost: the emit-only contract
-(parent F3). The make-before-break filter change and the hourly recycle are
-the two places I5 avoids a self-inflicted gap; a backend restart is not one of
-them.
+(parent F3). Modern filter changes and the modern hourly recycle avoid a
+self-inflicted gap (at the price of a possible duplicate, §3); the legacy
+recycle and every reconnect have one.
 
 Observability: per backend, plain `AtomicU64` counters beside I2's runtime drop
 counters (connected flag, reconnects, drops by reason: `tap_full`, `untagged`,
@@ -416,9 +466,9 @@ refused. The row does not pretend to test a per-principal URI policy.
 
 | Row | Era / transport | Clauses (each a separate assertion) |
 |---|---|---|
-| T39a | modern HTTP | (1) subscribe `resource_updated {uri: a}` → peer sees exactly one `subscriptions/listen` whose filter names `a`; (2) a second principal subscribing to `a` → still one live listen naming `a`; (3) push `resources/updated a` → one event per subscription, `data == {"uri": a}`; push `…updated b` → none; (4) subscribe `b` → the peer's log shows a new listen naming `a` and `b`, acknowledged before the old stream closes, and a push of `a` after the change is delivered once (the overlap rule itself is a unit row, so this clause does not lean on the coalescer); (5) unsubscribe all → the peer sees the stream close and no listen remains; (6) `resources/list_changed` and `prompts/list_changed` with matching subscriptions → one `resources_changed` and one `prompts_changed` event; (7) a frame without the listen tag → no event |
+| T39a | modern HTTP | (1) subscribe `resource_updated {uri: a}` → peer sees exactly one `subscriptions/listen` whose filter names `a`; (2) a second principal subscribing to `a` → still one live listen naming `a`; (3) push `resources/updated a` → one event per subscription, `data == {"uri": a}`; push `…updated b` → none; (4) subscribe `b` → the peer's log shows a new listen naming `a` and `b`, acknowledged before the old stream closes, and a push of `a` after the change is delivered (at least once; §3 allows a duplicate across the switch, the overlap rule is a unit row); (5) unsubscribe all → the peer sees the stream close and no listen remains; (6) `resources/list_changed` and `prompts/list_changed` with matching subscriptions → one `resources_changed` and one `prompts_changed` event; (7) a frame without the listen tag → no event |
 | T39b | legacy HTTP | (1) one `resources/subscribe a` and one GET stream on the same session id; (2) as T39a(3); (3) last unsubscribe → `resources/unsubscribe a`, GET closed; (4) as T39a(6) |
-| T39c | modern stdio | as T39a (1), (3), (5) with close seen as `notifications/cancelled` naming the listen id, (6) |
+| T39c | modern stdio | as T39a (1), (3), (5) with close seen as `notifications/cancelled` naming the listen id, (6), (7) on the shared stdio channel |
 | T39d | legacy stdio | as T39b (1)–(4), channel = stdout lines |
 | T39e | WebSocket | as T39d |
 | T39f | any (modern HTTP) | `resource_updated {uri: file:///secret}` (not in the catalogue) → `-32012`; carol → `-32011`; the peer sees no listen for either |
@@ -437,8 +487,8 @@ only after the same row has seen the event subscriber receive the push.
 
 **Unit rows (in `src/`, not red-first, landing with the code):** refcount
 algebra of `Need` (two keys sharing a URI, last-unsubscribe order); key
-re-parse round trip; coalescer window; the tag filter; the overlap rule (a frame on the old stream after the new acknowledgement is discarded); the acknowledgement
-check including the response-as-ack compatibility rule; the tap's `try_send`
+re-parse round trip; coalescer window; the tag filter; the overlap rule (both streams accepted until the old one ends); the projection to `UpstreamNote` and its 2 048-byte URI drop; the transport-generation check (a replaced slot transport ends the stream while the old `Arc` is still held elsewhere); a full tap does not delay an ordinary request's response or a progress notification on the same transport; the acknowledgement
+check including the response-as-ack compatibility rule and its exact shape; `force_restart` reaching strong count one while a listener holds its lease and an open `FrameStream`; key parse for a dotted backend name; the tap's `try_send`
 never blocking a full channel; the snapshot rule of §7 (error keeps, read-and-
 absent revokes); and the idle lease, driven in-crate rather than through the
 reaper's 60 s sweep (`SWEEP_INTERVAL`, `src/gateway/server/mod.rs` ~3648):
@@ -454,11 +504,11 @@ last unsubscribe.
 | # | Item | Why |
 |---|---|---|
 | D1 | Modern stdio uses `subscriptions/listen`, not `resources/subscribe` (parent §3.3 said stdio uses `resources/subscribe`) | 2026-07-28 removed `resources/subscribe` (`src/protocol/meta.rs:297`); the era decides, not the transport |
-| D2 | **Decision for the lead.** HTTP+SSE (`/sse`) and A2A backends offer no b2 events | A2A has no MCP notifications. For `/sse` the cheaper route exists: keep reading the transport's own handshake GET (today dropped after the `endpoint` event, `http/mod.rs:1188-1290`) and feed it to the tap. Its cost is a behaviour change for every `/sse` backend (one held connection each, and the existing fixtures return a finite handshake body, so stream end cannot mean "disconnected"). Impact today: the operator's live config has 34 backends, 26 stdio and 8 streamable HTTP, **0** `/sse`, 0 A2A. Proposed: ship without `/sse`, grade SOURCE.1 with that exclusion named; the lead may instead require the held-GET route in I5 |
+| D2 | **Decision for the lead.** HTTP backends without `streamable_http: true` (the SSE handshake path, `/sse` or not) and A2A backends offer no b2 events | A2A has no MCP notifications. For the handshake path the cheaper route exists: keep reading the transport's own handshake GET (today dropped after the `endpoint` event, `http/mod.rs:1188-1290`) and feed it to the tap. Its cost is a behaviour change for every handshake-path backend (one held connection each, and the existing fixtures return a finite handshake body, so stream end cannot mean "disconnected"). Impact today: the operator's live config has 34 backends, 26 stdio and 8 streamable HTTP, **0** on the handshake path, 0 A2A. Proposed: ship without it, grade SOURCE.1 with that exclusion named; the lead may instead require the held-GET route in I5 |
 | D3 | **Decision for the lead.** Backends with identity propagation or per-caller catalogue isolation offer no b2 events | the shared-slot listener would observe under the gateway's credential, not the subscriber's (§6). Per-principal listeners are a larger design. Impact today: **0** of the operator's 34 backends propagate identity |
 | D4 | URI access = shared catalogue membership, exact match; template-only URIs refused | the rule `/mcp` `resources/read` already applies; no new policy model |
 | D5 | A live event subscription keeps its backend from being idle-stopped | otherwise reaper and listener fight; bounded by the subscription TTL |
-| D6 | Lost while disconnected | emit-only (parent F3); make before break and hourly recycle avoid self-inflicted gaps |
+| D6 | Lost while disconnected; a modern filter change may duplicate | emit-only (parent F3); a duplicate change event is harmless, a gap is not |
 | D7 | Unsupported kinds are silent, not refused at subscribe | eligibility comes from config so `events/list` never starts a backend; the refusal would need a live probe at subscribe |
 
 **Finding outside I5 (for the lead):** the gateway's own downstream
@@ -485,3 +535,10 @@ one PR:
 
 Implementation starts only after I2 and I4 merge: the hooks this design hangs
 on are I4's, and the source it extends is I4's.
+
+## 13. Review record
+
+| Round | Seat | Verdict | Disposition |
+|---|---|---|---|
+| 1 | gpt-review | SHIP-WITH-FIXES | 9 findings, all accepted: snapshot kept current through an internal `resources/list_changed` plus TTL re-read; per-attempt `authorize` (I4 wiring); eligibility reads identity config explicitly; transport-generation check for restarts; URI budget in bytes under the frame cap; overlap accepts both streams (duplicate allowed, no gap); legacy keeps one GET, recycle has a stated gap; sessionless legacy GET; `UpstreamNote` projection bounds the taps. Improvements taken: modern `_meta` on listen (mocks refuse without it), tap-full regression row, exact response-as-ack shape |
+| 1 | grok-review | SHIP-WITH-FIXES | 6 findings, all accepted, verified at source: eligibility is `streamable_http: true` (any other `http_url` takes the handshake path, `http/mod.rs:765`); offline subscribe admits and the listener checks before first emit; control RPCs re-acquire the transport; new `HeaderMode::SessionStream` (`Sse` omits the session, `http/mod.rs:1078`); first-frame ack does not end the stream; T39a(4) no longer asserts "once". Improvements taken: `close()` cancels listen body tasks, T39c untagged clause, dotted-name key parse, `force_restart` strong-count unit row |
