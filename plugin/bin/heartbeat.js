@@ -93,11 +93,69 @@ function markSent(dir, now) {
   fs.renameSync(tmp, dest);
 }
 
-function installId(dir) {
+function ensureInstall(dir) {
   const file = path.join(dir, "install-id");
   try {
     const existing = fs.readFileSync(file, "utf8").trim();
-    if (existing) return existing;
+    if (existing) return { id: existing, fresh: false };
+  } catch {
+    // create one below
+  }
+  const id = crypto.randomBytes(16).toString("hex");
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, id, { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+  } catch {
+    return { id: "", fresh: false };
+  }
+  return { id, fresh: true };
+}
+
+function installId(dir) {
+  return ensureInstall(dir).id;
+}
+
+function validDay(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function formatDay(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function installDate(dir, now, fresh) {
+  const file = path.join(dir, "install-date");
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (validDay(existing)) return existing;
+  } catch {
+    // write one below
+  }
+  let day = formatDay(now);
+  if (!fresh) {
+    try {
+      const birth = fs.statSync(path.join(dir, "install-id")).birthtime;
+      if (birth instanceof Date && birth.getTime() > 86400000) day = formatDay(birth);
+    } catch {
+      // the injected clock stands
+    }
+  }
+  try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, day, { mode: 0o600 });
+  } catch {
+    // still report the day for this attempt
+  }
+  return day;
+}
+
+function machineId(home) {
+  const dir = path.join(home, ".revaluator");
+  const file = path.join(dir, "machine-id");
+  try {
+    const existing = fs.readFileSync(file, "utf8").trim();
+    if (/^[0-9a-f]{32}$/.test(existing)) return existing;
   } catch {
     // create one below
   }
@@ -116,7 +174,7 @@ function runtimeString() {
   return `${process.platform}/${process.arch}/${process.version}`;
 }
 
-function buildBody(project, version, id) {
+function buildBody(project, version, id, installed, machine) {
   const payload = {
     project,
     event: "heartbeat",
@@ -124,6 +182,8 @@ function buildBody(project, version, id) {
     runtime: runtimeString(),
   };
   if (id) payload.install_id = id;
+  if (installed) payload.install_date = installed;
+  if (machine) payload.machine_id = machine;
   const body = Buffer.from(JSON.stringify(payload));
   if (body.length > MAX_BODY) return null;
   return body;
@@ -187,7 +247,14 @@ function start(options, deps) {
     } catch {
       // still attempt the send; the next launch may retry if the stamp is missing
     }
-    const body = buildBody(options.project, options.version, installId(dir));
+    const install = ensureInstall(dir);
+    const body = buildBody(
+      options.project,
+      options.version,
+      install.id,
+      installDate(dir, now, install.fresh),
+      machineId(home),
+    );
     if (!body) return;
     const pending = sender(url, body);
     if (pending && typeof pending.catch === "function") pending.catch(() => {});
@@ -204,6 +271,8 @@ module.exports = {
   due,
   markSent,
   installId,
+  installDate,
+  machineId,
   buildBody,
   post,
   start,

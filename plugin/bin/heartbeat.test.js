@@ -50,11 +50,15 @@ test("opt-out, ci, and dev builds do not send or write state", () => {
   assert.equal(posts.length, 1);
   assert.deepEqual(Object.keys(posts[0]).sort(), [
     "event",
+    "install_date",
     "install_id",
+    "machine_id",
     "project",
     "runtime",
     "version",
   ]);
+  assert.equal(posts[0].install_date, "2026-10-02");
+  assert.match(posts[0].machine_id, /^[0-9a-f]{32}$/);
   assert.equal(posts[0].project, "mcp-gateway");
   assert.equal(posts[0].event, "heartbeat");
   assert.equal(posts[0].version, "3.5.1");
@@ -122,6 +126,51 @@ test("the daily slot is claimed before the post and a second call does not post"
   assert.deepEqual(posts, ["one", "three"]);
   const mode = fs.statSync(path.join(home, "telemetry", "install-id")).mode & 0o777;
   assert.equal(mode, 0o600);
+  const shared = fs.readFileSync(path.join(home, ".revaluator", "machine-id"), "utf8").trim();
+  const other = [];
+  hb.start(
+    {
+      project: "axterminator",
+      version: "0.10.2",
+      optOut: [],
+      endpointEnv: "AXTERMINATOR_TELEMETRY_ENDPOINT",
+      stateParts: [".axterminator", "telemetry"],
+    },
+    {
+      env: {},
+      home,
+      now,
+      post: (_url, body) => other.push(JSON.parse(body.toString())),
+    },
+  );
+  assert.equal(other.length, 1);
+  assert.equal(other[0].machine_id, shared);
+  assert.equal(other[0].install_date, "2026-10-02");
+  assert.notEqual(
+    other[0].install_id,
+    fs.readFileSync(path.join(home, "telemetry", "install-id"), "utf8").trim(),
+  );
+  fs.mkdirSync(path.join(home, ".kept", "telemetry"), { recursive: true });
+  fs.writeFileSync(path.join(home, ".kept", "telemetry", "install-date"), "2024-05-01");
+  fs.writeFileSync(path.join(home, ".kept", "telemetry", "install-id"), "abc");
+  const kept = [];
+  hb.start(
+    {
+      project: "nab",
+      version: "0.12.3",
+      optOut: [],
+      endpointEnv: "NAB_TELEMETRY_ENDPOINT",
+      stateParts: [".kept", "telemetry"],
+    },
+    {
+      env: {},
+      home,
+      now,
+      post: (_url, body) => kept.push(JSON.parse(body.toString())),
+    },
+  );
+  assert.equal(kept[0].install_date, "2024-05-01");
+  assert.equal(kept[0].machine_id, shared);
   fs.rmSync(home, { recursive: true, force: true });
 });
 
