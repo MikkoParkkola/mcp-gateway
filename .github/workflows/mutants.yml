@@ -131,9 +131,21 @@ jobs:
         run: |
           git fetch --quiet --depth=1 origin docs/ranking-1-release-line
           git show FETCH_HEAD:scripts/ci/mutants/run_mutants.py > "$RUNNER_TEMP/run_mutants.py"
+      # pwsh, as CI's Windows check launches its tests. Git Bash's MSYS2
+      # runtime enables SeBackupPrivilege and SeRestorePrivilege on the admin
+      # runner and every cargo test inherits them; restore privilege writes
+      # through a DACL deny, so an ACL-refusal mutant would be judged in a
+      # different environment from CI (MIK-7749 M2 came back VOID for this).
+      - name: Prove the shell holds no backup or restore privilege
+        shell: pwsh
+        run: |
+          $priv = whoami /priv
+          $priv
+          $on = $priv | Select-String -Pattern '(SeBackupPrivilege|SeRestorePrivilege)\s.*\sEnabled\s*$'
+          if ($on) { throw "backup or restore privilege is enabled in this shell" }
       - name: Run the windows rows
-        shell: bash
-        run: python "$RUNNER_TEMP/run_mutants.py" run --platform windows --out mutants-out
+        shell: pwsh
+        run: python "$env:RUNNER_TEMP/run_mutants.py" run --platform windows --out mutants-out
       - name: Upload the per-mutant results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
