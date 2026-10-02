@@ -95,10 +95,9 @@ impl CapabilityExecutor {
             ProcessConfig::Cli(config) => {
                 self.execute_cli(capability, config, params, context).await
             }
-            ProcessConfig::Mcp(_) => Err(Error::Config(format!(
-                "capability '{}': calling an MCP capability server is not available in this build",
-                capability.name
-            ))),
+            ProcessConfig::Mcp(config) => {
+                self.execute_mcp(capability, config, params, context).await
+            }
         }
     }
 }
