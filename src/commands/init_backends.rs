@@ -4,6 +4,8 @@
 //! entry that needs no login, has bounded reach and nothing to configure
 //! (`RegistryEntry::default_enabled`), enabled.
 
+use std::fmt::Write as _;
+
 use mcp_gateway::registry::server_registry::{self, HttpFlavor, Transport};
 
 /// The `backends:` block for the starter set, and one line per entry left out
@@ -44,11 +46,13 @@ pub(super) fn starter_backends(launcher_present: impl Fn(&str) -> bool) -> (Stri
                 flavor == HttpFlavor::Streamable
             ),
         };
-        yaml.push_str(&format!(
+        // Writing to a String cannot fail.
+        let _ = write!(
+            yaml,
             "  {}:\n{transport}    description: {}\n",
             entry.name,
             quoted(entry.description)
-        ));
+        );
     }
     (yaml, skipped)
 }
