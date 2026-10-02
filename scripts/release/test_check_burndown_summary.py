@@ -65,6 +65,28 @@ def test_conflicting_duplicate_rows_fail_closed():
     assert problems, "two disagreeing summary rows must not pass"
 
 
+def test_a_malformed_duplicate_row_fails_closed():
+    doubled = TRACKER + TRACKER.replace("| 134 |", "| 135.5 |")
+    problems = check.mismatches(check.tracker_counts(doubled), measured())
+    assert problems, "a valid row plus a malformed duplicate must not pass"
+
+
+def test_a_ledger_check_that_exits_nonzero_fails_main():
+    real_run, real_tracker = check.run, check.TRACKER
+    tracker = pathlib.Path(__file__).with_name("_burndown_fixture.md")
+    tracker.write_text(TRACKER, encoding="utf-8")
+    outputs = {"count-release-criteria.py": (CORE, 0), "check_scope_acceptance.py": (SCOPE, 2)}
+    check.run = lambda script, *args: outputs[script]
+    check.TRACKER = tracker
+    try:
+        assert check.main() == 1, "a failing ledger check must fail the comparison"
+        outputs["check_scope_acceptance.py"] = (SCOPE, 0)
+        assert check.main() == 0, "matching counts and clean exits pass"
+    finally:
+        check.run, check.TRACKER = real_run, real_tracker
+        tracker.unlink()
+
+
 if __name__ == "__main__":
     # CI runs this file as a script; without this it would assert nothing.
     failed = []

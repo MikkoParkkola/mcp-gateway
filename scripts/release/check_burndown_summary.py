@@ -37,7 +37,10 @@ KEYS = ("core_criteria", "core_rows", "core_ok", "core_blocking",
 def tracker_counts(text: str) -> dict:
     """The counts the tracker's summary table states; empty keys if a row is missing."""
     counts = {}
-    cores, scopes = CORE_ROW.findall(text), SCOPE_ROW.findall(text)
+    # Count rows by their label, not by the strict pattern, so a malformed
+    # duplicate cannot hide behind a valid row.
+    cores = re.findall(r"^\| Core release criteria \|", text, re.MULTILINE)
+    scopes = re.findall(r"^\| Scope-update criteria \|", text, re.MULTILINE)
     if len(cores) > 1 or len(scopes) > 1:
         counts["duplicate_rows"] = f"{len(cores)} core and {len(scopes)} scope summary rows"
         return counts
@@ -101,7 +104,7 @@ def main() -> int:
         if rc != 0:
             problems.append(f"{name} exited {rc}; its counts are not trusted")
     for problem in problems:
-        print(f"{TRACKER.relative_to(ROOT)}: {problem}")
+        print(f"{TRACKER.name}: {problem}")
     if problems:
         print("Update the tracker's summary table and provenance line from both checks.")
     return 1 if problems else 0
