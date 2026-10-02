@@ -46,8 +46,8 @@ our promise". Covers MIK-CAPEXEC.DESIGN.1, CLI.1, MCP.1, SEC.1, CAT.1, ATTACH.1,
 ### 2.1 gws argument fixes
 
 `calendar_insert`: `--calendar`, repeated `--attendee`. `docs_write`: `+write --document --text`.
-`drive_upload`: raw `drive files create --upload=<path> --upload-content-type=<mime>` with `name`,
-`parents` and `mimeType` in `--json` (keeps every declared field). `gmail_reply`: `+reply` threads from
+`drive_upload`: `drive +upload [--name=] [--parent=] -- <file>` (gws detects the type; `mimeType` is
+dropped, D7: raw `drive files create --upload` refuses a path outside its cwd). `gmail_reply`: `+reply` threads from
 the message id. `chat_send`: raw `chat spaces messages create` (keeps `threadKey`). `gmail_send`: map
 the declared `cc`/`bcc`. Eight raw-API files build
 `--params`/`--json` by pasting strings into JSON text; they move to structured JSON arguments (§3.2).
@@ -173,9 +173,15 @@ New `src/capability/executor/cli.rs` (`CliExecutor`, a `ProtocolExecutor` like `
    code and a diagnostic excerpt; a signal death says so. gws prints a JSON error object on stdout on
    failure (exit 2 = auth): when stdout parses as JSON with an `error` key, its `message` is the
    excerpt, else the last 2 KiB of stderr. The excerpt is redacted BEFORE truncation: every injected
-   env and `token_env` value and every argv/stdin value of 8+ bytes is replaced by `[redacted]`
-   (literal match), then the firewall redactor (`security/firewall/redactor.rs`
-   `scan_and_redact`) runs on it, the same scanner the output firewall uses.
+   env and `token_env` value, at ANY length, and every caller-supplied argv/stdin value of 4+ bytes is
+   replaced by `[redacted]` (literal match), then the firewall redactor
+   (`security/firewall/redactor.rs` `scan_and_redact`) runs on it. Caller values of 1-3 bytes may
+   remain: replacing every `a` or `1` would destroy the message, and secrets never travel as caller
+   argv/stdin (they reach a child only through `env`/`token_env`, redacted at every length).
+   An unauthorized answer (gws exit 2 whose JSON error has code 401) becomes a typed CLI
+   unauthorized error, and `is_upstream_unauthorized` (`security/http_diagnostics.rs:155`, today
+   `Error::Http` with status 401 only) also matches it, so `call_tool_with_context` runs the one managed
+   refresh (`PreparedAccountCredential::after_upstream_401`) for CLI calls exactly as for REST.
 7. Concurrency: a per-capability semaphore (default 4) bounds simultaneous children.
 
 Long-running calls: the existing task mode (`B3`) applies unchanged because the executor is reached
@@ -183,8 +189,8 @@ from the same dispatch; nothing new.
 
 ## 5. MCP execution
 
-New `src/capability/executor/mcp.rs` (`McpExecutor`). No new MCP client: each `service: mcp`
-capability gets one `crate::backend::Backend`, built with `Backend::new` from a `BackendConfig`
+New `src/capability/executor/mcp.rs` (`McpExecutor`). No new MCP client: each (capability, caller
+principal) pair gets its own `crate::backend::Backend` (the isolation rule below), built with `Backend::new` from a `BackendConfig`
 (`TransportConfig::Stdio` with `join_command(command, args)`; stdio only: a remote MCP server is
 already served as a configured backend, so `McpConfig` has no `url`), with
 `env` filled from the allowlist, `timeout` from the provider, and:
@@ -205,7 +211,7 @@ already served as a configured backend, so `McpConfig` has no `url`), with
 - **Filesystem namespace per map entry.** One private directory tree per (capability, caller) is
   created with the child, kept for the child's whole life, and removed when it stops: it is the cwd and
   holds HOME, `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`XDG_DATA_HOME`, `TMPDIR` (and on Windows `USERPROFILE`,
-  `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`). Never the gateway's working directory (never the gateway's working directory, which
+  `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`). Never the gateway's working directory, which
   `StdioTransport` inherits when `cwd` is None, `stdio.rs:187-190`). A restarted child gets a fresh one,
   so no project state (pyghidra's relative default project path, pact or openpencil files) outlives the
   child or crosses callers.
@@ -217,9 +223,12 @@ already served as a configured backend, so `McpConfig` has no `url`), with
   today, for every stdio backend. It becomes a bounded line read (default 16 MiB, raised by
   `max_frame_bytes`); an oversized frame kills that child and fails pending requests. This is a fix to
   the shared transport, not a capability-only guard.
-- **Idle stop** reuses `BackendConfig.stop_when_idle_for` (5 min) and the existing `stop_if_idle` sweep
-  (`gateway/server/mod.rs:3665-3676`), run over the private map as well; no second clock.
-- Ownership: a `McpCapabilityBackends` map ((capability, binding) to `Arc<Backend>`) owned by the
+- **Idle stop** reuses `BackendConfig.stop_when_idle_for` (5 min) and the existing idle sweep
+  (`gateway/server/mod.rs:3665-3676`), run over the private map as well; no second clock. Unlike a
+  configured backend, which `stop_if_idle` keeps for a restart from the same config, an idle capability
+  child is EVICTED: its map entry is removed, the `Backend` dropped and its directory tree deleted, so
+  the next call builds a new `Backend` with a fresh tree.
+- Ownership: a `McpCapabilityBackends` map ((capability, caller principal) to `Arc<Backend>`) owned by the
   `CapabilityExecutor`, created lazily. It is NOT registered in `BackendRegistry` (it must not appear as
   a public server). Entries are stopped when the capability is unloaded or reloaded with a different
   definition hash, and on shutdown.
@@ -247,15 +256,18 @@ already served as a configured backend, so `McpConfig` has no `url`), with
 2. **Exact invocation allowlist.** A pin only proves integrity, so config `capabilities.process_commands`
    lists what may run, each entry `{ command, args_prefix }` compared EXACTLY against the pinned YAML:
    `command` is the YAML string itself (a bare name or an absolute path, never a resolved basename,
-   never a name prefix), and `args_prefix` must equal the YAML's leading static args element by element.
-   Defaults (the shipped catalogue after the §9 decisions): `gws []`, `trawl []`,
-   `openpencil-mcp []`, `pact-mcp []`, `pyghidra-mcp []`, `mcp-scanner [--analyzers, yara, remote]`
-   (the analyzer pin is part of the prefix, so a definition without it is refused), `skill-scanner
-   [scan]`. No `npx`, `axterminator` or `metacognition` entry: those capabilities became REST, a webhook
-   route, or were removed. A non-matching definition is refused at call time and reported by
+   never a name prefix); the definition's leading static args must START WITH `args_prefix`, element
+   by element. The prefix is what fixes the dangerous part of a tool's surface: `gws []` admits every
+   gws subcommand on purpose (they are the Google Workspace API, bounded by the caller's token), while
+   `mcp-scanner [--analyzers, yara, remote]` admits only the remote scan with the local analyzer, never
+   `stdio`, `config` or another analyzer. Defaults (commands of capabilities that execute after the §9
+   decisions): `gws []`, `openpencil-mcp []`, `pact-mcp []`, `pyghidra-mcp []`, `skill-scanner [scan]`,
+   `mcp-scanner [--analyzers, yara, remote]`. Not listed: `trawl` (held, D8: an operator who accepts
+   the egress residual lists it), `npx`, `axterminator` and `metacognition` (replaced or removed). A non-matching definition is refused at call time and reported by
    `cap validate`. Operators extend the list for their own capabilities.
 3. **Kill switch.** `capabilities.process_execution: enabled | disabled` (enum, default `enabled`, lead
-   decision D6), hot reloadable, refuses all `cli`/`mcp` calls when disabled. UPGRADING and SECURITY
+   decision D6), read at startup, refuses all `cli`/`mcp` calls when disabled; the hot, per-capability
+   stop is the existing kill switch below. UPGRADING and SECURITY
    state that shipped `cli`/`mcp` files, inert before 4.0, become live process execution on upgrade, and
    name this switch. The per-capability kill switch and disable (`dispatch_guards.rs:112`) and the
    error-budget auto-kill already apply because the gate keys on the capability name.
@@ -267,7 +279,7 @@ already served as a configured backend, so `McpConfig` has no `url`), with
 - Input firewall, audit record, caller identity and output firewall come from the shared invoke wrapper
   (fact 3). The executor adds to the audit record's detail: command name (never argv values),
   exit code, duration, bytes out.
-- Egress parameters (`trawl_extract.url`; `cisco_scanner.target` if D3 keeps it) are declared
+- Egress parameters (`trawl_extract.url`, `cisco_scanner.target` for `scan_mcp_server`) are declared
   `format: uri` with `egress: true`. Two layers, both required before such a capability may run:
   (a) before spawn, the gateway resolves the host (A/AAAA) and refuses any address the REST
   `PinningResolver` deny list refuses, besides the literal check of `validate_url_not_ssrf` (which
@@ -306,8 +318,6 @@ already served as a configured backend, so `McpConfig` has no `url`), with
 - Logs and errors carry the command name, never argv, stdin or env values; diagnostic excerpts are
   redacted as in §4.6. New structs holding env or token values get a manual `Debug`.
   `cwe532-leak-lint.py` runs unchanged in CI.
-- `cloudflare_manage` today writes `{env.CLOUDFLARE_API_TOKEN}` into an env mapping; under whatever D2
-  decides it becomes the allowlist entry `CLOUDFLARE_API_TOKEN`.
 
 ## 7. Attachments (ATTACH.1)
 
@@ -374,7 +384,7 @@ recorded `tools/list` snapshot and answers `tools/call` with the name and argume
 | T11 | save_file: decode base64url with and without padding; saved bytes equal; `..`, `a/b`, `a\b`, `CON`, `con.txt`, `COM1.log`, `nul.tar.gz`, `x:y`, trailing dot, 256-byte name refused; existing file not overwritten (suffix `_1`); pre-placed symlink at the target name not followed; over-size refused before decode; quota exceeded refused with no partial file; two concurrent saves that each fit but together exceed the quota: exactly one succeeds; unset `downloads` refuses; `data` absent from the result | ATTACH.1 |
 | T12 | calendar_get_attachment projection on a recorded event body | ATTACH.1 |
 | T13 | Catalogue: every shipped `cli`/`mcp` file loads with zero CAP-012 warnings and dispatches to its executor; `public_claims.json` count equals executable capabilities | CAT.1, CLAIM.1 |
-| T15 | gws credentials: two callers with different personal-account bindings get their own token in `GOOGLE_WORKSPACE_CLI_TOKEN` (double echoes a hash of it); on a multi-user gateway an unbound caller with an unshared `oauth:google` account is refused before spawn; no fallback credential file is visible in HOME | SEC |
+| T15 | gws credentials: two callers with different personal-account bindings get their own token in `GOOGLE_WORKSPACE_CLI_TOKEN` (double echoes a hash of it); on a multi-user gateway an unbound caller with an unshared `oauth:google` account is refused before spawn; no fallback credential file is visible in HOME; a double answering exit 2 with a 401 JSON error triggers exactly one managed refresh and retry | SEC |
 | T14 | Egress: `http://169.254.169.254/`, `file:///etc/passwd` and a hostname resolving to 127.0.0.1 (`localhost`) refused before spawn; a capability with an `egress: true` parameter and no connect-time enforcement refused (D8); path roots: `/uploads_evil/x` vs root `/uploads`, `../` escape and a symlink inside the root pointing out are refused | SEC |
 
 Real binaries in CI (a separate job, not a required gate for external contributors):
