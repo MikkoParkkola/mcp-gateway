@@ -458,7 +458,11 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         category: "dev-tools",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
         auth: Auth::None,
-        reach: Reach::Bounded,
+        reach: Reach::Arbitrary {
+            reason: "Without --repository it reads and commits to any repository path a tool call \
+                 names, so a prompt injection can reach every repository you own. It is added \
+                 disabled; append --repository <path> to its command, then set `enabled: true`.",
+        },
         setup: Setup::NeedsArgs {
             hint: "--repository <path>; it can write commits there",
         },
@@ -466,7 +470,7 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
         name: "chrome-devtools",
         description: "Drive and debug Chrome through DevTools: navigate, inspect, trace performance",
-        command: "npx -y chrome-devtools-mcp@1.10.1 --headless --isolated",
+        command: "npx -y chrome-devtools-mcp@1.10.1 --headless --isolated --no-usage-statistics --no-performance-crux",
         required_env: &[],
         optional_env: &[],
         transport: Transport::Stdio,
@@ -493,8 +497,8 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
     },
     RegistryEntry {
         name: "mongodb",
-        description: "Query MongoDB databases and Atlas clusters (read-only)",
-        command: "npx -y mongodb-mcp-server@3.0.5 --readOnly",
+        description: "Query MongoDB databases and Atlas clusters (read-only; uses only the configured connection string)",
+        command: "npx -y mongodb-mcp-server@3.0.5 --readOnly --disabledTools connect",
         required_env: &["MDB_MCP_CONNECTION_STRING"],
         optional_env: &[],
         transport: Transport::Stdio,

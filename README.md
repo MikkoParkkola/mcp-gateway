@@ -183,7 +183,8 @@ sequential-thinking, context7, time); every other server is off until you `add` 
 - Playwright, Chrome DevTools and fetch are added **disabled**. They can open any address they are
   given, so a prompt injection in a page or a tool result can steer them to your local network or a
   cloud metadata address, and the gateway's private-network guard covers REST capabilities only, not
-  these servers. Set `enabled: true` on one if you accept that. Both browsers start with a
+  these servers. Git is added disabled too: without `--repository <path>` it acts on any repository
+  a call names. Set `enabled: true` on one if you accept that. Both browsers start with a
   throwaway profile (`--isolated`); do not point them at your everyday browser profile.
 
 `mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one.
