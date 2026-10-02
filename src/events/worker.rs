@@ -13,7 +13,7 @@ use tokio::sync::Semaphore;
 
 use super::EventsHub;
 use super::client::ReadBody;
-use super::outbox::DeadReason;
+use super::outbox::{DeadReason, OutboxRecord};
 use super::services::{Attempt, Services};
 use super::store::{Claim, Claimed, Settle};
 use super::types::CallbackFailure;
@@ -148,19 +148,19 @@ impl EventsHub {
                     next,
                     status: "access_revoked",
                 };
-                self.settle(services, event_id, retry).await;
+                self.settle(services, &record, retry).await;
             }
             return;
         }
         // A record a crash or a long suspension carried past its bounds is
         // dead before it is sent again, never after (§6.5).
         if let Some(reason) = record.dead_as {
-            self.settle(services, event_id, quiet_dead(reason)).await;
+            self.settle(services, &record, quiet_dead(reason)).await;
             return;
         }
         if self.overdue(&record, Utc::now()) {
             services.audit_attempt(&refused("exhausted")).await;
-            self.settle(services, event_id, quiet_dead(DeadReason::Exhausted))
+            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
             return;
         }
@@ -172,12 +172,12 @@ impl EventsHub {
         };
         if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
             services.audit_attempt(&refused("budget")).await;
-            self.settle(services, event_id, quiet_dead(DeadReason::Budget))
+            self.settle(services, &record, quiet_dead(DeadReason::Budget))
                 .await;
             return;
         }
         let (Some(body), Some(url)) = (record.body(), url) else {
-            self.settle(services, event_id, quiet_dead(DeadReason::Exhausted))
+            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
             return;
         };
@@ -204,7 +204,7 @@ impl EventsHub {
             self.blocking(move |store| store.suspend(&id)).await;
             tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
         }
-        self.settle(services, event_id, outcome).await;
+        self.settle(services, &record, outcome).await;
     }
 
     /// The one path an event's bytes take to a callback: signed with the
@@ -235,10 +235,16 @@ impl EventsHub {
             .await
     }
 
-    async fn settle(&self, services: &Services, event_id: &str, outcome: Settle) {
-        let (id, policy) = (event_id.to_owned(), self.dead_policy());
+    /// Settle the claimed occurrence `record`; a later occurrence that has
+    /// since taken its event id is left alone.
+    async fn settle(&self, services: &Services, record: &OutboxRecord, outcome: Settle) {
+        let (id, created_at, policy) = (
+            record.event_id.clone(),
+            record.created_at,
+            self.dead_policy(),
+        );
         let evicted = self
-            .blocking(move |store| store.settle(&id, outcome, Utc::now(), policy))
+            .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
         services.audit_evictions(evicted.unwrap_or_default()).await;
     }

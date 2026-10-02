@@ -132,7 +132,7 @@ fn claim_settle_and_unsubscribe_cancel() {
         next,
         status: "http_5xx",
     };
-    store.settle("a", retry, now, ROOMY).expect("io");
+    store.settle("a", now, retry, now, ROOMY).expect("io");
     assert_eq!(
         store.get("s1").and_then(|s| s.last_error).as_deref(),
         Some("http_5xx")
@@ -296,7 +296,7 @@ fn a_failed_settlement_leaves_the_record_pending() {
         reason: DeadReason::Gone,
         status: Some("http_4xx"),
     };
-    assert!(store.settle("a", dead, now, ROOMY).is_err());
+    assert!(store.settle("a", now, dead, now, ROOMY).is_err());
     let retry_at = now + super::SETTLE_RETRY;
     assert!(
         store
@@ -406,7 +406,7 @@ fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
         reason: DeadReason::TooLarge,
         status: Some("http_4xx"),
     };
-    assert!(store.settle("a", dead, now, ROOMY).is_err());
+    assert!(store.settle("a", now, dead, now, ROOMY).is_err());
     let due = store
         .due(now + super::SETTLE_RETRY, &HashSet::new())
         .expect("io");
@@ -478,5 +478,43 @@ fn a_cancelled_claim_has_no_signing_row_even_under_a_reused_id() {
     assert!(
         store.signing_row(&claimed.record).is_none(),
         "the cancelled claim is not signed with the new row"
+    );
+}
+
+#[test]
+fn an_old_answer_does_not_settle_a_later_occurrence() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    // Unsubscribed mid-flight, resubscribed, and the id re-admitted later.
+    store.remove("s1", now, TAIL).expect("io");
+    store
+        .admit(
+            sub("s1", now),
+            true,
+            CAPS,
+            chrono::Duration::zero(),
+            now,
+            TAIL,
+        )
+        .expect("io")
+        .expect("admitted");
+    let later = now + chrono::Duration::minutes(30);
+    store.enqueue(record("a", "s1", later), caps).expect("io");
+    store
+        .settle("a", now, Settle::Delivered, later, ROOMY)
+        .expect("io");
+    assert!(
+        matches!(store.claim("a", later).expect("io"), Claim::Ready(_)),
+        "the later occurrence is still pending"
     );
 }

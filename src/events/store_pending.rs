@@ -232,12 +232,20 @@ impl Store {
     pub(crate) fn settle(
         &self,
         event_id: &str,
+        created_at: DateTime<Utc>,
         outcome: Settle,
         now: DateTime<Utc>,
         policy: DeadPolicy,
     ) -> std::io::Result<Vec<Evicted>> {
         let mut state = self.state.lock();
-        let Some(record) = state.outbox.get(event_id).cloned() else {
+        // Only the claimed occurrence: a later one under the same id, admitted
+        // after the claim was cancelled, is not settled by the old answer.
+        let Some(record) = state
+            .outbox
+            .get(event_id)
+            .filter(|r| r.created_at == created_at)
+            .cloned()
+        else {
             return Ok(Vec::new());
         };
         let sub_id = record.subscription_id.clone();
