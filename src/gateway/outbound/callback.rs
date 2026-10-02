@@ -12,6 +12,10 @@ use crate::events::CallbackFailure;
 
 /// What the callback sender reports back to [`send_callback`].
 #[derive(Debug)]
+#[expect(
+    dead_code,
+    reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
+)]
 pub(crate) enum CallbackSend<T> {
     /// Nothing left the process (a refused literal, DNS or connect failure
     /// before any byte): the frame's reservation is released.
@@ -28,6 +32,10 @@ pub(crate) enum CallbackSend<T> {
 /// # Errors
 /// The sender's failure, or `ConnectionRefused` for a frame that is not a
 /// callback body or is bound to another principal.
+#[expect(
+    dead_code,
+    reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
+)]
 pub(crate) async fn send_callback<T, F, Fut>(
     frame: OutboundFrame,
     principal: &str,

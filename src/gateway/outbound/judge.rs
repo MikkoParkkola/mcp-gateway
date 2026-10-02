@@ -235,6 +235,13 @@ pub(crate) fn admit_stream_item(
 /// E1: judge a MIK-7630 event delivery for the subscription principal.
 /// `attribution` is what the outbox record carries from before the event
 /// firewall's redaction; a record without it counts as unread.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
+    )
+)]
 pub(crate) fn callback_frame(
     firewall: &Firewall,
     principal: &str,

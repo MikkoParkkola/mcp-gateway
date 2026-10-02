@@ -15,7 +15,7 @@ use crate::config::{AuthConfig, StreamingConfig};
 use crate::gateway::auth::live::held_credential;
 use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
 use crate::gateway::proxy::ProxyManager;
-use crate::gateway::streaming::{NotificationMultiplexer, SessionFrame, TaggedNotification};
+use crate::gateway::streaming::{NotificationMultiplexer, SessionFrame};
 use crate::key_server::{KeyServer, TemporaryToken};
 
 const AUTH_ON: &str = "enabled: true

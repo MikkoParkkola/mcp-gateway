@@ -11,6 +11,10 @@
 //! frame's reservation when it writes; a frame dropped unwritten commits
 //! nothing.
 
+// Without the `firewall` feature nothing is judged: every frame takes the
+// unjudged fast path and the judging half is unreachable.
+#![cfg_attr(not(feature = "firewall"), allow(dead_code))]
+
 mod audit;
 mod callback;
 mod http;
@@ -25,10 +29,9 @@ use serde_json::Value;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 
-pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, audit_rejection, recorded};
-pub(crate) use callback::{CallbackSend, send_callback};
+pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, recorded};
 pub(crate) use http::to_http;
-#[cfg(feature = "firewall")]
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, callback_frame, delivered};
 pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_message};
 
@@ -53,10 +56,28 @@ pub(crate) enum Payload {
     /// An answer already rendered as a JSON value (the direct route).
     Answer(Value),
     /// A server-to-client request, including proxy request envelopes.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "stdio bridged requests convert to it (design §4.3)"
+        )
+    )]
     Request(Value),
     /// An SSE document that is not JSON-RPC (webhook bodies).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "session items are judged in place (StreamMark)")
+    )]
     Event(Value),
     /// A MIK-7630 event body for an HTTPS callback.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
+        )
+    )]
     Callback(Value),
     /// A blocked non-answer item: a sink writes nothing for it.
     Withheld,
@@ -98,8 +119,8 @@ impl OutboundFrame {
         }
     }
 
-    /// The verdict, for records and tests; `None` when unassessed or within
-    /// the rule.
+    /// The verdict, for tests; `None` when unassessed or within the rule.
+    #[cfg(test)]
     pub(crate) fn verdict(&self) -> Option<ReadVerdict> {
         self.assessment.as_ref().and_then(|a| a.verdict)
     }
@@ -111,6 +132,10 @@ impl OutboundFrame {
 
     /// Whether a sink bound to `destination` may write this frame. An
     /// unjudged frame carries no key and binds nowhere.
+    #[expect(
+        dead_code,
+        reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
+    )]
     fn bound_to(&self, destination: &str) -> bool {
         self.key.as_deref().is_none_or(|key| key == destination)
     }

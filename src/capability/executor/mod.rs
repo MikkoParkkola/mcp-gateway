@@ -43,7 +43,6 @@ use super::{
 };
 use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
-use crate::security::firewall::tenant_reads;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
 
@@ -397,12 +396,9 @@ impl CapabilityExecutor {
             None
         };
         if let Some(ref cache_key) = cache_key
-            && let Some((cached, read)) = self.cache.get(cache_key)
+            && let Some(cached) = self.cache.get(cache_key)
         {
             tracing::debug!("Cache hit");
-            // MIN.2 F2: the hit carries the attribution of the raw response
-            // it was transformed from; an entry without one is unread.
-            tenant_reads::note_restored(read.as_ref());
             return Ok(cached);
         }
 
@@ -411,11 +407,7 @@ impl CapabilityExecutor {
         let response = self
             .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
             .await?;
-
-        // MIN.2 F1: attribute the raw response before a transform can drop
-        // the key that names its tenant.
-        let read = tenant_reads::note_read(&response);
-
+        let read = crate::security::tenant_reads::note_read(&response);
         // Apply response transform pipeline if configured
         let response = {
             let pipeline = TransformPipeline::compile(&capability.transform);
@@ -435,9 +427,8 @@ impl CapabilityExecutor {
             "Capability executed successfully"
         );
 
-        if let Some(ref cache_key) = cache_key {
-            self.cache
-                .set(cache_key, &response, read, capability.cache.ttl);
+        if let Some(key) = &cache_key {
+            self.cache.set(key, &response, read, capability.cache.ttl);
         }
 
         Ok(response)

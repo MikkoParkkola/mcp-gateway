@@ -177,6 +177,7 @@ impl RejectionAudit {
     }
 
     /// Rejections whose audit was refused for want of a permit.
+    #[cfg(test)]
     pub(crate) fn saturated(&self) -> u64 {
         self.saturated.load(Ordering::Relaxed)
     }

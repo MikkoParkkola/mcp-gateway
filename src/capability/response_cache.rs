@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use serde_json::Value;
 
-use crate::security::firewall::tenant_reads::ReadAttribution;
+use crate::security::tenant_reads::ReadAttribution;
 
 /// Thread-safe response cache with per-entry TTL expiration
 pub(crate) struct ResponseCache {
@@ -32,11 +32,14 @@ impl ResponseCache {
         }
     }
 
-    /// The cached value and the attribution stored beside it.
-    pub(crate) fn get(&self, key: &str) -> Option<(Value, Option<ReadAttribution>)> {
+    /// The cached value. A hit also restores, into the caller's read scope,
+    /// the attribution stored beside it (MIK-7116.MIN.2 F2); an entry without
+    /// one counts as unread.
+    pub(crate) fn get(&self, key: &str) -> Option<Value> {
         if let Some(entry) = self.entries.get(key) {
             if entry.expires_at > Instant::now() {
-                return Some((entry.value.clone(), entry.read.clone()));
+                crate::security::tenant_reads::note_restored(entry.read.as_ref());
+                return Some(entry.value.clone());
             }
             // Entry expired, remove it
             drop(entry);

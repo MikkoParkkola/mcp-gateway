@@ -26,11 +26,10 @@ use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::personal_accounts::refusal::refusal_text;
-use crate::protocol::{JsonRpcResponse, RequestId, Tool};
+use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{sanitize_json_value, validate_tool_name};
-use crate::trust::project_tool_descriptors_trust_cards;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
@@ -244,59 +243,6 @@ fn backend_security_error_with_status(
     status: StatusCode,
 ) -> (StatusCode, Json<Value>) {
     build_http_error_response(Some(id.clone()), code, message, status)
-}
-
-/// Fill missing MCP tool annotation hints on direct backend `tools/list`
-/// responses before returning them to clients.
-fn normalize_tools_list_response(
-    backend: &crate::backend::Backend,
-    response: &mut JsonRpcResponse,
-) {
-    let backend_name = backend.name.as_str();
-    if response.error.is_some() {
-        // Never forward an unjudged list beside an error (#1441).
-        response.result = None;
-        return;
-    }
-
-    let Some(result) = response.result.as_mut() else {
-        return;
-    };
-    let Some(tools_value) = result.get_mut("tools") else {
-        return;
-    };
-
-    let Some(items) = tools_value.as_array() else {
-        warn!(backend = %backend_name, "Backend tools/list result is not an array");
-        return;
-    };
-
-    // Element by element: one unparseable descriptor must not forward the
-    // whole list verbatim (a bypass). It is dropped, since it cannot be judged
-    // and would disclose a name the caller may not invoke (A3).
-    let mut tools = Vec::with_capacity(items.len());
-    for item in items {
-        match serde_json::from_value::<Tool>(item.clone()) {
-            Ok(tool) => tools.push(tool),
-            Err(e) => {
-                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized; dropped");
-            }
-        }
-    }
-
-    backend.prepare_judged_tools(&mut tools);
-
-    let server_id = format!("backend:{backend_name}");
-    let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
-
-    // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
-    // upstream sibling key or cursor could name a withheld tool (A3).
-    match serde_json::to_value(tools) {
-        Ok(normalized_tools) => *result = json!({ "tools": normalized_tools }),
-        Err(e) => {
-            warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
-        }
-    }
 }
 
 /// Stable, collision-safe upstream-session bucket key for a passthrough caller
@@ -620,17 +566,13 @@ async fn backend_handler_inner(
     // D2-a: the slot is filled before the envelope is validated, so a
     // malformed tools/call is recorded as `invalid` too.
     *call = direct_audit::DirectCall::of(&json_request, client.as_ref(), grant_subject.as_ref());
-    // MIN.2: the caller and the request params, for the answer's judge; only
-    // when the verdict is on, so the default config copies nothing.
-    if crate::gateway::outbound::judges(super::helpers::read_guard(&state).as_deref()) {
-        reads.key = Some(super::identity::caller_key(
+    reads.capture(&state, &json_request, || {
+        super::identity::caller_key(
             grant_subject.as_ref(),
             cert_identity.as_ref(),
             client.as_ref(),
-        ))
-        .filter(|key| !key.is_empty());
-        reads.params = json_request.get("params").cloned();
-    }
+        )
+    });
 
     // After the audit hash (D2-e: params as sent), before anything else reads
     // the request: parse, telemetry and every forwarding arm see no token.
@@ -1463,6 +1405,7 @@ mod key_check;
 mod notification_key;
 pub(super) use costs::costs_handler;
 use direct_failure::DirectFailure;
+use direct_list::normalize_tools_list_response;
 
 #[cfg(test)]
 mod tests;

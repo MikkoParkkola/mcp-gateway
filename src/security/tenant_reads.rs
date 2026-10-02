@@ -11,6 +11,10 @@
 //! Every write path reserves before it emits and commits when it emits, so
 //! a frame not yet written still counts against the next one (§4.5).
 
+// Without the `firewall` feature there is no tenant guard, so nothing is
+// attributed and the history is never consulted.
+#![cfg_attr(not(feature = "firewall"), allow(dead_code))]
+
 #[cfg(feature = "firewall")]
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -316,7 +320,8 @@ pub(crate) async fn with_read_scope<F: Future>(
 }
 
 #[cfg(feature = "firewall")]
-/// Note the attribution of a raw value read inside [`with_read_scope`],
+/// Note the attribution of a raw value read inside [`with_read_scope`] (F1:
+/// the capability executor calls it on the raw upstream response),
 /// before a transform maps or drops fields. Outside a scope, or with
 /// attribution off, nothing.
 pub(crate) fn note_read(value: &Value) -> Option<ReadAttribution> {
@@ -360,6 +365,16 @@ pub(crate) fn note_restored(stored: Option<&ReadAttribution>) {
 pub(crate) fn noted() -> Option<ReadAttribution> {
     READS.try_with(|cell| cell.borrow().1.clone()).ok()
 }
+
+/// Without the firewall nothing is attributed.
+#[cfg(not(feature = "firewall"))]
+pub(crate) fn note_read(_value: &Value) -> Option<ReadAttribution> {
+    None
+}
+
+/// Without the firewall nothing is attributed.
+#[cfg(not(feature = "firewall"))]
+pub(crate) fn note_restored(_stored: Option<&ReadAttribution>) {}
 
 #[cfg(test)]
 #[path = "tenant_reads_tests.rs"]

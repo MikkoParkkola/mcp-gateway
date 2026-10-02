@@ -57,9 +57,8 @@ fn held_body(frame: OutboundFrame) -> axum::response::Response {
         Payload::Answer(answer) => serde_json::to_vec(answer),
         _ => return axum::body::Body::empty().into_response(),
     };
-    let bytes = match bytes {
-        Ok(bytes) => bytes,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let Ok(bytes) = bytes else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     let body = futures::stream::once(async move {
         frame.written();

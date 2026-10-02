@@ -483,7 +483,7 @@ pub(super) async fn meta_mcp_handler(
         Box::pin(async move {
             crate::gateway::outbound::read_scoped(
                 guard_for_scope,
-                meta_mcp_dispatch(state, http_request),
+                Box::pin(meta_mcp_dispatch(state, http_request)),
             )
             .await
             .0
@@ -1943,7 +1943,7 @@ async fn meta_mcp_dispatch(
     // router never inspects — arrives here as a JSON-RPC error, and answering
     // it 200 tells every caller and intermediary the call succeeded. The status
     // travels on the error precisely so this line can honour it.
-    let status = refusal_status(&response).unwrap_or(StatusCode::OK);
+    let status = refusal_status(response).unwrap_or(StatusCode::OK);
     if is_modern {
         // An unimplemented method is 404 on this revision, not 200-with-error.
         // The status is what a client uses to tell "this server does not have

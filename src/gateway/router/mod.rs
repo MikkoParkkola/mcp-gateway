@@ -387,6 +387,21 @@ fn unauthenticated_routes() -> Router<Arc<AppState>> {
     }
 }
 
+/// Webhook delivery re-validates each session against the same authorizer
+/// the middleware uses, so the two cannot disagree about who may see what.
+/// MIN.2: every session-stream copy is judged for its session's caller, on
+/// the same process read history the answers are judged against.
+fn bind_multiplexer(state: &AppState, auth_state: &AuthState) {
+    state.multiplexer.set_authorizer(auth_state.clone());
+    if let Some(judge) = crate::gateway::outbound::SessionJudge::new(
+        helpers::read_guard(state),
+        state.meta_mcp.rejection_audit(),
+        state.meta_mcp.transparency_log().cloned(),
+    ) {
+        state.multiplexer.set_read_judge(judge);
+    }
+}
+
 /// [`create_router_with`] plus the managed-account handles, which only a
 /// gateway that brought custody up has.
 pub(crate) fn create_router_with_accounts(
@@ -395,18 +410,7 @@ pub(crate) fn create_router_with_accounts(
     accounts: Option<AccountHandles>,
 ) -> Router {
     let auth_state = build_auth_state(&state);
-    // Webhook delivery re-validates each session against the same authorizer
-    // the middleware uses, so the two cannot disagree about who may see what.
-    state.multiplexer.set_authorizer(auth_state.clone());
-    // MIN.2: every session-stream copy is judged for its session's caller,
-    // on the same process read history the answers are judged against.
-    if let Some(judge) = crate::gateway::outbound::SessionJudge::new(
-        helpers::read_guard(&state),
-        state.meta_mcp.rejection_audit(),
-        state.meta_mcp.transparency_log().cloned(),
-    ) {
-        state.multiplexer.set_read_judge(judge);
-    }
+    bind_multiplexer(&state, &auth_state);
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();

@@ -102,8 +102,24 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
 /// the caller, formed only when the verdict is on, and the request params.
 #[derive(Default)]
 pub(super) struct DirectReads {
-    pub(super) key: Option<String>,
-    pub(super) params: Option<Value>,
+    key: Option<String>,
+    params: Option<Value>,
+}
+
+impl DirectReads {
+    /// Capture the caller (`key` forms it) and the request params, only when
+    /// the verdict is on, so the default config copies nothing.
+    pub(super) fn capture(
+        &mut self,
+        state: &AppState,
+        request: &Value,
+        key: impl FnOnce() -> String,
+    ) {
+        if crate::gateway::outbound::judges(super::super::helpers::read_guard(state).as_deref()) {
+            self.key = Some(key()).filter(|key| !key.is_empty());
+            self.params = request.get("params").cloned();
+        }
+    }
 }
 
 /// D2: one write per tools/call, with the notes of its dispatch scope. Then

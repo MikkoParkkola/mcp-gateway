@@ -486,7 +486,7 @@ impl NotificationMultiplexer {
             let key = session.read_key.read().clone();
             let sent = self.enqueue(&session.tx, key.as_deref(), notification, None);
             if !sent {
-                debug!(session_id = %session_fp(session_id), "Notification not queued");
+                debug!(session_id = %session_fp(session_id), "Failed to send notification");
             }
             sent
         } else {

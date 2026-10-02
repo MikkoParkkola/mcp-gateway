@@ -155,6 +155,10 @@ impl SessionJudge {
 
     /// Judge one session's copy of an item for that session's caller. `Err`
     /// when it is withheld; the rejection is then audited, bounded.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(clippy::unnecessary_wraps, clippy::unused_self)
+    )]
     pub(crate) fn judge(
         &self,
         key: Option<&str>,
