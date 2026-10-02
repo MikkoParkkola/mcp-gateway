@@ -374,7 +374,9 @@ impl super::MetaMcp {
             return Ok(());
         }
         context.refuse_malformed_nonce()?;
-        if self.refused_before_dispatch(tool_name, caller) {
+        // No nonce, nothing to leave unspent: the store answers alone (and a
+        // missing-nonce refusal stays as cheap as it was).
+        if context.nonce_value()?.is_some() && self.refused_before_dispatch(tool_name, caller) {
             return Ok(());
         }
         self.prepare_signing_invocation(context, arguments, session, caller)

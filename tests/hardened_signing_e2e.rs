@@ -635,8 +635,8 @@ async fn a_direct_call_refused_by_its_key_leaves_its_nonce_unspent() {
     };
     let first = post(&stack, &path, &keyed(95, "unspent-first", json!({}))).await;
     assert_signed(&first, "unspent-first", "the first keyed direct call");
-    let reused = keyed(96, "unspent-reused", json!({"other": 1}));
-    let refused = post(&stack, &path, &reused).await;
+    let mismatch = keyed(96, "unspent-reused", json!({"other": 1}));
+    let refused = post(&stack, &path, &mismatch).await;
     assert_refused(&refused, "a key reused for a different request");
     let later = post(&stack, &path, &direct_call(97, Some("unspent-reused"))).await;
     assert_signed(&later, "unspent-reused", "a call after a key refusal");

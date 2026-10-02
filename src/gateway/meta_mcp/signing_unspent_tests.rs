@@ -33,7 +33,7 @@ fn meta() -> MetaMcp {
 }
 
 /// A hardened `tools/call` captured as the adapters capture it.
-fn captured(name: &str, arguments: Value, nonce: &str) -> (SigningInvocationContext, Value) {
+fn captured(name: &str, arguments: &Value, nonce: &str) -> (SigningInvocationContext, Value) {
     let mut request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": name, "arguments": arguments, "_meta": {(NONCE_META): nonce}}});
     let context =
@@ -44,7 +44,7 @@ fn captured(name: &str, arguments: Value, nonce: &str) -> (SigningInvocationCont
 
 /// `refused` is answered without registering `nonce`; a permitted call then
 /// admits it, and it replays as refused.
-fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCallerContext<'_>) {
+fn assert_unspent(meta: &MetaMcp, refused: (&str, &Value), caller: &MetaMcpCallerContext<'_>) {
     const NONCE: &str = "unspent-nonce";
     let (mut first, arguments) = captured(refused.0, refused.1, NONCE);
     meta.prepare_signing_for_call(&mut first, refused.0, &arguments, None, caller)
@@ -56,7 +56,7 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCaller
     );
 
     let permitted = ctx(&AllowAll);
-    let (mut later, arguments) = captured("gateway_list_servers", json!({}), NONCE);
+    let (mut later, arguments) = captured("gateway_list_servers", &json!({}), NONCE);
     meta.prepare_signing_for_call(
         &mut later,
         "gateway_list_servers",
@@ -67,7 +67,7 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCaller
     .expect("the refused call left the nonce unspent");
     assert!(later.admitted, "the later call admits it");
 
-    let (mut replay, arguments) = captured("gateway_list_servers", json!({}), NONCE);
+    let (mut replay, arguments) = captured("gateway_list_servers", &json!({}), NONCE);
     assert!(
         meta.prepare_signing_for_call(
             &mut replay,
@@ -85,7 +85,7 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCaller
 async fn an_admin_refusal_leaves_the_nonce_unspent() {
     let caller = ctx(&AllowAll);
     assert!(!caller.is_admin);
-    assert_unspent(&meta(), ("gateway_get_stats", json!({})), &caller);
+    assert_unspent(&meta(), ("gateway_get_stats", &json!({})), &caller);
 }
 
 /// An admin caller with no way to be asked (stdio and task contexts): the
@@ -96,7 +96,7 @@ async fn an_unconfirmable_destructive_call_leaves_the_nonce_unspent() {
     caller.is_admin = true;
     assert_unspent(
         &meta(),
-        ("gateway_kill_server", json!({"server": "x"})),
+        ("gateway_kill_server", &json!({"server": "x"})),
         &caller,
     );
 }
@@ -110,7 +110,7 @@ async fn a_hidden_gateway_invoke_leaves_the_nonce_unspent() {
         &meta,
         (
             "gateway_invoke",
-            json!({"server": "alpha", "tool": "read", "arguments": {}}),
+            &json!({"server": "alpha", "tool": "read", "arguments": {}}),
         ),
         &ctx(&AllowAll),
     );
@@ -121,7 +121,7 @@ async fn a_hidden_gateway_invoke_leaves_the_nonce_unspent() {
 #[tokio::test]
 async fn dispatch_refuses_a_signed_call_left_unadmitted() {
     let meta = meta();
-    let (context, arguments) = captured("gateway_list_servers", json!({}), "never-admitted");
+    let (context, arguments) = captured("gateway_list_servers", &json!({}), "never-admitted");
     let mut caller = ctx(&AllowAll);
     caller.signing = Some(&context);
     let response = Box::pin(meta.handle_tools_call(
