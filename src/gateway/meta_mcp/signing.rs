@@ -325,7 +325,8 @@ impl super::MetaMcp {
 
     /// Whether [`Self::handle_tools_call`] refuses `tool_name` before the tool
     /// acts and with no exchange or spend: its own exposure, unsolicited
-    /// answer, admin and unconfirmable-destructive predicates, in its order.
+    /// answer and admin predicates, in its order (the unconfirmable
+    /// destructive one is read beside it, in `prepare_signing_for_call`).
     /// Only the signing layer asks, to leave such a call's nonce unspent
     /// (MIK-7698); the refusal itself is still answered by dispatch.
     pub(crate) fn refused_before_dispatch(
@@ -337,7 +338,6 @@ impl super::MetaMcp {
             || caller.retry.solicited_input_responses().is_err()
             || !crate::gateway::router::CallerStanding::of_admin_flag(caller.is_admin)
                 .permits(tool_name)
-            || super::confirmation::unconfirmable(tool_name, caller)
     }
 
     /// Dispatch's refusal of a signed call whose nonce was left unadmitted.
@@ -374,9 +374,13 @@ impl super::MetaMcp {
             return Ok(());
         }
         context.refuse_malformed_nonce()?;
-        // No nonce, nothing to leave unspent: the store answers alone (and a
-        // missing-nonce refusal stays as cheap as it was).
-        if context.nonce_value()?.is_some() && self.refused_before_dispatch(tool_name, caller) {
+        // The destructive prediction builds its tool set on first use, so it
+        // runs only when a nonce is presented: a missing one has nothing to
+        // leave unspent, and its refusal stays as cheap as it was.
+        if self.refused_before_dispatch(tool_name, caller)
+            || (context.nonce_value()?.is_some()
+                && super::confirmation::unconfirmable(tool_name, caller))
+        {
             return Ok(());
         }
         self.prepare_signing_invocation(context, arguments, session, caller)

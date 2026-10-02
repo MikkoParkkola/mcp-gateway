@@ -136,3 +136,24 @@ async fn dispatch_refuses_a_signed_call_left_unadmitted() {
     assert_eq!(wire["error"]["code"], -32603, "{wire}");
     assert!(wire.get("result").is_none(), "{wire}");
 }
+
+/// A hidden tool presenting no nonce is still answered by dispatch's exposure
+/// refusal, never by its own argument checks: the exposure prediction does not
+/// depend on a nonce being presented.
+#[tokio::test]
+async fn a_hidden_gateway_invoke_without_a_nonce_is_left_to_dispatch() {
+    let meta = meta().with_exposed_meta_tools(&["gateway_list_servers".to_string()]);
+    let mut request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {}}});
+    let mut context =
+        SigningInvocationContext::capture_scoped(&mut request, SigningScope::EveryToolCall);
+    meta.prepare_signing_for_call(
+        &mut context,
+        "gateway_invoke",
+        &json!({}),
+        None,
+        &ctx(&AllowAll),
+    )
+    .expect("the hidden tool is dispatch's to answer, not its arguments'");
+    assert!(!context.admitted);
+}
