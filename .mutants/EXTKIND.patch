@@ -1,0 +1,16 @@
+diff --git a/src/personal_accounts/config.rs b/src/personal_accounts/config.rs
+index 565d59c6d..3a33869eb 100644
+--- a/src/personal_accounts/config.rs
++++ b/src/personal_accounts/config.rs
+@@ -597,10 +597,7 @@ fn validate_external(
+                 account_id: account_id.to_string(),
+                 problem: "mode external requires an external_strategy block",
+             })?;
+-    if !matches!(
+-        strategy.strategy,
+-        PropagationStrategyKind::SignedAssertion | PropagationStrategyKind::TokenExchange
+-    ) {
++    if false {
+         return Err(AccountsConfigError::Descriptor {
+             account_id: account_id.to_string(),
+             problem: "external_strategy accepts only signed_assertion or token_exchange",

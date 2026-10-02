@@ -1,0 +1,17 @@
+diff --git a/src/personal_accounts/config.rs b/src/personal_accounts/config.rs
+index 565d59c6d..b01edaa2f 100644
+--- a/src/personal_accounts/config.rs
++++ b/src/personal_accounts/config.rs
+@@ -547,12 +547,6 @@ pub(crate) fn validate_descriptors(
+     };
+ 
+     for (account_id, descriptor) in descriptors {
+-        if account_id.is_empty() {
+-            return Err(AccountsConfigError::Descriptor {
+-                account_id: account_id.clone(),
+-                problem: "account id must be nonempty",
+-            });
+-        }
+         if descriptor.provider.is_empty() {
+             return Err(AccountsConfigError::Descriptor {
+                 account_id: account_id.clone(),
