@@ -1,0 +1,6 @@
+head_sha	ec958d187807bf794300c41f0c7b35b51ff3c7a7
+m1-no-end-of-options	linux	m1-no-end-of-options.patch	--lib -- executor::cli_argv_tests
+m2-textual-json	linux	m2-textual-json.patch	--lib -- executor::cli_argv_tests
+m3-skip-pin-gate	linux	m3-skip-pin-gate.patch	--lib -- executor::process_tests
+m4-inherit-env	linux	m4-inherit-env.patch	--lib -- executor::cli_run_tests
+m5-string-prefix-root	linux	m5-string-prefix-root.patch	--lib -- executor::cli_tests

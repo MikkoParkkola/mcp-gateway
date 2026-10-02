@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index 9ac4893f3..bfd16a909 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -205,7 +205,7 @@ pub(crate) fn confine(
+     };
+     let resolved =
+         std::fs::canonicalize(&joined).map_err(|_| "does not name an existing path".to_owned())?;
+-    if resolved.strip_prefix(&root).is_err() {
++    if !resolved.to_string_lossy().starts_with(&*root.to_string_lossy()) {
+         return Err(format!("is outside capabilities.files.{root_name}"));
+     }
+     Ok(resolved)

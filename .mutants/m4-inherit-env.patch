@@ -1,0 +1,12 @@
+diff --git a/src/capability/executor/cli_run.rs b/src/capability/executor/cli_run.rs
+index ed9a491a9..cb21a5386 100644
+--- a/src/capability/executor/cli_run.rs
++++ b/src/capability/executor/cli_run.rs
+@@ -238,7 +238,6 @@ pub(crate) async fn run(
+     let timeout = timeout.min(MAX_TIMEOUT);
+     let mut wrap = CommandWrap::with_new(program, |cmd| {
+         cmd.args(&invocation.args)
+-            .env_clear()
+             .envs(env)
+             .current_dir(workdir.path())
+             .stdin(if invocation.stdin.is_some() {
