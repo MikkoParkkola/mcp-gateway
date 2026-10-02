@@ -239,6 +239,20 @@ fn a_mapping_without_braces_is_a_literal_and_an_unresolved_template_is_omitted()
     assert!(!data.contains_key("missing"));
 }
 
+#[test]
+fn a_notification_whose_mappings_all_fail_carries_the_whole_payload() {
+    let multiplexer = make_multiplexer();
+    let mut def = make_definition(true);
+    def.transform
+        .data
+        .insert("id".to_string(), "{data.nope}".to_string());
+    let state = make_handler_state(multiplexer, def);
+    let payload = json!({ "action": "created" });
+
+    let notif = transform_payload(&payload, &state).unwrap();
+    assert_eq!(notif.data, payload);
+}
+
 // ── WebhookRegistry ───────────────────────────────────────────────────
 
 pub(super) fn make_capability_with_webhooks(
