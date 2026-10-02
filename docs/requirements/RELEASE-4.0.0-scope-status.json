@@ -1626,14 +1626,11 @@
     },
     {
       "id": "MIK-7630.EVENTS.4",
-      "status": "met",
-      "stage": "met",
+      "status": "pending",
+      "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": [
-        "tests/mik_7630_events_subscribe.rs",
-        "tests/mik_7630_events_delivery_lifecycle.rs"
-      ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 27 hand-written mutants across four batches all killed. T22 delivery half: after a restart on the same store an event is delivered with no re-subscribe and no new verification; TTL negotiation was proven at I1 (subscribe half)."
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T22's TTL clause requests 1000 ms against a 1 s floor, so the upward clamp to min_ttl is not exercised; stays pending under MIK-7783."
     },
     {
       "id": "MIK-7630.EVENTS.5",
@@ -1647,7 +1644,7 @@
         "tests/mik_7630_events_delivery_lifecycle.rs",
         "src/events/worker_tests.rs"
       ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 27 hand-written mutants across four batches all killed. T13 (no redirects, I1), T14 connect-time address check, T15-T17 size cap, stable webhook-id with a fresh signature per attempt, no retry on 410/413, T31, T47."
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T13 (no redirects, I1), T14 connect-time address check, T15-T17 size cap, stable webhook-id with a fresh signature per attempt, no retry on 410/413, T31, T47."
     },
     {
       "id": "MIK-7630.EVENTS.6",
@@ -1668,7 +1665,7 @@
         "tests/mik_7630_events_delivery_lifecycle.rs",
         "src/events/rpc_tests.rs"
       ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 27 hand-written mutants across four batches all killed. T11 authorisation, T23 idempotent and caller-scoped with the pending retry cancelled, T55 nothing sent after the unsubscribe answer; unit unsubscribe_waits_out_a_claimed_attempt."
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T11 authorisation, T23 idempotent and caller-scoped with the pending retry cancelled, T55 nothing sent after the unsubscribe answer; unit unsubscribe_waits_out_a_claimed_attempt."
     },
     {
       "id": "MIK-7630.EVENTS.8",
@@ -1710,7 +1707,7 @@
       "evidence": [
         "tests/mik_7630_events_delivery_safety.rs"
       ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 27 hand-written mutants across four batches all killed. T19: every payload passes the response firewall once, before the outbox write; a block dead-letters firewall_blocked."
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T19: every payload passes the response firewall once, before the outbox write; a block dead-letters firewall_blocked."
     },
     {
       "id": "MIK-7630.SAFETY.2",
@@ -1721,7 +1718,7 @@
         "tests/mik_7630_events_delivery.rs",
         "src/events/services.rs"
       ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 27 hand-written mutants across four batches all killed. T29: one MIN.1 attributed audit record per attempt with attempt number, body hash, callback host and tenants; refused attempts (access, budget, overdue) are audited too."
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T29: one MIN.1 attributed audit record per attempt with attempt number, body hash, callback host and tenants; refused attempts (access, budget, overdue) are audited too."
     },
     {
       "id": "MIK-7630.SAFETY.3",
@@ -1741,15 +1738,11 @@
     },
     {
       "id": "MIK-7630.SAFETY.5",
-      "status": "met",
-      "stage": "met",
+      "status": "pending",
+      "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": [
-        "tests/mik_7630_events_subscribe.rs",
-        "tests/mik_7630_events_delivery_safety.rs",
-        "tests/mik_7630_events_delivery_store.rs"
-      ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 27 hand-written mutants across four batches all killed. T26 subscription caps (I1), T27 rate limit delays not drops, T28 budget refusal dead-letters budget, T45 outbox caps, T48 and T51 verification limits (I1)."
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T28 substitutes a 0.01 budget for 0 and does not assert the budget-ledger charge attempt; stays pending under MIK-7783."
     },
     {
       "id": "MIK-7630.SAFETY.6",
@@ -1769,7 +1762,7 @@
         "src/events/store_pending_tests.rs",
         "src/events/worker_tests.rs"
       ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 27 hand-written mutants across four batches all killed. T32: exhausted retries dead-letter inside the window across a restart, keeping the webhook-id; units pin crash recovery, overdue records and failed settlements."
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T32: exhausted retries dead-letter inside the window across a restart, keeping the webhook-id; units pin crash recovery, overdue records and failed settlements."
     },
     {
       "id": "MIK-7630.RELIABLE.2",
