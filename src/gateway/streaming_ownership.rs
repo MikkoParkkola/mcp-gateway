@@ -36,9 +36,6 @@ impl NotificationMultiplexer {
             .filter(|session| session.owner == *owner)?;
         *session.credential.write() = credential;
         *session.last_active.write() = std::time::Instant::now();
-        Some((
-            session.id.expose_secret().to_string(),
-            session.tx.subscribe(),
-        ))
+        Some((session.id.expose_secret().to_string(), session.subscribe()))
     }
 }

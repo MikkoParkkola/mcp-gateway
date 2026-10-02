@@ -95,3 +95,41 @@ fn an_anonymous_holder_resumes_by_its_minted_id() {
     let (again, _rx2) = m.get_or_create_session(Some(&id));
     assert_eq!(again, id);
 }
+
+/// NFR.WORKLOAD.1: a session opened for its id alone (every legacy POST) holds
+/// no notification channel. A send to it is refused as a send with no
+/// receiver is, the reaper sees it abandoned, and a later stream on the same
+/// id still subscribes and receives.
+#[test]
+fn an_id_only_session_opens_its_channel_on_first_subscribe() {
+    let m = mux();
+    let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+    let session = Arc::clone(m.sessions.read().get(id.as_str()).expect("opened"));
+    assert!(
+        session.tx.get().is_none(),
+        "an id-only open built a channel"
+    );
+    assert_eq!(session.receiver_count(), 0);
+    assert!(
+        !m.send_to_session(&id, note()),
+        "a send with no receiver reported delivery"
+    );
+    assert!(session.tx.get().is_none(), "a refused send built a channel");
+
+    let (again, mut rx) = m.get_or_create_session_for(Some(&id), &cred("alice"));
+    assert_eq!(again, id, "the owner resumes the id-only session");
+    assert!(
+        m.send_to_session(&id, note()),
+        "a subscribed session missed a send"
+    );
+    assert_eq!(rx.try_recv().expect("delivered").event_type, "notification");
+}
+
+fn note() -> TaggedNotification {
+    TaggedNotification {
+        source: "b".to_string(),
+        event_type: "notification".to_string(),
+        data: serde_json::json!({}),
+        event_id: None,
+    }
+}
