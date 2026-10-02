@@ -41,6 +41,7 @@ use crate::security::{
     extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
 };
 
+mod events;
 mod owner;
 pub(super) mod request_checks;
 mod tasks;
@@ -268,7 +269,9 @@ pub(super) async fn mcp_sse_handler(
             .get_or_create_session_scoped(existing_session_id.as_deref(), &owner, held)
     };
 
-    info!(session_id = %session_fp(&session_id), "Client connected to SSE stream");
+    // Computed before the macro so its count is graded (MIK-7725).
+    let session = session_fp(&session_id);
+    info!(session_id = %session, "Client connected to SSE stream");
 
     // Auto-subscribe to configured backends
     let multiplexer = Arc::clone(&state.multiplexer);
@@ -333,7 +336,8 @@ pub(super) async fn mcp_delete_handler(
 
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
-            info!(session_id = %session_fp(id), "Session terminated by client");
+            let session = session_fp(id);
+            info!(session_id = %session, "Session terminated by client");
             // The id is dead from here; what was keyed by it goes too.
             if let Some(ref lifecycle) = state.session_lifecycle {
                 lifecycle.on_disconnect(id);
@@ -341,7 +345,8 @@ pub(super) async fn mcp_delete_handler(
             StatusCode::NO_CONTENT
         }
         Some(id) => {
-            debug!(session_id = %session_fp(id), "No owned session for DELETE");
+            let session = session_fp(id);
+            debug!(session_id = %session, "No owned session for DELETE");
             StatusCode::NOT_FOUND
         }
         None => StatusCode::BAD_REQUEST,
@@ -826,7 +831,8 @@ async fn meta_mcp_dispatch(
     // still declared what it declared.
     crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
-    debug!(method = %method, session_id = %session_fp(&session_id), "Meta-MCP request");
+    let session = session_fp(&session_id);
+    debug!(method = %method, session_id = %session, "Meta-MCP request");
 
     if let Some((rpc, status)) = request_checks::request_check_refusal(
         &state,
@@ -1093,6 +1099,27 @@ async fn meta_mcp_dispatch(
                 &acknowledgement,
                 state.streaming_config.keep_alive_interval,
             );
+        }
+        // MIK-7630. Answered here, never proxied; with events off the guard
+        // fails and the method falls through to `-32601`.
+        "events/list" | "events/subscribe" | "events/unsubscribe"
+            if state.meta_mcp.events().is_some() =>
+        {
+            let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));
+            let session = Some(session_id.as_str());
+            let caller = crate::events::Caller {
+                principal: events::principal(&owner, state.auth_config.enabled),
+                api_key_name: client
+                    .as_ref()
+                    .filter(|c| c.authenticated)
+                    .map(|c| c.name.clone()),
+                visible_backends: hub
+                    .scope_backends()
+                    .into_iter()
+                    .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
+                    .collect(),
+            };
+            events::answer(&hub, id, &method, params.as_ref(), &caller).await
         }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.

@@ -16,6 +16,8 @@ use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
 struct AlwaysAsks {
     calls: Arc<parking_lot::Mutex<Vec<Value>>>,
     method: fn(usize) -> Option<&'static str>,
+    /// How many keys round `n` asks; every key asks `method(n)`.
+    width: fn(usize) -> usize,
 }
 
 /// Every round asks for roots.
@@ -38,7 +40,17 @@ impl crate::transport::Transport for AlwaysAsks {
             calls.len()
         };
         let requests = match (self.method)(n) {
-            Some(method) => json!({ format!("k{n}"): {"method": method} }),
+            Some(method) => (0..(self.width)(n))
+                .map(|i| {
+                    let key = if i == 0 {
+                        format!("k{n}")
+                    } else {
+                        format!("k{n}-{i}")
+                    };
+                    (key, json!({"method": method}))
+                })
+                .collect::<serde_json::Map<_, _>>()
+                .into(),
             None => json!({}),
         };
         Ok(crate::protocol::JsonRpcResponse::success(
@@ -65,6 +77,14 @@ impl crate::transport::Transport for AlwaysAsks {
 fn meta_that_always_asks(
     method: fn(usize) -> Option<&'static str>,
 ) -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
+    meta_asking(method, |_| 1)
+}
+
+/// [`meta_that_always_asks`] with round `n` asking `width(n)` keys.
+fn meta_asking(
+    method: fn(usize) -> Option<&'static str>,
+    width: fn(usize) -> usize,
+) -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
     use crate::config::{BackendConfig, TransportConfig};
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     let config = BackendConfig {
@@ -88,6 +108,7 @@ fn meta_that_always_asks(
     backend.set_transport_for_test(Arc::new(AlwaysAsks {
         calls: Arc::clone(&calls),
         method,
+        width,
     }));
     let _ = registry.register(backend);
     (MetaMcp::new(registry), calls)
@@ -387,4 +408,19 @@ async fn t3c_the_last_round_is_held_to_the_callers_declaration() {
     let outcome = m.invoke_tool(&args(), Some("session-1"), &caller).await;
     let err = outcome.expect_err("an undeclared last round is refused");
     assert!(err.to_string().contains("did not declare"), "{err}");
+}
+
+/// MIK-7691: the last round is handed back rather than asked, but its requests
+/// still count against the call's budget. Three one-request rounds leave five
+/// of the default eight, so an eight-wide last round is refused.
+#[tokio::test]
+async fn a_wide_last_round_is_held_to_the_request_budget() {
+    let (m, _calls) = meta_asking(ROOTS, |n| if n == last_round() { 8 } else { 1 });
+    let channel = Answering::default();
+    let caller = legacy_caller(&channel, &crate::protocol::mrtr::NO_RETRY);
+    let outcome = m.invoke_tool(&args(), Some("session-1"), &caller).await;
+    assert!(
+        outcome.is_err(),
+        "a last round past the request budget must not be handed back: {outcome:?}"
+    );
 }

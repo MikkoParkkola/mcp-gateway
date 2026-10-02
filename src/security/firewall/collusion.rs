@@ -81,9 +81,15 @@ struct Holder {
     principal: u64,
     /// Any delivery of this pair: what the same-source excuse ages on.
     last_seen: Instant,
+    /// The earliest delivery. Calls reach the lock out of time order, so a
+    /// copy stamped after an egress can already be here when that egress is
+    /// checked; only a pair held by the egress instant may excuse it.
+    first_seen: Instant,
     /// The latest *sensitive* delivery: what a relay witness ages on. Kept
     /// apart so a plain re-delivery cannot extend sensitive evidence.
     sensitive_at: Option<Instant>,
+    /// The earliest sensitive delivery: a witness must predate the egress.
+    sensitive_first: Option<Instant>,
 }
 
 enum Holders {
@@ -250,7 +256,9 @@ impl CollusionDetector {
             source: self.digest(source),
             principal: self.digest(principal),
             last_seen,
+            first_seen: last_seen,
             sensitive_at: sensitive.then_some(last_seen),
+            sensitive_first: sensitive.then_some(last_seen),
         };
         let window = self.params.window;
         let mut state = self.state.lock();
@@ -287,9 +295,15 @@ impl CollusionDetector {
             .find(|t| t.source == new.source && t.principal == new.principal)
         {
             Some(t) => {
-                // Keep the latest of each time, whatever order calls arrive in.
+                // Keep the earliest and latest of each time, whatever order calls arrive in.
                 t.last_seen = t.last_seen.max(new.last_seen);
+                t.first_seen = t.first_seen.min(new.first_seen);
                 t.sensitive_at = t.sensitive_at.max(new.sensitive_at);
+                t.sensitive_first = t
+                    .sensitive_first
+                    .into_iter()
+                    .chain(new.sensitive_first)
+                    .min();
             }
             None => tuples.push(new),
         }
@@ -322,7 +336,12 @@ impl CollusionDetector {
         let sender = self.digest(principal);
         let fps = self.fingerprints(args);
         let window = self.params.window;
-        let live = |t: &&Holder| now.saturating_duration_since(t.last_seen) <= window;
+        // Held at `now`: first delivered by then, last delivered in the window.
+        // Known limit: a pair with one copy before the window and one after
+        // `now` still counts; exact per-copy times would need a list per pair.
+        let live = |t: &&Holder| {
+            t.first_seen <= now && now.saturating_duration_since(t.last_seen) <= window
+        };
         let mut state = self.state.lock();
         state.sweep(now, window);
         let mut matches = 0;
@@ -342,8 +361,9 @@ impl CollusionDetector {
                     .any(|t| t.source == source && t.principal == sender)
             };
             let sensitive = |t: &&Holder| {
-                t.sensitive_at
-                    .is_some_and(|at| now.saturating_duration_since(at) <= window)
+                t.sensitive_first.is_some_and(|first| first <= now)
+                    && t.sensitive_at
+                        .is_some_and(|at| now.saturating_duration_since(at) <= window)
             };
             if let Some(t) = tuples
                 .iter()

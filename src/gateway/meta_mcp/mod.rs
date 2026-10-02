@@ -86,6 +86,7 @@ mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
 mod effects;
+mod events_hook;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
@@ -400,10 +401,14 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
     pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
+    /// MCP Events hub (MIK-7630); unset while events are off or on stdio.
+    pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// MIK-7692: the last written stored-delivery re-check decisions.
+    pub(super) grant_repeats: Arc<grant_audit::DecisionDedupe>,
     /// One bounded execution owner shared by the meta and direct transports.
     ///
     /// The ledger is in-memory and owned per [`MetaMcp`]: `State.entries` is a
@@ -679,10 +684,12 @@ impl MetaMcp {
         Self {
             backends,
             change_feed: std::sync::OnceLock::new(),
+            events: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            grant_repeats: Arc::default(),
             execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             unkeyed: admission::UnkeyedPolicy::default(),
@@ -1682,6 +1689,7 @@ impl MetaMcp {
             self.change_feed(),
         );
 
+        let capabilities = self.capabilities_with_events(capabilities);
         serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
@@ -1744,7 +1752,8 @@ impl MetaMcp {
         // `protocol::meta::classify_request` records.
         let result =
             build_initialize_result(negotiated_version, &instructions, era, self.change_feed());
-        JsonRpcResponse::success_serialized(id, result)
+        let result = self.initialize_with_events(result);
+        JsonRpcResponse::success(id, result)
     }
 
     /// The initialize instructions as this caller may read them: counts over
@@ -2752,6 +2761,8 @@ pub(super) mod grant_audit_fixture;
 mod grant_decision_audit_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
+#[cfg(test)]
+mod grant_replay_dedupe_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;

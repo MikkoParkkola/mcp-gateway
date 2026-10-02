@@ -31,6 +31,7 @@ pub(super) fn make_definition(notify: bool) -> WebhookDefinition {
         signature_header: None,
         notify,
         transform: WebhookTransform::default(),
+        event: None,
     }
 }
 
@@ -231,6 +232,7 @@ pub(super) fn make_capability_with_webhooks(
                 secret: None,
                 signature_header: None,
                 notify: *notify,
+                event: None,
                 transform: WebhookTransform::default(),
             },
         );
