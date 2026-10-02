@@ -14,7 +14,7 @@ use tokio::sync::Semaphore;
 use super::EventsHub;
 use super::client::ReadBody;
 use super::outbox::{DeadReason, OutboxRecord};
-use super::services::{Attempt, Services};
+use super::services::{Attempt, SENDING, Services};
 use super::store::{Claim, Claimed, Settle};
 use super::types::CallbackFailure;
 
@@ -188,17 +188,30 @@ impl EventsHub {
             use sha2::Digest as _;
             hex::encode(sha2::Sha256::digest(&body))
         };
+        // The attempt is on record before its bytes leave: a log that refuses
+        // the record means no POST, and the record goes back to retry (SAFETY.2).
+        let attempt = Attempt {
+            body_sha256: &body_sha256,
+            ..refused(SENDING)
+        };
+        if services.audit_attempt(&attempt).await.is_err() {
+            let next = Utc::now() + chrono::TimeDelta::seconds(30);
+            let retry = Settle::Retry {
+                next,
+                status: "audit_unavailable",
+            };
+            self.settle(services, &record, retry).await;
+            return;
+        }
         let answer = self.send_event(&url, &current, event_id, body).await;
         let (outcome, status) = self.judge(&record, &answer);
         let delivered = matches!(outcome, Settle::Delivered);
         services
-            .audit_attempt(&Attempt {
-                body_sha256: &body_sha256,
+            .audit_outcome(&Attempt {
                 delivered,
                 ..refused(status)
             })
-            .await
-            .ok();
+            .await;
         if self
             .runtime
             .failures

@@ -259,6 +259,10 @@ impl Services {
     }
 }
 
+/// The status of the record written before a POST (SAFETY.2): the attempt is
+/// on record before its bytes leave; its outcome follows as its own record.
+pub(crate) const SENDING: &str = "sending";
+
 /// One delivery attempt, as the attributed audit record states it: never
 /// the body, the secret or the callback path.
 pub(crate) struct Attempt<'a> {
@@ -280,7 +284,12 @@ pub(crate) struct Attempt<'a> {
 
 impl Services {
     /// Write one MIN.1 attributed record for `attempt`, on the bounded
-    /// blocking pool. Best effort: a down log is logged, not fatal.
+    /// blocking pool.
+    ///
+    /// # Errors
+    ///
+    /// The log's refusal. A caller about to send writes this record first
+    /// and does not send when it fails (SAFETY.2).
     pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) -> std::io::Result<()> {
         use crate::security::audit::{
             AuditEnvelope, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
@@ -302,7 +311,7 @@ impl Services {
         let envelope = AuditEnvelope {
             trace_id: None,
             otel_trace_id: None,
-            outcome: if attempt.delivered {
+            outcome: if attempt.delivered || attempt.status == SENDING {
                 AuditOutcome::Ok
             } else {
                 AuditOutcome::Error(-32015)
@@ -343,9 +352,30 @@ impl Services {
         if let Err(error) = &written {
             tracing::warn!(%error, "events: delivery audit record not written");
         }
-        // ponytail: red phase swallows the error; the fix returns it.
-        let _ = written;
-        Ok(())
+        written
+    }
+
+    /// How an attempt already recorded as [`SENDING`] ended. Best effort: the
+    /// attempt itself is on record, and the POST has been made.
+    pub(crate) async fn audit_outcome(&self, attempt: &Attempt<'_>) {
+        let Some(log) = &self.audit else {
+            return;
+        };
+        let mut fields = Map::new();
+        fields.insert("action".into(), "events.delivery_outcome".into());
+        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        fields.insert("event_id".into(), attempt.event_id.into());
+        fields.insert("subscription_id".into(), attempt.subscription_id.into());
+        fields.insert("outcome_of_attempt".into(), attempt.number.into());
+        fields.insert("status".into(), attempt.status.into());
+        fields.insert("delivered".into(), attempt.delivered.into());
+        let envelope = crate::security::audit::AuditEnvelope::gateway();
+        let written = log
+            .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
+            .await;
+        if let Err(error) = written {
+            tracing::warn!(%error, "events: delivery outcome audit record not written");
+        }
     }
 
     /// One governance record per evicted dead letter (design §3.8).

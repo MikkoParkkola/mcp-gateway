@@ -115,7 +115,8 @@ pub struct EventsConfig {
     pub retry_base: Duration,
     /// Delivery attempts before a record is dead-lettered `exhausted`.
     pub retry_max_attempts: u32,
-    /// Span from the first attempt within which every retry must fall.
+    /// Span from the first attempt within which every retry must fall; at
+    /// most 15 minutes.
     #[serde(with = "humantime_serde")]
     pub retry_window: Duration,
     /// Window over which the failure rate that suspends a subscription is taken.
@@ -208,6 +209,9 @@ impl EventsConfig {
         if let Some((name, _)) = timings.iter().find(|(_, d)| d.is_zero()) {
             return fail(&format!("{name} must be nonzero"));
         }
+        if self.retry_window > MAX_RETRY_WINDOW {
+            return fail("retry_window must not exceed 15 minutes");
+        }
         if self.retry_max_attempts == 0 || self.suspend_min_attempts == 0 {
             return fail("retry_max_attempts and suspend_min_attempts must be nonzero");
         }
@@ -227,6 +231,9 @@ impl EventsConfig {
         Ok(())
     }
 }
+
+/// RELIABLE.1: every retry falls within this span of the first attempt.
+const MAX_RETRY_WINDOW: Duration = Duration::from_secs(15 * 60);
 
 /// `addr/len` with `len` within the family's width.
 pub(crate) fn parse_cidr(text: &str) -> Option<(std::net::IpAddr, u8)> {
