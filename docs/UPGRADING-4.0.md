@@ -3510,7 +3510,7 @@ Removed, because no maintained server exists at a resolvable package:
 **Action:** none for existing configs. To keep using a removed server, add it with an explicit
 command or URL: `mcp-gateway add <name> -- <command>` or `mcp-gateway add --url <url> <name>`.
 
-## 124. Backend upstream events are refused where the gateway cannot listen
+## 125. Backend upstream events are refused where the gateway cannot listen
 
 **Startup:** no notice, a subscription to such an event answers -32014
 
