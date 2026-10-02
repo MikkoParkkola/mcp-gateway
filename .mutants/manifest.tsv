@@ -1,0 +1,14 @@
+head_sha	ea5e17e98ea44303ca7a781e4d62a9e8ff8d6035
+# mutants for #2624
+CLAIMABSENT	linux	CLAIMABSENT.patch	--lib personal_accounts::service::service_tests::service_rejection_tests::claim_is_refused_for_an_absent_account_and_for_a_moved_version -- --exact
+CLAIMSTATE	linux	CLAIMSTATE.patch	--lib personal_accounts::service::service_tests::service_rejection_tests::claim_is_refused_for_an_absent_account_and_for_a_moved_version -- --exact
+CLAIMGEN	linux	CLAIMGEN.patch	--lib personal_accounts::service::service_tests::service_rejection_tests::claim_is_refused_for_an_absent_account_and_for_a_moved_version -- --exact
+CLAIMREV	linux	CLAIMREV.patch	--lib personal_accounts::service::service_tests::service_rejection_tests::claim_is_refused_for_an_absent_account_and_for_a_moved_version -- --exact
+CLAIMEPOCH	linux	CLAIMEPOCH.patch	--lib personal_accounts::service::service_tests::service_rejection_tests::claim_is_refused_for_an_absent_account_and_for_a_moved_version -- --exact
+CLAIMDESC	linux	CLAIMDESC.patch	--lib personal_accounts::service::service_tests::service_rejection_tests::claim_is_refused_for_an_absent_account_and_for_a_moved_version -- --exact
+MARKSWALLOW	linux	MARKSWALLOW.patch	--lib personal_accounts::service::service_tests::service_rejection_tests::failed_mark_of_the_rotated_revision_surfaces_and_keeps_the_rotation -- --exact
+LITERAL	linux	LITERAL.patch	--lib personal_accounts::config::config_tests::resolve_key_refuses_a_literal_before_any_overlay_read -- --exact
+REVNORET	linux	REVNORET.patch	--lib personal_accounts::provider::provider_tests::grant_flow_tests::revoke_without_a_resolvable_client_secret_posts_nothing -- --exact
+REVNOLOG	linux	REVNOLOG.patch	--lib personal_accounts::provider::provider_tests::grant_flow_tests::revoke_without_a_resolvable_client_secret_posts_nothing -- --exact
+EXALLERR	linux	EXALLERR.patch	--lib gateway::router::tests::openwebui_adapter::start_route::callback::abort::t_exchange_refusal_maps_to_a_closed_reason_and_commits_nothing -- --exact
+EXNONE	linux	EXNONE.patch	--lib gateway::router::tests::openwebui_adapter::start_route::callback::abort::t_exchange_refusal_maps_to_a_closed_reason_and_commits_nothing -- --exact

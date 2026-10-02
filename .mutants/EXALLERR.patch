@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/worker_callback.rs b/src/personal_accounts/worker_callback.rs
+index f69b19fa2..209ca4f30 100644
+--- a/src/personal_accounts/worker_callback.rs
++++ b/src/personal_accounts/worker_callback.rs
+@@ -323,7 +323,7 @@ where
+         let tokens = match exchanged {
+             Ok(tokens) => tokens,
+             Err(error) => {
+-                let reason = if matches!(error, ProviderRefreshError::InvalidGrant) {
++                let reason = if true {
+                     JourneyReason::ProviderError
+                 } else {
+                     JourneyReason::ProviderUnavailable

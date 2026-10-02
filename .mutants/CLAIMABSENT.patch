@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/commit.rs b/src/personal_accounts/commit.rs
+index 4670b6277..b11ce2759 100644
+--- a/src/personal_accounts/commit.rs
++++ b/src/personal_accounts/commit.rs
+@@ -670,7 +670,7 @@ pub(in crate::personal_accounts) fn claim_forced_refresh(
+     let digest = account.digest()?;
+     let authority = slot.as_ref().ok_or(AccountError::StorageUnavailable)?;
+     let Some(entry) = authority.entries.get(&digest) else {
+-        return Ok(ForceClaim::Superseded);
++        return Ok(ForceClaim::AlreadyForced);
+     };
+     let holds = matches!(entry.state, GrantState::Connected)
+         && entry.generation == expected.generation

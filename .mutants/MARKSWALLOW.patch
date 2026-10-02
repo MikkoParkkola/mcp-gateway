@@ -1,0 +1,22 @@
+diff --git a/src/personal_accounts/service.rs b/src/personal_accounts/service.rs
+index c60c10a99..0501c6581 100644
+--- a/src/personal_accounts/service.rs
++++ b/src/personal_accounts/service.rs
+@@ -331,7 +331,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
+                 // provider that rotates on every refresh.
+                 // ponytail: a second authority write; a crash between the two
+                 // costs one extra provider call, never a missed fence.
+-                self.store.claim_forced_refresh(
++                let _ = self.store.claim_forced_refresh(
+                     account,
+                     &GrantVersion {
+                         generation: next.generation,
+@@ -339,7 +339,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
+                         authorization_epoch: next.authorization_epoch,
+                         descriptor_revision: next.descriptor_revision,
+                     },
+-                )?;
++                );
+                 Ok(RejectionOutcome::Rotated)
+             }
+             Err(ProviderRefreshError::Unavailable) => Ok(RejectionOutcome::Unavailable),

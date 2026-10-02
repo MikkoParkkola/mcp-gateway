@@ -1,0 +1,12 @@
+diff --git a/src/personal_accounts/commit.rs b/src/personal_accounts/commit.rs
+index 4670b6277..f4b99f568 100644
+--- a/src/personal_accounts/commit.rs
++++ b/src/personal_accounts/commit.rs
+@@ -674,7 +674,6 @@ pub(in crate::personal_accounts) fn claim_forced_refresh(
+     };
+     let holds = matches!(entry.state, GrantState::Connected)
+         && entry.generation == expected.generation
+-        && entry.token_revision == expected.token_revision
+         && entry.authorization_epoch == expected.authorization_epoch
+         && entry.descriptor_revision == expected.descriptor_revision;
+     if !holds {

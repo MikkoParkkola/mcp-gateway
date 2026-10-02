@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/provider/grant_flow.rs b/src/personal_accounts/provider/grant_flow.rs
+index ee8dc3b02..d130614e2 100644
+--- a/src/personal_accounts/provider/grant_flow.rs
++++ b/src/personal_accounts/provider/grant_flow.rs
+@@ -207,7 +207,7 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
+         let Ok(credentials) = self.client_authentication(descriptor) else {
+             tracing::warn!(
+                 account_id,
+-                "provider revocation skipped: client credentials unavailable"
++                "provider revocation skipped"
+             );
+             return ProviderRevocation::Failed;
+         };

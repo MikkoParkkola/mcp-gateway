@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/provider/grant_flow.rs b/src/personal_accounts/provider/grant_flow.rs
+index ee8dc3b02..e9945e42c 100644
+--- a/src/personal_accounts/provider/grant_flow.rs
++++ b/src/personal_accounts/provider/grant_flow.rs
+@@ -209,7 +209,7 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
+                 account_id,
+                 "provider revocation skipped: client credentials unavailable"
+             );
+-            return ProviderRevocation::Failed;
++            return ProviderRevocation::Unsupported;
+         };
+         let mut form = vec![
+             ("token".to_string(), token.to_string()),
