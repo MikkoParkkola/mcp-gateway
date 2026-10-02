@@ -417,4 +417,8 @@ fn a_numeric_origin_needs_a_parseable_same_scheme_origin_on_a_public_bind() {
         !p.origin_ok("http://203.0.113.7:39400"),
         "without a request authority nothing numeric can be admitted"
     );
+    assert!(
+        !p.origin_ok_at("http://attacker.example:39400", authority),
+        "a named Origin is not the numeric address this request was sent to"
+    );
 }
