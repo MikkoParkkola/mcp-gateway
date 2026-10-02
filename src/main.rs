@@ -130,28 +130,9 @@ async fn run() -> ExitCode {
             ExitCode::FAILURE
         }
         #[cfg(feature = "webui")]
-        Some(Command::Events(mcp_gateway::cli::events::EventsArgs {
-            command: mcp_gateway::cli::events::EventsCommand::DeadLetters(args),
-        })) => {
-            let flags = commands::LinkTlsFlags {
-                client_cert: args.tls.client_cert.clone(),
-                client_key: args.tls.client_key.clone(),
-                ca_cert: args.tls.ca_cert.clone(),
-            };
-            let target = commands::dashboard_link_base(
-                args.url.clone(),
-                flags,
-                || Config::load(config_path.as_deref()).map_err(|e| e.to_string()),
-                port_override,
-                host_override.as_deref(),
-            );
-            match target {
-                Ok((base, tls)) => commands::run_dead_letters_command(&base, &tls, &args).await,
-                Err(message) => {
-                    eprintln!("events dead-letters: {message}");
-                    ExitCode::FAILURE
-                }
-            }
+        Some(Command::Events(args)) => {
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_events_command(args, load, port_override, host_override.as_deref()).await
         }
         #[cfg(not(feature = "webui"))]
         Some(Command::Events(_)) => {

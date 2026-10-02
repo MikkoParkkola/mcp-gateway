@@ -266,8 +266,31 @@ pub(crate) fn dead_letters_request(
     }
 }
 
+/// `mcp-gateway events ...`: resolve the gateway like `dashboard-link`, then
+/// run the subcommand.
+pub async fn run_events_command(
+    args: mcp_gateway::cli::events::EventsArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+) -> ExitCode {
+    let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
+    let flags = LinkTlsFlags {
+        client_cert: args.tls.client_cert.clone(),
+        client_key: args.tls.client_key.clone(),
+        ca_cert: args.tls.ca_cert.clone(),
+    };
+    match dashboard_link_base(args.url.clone(), flags, load, port_override, host_override) {
+        Ok((base, tls)) => run_dead_letters_command(&base, &tls, &args).await,
+        Err(message) => {
+            eprintln!("events dead-letters: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Run `events dead-letters` against the gateway at `base`.
-pub async fn run_dead_letters_command(
+async fn run_dead_letters_command(
     base: &str,
     tls: &LinkTls,
     args: &mcp_gateway::cli::events::DeadLettersArgs,

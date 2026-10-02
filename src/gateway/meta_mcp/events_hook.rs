@@ -51,6 +51,22 @@ impl MetaMcp {
         })
     }
 
+    /// Append up to `limit` visible event entries to `matches`; how many
+    /// matched in all, for the search's `total_available`.
+    pub(super) fn add_event_matches(
+        &self,
+        query: &str,
+        limit: usize,
+        caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+        matches: &mut Vec<serde_json::Value>,
+    ) -> usize {
+        let events = self.event_search_matches(query, usize::MAX, caller, session_id);
+        let found = events.len();
+        matches.extend(events.into_iter().take(limit));
+        found
+    }
+
     /// `capabilities` as JSON, with `events` advertised when it applies.
     pub(super) fn capabilities_with_events(
         &self,
