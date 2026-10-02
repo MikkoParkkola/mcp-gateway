@@ -272,6 +272,14 @@ async fn ac_sub_1_a_lagged_listener_is_closed_without_a_graceful_end() {
         None,
         "a lagged stream closes with no response"
     );
+    use futures::StreamExt;
+    assert!(
+        matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await,
+            Ok(None)
+        ),
+        "the body ended, not merely went quiet"
+    );
 }
 
 /// MIK-7766: the honoured filter names only what the gateway delivers, and
