@@ -355,8 +355,8 @@ async fn a_result_over_the_record_budget_settles_failed_without_output() {
     );
 }
 
-/// MIK-7686: a legacy row whose tool is withheld is refused on `tasks/get`
-/// and on a repeated keyed call alike.
+/// MIK-7686: a legacy row is refused on `tasks/get` and on a repeated keyed
+/// call alike.
 #[tokio::test]
 async fn a_legacy_row_is_refused_on_get_when_its_tool_is_withheld() {
     let mock = MockBackend::answering(Answer::ok());
@@ -370,13 +370,14 @@ async fn a_legacy_row_is_refused_on_get_when_its_tool_is_withheld() {
     );
 }
 
+/// Nothing withheld: a withheld tool would refuse the repeat at its own
+/// admission check, before the stored row is ever read.
 #[tokio::test]
-async fn a_legacy_row_is_refused_on_repeat_when_its_tool_is_withheld() {
+async fn a_legacy_row_is_refused_on_repeat() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     let id = finished_invoke(&state, "b-legacy-repeat").await;
     strip_targets(&state, &id);
-    withhold(&state, TOOL);
     let repeat = post(
         &state,
         "key-a",
