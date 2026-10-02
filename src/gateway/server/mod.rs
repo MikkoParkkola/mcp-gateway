@@ -3329,8 +3329,9 @@ impl Gateway {
                 client,
             );
             if let Some(context) = signing_context.as_mut()
-                && let Err(error) = meta_mcp.prepare_signing_invocation(
+                && let Err(error) = meta_mcp.prepare_signing_for_call(
                     context,
+                    &tool_name,
                     arguments.as_ref(),
                     Some(session_id),
                     &caller,

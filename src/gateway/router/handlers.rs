@@ -1590,8 +1590,9 @@ async fn meta_mcp_dispatch(
                 },
             };
             if let Some(context) = signing_context.as_mut()
-                && let Err(error) = state.meta_mcp.prepare_signing_invocation(
+                && let Err(error) = state.meta_mcp.prepare_signing_for_call(
                     context,
+                    tool_name,
                     &arguments,
                     Some(&session_id),
                     &caller,

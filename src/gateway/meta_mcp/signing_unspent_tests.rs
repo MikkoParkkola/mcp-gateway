@@ -47,7 +47,7 @@ fn captured(name: &str, arguments: Value, nonce: &str) -> (SigningInvocationCont
 fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCallerContext<'_>) {
     const NONCE: &str = "unspent-nonce";
     let (mut first, arguments) = captured(refused.0, refused.1, NONCE);
-    meta.prepare_signing_invocation(&mut first, &arguments, None, caller)
+    meta.prepare_signing_for_call(&mut first, refused.0, &arguments, None, caller)
         .expect("the refusal is the dispatcher's to answer");
     assert!(
         !first.admitted,
@@ -57,14 +57,26 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCaller
 
     let permitted = ctx(&AllowAll);
     let (mut later, arguments) = captured("gateway_list_servers", json!({}), NONCE);
-    meta.prepare_signing_invocation(&mut later, &arguments, None, &permitted)
-        .expect("the refused call left the nonce unspent");
+    meta.prepare_signing_for_call(
+        &mut later,
+        "gateway_list_servers",
+        &arguments,
+        None,
+        &permitted,
+    )
+    .expect("the refused call left the nonce unspent");
     assert!(later.admitted, "the later call admits it");
 
     let (mut replay, arguments) = captured("gateway_list_servers", json!({}), NONCE);
     assert!(
-        meta.prepare_signing_invocation(&mut replay, &arguments, None, &permitted)
-            .is_err(),
+        meta.prepare_signing_for_call(
+            &mut replay,
+            "gateway_list_servers",
+            &arguments,
+            None,
+            &permitted
+        )
+        .is_err(),
         "and the nonce is a real one: its replay is refused"
     );
 }

@@ -190,6 +190,12 @@ impl SigningInvocationContext {
             .is_some_and(|(s, t)| s == server && t == tool)
     }
 
+    /// A signed context whose nonce has not passed admission. Dispatch refuses
+    /// it: only a call predicted refused is left unadmitted (MIK-7698).
+    pub(crate) fn awaits_admission(&self) -> bool {
+        self.origin != Origin::Unsigned && !self.admitted
+    }
+
     /// Whether this context signs what it delivers, so a stored copy of the
     /// result must be kept without its `_signature`.
     pub(crate) fn owns_signature(&self) -> bool {
@@ -305,6 +311,66 @@ pub(crate) fn take_direct_nonce(params: Option<&mut Value>) -> crate::Result<Opt
 impl super::MetaMcp {
     pub(crate) fn signing_enabled(&self) -> bool {
         self.message_signer.is_some()
+    }
+
+    /// Whether [`Self::handle_tools_call`] refuses `tool_name` before the tool
+    /// acts and with no exchange or spend: its own exposure, unsolicited
+    /// answer, admin and unconfirmable-destructive predicates, in its order.
+    /// Only the signing layer asks, to leave such a call's nonce unspent
+    /// (MIK-7698); the refusal itself is still answered by dispatch.
+    pub(crate) fn refused_before_dispatch(
+        &self,
+        tool_name: &str,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> bool {
+        !self.meta_tool_exposure.is_exposed(tool_name)
+            || caller.retry.solicited_input_responses().is_err()
+            || !crate::gateway::router::CallerStanding::of_admin_flag(caller.is_admin)
+                .permits(tool_name)
+            || super::confirmation::unconfirmable(tool_name, caller)
+    }
+
+    /// Dispatch's refusal of a signed call whose nonce was left unadmitted.
+    /// Only a call [`Self::refused_before_dispatch`] predicts refused is left
+    /// so, and the gates answer it first: reaching this means the prediction
+    /// and the gates disagree, and nothing may act on an unspent nonce.
+    pub(crate) fn refuse_unadmitted(
+        &self,
+        id: &crate::protocol::RequestId,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Option<crate::protocol::JsonRpcResponse> {
+        let unadmitted = caller
+            .signing
+            .is_some_and(SigningInvocationContext::awaits_admission);
+        (self.signing_enabled() && unadmitted).then(|| {
+            crate::protocol::JsonRpcResponse::error(
+                Some(id.clone()),
+                -32603,
+                "signing admission did not run",
+            )
+        })
+    }
+
+    /// [`Self::prepare_signing_invocation`] for a `tools/call` naming
+    /// `tool_name`. A call dispatch refuses before the tool acts is left
+    /// unadmitted, so its nonce stays unspent and dispatch answers it as it
+    /// would unsigned (MIK-7698). A malformed nonce is still refused first.
+    pub(crate) fn prepare_signing_for_call(
+        &self,
+        context: &mut SigningInvocationContext,
+        tool_name: &str,
+        arguments: &Value,
+        session: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> crate::Result<()> {
+        if context.origin == Origin::Unsigned || !self.signing_enabled() {
+            return Ok(());
+        }
+        context.refuse_malformed_nonce()?;
+        if self.refused_before_dispatch(tool_name, caller) {
+            return Ok(());
+        }
+        self.prepare_signing_invocation(context, arguments, session, caller)
     }
 
     /// Complete policy and nonce checks once, before outer execution admission

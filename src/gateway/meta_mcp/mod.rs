@@ -2185,8 +2185,7 @@ impl MetaMcp {
         }
 
         // Admin gate for the meta-tools that change the gateway for every
-        // session. Enforced HERE, at the dispatcher, and not only at the HTTP
-        // router that also checks it.
+        // session, enforced HERE at the dispatcher.
         //
         // The router checks this too, and stdio marks its caller admin because
         // the client that spawned the process already holds whatever the
@@ -2195,13 +2194,9 @@ impl MetaMcp {
         // silently absent for the next one added, which is the shape that hid
         // the playbook defect. Placing it at the point of dispatch costs a
         // redundant comparison on the router path and removes the possibility.
-        //
-        // It also caught a live one immediately. Moving it here refused stdio,
-        // because that path passed a default context whose `is_admin` is false
-        // and nothing had ever checked it.
-        // The same predicate `tools/list` filters its answer with
-        // (`meta_tools_for`), so a caller is never shown a tool this gate
-        // would then refuse.
+        // Moving it here caught stdio passing a default non-admin context.
+        // The same predicate `tools/list` filters with (`meta_tools_for`) and
+        // the signing layer reads (`refused_before_dispatch`).
         if !CallerStanding::of_admin_flag(caller.is_admin).permits(tool_name) {
             return JsonRpcResponse::error(
                 Some(id),
@@ -2219,6 +2214,10 @@ impl MetaMcp {
                 GateOutcome::ProceedConfirmed => true,
             };
 
+        // MIK-7698: nothing acts on a nonce the signing layer left unadmitted.
+        if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
+            return refusal;
+        }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
             if let Err(error) = self.refuse_chained_task(tool_name, &arguments) {

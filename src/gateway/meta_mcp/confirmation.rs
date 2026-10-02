@@ -163,6 +163,19 @@ impl GateOutcome {
     }
 }
 
+/// A destructive meta call nobody can be asked to confirm: no asker on this
+/// transport, or an in-band asker with no principal to bind the answer to.
+/// Refused with no exchange, so the signing layer reads it too (MIK-7698).
+pub(super) fn unconfirmable(tool_name: &str, caller: &MetaMcpCallerContext<'_>) -> bool {
+    use crate::gateway::destructive_confirmation::ConfirmationChannel;
+    crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name)
+        && match caller.confirmation {
+            ConfirmationChannel::Unavailable => true,
+            ConfirmationChannel::InBand { .. } => confirmation_principal(caller).is_none(),
+            ConfirmationChannel::Elicit { .. } => false,
+        }
+}
+
 /// Whether the call may run, and if so whether it spent a confirmation here.
 ///
 /// Long by construction: one arm per `ConfirmationChannel` variant, and each

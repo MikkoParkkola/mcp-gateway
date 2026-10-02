@@ -35,6 +35,36 @@ impl DirectRouteGuards {
         Ok(())
     }
 
+    /// Admit a hardened direct call's nonce (`None`: this route does not sign)
+    /// in the replay store the meta route uses, keyed by the meta route's own
+    /// derivation (an authenticated key, then an OAuth agent, then a
+    /// certificate), so one caller has one bucket on both.
+    pub(crate) fn admit_nonce(
+        state: &AppState,
+        (client, oauth_agent_identity, cert_identity): (
+            Option<&AuthenticatedClient>,
+            Option<&crate::gateway::oauth::AgentIdentity>,
+            Option<&crate::mtls::CertIdentity>,
+        ),
+        nonce: Option<Option<&str>>,
+    ) -> Result<()> {
+        let Some(nonce) = nonce else {
+            return Ok(());
+        };
+        let authorizer = super::authorization::RouterAuthorizer {
+            state,
+            client,
+            oauth_agent_identity,
+            cert_identity,
+            principal: None,
+        };
+        let principal = crate::gateway::authz::ToolAuthorizer::quota_principal(&authorizer).map_or(
+            "anonymous",
+            crate::gateway::auth::QuotaPrincipal::as_store_key,
+        );
+        state.meta_mcp.admit_signing_nonce(nonce, principal)
+    }
+
     /// S2 spend, once, immediately before an actual backend dispatch (after
     /// the idempotency short-circuit: a replay spends nothing).
     pub(crate) fn before_dispatch(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<Vec<String>> {
