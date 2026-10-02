@@ -38,7 +38,7 @@ failsafe:
 backends:
   # Stdio transport (subprocess)
   tavily:
-    command: "npx -y @anthropic/mcp-server-tavily"
+    command: "npx -y tavily-mcp@0.2.22"
     description: "Web search via Tavily API"
     timeout: "30s"
     env:

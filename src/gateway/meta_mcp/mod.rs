@@ -265,16 +265,16 @@ impl<'a> MetaMcpCallerContext<'a> {
 
     /// The principal text that keys this caller's retained results (MIK-7272.OWNER.3).
     ///
-    /// The stdio transport's mark, not its principal text, names the local
-    /// operator: a context the transport built keys under
-    /// [`LOCAL_OPERATOR_PRINCIPAL`], and text from any other source can never
-    /// spell it, because text carrying the reserved prefix is dropped here.
+    /// The stdio mark names the local operator ([`LOCAL_OPERATOR_PRINCIPAL`]); other
+    /// text can never spell it, since text with the reserved prefix is dropped.
+    /// With no credential, a proven agent or certificate subject (MIK-7688).
     pub(crate) fn owner_principal(&self) -> Option<&'a str> {
         if self.stdio_nonce.is_some() {
             return Some(LOCAL_OPERATOR_PRINCIPAL);
         }
         self.credential_principal
-            .filter(|text| !text.starts_with(LOCAL_OPERATOR_PREFIX))
+            .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX))
+            .or_else(|| support::proven_subject_owner(self))
     }
 
     /// How this caller was established. The stdio transport's mark decides

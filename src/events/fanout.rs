@@ -71,8 +71,8 @@ impl EventsHub {
             .filter(|s| source.matches(&s.arguments, event))
             .collect();
         for sub in matching {
-            if !services.admits_subscription(&sub, &event.backend) {
-                self.revoke(&sub.id).await;
+            if !services.admits_subscription(&sub, &event.backend).await {
+                self.revoke(&sub).await;
                 continue;
             }
             self.offer(services, event, &sub).await;
@@ -157,19 +157,24 @@ impl EventsHub {
         }
     }
 
-    /// Delete a subscription whose principal lost access; its pending
-    /// records go with it (F9).
-    /// `false` when the store could not record the removal.
-    pub(super) async fn revoke(self: &Arc<Self>, id: &str) -> bool {
+    /// Delete subscription `refused`, the snapshot the access check refused,
+    /// with its pending records (F9), unless a refresh has since re-bound it
+    /// to another credential.
+    pub(super) async fn revoke(self: &Arc<Self>, refused: &Subscription) {
         let tail = super::tail_policy(&self.config);
-        let id = id.to_owned();
+        let snapshot = refused.clone();
         let removed = self
-            .blocking(move |store| store.remove(&id, Utc::now(), tail))
+            .blocking(move |store| {
+                store.remove_where(&snapshot.id, Utc::now(), tail, |row| {
+                    row.credential_principal == snapshot.credential_principal
+                        && row.binding == snapshot.binding
+                        && row.api_key == snapshot.api_key
+                })
+            })
             .await;
         if removed == Some(true) {
             tracing::info!("events: subscription revoked, access no longer granted");
         }
-        removed.is_some()
     }
 }
 

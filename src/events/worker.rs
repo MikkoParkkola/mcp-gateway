@@ -138,18 +138,18 @@ impl EventsHub {
             body_sha256: "",
             delivered: false,
         };
-        if !services.admits_subscription(&sub, &record.backend) {
+        if !services.admits_subscription(&sub, &record.backend).await {
             services.audit_attempt(&refused("access_revoked")).await;
-            if !self.revoke(&sub.id).await {
-                // The removal did not reach the store: the record goes back to
-                // pending, so the next attempt re-checks and revokes again.
-                let next = Utc::now() + chrono::TimeDelta::seconds(30);
-                let retry = Settle::Retry {
-                    next,
-                    status: "access_revoked",
-                };
-                self.settle(services, &record, retry).await;
-            }
+            self.revoke(&sub).await;
+            // Removed: the record went with it and this settles nothing. Not
+            // removed (a store error, or a refresh re-bound the row): the
+            // record goes back to pending and the next attempt re-checks.
+            let next = Utc::now() + chrono::TimeDelta::seconds(30);
+            let retry = Settle::Retry {
+                next,
+                status: "access_revoked",
+            };
+            self.settle(services, &record, retry).await;
             return;
         }
         // A record a crash or a long suspension carried past its bounds is
