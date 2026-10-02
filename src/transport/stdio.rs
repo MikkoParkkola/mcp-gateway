@@ -693,6 +693,16 @@ impl Transport for StdioTransport {
     }
 }
 
+impl Drop for StdioTransport {
+    /// A dropped transport ends the whole tree. `KillOnDrop` only kills the
+    /// group leader, so `npx`/`uvx` descendants would outlive it.
+    fn drop(&mut self) {
+        if let Some(child) = self.child.get_mut().as_mut() {
+            let _ = child.start_kill();
+        }
+    }
+}
+
 /// Start `cmd` as the leader of its own process group (Unix) or Job object
 /// (Windows), so stopping the backend ends every process it started:
 /// `npx`/`uvx`-style launchers otherwise leave the real server behind.

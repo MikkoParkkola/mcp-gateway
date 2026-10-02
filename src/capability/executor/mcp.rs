@@ -250,7 +250,7 @@ fn select<'a>(config: &'a McpConfig, params: &Value) -> Result<Selected<'a>> {
     match &config.tool {
         Some(tool) => Ok((tool, config.arguments.as_ref(), None)),
         None => Err(Error::Config(
-            "an mcp capability needs `tool` or `tool_selector`".into(),
+            "not executable: this mcp capability declares no tool mapping (`tool` or `tool_selector`)".into(),
         )),
     }
 }
@@ -337,31 +337,38 @@ impl CapabilityExecutor {
                 self.start_mcp(capability, config)
             })?;
 
-        let mut args = arguments(template, &params)?;
-        if let Some(prepare) = prepare {
-            let first = call_tool(
-                &backend,
-                &prepare.tool,
-                arguments(prepare.arguments.as_ref(), &params)?,
-            )
-            .await?;
-            let object = prepare_object(first).ok_or_else(|| {
-                Error::Protocol(format!(
-                    "prepare tool '{}' returned no object",
-                    prepare.tool
-                ))
-            })?;
-            for (arg, field) in &prepare.bind {
-                let value = object.get(field).cloned().ok_or_else(|| {
+        // One deadline for the whole call, writes included: a server that stops
+        // reading its stdin must not hold its slot (and so its eviction) forever.
+        let deadline = Duration::from_secs(capability.primary_provider().map_or(30, |p| p.timeout));
+        tokio::time::timeout(deadline, async {
+            let mut args = arguments(template, &params)?;
+            if let Some(prepare) = prepare {
+                let first = call_tool(
+                    &backend,
+                    &prepare.tool,
+                    arguments(prepare.arguments.as_ref(), &params)?,
+                )
+                .await?;
+                let object = prepare_object(first).ok_or_else(|| {
                     Error::Protocol(format!(
-                        "prepare tool '{}' returned no '{field}'",
+                        "prepare tool '{}' returned no object",
                         prepare.tool
                     ))
                 })?;
-                args.insert(arg.clone(), value);
+                for (arg, field) in &prepare.bind {
+                    let value = object.get(field).cloned().ok_or_else(|| {
+                        Error::Protocol(format!(
+                            "prepare tool '{}' returned no '{field}'",
+                            prepare.tool
+                        ))
+                    })?;
+                    args.insert(arg.clone(), value);
+                }
             }
-        }
-        call_tool(&backend, tool, args).await
+            call_tool(&backend, tool, args).await
+        })
+        .await
+        .map_err(|_| Error::BackendTimeout("MCP call timed out".to_string()))?
     }
 
     /// A new backend for one caller's child, in its own directory tree.

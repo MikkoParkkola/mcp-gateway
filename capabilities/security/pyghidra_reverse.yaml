@@ -1,10 +1,11 @@
-sha256: 741441f8c970722995bb0e560cef7ba57dee4a8ccd092a08bce4ee9d06c3c084
+sha256: 90ac882c920078b76870803e4d0e83583329290600d2c4324686e2ef5e89db52
 fulcrum: "1.0"
 name: pyghidra_reverse
 description: >
   PyGhidra MCP server for binary reverse engineering — decompile, disassemble,
   analyze call graphs, search symbols, and get cross-references in compiled
   binaries. Completes the red team tooling stack with binary analysis capability.
+  Not executable yet: the operations are not mapped to the server's tools (import is a background job).
   [keywords: binary, reverse-engineering, decompile, disassemble, ghidra, security, malware]
 
 schema:

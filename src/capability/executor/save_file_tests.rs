@@ -97,3 +97,10 @@ async fn does_not_follow_a_planted_symlink() {
     assert_eq!(out["filename"], "a_1.txt");
     assert_eq!(std::fs::read(&target).unwrap(), b"keep");
 }
+
+#[test]
+fn a_value_that_looks_like_a_slot_is_not_expanded_again() {
+    let params = json!({"a": "{b}", "b": "boom"});
+    assert_eq!(render_filename("{a}.txt", &params), "{b}.txt");
+    assert_eq!(render_filename("x{missing}y", &params), "x{missing}y");
+}

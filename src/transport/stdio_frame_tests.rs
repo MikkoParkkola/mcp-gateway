@@ -92,3 +92,48 @@ async fn a_child_that_fails_to_start_takes_its_grandchild_with_it() {
     }
     assert!(!alive, "grandchild {pid} outlived its backend");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_a_live_transport_takes_its_descendants_with_it() {
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("descendant.pid");
+    let transport = super::StdioTransport::new(
+        "true",
+        HashMap::new(),
+        None,
+        std::time::Duration::from_secs(3),
+        None,
+    );
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(format!("sleep 120 & echo $! > {}; wait", pidfile.display()));
+    *transport.child.lock().await = Some(super::spawn_in_own_tree(cmd).unwrap());
+    let mut pid = String::new();
+    for _ in 0..50 {
+        pid = std::fs::read_to_string(&pidfile)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        if !pid.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(!pid.is_empty(), "the descendant never started");
+    drop(transport);
+    let mut alive = true;
+    for _ in 0..50 {
+        let status = std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .status()
+            .unwrap();
+        if !status.success() {
+            alive = false;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(!alive, "descendant {pid} outlived a dropped transport");
+}

@@ -12,7 +12,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt as _;
 
 use crate::config::FileRoots;
 use crate::{Error, Result};
@@ -98,15 +97,29 @@ pub fn validate_filename(name: &str) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// One left-to-right pass, so a parameter value that itself looks like `{x}`
+/// is never expanded again. A missing or non-string slot stays literal.
 fn render_filename(template: &str, params: &Value) -> String {
-    let mut out = template.to_string();
-    if let Some(map) = params.as_object() {
-        for (k, v) in map {
-            if let Some(s) = v.as_str() {
-                out = out.replace(&format!("{{{k}}}"), s);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let tail = &rest[open..];
+        match tail.find('}') {
+            Some(close) => {
+                match params.get(&tail[1..close]).and_then(Value::as_str) {
+                    Some(value) => out.push_str(value),
+                    None => out.push_str(&tail[..=close]),
+                }
+                rest = &tail[close + 1..];
+            }
+            None => {
+                out.push_str(tail);
+                rest = "";
             }
         }
     }
+    out.push_str(rest);
     out
 }
 
@@ -129,13 +142,14 @@ fn decode(spec: &SaveFileSpec, encoded: &str) -> Result<Vec<u8>> {
 }
 
 /// Serializes the quota check and the write, so two saves cannot both fit.
-static SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Held for the whole blocking write, so a cancelled caller cannot release it
+/// while the write is still running.
+static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-async fn dir_size(root: &std::path::Path) -> std::io::Result<u64> {
+fn dir_size(root: &std::path::Path) -> std::io::Result<u64> {
     let mut total = 0;
-    let mut rd = tokio::fs::read_dir(root).await?;
-    while let Some(e) = rd.next_entry().await? {
-        let meta = e.metadata().await?;
+    for entry in std::fs::read_dir(root)? {
+        let meta = entry?.metadata()?;
         if meta.is_file() {
             total += meta.len();
         }
@@ -143,12 +157,56 @@ async fn dir_size(root: &std::path::Path) -> std::io::Result<u64> {
     Ok(total)
 }
 
-async fn create_new(path: &std::path::Path) -> std::io::Result<tokio::fs::File> {
-    let mut o = tokio::fs::OpenOptions::new();
+fn create_new(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
     o.write(true).create_new(true);
     #[cfg(unix)]
-    o.mode(0o600);
-    o.open(path).await
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        o.mode(0o600);
+    }
+    o.open(path)
+}
+
+/// Quota check, create-new write and cleanup, all on one blocking thread.
+fn write_unique(root: &std::path::Path, name: &str, bytes: &[u8], quota: u64) -> Result<Value> {
+    use std::io::Write as _;
+    let _guard = SAVE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let used = dir_size(root).map_err(refuse)?;
+    if used.saturating_add(bytes.len() as u64) > quota {
+        return Err(refuse("downloads quota would be exceeded"));
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    for n in 0..=99 {
+        let candidate = if n == 0 {
+            name.to_owned()
+        } else {
+            format!("{stem}_{n}{ext}")
+        };
+        let path = root.join(&candidate);
+        match create_new(&path) {
+            Ok(mut f) => {
+                if let Err(e) = f.write_all(bytes).and_then(|()| f.flush()) {
+                    drop(f);
+                    let _ = std::fs::remove_file(&path);
+                    return Err(refuse(e));
+                }
+                return Ok(json!({
+                    "saved_path": path.to_string_lossy(),
+                    "size": bytes.len(),
+                    "filename": candidate,
+                }));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(refuse(e)),
+        }
+    }
+    Err(refuse("no free file name after 99 attempts"))
 }
 
 /// Decode the payload and write it; returns `{saved_path, size, filename}`.
@@ -177,42 +235,10 @@ pub async fn save(
         .and_then(Value::as_str)
         .ok_or_else(|| refuse(format!("response has no string field '{}'", spec.data)))?;
     let bytes = decode(spec, encoded)?;
-
-    let _guard = SAVE_LOCK.lock().await;
-    let used = dir_size(&root).await.map_err(|e| refuse(e))?;
-    if used.saturating_add(bytes.len() as u64) > roots.downloads_quota_bytes {
-        return Err(refuse("downloads quota would be exceeded"));
-    }
-    let (stem, ext) = match name.rfind('.') {
-        Some(i) if i > 0 => (&name[..i], &name[i..]),
-        _ => (name.as_str(), ""),
-    };
-    for n in 0..=99 {
-        let candidate = if n == 0 {
-            name.clone()
-        } else {
-            format!("{stem}_{n}{ext}")
-        };
-        let path = root.join(&candidate);
-        match create_new(&path).await {
-            Ok(mut f) => {
-                let written = f.write_all(&bytes).await.and(f.flush().await);
-                if let Err(e) = written {
-                    drop(f);
-                    let _ = tokio::fs::remove_file(&path).await;
-                    return Err(refuse(e));
-                }
-                return Ok(json!({
-                    "saved_path": path.to_string_lossy(),
-                    "size": bytes.len(),
-                    "filename": candidate,
-                }));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(refuse(e)),
-        }
-    }
-    Err(refuse("no free file name after 99 attempts"))
+    let quota = roots.downloads_quota_bytes;
+    tokio::task::spawn_blocking(move || write_unique(&root, &name, &bytes, quota))
+        .await
+        .map_err(refuse)?
 }
 
 #[cfg(test)]
