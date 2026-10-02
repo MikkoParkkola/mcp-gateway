@@ -123,40 +123,8 @@ runtimes a stdio backend shells out to — Node.js 24, `uv`, `git` and
 `openssh-client` (for `git+https://` and `git+ssh://` package specs). It also
 leaves `curl` behind, which the builds above it use, and picks up `python3` as
 a hard dependency of the NodeSource package; neither is there to be spawned.
-`pnpm`, `yarn` and `bunx` are not installed. A backend that needs one of them —
-or a deployment that needs a package the image has no reason to carry, such as
-`iproute2` to route a backend's egress through a tunnel — declares it instead of
-forking the image:
-
-```bash
-docker run --user root -e EXTRA_APT_PACKAGES="iproute2 net-tools" \
-  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
-```
-
-Installing needs root, so the container runs as root and the entrypoint drops to
-the gateway user before exec'ing it. Run as the image's own user it does nothing,
-so the image behaves exactly as it does without the variable.
-
-Packages resolve at every start, so a restart can pick up a different build of
-one; name a version (`iproute2=6.12.0-1`) when that matters. An install that
-fails stops the container rather than starting without the package it was told
-to carry, which couples startup to the apt mirror — the trade a deployment makes
-by naming a package.
-
-Startup steps the image has no reason to carry go in `/docker-entrypoint.d`,
-which a deployment mounts (a file in the repository, a directory on a share — the
-entrypoint does not care). Executable `*.sh` files run and `*.envsh` files are
-sourced, in name order, as the container's user, after the packages are installed
-and before the gateway starts, so a route or a key is in place by the time a
-backend spawns. A file that is not executable is skipped with a message rather
-than half-run, and a script that fails stops the container. Both follow the
-convention nginx and postgres ship:
-
-```bash
-docker run --user root -e EXTRA_APT_PACKAGES="iproute2" \
-  -v ./startup:/docker-entrypoint.d:ro \
-  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
-```
+`pnpm`, `yarn` and `bunx` are not installed: a backend naming one of those
+needs a layer of its own.
 
 ```bash
 docker pull ghcr.io/mikkoparkkola/mcp-gateway:latest-full
@@ -186,6 +154,65 @@ only for a stable release. A push to a branch builds, scans and smoke-tests the
 variant but publishes nothing for it: there is no `<branch>-full`, and
 `--target runtime-full` builds the variant from any commit in one command. It
 costs nothing if you carry no such backend; the default tag is smaller.
+
+### Extra packages and startup steps
+
+A deployment that needs a package the image has no reason to carry, such as
+`iproute2` to route a backend's egress through a tunnel, or `pnpm`, declares it
+instead of forking the image. Startup steps go in `/docker-entrypoint.d`, the
+convention nginx and postgres ship:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2" \
+  -v ./startup:/docker-entrypoint.d:ro \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Started as root, the entrypoint installs the packages, runs the drop-ins, and
+then runs the gateway as the `gateway` user (uid 1001) with only that user's
+groups. Started as the image's own user, it skips the install and runs only the
+drop-ins. The image still declares `USER gateway`, so in a container started
+without `--user root` the entrypoint, the drop-ins and the gateway all run as
+`gateway`. One started with
+`--user root` keeps root as its configured user: `docker exec` into it runs as
+root unless you pass `--user gateway`, and so does an `--entrypoint` override.
+
+- **Drop-ins** run in name order, after the install and before the gateway
+  starts, so a route or a key is in place before the first backend spawns.
+  Executable `*.sh` files run; executable `*.envsh` files are sourced. A file
+  without the exec bit is skipped with a message, and a step that fails stops
+  the container. `docker stop` does not interrupt a running drop-in; Docker
+  kills the container when its stop timeout runs out.
+- **Drop-ins run as root when the container starts as root.** Mount the
+  directory read-only and keep it owned by root: anyone who can write it can run
+  code as root in the container.
+- **A sourced `.envsh` changes the gateway's own environment.** A variable it
+  exports reaches the gateway process, though a stdio backend still sees only
+  what the gateway passes on. In a container started as root, `HOME` is the
+  exception: the gateway always gets `/home/gateway`.
+- **The install couples start-up to the apt mirror.** Packages resolve at every
+  start, so a restart can pick up a different build; pin a version
+  (`iproute2=6.12.0-1`) when that matters. `EXTRA_APT_PACKAGES` names packages
+  only: a value starting with `-` is an apt option, and the container refuses to
+  start. The install runs non-interactively under a ceiling
+  (`EXTRA_APT_TIMEOUT`, a positive whole number of seconds, default 300). A
+  failed or timed-out install stops the container rather than starting it without the
+  package. `docker stop` works during the install. The HEALTHCHECK start period
+  is 5 seconds, so a slow install can mark the container unhealthy before the
+  gateway is up.
+- **For a reproducible image, or one that never starts as root,** derive it
+  instead:
+
+  ```dockerfile
+  FROM ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+  USER root
+  RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+      && rm -rf /var/lib/apt/lists/*
+  USER gateway
+  ```
+
+  This is the route for the Helm chart, which runs the gateway as non-root on a
+  read-only root filesystem, where neither the install nor a root drop-in can run.
 
 ### Container Verification
 
