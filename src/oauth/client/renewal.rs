@@ -9,15 +9,25 @@ use std::time::Duration;
 use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, warn};
 
-use super::{OAuthClient, destination};
+use super::OAuthClient;
+use crate::security::ssrf::is_ssrf_refusal;
+
+/// What one background renewal attempt came to.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Renewal {
+    /// A headless grant issued a new token.
+    Renewed,
+    /// The destination policy refused a grant's endpoint. Every later attempt
+    /// meets the same policy, and re-authorizing is not the remedy (MIK-7701).
+    Refused,
+    /// Every headless grant failed: the person must authorize again.
+    Exhausted,
+}
 
 impl OAuthClient {
-    /// Try all headless renewal strategies (`refresh_token` → `client_credentials`).
-    ///
-    /// Returns `Ok(true)` on success, `Ok(false)` when all automatic methods
-    /// are unavailable and manual re-authorization is required.
-    pub(super) async fn attempt_background_renewal(&self) -> bool {
-        // Strategy 1: refresh_token grant
+    /// Try the headless renewal strategies (`refresh_token`, then
+    /// `client_credentials`), stopping at a policy refusal.
+    pub(super) async fn attempt_background_renewal(&self) -> Renewal {
         let refresh_token_opt = {
             let token = self.current_token.read();
             token.as_ref().and_then(|t| t.refresh_token.clone())
@@ -25,13 +35,8 @@ impl OAuthClient {
 
         if let Some(refresh_token) = refresh_token_opt {
             match self.refresh_token(&refresh_token).await {
-                Ok(_) => return true,
-                // A policy refusal: no other grant will reach a different
-                // place, and re-authorizing is not the remedy (MIK-7701).
-                Err(e) if destination::is_policy_refusal(&e) => {
-                    warn!(backend = %self.backend_name, error = %e, "Token renewal refused");
-                    return false;
-                }
+                Ok(_) => return Renewal::Renewed,
+                Err(e) if is_ssrf_refusal(&e) => return self.refused(&e),
                 Err(e) => {
                     debug!(
                         backend = %self.backend_name,
@@ -42,24 +47,33 @@ impl OAuthClient {
             }
         }
 
-        // Strategy 2: client_credentials grant (headless, for Beeper-style tokens)
+        // Headless, for Beeper-style tokens.
         match self.try_client_credentials().await {
-            Ok(_) => return true,
+            Ok(_) => Renewal::Renewed,
+            Err(e) if is_ssrf_refusal(&e) => self.refused(&e),
             Err(e) => {
                 debug!(
                     backend = %self.backend_name,
                     error = %e,
                     "client_credentials renewal failed"
                 );
+                Renewal::Exhausted
             }
         }
+    }
 
-        false
+    fn refused(&self, error: &crate::Error) -> Renewal {
+        warn!(
+            backend = %self.backend_name,
+            error = %error,
+            "Background token renewal stopped: the destination policy refused it"
+        );
+        Renewal::Refused
     }
 
     /// Spawn a background task that proactively refreshes the token before it
-    /// expires.  The task runs for the lifetime of the provided `Arc`; it
-    /// stops automatically when the last strong reference is dropped.
+    /// expires.  The task runs for the lifetime of the provided `Arc`, or
+    /// until the destination policy refuses a renewal.
     ///
     /// The returned `JoinHandle` can be aborted to cancel the task.
     ///
@@ -94,17 +108,19 @@ impl OAuthClient {
             };
 
             if needs_refresh {
-                let success = {
+                let renewal = {
                     let guard = client.lock().await;
                     guard.attempt_background_renewal().await
                 };
 
-                if !success {
-                    warn!(
+                match renewal {
+                    Renewal::Renewed => {}
+                    Renewal::Refused => return,
+                    Renewal::Exhausted => warn!(
                         backend = %backend_name,
                         "All automatic token renewal strategies failed — \
                          manual re-authorization required"
-                    );
+                    ),
                 }
             }
         }

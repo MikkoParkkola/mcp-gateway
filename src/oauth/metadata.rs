@@ -132,8 +132,10 @@ impl AuthorizationServerMetadata {
         info!(url = %url, "Discovering OAuth authorization server metadata");
 
         let response = client.get(&url).send().await.map_err(|e| {
-            crate::security::http_diagnostics::ssrf_refusal(&e)
-                .unwrap_or_else(|| Error::OAuth(format!("Failed to fetch OAuth metadata: {e}")))
+            crate::security::http_diagnostics::oauth_request_error(
+                "Failed to fetch OAuth metadata",
+                &e,
+            )
         })?;
 
         if !response.status().is_success() {
@@ -202,9 +204,10 @@ impl ProtectedResourceMetadata {
         info!(url = %url, "Discovering OAuth protected resource metadata");
 
         let response = client.get(&url).send().await.map_err(|e| {
-            crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
-                Error::OAuth(format!("Failed to fetch protected resource metadata: {e}"))
-            })
+            crate::security::http_diagnostics::oauth_request_error(
+                "Failed to fetch protected resource metadata",
+                &e,
+            )
         })?;
 
         if !response.status().is_success() {
