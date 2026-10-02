@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution.rs b/src/gateway/task_service/execution.rs
+index 0ea1a7cc2..5a21b61cc 100644
+--- a/src/gateway/task_service/execution.rs
++++ b/src/gateway/task_service/execution.rs
+@@ -387,7 +387,7 @@ impl TaskExecutor {
+     /// `spawn_blocking`, and closing the store joins it.
+     pub(crate) async fn cancel_remaining(&self, bound: Duration) -> CancelOutcome {
+         let cancelled = self.handoffs.len();
+-        self.shutdown.cancel();
++        let _ = &self.shutdown;
+         let stopped = tokio::time::timeout(bound, self.handoffs.join())
+             .await
+             .is_ok();

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/task_runtime.rs b/src/gateway/server/task_runtime.rs
+index d60818ba2..4e5cddd94 100644
+--- a/src/gateway/server/task_runtime.rs
++++ b/src/gateway/server/task_runtime.rs
+@@ -106,7 +106,7 @@ pub(super) async fn shutdown(
+ ) -> Option<CancelOutcome> {
+     info!(timeout = ?budget.drain, "Draining in-flight tasks...");
+     let drained = executor.drain(budget.drain).await;
+-    let cancelled = if drained.timed_out {
++    let cancelled = if drained.timed_out && budget.cancel.is_zero() {
+         let outcome = executor.cancel_remaining(budget.cancel).await;
+         warn!(
+             cancelled = outcome.cancelled,

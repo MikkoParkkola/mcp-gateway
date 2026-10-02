@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index d7fffc4aa..8e0dcac10 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -334,7 +334,7 @@ impl TaskExecutor {
+             id.to_owned(),
+             principal.to_owned(),
+         );
+-        self.spawn_worker(async move {
++        tokio::spawn(async move {
+             let workers = Arc::clone(&executor.workers);
+             let provided = executor
+                 .service

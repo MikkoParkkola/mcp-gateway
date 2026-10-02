@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/task_runtime.rs b/src/gateway/server/task_runtime.rs
+index 98fe6fce1..b9a6dba06 100644
+--- a/src/gateway/server/task_runtime.rs
++++ b/src/gateway/server/task_runtime.rs
+@@ -72,7 +72,7 @@ impl ShutdownBudget {
+     pub(super) fn within(remaining: Duration, timeout: Duration) -> Self {
+         let reserve = remaining / 5;
+         Self {
+-            drain: timeout.min(remaining.saturating_sub(reserve)),
++            drain: timeout,
+             cancel: reserve / 2,
+         }
+     }
