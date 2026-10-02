@@ -155,6 +155,13 @@ fn a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result() {
         );
     }
 
+    let mut no_status = json!({"taskId": 7, "result": {"cacheScope": "public"}});
+    clamp_delivered_scope(&mut no_status);
+    assert_eq!(
+        no_status["result"]["cacheScope"], "public",
+        "a non-string taskId without a status is not an envelope"
+    );
+
     let mut tool = json!({"structuredContent": {
         "taskId": 7, "status": "completed", "result": {"cacheScope": "public"}
     }});

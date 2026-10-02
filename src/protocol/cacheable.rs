@@ -159,8 +159,8 @@ pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
     }
 }
 
-/// Clamp the `result` of one JSON-RPC response; requests and notifications
-/// (no `id`) pass unchanged.
+/// Clamp the `result` and `error.data` of one JSON-RPC response; requests and
+/// notifications (no `id`) pass unchanged.
 fn clamp_response_envelope(payload: &mut Value) {
     if payload.get("id").is_some()
         && let Some(result) = payload.get_mut("result")
@@ -177,8 +177,8 @@ fn clamp_response_envelope(payload: &mut Value) {
 }
 
 /// The SSE `data` of a `message` event: the payload as text, with the `result`
-/// of a JSON-RPC response, or of each response in a batch, clamped by
-/// [`clamp_delivered_scope`].
+/// and `error.data` of a JSON-RPC response, or of each response in a batch,
+/// clamped by [`clamp_delivered_scope`].
 pub(crate) fn message_event_data(payload: &Value) -> String {
     let mut clamped = payload.clone();
     match &mut clamped {

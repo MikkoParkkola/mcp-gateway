@@ -31,7 +31,11 @@ mod source_checks {
     /// Test 7 (a). Both wire result slots carry the clamping serializer.
     #[test]
     fn both_result_slots_carry_the_clamping_serializer() {
-        assert!(MESSAGES.contains(ATTRIBUTE), "JsonRpcResponse.result");
+        assert_eq!(
+            MESSAGES.matches(ATTRIBUTE).count(),
+            2,
+            "JsonRpcResponse.result and JsonRpcError.data (MIK-7702)"
+        );
         assert!(TASKS.contains(ATTRIBUTE), "task snapshot result");
     }
 
