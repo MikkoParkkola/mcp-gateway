@@ -308,6 +308,20 @@ A backend offers the three descriptors when all hold:
    read. Those backends get no b2 descriptors (stated limit, §11 D3).
 3. The events source config `sources.backend_notifications` is true (parent §9).
 
+**Refusal, not silence (lead ruling on D2/D3).** A subscription to one of the
+three names on a configured backend that fails 1 or 2 answers
+`-32014 Unsupported` with `data = {"feature": "backendEvents", "value": <name>,
+"reason": <r>}`, `r` one of `sse_handshake_transport`, `a2a_transport`,
+`identity_propagation`, `per_user_credential` (a per-user OAuth login or a
+personal account on a multi-user gateway, the config form of the meta-route
+isolation check). It is answered at step 2 of the subscribe order, only to a
+caller who passes the backend's visibility check (anyone else gets `-32011`),
+so it cannot probe the config and costs no callback traffic. Account
+references are compiled first, so the reason is judged on the configuration the
+backend runs with. Shipped ahead of the listener in #2691
+(`src/events/upstream.rs`, `tests/mik_7630_events_refusal.rs`). Whether SOURCE.1
+("any backend") is met with these named exclusions is an operator decision.
+
 Eligibility is computed from config, not from the backend's runtime
 capabilities, so `events/list` never starts a backend. A backend that turns out
 not to support a kind is reported as unsupported (§3); its subscriptions
@@ -547,8 +561,8 @@ last unsubscribe.
 | # | Item | Why |
 |---|---|---|
 | D1 | Modern stdio uses `subscriptions/listen`, not `resources/subscribe` (parent §3.3 said stdio uses `resources/subscribe`) | 2026-07-28 removed `resources/subscribe` (`src/protocol/meta.rs:297`); the era decides, not the transport |
-| D2 | **Decision for the lead.** HTTP backends without `streamable_http: true` (the SSE handshake path, `/sse` or not) and A2A backends offer no b2 events | A2A has no MCP notifications. For the handshake path the cheaper route exists: keep reading the transport's own handshake GET (today dropped after the `endpoint` event, `http/mod.rs:1188-1290`) and feed it to the tap. Its cost is a behaviour change for every handshake-path backend (one held connection each, and the existing fixtures return a finite handshake body, so stream end cannot mean "disconnected"). Impact today: the operator's live config has 34 backends, 26 stdio and 8 streamable HTTP, **0** on the handshake path, 0 A2A. Proposed: ship without it, grade SOURCE.1 with that exclusion named; the lead may instead require the held-GET route in I5 |
-| D3 | **Decision for the lead.** Backends with identity propagation or per-caller catalogue isolation offer no b2 events | the shared-slot listener would observe under the gateway's credential, not the subscriber's (§6). Per-principal listeners are a larger design. Impact today: **0** of the operator's 34 backends propagate identity |
+| D2 | **Ruled (lead, 2026-10-02 interim): typed refusal.** HTTP backends without `streamable_http: true` (the SSE handshake path, `/sse` or not) and A2A backends offer no b2 events | A2A has no MCP notifications. For the handshake path the cheaper route exists: keep reading the transport's own handshake GET (today dropped after the `endpoint` event, `http/mod.rs:1188-1290`) and feed it to the tap. Its cost is a behaviour change for every handshake-path backend (one held connection each, and the existing fixtures return a finite handshake body, so stream end cannot mean "disconnected"). Impact today: the operator's live config has 34 backends, 26 stdio and 8 streamable HTTP, **0** on the handshake path, 0 A2A. Proposed: ship without it, grade SOURCE.1 with that exclusion named; the lead may instead require the held-GET route in I5 |
+| D3 | **Ruled (lead, 2026-10-02 interim): typed refusal.** Backends with identity propagation or per-caller catalogue isolation offer no b2 events | the shared-slot listener would observe under the gateway's credential, not the subscriber's (§6). Per-principal listeners are a larger design. Impact today: **0** of the operator's 34 backends propagate identity |
 | D4 | URI access = shared catalogue membership, exact match; template-only URIs refused | the rule `/mcp` `resources/read` already applies; no new policy model |
 | D5 | A live event subscription keeps its backend from being idle-stopped | otherwise reaper and listener fight; bounded by the subscription TTL |
 | D6 | Lost while disconnected; a modern filter change may duplicate | emit-only (parent F3); a duplicate change event is harmless, a gap is not |
