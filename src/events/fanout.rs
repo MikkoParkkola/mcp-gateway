@@ -50,7 +50,7 @@ const PROVENANCE_KEY: &str = "io.github.mikkoparkkola/provenance";
 
 /// The delivery body: exactly the protocol fields, the source's data and
 /// the provenance receipt in `_meta`.
-pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: Value) -> Vec<u8> {
+pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "eventId": event_id,
         "name": event.name,
@@ -105,7 +105,7 @@ impl EventsHub {
             &id,
             event,
             &data,
-            services.provenance(&event.backend, &event.name),
+            &services.provenance(&event.backend, &event.name),
         );
         let now = Utc::now();
         let record = OutboxRecord {

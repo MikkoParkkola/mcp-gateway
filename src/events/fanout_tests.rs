@@ -24,7 +24,7 @@ fn body_carries_only_protocol_fields_and_data() {
     };
     let receipt = json!({"receipt": {"subject_kind": "event"}});
     let body: Value =
-        serde_json::from_slice(&body("evt_1", &event, &event.data, receipt.clone())).expect("json");
+        serde_json::from_slice(&body("evt_1", &event, &event.data, &receipt)).expect("json");
     let mut keys: Vec<&str> = body
         .as_object()
         .expect("object")
