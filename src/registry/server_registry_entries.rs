@@ -484,8 +484,8 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
     },
     RegistryEntry {
         name: "grafana",
-        description: "Grafana dashboards, Prometheus and Loki queries, alerts, and incidents",
-        command: "uvx mcp-grafana@2.0.0",
+        description: "Grafana dashboards, Prometheus and Loki queries, alerts, and incidents (read-only)",
+        command: "uvx mcp-grafana@2.0.0 --disable-write",
         required_env: &["GRAFANA_URL", "GRAFANA_SERVICE_ACCOUNT_TOKEN"],
         optional_env: &["GRAFANA_ORG_ID"],
         transport: Transport::Stdio,
