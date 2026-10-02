@@ -302,11 +302,10 @@ fn relay_finding(description: String, matched: String) -> Finding {
 /// Which side of a call [`text_of`] reads.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Walk {
-    /// What a backend receives: every object key too, since a key reaches
-    /// the backend like a value.
+    /// What a backend receives: the leaves once more run together, and
+    /// nothing skipped.
     Egress,
-    /// What a caller is delivered: only keys long enough to fingerprint
-    /// alone, so short schema keys never make unrelated payloads alike.
+    /// What a caller is delivered: the gateway's own verdict slot skipped.
     Delivery,
 }
 
@@ -314,7 +313,7 @@ pub(super) enum Walk {
 /// (content split over short fields at word boundaries still matches); on
 /// egress the leaves once more run together, since a copy split mid-word
 /// over fields shorter than a fingerprint is still one the backend can
-/// join; then the keys `walk` reads. A delivery leaves out the top-level
+/// join; then every key of at least k chars. A delivery leaves out the top-level
 /// `_context_integrity`: that slot is the gateway's verdict about the
 /// result, whose fixed wording would make unrelated results look alike; a
 /// backend writing its own content there is backend collusion (§9). A
@@ -353,7 +352,11 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
         push(&mut out, &leaves.concat());
     }
     for key in keys {
-        if walk == Walk::Egress || key.chars().count() >= super::collusion::K {
+        // A key reaches the backend like a value, but only one long enough
+        // to fingerprint alone is read: short schema keys would make
+        // unrelated payloads alike, and keys are read in sorted order, so a
+        // copy split over short keys cannot be reassembled here anyway.
+        if key.chars().count() >= super::collusion::K {
             push(&mut out, key);
         }
     }

@@ -117,11 +117,9 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
 
 /// B3: a delivery skips only the top-level `_context_integrity`, the
 /// gateway's own verdict slot; a nested one, in any shape, is delivered
-/// content. Values are read first, contiguous, so content split
-/// over several short fields still matches; keys follow. Egress reads every
-/// key (a key reaches the backend like a value); a delivery reads only keys
-/// long enough to fingerprint alone, so short schema keys never make two
-/// unrelated payloads alike.
+/// content. Leaves come first, newline-joined; egress adds them run
+/// together. Both read only keys long enough to fingerprint alone, so short
+/// schema keys never make two unrelated payloads alike.
 #[test]
 fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
     let long_key = "k".repeat(48);
@@ -144,14 +142,9 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
     );
     assert!(egress.contains("one\ntwo\nthree\n"), "{egress:?}");
     assert!(egress.contains("five"), "{egress:?}");
-    for key in [
-        "key four",
-        "_context_integrity",
-        "schema_version",
-        long_key.as_str(),
-    ] {
-        assert!(egress.contains(key), "{key} missing: {egress:?}");
-    }
+    assert!(egress.contains("fiveonetwothree"), "{egress:?}");
+    assert!(egress.contains(&long_key), "{egress:?}");
+    assert!(!egress.contains("key four"), "{egress:?}");
 }
 
 /// B3: the adopted cap, pinned apart from the constant; at and below it the

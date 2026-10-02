@@ -449,8 +449,9 @@ is lane policy (operator decision 2026-09-29), not something the workflow enforc
   failure replaces the result with a refusal, which records nothing.
 - **Text read.** String leaves first, newline-joined, so content split over short fields at word
   boundaries still matches. On egress the leaves are read once more run together, so a copy split
-  mid-word over fields shorter than a fingerprint still matches. Keys come after. Egress reads every key, since a key reaches the backend
-  like a value. A delivery reads only keys of at least k = 48 chars, so short schema keys never
-  make unrelated results look alike. A delivery skips only the top-level `_context_integrity`, the
+  mid-word over fields shorter than a fingerprint still matches. Keys come after: both sides read
+  keys of at least k = 48 chars, since a key reaches the backend like a value. Shorter keys are
+  skipped, because shared schema keys would make unrelated payloads look alike, and keys are read
+  in sorted order, so a copy split over short keys could not be reassembled anyway. A delivery skips only the top-level `_context_integrity`, the
   gateway's verdict slot. A nested one is content. A backend that writes its own content into
   that slot is backend collusion (§9).
