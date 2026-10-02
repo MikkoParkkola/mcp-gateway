@@ -550,10 +550,10 @@ name: unpinned_cap
 description: No pin
 providers:
   primary:
-service: rest
-config:
-  base_url: https://example.com
-  path: /u
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /u
 ",
         )
         .unwrap();

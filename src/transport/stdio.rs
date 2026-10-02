@@ -144,26 +144,7 @@ impl StdioTransport {
             cmd.current_dir(cwd);
         }
 
-        // The child leads its own process group (Unix) or Job object
-        // (Windows), so stopping the backend ends every process it started:
-        // `npx`/`uvx`-style launchers otherwise leave the real server behind.
-        let mut wrap = CommandWrap::from(cmd);
-        wrap.wrap(KillOnDrop);
-        #[cfg(unix)]
-        wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
-        #[cfg(windows)]
-        wrap.wrap(process_wrap::tokio::JobObject);
-        let mut child = wrap.spawn().map_err(|e| match e.kind() {
-            // A command path that does not exist, or a file that is not
-            // executable. No amount of waiting fixes either, and warm-start
-            // retries transport failures indefinitely -- so before this, a
-            // typo in a backend command was respawned once a minute for the
-            // life of the process with no indication the config was wrong.
-            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
-                Error::TransportPermanent(format!("Failed to spawn: {e}"))
-            }
-            _ => Error::Transport(format!("Failed to spawn: {e}")),
-        })?;
+        let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
             .stdin()
@@ -710,6 +691,29 @@ impl Transport for StdioTransport {
 
         Ok(())
     }
+}
+
+/// Start `cmd` as the leader of its own process group (Unix) or Job object
+/// (Windows), so stopping the backend ends every process it started:
+/// `npx`/`uvx`-style launchers otherwise leave the real server behind.
+fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
+    let mut wrap = CommandWrap::from(cmd);
+    wrap.wrap(KillOnDrop);
+    #[cfg(unix)]
+    wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
+    #[cfg(windows)]
+    wrap.wrap(process_wrap::tokio::JobObject);
+    wrap.spawn().map_err(|e| match e.kind() {
+        // A command path that does not exist, or a file that is not
+        // executable. No amount of waiting fixes either, and warm-start
+        // retries transport failures indefinitely -- so before this, a
+        // typo in a backend command was respawned once a minute for the
+        // life of the process with no indication the config was wrong.
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+            Error::TransportPermanent(format!("Failed to spawn: {e}"))
+        }
+        _ => Error::Transport(format!("Failed to spawn: {e}")),
+    })
 }
 
 /// Longest JSON-RPC frame a stdio peer may send (16 MiB). Without a bound, a

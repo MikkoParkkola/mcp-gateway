@@ -22,11 +22,7 @@ const HEADER: &str = "X-Desktop-Signature";
 fn hammerspoon_signature(body: &[u8]) -> String {
     let mut mac = hmac::Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
     mac.update(body);
-    mac.finalize()
-        .into_bytes()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    hex::encode(mac.finalize().into_bytes())
 }
 
 fn check(body: &[u8], header: &str) -> Result<(), String> {
