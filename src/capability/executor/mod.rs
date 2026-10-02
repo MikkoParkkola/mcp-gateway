@@ -17,11 +17,13 @@
 //! - `file:/path/to/file.json:field` - JSON file with dot-path field extraction
 //! - `{env.VAR}` - Template format for environment variables
 
+mod cli_argv;
 mod client;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
 mod params;
+mod process;
 pub mod rest;
 mod xml;
 
@@ -82,6 +84,8 @@ pub struct CapabilityExecutor {
     /// the ONE registry the shared installer wrote to — not a second store.
     pub(super) account_strategies:
         Option<Arc<crate::identity_propagation::AccountStrategyRegistry>>,
+    /// What `service: cli`/`mcp` capabilities may run (MIK-7782).
+    pub(super) process_policy: process::ProcessPolicy,
 }
 
 impl CapabilityExecutor {
@@ -103,6 +107,7 @@ impl CapabilityExecutor {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: process::ProcessPolicy::default(),
         }
     }
 
@@ -115,6 +120,7 @@ impl CapabilityExecutor {
     #[must_use]
     pub fn for_config(config: &crate::config::CapabilityConfig) -> Self {
         let mut executor = Self::new();
+        executor.process_policy = process::ProcessPolicy::from_config(config);
         if let Ok(Some(proxy)) = config.egress_proxy_url() {
             tracing::warn!(
                 proxy = %crate::config::CapabilityConfig::egress_proxy_for_log(&proxy),
@@ -220,6 +226,7 @@ impl CapabilityExecutor {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: process::ProcessPolicy::default(),
         }
     }
 
@@ -310,11 +317,21 @@ impl CapabilityExecutor {
             return Ok(cached);
         }
 
-        // Route through the protocol executor trait.
-        let protocol_config = provider.protocol_config();
-        let response = self
-            .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
-            .await?;
+        // A process-running provider (MIK-7782) has its own executor; every
+        // other provider routes through the protocol executor trait.
+        let (response, protocol) =
+            if let Some(process) = capability.providers.process.get("primary") {
+                let response = self
+                    .execute_process(capability, process, &params, &context)
+                    .await?;
+                (response, provider.service.as_str())
+            } else {
+                let protocol_config = provider.protocol_config();
+                let response = self
+                    .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
+                    .await?;
+                (response, protocol_config.protocol_name())
+            };
 
         // Apply response transform pipeline if configured
         let response = {
@@ -331,7 +348,7 @@ impl CapabilityExecutor {
         tracing::info!(
             latency_ms = latency.as_millis(),
             provider = %provider.service,
-            protocol = %protocol_config.protocol_name(),
+            protocol = %protocol,
             "Capability executed successfully"
         );
 

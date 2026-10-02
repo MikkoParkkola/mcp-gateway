@@ -11,9 +11,14 @@ use crate::identity_grants::{CapabilityExposure, GrantSubject};
 use crate::protocol::ToolAnnotations;
 use crate::transform::TransformConfig;
 
+mod process;
 mod providers;
 mod webhook;
-pub use providers::ProvidersConfig;
+pub use process::{
+    CliArg, CliConfig, CliOutput, ConditionalArg, EachArg, JsonArg, McpConfig, McpTransport,
+    PrepareCall, ProcessConfig, ToolCall, ToolSelector,
+};
+pub use providers::{Integrity, ProvidersConfig};
 pub use webhook::WebhookEvent;
 
 /// A capability definition describing how to call a REST API
