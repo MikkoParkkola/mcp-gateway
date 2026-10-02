@@ -602,3 +602,7 @@ mod retry_input_tests;
 #[cfg(test)]
 #[path = "cache_principal_tests.rs"]
 mod cache_principal_tests;
+
+#[cfg(test)]
+#[path = "proven_owner_tests.rs"]
+mod proven_owner_tests;
