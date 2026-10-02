@@ -299,23 +299,30 @@ fn relay_finding(description: String, matched: String) -> Finding {
     }
 }
 
-/// Every string leaf of `value`, newline-joined. `skip_integrity` leaves out
-/// the gateway's own `_context_integrity` subtree (responses only: on
-/// arguments a caller-supplied one is content like any other).
+/// Every string leaf and object key of `value`, newline-joined: a key
+/// reaches the backend like a value. `skip_integrity` leaves out the
+/// gateway's own `_context_integrity`: top level, with its `schema_version`
+/// (responses only: any other one, or one in the arguments, is content).
 pub(super) fn text_of(value: &Value, skip_integrity: bool) -> String {
+    fn push(out: &mut String, s: &str) {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(s);
+    }
     fn walk(value: &Value, skip: bool, out: &mut String) {
         match value {
-            Value::String(s) => {
-                if !out.is_empty() {
-                    out.push('\n');
+            Value::String(s) => push(out, s),
+            Value::Array(items) => items.iter().for_each(|v| walk(v, false, out)),
+            Value::Object(map) => {
+                let gateways = |k: &str, v: &Value| {
+                    skip && k == "_context_integrity" && v.get("schema_version").is_some()
+                };
+                for (k, v) in map.iter().filter(|(k, v)| !gateways(k, v)) {
+                    push(out, k);
+                    walk(v, false, out);
                 }
-                out.push_str(s);
             }
-            Value::Array(items) => items.iter().for_each(|v| walk(v, skip, out)),
-            Value::Object(map) => map
-                .iter()
-                .filter(|(k, _)| !(skip && k.as_str() == "_context_integrity"))
-                .for_each(|(_, v)| walk(v, skip, out)),
             _ => {}
         }
     }

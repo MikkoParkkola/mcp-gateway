@@ -1256,7 +1256,7 @@ async fn backend_handler_inner(
     }
 }
 
-/// The direct caller's response, signed when `nonce` is `Some` and recorded as delivered.
+/// Sign when `nonce` is `Some`, then record what is delivered: a refusal records nothing.
 #[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
 fn sign_and_record(
     state: &AppState,
@@ -1265,11 +1265,11 @@ fn sign_and_record(
     response: &mut JsonRpcResponse,
     nonce: Option<Option<&str>>,
 ) {
-    #[cfg(feature = "firewall")]
-    record_direct_delivery(state, auth, server, tool, response.result.as_ref());
     if let Some(nonce) = nonce {
         state.meta_mcp.sign_direct_delivery(response, nonce);
     }
+    #[cfg(feature = "firewall")]
+    record_direct_delivery(state, auth, server, tool, response.result.as_ref());
 }
 
 /// #1962: run a backend dispatch with the reservation armed, so a caller
