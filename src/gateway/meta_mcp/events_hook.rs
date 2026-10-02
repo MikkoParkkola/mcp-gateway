@@ -15,6 +15,24 @@ impl MetaMcp {
         let _ = self.events.set(hub);
     }
 
+    /// Reconcile the hub's stored subscriptions with the capability catalogue
+    /// once the startup scan has registered its routes. Called after the
+    /// hub is installed and started.
+    pub(crate) fn reconcile_events_after_scan(&self) {
+        let Some(hub) = self.events().cloned() else {
+            return;
+        };
+        let capabilities = self.get_capabilities();
+        tokio::spawn(async move {
+            if let Some(capabilities) = capabilities {
+                while !capabilities.initial_scan_complete() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+            hub.reconcile_catalogue();
+        });
+    }
+
     /// The events hub, when events are on for this transport.
     pub(crate) fn events(&self) -> Option<&Arc<EventsHub>> {
         self.events.get()
