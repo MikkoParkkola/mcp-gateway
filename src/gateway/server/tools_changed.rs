@@ -23,7 +23,11 @@ pub(super) fn spawn_drain(
 ) {
     tokio::spawn(drain_until(rx, shutdown, move |backend: String| {
         let state = Arc::clone(&state);
-        async move { state.announce_tools_changed(&backend).await }
+        async move {
+            // A capability reload also refreshes webhook event routes.
+            state.meta_mcp.events_capabilities_reloaded(&backend);
+            state.announce_tools_changed(&backend).await;
+        }
     }));
 }
 

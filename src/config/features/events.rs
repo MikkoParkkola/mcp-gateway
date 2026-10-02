@@ -110,6 +110,19 @@ pub struct EventsConfig {
     pub callback_allow_private: Vec<String>,
     /// Built-in sources.
     pub sources: EventsSourcesConfig,
+    /// First retry delay; later ones grow by a factor of 3, with full jitter.
+    #[serde(with = "humantime_serde")]
+    pub retry_base: Duration,
+    /// Delivery attempts before a record is dead-lettered `exhausted`.
+    pub retry_max_attempts: u32,
+    /// Span from the first attempt within which every retry must fall.
+    #[serde(with = "humantime_serde")]
+    pub retry_window: Duration,
+    /// Window over which the failure rate that suspends a subscription is taken.
+    #[serde(with = "humantime_serde")]
+    pub suspend_window: Duration,
+    /// Attempts inside `suspend_window` before the 95 % failure rate applies.
+    pub suspend_min_attempts: u32,
 }
 
 impl Default for EventsConfig {
@@ -140,6 +153,11 @@ impl Default for EventsConfig {
             verification_per_host_per_minute: 10,
             callback_allow_private: Vec::new(),
             sources: EventsSourcesConfig::default(),
+            retry_base: Duration::from_secs(10),
+            retry_max_attempts: 5,
+            retry_window: Duration::from_secs(15 * 60),
+            suspend_window: Duration::from_secs(60 * 60),
+            suspend_min_attempts: 100,
         }
     }
 }
@@ -181,6 +199,17 @@ impl EventsConfig {
         ];
         if let Some((name, _)) = caps.iter().find(|(_, v)| *v == 0) {
             return fail(&format!("{name} must be nonzero"));
+        }
+        let timings = [
+            ("retry_base", self.retry_base),
+            ("retry_window", self.retry_window),
+            ("suspend_window", self.suspend_window),
+        ];
+        if let Some((name, _)) = timings.iter().find(|(_, d)| d.is_zero()) {
+            return fail(&format!("{name} must be nonzero"));
+        }
+        if self.retry_max_attempts == 0 || self.suspend_min_attempts == 0 {
+            return fail("retry_max_attempts and suspend_min_attempts must be nonzero");
         }
         if self.rate_limit_per_subscription.per_minute == 0
             || self.verification_per_host_per_minute == 0
@@ -232,5 +261,36 @@ mod tests {
         };
         assert!(config.validate().is_err());
         assert_eq!(parse_cidr("10.0.0.0/8").map(|(_, l)| l), Some(8));
+    }
+
+    #[test]
+    fn delivery_timing_keys_parse_and_refuse_zero() {
+        let config: EventsConfig = serde_yaml::from_str(
+            "retry_base: 200ms\nretry_max_attempts: 3\nretry_window: 5s\n\
+             suspend_window: 2s\nsuspend_min_attempts: 4\n",
+        )
+        .expect("timing keys parse");
+        assert_eq!(config.retry_base, Duration::from_millis(200));
+        assert_eq!(config.retry_max_attempts, 3);
+        config.validate().expect("valid timings");
+        let defaults = EventsConfig::default();
+        assert_eq!(defaults.retry_base, Duration::from_secs(10));
+        assert_eq!(defaults.suspend_min_attempts, 100);
+        for zero in [
+            EventsConfig {
+                retry_base: Duration::ZERO,
+                ..EventsConfig::default()
+            },
+            EventsConfig {
+                retry_max_attempts: 0,
+                ..EventsConfig::default()
+            },
+            EventsConfig {
+                suspend_window: Duration::ZERO,
+                ..EventsConfig::default()
+            },
+        ] {
+            assert!(zero.validate().is_err());
+        }
     }
 }
