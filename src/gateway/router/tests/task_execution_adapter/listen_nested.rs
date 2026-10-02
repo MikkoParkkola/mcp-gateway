@@ -8,7 +8,9 @@
 //! same bounded stream reader and shaped assertions.
 use super::super::super::*;
 use super::super::support::*;
-use super::helpers::{assert_only_its_own_task, assert_receives_nothing, open_listen};
+use super::helpers::{
+    ReleasedOnDrop, assert_only_its_own_task, assert_receives_nothing, open_listen,
+};
 
 /// The nested form delivers the caller's own task, and a foreign or a mixed
 /// nested filter receives nothing, its own task included.
