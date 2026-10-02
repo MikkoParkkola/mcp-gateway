@@ -98,7 +98,7 @@ use super::super::meta_mcp_helpers::{
 use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
 use super::MetaMcp;
-use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
+use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens};
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
@@ -121,6 +121,7 @@ use super::support::{
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 mod output_shape;
+pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
 use output_shape::{apply_validated_output, extract_output_validation_target};
 
@@ -775,6 +776,9 @@ struct BridgeDispatcher<'a> {
     /// #1962: the call's idempotency reservation, held here for the exchange
     /// so each round can arm it around its dispatch.
     reservation: &'a parking_lot::Mutex<Option<IdempotencyReservation>>,
+    /// COLLUDE.1: who a round's relay check keys on, and its refusal slot.
+    relay: relay::RelayKey<'a>,
+    relay_refused: &'a parking_lot::Mutex<Option<Error>>,
 }
 
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
@@ -882,6 +886,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 .map(str::to_owned),
             input_responses: retry_params.get("inputResponses").cloned(),
         };
+        self.refuse_relaying_round(&outbound)?;
         // #1962: armed for the dispatch, so a dropped exchange settles the key.
         arm(self.reservation, true);
         let dispatched = self
@@ -1773,6 +1778,11 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
+                    self.stage_relay_receipt(
+                        caller.relay_caller(session_id),
+                        (server, tool),
+                        &cached,
+                    );
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }
@@ -1884,6 +1894,7 @@ impl MetaMcp {
             && let Some(cached) = cache.get(&cache_key)
         {
             debug!(server, tool, trace_id, "Cache hit");
+            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &cached);
             if let Some(ref stats) = self.stats {
                 stats.record_cache_hit();
             }
@@ -2010,6 +2021,14 @@ impl MetaMcp {
                 }
             };
 
+        let egress = relay::Egress {
+            arguments: &arguments,
+            inbound_meta: args.get("_meta"),
+            prompt_cache_key: prompt_cache_key.as_deref(),
+            retry: &outbound_retry,
+        };
+        let reservation = idem_reservation.as_mut();
+        self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
         if let Some(execution) = caller.execution {
             execution.mark_dispatched();
         }
@@ -2222,6 +2241,8 @@ impl MetaMcp {
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
             let account_refusal = parking_lot::Mutex::new(None);
+            let relay_refused = parking_lot::Mutex::new(None);
+            let recording = self.recording_channel(caller, session_id, (server, tool), trace_id);
             let held = parking_lot::Mutex::new(idem_reservation.take());
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
@@ -2248,8 +2269,10 @@ impl MetaMcp {
                     managed: caller_credential.managed.as_ref(),
                     account_refusal: &account_refusal,
                     reservation: &held,
+                    relay: caller.relay_caller(session_id),
+                    relay_refused: &relay_refused,
                 },
-                caller.channel,
+                &recording,
                 session,
                 caller.input_capabilities,
                 pending,
@@ -2260,6 +2283,18 @@ impl MetaMcp {
             // across that arm's awaits and make this future non-Send.
             let mut parked = account_refusal.into_inner();
             idem_reservation = held.into_inner();
+            // A relay refusal answers first, before the parked and generic arms.
+            if let Some(refused) = relay_refused.into_inner() {
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
+                }
+                // The outer lease was marked before round one; this refusal
+                // is no result of a call that acted, so it is not retained.
+                if let Some(execution) = caller.execution {
+                    execution.withdraw_dispatch();
+                }
+                return Err(refused);
+            }
             match bridged {
                 Ok(completed) => {
                     // The exchange finished, so the backend has now acted and
@@ -2466,6 +2501,7 @@ impl MetaMcp {
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;
+        self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.
         let (source, upstream) = super::response_security::chain_after_gates(
             effect,
@@ -3572,13 +3608,8 @@ impl MetaMcp {
         // Build request params. `_meta` is one object, so one writer owns it:
         // the caller's propagable trace context and this hop's cache key are
         // merged, or the field is absent entirely (design §3.4a).
-        let mut params = json!({ "name": tool, "arguments": arguments });
-        if let Some(meta) = build_outbound_meta(inbound_meta, prompt_cache_key)
-            && let Value::Object(map) = &mut params
-        {
-            map.insert("_meta".to_string(), meta);
-        }
-        outbound_retry.apply(&mut params);
+        let (meta, key) = (inbound_meta, prompt_cache_key);
+        let mut params = relay::outbound_params(tool, arguments, meta, key, outbound_retry);
         // ASI07 inc3: a chained backend gets this dispatch's own challenge.
         let chained = backend.chain_policy();
         let challenge = self.chain_challenge(chained.0, &mut params)?;
