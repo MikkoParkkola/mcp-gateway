@@ -1,0 +1,4 @@
+head_sha	08b8993665621c86e37f2459fb6e0d2060f464c2
+# batch 1 for #2699 (oauth hop / literal refusal)
+M1	linux	m1.patch	--lib -- oauth_redirect_hop_policy
+M2	linux	m2.patch	--lib -- ssrf::destination

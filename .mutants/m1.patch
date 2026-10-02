@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
+index bfeacd891..c32362a34 100644
+--- a/src/oauth/client/destination.rs
++++ b/src/oauth/client/destination.rs
+@@ -70,7 +70,7 @@ pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url:
+     // adds a "Protocol error: " prefix the refusal would then carry twice.
+     destination
+         .literal_refusal(target)
+-        .map_or(Hop::Follow, Hop::Refuse)
++        .map_or(Hop::Follow, |_| Hop::Follow)
+ }
+ 
+ impl OAuthClient {

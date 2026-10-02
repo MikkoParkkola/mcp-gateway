@@ -1,0 +1,13 @@
+diff --git a/src/security/ssrf/destination.rs b/src/security/ssrf/destination.rs
+index ce8798826..8625fdf66 100644
+--- a/src/security/ssrf/destination.rs
++++ b/src/security/ssrf/destination.rs
+@@ -83,7 +83,7 @@ impl DestinationPolicy {
+             .trim_end_matches(']')
+             .parse::<IpAddr>()
+         {
+-            Ok(addr) if self.denies(addr) => Some(format!(
++            Ok(addr) if self.denies(addr) && false => Some(format!(
+                 "{SSRF_BLOCKED}: host targets {}",
+                 super::denied_address(addr)
+             )),
