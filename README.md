@@ -163,11 +163,27 @@ Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex, and running
 28 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
 
 ```bash
-mcp-gateway add tavily                                       # known server, fills env vars
+mcp-gateway list --available                                 # browse the library: login, on/off
+mcp-gateway add tavily                                       # known server, writes ${TAVILY_API_KEY}
+mcp-gateway add notion                                       # hosted server, logs in with OAuth
 mcp-gateway add my-server -- npx -y @some/mcp-server --flag  # arbitrary stdio command
-mcp-gateway add --url https://mcp.sentry.dev/mcp sentry      # HTTP server
+mcp-gateway add --url https://mcp.example.com/mcp my-server  # HTTP server
 mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
 ```
+
+The registry is a library. `mcp-gateway init` turns on the servers that need no account (memory,
+sequential-thinking, context7); every other server is off until you `add` it:
+
+- A server that needs a key gets `${VAR}` references in `gateway.yaml`. If a variable is not set (in
+  the environment or an `env_files` entry), `add` writes the server disabled and names the variable;
+  set it, then set `enabled: true`.
+- A vendor-hosted server that logs in with OAuth (Notion, Atlassian, Linear, Sentry, ...) opens the
+  login in your browser the first time it is used. A server that takes a token in a header (GitHub,
+  Stripe) gets the header with a `${VAR}` reference.
+- Playwright and fetch are added **disabled**. They can open any address they are given, so a prompt
+  injection in a page or a tool result can steer them to your local network or a cloud metadata
+  address, and the gateway's private-network guard covers REST capabilities only, not these
+  servers. Set `enabled: true` on one if you accept that.
 
 `mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one.
 

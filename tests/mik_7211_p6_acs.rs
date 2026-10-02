@@ -32,6 +32,12 @@ mod source_checks {
     #[test]
     fn both_result_slots_carry_the_clamping_serializer() {
         assert!(MESSAGES.contains(ATTRIBUTE), "JsonRpcResponse.result");
+        assert!(
+            MESSAGES.contains(
+                "serialize_with = \"crate::protocol::cacheable::serialize_delivered_error_data\""
+            ),
+            "JsonRpcError.data (MIK-7702)"
+        );
         assert!(TASKS.contains(ATTRIBUTE), "task snapshot result");
     }
 
