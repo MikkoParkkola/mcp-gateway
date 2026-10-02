@@ -38,6 +38,21 @@ impl CapabilityExecutor {
         refuse_egress(capability)?;
         let params = confine_paths(capability, params, &self.process_policy.files)?;
         let invocation = build_cli_invocation(config, &params, &capability.schema.input)?;
+        // The slot first: no credential is fetched and no directory made for a
+        // call that would then wait behind the capability's busy children.
+        let slots = Arc::clone(
+            self.process_slots
+                .entry(capability.name.clone())
+                .or_insert_with(|| {
+                    Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PER_CAPABILITY))
+                })
+                .value(),
+        );
+        let _slot = slots
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Internal("process slots closed".into()))?;
+
         let token = match &config.token_env {
             Some(name) => Some((name.as_str(), self.cli_token(capability, context).await?)),
             None => None,
@@ -69,19 +84,6 @@ impl CapabilityExecutor {
             .map(|v| v.to_string_lossy().into_owned())
             .chain(token.map(|(_, value)| value))
             .collect();
-
-        let slots = Arc::clone(
-            self.process_slots
-                .entry(capability.name.clone())
-                .or_insert_with(|| {
-                    Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PER_CAPABILITY))
-                })
-                .value(),
-        );
-        let _slot = slots
-            .acquire_owned()
-            .await
-            .map_err(|_| Error::Internal("process slots closed".into()))?;
 
         let timeout = Duration::from_secs(
             capability

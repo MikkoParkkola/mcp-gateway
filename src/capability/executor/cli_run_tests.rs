@@ -261,3 +261,38 @@ fn a_typed_process_config_survives_serialization() {
         python().display().to_string()
     );
 }
+
+/// T6: a `.cmd` shim (how npm installs gws on Windows) is resolved and run
+/// through std's batch-argument escaping: a hostile value arrives intact or the
+/// call is refused, and is never expanded or split by cmd.exe.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let shim = dir.path().join("probe.cmd");
+    std::fs::write(
+        &shim,
+        format!("@\"{}\" \"{}\" echo %*\r\n", python().display(), script()),
+    )
+    .unwrap();
+    let yaml = format!(
+        "name: cmd_probe\ndescription: Cmd probe.\nschema:\n  input:\n    type: object\n\
+         providers:\n  primary:\n    service: cli\n    timeout: 30\n    config:\n      \
+         command: '{}'\n      args: [\"--to={{to}}\", \"--\", \"{{file}}\"]\n",
+        shim.display()
+    );
+    let cap = parse_capability(&yaml).expect("cmd probe parses");
+    for hostile in ["%PATH%", "^&|<>", "\"q\" 'q'", "a b", "!VAR!", "--draft"] {
+        match call(&cap, json!({"to": hostile, "file": hostile})).await {
+            Ok(out) => assert_eq!(
+                out["argv"],
+                json!([format!("--to={hostile}"), "--", hostile]),
+                "{hostile:?} was altered on its way through the shim"
+            ),
+            Err(e) => assert!(
+                e.to_string().contains("could not start") || e.to_string().contains("invalid"),
+                "{hostile:?}: unexpected failure {e}"
+            ),
+        }
+    }
+}

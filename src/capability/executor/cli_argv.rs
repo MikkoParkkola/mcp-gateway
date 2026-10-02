@@ -19,6 +19,8 @@ use crate::{Error, Result};
 pub(crate) const MAX_EACH_ITEMS: usize = 64;
 /// Most bytes all argv elements together may hold.
 pub(crate) const MAX_ARGV_BYTES: usize = 128 * 1024;
+/// Most bytes a call may write to a child's stdin.
+pub(crate) const MAX_STDIN_BYTES: usize = 1024 * 1024;
 
 /// A fully built CLI call: nothing in it is a template any more.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +94,14 @@ pub(crate) fn build_cli_invocation(
         Some(template) => Some(render_stdin(template, params)?),
         None => None,
     };
+    if let Some(text) = &stdin
+        && text.len() > MAX_STDIN_BYTES
+    {
+        return Err(invalid_params(format!(
+            "stdin is {} bytes, over the {MAX_STDIN_BYTES}-byte limit",
+            text.len()
+        )));
+    }
     Ok(CliInvocation {
         command: config.command.clone(),
         args,
