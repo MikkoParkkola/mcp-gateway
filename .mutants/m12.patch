@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_route.rs b/src/gateway/task_route.rs
+index 980e41ead..0151a8782 100644
+--- a/src/gateway/task_route.rs
++++ b/src/gateway/task_route.rs
+@@ -125,7 +125,7 @@ impl TaskRoute<'_> {
+                 // MIK-7116.MIN.2 (design §4.9): a stored task row keeps no
+                 // reading of its result yet, so serving one counts as unread.
+                 // A row with no stored output (still working) serves nothing.
+-                if current.task.result().is_some() || current.task.error().is_some() {
++                if true {
+                     crate::security::tenant_reads::note_restored(None);
+                 }
+                 JsonRpcResponse::success(id, task_envelope(&current.task, "complete"))

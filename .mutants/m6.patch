@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index 7b8e4dd8f..e4f117f64 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -149,7 +149,7 @@ pub(crate) fn delivered(
+     // result. An error answer (a refusal above all) charges only what its
+     // own payload names, so a refused B request does not count as a read of
+     // B (row 7).
+-    if let Some(request) = request.filter(|_| delivers_result(&payload)) {
++    if let Some(request) = request {
+         attribution.extend(&ReadAttribution::of(guard.request_tenants(request), false));
+     }
+     // Likewise what the answer no longer shows: a refusal that replaced the
