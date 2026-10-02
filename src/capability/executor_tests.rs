@@ -171,8 +171,8 @@ fn test_cache() {
     let cache = ResponseCache::new();
     let value = serde_json::json!({"test": true});
 
-    cache.set("key1", &value, 60);
-    assert_eq!(cache.get("key1"), Some(value));
+    cache.set("key1", &value, None, 60);
+    assert_eq!(cache.get("key1"), Some((value, None)));
 
     assert_eq!(cache.get("nonexistent"), None);
 }

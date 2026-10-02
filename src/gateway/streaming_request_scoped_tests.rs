@@ -12,12 +12,27 @@ fn json_response(body: &str) -> axum::response::Response {
         .into_response()
 }
 
-fn note(method: &str) -> crate::protocol::JsonRpcNotification {
+fn raw_note(method: &str) -> crate::protocol::JsonRpcNotification {
     crate::protocol::JsonRpcNotification {
         jsonrpc: "2.0".to_string(),
         method: method.to_string(),
         params: None,
     }
+}
+
+/// A notification on a stream that judges nothing (the default config).
+fn note(method: &str) -> OutboundFrame {
+    OutboundFrame::unjudged(crate::gateway::outbound::Payload::Notification(raw_note(
+        method,
+    )))
+}
+
+fn judge() -> Arc<StreamJudge> {
+    Arc::new(StreamJudge::new(
+        None,
+        Arc::new(crate::gateway::outbound::RejectionAudit::new(None, 1)),
+        None,
+    ))
 }
 
 async fn body_text(response: axum::response::Response) -> String {
@@ -38,6 +53,7 @@ async fn notifications_are_framed_ahead_of_the_result() {
             note("notifications/progress"),
             note("notifications/message"),
         ],
+        &judge(),
     )
     .await;
 
@@ -60,6 +76,7 @@ async fn a_stream_with_no_notifications_still_carries_the_result() {
     let response = request_scoped_event_stream(
         json_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
         Vec::new(),
+        &judge(),
     )
     .await;
 
@@ -79,7 +96,8 @@ async fn an_answer_that_is_already_a_stream_is_passed_through() {
     )
         .into_response();
 
-    let response = request_scoped_event_stream(already, vec![note("notifications/progress")]).await;
+    let response =
+        request_scoped_event_stream(already, vec![note("notifications/progress")], &judge()).await;
     let body = body_text(response).await;
     assert!(
         !body.contains("notifications/progress"),
@@ -122,6 +140,7 @@ async fn a_notification_raised_after_the_first_frame_is_framed_before_the_result
             json_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
         },
         rx,
+        judge(),
     )
     .await;
     let mut body = response.into_body().into_data_stream();

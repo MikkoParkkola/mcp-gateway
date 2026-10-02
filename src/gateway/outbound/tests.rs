@@ -13,9 +13,11 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::protocol::RequestId;
+use crate::security::firewall::Firewall;
 use crate::security::firewall::FirewallConfig;
 use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
 use crate::security::hash_argument;
+use crate::security::tenant_reads::RejectionEvidence;
 
 const A: &str = "cust-a";
 const B: &str = "cust-b";

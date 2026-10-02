@@ -497,7 +497,8 @@ pub(super) async fn backend_handler(
             error.to_rpc_code(),
             error.to_string(),
             StatusCode::SERVICE_UNAVAILABLE,
-        );
+        )
+        .into_response();
     }
 
     direct_audit::audited_call(Arc::clone(&state), name, request).await
@@ -509,6 +510,7 @@ async fn backend_handler_inner(
     name: String,
     request: axum::http::Request<axum::body::Body>,
     call: &mut Option<direct_audit::DirectCall>,
+    reads: &mut direct_audit::DirectReads,
 ) -> (StatusCode, Json<Value>) {
     // Extract authenticated client from extensions (injected by auth middleware)
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
@@ -618,6 +620,17 @@ async fn backend_handler_inner(
     // D2-a: the slot is filled before the envelope is validated, so a
     // malformed tools/call is recorded as `invalid` too.
     *call = direct_audit::DirectCall::of(&json_request, client.as_ref(), grant_subject.as_ref());
+    // MIN.2: the caller and the request params, for the answer's judge; only
+    // when the verdict is on, so the default config copies nothing.
+    if crate::gateway::outbound::judges(super::helpers::read_guard(&state).as_deref()) {
+        reads.key = Some(super::identity::caller_key(
+            grant_subject.as_ref(),
+            cert_identity.as_ref(),
+            client.as_ref(),
+        ))
+        .filter(|key| !key.is_empty());
+        reads.params = json_request.get("params").cloned();
+    }
 
     // After the audit hash (D2-e: params as sent), before anything else reads
     // the request: parse, telemetry and every forwarding arm see no token.

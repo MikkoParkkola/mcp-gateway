@@ -457,16 +457,33 @@ pub(super) async fn meta_mcp_handler(
 
     // D3-a: one grant-decision slot spans signing, admission and dispatch.
     let logger = state.meta_mcp.transparency_logger.clone();
+    // MIN.2: the dispatch notes what its inner calls read before transforms,
+    // so the answer's judge sees tenants the delivered value no longer shows.
+    let guard = super::helpers::read_guard(&state);
+    let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
+    let guard_for_scope = guard.clone();
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
-        logger,
-        Box::pin(meta_mcp_dispatch(state, http_request)),
+        logger.clone(),
+        Box::pin(async move {
+            crate::gateway::outbound::read_scoped(
+                guard_for_scope,
+                meta_mcp_dispatch(state, http_request),
+            )
+            .await
+            .0
+        }),
     );
 
-    if offers_event_stream {
+    if let Some(audit) = audit {
         // Scope rather than collect: the client offered a stream, so the first
         // notification decides the body shape instead of waiting for dispatch.
-        let (scoped, rx) = crate::transport::notification_sink::scope(dispatch);
-        crate::gateway::streaming::first_event_wins_stream(scoped, rx).await
+        // Each notification is judged for this caller as it is queued.
+        let judge = Arc::new(crate::gateway::outbound::StreamJudge::new(
+            guard, audit, logger,
+        ));
+        let (scoped, rx) =
+            crate::transport::notification_sink::scope_judged(dispatch, Arc::clone(&judge));
+        crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await
     } else {
         // Still scoped, and still drained alongside: `publish` sheds on a full
         // sink, and a client that did not offer a stream must not make a
@@ -547,6 +564,21 @@ async fn meta_mcp_dispatch(
             Ok(resolved) => resolved,
             Err(refusal) => return refusal,
         };
+    // MIN.2: the caller every frame of this request is judged for, formed
+    // only when the verdict is on (the default config allocates nothing).
+    let read_guard = super::helpers::read_guard(&state);
+    let read_key = crate::gateway::outbound::judges(read_guard.as_deref())
+        .then(|| {
+            super::identity::caller_key(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+            )
+        })
+        .filter(|key| !key.is_empty());
+    if let Some(key) = &read_key {
+        crate::transport::notification_sink::bind_reader(|| key.clone());
+    }
 
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(http_request).await {
@@ -1856,6 +1888,20 @@ async fn meta_mcp_dispatch(
     if let Some(execution) = execution {
         execution.complete_delivery(&response, signing_context.as_ref());
     }
+    // MIN.2: judged on the finalized answer, then recorded; nothing changes
+    // the content after this, and the sink commits when the body is read.
+    let hidden = crate::gateway::outbound::noted_reads();
+    let frame = crate::gateway::outbound::answer(
+        read_guard.as_deref(),
+        read_key.as_deref(),
+        response,
+        request.get("params"),
+        hidden.as_ref(),
+    );
+    let frame = crate::gateway::outbound::recorded(frame, state.meta_mcp.transparency_log()).await;
+    let response = frame
+        .response()
+        .expect("an answer frame stays an answer through its replacements");
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
@@ -1900,9 +1946,9 @@ async fn meta_mcp_dispatch(
         // A stateless client has no handshake in which to learn who answered,
         // so every result says. And it holds no session, so it is sent no
         // session header — the legacy path below keeps both unchanged.
-        return (status, axum::Json(response)).into_response();
+        return crate::gateway::outbound::to_http(frame, status, "");
     }
-    build_response(response, &session_id, status)
+    crate::gateway::outbound::to_http(frame, status, &session_id)
 }
 
 /// Build a response for a request written against 2026-07-28.

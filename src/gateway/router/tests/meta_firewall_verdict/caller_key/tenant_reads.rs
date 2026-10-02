@@ -20,6 +20,7 @@ use crate::gateway::router::create_router;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse, RequestId};
 use crate::security::TransparencyLogger;
 use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
+use crate::security::firewall::tenant_reads::ReadHistory;
 use crate::security::firewall::{Firewall, FirewallConfig};
 use crate::security::hash_argument;
 use crate::security::transparency_log::TransparencyLogConfig;
@@ -34,21 +35,29 @@ const B: &str = "cust-b";
 use Outcome::Delivered;
 
 /// Attribution on `customer_id`, the TENANT.1 guard off, the MIN.2 verdict
-/// in `mode`.
-fn reads_firewall(mode: CrossTenantReads, window_secs: u64) -> Arc<Firewall> {
-    Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                enabled: false,
-                window_secs,
-                arg_keys: vec!["customer_id".to_string()],
-                cross_tenant_reads: mode,
-                ..TenantGuardConfig::default()
+/// in `mode`, on the process history `reads` (startup shares one between
+/// both firewalls, `Gateway::response_firewall`).
+fn reads_firewall(
+    mode: CrossTenantReads,
+    window_secs: u64,
+    reads: &Arc<ReadHistory>,
+) -> Arc<Firewall> {
+    Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    enabled: false,
+                    window_secs,
+                    arg_keys: vec!["customer_id".to_string()],
+                    cross_tenant_reads: mode,
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))
+            None,
+        )
+        .with_reads(Arc::clone(reads)),
+    )
 }
 
 /// The router with one API-key caller and production's split firewall: one
@@ -63,7 +72,11 @@ async fn windowed_router(mode: CrossTenantReads, window: u64) -> (axum::Router, 
 }
 
 async fn split_state(mode: CrossTenantReads, window: u64) -> (Arc<AppState>, tempfile::TempDir) {
-    let (handler, meta) = (reads_firewall(mode, window), reads_firewall(mode, window));
+    let reads = ReadHistory::shared();
+    let (handler, meta) = (
+        reads_firewall(mode, window, &reads),
+        reads_firewall(mode, window, &reads),
+    );
     let (state, store) =
         super::super::state_with_firewalls_and_auth(handler, meta, &one_key()).await;
     state

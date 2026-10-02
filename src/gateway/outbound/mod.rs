@@ -7,42 +7,59 @@
 //! Every frame the gateway sends a caller is an [`OutboundFrame`], and only
 //! the judge in this module builds one. A frame is judged once, on its final
 //! content, against the process's read history for the `caller_key` it is
-//! bound to, and only a sink in this module writes it.
-//!
-//! SKELETON: the public shape the stream, stdio and callback writers build
-//! against. The judge does not judge yet: every frame passes unassessed.
+//! bound to, and only a sink in this module writes it. A sink commits the
+//! frame's reservation when it writes; a frame dropped unwritten commits
+//! nothing.
 
-// The skeleton has no production caller until the writers are wired.
-#![allow(dead_code)]
+mod audit;
+mod callback;
+mod http;
+#[cfg(feature = "firewall")]
+mod judge;
+mod stream;
 
-use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::Value;
 
-use crate::events::CallbackFailure;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
-use crate::security::TransparencyLogger;
-use crate::security::firewall::Firewall;
-use crate::security::firewall::tenant_reads::{ReadAttribution, ReadVerdict, RejectionEvidence};
+use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
+
+pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, audit_rejection, recorded};
+pub(crate) use callback::{CallbackSend, send_callback};
+pub(crate) use http::to_http;
+#[cfg(feature = "firewall")]
+pub(crate) use judge::{admit, attribute, callback_frame, delivered};
+pub(crate) use stream::{StreamJudge, sse_message};
+
+/// The firewall that carries the tenant guard and the read history. Without
+/// the `firewall` feature nothing is judged, and this has no values.
+#[cfg(feature = "firewall")]
+pub(crate) use crate::security::firewall::Firewall as Guard;
+/// The firewall that carries the tenant guard and the read history. Without
+/// the `firewall` feature nothing is judged, and this has no values.
+#[cfg(not(feature = "firewall"))]
+#[derive(Debug)]
+pub(crate) enum Guard {}
 
 /// The content of one frame, typed as it is built; never converted to a
 /// `Value` tree on the fast path.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) enum Payload {
     /// An answer: result or error.
     Response(JsonRpcResponse),
     /// A notification.
     Notification(JsonRpcNotification),
+    /// An answer already rendered as a JSON value (the direct route).
+    Answer(Value),
     /// A server-to-client request, including proxy request envelopes.
     Request(Value),
     /// An SSE document that is not JSON-RPC (webhook bodies).
     Event(Value),
     /// A MIK-7630 event body for an HTTPS callback.
     Callback(Value),
-    /// A stdio JSON-RPC array; items judged one by one.
-    Batch(Vec<OutboundFrame>),
+    /// A blocked non-answer item: a sink writes nothing for it.
+    Withheld,
 }
 
 /// The judgement a frame carries: immutable once made, and kept as evidence
@@ -57,16 +74,30 @@ pub(crate) struct Assessment {
 
 /// A judged frame. Private fields and no accessor to the payload: judged
 /// content cannot be detached and changed, only written by a sink here.
-#[derive(Debug)]
+/// A clone is a copy of the same frame (fan-out) and shares its ticket.
+#[derive(Debug, Clone)]
 pub(crate) struct OutboundFrame {
     payload: Payload,
     assessment: Option<Assessment>,
+    /// The history reservation; committed by the sink that writes the frame.
+    ticket: Option<ReadTicket>,
     /// The `caller_key` the frame was judged for; a sink bound to another key
-    /// drops it.
+    /// drops it. `None` on the fast path, where nothing was judged.
     key: Option<Arc<str>>,
 }
 
 impl OutboundFrame {
+    /// The fast path: nothing to judge (attribution unconfigured, mode `off`,
+    /// or no firewall). A move of the payload; no allocation, no lock.
+    pub(crate) const fn unjudged(payload: Payload) -> Self {
+        Self {
+            payload,
+            assessment: None,
+            ticket: None,
+            key: None,
+        }
+    }
+
     /// The verdict, for records and tests; `None` when unassessed or within
     /// the rule.
     pub(crate) fn verdict(&self) -> Option<ReadVerdict> {
@@ -74,8 +105,57 @@ impl OutboundFrame {
     }
 
     /// The judgement this frame carries, if it was assessed.
-    pub(crate) fn assessment(&self) -> Option<&Assessment> {
+    pub(crate) const fn assessment(&self) -> Option<&Assessment> {
         self.assessment.as_ref()
+    }
+
+    /// Whether a sink bound to `destination` may write this frame. An
+    /// unjudged frame carries no key and binds nowhere.
+    fn bound_to(&self, destination: &str) -> bool {
+        self.key.as_deref().is_none_or(|key| key == destination)
+    }
+
+    /// The sink wrote this frame: refresh its tenants' last-seen time. The
+    /// pending reservation is released when the last copy goes.
+    fn written(&self) {
+        if let Some(ticket) = &self.ticket {
+            ticket.emitted();
+        }
+    }
+
+    /// A late replacer (an audit failure, a grant-slot failure) swaps this
+    /// frame for a fixed gateway refusal. The refusal names no tenant, so it
+    /// carries no ticket: the original reservation is dropped uncommitted,
+    /// and its assessment stays as evidence.
+    pub(crate) fn replaced_by(self, refusal: JsonRpcResponse) -> Self {
+        Self {
+            payload: Payload::Response(refusal),
+            assessment: self.assessment,
+            ticket: None,
+            key: self.key,
+        }
+    }
+
+    /// A non-answer frame that may not be written after all: nothing is
+    /// sent, and its reservation is dropped uncommitted.
+    pub(crate) fn withheld(self) -> Self {
+        Self {
+            payload: Payload::Withheld,
+            assessment: self.assessment,
+            ticket: None,
+            key: self.key,
+        }
+    }
+
+    /// The answer's id, for a replacement that must keep it.
+    pub(crate) fn answer_id(&self) -> Option<crate::protocol::RequestId> {
+        match &self.payload {
+            Payload::Response(response) => response.id.clone(),
+            Payload::Answer(value) => value
+                .get("id")
+                .and_then(|id| serde_json::from_value(id.clone()).ok()),
+            _ => None,
+        }
     }
 }
 
@@ -87,142 +167,122 @@ pub(crate) enum Admission {
     Admitted(OutboundFrame),
     /// Withhold it; audit the evidence (async producers await
     /// [`audit_rejection`]; sync producers hand it to [`RejectionAudit`]).
-    Blocked(RejectionEvidence),
+    Blocked(crate::security::tenant_reads::RejectionEvidence),
 }
 
-/// The attribution of a raw value under the firewall's `arg_keys`, taken
-/// before a transform or a redaction can drop fields (§4.4). An outbox
-/// record carries it to the delivery.
-pub(crate) fn attribute(firewall: &Firewall, value: &Value) -> ReadAttribution {
-    let _ = (firewall, value);
-    ReadAttribution::default()
+/// Whether `guard` judges frames at all: attribution configured and the mode
+/// not `off`. Callers form a `caller_key` only when it does, so the default
+/// deployment allocates nothing for the verdict.
+pub(crate) fn judges(guard: Option<&Guard>) -> bool {
+    #[cfg(feature = "firewall")]
+    {
+        guard.is_some_and(|g| judge::judging(g).is_some())
+    }
+    #[cfg(not(feature = "firewall"))]
+    {
+        let _ = guard;
+        false
+    }
 }
 
-/// Judge a frame carrying backend-derived content for `key`. `request` is
-/// the params of the request it answers; `hidden` is attribution the frame
+/// Judge an answer carrying backend-derived content for `key`. `request` is
+/// the params of the request it answers; `hidden` is attribution the answer
 /// no longer shows (pre-transform, cached, stored).
-pub(crate) fn delivered(
-    firewall: &Firewall,
+pub(crate) fn answer(
+    guard: Option<&Guard>,
     key: Option<&str>,
-    payload: Payload,
+    response: JsonRpcResponse,
     request: Option<&Value>,
     hidden: Option<&ReadAttribution>,
 ) -> OutboundFrame {
-    let _ = (firewall, request, hidden);
-    OutboundFrame {
-        payload,
-        assessment: None,
-        key: key.map(Arc::from),
+    #[cfg(feature = "firewall")]
+    if let Some(guard) = guard {
+        return judge::delivered(guard, key, Payload::Response(response), request, hidden);
     }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (guard, key, request, hidden);
+    OutboundFrame::unjudged(Payload::Response(response))
+}
+
+/// [`answer`] for an answer already rendered as a JSON value (the direct
+/// route, H9).
+pub(crate) fn answer_value(
+    guard: Option<&Guard>,
+    key: Option<&str>,
+    body: Value,
+    request: Option<&Value>,
+    hidden: Option<&ReadAttribution>,
+) -> OutboundFrame {
+    #[cfg(feature = "firewall")]
+    if let Some(guard) = guard {
+        return judge::delivered(guard, key, Payload::Answer(body), request, hidden);
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (guard, key, request, hidden);
+    OutboundFrame::unjudged(Payload::Answer(body))
 }
 
 /// Judge a frame that is withheld, not replaced, when blocked.
-pub(crate) fn admit(
-    firewall: &Firewall,
+pub(crate) fn admission(
+    guard: Option<&Guard>,
     key: Option<&str>,
     payload: Payload,
     hidden: Option<&ReadAttribution>,
 ) -> Admission {
-    Admission::Admitted(delivered(firewall, key, payload, None, hidden))
+    #[cfg(feature = "firewall")]
+    if let Some(guard) = guard {
+        return judge::admit(guard, key, payload, hidden);
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = (guard, key, hidden);
+    Admission::Admitted(OutboundFrame::unjudged(payload))
 }
 
-/// E1: judge a MIK-7630 event delivery for the subscription principal.
-/// `attribution` is what the outbox record carries from before the event
-/// firewall's redaction; a record without it counts as unread.
-pub(crate) fn callback_frame(
-    firewall: &Firewall,
-    principal: &str,
-    body: Value,
-    attribution: Option<&ReadAttribution>,
-) -> Admission {
-    admit(
-        firewall,
-        Some(principal),
-        Payload::Callback(body),
-        attribution,
-    )
-}
-
-/// What the callback sender reports back to [`send_callback`].
-#[derive(Debug)]
-pub(crate) enum CallbackSend {
-    /// Nothing left the process (a refused literal, DNS or connect failure
-    /// before any byte): the frame's reservation is released.
-    NotSent(CallbackFailure),
-    /// The body was handed to the HTTP client: the frame commits, whatever
-    /// the answer, because a recipient can read and then fail.
-    Sent(Result<Vec<u8>, CallbackFailure>),
-}
-
-/// E1 sink: serialize `frame` and hand the bytes to `post` (the events
-/// lane's signed `CallbackClient::post`). `principal` is the subscription's;
-/// a frame judged for another key is dropped.
-///
-/// # Errors
-/// The sender's failure, or `ConnectionRefused` for a frame bound to another
-/// principal.
-pub(crate) async fn send_callback<F, Fut>(
-    frame: OutboundFrame,
-    principal: &str,
-    post: F,
-) -> Result<Vec<u8>, CallbackFailure>
-where
-    F: FnOnce(Vec<u8>) -> Fut,
-    Fut: Future<Output = CallbackSend>,
-{
-    let _ = principal;
-    let body = match frame.payload {
-        Payload::Callback(body) => serde_json::to_vec(&body).unwrap_or_default(),
-        _ => return Err(CallbackFailure::ConnectionRefused),
-    };
-    match post(body).await {
-        CallbackSend::NotSent(failure) => Err(failure),
-        CallbackSend::Sent(result) => result,
+/// The attribution of a raw value before a transform or a redaction drops
+/// fields (§4.4); `None` when nothing is judged.
+pub(crate) fn raw_attribution(guard: Option<&Guard>, value: &Value) -> Option<ReadAttribution> {
+    if !judges(guard) {
+        return None;
+    }
+    #[cfg(feature = "firewall")]
+    {
+        guard.map(|g| judge::attribute(g, value))
+    }
+    #[cfg(not(feature = "firewall"))]
+    {
+        let _ = value;
+        None
     }
 }
 
-/// The rejection audit for an async producer: one `tenant_read` record of
-/// `evidence`, through the bounded append. A failure is logged; the content
-/// is withheld either way.
-pub(crate) async fn audit_rejection(log: &Arc<TransparencyLogger>, evidence: &RejectionEvidence) {
-    let _ = (log, evidence);
+/// Run `fut` inside a read scope when `guard` judges, so the inner
+/// dispatches note what they read before any transform (§4.4). Returns what
+/// was noted; a judge inside `fut` reads it so far with [`noted_reads`].
+pub(crate) async fn read_scoped<F: std::future::Future>(
+    guard: Option<Arc<Guard>>,
+    fut: F,
+) -> (F::Output, Option<ReadAttribution>) {
+    #[cfg(feature = "firewall")]
+    if let Some(guard) = guard.filter(|g| judges(Some(g))) {
+        let (output, noted) = crate::security::tenant_reads::with_read_scope(guard, fut).await;
+        return (output, Some(noted));
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = guard;
+    (fut.await, None)
 }
 
-/// The rejection audit for sync producers (`send_or_count`): each rejection
-/// is handed to one detached task, admitted by a bounded non-blocking permit
-/// (F4). Saturation is counted as an audit failure.
-pub(crate) struct RejectionAudit {
-    log: Option<Arc<TransparencyLogger>>,
-    saturated: AtomicU64,
-}
-
-impl RejectionAudit {
-    /// An auditor writing to `log` with at most `permits` audits in flight.
-    pub(crate) fn new(log: Option<Arc<TransparencyLogger>>, permits: usize) -> Self {
-        let _ = permits;
-        Self {
-            log,
-            saturated: AtomicU64::new(0),
-        }
+/// What the read scope around this task has noted so far.
+pub(crate) fn noted_reads() -> Option<ReadAttribution> {
+    #[cfg(feature = "firewall")]
+    {
+        crate::security::tenant_reads::noted()
     }
-
-    /// Hand `evidence` to a detached audit task. Never blocks. Returns whether
-    /// a task was spawned; `false` means saturation, recorded.
-    pub(crate) fn submit(&self, evidence: RejectionEvidence) -> bool {
-        let log = self.log.clone();
-        tokio::spawn(async move {
-            if let Some(log) = log {
-                audit_rejection(&log, &evidence).await;
-            }
-        });
-        true
-    }
-
-    /// Rejections whose audit was refused for want of a permit.
-    pub(crate) fn saturated(&self) -> u64 {
-        self.saturated.load(Ordering::Relaxed)
+    #[cfg(not(feature = "firewall"))]
+    {
+        None
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "firewall"))]
 mod tests;

@@ -29,6 +29,7 @@ use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::gateway::auth::AuthState;
 use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
+use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_message};
 use crate::gateway::session_id::{SessionId, SessionOwner, session_fp};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
@@ -710,7 +711,8 @@ mod session_ownership_tests {
 /// producer of the decorated result to drift from the first. `MIK-7272.SUB.2b`.
 pub(crate) async fn request_scoped_event_stream(
     response: axum::response::Response,
-    notifications: Vec<crate::protocol::JsonRpcNotification>,
+    notifications: Vec<OutboundFrame>,
+    judge: &StreamJudge,
 ) -> axum::response::Response {
     use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 
@@ -733,11 +735,9 @@ pub(crate) async fn request_scoped_event_stream(
     };
 
     let mut sse = String::new();
-    for notification in &notifications {
-        if let Ok(frame) = serde_json::to_string(notification) {
-            sse.push_str("event: message\ndata: ");
-            sse.push_str(&frame);
-            sse.push_str("\n\n");
+    for frame in notifications {
+        if let Some(event) = sse_message(&judge.record(frame).await) {
+            sse.push_str(&event);
         }
     }
     sse.push_str("event: message\ndata: ");
@@ -811,7 +811,8 @@ async fn terminal_frame(response: axum::response::Response) -> String {
 /// always takes the buffered arm. `MIK-7272.SUB.2b`.
 pub(crate) async fn first_event_wins_stream<F>(
     dispatch: F,
-    mut rx: tokio::sync::mpsc::Receiver<crate::protocol::JsonRpcNotification>,
+    mut rx: tokio::sync::mpsc::Receiver<OutboundFrame>,
+    judge: Arc<StreamJudge>,
 ) -> axum::response::Response
 where
     F: Future<Output = axum::response::Response> + Send + 'static,
@@ -829,20 +830,20 @@ where
             while let Ok(notification) = rx.try_recv() {
                 drained.push(notification);
             }
-            return request_scoped_event_stream(response, drained).await;
+            return request_scoped_event_stream(response, drained, &judge).await;
         }
     };
 
     let body = stream! {
-        if let Ok(frame) = serde_json::to_string(&first) {
-            yield Ok::<_, Infallible>(message_frame(&frame));
+        if let Some(event) = sse_message(&judge.record(first).await) {
+            yield Ok::<_, Infallible>(event);
         }
         loop {
             tokio::select! {
                 biased;
                 Some(notification) = rx.recv() => {
-                    if let Ok(frame) = serde_json::to_string(&notification) {
-                        yield Ok(message_frame(&frame));
+                    if let Some(event) = sse_message(&judge.record(notification).await) {
+                        yield Ok(event);
                     }
                 }
                 response = &mut dispatch => {
@@ -850,8 +851,8 @@ where
                     // so a notification published as dispatch resolved is not
                     // overtaken by the result it preceded.
                     while let Ok(notification) = rx.try_recv() {
-                        if let Ok(frame) = serde_json::to_string(&notification) {
-                            yield Ok(message_frame(&frame));
+                        if let Some(event) = sse_message(&judge.record(notification).await) {
+                            yield Ok(event);
                         }
                     }
                     yield Ok(terminal_frame(response).await);

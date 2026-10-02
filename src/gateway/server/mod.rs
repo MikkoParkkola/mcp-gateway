@@ -334,6 +334,10 @@ pub struct Gateway {
     /// file watcher — resolves through this rather than the process
     /// environment, which no env file is written to.
     env: Arc<crate::config::LiveEnv>,
+    /// The one cross-tenant read history of this process (MIK-7116.MIN.2):
+    /// both firewalls share it, so `/mcp` and `/mcp/{name}` meet in it.
+    #[cfg(feature = "firewall")]
+    reads: Arc<crate::security::firewall::tenant_reads::ReadHistory>,
     /// Managed personal-account custody, present only when the config carries an
     /// `accounts` block. `None` is the ordinary gateway: no store, no locks.
     ///
@@ -522,7 +526,8 @@ impl Gateway {
             Firewall::from_config(fw_cfg, tt)
                 .with_env(Arc::clone(&self.env))
                 .with_continuations(meta_mcp.continuation())
-                .with_posture(self.config.security.posture),
+                .with_posture(self.config.security.posture)
+                .with_reads(Arc::clone(&self.reads)),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");
@@ -657,6 +662,8 @@ impl Gateway {
             // every later resolution answers from the same overlay the decision
             // to start was made on.
             env,
+            #[cfg(feature = "firewall")]
+            reads: crate::security::firewall::tenant_reads::ReadHistory::shared(),
             // Attached by `start_account_custody`, so this constructor stays
             // exactly what it was for a caller building a Config in memory.
             custody: None,

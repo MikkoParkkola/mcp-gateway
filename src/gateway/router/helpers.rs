@@ -29,7 +29,7 @@ where
     (status, resp).into_response()
 }
 
-pub(super) fn attach_session_header(headers: &mut axum::http::HeaderMap, session_id: &str) {
+pub(crate) fn attach_session_header(headers: &mut axum::http::HeaderMap, session_id: &str) {
     // An empty id means the caller has no session, which after MCP 2026-07-28
     // is the ordinary case rather than an error. Emitting the header with an
     // empty value would be worse than omitting it: a client and an intermediary
@@ -50,6 +50,22 @@ pub(super) fn attach_session_header(headers: &mut axum::http::HeaderMap, session
             let session_id = crate::gateway::session_id::session_fp(session_id);
             warn!(%session_id, %err, "failed to set mcp-session-id response header");
         }
+    }
+}
+
+/// The firewall whose tenant guard judges this router's frames
+/// (MIK-7116.MIN.2); it shares the process read history with the Meta-MCP's.
+pub(crate) fn read_guard(
+    state: &super::AppState,
+) -> Option<std::sync::Arc<crate::gateway::outbound::Guard>> {
+    #[cfg(feature = "firewall")]
+    {
+        state.firewall.clone()
+    }
+    #[cfg(not(feature = "firewall"))]
+    {
+        let _ = state;
+        None
     }
 }
 

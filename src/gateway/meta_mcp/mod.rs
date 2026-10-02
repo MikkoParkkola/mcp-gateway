@@ -339,7 +339,10 @@ impl<'a> MetaMcpCallerContext<'a> {
 /// boundary from the JSON-RPC code cannot work: eight of the nine refusal
 /// branches emit the generic `-32600`, and `-32003` already means something
 /// else elsewhere.
-fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
+pub(crate) fn error_response_preserving_status(
+    id: RequestId,
+    error: &crate::Error,
+) -> JsonRpcResponse {
     let mut response = match error {
         crate::Error::ResponseFirewallRefused => JsonRpcResponse::delivery_refusal_error(
             Some(id),
@@ -594,6 +597,11 @@ pub struct MetaMcp {
     /// Zero overhead when `None` — no allocation or I/O on the hot path.
     pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
 
+    /// The bounded auditor of frames withheld by the cross-tenant read
+    /// verdict (MIK-7116.MIN.2, design §4.7), built on first use with the
+    /// transparency log in place by then.
+    rejection_audit: std::sync::OnceLock<Arc<crate::gateway::outbound::RejectionAudit>>,
+
     /// Response-side anomaly screening action mode (issue #133, D2).
     ///
     /// When `true`, responses with HIGH/CRITICAL inspection findings are blocked
@@ -737,6 +745,7 @@ impl MetaMcp {
             claim_capture: None,
             require_nonce: false,
             transparency_logger: None,
+            rejection_audit: std::sync::OnceLock::new(),
             response_inspection_action_mode: false,
             response_contract: None,
             attestation_validator: None,
@@ -1008,6 +1017,21 @@ impl MetaMcp {
         self.message_signer = Some(Arc::new(signer));
         self.nonce_store = Some(nonce_store);
         self.require_nonce = require_nonce;
+    }
+
+    /// The process's bounded auditor of withheld frames (MIK-7116.MIN.2).
+    pub(crate) fn rejection_audit(&self) -> Arc<crate::gateway::outbound::RejectionAudit> {
+        Arc::clone(self.rejection_audit.get_or_init(|| {
+            Arc::new(crate::gateway::outbound::RejectionAudit::new(
+                self.transparency_logger.clone(),
+                crate::gateway::outbound::REJECTION_AUDIT_PERMITS,
+            ))
+        }))
+    }
+
+    /// The transparency log, if enabled.
+    pub(crate) fn transparency_log(&self) -> Option<&Arc<crate::security::TransparencyLogger>> {
+        self.transparency_logger.as_ref()
     }
 
     /// Attach a transparency logger (issue #133, D3).

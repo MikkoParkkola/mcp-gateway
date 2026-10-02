@@ -195,6 +195,52 @@ impl TenantGuard {
         self.scan_response(result).1
     }
 
+    /// MIN.2: one walk over the parts of an outbound frame: whole values and
+    /// bare strings (a `method`, an error message), each decoded like a
+    /// response string. Empty when attribution is off.
+    pub(crate) fn scan_frame(&self, values: &[&Value], texts: &[&str]) -> (BTreeSet<String>, bool) {
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        for value in values {
+            self.walk_response(value, 0, &mut scan);
+        }
+        for text in texts {
+            self.decode_response(text, 0, &mut scan);
+        }
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    /// MIN.2: [`Self::scan_frame`] over a whole document but its top-level
+    /// `skip` keys (`jsonrpc`, `id`).
+    pub(crate) fn scan_document(&self, doc: &Value, skip: &[&str]) -> (BTreeSet<String>, bool) {
+        let Value::Object(map) = doc else {
+            return self.scan_frame(&[doc], &[]);
+        };
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        for (key, child) in map {
+            if skip.contains(&key.as_str()) {
+                continue;
+            }
+            if self.config.arg_keys.iter().any(|k| k == key)
+                && let Some(tenant) = Self::tenant_name(child)
+            {
+                scan.tenants.push(tenant);
+            }
+            self.walk_response(child, 0, &mut scan);
+        }
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    /// The configuration this guard was built from.
+    pub(crate) const fn config(&self) -> &TenantGuardConfig {
+        &self.config
+    }
+
     /// One walk: the tenants read, and whether anything was left unread.
     // ponytail: each public caller rescans; merge into one call if a profile shows it.
     fn scan_response(&self, result: &Value) -> (BTreeSet<String>, bool) {

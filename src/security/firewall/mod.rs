@@ -43,7 +43,8 @@ pub mod principal_window;
 pub mod redactor;
 mod response;
 pub mod tenant_guard;
-pub(crate) mod tenant_reads;
+/// Re-exported here, where the guard that attributes reads lives.
+pub(crate) use crate::security::tenant_reads;
 
 #[cfg(test)]
 mod anomaly_learning_tests;
@@ -242,6 +243,9 @@ pub struct Firewall {
     /// Cross-tenant data-minimisation guard, keyed on the authenticated
     /// principal (MIK-7116.TENANT.1).
     tenant_guard: tenant_guard::TenantGuard,
+    /// The process's cross-tenant read history (MIK-7116.MIN.2), shared by
+    /// every firewall the gateway builds; see [`Self::with_reads`].
+    reads: Arc<tenant_reads::ReadHistory>,
     /// Principal-keyed call budget (MIK-7215.CONTROL.2).
     budget: Option<budget_guard::BudgetGuard>,
     /// Structured audit logger.
@@ -394,6 +398,7 @@ impl Firewall {
             continuations: None,
             anomaly,
             tenant_guard,
+            reads: tenant_reads::ReadHistory::shared(),
             budget,
             audit,
             #[cfg(test)]
@@ -502,6 +507,19 @@ impl Firewall {
     /// MIK-7116.MIN.1: the tenants a tool result names (text-JSON included).
     pub(crate) fn response_tenants(&self, result: &Value) -> std::collections::BTreeSet<String> {
         self.tenant_guard.response_tenants(result)
+    }
+
+    /// Share `reads` with every other firewall of this process, so one
+    /// caller's reads on `/mcp` and `/mcp/{name}` meet in one history.
+    #[must_use]
+    pub(crate) fn with_reads(mut self, reads: Arc<tenant_reads::ReadHistory>) -> Self {
+        self.reads = reads;
+        self
+    }
+
+    /// The process's cross-tenant read history.
+    pub(crate) const fn reads(&self) -> &Arc<tenant_reads::ReadHistory> {
+        &self.reads
     }
 
     /// The tenant guard, for attribution reads that record nothing (MIN.1).
