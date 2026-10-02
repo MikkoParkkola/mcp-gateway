@@ -121,8 +121,29 @@ pub fn add_backend(
     if config.backends.contains_key(name) {
         return Err(format!("Backend '{name}' already exists. Remove it first."));
     }
-    config.backends.insert(name.to_string(), resolved.backend);
-    Ok(Vec::new())
+    let mut backend = resolved.backend;
+    let mut notes = Vec::new();
+    if let Some(entry) = resolved.entry
+        && let server_registry::Reach::Arbitrary { reason } = entry.reach
+    {
+        notes.push(format!("Added disabled. {reason}"));
+    }
+    if backend.enabled {
+        // The loader refuses an enabled backend whose reference resolves to
+        // nothing (C4); writing one would break the next start.
+        let unresolved = backend.unresolved_references(name, &config.env_overlay());
+        if !unresolved.is_empty() {
+            backend.enabled = false;
+            notes.push(
+                "Added disabled until these resolve; set them in the environment or an \
+                 env_files entry, then set `enabled: true`:"
+                    .to_string(),
+            );
+            notes.extend(unresolved);
+        }
+    }
+    config.backends.insert(name.to_string(), backend);
+    Ok(notes)
 }
 
 /// Remove a backend from the in-memory config.
@@ -149,10 +170,13 @@ pub fn update_backend(
     name: &str,
     update: BackendUpdate,
 ) -> Result<(), String> {
-    let backend = config
+    let overlay = config.env_overlay();
+    let slot = config
         .backends
         .get_mut(name)
         .ok_or_else(|| format!("Backend '{name}' not found."))?;
+    // Applied to a copy: a refused update leaves the config untouched.
+    let mut backend = slot.clone();
 
     if let Some(desc) = update.description {
         backend.description = desc;
@@ -180,6 +204,20 @@ pub fn update_backend(
         backend.stop_when_idle_for = idle;
     }
 
+    // Same rule as `add_backend`, after every field is applied: an enabled
+    // backend with an unresolved reference makes the next load fail (C4), so
+    // the update is refused and the caller writes nothing.
+    if backend.enabled {
+        let unresolved = backend.unresolved_references(name, &overlay);
+        if !unresolved.is_empty() {
+            return Err(format!(
+                "Backend '{name}' cannot be enabled with unresolved references: {}",
+                unresolved.join("; ")
+            ));
+        }
+    }
+
+    *slot = backend;
     Ok(())
 }
 
@@ -263,26 +301,77 @@ pub fn resolve_backend<S: std::hash::BuildHasher>(
 
     // Registry lookup.
     if let Some(entry) = server_registry::lookup(name) {
-        let transport = match entry.transport {
-            server_registry::Transport::Stdio => TransportConfig::Stdio {
-                command: entry.command.to_string(),
-                cwd: None,
-                protocol_version: None,
-            },
-            server_registry::Transport::Http { default_url, .. } => TransportConfig::Http {
-                http_url: default_url.to_string(),
-                streamable_http: false,
-                protocol_version: None,
-            },
-        };
-        let mut resolved = plain(transport, desc.unwrap_or(entry.description));
-        resolved.entry = Some(entry);
-        return Ok(resolved);
+        return Ok(ResolvedBackend {
+            backend: registry_backend(entry, desc, env),
+            entry: Some(entry),
+        });
     }
 
     Err(format!(
         "'{name}' is not in the built-in registry. Provide --command or --url."
     ))
+}
+
+/// The backend a registry entry describes, with the user's `-e` values.
+///
+/// Stdio: each required variable becomes `${NAME}` in `env` (the child
+/// environment is cleared, so nothing else would reach it) unless `-e` gave a
+/// value. HTTP: an OAuth entry gets an enabled `oauth:` stanza, so the existing
+/// backend OAuth flow runs; a header entry gets its template, with a `-e`
+/// value substituted in place because `headers` expand from the overlay, never
+/// from `backend.env`. Enabled unless its reach is arbitrary; readiness of the
+/// references is decided later, in [`add_backend`], against the target config.
+fn registry_backend(
+    entry: &server_registry::RegistryEntry,
+    desc: Option<&str>,
+    mut env: HashMap<String, String>,
+) -> BackendConfig {
+    use server_registry::{Auth, HttpFlavor, Transport};
+
+    let mut backend = BackendConfig {
+        description: desc.unwrap_or(entry.description).to_string(),
+        enabled: entry.reach_allows_on(),
+        ..Default::default()
+    };
+    match entry.transport {
+        Transport::Stdio => {
+            backend.transport = TransportConfig::Stdio {
+                command: entry.command.to_string(),
+                cwd: None,
+                protocol_version: None,
+            };
+            for var in entry.required_env {
+                env.entry((*var).to_string())
+                    .or_insert_with(|| format!("${{{var}}}"));
+            }
+            backend.env = env;
+        }
+        Transport::Http {
+            default_url,
+            flavor,
+        } => {
+            backend.transport = TransportConfig::Http {
+                http_url: default_url.to_string(),
+                streamable_http: flavor == HttpFlavor::Streamable,
+                protocol_version: None,
+            };
+            match entry.auth {
+                Auth::OAuth => backend.oauth = Some(crate::config::OAuthConfig::default()),
+                Auth::Header { name, value } => {
+                    let mut value = value.to_string();
+                    for var in entry.required_env {
+                        if let Some(given) = env.remove(*var) {
+                            value = value.replace(&format!("${{{var}}}"), &given);
+                        }
+                    }
+                    backend.headers.insert(name.to_string(), value);
+                }
+                Auth::None | Auth::EnvVars => {}
+            }
+            backend.env = env;
+        }
+    }
+    backend
 }
 
 /// Transport and description only, for tests that check routing.

@@ -18,6 +18,8 @@ use mcp_gateway::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
         remove_backend, resolve_backend, update_backend, write_config,
     },
+    gateway::ui::backends::RegistryEntryJson,
+    registry::server_registry,
 };
 
 // ── add ───────────────────────────────────────────────────────────────────────
@@ -172,6 +174,42 @@ pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
             let enabled = if info.enabled { "" } else { " [disabled]" };
             println!("  {} ({}){enabled}", info.name, info.transport);
             println!("    {desc}");
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Run `mcp-gateway list --available`: the built-in server library, with
+/// what each needs and whether `add` writes it on or off.
+pub fn run_list_available_command(json: bool) -> ExitCode {
+    let entries: Vec<RegistryEntryJson> = server_registry::all()
+        .iter()
+        .map(RegistryEntryJson::from)
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&entries).unwrap_or_default()
+        );
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "{} servers in the built-in library. Turn one on with `mcp-gateway add <name>`.\n",
+        entries.len()
+    );
+    for e in &entries {
+        let state = if e.default_enabled {
+            "on in `mcp-gateway init`"
+        } else if e.reach_reason.is_some() {
+            "added disabled: can reach any address"
+        } else {
+            "off until added"
+        };
+        println!("  {} ({}, {}) - {state}", e.name, e.category, e.transport);
+        println!("    {}", e.description);
+        println!("    login: {}", e.login);
+        if let Some(setup) = e.setup {
+            println!("    needs: {setup}");
         }
     }
     ExitCode::SUCCESS

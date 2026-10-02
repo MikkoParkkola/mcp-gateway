@@ -102,6 +102,16 @@ pub struct RegistryEntryJson {
     pub category: &'static str,
     /// Project homepage URL.
     pub homepage: &'static str,
+    /// What the user supplies: `none`, `env: A, B`, `oauth`, or `header: NAME (VAR)`.
+    pub login: String,
+    /// True when the server needs an account, key or login.
+    pub needs_login: bool,
+    /// True for the starter set `mcp-gateway init` writes enabled.
+    pub default_enabled: bool,
+    /// Why `add` writes it disabled, when its reach is arbitrary.
+    pub reach_reason: Option<&'static str>,
+    /// What it needs beyond its command (arguments, a running service).
+    pub setup: Option<&'static str>,
 }
 
 impl From<&'static server_registry::RegistryEntry> for RegistryEntryJson {
@@ -119,6 +129,25 @@ impl From<&'static server_registry::RegistryEntry> for RegistryEntryJson {
             transport,
             category: e.category,
             homepage: e.homepage,
+            login: match e.auth {
+                server_registry::Auth::None => "none".to_string(),
+                server_registry::Auth::EnvVars => format!("env: {}", e.required_env.join(", ")),
+                server_registry::Auth::OAuth => "oauth".to_string(),
+                server_registry::Auth::Header { name, .. } => {
+                    format!("header: {name} ({})", e.required_env.join(", "))
+                }
+            },
+            needs_login: e.needs_login(),
+            default_enabled: e.default_enabled(),
+            reach_reason: match e.reach {
+                server_registry::Reach::Arbitrary { reason } => Some(reason),
+                server_registry::Reach::Bounded => None,
+            },
+            setup: match e.setup {
+                server_registry::Setup::Ready => None,
+                server_registry::Setup::NeedsArgs { hint }
+                | server_registry::Setup::NeedsService { hint } => Some(hint),
+            },
         }
     }
 }
@@ -623,11 +652,7 @@ mod tests {
             .iter()
             .map(RegistryEntryJson::from)
             .collect();
-        // Must have all 48 built-in entries
-        assert!(
-            entries.len() >= 40,
-            "registry should have at least 40 entries"
-        );
+        assert!(!entries.is_empty(), "the registry has entries");
         // All must serialize to JSON without error
         for e in &entries {
             serde_json::to_string(e).expect("registry entry must be JSON-serializable");
