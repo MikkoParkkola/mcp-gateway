@@ -35,9 +35,19 @@ impl MetaMcp {
         ) {
             return None;
         }
-        self.authorize_stored(stored, attestation, session, caller)
-            .err()
-            .map(|error| error_response_preserving_status(id.clone(), &error))
+        let refused = self
+            .authorize_stored(stored, attestation, session, caller)
+            .err();
+        // COLLUDE.1 §13.3: a completed single-target result delivered again
+        // renews the reader's receipt; the delivery owner commits it.
+        if refused.is_none()
+            && matches!(stored.task.status(), TaskStatus::Completed)
+            && let ([target], Some(result)) = (stored.targets.as_slice(), stored.task.result())
+        {
+            let who = caller.relay_caller(session);
+            self.stage_relay_receipt(who, (&target.server, &target.tool), result);
+        }
+        refused.map(|error| error_response_preserving_status(id.clone(), &error))
     }
 
     fn authorize_stored(

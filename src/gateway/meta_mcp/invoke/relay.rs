@@ -217,7 +217,7 @@ impl MetaMcp {
     /// A no-op outside a collector or with relay detection off.
     // ponytail: the value is held whole until commit; stage the capped text
     // instead if large results show up in memory profiles.
-    pub(super) fn stage_relay_receipt(
+    pub(crate) fn stage_relay_receipt(
         &self,
         who: RelayKey<'_>,
         (server, tool): (&str, &str),
@@ -240,10 +240,15 @@ impl MetaMcp {
     /// Record every staged receipt, when `response` is a delivered result
     /// rather than an error or a delivery refusal.
     pub(crate) fn commit_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
+        self.commit_staged_relay(response.error.is_none() && !response.delivery_refusal);
+    }
+
+    /// Record every staged receipt when `delivered`; drop them either way.
+    pub(crate) fn commit_staged_relay(&self, delivered: bool) {
         let receipts = RELAY_RECEIPTS
             .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
             .unwrap_or_default();
-        if response.error.is_some() || response.delivery_refusal {
+        if !delivered {
             return;
         }
         for receipt in receipts {
@@ -263,6 +268,29 @@ impl MetaMcp {
             .try_with(|receipts| !receipts.borrow().is_empty())
             .unwrap_or(false);
         (pending && self.relay_on()).then(|| result.clone())
+    }
+
+    /// A replayed single-target call (`gateway_invoke`, a surfaced tool) is
+    /// delivered again: stage the delivered value under its own target, so
+    /// the replay renews the caller's receipt. Multi-step calls renew nothing.
+    pub(super) fn stage_replay(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        session_id: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+        replay: &crate::protocol::JsonRpcResponse,
+    ) {
+        let field = |name: &str| arguments.get(name).and_then(Value::as_str);
+        let target = if tool_name == "gateway_invoke" {
+            field("server").zip(field("tool"))
+        } else {
+            self.surfaced_tool_server(tool_name)
+                .map(|server| (server, tool_name))
+        };
+        if let (Some(target), Some(result)) = (target, replay.result.as_ref()) {
+            self.stage_relay_receipt(caller.relay_caller(session_id), target, result);
+        }
     }
 
     /// Record `value` as delivered to `who` from `server:tool`, now.
@@ -296,6 +324,21 @@ impl MetaMcp {
             false
         }
     }
+}
+
+/// An upstream task's gated result replaces the `working` stub its dispatch
+/// staged under `server:tool`, so settlement records what was delivered.
+pub(crate) fn restage((server, tool): (&str, &str), value: &Value) {
+    let _ = RELAY_RECEIPTS.try_with(|receipts| {
+        let mut receipts = receipts.borrow_mut();
+        let staged = receipts
+            .iter_mut()
+            .rev()
+            .find(|r| r.server == server && r.tool == tool);
+        if let Some(staged) = staged {
+            staged.value = value.clone();
+        }
+    });
 }
 
 /// A final check that changed the delivered result (a redaction) leaves the
