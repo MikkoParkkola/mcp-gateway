@@ -266,17 +266,18 @@ impl EventsHub {
             .map(Vec::as_slice)
             .collect();
         outbound::send_callback(frame, key.unwrap_or_default(), |body| async move {
-            // A literal the deny list covers never leaves the process, so
-            // the frame's reservation is released; any other failure may
-            // follow a written byte, and the frame commits.
-            if let Err(refused) = self.client.check_literal(url) {
-                return CallbackSend::NotSent(refused);
+            // Only a failure before any byte could be written releases the
+            // frame's reservation; any other may follow a written byte, and
+            // the frame commits.
+            match self
+                .client
+                .post_tracked(url, &sub.id, event_id, &keys, body, ReadBody::Discard)
+                .await
+            {
+                Err((failure, true)) => CallbackSend::NotSent(failure),
+                Err((failure, false)) => CallbackSend::Sent(Err(failure)),
+                Ok(answer) => CallbackSend::Sent(Ok(answer)),
             }
-            CallbackSend::Sent(
-                self.client
-                    .post(url, &sub.id, event_id, &keys, body, ReadBody::Discard)
-                    .await,
-            )
         })
         .await
     }

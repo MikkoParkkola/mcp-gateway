@@ -61,7 +61,21 @@ fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
         Payload::Request(doc) | Payload::Answer(doc) => {
             guard.scan_document(doc, &["jsonrpc", "id"])
         }
-        Payload::Event(doc) | Payload::Callback(doc) => guard.scan_frame(&[doc], &[]),
+        Payload::Event(doc) => guard.scan_frame(&[doc], &[]),
+        // The event data the record's attribution covers was redacted
+        // before this body was built: rescanning it would read a redaction
+        // marker as a tenant of its own. Only the envelope is scanned.
+        Payload::Callback(doc) => match doc.as_object() {
+            Some(members) => {
+                let envelope: Vec<&Value> = members
+                    .iter()
+                    .filter(|(name, _)| name.as_str() != "data")
+                    .map(|(_, value)| value)
+                    .collect();
+                guard.scan_frame(&envelope, &[])
+            }
+            None => guard.scan_frame(&[doc], &[]),
+        },
         Payload::Batch(items) => {
             let mut all = ReadAttribution::default();
             for item in items.iter().filter_map(OutboundFrame::assessment) {

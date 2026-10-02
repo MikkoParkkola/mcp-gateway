@@ -169,6 +169,23 @@ fn scan_root_covers_a_redacted_callback_body() {
     );
 }
 
+/// A tenant id the event firewall redacted is the tenant the record's
+/// attribution names, not a second tenant named by the marker that replaced it.
+#[test]
+fn a_redacted_tenant_field_does_not_name_a_second_tenant() {
+    let raw = json!({ "data": { "customer_id": A } });
+    let redacted = json!({ "data": { "customer_id": "[REDACTED:credential]" } });
+    let block = firewall(CrossTenantReads::Block);
+    let carried = attribute(&block, &raw);
+    assert!(
+        matches!(
+            callback_frame(Some(&block), Some(KEY), redacted, Some(&carried)),
+            Admission::Admitted(_)
+        ),
+        "a first, single-tenant delivery is not blocked by its own redaction marker"
+    );
+}
+
 fn evidence() -> RejectionEvidence {
     RejectionEvidence {
         caller_key: Some(KEY.to_string()),
