@@ -104,9 +104,12 @@ impl Services {
             }
             // No credential was presented: authentication is off.
             Some(Kind::None | Kind::LocalTransport) => true,
-            Some(_) => match &sub.binding {
-                Some(binding) => self.binding_live(binding, sub, backend).await,
-                None => false,
+            Some(kind) => match &sub.binding {
+                // The binding must be the one this kind is re-checked by.
+                Some(binding) if binding.kind() == kind => {
+                    self.binding_live(binding, sub, backend).await
+                }
+                _ => false,
             },
         }
     }
@@ -517,6 +520,11 @@ mod tests {
         assert!(
             !rotated.admits_subscription(&sub, "x").await,
             "rotated bearer"
+        );
+        let mismatched = bound(Kind::KeyServerToken, Some(LiveBinding::StaticBearer));
+        assert!(
+            !same.admits_subscription(&mismatched, "x").await,
+            "a binding of another kind is refused"
         );
     }
 

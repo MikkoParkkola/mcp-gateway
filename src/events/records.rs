@@ -98,6 +98,19 @@ pub(crate) enum LiveBinding {
     DashboardSession { session_sha256: String },
 }
 
+impl LiveBinding {
+    /// The credential kind this binding re-checks.
+    pub(crate) const fn kind(&self) -> crate::security::audit::CredentialKind {
+        use crate::security::audit::CredentialKind as Kind;
+        match self {
+            Self::KeyServerToken { .. } => Kind::KeyServerToken,
+            Self::OidcBearer { .. } => Kind::OidcBearer,
+            Self::StaticBearer => Kind::StaticBearer,
+            Self::DashboardSession { .. } => Kind::DashboardSession,
+        }
+    }
+}
+
 impl std::fmt::Debug for LiveBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The variant only: an email is personal data.
