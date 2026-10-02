@@ -84,3 +84,15 @@ fn a_current_row_keeps_its_own_targets() {
         "a current row's recorded list is authoritative, even when empty"
     );
 }
+
+#[test]
+fn a_current_row_keeps_recorded_targets_over_its_descriptor() {
+    let task = Task::create("gateway_invoke");
+    let mut record = row(&task, TARGET_VERSION, Some(upstream(DIGEST)));
+    let recorded = Target {
+        server: "sdk".to_owned(),
+        tool: "recorded_tool".to_owned(),
+    };
+    record.targets = vec![recorded.clone()];
+    assert_eq!(CommittedTask::of(task, &record).targets, vec![recorded]);
+}
