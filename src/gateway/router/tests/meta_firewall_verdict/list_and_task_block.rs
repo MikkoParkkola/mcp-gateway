@@ -238,17 +238,24 @@ async fn discovery_inspection_reads_the_unescaped_value() {
 /// Warm the catalogue, so the read-only annotation classifies the tool as
 /// harmless and a task needs no confirmation. A listing that carries a
 /// credential is refused after the fetch; the warm-up needs only the fetch.
-async fn warm_catalogue(state: &Arc<crate::gateway::router::AppState>) {
+async fn warm_catalogue(state: &Arc<crate::gateway::router::AppState>, key: Option<&str>) {
     let warm = json!({
         "jsonrpc": "2.0", "id": 0, "method": "tools/call",
         "params": {"name": "gateway_list_tools", "arguments": {"server": "demo"}}
     });
-    let _ = post(state, "/mcp", &[], &warm).await;
+    let bearer = key.map(|key| format!("Bearer {key}"));
+    let headers: Vec<(&str, &str)> = bearer
+        .iter()
+        .map(|b| ("authorization", b.as_str()))
+        .collect();
+    let _ = post(state, "/mcp", &headers, &warm).await;
 }
 
-/// Run `tool` as a task and return the first settled `tasks/get` body.
+/// Run `tool` as a task, as the API key `key` when given, and return the first
+/// settled `tasks/get` body.
 async fn settled_task(
     state: &Arc<crate::gateway::router::AppState>,
+    key: Option<&str>,
     tool: &str,
     args: Value,
 ) -> Value {
@@ -267,11 +274,15 @@ async fn settled_task(
         json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
     };
     let headers = |method: &'static str, name: String| {
-        vec![
+        let mut headers = vec![
             ("mcp-protocol-version", "2026-07-28".to_string()),
             ("mcp-method", method.to_string()),
             ("mcp-name", name),
-        ]
+        ];
+        if let Some(key) = key {
+            headers.push(("authorization", format!("Bearer {key}")));
+        }
+        headers
     };
     let send = |h: Vec<(&'static str, String)>, body: Value| {
         let state = Arc::clone(state);
@@ -317,8 +328,8 @@ async fn settled_task(
 #[tokio::test]
 async fn a_blocked_task_result_is_refused_on_tasks_get() {
     let (state, _handler, _meta, _store) = leaky_list_state().await;
-    warm_catalogue(&state).await;
-    let got = settled_task(&state, TOOL, json!({})).await;
+    warm_catalogue(&state, None).await;
+    let got = settled_task(&state, None, TOOL, json!({})).await;
     // Settled on the refusal: every read serves it, never the result.
     assert_eq!(
         got.pointer("/result/status").and_then(Value::as_str),
@@ -342,10 +353,46 @@ async fn a_blocked_task_result_is_refused_on_tasks_get() {
 /// would be scanned twice.
 #[tokio::test]
 async fn a_task_mode_discovery_settles_with_one_inspection() {
-    let (state, _handler, meta, _store) = listing_state("echo".to_string(), Vec::new()).await;
-    warm_catalogue(&state).await;
+    // A task needs an execution principal, so the caller holds an API key.
+    let auth = crate::config::AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![crate::config::ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(b"tasker-key")),
+            expires_at: None,
+            name: "tasker".to_string(),
+            rate_limit: 0,
+            backends: vec!["demo".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
+        }],
+        ..crate::config::AuthConfig::default()
+    };
+    let (handler, meta) = (
+        super::response_firewall(Vec::new()),
+        super::response_firewall(Vec::new()),
+    );
+    let (state, _store) =
+        super::state_with_firewalls_and_auth(handler, Arc::clone(&meta), &auth).await;
+    state
+        .backends
+        .get("demo")
+        .expect("the fixture registers demo")
+        .set_transport_for_test(Arc::new(LeakyListTransport {
+            description: "echo".to_string(),
+        }) as Arc<dyn Transport>);
+    warm_catalogue(&state, Some("tasker-key")).await;
     let before = inspections(&meta);
-    let got = settled_task(&state, "gateway_search_tools", json!({"query": "echo"})).await;
+    let got = settled_task(
+        &state,
+        Some("tasker-key"),
+        "gateway_search_tools",
+        json!({"query": "echo"}),
+    )
+    .await;
     assert_eq!(
         got.pointer("/result/status").and_then(Value::as_str),
         Some("completed"),
