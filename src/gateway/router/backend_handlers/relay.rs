@@ -95,3 +95,7 @@ pub(super) fn record_direct_delivery(
     let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
     fw.record_delivery(RelayCaller::new(&key, keyed), server, tool, result);
 }
+
+#[cfg(test)]
+#[path = "relay_tests.rs"]
+mod tests;
