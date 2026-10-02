@@ -316,6 +316,38 @@ async fn t_offer3_a_rate_limited_offer_keeps_todays_text_and_says_retry() {
 }
 
 #[tokio::test]
+async fn t_offer3_an_exhausted_creation_budget_offers_a_retry_and_no_link() {
+    // GIVEN: the one creation per minute is spent by another caller
+    let gw = gateway(Shape::Bridged).await;
+    offered(
+        &invoke(&gw, Caller::Bridged, "alice").await,
+        "account_not_connected",
+    );
+
+    // WHEN: a second caller is refused for the same absent account
+    let refused = invoke(&gw, Caller::Bridged, "bob").await;
+
+    // THEN: still the -32001 envelope, retryable with a wait, and no link
+    let data = &refused["error"]["data"];
+    assert_eq!(refused["error"]["code"], -32001, "{refused}");
+    assert_eq!(data["error"]["code"], "account_not_connected", "{refused}");
+    assert_eq!(data["error"]["retryable"], true, "{refused}");
+    assert_eq!(data["account_id"], ACCOUNT, "{refused}");
+    assert!(
+        data["retry_after"].as_u64().is_some_and(|wait| wait > 0),
+        "{refused}"
+    );
+    assert!(data.get("connect_url").is_none(), "{refused}");
+    // The envelope prefixes the JSON-RPC code; the text itself is today's, with
+    // no connect link appended.
+    assert_eq!(
+        refused["error"]["message"],
+        format!("JSON-RPC error -32001: {ABSENT_TEXT}"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
 async fn t_offer2_an_unbridged_caller_or_an_unhosted_gateway_reads_todays_text() {
     for (shape, caller) in [
         (Shape::Bridged, Caller::Plain),

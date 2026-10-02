@@ -104,3 +104,51 @@ async fn browser_delete_refuses_conflicting_or_missing_credentials() {
         "connected"
     );
 }
+
+/// A session cookie Open `WebUI` does not recognise names no principal: 401
+/// in the §9.1 envelope, and the connected grant is untouched.
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_delete_with_a_rejected_session_is_unauthenticated() {
+    // GIVEN
+    let (_owui, gw) = journey_gateway(RevocationEndpoint::Configured).await;
+    let alice = begin(&gw, ALICE, ALICE_TOKEN, WORK).await;
+    assert_outcome(&complete(&gw, &alice).await, "connected");
+    let request = browser_delete(WORK, "owui-session-stranger-1f2e")
+        .body(Body::empty())
+        .unwrap();
+    // WHEN
+    let (status, body) = json_of(&gw, request).await;
+    // THEN
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(body["schema_version"], "accounts.v1", "{body}");
+    assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
+    assert!(gw.fixture.received().is_empty());
+    assert_eq!(
+        gw.fixture.state(&key_of(&gw, ALICE, WORK)).await,
+        "connected"
+    );
+}
+
+/// A bare API key authenticates the call but is not a principal: with no
+/// adapter assertion the API half refuses, and nothing is revoked.
+#[tokio::test(flavor = "multi_thread")]
+async fn api_delete_without_an_adapter_assertion_is_unauthenticated() {
+    // GIVEN
+    let (_owui, gw) = journey_gateway(RevocationEndpoint::Configured).await;
+    let alice = begin(&gw, ALICE, ALICE_TOKEN, WORK).await;
+    assert_outcome(&complete(&gw, &alice).await, "connected");
+    let request = Request::delete(format!("/accounts/v1/connections/{WORK}"))
+        .header("authorization", format!("Bearer {API_KEY}"))
+        .body(Body::empty())
+        .unwrap();
+    // WHEN
+    let (status, body) = json_of(&gw, request).await;
+    // THEN
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
+    assert!(gw.fixture.received().is_empty());
+    assert_eq!(
+        gw.fixture.state(&key_of(&gw, ALICE, WORK)).await,
+        "connected"
+    );
+}
