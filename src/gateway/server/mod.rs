@@ -2879,11 +2879,26 @@ impl Gateway {
         }
     }
 
+    /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,
+    /// which spans dispatch and finalize (COLLUDE.1 §13.3).
+    async fn dispatch_single_with_sink(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        request: serde_json::Value,
+        client: StdioClient<'_>,
+        sink: &StdioTelemetry,
+    ) -> Option<serde_json::Value> {
+        let dispatch =
+            Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink);
+        crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(dispatch)).await
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one dispatch path; the telemetry-guard scope is part of it"
     )]
-    async fn dispatch_single_with_sink(
+    async fn dispatch_relay_scoped(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
@@ -3035,6 +3050,7 @@ impl Gateway {
                 chain_nonce: chain_nonce.as_deref(),
             },
         ).await;
+        meta_mcp.commit_relay_receipts(&response);
         if let Some(execution) = execution {
             execution.complete_delivery(&response, signing_context.as_ref());
         }

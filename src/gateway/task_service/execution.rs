@@ -208,8 +208,10 @@ impl TaskExecutor {
         let (handoff, cancel_rx) =
             Handoff::try_accept(self, task.id()).ok_or(ServiceError::Unavailable)?;
         let (tx, rx) = oneshot::channel();
-        tokio::spawn(commit_and_run(
-            handoff, intent, task, backend, call, cancel_rx, tx,
+        // COLLUDE.1: the task's relay receipts are collected on the spawned
+        // task itself; task-locals do not cross `tokio::spawn`.
+        tokio::spawn(crate::gateway::meta_mcp::invoke::relay::collecting(
+            commit_and_run(handoff, intent, task, backend, call, cancel_rx, tx),
         ));
         rx.await.map_err(|_| ServiceError::Unavailable)?
     }

@@ -196,6 +196,11 @@ impl Firewall {
         self.relay.text_cut.load(Ordering::Relaxed)
     }
 
+    /// Whether relay detection is on, so a delivery is worth staging.
+    pub(crate) fn relay_detection_on(&self) -> bool {
+        self.relay_detector().is_some()
+    }
+
     fn relay_detector(&self) -> Option<&CollusionDetector> {
         self.relay
             .detector
