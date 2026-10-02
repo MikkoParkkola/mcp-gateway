@@ -686,7 +686,8 @@ fn a_withdrawn_dispatch_frees_the_key_unless_an_earlier_step_acted() {
         idempotency_key: Some("withdraw-key".into()),
         ..RetryFields::default()
     };
-    let caller = context(&policy, &retry);
+    let mut caller = context(&policy, &retry);
+    caller.is_modern = false;
     let args = json!({"state":"triage"});
     let refusal_body = JsonRpcResponse::success(RequestId::Number(1), json!({"isError": true}));
 
