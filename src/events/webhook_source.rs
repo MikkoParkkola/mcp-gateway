@@ -114,7 +114,12 @@ fn dedupe_key(inbound: &Inbound<'_>) -> Option<String> {
             .get(header.as_str())
             .and_then(|v| v.to_str().ok())
             .filter(|v| !v.is_empty())
-            .map(|v| format!("id:{v}"));
+            // Hashed: the seen-set's bound is a count, so its entries must be
+            // fixed-size whatever the sender puts in the header.
+            .map(|v| {
+                use sha2::Digest as _;
+                format!("id:{}", hex::encode(sha2::Sha256::digest(v.as_bytes())))
+            });
     }
     (inbound.event.dedupe.as_deref() == Some("body")).then(|| {
         use sha2::Digest as _;

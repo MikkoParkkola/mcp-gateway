@@ -159,7 +159,8 @@ impl EventsHub {
 
     /// Delete a subscription whose principal lost access; its pending
     /// records go with it (F9).
-    pub(super) async fn revoke(self: &Arc<Self>, id: &str) {
+    /// `false` when the store could not record the removal.
+    pub(super) async fn revoke(self: &Arc<Self>, id: &str) -> bool {
         let tail = super::tail_policy(&self.config);
         let id = id.to_owned();
         let removed = self
@@ -168,6 +169,7 @@ impl EventsHub {
         if removed == Some(true) {
             tracing::info!("events: subscription revoked, access no longer granted");
         }
+        removed.is_some()
     }
 }
 

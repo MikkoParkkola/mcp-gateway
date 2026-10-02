@@ -486,4 +486,6 @@ pub(super) async fn tasks_cancel(
 }
 
 #[cfg(test)]
+mod intent_tests;
+#[cfg(test)]
 mod scope_tests;
