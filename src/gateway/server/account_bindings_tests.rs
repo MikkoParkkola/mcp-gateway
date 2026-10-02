@@ -235,3 +235,46 @@ fn http_identity_adapter_is_not_sole_operator() {
         false,
     );
 }
+
+fn bound_config(enabled: bool) -> Config {
+    let yaml = format!(
+        "backends:\n  mail:\n    http_url: https://backend.fixture.test/mcp\n    enabled: {enabled}\n    \
+         account: work\n\
+         accounts:\n  schema_version: accounts.v1\n  enabled: true\n  deployment: single_process\n  \
+         instance_id: unit\n  store_dir: /unused/store\n  authority_dir: /unused/authority\n  \
+         current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  descriptors:\n    \
+         work:\n      mode: personal_managed\n      provider: fixture\n      \
+         resource: https://api.fixture.test/\n      issuer: https://issuer.fixture.test\n      \
+         authorization_endpoint: https://issuer.fixture.test/authorize\n      \
+         token_endpoint: https://issuer.fixture.test/token\n      client_id: fixture-client\n      \
+         redirect_uri: https://gateway.fixture.test/callback\n      \
+         scopes: [read]\n      send_resource_parameter: true\n"
+    );
+    serde_yaml::from_str(&yaml).expect("config parses")
+}
+
+fn install(config: &Config) -> crate::Result<()> {
+    let registry = std::sync::Arc::new(crate::backend::BackendRegistry::new());
+    let meta = crate::gateway::meta_mcp::MetaMcp::new(registry);
+    let keys = std::sync::Arc::new(
+        crate::gateway::oauth::jwks::GatewayKeyPair::generate().expect("a key pair"),
+    );
+    super::install_account_strategies(config, None, &keys, &meta, ServeMode::Http)
+}
+
+/// Mutant: an enabled managed binding with no custody installs nothing and
+/// the backend is later served as though it were a shared one.
+#[test]
+fn a_managed_binding_with_no_custody_is_refused_not_installed_empty() {
+    let error = install(&bound_config(true)).expect_err("no custody must refuse");
+    let text = error.to_string();
+    assert!(text.contains("no account custody was started"), "{text}");
+    assert!(text.contains("'mail'") && text.contains("'work'"), "{text}");
+}
+
+/// Mutant: a disabled backend's binding is held to the custody check, or has a
+/// strategy bound to something that cannot be dispatched to.
+#[test]
+fn a_disabled_backend_binding_is_skipped() {
+    install(&bound_config(false)).expect("a disabled backend has nothing to install");
+}

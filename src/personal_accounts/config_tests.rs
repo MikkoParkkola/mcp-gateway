@@ -58,6 +58,8 @@ fn domain_err<T>(result: Result<T, AccountsConfigError>, what: &str) -> Accounts
 struct CountingOverlay {
     values: Vec<(String, String)>,
     looked_up: RefCell<Vec<String>>,
+    /// Every reference handed to `resolve_reference`, in any spelling.
+    references: RefCell<Vec<String>>,
 }
 
 impl CountingOverlay {
@@ -68,11 +70,16 @@ impl CountingOverlay {
                 .map(|(k, v)| ((*k).into(), (*v).into()))
                 .collect(),
             looked_up: RefCell::new(Vec::new()),
+            references: RefCell::new(Vec::new()),
         }
     }
 
     fn lookups(&self) -> Vec<String> {
         self.looked_up.borrow().clone()
+    }
+
+    fn references(&self) -> Vec<String> {
+        self.references.borrow().clone()
     }
 }
 
@@ -88,6 +95,7 @@ impl CountingOverlay {
 
 impl SecretOverlay for CountingOverlay {
     fn resolve_reference(&self, field: &str, reference: &str) -> Result<Option<String>, String> {
+        self.references.borrow_mut().push(reference.to_string());
         // `env:` through this fake; `file:` and literals as production does.
         match reference.strip_prefix("env:") {
             Some(name) => Ok(self.resolve(name)),
@@ -620,3 +628,6 @@ fn account_key_accepts_file_ref() {
     assert_eq!(env.lookups(), vec![RETIRED_VAR.to_string()]);
     assert!(resolved.secret_refs_read.contains(&reference));
 }
+
+#[path = "config_adapter_tests.rs"]
+mod adapter_tests;
