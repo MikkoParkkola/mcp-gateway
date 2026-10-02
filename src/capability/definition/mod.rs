@@ -526,6 +526,11 @@ fn default_method() -> String {
     "GET".to_string()
 }
 
+/// Webhook senders POST; a route that names no method accepts that.
+fn default_webhook_method() -> String {
+    "POST".to_string()
+}
+
 /// GraphQL API configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GraphqlConfig {
@@ -790,7 +795,7 @@ pub struct WebhookDefinition {
     /// URL path relative to `base_path` (e.g., "/linear/webhook")
     pub path: String,
     /// HTTP method to accept (default: POST)
-    #[serde(default = "default_method")]
+    #[serde(default = "default_webhook_method")]
     pub method: String,
     /// HMAC secret reference (e.g., "`env:LINEAR_WEBHOOK_SECRET`")
     #[serde(default)]
