@@ -372,10 +372,24 @@ before every delivery attempt (§3.2 step 7), `EventSource::authorize` included.
 I2's worker checks backend admission only, because `authorize` arrives with
 I4. I5 requires the attempt path to call `authorize` (I4 wiring, coordinated
 with L8), and b2's `authorize` reads the same snapshot synchronously: URI
-absent from a good snapshot cancels the subscription's pending records; no
-good snapshot defers the attempt, as a missing rate token does, and the check
-sits in the worker's dispatch **before** the record is claimed, beside the rate
-token, so a deferred record is never left `in_flight` (`worker.rs:102-118`).
+absent from a complete snapshot cancels the subscription's pending records.
+The parent's binary `authorize -> Result<(), Refusal>` is enough; no defer
+state is needed. `matches` returns false while no good snapshot exists (skip,
+keep), `authorize` errs only on confirmed absence from a complete snapshot,
+and a failed or truncated re-read never replaces a good snapshot's verdict
+with a refusal. A record is enqueued only after a good snapshot listed its
+URI, so at attempt time a snapshot always exists, and the check (placed in the
+worker's dispatch before the record is claimed, `worker.rs:102-118`) is
+either Ok or a confirmed revoke.
+
+**What I5 needs from I4** (coordination with L8, stated here so I4 builds it):
+`authorize` and `matches` on the trait as in the parent §4, with `authorize`
+called at subscribe, at fan-out and in the worker before each claim;
+`on_first_subscriber` / `on_last_subscriber` refcounted per `lifecycle_key`
+and replayed once per live key on restart; and a way for the one
+`BackendNotification` source to delegate the three b2 names to
+`src/events/upstream.rs` while keeping b1 its own (a field on that source is
+enough; no second source of the same kind).
 
 **Kept out of `SubscriptionRegistry`.** b2 notifications go only to
 `EventsHub::emit`; nothing in I5 calls `publish` or `publish_for_backend`, so
@@ -510,7 +524,7 @@ refused. The row does not pretend to test a per-principal URI policy.
 **Fails first because:** on the I2/I4 base no b2 descriptor exists, so each
 row's first subscribe answers `-32011` and the row fails at its own "subscribe
 accepted" or "listed" assertion, after the gateway and the peer have started
-(the harness steps before it are asserted green separately). T39g's
+(the implementation PR's first commit adds a precondition that each peer saw its handshake, `server/discover` or `initialize`, so a row cannot pass its early steps without a live peer). T39g's
 "receives none" clause would pass vacuously on that base, so it is asserted
 only after the same row has seen the event subscriber receive the push.
 
