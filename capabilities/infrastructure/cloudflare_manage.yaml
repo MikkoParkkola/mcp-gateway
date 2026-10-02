@@ -1,4 +1,4 @@
-sha256: 1b6fd1a9c883468fac35a4f296990ff5c6c136d89f2b8e12569556ee37f13e52
+sha256: ebb0e06fbb5f12e057ab21bdb93257ce7188e2912a28c8e7e0ad2bdfa8522a91
 fulcrum: "1.0"
 name: cloudflare_manage
 description: >
@@ -79,11 +79,11 @@ providers:
     config:
       command: npx
       args:
-        - "@anthropic/cloudflare-mcp"
+      - '@anthropic/cloudflare-mcp'
       transport: stdio
       env:
-        CLOUDFLARE_API_TOKEN: "{env.CLOUDFLARE_API_TOKEN}"
-        CLOUDFLARE_ACCOUNT_ID: "{env.CLOUDFLARE_ACCOUNT_ID}"
+      - CLOUDFLARE_API_TOKEN
+      - CLOUDFLARE_ACCOUNT_ID
 
 auth:
   required: true

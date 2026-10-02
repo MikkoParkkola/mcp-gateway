@@ -17,11 +17,15 @@
 //! - `file:/path/to/file.json:field` - JSON file with dot-path field extraction
 //! - `{env.VAR}` - Template format for environment variables
 
+mod cli;
+mod cli_argv;
+mod cli_run;
 mod client;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
 mod params;
+mod process;
 mod readiness;
 pub mod rest;
 mod xml;
@@ -46,6 +50,7 @@ use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
+use client::send_with_retry;
 
 /// Executor for capability REST calls
 pub struct CapabilityExecutor {
@@ -82,99 +87,10 @@ pub struct CapabilityExecutor {
     /// the ONE registry the shared installer wrote to — not a second store.
     pub(super) account_strategies:
         Option<Arc<crate::identity_propagation::AccountStrategyRegistry>>,
-}
-
-/// Maximum number of send attempts (1 initial + 2 retries) for transient
-/// outbound transport failures.
-pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
-
-/// Send an outbound HTTP request, retrying transient transport failures with
-/// exponential backoff, and recording the transport outcome on `health`.
-///
-/// Capability calls run inside the gateway's own tokio runtime, so a transient
-/// connect failure reaching an upstream (e.g. a momentary blip reaching
-/// `api.linear.app` under host load) otherwise surfaces directly as a
-/// `BACKEND_ERROR` to the caller (MIK-5081).
-///
-/// Retry policy:
-/// - **Connection** failures are always retried — no request bytes were sent,
-///   so a retry is side-effect-free.
-/// - **Timeout** failures are retried only when `retry_timeouts` is true (i.e.
-///   the request is idempotent). A timeout on a non-idempotent POST may mean
-///   the upstream already processed it, so blindly replaying it could duplicate
-///   a side effect.
-/// - HTTP error *statuses* (4xx/5xx) are returned unchanged (never retried) and
-///   count as a live backend for health purposes.
-///
-/// Health: a transport success (any HTTP status) records success; exhausting
-/// retries records a failure. The request is cloned per attempt; a
-/// non-cloneable body is sent once.
-/// Render an outbound transport error without the URL it was built from.
-///
-/// `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim
-/// (`reqwest-0.13.4/src/error.rs:279-280`), and reqwest's own docs on
-/// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
-/// Backend URLs here are operator-configured and a query-string API key is a
-/// common shape, so the raw error must never reach a log sink or a client.
-fn redact_url(e: reqwest::Error) -> reqwest::Error {
-    e.without_url()
-}
-
-pub(super) async fn send_with_retry(
-    request: reqwest::RequestBuilder,
-    label: &str,
-    retry_timeouts: bool,
-    health: &crate::failsafe::HealthTracker,
-) -> Result<reqwest::Response> {
-    let started = std::time::Instant::now();
-    let mut backoff_ms: u64 = 100;
-    for attempt in 1..=MAX_SEND_ATTEMPTS {
-        let Some(attempt_req) = request.try_clone() else {
-            // Non-cloneable body: a single attempt is the best we can do.
-            return match request.send().await {
-                Ok(resp) => {
-                    health.record_success(started.elapsed());
-                    Ok(resp)
-                }
-                Err(e) => Err(
-                    crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
-                        health.record_failure();
-                        Error::Transport(format!("{label} failed: {}", redact_url(e)))
-                    }),
-                ),
-            };
-        };
-        match attempt_req.send().await {
-            Ok(resp) => {
-                health.record_success(started.elapsed());
-                return Ok(resp);
-            }
-            Err(e) => {
-                // A refused destination is refused again: one attempt, no health mark.
-                if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
-                    return Err(refused);
-                }
-                let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
-                let e = redact_url(e);
-                if transient && attempt < MAX_SEND_ATTEMPTS {
-                    tracing::warn!(
-                        label = label,
-                        attempt = attempt,
-                        backoff_ms = backoff_ms,
-                        error = %e,
-                        "transient outbound transport error; retrying"
-                    );
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms *= 2;
-                    continue;
-                }
-                health.record_failure();
-                return Err(Error::Transport(format!("{label} failed: {e}")));
-            }
-        }
-    }
-    // The final attempt always returns above; the loop cannot fall through.
-    unreachable!("send_with_retry exhausted attempts without returning")
+    /// What `service: cli`/`mcp` capabilities may run (MIK-7782).
+    pub(super) process_policy: process::ProcessPolicy,
+    /// Per-capability bound on simultaneous CLI children.
+    pub(super) process_slots: DashMap<String, Arc<tokio::sync::Semaphore>>,
 }
 
 impl CapabilityExecutor {
@@ -196,6 +112,8 @@ impl CapabilityExecutor {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
         }
     }
 
@@ -208,6 +126,7 @@ impl CapabilityExecutor {
     #[must_use]
     pub fn for_config(config: &crate::config::CapabilityConfig) -> Self {
         let mut executor = Self::new();
+        executor.process_policy = process::ProcessPolicy::from_config(config);
         if let Ok(Some(proxy)) = config.egress_proxy_url() {
             tracing::warn!(
                 proxy = %crate::config::CapabilityConfig::egress_proxy_for_log(&proxy),
@@ -313,6 +232,8 @@ impl CapabilityExecutor {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
         }
     }
 
@@ -403,11 +324,21 @@ impl CapabilityExecutor {
             return Ok(cached);
         }
 
-        // Route through the protocol executor trait.
-        let protocol_config = provider.protocol_config();
-        let response = self
-            .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
-            .await?;
+        // A process-running provider (MIK-7782) has its own executor; every
+        // other provider routes through the protocol executor trait.
+        let (response, protocol) =
+            if let Some(process) = capability.providers.process.get("primary") {
+                let response = self
+                    .execute_process(capability, process, &params, &context)
+                    .await?;
+                (response, provider.service.as_str())
+            } else {
+                let protocol_config = provider.protocol_config();
+                let response = self
+                    .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
+                    .await?;
+                (response, protocol_config.protocol_name())
+            };
 
         // Apply response transform pipeline if configured
         let response = {
@@ -424,7 +355,7 @@ impl CapabilityExecutor {
         tracing::info!(
             latency_ms = latency.as_millis(),
             provider = %provider.service,
-            protocol = %protocol_config.protocol_name(),
+            protocol = %protocol,
             "Capability executed successfully"
         );
 

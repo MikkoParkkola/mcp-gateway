@@ -674,3 +674,38 @@ fn replay_facts_round_trip_and_older_records_decode() {
             .is_none()
     );
 }
+
+/// A refused round (a relay caught mid-exchange) withdraws its dispatch: the
+/// refusal is not retained under the key, unless an earlier step of the same
+/// execution acted, whose protection stays.
+#[test]
+fn a_withdrawn_dispatch_frees_the_key_unless_an_earlier_step_acted() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let policy = MutablePolicy::new(SECOND);
+    let retry = RetryFields {
+        idempotency_key: Some("withdraw-key".into()),
+        ..RetryFields::default()
+    };
+    let mut caller = context(&policy, &retry);
+    caller.is_modern = false;
+    let args = json!({"state":"triage"});
+    let refusal_body = JsonRpcResponse::success(RequestId::Number(1), json!({"isError": true}));
+
+    for (marks, replays) in [(1, false), (2, true)] {
+        let Ok(SyncAdmission::Owned(owner)) = admit(&meta, &caller, "gateway_set_state", &args, 1)
+        else {
+            panic!("the key must be free for the first call");
+        };
+        for _ in 0..marks {
+            owner.mark_dispatched();
+        }
+        owner.withdraw_dispatch();
+        owner.complete_delivery(&refusal_body, None);
+        let again = admit(&meta, &caller, "gateway_set_state", &args, 2);
+        assert_eq!(
+            matches!(again, Ok(SyncAdmission::Replay(..))),
+            replays,
+            "marks={marks}: wrong retention after one withdrawal"
+        );
+    }
+}
