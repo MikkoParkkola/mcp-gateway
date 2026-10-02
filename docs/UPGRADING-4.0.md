@@ -144,7 +144,7 @@ backend" and "fails a capability file" first.**
 | 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp, writes no new `identity_grant_decision` record for 10 minutes; a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
-| 120 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
+| 120 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3423,7 +3423,9 @@ Before, a task whose backend call outlasted `server.shutdown_timeout` kept runni
 store closed, and could still call its backend while the backends were stopping. Now the drain
 cancels it, waits a bounded time for it to end, and only then closes the store. Its record stays
 `working` until the next start settles it through the interrupted-task table
-(`gateway_restart_after_dispatch`). This applies to HTTP shutdown and to stdio EOF.
+(`gateway_restart_after_dispatch`); a task whose backend is a configured `tasks.recovery_adapters`
+entry with a durable upstream handle stays managed `working`, as after any restart, and an owner
+`tasks/get` resolves it. This applies to HTTP shutdown and to stdio EOF.
 
 **Action:** none. Raise `server.shutdown_timeout` if long tasks should be allowed to finish.
 
