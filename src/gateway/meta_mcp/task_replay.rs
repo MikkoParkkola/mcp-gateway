@@ -53,10 +53,18 @@ impl MetaMcp {
         }
         if stored.targets.is_empty() {
             // A recording gateway's empty list means nothing was dispatched.
+            // An older row's empty list means the provenance is unavailable:
+            // `task.tool()` is the meta tool, and the backend's current list is
+            // no record of what ran, so nothing can prove the caller may read
+            // it. Refused, plan or not (MIK-7686, fail closed).
             return if stored.targets_recorded {
                 Ok(())
             } else {
-                self.authorize_legacy_row(stored, attestation, session, caller)
+                Err(Error::Forbidden {
+                    code: -32003,
+                    status: 403,
+                    message: "stored task result has no recorded provenance".to_owned(),
+                })
             };
         }
         // MIK-7692: a poll that meets the same decision again is not written
@@ -81,79 +89,5 @@ impl MetaMcp {
             }
             Ok(())
         })
-    }
-
-    /// A row written before targets were recorded. A plan (by the task's own
-    /// tool name, never the backend label) has no provenance and is refused;
-    /// anything else faces the backend-level checks, and then, because the row
-    /// cannot name the tool it ran (`task.tool()` is the meta tool), is refused
-    /// while any tool its backend lists is withheld from this caller, while
-    /// that list is absent, empty or not known in full, or while the backend
-    /// lists per caller (MIK-7686).
-    fn authorize_legacy_row(
-        &self,
-        stored: &CommittedTask,
-        attestation: Option<&str>,
-        session: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
-        let refuse = |message: &str| Error::Forbidden {
-            code: -32003,
-            status: 403,
-            message: message.to_owned(),
-        };
-        if matches!(
-            stored.task.tool(),
-            "gateway_execute" | "gateway_run_playbook"
-        ) {
-            return Err(refuse("stored plan result has no recorded provenance"));
-        }
-        let server = stored.backend.as_str();
-        if !caller.authorizer.admits_backend(server) {
-            return Err(refuse("stored task result is outside this caller's scope"));
-        }
-        if !self.active_profile(session).backend_allowed(server) {
-            return Err(refuse("stored task result is outside the active profile"));
-        }
-        let saturated = self
-            .backends
-            .get(server)
-            .is_some_and(|backend| backend.gate_saturated());
-        if self.kill_switch.is_killed(server) || saturated {
-            return Err(refuse("the backend that produced this result is disabled"));
-        }
-        let withheld = || {
-            refuse(
-                "stored task result has no recorded tool, and its backend has a withheld \
-                 or unlisted tool",
-            )
-        };
-        let Some(backend) = self.backends.get(server) else {
-            return Err(withheld());
-        };
-        // A backend that forwards caller identity lists per caller, so the
-        // shared catalogue cannot speak for this one.
-        if backend.identity_propagation_config().is_some() {
-            return Err(withheld());
-        }
-        // The list first, then the blocked set: a block landing between the
-        // two is still seen by the second read.
-        let Some(tools) = backend.cached_tools_complete().filter(|t| !t.is_empty()) else {
-            return Err(withheld());
-        };
-        if backend.withholds_any_tool() {
-            return Err(withheld());
-        }
-        for tool in tools.iter() {
-            let args =
-                super::upstream::recovery_policy_args(server, &tool.name, &json!({}), attestation);
-            if self
-                .check_invocation_policy(&args, session, caller)
-                .is_err()
-            {
-                return Err(withheld());
-            }
-        }
-        Ok(())
     }
 }

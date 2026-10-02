@@ -140,22 +140,6 @@ impl Backend {
         (self.without_blocked(tools), truncated)
     }
 
-    /// The shared slot's tools only when known in full: present, populated
-    /// and not truncated, all read under one guard. `None` for an absent or
-    /// partial catalogue, which must never read as a complete list with
-    /// nothing withheld (MIK-7686).
-    #[must_use]
-    pub(crate) fn cached_tools_complete(&self) -> Option<Arc<Vec<Tool>>> {
-        let slot = self.tools_slot(None);
-        let tools = slot
-            .tools_cache
-            .with_cached_and_populated(|tools, populated| {
-                let truncated = slot.tools_truncated.load(Ordering::SeqCst);
-                tools.filter(|_| populated && !truncated).map(Arc::clone)
-            })?;
-        Some(self.without_blocked(tools))
-    }
-
     /// Both under one guard; use wherever the two travel together.
     #[must_use]
     pub fn cached_tools_count_and_known(&self) -> (usize, bool) {

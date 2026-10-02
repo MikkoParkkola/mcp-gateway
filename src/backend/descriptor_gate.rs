@@ -360,12 +360,6 @@ impl Backend {
             .all(|t| blocked.contains_key(&name_key(&t.name)))
     }
 
-    /// Whether this backend withholds any tool by its description, or all of
-    /// them because the blocked-name map overflowed.
-    pub(crate) fn withholds_any_tool(&self) -> bool {
-        self.gate_saturated() || !self.descriptor_gate.blocked.read().is_empty()
-    }
-
     /// Whether a served list may carry `tool`.
     pub(crate) fn is_blocked_tool(&self, tool: &str) -> bool {
         self.gate_saturated()
