@@ -123,8 +123,64 @@ runtimes a stdio backend shells out to — Node.js 24, `uv`, `git` and
 `openssh-client` (for `git+https://` and `git+ssh://` package specs). It also
 leaves `curl` behind, which the builds above it use, and picks up `python3` as
 a hard dependency of the NodeSource package; neither is there to be spawned.
-`pnpm`, `yarn` and `bunx` are not installed: a backend naming one of those
-needs a layer of its own.
+`pnpm`, `yarn` and `bunx` are not installed. A backend that needs one of them —
+or a deployment that needs a package the image has no reason to carry, such as
+`iproute2` to route a backend's egress through a tunnel — has two ways to get it
+without forking the image.
+
+**Declare the packages.** `EXTRA_APT_PACKAGES` names apt packages the entrypoint
+installs before the gateway starts:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2 net-tools" \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Installing needs root, so the container runs as root and the entrypoint drops to
+the gateway user before exec'ing it; run as the image's own user the variable
+does nothing. The install is non-interactive and bounded at five minutes, and an
+update or install that fails, or that outlives the bound, stops the container
+instead of starting without the packages it was told to carry.
+
+That couples startup to the apt mirror and resolves versions at every start, so
+a restart can pick up a different build of a package. Name a version
+(`EXTRA_APT_PACKAGES="iproute2=6.12.0-1"`) when that matters. Where neither
+trade is acceptable — and in every Helm deployment, whose chart runs non-root
+with a read-only root filesystem, where this cannot work at all — derive an
+image instead: two lines, reproducible, and never running as root.
+
+```dockerfile
+FROM ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+USER gateway
+```
+
+**Mount the startup steps.** Executable `*.sh` files in `/docker-entrypoint.d`
+run, and `*.envsh` files are sourced, in name order, before the gateway starts.
+A container that starts as root runs them as root, after the packages are
+installed and before it drops to the gateway user, so a step that needs root — a
+route, a NAT rule — works; a container run as the image's user runs them as that
+user. A file that is not executable is skipped with a message rather than
+half-run, and a step that fails stops the container. Both follow the convention
+nginx and postgres ship:
+
+```bash
+docker run --user root -e EXTRA_APT_PACKAGES="iproute2" \
+  -v ./startup:/docker-entrypoint.d:ro \
+  ghcr.io/mikkoparkkola/mcp-gateway:latest-full
+```
+
+Mount the directory read-only and own it as root: its steps run with the
+privileges the container started with, so write access to it is write access to
+root's next startup step.
+
+A sourced `.envsh` runs in the entrypoint's shell immediately before the gateway
+is exec'd, so a variable it exports is part of the environment the gateway
+inherits, and one it only assigns is not. It is a startup step, not a
+configuration channel; the gateway's own settings belong in `-e` or the config
+file.
 
 ```bash
 docker pull ghcr.io/mikkoparkkola/mcp-gateway:latest-full
