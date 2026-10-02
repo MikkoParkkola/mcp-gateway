@@ -391,6 +391,16 @@ async fn dispatch_in_scope(
         }
     })
     .await;
+    // MIK-7116.MIN.2: what the backend sent counts as read here, before a
+    // list drain, filter or normalisation drops fields. `tools/call` notes
+    // its result at its gates instead, once they pass.
+    if method != "tools/call"
+        && let Ok(JsonRpcResponse {
+            result: Some(raw), ..
+        }) = &response
+    {
+        crate::security::tenant_reads::note_read(raw);
+    }
     response
 }
 

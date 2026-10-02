@@ -96,10 +96,15 @@ struct NotifyingBackend;
 impl Transport for NotifyingBackend {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         if method == "tools/list" {
-            let tools = json!([{ "name": TOOL, "inputSchema": { "type": "object" } }]);
+            let mut tool = json!({ "name": TOOL, "inputSchema": { "type": "object" } });
+            // Asked with `probe`, the descriptor names B in a field the list
+            // normalisation does not keep.
+            if params.as_ref().and_then(|p| p.get("probe")) == Some(&json!("tenant-b")) {
+                tool["customer_id"] = json!(B);
+            }
             return Ok(JsonRpcResponse::success_serialized(
                 RequestId::Number(1),
-                json!({ "tools": tools }),
+                json!({ "tools": [tool] }),
             ));
         }
         let notify = params
@@ -294,6 +299,41 @@ async fn meta_and_direct_share_history() {
         b, Delivered,
         "A on /mcp and B on /mcp/demo under one key must share one history: {body}"
     );
+}
+
+/// Round 9 (review P1): a direct `tools/list` is read before it is
+/// normalised. A descriptor naming B in a field the normalisation drops is
+/// still a read of B: after A, block refuses it.
+#[tokio::test]
+async fn direct_list_reads_before_normalising() {
+    let list = || {
+        let body = json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/list",
+            "params": { "probe": "tenant-b" }
+        });
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp/demo")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer key-one")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap()
+    };
+    let who = caller();
+    for (mode, refused) in [
+        (CrossTenantReads::Off, false),
+        (CrossTenantReads::Block, true),
+    ] {
+        let (router, _store) = router(mode).await;
+        let (a, _, body) = send(&router, call_with(&who, true, None, 0, &reading(A))).await;
+        assert_eq!(a, Delivered, "{body}");
+        let (_, _, body) = send(&router, list()).await;
+        assert_eq!(
+            body.get("error").is_some(),
+            refused,
+            "{mode:?}: a list naming B only in a dropped field, after A: {body}"
+        );
+    }
 }
 
 /// POST `tools/call` with `Accept: text/event-stream`; the whole body, read
