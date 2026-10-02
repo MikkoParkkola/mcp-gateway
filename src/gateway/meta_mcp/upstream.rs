@@ -448,7 +448,7 @@ impl MetaMcp {
             server: server.to_owned(),
             tool: tool.to_owned(),
         };
-        self.inspect_task_result(&[target], trace_id, &mut gated)?;
+        let _ = &target; // MUTANT MIK-7706: inspection removed
         Ok(gated)
     }
 
