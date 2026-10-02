@@ -5700,11 +5700,18 @@ mod identity_propagation_enforcement_tests {
             .to_string();
         let script =
             format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
+        let profile_dir = tempfile::tempdir().expect("private profile dir");
         let output = std::process::Command::new("sh")
             .arg("-c")
             .arg(script)
             .arg(&exe)
             .env(ENV_VAR, &path)
+            // Under a zero file-size limit the child's coverage profile is written
+            // empty and corrupts the measured set (#2573); give it a private file.
+            .env(
+                "LLVM_PROFILE_FILE",
+                profile_dir.path().join("child-%p.profraw"),
+            )
             .output()
             .expect("spawn fsize-limited child process");
 
