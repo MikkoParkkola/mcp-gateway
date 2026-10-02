@@ -17,9 +17,14 @@ const TOOL: &str = "rows";
 
 /// An HTTP MCP backend whose one tool answers a tenant-free "ok".
 async fn spawn_backend() -> String {
+    spawn_backend_after(Duration::ZERO).await
+}
+
+/// [`spawn_backend`] whose tool answers only after `delay`.
+async fn spawn_backend_after(delay: Duration) -> String {
     let app = axum::Router::new().route(
         "/",
-        axum::routing::post(|axum::Json(request): axum::Json<Value>| async move {
+        axum::routing::post(move |axum::Json(request): axum::Json<Value>| async move {
             let method = request.get("method").and_then(Value::as_str).unwrap_or("");
             let result = match method {
                 "initialize" => json!({
@@ -32,10 +37,13 @@ async fn spawn_backend() -> String {
                     "description": "reads rows",
                     "inputSchema": {"type": "object"},
                 }]}),
-                "tools/call" => json!({
-                    "content": [{"type": "text", "text": "ok"}],
-                    "isError": false,
-                }),
+                "tools/call" => {
+                    tokio::time::sleep(delay).await;
+                    json!({
+                        "content": [{"type": "text", "text": "ok"}],
+                        "isError": false,
+                    })
+                }
                 _ => json!({}),
             };
             axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}))
@@ -77,52 +85,113 @@ async fn answer(
     }
 }
 
+/// One initialized stdio session against `backend_url` under `mode`.
+struct Session {
+    client: tokio::io::DuplexStream,
+    lines: tokio::io::Lines<BufReader<tokio::io::DuplexStream>>,
+    task: tokio::task::JoinHandle<()>,
+    _dir: tempfile::TempDir,
+}
+
+impl Session {
+    async fn open(backend_url: &str, mode: &str) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        let yaml = format!(
+            "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
+             tasks:\n  store_dir: {}\n\
+             security:\n  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: {mode}\n",
+            serde_json::to_string(&dir.path().join("tasks").display().to_string())
+                .expect("a JSON string")
+        );
+        crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
+        let config = Config::load(Some(&path)).expect("config loads");
+        let gateway = Gateway::new(config)
+            .await
+            .expect("gateway boots")
+            .with_data_dir(dir.path().to_path_buf());
+        let (client, input) = tokio::io::duplex(64 * 1024);
+        let (output, reader) = tokio::io::duplex(1 << 20);
+        let task = tokio::spawn(async move {
+            drop(gateway.run_stdio_on(input, output, None).await);
+        });
+        let mut session = Self {
+            client,
+            lines: BufReader::new(reader).lines(),
+            task,
+            _dir: dir,
+        };
+        let init = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                       "clientInfo": {"name": "min2", "version": "0"}},
+        });
+        let _ = session.ask(&init, 1).await;
+        session
+    }
+
+    /// Send `frame` and wait for the answer to `id`.
+    async fn ask(&mut self, frame: &Value, id: i64) -> Value {
+        self.client
+            .write_all(format!("{frame}\n").as_bytes())
+            .await
+            .expect("stdin");
+        answer(&mut self.lines, id).await
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Round 7 (review P1): polling a task that is still working serves no
+/// stored output, so it reads no tenant. Under block, the second poll of one
+/// long-running task is answered like the first, not refused as a read of a
+/// second, unknown tenant.
+#[tokio::test]
+async fn stdio_polls_of_a_working_task_are_not_refused() {
+    let backend_url = spawn_backend_after(Duration::from_secs(30)).await;
+    let mut session = Session::open(&backend_url, "block").await;
+    let meta = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities":
+            {"extensions": {"io.modelcontextprotocol/tasks": {}}},
+        "io.modelcontextprotocol/clientInfo": {"name": "min2", "version": "0"},
+    });
+    let mut call: Value = serde_json::from_str(&call(2, "cust-a")).expect("call JSON");
+    call["params"]["_meta"] = meta.clone();
+    call["params"]["_meta"]["io.mcp-gateway/idempotency-key"] = json!("min2-working-task");
+    call["params"]["task"] = json!({});
+    let created = session.ask(&call, 2).await;
+    let task_id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("a task handle: {created}"))
+        .to_owned();
+    for id in [3, 4] {
+        let poll = json!({"jsonrpc": "2.0", "id": id, "method": "tasks/get",
+                          "params": {"taskId": task_id, "_meta": meta}});
+        let poll = session.ask(&poll, id).await;
+        assert_eq!(
+            poll.pointer("/result/status").and_then(Value::as_str),
+            Some("working"),
+            "poll {id} of a working task is answered: {poll}"
+        );
+    }
+}
+
 /// The answers to two calls, A then B, under `mode`.
 async fn a_then_b(mode: &str) -> (Value, Value) {
     let backend_url = spawn_backend().await;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    let yaml = format!(
-        "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
-         tasks:\n  store_dir: {}\n\
-         security:\n  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: {mode}\n",
-        serde_json::to_string(&dir.path().join("tasks").display().to_string())
-            .expect("a JSON string")
-    );
-    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
-    let config = Config::load(Some(&path)).expect("config loads");
-    let gateway = Gateway::new(config)
-        .await
-        .expect("gateway boots")
-        .with_data_dir(dir.path().to_path_buf());
-    let (mut client, input) = tokio::io::duplex(64 * 1024);
-    let (output, reader) = tokio::io::duplex(1 << 20);
-    let task = tokio::spawn(async move {
-        drop(gateway.run_stdio_on(input, output, None).await);
-    });
-    let mut lines = BufReader::new(reader).lines();
-    let init = json!({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                   "clientInfo": {"name": "min2", "version": "0"}},
-    });
-    client
-        .write_all(format!("{init}\n").as_bytes())
-        .await
-        .expect("stdin");
-    let _ = answer(&mut lines, 1).await;
-    client
-        .write_all(format!("{}\n", call(2, "cust-a")).as_bytes())
-        .await
-        .expect("stdin");
-    let a = answer(&mut lines, 2).await;
-    client
-        .write_all(format!("{}\n", call(3, "cust-b")).as_bytes())
-        .await
-        .expect("stdin");
-    let b = answer(&mut lines, 3).await;
-    drop(client);
-    task.abort();
+    let mut session = Session::open(&backend_url, mode).await;
+    let a = session
+        .ask(&serde_json::from_str(&call(2, "cust-a")).expect("call"), 2)
+        .await;
+    let b = session
+        .ask(&serde_json::from_str(&call(3, "cust-b")).expect("call"), 3)
+        .await;
     (a, b)
 }
 
@@ -146,49 +215,18 @@ async fn stdio_a_then_b_block_refuses() {
 /// The answers to one stdio batch `[A as id_a, B as id_b]` under block.
 async fn batch_a_then_b(id_a: i64, id_b: i64) -> Vec<Value> {
     let backend_url = spawn_backend().await;
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("gateway.yaml");
-    let yaml = format!(
-        "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
-         tasks:\n  store_dir: {}\n\
-         security:\n  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: block\n",
-        serde_json::to_string(&dir.path().join("tasks").display().to_string())
-            .expect("a JSON string")
-    );
-    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
-    let config = Config::load(Some(&path)).expect("config loads");
-    let gateway = Gateway::new(config)
-        .await
-        .expect("gateway boots")
-        .with_data_dir(dir.path().to_path_buf());
-    let (mut client, input) = tokio::io::duplex(64 * 1024);
-    let (output, reader) = tokio::io::duplex(1 << 20);
-    let task = tokio::spawn(async move {
-        drop(gateway.run_stdio_on(input, output, None).await);
-    });
-    let mut lines = BufReader::new(reader).lines();
-    let init = json!({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
-                   "clientInfo": {"name": "min2", "version": "0"}},
-    });
-    client
-        .write_all(format!("{init}\n").as_bytes())
-        .await
-        .expect("stdin");
-    let _ = answer(&mut lines, 1).await;
+    let mut session = Session::open(&backend_url, "block").await;
     let batch = format!("[{},{}]", call(id_a, "cust-a"), call(id_b, "cust-b"));
-    client
+    session
+        .client
         .write_all(format!("{batch}\n").as_bytes())
         .await
         .expect("stdin");
-    let line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+    let line = tokio::time::timeout(Duration::from_secs(10), session.lines.next_line())
         .await
         .expect("the batch answer within the bound")
         .expect("stdout readable")
         .expect("stdout open");
-    drop(client);
-    task.abort();
     serde_json::from_str(&line).expect("one JSON array")
 }
 

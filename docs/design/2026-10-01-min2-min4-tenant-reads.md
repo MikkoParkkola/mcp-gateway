@@ -355,7 +355,8 @@ sources:
   `read_uninspected` in the same write as the payload. A version bump goes
   next to `TARGET_VERSION` (record.rs:35-38; precedent
   store_targets.rs:118-196). Settlement stops passing the empty set it
-  passes today (audit.rs:475). A row without the fields restores `U`.
+  passes today (audit.rs:475). A row without the fields restores `U`; a
+  row with no stored result or error (still working) restores nothing.
 - **Before transformations.** A webhook's attribution is taken from the raw
   inbound payload, before `transform_payload` (webhooks/mod.rs:574-606) maps
   or drops fields. A MIK-7630 event's attribution is taken before the event
