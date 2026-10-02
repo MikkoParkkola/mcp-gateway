@@ -63,9 +63,10 @@ fn absent_or_empty_metadata_stays_absent() {
 fn a_backend_cannot_plant_the_gateway_outcome_marker() {
     let key = super::super::super::record::EXECUTION_OUTCOME_KEY;
     let planted = json!({"content": [], "_meta": {key: "interrupted", "keep": 1}});
-    let DispatchSettlement::Complete(settled) =
-        classify_dispatch(JsonRpcResponse::success(None, planted))
-    else {
+    let DispatchSettlement::Complete(settled) = classify_dispatch(JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        planted,
+    )) else {
         panic!("a result must settle as completed");
     };
     assert!(settled["_meta"].get(key).is_none(), "{settled}");
