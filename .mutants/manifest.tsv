@@ -1,0 +1,9 @@
+head_sha	f76100bb35ac10a1befa6841c486120b96bdd41c
+k1	linux	k1.patch	--test mik_7272_subscriptions_acs
+k2	linux	k2.patch	--test mik_7272_subscriptions_acs
+k3	linux	k3.patch	--test mik_7272_subscriptions_acs
+k4	linux	k4.patch	--test mik_7272_subscriptions_acs
+k6	linux	k6.patch	--test mik_7272_subscriptions_acs
+k7	linux	k7.patch	--test mik_7272_subscriptions_acs
+k8	linux	k8.patch	--test mik_7272_subscriptions_acs
+k5	linux	k5.patch	--lib -- a_listener_whose_token_is_revoked_is_closed_at_next_delivery

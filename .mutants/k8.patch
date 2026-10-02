@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 579621e29..319eedf12 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -657,7 +657,7 @@ pub fn subscription_stream(
+                     // Not graceful: updates were lost, and a success response
+                     // would tell the client its state is complete.
+                     graceful = false;
+-                    break;
++                    continue;
+                 }
+             }
+         }

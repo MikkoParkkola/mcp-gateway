@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 579621e29..6dbd03a12 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -664,7 +664,7 @@ pub fn subscription_stream(
+         // The server ended the subscription (a client that hangs up drops the
+         // stream and never gets here). A lagged stream just closes: the
+         // abrupt end is the specification's non-graceful signal.
+-        if graceful {
++        if false && graceful {
+             yield Ok(Event::default().event("message").data(subscription.graceful_end().to_string()));
+         }
+     };

@@ -1,0 +1,14 @@
+diff --git a/src/protocol/subscriptions.rs b/src/protocol/subscriptions.rs
+index d6c943f6e..da711303f 100644
+--- a/src/protocol/subscriptions.rs
++++ b/src/protocol/subscriptions.rs
+@@ -190,7 +190,8 @@ impl ListenRequest {
+     /// to the listen request is how a subscription ENDS (MIK-7766).
+     #[must_use]
+     pub fn acknowledgement(&self, subscription: &SubscriptionId) -> Value {
+-        subscription.tag(serde_json::json!({
++        let _ = subscription;
++        (serde_json::json!({
+             "jsonrpc": "2.0",
+             "method": "notifications/subscriptions/acknowledged",
+             "params": { "notifications": self.honoured() },
