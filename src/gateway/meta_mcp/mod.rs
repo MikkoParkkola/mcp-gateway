@@ -1689,8 +1689,7 @@ impl MetaMcp {
             self.change_feed(),
         );
 
-        let mut capabilities = serde_json::to_value(capabilities).unwrap_or_default();
-        self.advertise_events(&mut capabilities);
+        let capabilities = self.capabilities_with_events(capabilities);
         serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
@@ -1753,8 +1752,7 @@ impl MetaMcp {
         // `protocol::meta::classify_request` records.
         let result =
             build_initialize_result(negotiated_version, &instructions, era, self.change_feed());
-        let mut result = serde_json::to_value(result).unwrap_or_default();
-        self.advertise_events(&mut result["capabilities"]);
+        let result = self.initialize_with_events(result);
         JsonRpcResponse::success(id, result)
     }
 
