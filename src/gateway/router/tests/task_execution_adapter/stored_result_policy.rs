@@ -181,23 +181,19 @@ async fn a_legacy_plan_row_is_refused_by_its_task_tool_name() {
     );
 }
 
+/// A legacy row cannot name the tool it ran (`task.tool()` is the meta tool),
+/// so no current check can prove the caller may read it: it is refused even
+/// with its backend reachable and nothing withheld (MIK-7686, fail closed).
 #[tokio::test]
-async fn a_legacy_single_backend_row_is_refused_when_its_backend_is_killed() {
-    let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
-    let id = finished_invoke(&state, "b-legacy-kill").await;
-    strip_targets(&state, &id);
-    state.meta_mcp.kill_switch().kill(BACKEND);
-    assert_refused(&get_task(&state, "key-a", &id).await, "disabled");
-}
-
-#[tokio::test]
-async fn a_legacy_single_backend_row_is_delivered_when_its_backend_is_reachable() {
+async fn a_legacy_single_backend_row_is_refused_though_nothing_is_withheld() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     let id = finished_invoke(&state, "b-legacy-ok").await;
     strip_targets(&state, &id);
-    assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
+    assert_refused(
+        &get_task(&state, "key-a", &id).await,
+        "no recorded provenance",
+    );
 }
 
 pub(super) fn code_mode_call(id: i64, key: &str) -> Value {
@@ -268,23 +264,6 @@ async fn a_legacy_mixed_chain_and_tool_execute_row_is_refused() {
         &get_task(&state, "key-a", &id).await,
         "no recorded provenance",
     );
-}
-
-/// A real backend that happens to be named `execute` is not an aggregate: the
-/// legacy fallback goes by the task's tool, not the backend label.
-#[tokio::test]
-async fn a_legacy_row_on_a_backend_named_execute_takes_the_backend_fallback() {
-    let mock = MockBackend::answering(Answer::ok());
-    let mut auth = two_principal_auth();
-    auth.api_keys[0].backends.push("execute".to_string());
-    let (state, _store) = fixture_state(&auth).await;
-    register(&state, "execute", &mock);
-    let mut call = task_invoke(9, "b-execute", json!({}));
-    call["params"]["arguments"]["server"] = json!("execute");
-    let id = task_id(&post(&state, "key-a", call).await);
-    assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id).await);
-    strip_targets(&state, &id);
-    assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
 }
 
 /// A step refused before dispatch by a non-authorization gate (a withheld
@@ -376,9 +355,8 @@ async fn a_result_over_the_record_budget_settles_failed_without_output() {
     );
 }
 
-/// MIK-7686: a legacy row cannot name the tool it ran (`task.tool()` is the
-/// meta tool), so it is refused while any tool its backend lists is withheld,
-/// on `tasks/get` and on a repeated keyed call alike.
+/// MIK-7686: a legacy row whose tool is withheld is refused on `tasks/get`
+/// and on a repeated keyed call alike.
 #[tokio::test]
 async fn a_legacy_row_is_refused_on_get_when_its_tool_is_withheld() {
     let mock = MockBackend::answering(Answer::ok());
@@ -386,7 +364,10 @@ async fn a_legacy_row_is_refused_on_get_when_its_tool_is_withheld() {
     let id = finished_invoke(&state, "b-legacy-withheld").await;
     strip_targets(&state, &id);
     withhold(&state, TOOL);
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+    assert_refused(
+        &get_task(&state, "key-a", &id).await,
+        "no recorded provenance",
+    );
 }
 
 #[tokio::test]
@@ -402,73 +383,30 @@ async fn a_legacy_row_is_refused_on_repeat_when_its_tool_is_withheld() {
         task_invoke(11, "b-legacy-repeat", json!({ "q": 1 })),
     )
     .await;
-    assert_refused(&repeat, "withheld");
+    assert_refused(&repeat, "no recorded provenance");
     assert_ne!(repeat.pointer("/result/taskId"), Some(&json!(id)));
 }
 
-/// The same refusal when the tool is withheld by policy rather than by its
-/// description: here the error budget has disabled the capability.
+/// The backend's current list is no record of what ran: a tool disabled by
+/// policy and no longer listed beside an admitted one must not let the row
+/// through on the admitted one's strength.
 #[tokio::test]
-async fn a_legacy_row_is_refused_when_its_tool_is_disabled_by_policy() {
+async fn a_legacy_row_is_refused_when_its_disabled_tool_is_no_longer_listed() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
-    let id = finished_invoke(&state, "b-legacy-disabled").await;
+    let id = finished_invoke(&state, "b-legacy-delisted").await;
     strip_targets(&state, &id);
     let cfg = crate::kill_switch::budget::CapabilityErrorBudgetConfig::default();
     let kill = state.meta_mcp.kill_switch();
     for _ in 0..cfg.min_samples.max(cfg.window_size) {
         kill.record_capability_failure(BACKEND, TOOL, &cfg);
     }
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
-}
-
-/// A catalogue that is gone is not a catalogue with nothing withheld: the
-/// legacy row is refused while its backend's list is absent (MIK-7686).
-#[tokio::test]
-async fn a_legacy_row_is_refused_when_its_backend_catalogue_is_absent() {
-    let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
-    let id = finished_invoke(&state, "b-legacy-absent").await;
-    strip_targets(&state, &id);
     let backend = state.backends.get(BACKEND).expect("the mock is registered");
-    let _ = backend.remember_listed_tools(None, false, &[]);
-    backend.invalidate_tools_cache();
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
-}
-
-/// A backend that forwards caller identity lists per caller, so the shared
-/// catalogue says nothing about what this caller may call (MIK-7686).
-#[tokio::test]
-async fn a_legacy_row_is_refused_when_its_backend_lists_per_caller() {
-    let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
-    let id = finished_invoke(&state, "b-legacy-per-caller").await;
-    strip_targets(&state, &id);
-    assert!(state.backends.remove(BACKEND));
-    let backend = Arc::new(Backend::new(
-        BACKEND,
-        BackendConfig {
-            enabled: true,
-            identity_propagation: Some(crate::identity_propagation::IdentityPropagationConfig {
-                strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
-                audience: "legacy".to_string(),
-                required: true,
-                session_mode: crate::identity_propagation::SessionMode::PerUser,
-                token_exchange_endpoint: None,
-                token_exchange_scope: None,
-            }),
-            ..BackendConfig::default()
-        },
-        &FailsafeConfig::default(),
-        Duration::from_secs(60),
-    ));
-    backend.set_transport_for_test(Arc::clone(&mock) as Arc<dyn Transport>);
-    let listed = json!({"name": TOOL, "description": "Reads.", "inputSchema": {"type": "object"}});
-    let _ = backend.remember_listed_tools(None, false, &[listed]);
-    assert!(
-        backend.cached_tools_known(),
-        "the shared catalogue is filled"
+    let admitted =
+        json!({"name": "other", "description": "Reads.", "inputSchema": {"type": "object"}});
+    let _ = backend.remember_listed_tools(None, false, &[admitted]);
+    assert_refused(
+        &get_task(&state, "key-a", &id).await,
+        "no recorded provenance",
     );
-    assert!(state.backends.register(backend));
-    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
 }
