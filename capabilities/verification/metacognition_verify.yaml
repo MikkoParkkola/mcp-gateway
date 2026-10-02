@@ -1,4 +1,4 @@
-sha256: cbad4de9d05eee2e8ddc3bad9453524ebcfbae53037626f1f5f21ad5ac830ec4
+sha256: 6bd992fb29fde823b0ff414a6f8a033ab96b58cfcdb305097f1c50d9034ddd0b
 # Metacognition NLI Verification - Gateway Capability
 #
 # This capability exposes metacognition verification via the MCP Gateway
@@ -46,11 +46,12 @@ providers:
   primary:
     service: cli
     config:
-      command: "metacognition"
+      command: metacognition
       args:
-        - "--json"
-        - "{text}"
-      timeout_ms: 5000
+      - --json
+      - '-'
+      stdin: '{text}'
+    timeout: 5
 
 examples:
   - name: "Verify consistent text"

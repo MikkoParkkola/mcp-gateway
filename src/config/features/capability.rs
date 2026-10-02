@@ -28,6 +28,123 @@ pub struct CapabilityConfig {
     /// `http://` destination sends its URL and headers, credentials included,
     /// to the proxy. Restart-only.
     pub egress_proxy: Option<String>,
+    /// Whether `service: cli` and `service: mcp` capabilities may run a local
+    /// process at all (MIK-7782). Restart-only; the per-capability kill switch
+    /// is the hot stop.
+    pub process_execution: ProcessExecution,
+    /// What a process-running capability may run: each entry is matched
+    /// EXACTLY against the pinned definition's `command` and leading static
+    /// `args`. `None` means the shipped catalogue's list
+    /// ([`ProcessCommand::shipped`]).
+    pub process_commands: Option<Vec<ProcessCommand>>,
+    /// Directories capability file parameters are confined to (MIK-7782).
+    pub files: FileRoots,
+}
+
+/// Named directories a capability's path parameters must resolve inside.
+///
+/// None has a default: a capability whose parameter names an unset root
+/// refuses the call and names the key, rather than reading or writing
+/// anywhere the gateway user can.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FileRoots {
+    /// Files a capability may read and send elsewhere (uploads, analysis).
+    pub uploads: Option<std::path::PathBuf>,
+    /// Project directories a capability may read (design files, contracts).
+    pub projects: Option<std::path::PathBuf>,
+    /// Where a capability may write files it fetched.
+    pub downloads: Option<std::path::PathBuf>,
+    /// Most bytes the downloads directory may hold.
+    pub downloads_quota_bytes: u64,
+}
+
+/// Default ceiling for the downloads directory (1 GiB).
+pub const DEFAULT_DOWNLOADS_QUOTA_BYTES: u64 = 1024 * 1024 * 1024;
+
+impl Default for FileRoots {
+    fn default() -> Self {
+        Self {
+            uploads: None,
+            projects: None,
+            downloads: None,
+            downloads_quota_bytes: DEFAULT_DOWNLOADS_QUOTA_BYTES,
+        }
+    }
+}
+
+impl FileRoots {
+    /// The configured root a schema's `path_root` names.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&std::path::Path> {
+        match name {
+            "uploads" => self.uploads.as_deref(),
+            "projects" => self.projects.as_deref(),
+            "downloads" => self.downloads.as_deref(),
+            _ => None,
+        }
+    }
+}
+
+/// The global switch for process-running capabilities.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessExecution {
+    /// Pinned, allowlisted `cli`/`mcp` capabilities may run.
+    #[default]
+    Enabled,
+    /// Every `cli`/`mcp` call is refused before anything is spawned.
+    Disabled,
+}
+
+/// One allowed invocation: the definition's `command`, spelled exactly as
+/// here (a bare name or an absolute path, never a prefix of either), whose
+/// static leading args start with `args_prefix`, element by element.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessCommand {
+    /// The command string as the capability definition writes it.
+    pub command: String,
+    /// Leading static arguments the definition must start with.
+    #[serde(default)]
+    pub args_prefix: Vec<String>,
+}
+
+impl ProcessCommand {
+    fn new(command: &str, args_prefix: &[&str]) -> Self {
+        Self {
+            command: command.to_string(),
+            args_prefix: args_prefix.iter().map(ToString::to_string).collect(),
+        }
+    }
+
+    /// The commands the shipped catalogue runs.
+    #[must_use]
+    pub fn shipped() -> Vec<Self> {
+        vec![
+            Self::new("gws", &[]),
+            // Not `trawl`: held until it refuses private addresses at dial
+            // time (MIK-7788); an operator accepting that lists it.
+            Self::new("openpencil-mcp", &[]),
+            Self::new("pact-mcp", &[]),
+            Self::new("pyghidra-mcp", &[]),
+            // The analyzer pin keeps tool descriptions on this machine.
+            Self::new("mcp-scanner", &["--analyzers", "yara", "remote"]),
+            Self::new("skill-scanner", &["scan"]),
+        ]
+    }
+
+    /// Whether a definition's `command` and static leading args match.
+    #[must_use]
+    pub fn admits(&self, command: &str, static_args: &[&str]) -> bool {
+        self.command == command
+            && static_args.len() >= self.args_prefix.len()
+            && self
+                .args_prefix
+                .iter()
+                .zip(static_args)
+                .all(|(want, got)| want == got)
+    }
 }
 
 // Manual `Debug` (CWE-532): `egress_proxy` may carry `user:password@` in its
@@ -46,6 +163,9 @@ impl std::fmt::Debug for CapabilityConfig {
             .field("name", &self.name)
             .field("directories", &self.directories)
             .field("egress_proxy", &proxy)
+            .field("process_execution", &self.process_execution)
+            .field("process_commands", &self.process_commands)
+            .field("files", &self.files)
             .finish()
     }
 }
@@ -58,6 +178,9 @@ impl Default for CapabilityConfig {
             // Only the bundled catalogue. Any other source is named in config.
             directories: vec!["capabilities".to_string()],
             egress_proxy: None,
+            process_execution: ProcessExecution::Enabled,
+            process_commands: None,
+            files: FileRoots::default(),
         }
     }
 }

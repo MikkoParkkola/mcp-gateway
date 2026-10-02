@@ -454,3 +454,193 @@ is lane policy (operator decision 2026-09-29), not something the workflow enforc
   make unrelated results look alike. A delivery skips only the top-level `_context_integrity`, the
   gateway's verdict slot. A nested one is content. A backend that writes its own content into
   that slot is backend collusion (§9).
+
+### 13.3 Meta-route wiring (delta r2, 2026-10-02; r1 + round-1 seat fixes)
+
+Completes COLLUDE.1 on the meta route, for the same surface as the direct route: `tools/call`
+egress and delivered tool results. Reuses #2644 unchanged: `Firewall::check_relay`,
+`Firewall::record_delivery`, `RelayCaller`, the shared detector, the text walker (string leaves AND
+object keys; only the gateway's own top-level `_context_integrity` skipped), the record cap and the
+sensitivity read. Where it disagrees with §13, this section wins.
+
+**Corrections to §13 (verified at source).**
+- Context integrity is evaluated in `gate_payload` (`invoke.rs:2467`), AFTER `accounted_dispatch`
+  returns; staging inside `accounted_dispatch` would read ungated values.
+- An `Err` inside `accounted_dispatch` is flattened to `isError`, commits the idempotency key, is
+  metered as a backend failure, rewrapped `-32603` by chains and retried by playbooks. The check
+  therefore runs before `accounted_dispatch`.
+- `accounted_dispatch` receives no `caller_key` (`InvokeScope`, `mod.rs:256-264`).
+- The router pre-check (`handlers.rs:1311-1378`) misses playbooks and every stdio call.
+
+**Caller (`MetaMcpCallerContext::relay_caller(session_id)`, crate-internal).**
+- `caller_key` Some and non-empty -> `Keyed(caller_key)` (HTTP; inherited by playbooks
+  `support.rs:398`, chains `mod.rs:320`, HTTP tasks `context.rs:218`).
+- `stdio_nonce` Some -> `Keyed(LOCAL_OPERATOR_PRINCIPAL)` (`mod.rs:139`): the local operator is one
+  principal, distinct from every HTTP caller (the `\0` prefix cannot be a `caller_key`). Stdio tasks
+  rebuild the context without a caller key (`stdio_tasks.rs:229`) but keep `stdio_nonce`.
+- Otherwise `Unkeyed(session_id or "meta:unkeyed")`; under `block` it is refused (§13 rule 2).
+
+**What is checked: the outbound params as the backend receives them, minus injected secrets.**
+One crate-internal builder `outbound_params(tool, arguments, inbound_meta, prompt_cache_key,
+outbound_retry) -> Value` produces `{name, arguments, _meta, requestState, inputResponses}`;
+`dispatch_to_backend` (`invoke.rs:~3570-3580`) is refactored to call it after secret injection, and
+the check calls it on the pre-injection arguments. So `_meta.progressToken`, the trace context
+(`baggage`, `tracestate`) and `prompt_cache_key` (`prompt_cache.rs:235-259`) are checked, and the two
+can never drift. Injected secrets are neither fingerprinted nor written to the relay audit.
+
+**Egress sites (one helper `MetaMcp::relay_refusal(ctx, server, tool, params) -> Option<Error>`).**
+1. `invoke_tool_traced`, after `redeem_retry`'s `Err` arm and BEFORE `execution.mark_dispatched()`
+   (`invoke.rs:2013-2020`): on refusal release the idempotency reservation (as the `redeem_retry`
+   error arm does) and return `Error::Forbidden { code: -32002, status: 403, "Relay detection
+   blocked: ..." }`. Not marked dispatched, so sync admission treats it as pre-dispatch. Covers
+   gateway_invoke, surfaced tools, gateway_execute single and chain steps, playbooks, tasks (worker
+   `:201`) and stdio `tools/call`.
+2. Bridged retry `BridgeDispatcher::invoke` (`invoke.rs:~810-885`), before `arm(...)`, on
+   `outbound_params(...)` built from the round's `retry_params`. The refusal is stored in a
+   crate-internal slot on the dispatcher (`relay_refused: Mutex<Option<Error>>`) and the round returns
+   `BridgeError::NotAdmitted`. The call site reads the slot FIRST, before the `Err(round) if
+   parked.is_some()` arm and the generic arm (`invoke.rs:~2355-2420`): reservation released, the
+   stored `Forbidden -32002` returned. No new public `BridgeError` variant (operator ruling: minimise
+   surface).
+`non_egress` globs apply as on direct. Response-cache and idempotency hits make no backend call.
+
+**Refusal semantics through composites.** Chains keep `Forbidden` and its code (`search.rs:542-549`):
+`-32002` survives. Playbooks: `MetaMcpInvoker` rewrites every `Forbidden` to `-32003 "step not
+permitted for this caller"` (`support.rs:403-415`, A3: refusal reasons must not name operator
+targets), and under `Continue`/`Retry` the step is null-filled with its reason in `step_errors`
+(`engine/mod.rs:199-228`). r1's claim that `-32002` survives playbooks was wrong and is withdrawn.
+The security property holds either way: the refused step never reaches its backend. Changing the
+A3 rewrite or the playbook error strategy would change anomaly-block behaviour too and is out of
+COLLUDE scope.
+
+**Recording: staged per call, committed at delivery.**
+- Collector: a `tokio::task_local!` `RelayReceipts` (Vec of `(caller key, keyed, "server:tool",
+  Value)`, each value capped at the record cap). It is scoped by the delivery owner: the HTTP
+  `tools/call` handler, the stdio `tools/call` handler, the task worker's spawned execution
+  (`execution.rs:211`) and the input-round spawn (`input_round.rs:337`). A scope must be entered on
+  the spawned task itself, since task-locals do not cross `tokio::spawn`. With no scope (unit paths)
+  staging is a no-op. Chain and playbook steps run in the owner's task and stage into its collector,
+  each under its own `server:tool`.
+- Stage points (value as gated, before `shape_meta_result` wraps it, `mod.rs:2434`):
+  a. after `gate_payload` (`invoke.rs:2467`) on success, `isError` results included;
+  b. the idempotency `CachedResult` (`:1774-1798`) and the response-cache hit (`:1884-1913`): the
+     stored value, which already carries its first run's `_context_integrity`.
+- Commit (one `record_delivery` per staged entry) when the final response is neither a JSON-RPC
+  error nor a delivery refusal (`delivery_refusal`). An `isError` result is delivered content and is
+  committed (parity with direct, which records any `result`, `backend_handlers.rs:1257`):
+  - HTTP: after `finalize_response_after_inspection` (`handlers.rs:1853-1855`);
+  - stdio: after `finalize_response_for_delivery` (`server/mod.rs:3020-3037`);
+  - tasks: at settlement after `inspect_settled` (`worker.rs:256, 507-540`; upstream-followed jobs
+    `:387-396`).
+  - outer sync replays (`handlers.rs:1633,1658`; `server/mod.rs:3365-3380`) record nothing.
+- A refused or failed delivery commits nothing (M5).
+- Bridged prompts (legacy clients, `input_bridge.rs:526, 695`): the backend's `sampling` /
+  `elicitation` prompt is content delivered to the caller. `run_input_bridge` wraps its
+  `ClientChannel` in a crate-internal recorder that calls `record_delivery(caller, server, tool,
+  prompt params)` when `send_request` returns `Ok` (the client received and answered it), at once
+  and independent of the call's final outcome. The caller's answers go back out through site 2.
+- Sensitivity: `sources` globs, or the gateway-attached
+  `_context_integrity.classification.data_classes` (meta attaches it whenever there are findings,
+  `invoke.rs:2738-2753, 2865-2886`). Same function as direct.
+
+**Request check `is_anomaly_block`.** Unchanged; #2644 made the `-32002` widening the crate-internal
+`is_asi10_block`, already used at the meta router sites.
+
+**Scope: `prompts/get` and `resources/read` are out, as on the direct route.** r1 added both through
+`forward_for_caller` (`caller_forward.rs:123-133`). §3 defines egress as a call to a backend tool and
+a receipt as a delivered result. The direct route checks and records `tools/call` only
+(`backend_handlers.rs:160-165, 1257`). Round 1 showed that the r1 additions were also unsound:
+`forward_for_caller` has no caller context, the stdio catalogue keys as principal `stdio`
+(`stdio_catalogue.rs:52-67`), and forwarded results get no context-integrity classification
+(`response_security.rs:177`). Removed rather than half-built. If they are wanted, it is one
+follow-up for both routes, tracked in Linear. The lead decides whether it is in 4.0.
+
+**Limits (added to §5).**
+- Meta replays renew no receipt. The direct route renews; a meta replay is the same caller's own
+  earlier delivery, recorded then.
+- A task result is recorded at settlement. The owner is entitled to exactly that value through
+  `tasks/get`, so recording before the read gives no undue excuse. A `tasks/get` more than
+  `window_secs` after settlement finds the receipt expired, and a relay of that text by another
+  caller is then missed (false negative only).
+- Playbook steps record their own results, including steps an output mapping leaves out of the
+  playbook's answer. This is not row M5's case. M5 covers a delivery the gateway refused, where the
+  caller is not entitled to the content. Every step here ran under the caller's own authorization
+  (`support.rs:391-404`), and the caller could call it directly. The omission is a presentation
+  choice of the playbook author, not a security decision. The effect is a same-source excuse for
+  content the caller is authorized to fetch: a false negative bounded by its own access.
+- `resources/subscribe` notifications, `logging/setLevel`, `server/discover`: no caller text out and
+  no per-caller delivered result.
+
+**Round-1 dispositions (all verified at source).**
+| Finding | Seat | Disposition |
+|---|---|---|
+| `_meta` (progressToken, baggage, tracestate, cache key) unchecked | gpt CRIT, grok HIGH | FIXED: the shared `outbound_params` builder is checked at sites 1 and 2 (M4) |
+| sampling/elicitation prompts unrecorded | gpt CRIT | FIXED: recording `ClientChannel` wrapper (M6) |
+| playbook output mapping over-records | gpt HIGH | NOT-A-DEFECT for row M5 (entitlement distinction above); documented limit |
+| task receipt before `tasks/get`, none after expiry | gpt HIGH | premature: NOT-A-DEFECT (the owner is entitled to the settled value); late read: documented limit |
+| forwarded results lack classification | gpt HIGH | FIXED by deletion: `prompts/get`/`resources/read` out of scope, parity with direct; Linear follow-up |
+| `forward_for_caller` has no caller; stdio catalogue split | grok HIGH | FIXED by deletion, same |
+| `isError` results not committed | grok MED | FIXED: committed, parity with direct (M13) |
+| playbook refusal becomes `-32003`, swallowed under Continue | gpt MED, grok MED | design claim corrected; nothing egresses; M2 asserts what is true |
+| bridge `NotAdmitted` -> generic `-32003` | gpt MED | FIXED: dispatcher slot read before the parked and generic arms (M3) |
+| task-local scope on spawned worker / input round | grok IMPR | ACCEPTED: stated above, M9 covers the worker |
+| `_meta` test | grok IMPR | ACCEPTED: M4 |
+| site 1 before `mark_dispatched` | grok IMPR | ACCEPTED |
+| tests must tell a missing receipt from a same-source excuse | gpt IMPR | ACCEPTED: M5/M7 use a second caller with no copy of its own |
+
+**Tests (red first; route-level unless noted).**
+| # | Rule | Test | Mutant that must redden it |
+|---|---|---|---|
+| M1 | A reads via gateway_invoke, B gateway_invokes a send with it: -32002, backend not called, key released | `meta_invoke_relay_refused` | drop the check at site 1 |
+| M2 | chain step: -32002 survives; playbook step: refused (-32003 step not permitted), its backend not called | `meta_chain_relay_refused`, `meta_playbook_relay_not_sent` | drop the check at site 1 |
+| M3 | bridged retry round carrying A's text in inputResponses: -32002, key released, also on a managed (parked) account | `meta_retry_round_relay_refused` | skip site 2 / read the slot after the parked arm |
+| M4 | A's text in `_meta.progressToken` and in `_meta.baggage`: refused | `meta_relay_in_outbound_meta_refused` | check `arguments` only |
+| M5 | A's delivery refused by the response firewall records nothing: B (no copy of its own) sending it is sent | `meta_refused_delivery_not_recorded` | commit unconditionally |
+| M6 | a bridged elicitation prompt delivered to A is a source: B sending its text is refused | `meta_bridged_prompt_recorded` | drop the channel recorder |
+| M7 | a cache hit renews A's receipt after expiry of the first | `meta_cache_hit_recorded` | skip stage b |
+| M8 | stdio operator is one principal: its own content passes under block; an HTTP caller's content sent from stdio is refused | `stdio_operator_is_one_principal` | treat stdio as Unkeyed |
+| M9 | task settlement commits; a failed task commits nothing | `task_settlement_records`, `failed_task_records_nothing` | commit at submit |
+| M10 | unkeyed meta egress refused under block, allowed under observe | `meta_unkeyed_block_refused`, `meta_unkeyed_observe_allowed` | refuse in observe |
+| M11 | chain attribution: step T unrelated, step V relays -> the finding names V's target | `meta_chain_attribution_per_step` | stage the aggregate target |
+| M12 | injected secrets never reach the relay audit | `relay_audit_has_no_injected_secret` (unit) | check post-injection params |
+| M13 | an `isError` result A was delivered is a source | `meta_is_error_result_recorded` | skip `isError` at commit |
+
+**r3 amendments (round 2, both seats SHIP-WITH-FIXES; design FROZEN after this round).**
+These amend the r2 text above; where they disagree, r3 wins.
+1. Collector scope (grok HIGH): the `RelayReceipts` scope wraps the whole JSON-RPC dispatch future
+   *including* finalize: HTTP through `handlers.rs:1853-1855`, stdio through
+   `dispatch_single_with_sink` up to `server/mod.rs:3037`, not only the `tools/call` arm. Dropping
+   the collector discards it. Only the explicit post-finalize / post-settlement commit records.
+2. Upstream task results (both seats, HIGH/CRIT): stage point c = the gated `Complete` value in
+   `recover_task_result` (`upstream.rs:412-452`) after its inspection, committed with the worker's
+   settlement (`worker.rs:387-396`). The owner-read recovery path (`router/handlers/tasks.rs:372`)
+   commits the same staged value after its own delivery gates.
+3. Redelivery renews (gpt MED): a successful outer replay (`handlers.rs:1633,1658`;
+   `server/mod.rs:3365-3380`) and a `tasks/get` that delivers a completed result record the
+   delivered value again under the call's own `server:tool` when the call has a single target
+   (`gateway_invoke`, a surfaced tool, a task over either). A multi-step replay (chain, playbook)
+   renews nothing: documented limit, possible false positive for the replaying caller after its
+   receipt expired while another caller holds a fresh one.
+4. Final-check mutation (gpt MED): if the final response artifact check
+   (`response_security.rs:187`) changes the result (redaction), that delivery commits nothing
+   (result hash compared before/after). False negative only, never an excuse for undelivered text.
+5. Capability dispatch (gpt MED): for the capability server (`mcp_backend == false`,
+   `invoke.rs:~2028`) the check reads `arguments` only; `_meta` is never forwarded there.
+6. Bridged prompts (gpt CRIT, grok MED):
+   - recorded when the prompt is handed to `send_request`, before the reply is awaited, so a
+     timeout after delivery still leaves a receipt (gpt CRIT). An unsuccessful send also records
+     it: the over-record is bounded to a prompt the caller's own call raised;
+   - classified: a recording-only copy of the prompt params goes through the same
+     context-integrity evaluation as a tool result (`apply_context_integrity`). Sensitivity is read
+     from the copy's classes, and the copy's top-level `_context_integrity` is removed before its
+     text is recorded. M6 runs with `sources` empty.
+7. Gateway metadata: `Walk::Delivery` skips the top-level `_context_integrity`, the gateway's
+   verdict slot (§13.2), so every stage point stages the gated value as is, and `record_delivery`
+   reads its sensitivity from that slot.
+8. Added rows:
+   - M14 `meta_modern_retry_relay_refused`: a modern (non-bridged) retry whose redeemed
+     `inputResponses` carry A's text is refused at site 1 (mutant: omit `outbound_retry` from the
+     checked params).
+   - M5 mutant extended: commit at the end of the `tools/call` arm instead of after finalize.
+   - M15 `meta_upstream_task_result_recorded`.
+   - M16 `meta_capability_meta_not_checked`: capability-call `_meta` is not checked.

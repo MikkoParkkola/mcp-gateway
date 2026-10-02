@@ -295,7 +295,16 @@ async fn per_subscription_rate_limit_delays_not_drops() {
         fire(&gw, &format!("d-27-{n}"), "o/r").await;
     }
     events_at_least(&rx, 10).await;
-    let status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
+    // A refreshed bucket reads false for the instant before the next take
+    // spends it again; with records still waiting, it converges on true.
+    let mut status = json!(null);
+    for _ in 0..100 {
+        status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
+        if status["throttled"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(status["throttled"], true, "{status}");
     let posts = events_at_least(&rx, 20).await;
     assert_eq!(posts.len(), 20, "every event delivered once");
@@ -306,10 +315,11 @@ async fn per_subscription_rate_limit_delays_not_drops() {
 }
 
 /// T28 (SAFETY.5): with cost governance on, a delivery that alice's key
-/// budget cannot cover is dead-lettered `budget` and never posted. A budget
-/// of 0.01 against a 1.0 charge stands in for "0" (a zero limit divides by
-/// zero in the alert percentage). The ledger clause is not asserted: a
-/// refused check records no spend in `costs.json`.
+/// budget cannot cover is dead-lettered `budget` and never posted, and the
+/// refused attempt is on the audit log with status `budget`. A refused
+/// check records no spend, so that audit record, not the ledger, is the
+/// operator-visible evidence. A zero limit is "no limit" in cost governance
+/// (`evaluate_alerts`), so the budget here is 0.01 against a 1.0 charge.
 #[tokio::test]
 async fn budget_refusal_dead_letters_with_reason_budget() {
     let root = tempfile::tempdir().expect("root");
@@ -322,4 +332,51 @@ async fn budget_refusal_dead_letters_with_reason_budget() {
     dead_with_reason(root.path(), "budget").await;
     tokio::time::sleep(SETTLE).await;
     assert!(rx.events().is_empty(), "a refused budget sends nothing");
+    let refused: Vec<Value> = audit_records(root.path())
+        .into_iter()
+        .filter(|r| r["status"] == "budget")
+        .collect();
+    assert_eq!(refused.len(), 1, "one audit record for the refused attempt");
+}
+
+/// T28, charge clause: a delivery is charged through cost governance. A key
+/// budget of 1.5 against a 1.0 charge covers the first delivery and not the
+/// second: the first is posted and spends, the second is dead-lettered
+/// `budget`.
+#[tokio::test]
+async fn a_delivery_is_charged_against_the_key_budget() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({"cost_per_delivery_usd": 1.0}));
+    cfg["cost_governance"] = json!({"enabled": true, "budgets": {"per_key": {"alice": 1.5}}});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-28c-1", "o/r").await;
+    events_at_least(&rx, 1).await;
+    fire(&gw, "d-28c-2", "o/r").await;
+    dead_with_reason(root.path(), "budget").await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        rx.events().len(),
+        1,
+        "the charged delivery posted, the next did not"
+    );
+}
+
+/// T28, zero clause: a zero per-key budget is no limit, as for a tool call,
+/// so the delivery is posted.
+#[tokio::test]
+async fn a_zero_key_budget_is_no_limit() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({"cost_per_delivery_usd": 1.0}));
+    cfg["cost_governance"] = json!({"enabled": true, "budgets": {"per_key": {"alice": 0.0}}});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-28z", "o/r").await;
+    events_at_least(&rx, 1).await;
+    assert!(
+        dead_letters(root.path()).is_empty(),
+        "nothing dead-lettered"
+    );
 }

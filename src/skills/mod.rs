@@ -119,6 +119,8 @@ mod tests {
                 named,
                 fallback: vec![],
                 unread_keys: Vec::new(),
+                process: HashMap::new(),
+                integrity: crate::capability::Integrity::Unpinned,
             },
             auth: AuthConfig::default(),
             cache: CacheConfig::default(),
