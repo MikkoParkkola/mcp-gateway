@@ -24,6 +24,7 @@ pub(super) fn credential(
 ) -> crate::events::Credential {
     crate::events::Credential {
         kind: CredentialKind::of(client),
+        principal: client.map(|c| c.principal.clone()).unwrap_or_default(),
         api_key: api_key(client),
     }
 }

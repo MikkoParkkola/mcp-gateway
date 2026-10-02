@@ -131,6 +131,7 @@ impl EventsHub {
             credential_kind: sub
                 .credential_kind
                 .unwrap_or(crate::security::audit::CredentialKind::None),
+            credential_principal: sub.credential_principal.as_deref(),
             tenants: &record.tenants,
             callback_host: &host,
             status,

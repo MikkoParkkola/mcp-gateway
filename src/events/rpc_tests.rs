@@ -38,6 +38,7 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
         principal: Some("p".to_owned()),
         credential: Credential {
             kind: crate::security::audit::CredentialKind::None,
+            principal: String::new(),
             api_key: None,
         },
         visible_backends: std::collections::HashSet::new(),

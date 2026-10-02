@@ -28,6 +28,9 @@ pub(crate) struct Subscription {
     /// record's `who`. Absent on records written before it was kept.
     #[serde(default)]
     pub credential_kind: Option<crate::security::audit::CredentialKind>,
+    /// The audit principal of that credential (a digest, never the secret).
+    #[serde(default)]
+    pub credential_principal: Option<String>,
     /// An early record's bare key name, which binds no secret: such a
     /// subscription fails every re-check and is deleted. Never written.
     #[serde(default, rename = "api_key_name", skip_serializing)]
@@ -50,6 +53,8 @@ pub(crate) struct Subscription {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Credential {
     pub kind: crate::security::audit::CredentialKind,
+    /// The audit principal: the validated credential's digest.
+    pub principal: String,
     /// Set only for a configured API key: the one credential whose live
     /// scope the re-check can read.
     pub api_key: Option<ApiKeyRef>,
@@ -196,6 +201,14 @@ pub(crate) fn write_record<T: Serialize>(
         Ok(()) => Placed::Durable,
         Err(error) => Placed::NotSynced(error),
     })
+}
+
+/// Remove `dir/name` and sync `dir`; `Err` unless the removal is durable.
+pub(crate) fn remove_record_durable(dir: &Path, name: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(name)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => sync_dir(dir),
+    }
 }
 
 /// Remove `dir/name`; a missing file is already removed.

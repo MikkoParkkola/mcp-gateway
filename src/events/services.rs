@@ -168,6 +168,7 @@ pub(crate) struct Attempt<'a> {
     pub principal: &'a str,
     pub api_key_name: Option<&'a str>,
     pub credential_kind: crate::security::audit::CredentialKind,
+    pub credential_principal: Option<&'a str>,
     pub tenants: &'a [String],
     pub callback_host: &'a str,
     pub status: &'a str,
@@ -206,7 +207,7 @@ impl Services {
             },
             who: AuditWho::from_parts(
                 attempt.credential_kind,
-                Some(attempt.principal),
+                attempt.credential_principal,
                 attempt.api_key_name.or(Some(attempt.principal)),
                 None,
             ),

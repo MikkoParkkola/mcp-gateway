@@ -14,7 +14,9 @@ use super::{State, Store};
 use crate::events::outbox::{
     DeadLetter, DeadPolicy, DeadReason, Enqueued, Evicted, OutboxCaps, OutboxRecord, OutboxState,
 };
-use crate::events::records::{Subscription, load_records, remove_record, write_record};
+use crate::events::records::{
+    Subscription, load_records, remove_record, remove_record_durable, write_record,
+};
 
 /// How long a record whose settlement the disk refused waits to be tried
 /// again.
@@ -457,7 +459,7 @@ impl Store {
             }
             // The dead letter is the marker that keeps an outbox copy left by
             // a failed unlink from being sent again: that copy goes first.
-            remove_record(&self.outbox_dir, &OutboxRecord::file(&id))?;
+            remove_record_durable(&self.outbox_dir, &OutboxRecord::file(&id))?;
             remove_record(&self.dead_dir, &OutboxRecord::file(&id))?;
             if let Some((dead, _)) = state.dead.remove(&id) {
                 evicted.push(Evicted {
