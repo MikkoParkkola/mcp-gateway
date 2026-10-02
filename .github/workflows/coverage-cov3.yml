@@ -1,0 +1,123 @@
+# Throwaway: measure per-path line coverage for MIK-7324.COV.3.
+# Lives only on throwaway/coverage-* branches; never merged.
+name: Coverage probe
+
+on:
+  push:
+    branches: ["throwaway/coverage-*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: llvm-cov per path
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      # A test that kills an instrumented child mid-write leaves a profile with
+      # a corrupt header, and llvm-profdata then refuses to merge any profile.
+      # Drop those (named in the log) before each report.
+      - name: Write the corrupt-profile sweep
+        run: |
+          cat > sweep-profiles.sh <<'SWEEP'
+          set -u
+          tool="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
+          for f in target/llvm-cov-target/*.profraw; do
+            [ -e "$f" ] || continue
+            if ! "$tool" show "$f" > /dev/null 2>&1; then
+              echo "dropping corrupt profile: $f"
+              rm -f -- "$f"
+            fi
+          done
+          SWEEP
+      - name: Lib unit tests
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --no-report --all-features --lib --ignore-run-fail > lib-run.log 2>&1
+          grep -E '^test result|FAILED|panicked' lib-run.log || true
+          bash sweep-profiles.sh
+          cargo llvm-cov report --summary-only --json --output-path lib.json
+      - name: Add every test target (the contract command)
+        run: |
+          cargo llvm-cov --no-report --all-features --tests --ignore-run-fail > all-run.log 2>&1
+          grep -E '^test result|FAILED|panicked' all-run.log || true
+          bash sweep-profiles.sh
+          cargo llvm-cov report --summary-only --json --output-path all.json
+          cargo llvm-cov report --lcov --output-path all.lcov
+      - name: Per-path table
+        shell: python
+        run: |
+          import json
+          paths = {
+              "startup": ["src/gateway/server/"],
+              "OAuth": ["src/oauth/"],
+              "HTTP dispatch": ["src/transport/http/", "src/gateway/router/"],
+              "stdio dispatch": ["src/transport/stdio.rs", "src/gateway/server/stdio_channel.rs", "src/transport/command_split.rs"],
+              "bridge": ["src/gateway/input_bridge.rs"],
+              "tasks": ["src/gateway/task_service/", "src/gateway/router/handlers/tasks.rs", "src/gateway/meta_mcp/task_confirmation"],
+              "account paths": ["src/personal_accounts/", "src/gateway/server/account_bindings.rs", "src/config/account_bindings.rs", "src/identity_propagation/"],
+          }
+          for name in ("lib", "all"):
+              files = json.load(open(f"{name}.json"))["data"][0]["files"]
+              print(f"== {name}")
+              for p, prefixes in paths.items():
+                  c = t = n = 0
+                  for f in files:
+                      rel = "src/" + f["filename"].split("/src/", 1)[-1]
+                      if any(rel.startswith(x) for x in prefixes):
+                          l = f["summary"]["lines"]
+                          c += l["covered"]; t += l["count"]; n += 1
+                  print(f"{p}: {n} files {c}/{t} {100*c/max(t,1):.2f}%")
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-cov3
+          path: |
+            lib.json
+            all.json
+            all.lcov
+            lib-run.log
+            all-run.log
+
+  # The five Critical rows compiled only on Windows (task store and account
+  # storage) are graded from this report, unioned with the Linux one.
+  coverage-windows:
+    name: llvm-cov Windows-only rows
+    runs-on: windows-2025
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      # Set up like CI's Windows job: default (pwsh) shell, the same
+      # --all-features --tests --no-fail-fast invocation, no test filter, with
+      # the same symlink setting that job applies first.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      - name: Every test target, as CI runs them
+        run: cargo llvm-cov --all-features --tests --no-fail-fast --lcov --output-path windows.lcov -- --show-output 2>&1 | Tee-Object windows-run.log | Select-String -Pattern '^test result|FAILED|panicked'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-windows
+          path: |
+            windows.lcov
+            windows-run.log
