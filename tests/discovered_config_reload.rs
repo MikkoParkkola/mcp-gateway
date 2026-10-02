@@ -577,5 +577,8 @@ fn the_reported_port_ignores_colour_codes_and_the_module_path() {
     assert_eq!(reported_port(coloured), Some(39123));
     assert_eq!(reported_port("Listening on nothing"), None);
     assert_eq!(reported_port("Listening host=127.0.0.1 port=39"), None);
-    assert_eq!(reported_port("Listening host=127.0.0.1 port=39123\n"), Some(39123));
+    assert_eq!(
+        reported_port("Listening host=127.0.0.1 port=39123\n"),
+        Some(39123)
+    );
 }
