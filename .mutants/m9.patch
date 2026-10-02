@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index ebabdfd39..8b1b436c6 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -331,7 +331,7 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
+             Value::String(s) => leaves.push(s),
+             Value::Array(items) => items.iter().for_each(|v| visit(v, leaves, keys)),
+             Value::Object(map) => map.iter().for_each(|(k, v)| {
+-                keys.push(k);
++                leaves.push(k);
+                 visit(v, leaves, keys);
+             }),
+             _ => {}

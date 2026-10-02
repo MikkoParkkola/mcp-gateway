@@ -1,0 +1,7 @@
+head_sha	e6b34bd4fdc194e742d9949a9b319b75a53c0d4c
+# COLLUDE.1 #2644 rerun: rows touched by the text-walker fixes since 16020e061
+M5	linux	m5.patch	--lib -- a_relay_split_over_short_sorted_keys_is_refused
+M6	linux	m6.patch	--lib -- the_text_walker_reads_values_then_keys_and_skips_nothing
+M9	linux	m9.patch	--lib -- the_text_walker_reads_values_then_keys_and_skips_nothing
+M10	linux	m10.patch	--lib -- the_text_walker_reads_values_then_keys_and_skips_nothing
+M11	linux	m11.patch	--lib -- a_relay_split_mid_word_over_short_fields_is_refused

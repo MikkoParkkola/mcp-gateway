@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index ebabdfd39..1b1d34675 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -353,7 +353,7 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
+         push(&mut out, &leaves.concat());
+     }
+     for key in keys {
+-        if walk == Walk::Egress || key.chars().count() >= super::collusion::K {
++        if key.chars().count() >= super::collusion::K {
+             push(&mut out, key);
+         }
+     }
