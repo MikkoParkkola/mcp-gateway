@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/stdio_shutdown.rs b/src/gateway/server/stdio_shutdown.rs
+index d1149d551..5ffa86226 100644
+--- a/src/gateway/server/stdio_shutdown.rs
++++ b/src/gateway/server/stdio_shutdown.rs
+@@ -138,6 +138,6 @@ impl Gateway {
+         {
+             warn!(error = %e, "Personal account custody shutdown failed");
+         }
+-        bounded_step(deadline, "backend stop", self.backends.stop_all()).await;
++        self.backends.stop_all().await;
+     }
+ }
