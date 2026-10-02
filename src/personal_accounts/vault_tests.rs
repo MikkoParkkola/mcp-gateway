@@ -751,10 +751,12 @@ fn prepare_refuses_a_wrong_audience_and_an_unbindable_principal_before_custody()
         let refused = vault
             .prepare(Principal::Verified(&nameless), &backend())
             .await;
-        assert!(
-            matches!(refused, Err(PropagationError::Refuse(_))),
-            "{refused:?}"
-        );
+        // The identity-binding refusal specifically: custody also refuses an
+        // invalid key, with the same variant but its own text.
+        let Err(PropagationError::Refuse(why)) = refused else {
+            panic!("an unbindable principal must be refused: {refused:?}");
+        };
+        assert!(why.starts_with("account identity binding refused"), "{why}");
         assert_eq!(refreshes.load(Ordering::SeqCst), 0, "custody was not asked");
 
         // Positive control: the same strategy and backend mint for the operator.

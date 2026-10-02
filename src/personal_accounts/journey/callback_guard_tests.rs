@@ -4,7 +4,7 @@
 //! oversize cap on the secrets it carries, and a record with no owner.
 
 use super::{CALLBACK_SECRET_MAX, JourneyError, JourneyRefusal, admitted, within_cap};
-use crate::personal_accounts::journey::tests::maximal_record;
+use crate::personal_accounts::journey::tests::{fresh, limits, maximal_record, refused};
 
 /// Mutant: an oversized state or binding reaches the store, or either side of
 /// the cap is off by one.
@@ -42,4 +42,56 @@ fn a_journey_record_without_its_owner_is_not_admitted() {
             Err(JourneyRefusal::UnknownState)
         ));
     }
+}
+
+/// Mutant: a callback entry point drops (or runs after) its cap check. The
+/// control is a short absent state, which only a store lookup refuses as
+/// `UnknownState`; an oversized one must be refused as `InvalidRequest`.
+#[test]
+fn every_callback_entry_point_refuses_an_oversized_secret_before_the_store() {
+    let (_root, _config, store) = fresh();
+    let limits = limits();
+    let over = "s".repeat(CALLBACK_SECRET_MAX + 1);
+    let absent = "absent";
+    let reached = JourneyRefusal::UnknownState;
+    let capped = JourneyRefusal::InvalidRequest;
+
+    assert_eq!(
+        refused(store.callback_journey(1_000, &limits, absent)),
+        reached,
+        "control: a short absent state reaches the store"
+    );
+    assert_eq!(
+        refused(store.callback_journey(1_000, &limits, &over)),
+        capped
+    );
+    for binding in [Some("b"), None] {
+        assert_eq!(
+            refused(store.admit_callback(1_000, &limits, absent, binding)),
+            reached,
+            "control: admit reaches the store"
+        );
+        assert_eq!(
+            refused(store.consume_callback(1_000, &limits, absent, binding)),
+            reached,
+            "control: consume reaches the store"
+        );
+        assert_eq!(
+            refused(store.admit_callback(1_000, &limits, &over, binding)),
+            capped
+        );
+        assert_eq!(
+            refused(store.consume_callback(1_000, &limits, &over, binding)),
+            capped
+        );
+    }
+    let over = Some(over.as_str());
+    assert_eq!(
+        refused(store.admit_callback(1_000, &limits, absent, over)),
+        capped
+    );
+    assert_eq!(
+        refused(store.consume_callback(1_000, &limits, absent, over)),
+        capped
+    );
 }
