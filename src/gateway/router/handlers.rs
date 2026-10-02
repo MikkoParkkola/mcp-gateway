@@ -1063,16 +1063,8 @@ async fn meta_mcp_dispatch(
             // subscription id as the JSON-RPC id of the listen request, and it
             // is how a client correlates a notification with the subscription
             // that asked for it.
-            let subscription =
-                crate::protocol::subscriptions::SubscriptionId::of_request(id.clone());
-            let acknowledgement = crate::protocol::JsonRpcResponse::success(
-                id,
-                serde_json::json!({
-                    "_meta": {
-                        "io.modelcontextprotocol/subscriptionId": subscription.as_value(),
-                    },
-                }),
-            );
+            let subscription = crate::protocol::subscriptions::SubscriptionId::of_request(id);
+            let acknowledgement = request.acknowledgement(&subscription);
             debug!(
                 empty = request.is_empty(),
                 resources = request.resource_uris().len(),
