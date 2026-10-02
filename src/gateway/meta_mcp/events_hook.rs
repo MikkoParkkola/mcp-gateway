@@ -15,6 +15,35 @@ impl MetaMcp {
         let _ = self.events.set(hub);
     }
 
+    /// Reconcile the hub's stored subscriptions with the capability catalogue
+    /// once the startup scan has registered its routes. Called after the
+    /// hub is installed and started.
+    pub(crate) fn reconcile_events_after_scan(&self) {
+        let Some(hub) = self.events().cloned() else {
+            return;
+        };
+        let capabilities = self.get_capabilities();
+        tokio::spawn(async move {
+            if let Some(capabilities) = capabilities {
+                while !capabilities.initial_scan_complete() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+            // Disk work, off the async workers; a removal that failed is
+            // retried, the worker held meanwhile.
+            loop {
+                let hub = Arc::clone(&hub);
+                if tokio::task::spawn_blocking(move || hub.reconcile_catalogue())
+                    .await
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
+    }
+
     /// The events hub, when events are on for this transport.
     pub(crate) fn events(&self) -> Option<&Arc<EventsHub>> {
         self.events.get()
@@ -87,7 +116,9 @@ impl MetaMcp {
             return;
         }
         match crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities()) {
-            Ok(removed) => hub.withdraw(&removed),
+            Ok(removed) => {
+                hub.withdraw(&removed);
+            }
             Err(event) => tracing::error!(
                 %event,
                 "capability reload not applied to webhook routes: it removes a filter or \

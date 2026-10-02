@@ -156,16 +156,50 @@ impl EventsHub {
     /// Delete every subscription to an event type a reload removed; their
     /// pending records go with them (design §9). Synchronous, inside the
     /// reload, so a later reload that restores the type cannot interleave.
-    pub(crate) fn withdraw(&self, names: &[String]) {
+    ///
+    /// `false` when a subscription could not be removed.
+    pub(crate) fn withdraw(&self, names: &[String]) -> bool {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
+        let mut all_removed = true;
         for sub in self.store.subscriptions() {
             if names.contains(&sub.name)
                 && let Err(error) = self.store.remove(&sub.id, now, tail)
             {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
+                all_removed = false;
             }
         }
+        all_removed
+    }
+
+    /// Once the startup capability scan has registered the webhook routes:
+    /// delete the subscriptions to webhook event types the catalogue no
+    /// longer offers (a route removed while the gateway was down, or webhooks
+    /// turned off), their pending records with them, and let the worker start.
+    /// Before this the catalogue is partial, so nothing is withdrawn and
+    /// nothing is sent (MIK-7772). `false`, with the worker still held, when
+    /// a removal failed: the caller retries.
+    pub(crate) fn reconcile_catalogue(&self) -> bool {
+        let offered: std::collections::HashSet<String> =
+            self.catalogue().into_iter().map(|d| d.name).collect();
+        let gone: Vec<String> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| {
+                name.starts_with(super::webhook_source::NAME_PREFIX) && !offered.contains(name)
+            })
+            .collect();
+        if !self.withdraw(&gone) {
+            return false;
+        }
+        self.runtime
+            .reconciled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.runtime.wake.notify_one();
+        true
     }
 
     /// Delete subscription `refused`, the snapshot the access check refused,
