@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Dead-letter administration (design §3.8, §17): the listing and replay
+//! Dead-letter administration (design §3.8, §18): the listing and replay
 //! behind the admin route and the CLI. A replay goes back through the same
 //! access re-check and firewall scan a fresh occurrence passes.
 

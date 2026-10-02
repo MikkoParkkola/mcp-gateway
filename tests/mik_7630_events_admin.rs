@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7630 increment I6: the dead-letter admin route, replay and discovery
-//! (design §10 and §17: T21 admin clause, T33 replay clause, T35, T49
+//! (design §10 and §18: T21 admin clause, T33 replay clause, T35, T49
 //! listing clause, T54).
 //!
 //! Today the routes do not exist, so each row goes red at its first
@@ -458,7 +458,7 @@ async fn the_cli_lists_and_replays_through_the_admin_route() {
     events_at_least(&rx, 2).await;
 }
 
-/// Section 17: with events off the admin routes answer 404, not an empty list.
+/// Section 18: with events off the admin routes answer 404, not an empty list.
 #[tokio::test]
 async fn the_dead_letter_routes_answer_404_with_events_off() {
     let root = tempfile::tempdir().expect("root");
@@ -473,7 +473,7 @@ async fn the_dead_letter_routes_answer_404_with_events_off() {
     assert_eq!(status, 404);
 }
 
-/// Section 17: a replay re-checks access. After alice's backend grant is
+/// Section 18: a replay re-checks access. After alice's backend grant is
 /// revoked by a config reload, her dead letter is not replayed.
 #[tokio::test]
 async fn replay_is_refused_once_access_is_revoked() {
@@ -515,7 +515,7 @@ async fn replay_is_refused_once_access_is_revoked() {
     assert_eq!(dead_letters(root.path()).len(), 1, "the dead letter stays");
 }
 
-/// Section 17: a replayed dead letter starts with a fresh attempt count, so
+/// Section 18: a replayed dead letter starts with a fresh attempt count, so
 /// an exhausted one is delivered, not exhausted again at once.
 #[tokio::test]
 async fn an_exhausted_dead_letter_replays_with_a_fresh_attempt_count() {
@@ -539,7 +539,7 @@ async fn an_exhausted_dead_letter_replays_with_a_fresh_attempt_count() {
     assert!(wait_until(DEADLINE, || dead_letters(root.path()).is_empty()).await);
 }
 
-/// Section 17: an oversize dead letter is refused on replay (`too_large`),
+/// Section 18: an oversize dead letter is refused on replay (`too_large`),
 /// never `POSTed`, and stays listed.
 #[tokio::test]
 async fn an_oversize_dead_letter_is_refused_on_replay() {

@@ -447,7 +447,9 @@ pub enum Command {
         /// Output as JSON (codex-compatible)
         #[arg(long)]
         json: bool,
-
+        /// List the built-in server library instead: login, default state
+        #[arg(long)]
+        available: bool,
         /// Gateway config file to read
         #[arg(short, long, default_value = "gateway.yaml")]
         config: PathBuf,

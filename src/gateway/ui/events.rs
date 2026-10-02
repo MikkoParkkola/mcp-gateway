@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Dead-letter administration for MCP Events (MIK-7630, design §3.8, §17):
+//! Dead-letter administration for MCP Events (MIK-7630, design §3.8, §18):
 //!
 //!   GET  `/ui/api/events/dead-letters`                    — list
 //!   POST `/ui/api/events/dead-letters/{id}/replay`        — replay one

@@ -77,7 +77,7 @@ impl EventsHub {
 
     /// Catalogue entries a keyword search finds (a case-insensitive
     /// substring of name or description), for the callers `visible` admits,
-    /// as `gateway_search` entries (design §3.9, §17), at most `limit`.
+    /// as `gateway_search` entries (design §3.9, §18), at most `limit`.
     pub(crate) fn search(
         &self,
         query: &str,
