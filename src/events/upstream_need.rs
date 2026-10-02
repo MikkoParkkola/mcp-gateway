@@ -178,10 +178,9 @@ impl Snapshot {
 
     pub(crate) fn verdict(&self, uri: &str) -> Verdict {
         match &self.good {
-            None => Verdict::Skip,
             Some((uris, _)) if uris.contains(uri) => Verdict::Deliver,
             Some((_, true)) => Verdict::Revoke,
-            Some((_, false)) => Verdict::Skip,
+            None | Some((_, false)) => Verdict::Skip,
         }
     }
 }
