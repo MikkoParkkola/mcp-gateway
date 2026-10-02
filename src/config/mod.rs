@@ -55,7 +55,7 @@ pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, ApiKeyKind,
     AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit, ChainMode,
     CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
-    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig,
+    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, FileRoots,
     HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
     PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, ProcessCommand, ProcessExecution,

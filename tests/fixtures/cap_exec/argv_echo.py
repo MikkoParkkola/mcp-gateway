@@ -24,13 +24,16 @@ if mode == "echo":
     data = sys.stdin.read() if not sys.stdin.isatty() else ""
     # Names only (plus HOME): run by hand, this must not print a real environment.
     json.dump({"argv": rest, "stdin": data, "env_keys": sorted(os.environ),
-               "home": os.environ.get("HOME", ""), "cwd": os.getcwd()}, sys.stdout)
+               "home": os.environ.get("HOME", ""), "cwd": os.getcwd(),
+               "test_values": {k: v for k, v in os.environ.items() if k.startswith("CAP_EXEC_TEST_")}},
+              sys.stdout)
 elif mode == "fail":
     code = int(rest[0])
     sys.stderr.write("argv=" + " ".join(rest) + "\n")
     # Only test-owned names: run by hand, this must not print a real environment.
     sys.stderr.write("env=" + " ".join(v for k, v in os.environ.items() if k.startswith("CAP_EXEC_TEST_")) + "\n")
-    json.dump({"error": {"code": 400, "message": "bad request: " + " ".join(rest)}}, sys.stdout)
+    owned = " ".join(v for k, v in os.environ.items() if k.startswith("CAP_EXEC_TEST_"))
+    json.dump({"error": {"code": 400, "message": "bad request: " + " ".join(rest) + " " + owned}}, sys.stdout)
     sys.exit(code)
 elif mode == "flood":
     chunk = "x" * 65536

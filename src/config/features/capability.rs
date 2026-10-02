@@ -37,6 +37,53 @@ pub struct CapabilityConfig {
     /// `args`. `None` means the shipped catalogue's list
     /// ([`ProcessCommand::shipped`]).
     pub process_commands: Option<Vec<ProcessCommand>>,
+    /// Directories capability file parameters are confined to (MIK-7782).
+    pub files: FileRoots,
+}
+
+/// Named directories a capability's path parameters must resolve inside.
+///
+/// None has a default: a capability whose parameter names an unset root
+/// refuses the call and names the key, rather than reading or writing
+/// anywhere the gateway user can.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FileRoots {
+    /// Files a capability may read and send elsewhere (uploads, analysis).
+    pub uploads: Option<std::path::PathBuf>,
+    /// Project directories a capability may read (design files, contracts).
+    pub projects: Option<std::path::PathBuf>,
+    /// Where a capability may write files it fetched.
+    pub downloads: Option<std::path::PathBuf>,
+    /// Most bytes the downloads directory may hold.
+    pub downloads_quota_bytes: u64,
+}
+
+/// Default ceiling for the downloads directory (1 GiB).
+pub const DEFAULT_DOWNLOADS_QUOTA_BYTES: u64 = 1024 * 1024 * 1024;
+
+impl Default for FileRoots {
+    fn default() -> Self {
+        Self {
+            uploads: None,
+            projects: None,
+            downloads: None,
+            downloads_quota_bytes: DEFAULT_DOWNLOADS_QUOTA_BYTES,
+        }
+    }
+}
+
+impl FileRoots {
+    /// The configured root a schema's `path_root` names.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&std::path::Path> {
+        match name {
+            "uploads" => self.uploads.as_deref(),
+            "projects" => self.projects.as_deref(),
+            "downloads" => self.downloads.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// The global switch for process-running capabilities.
@@ -118,6 +165,7 @@ impl std::fmt::Debug for CapabilityConfig {
             .field("egress_proxy", &proxy)
             .field("process_execution", &self.process_execution)
             .field("process_commands", &self.process_commands)
+            .field("files", &self.files)
             .finish()
     }
 }
@@ -132,6 +180,7 @@ impl Default for CapabilityConfig {
             egress_proxy: None,
             process_execution: ProcessExecution::Enabled,
             process_commands: None,
+            files: FileRoots::default(),
         }
     }
 }

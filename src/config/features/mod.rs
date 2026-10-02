@@ -27,7 +27,7 @@ pub use api_key::{ApiKeyConfig, ApiKeyKind, api_key_digest_spec};
 pub(crate) use api_key::{api_key_expired, parse_api_key_digest};
 pub use auth::{AgentAuthConfig, AgentDefinitionConfig, AuthConfig, DashboardSessionConfig};
 pub use cache::CacheConfig;
-pub use capability::{CapabilityConfig, ProcessCommand, ProcessExecution};
+pub use capability::{CapabilityConfig, FileRoots, ProcessCommand, ProcessExecution};
 pub use code_mode::CodeModeConfig;
 pub use error_budget::{CapabilityErrorBudgetSection, ErrorBudgetSection};
 pub(crate) use events::parse_cidr;
