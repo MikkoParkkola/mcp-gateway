@@ -2878,7 +2878,12 @@ impl Gateway {
     }
 
     /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,
-    /// which spans dispatch and finalize (COLLUDE.1 §13.3).
+    /// which spans dispatch and finalize (COLLUDE.1 §13.3). With relay
+    /// detection off there is nothing to collect, and no box to allocate.
+    #[allow(
+        clippy::large_futures,
+        reason = "the unboxed arm is the dispatch as it ran before the collector"
+    )]
     async fn dispatch_single_with_sink(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
@@ -2889,7 +2894,10 @@ impl Gateway {
     ) -> Option<serde_json::Value> {
         let dispatch =
             Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink);
-        crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(dispatch)).await
+        if meta_mcp.relay_active() {
+            return crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(dispatch)).await;
+        }
+        dispatch.await
     }
 
     #[expect(

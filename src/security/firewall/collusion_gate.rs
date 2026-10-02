@@ -201,6 +201,11 @@ impl Firewall {
         self.relay_detector().is_some()
     }
 
+    /// Relay detection is on: callers skip the receipt collector otherwise.
+    pub(crate) fn relay_active(&self) -> bool {
+        self.relay_detector().is_some()
+    }
+
     fn relay_detector(&self) -> Option<&CollusionDetector> {
         self.relay
             .detector

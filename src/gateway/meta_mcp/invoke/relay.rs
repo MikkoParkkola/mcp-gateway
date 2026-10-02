@@ -128,6 +128,20 @@ impl MetaMcp {
 }
 
 impl MetaMcp {
+    /// Relay detection is on, so a delivery owner opens a receipt collector.
+    pub(crate) fn relay_active(&self) -> bool {
+        #[cfg(feature = "firewall")]
+        {
+            self.firewall.as_ref().is_some_and(|f| f.relay_active())
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            false
+        }
+    }
+}
+
+impl MetaMcp {
     /// Site 1 (§13.3): refuse a relaying call before it is marked dispatched,
     /// releasing its idempotency reservation, since nothing ran.
     pub(super) fn refuse_relay(
