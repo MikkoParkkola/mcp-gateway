@@ -146,7 +146,8 @@ backend" and "fails a capability file" first.**
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
-| 122 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity; an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
+| 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
+| 123 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity; an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3445,6 +3446,38 @@ entry with a durable upstream handle stays managed `working`, as after any resta
 `tasks/get` resolves it. This applies to HTTP shutdown and to stdio EOF.
 
 **Action:** none. Raise `server.shutdown_timeout` if long tasks should be allowed to finish.
+
+## 122. Capability fallback providers are warned as not executed
+
+**Startup:** no notice, a capability that declares `providers.fallback` logs a CAP-011 warning and is still served; fails a capability file, only when a fallback entry does not parse (null included)
+
+A capability YAML could list `providers.fallback`, and the gateway parsed and validated it, but
+calls were only ever sent to `providers.primary`. That is unchanged in 4.0: a fallback is not
+tried when the primary fails. Loading such a capability now says so instead of accepting the
+block silently. A fallback entry that does not parse as a provider used to be dropped without a
+word; it now fails the load of that capability, like a malformed `primary`. An empty list declares
+no provider and loads without a warning.
+
+**Action:** delete the `fallback` block from your capability files, and fix or delete any entry
+that does not parse.
+
+## 123. Frames naming a second tenant for one caller are recorded, or withheld
+
+**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
+
+With `arg_keys` set, every frame the gateway sends a caller is checked for the tenants it names:
+answers and errors, notifications, server-to-client requests and webhook deliveries, on HTTP, the
+POST and GET streams, the direct route and stdio. Content the gateway read but did not show
+(before a capability transform, a cache or idempotency replay, a stored task's output) counts
+too, and a response it could not read counts as a tenant of its own. When one `caller_key`'s
+frames name more than one tenant inside `window_secs`, the new key
+`tenant_guard.cross_tenant_reads` decides: `observe` (the default) writes a `tenant_read`
+audit record with `cross_tenant_read: flagged`, `block` withholds the frame with a JSON-RPC
+error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
+Tenant ids are compared across backends, so two backends that reuse one id count as one tenant.
+
+**Action:** none. Set `off` to silence it, or `block` to withhold such frames; namespace tenant
+ids that two backends reuse.
 
 ## Upgrading from 3.5.x: a walkthrough
 
