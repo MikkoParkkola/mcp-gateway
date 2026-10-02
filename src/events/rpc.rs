@@ -275,6 +275,7 @@ impl EventsHub {
             api_key: caller.credential.api_key.clone(),
             credential_kind: Some(caller.credential.kind),
             credential_principal: Some(caller.credential.principal.clone()),
+            binding: caller.credential.binding.clone(),
             legacy_api_key_name: None,
             url: url.as_str().to_owned(),
             name: descriptor.name.clone(),
