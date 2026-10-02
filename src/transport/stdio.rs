@@ -786,6 +786,11 @@ mod early_exit;
 #[path = "stdio_tests.rs"]
 mod tests;
 
+// Unix-only: the fake backend is a `sh` script.
+#[cfg(all(test, unix))]
+#[path = "stdio_negotiation_tests.rs"]
+mod negotiation_tests;
+
 #[cfg(test)]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;

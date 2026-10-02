@@ -772,3 +772,7 @@ mod pinned;
 #[cfg(test)]
 #[path = "websocket_backend_tests.rs"]
 mod backend_tests;
+
+#[cfg(test)]
+#[path = "websocket_negotiation_tests.rs"]
+mod negotiation_tests;
