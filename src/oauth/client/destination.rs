@@ -75,6 +75,24 @@ pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url:
     }
 }
 
+/// Whether `error` is a destination-policy refusal, which no fallback may
+/// absorb.
+pub(super) fn is_policy_refusal(error: &Error) -> bool {
+    matches!(error, Error::Protocol(message) if message.starts_with("SSRF blocked"))
+}
+
+/// The error an OAuth request's failed send surfaces as (MIK-7701).
+/// A destination-policy refusal stays `-32600 SSRF blocked`; anything else is
+/// an OAuth failure naming `context` and the error's category.
+pub(super) fn send_error(context: &str, error: &reqwest::Error) -> Error {
+    crate::security::http_diagnostics::ssrf_refusal(error).unwrap_or_else(|| {
+        Error::OAuth(format!(
+            "{context}: {}",
+            crate::security::request_error_category(error)
+        ))
+    })
+}
+
 impl OAuthClient {
     /// [`OAuthClient::new`] under a backend destination policy.
     pub(crate) fn with_destination(

@@ -354,7 +354,7 @@ async fn a_refused_oauth_redirect_is_typed_ssrf_blocked() {
         .await
         .expect_err("the hop is refused");
     for context in ["Token request failed", "Client registration failed"] {
-        let error = super::super::send_error(context, &sent);
+        let error = super::send_error(context, &sent);
         assert!(
             error.to_string().contains("SSRF blocked"),
             "{context}: {error}"

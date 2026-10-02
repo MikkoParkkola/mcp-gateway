@@ -20,7 +20,7 @@ use url::Url;
 use super::callback;
 use super::metadata::{self, AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
 use super::storage::{TokenInfo, TokenStorage};
-use crate::security::{request_error_category, safe_oauth_http_error, safe_reqwest_message};
+use crate::security::{safe_oauth_http_error, safe_reqwest_message};
 use crate::{Error, Result};
 
 /// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
@@ -344,7 +344,7 @@ impl OAuthClient {
             }
             // A policy refusal is an answer, not a missing document: falling
             // back would walk past it (MIK-7701).
-            Err(e) if is_policy_refusal(&e) => return Err(e),
+            Err(e) if destination::is_policy_refusal(&e) => return Err(e),
             Err(e) => {
                 debug!(error = %e, "No protected resource metadata, using base URL");
                 self.oauth_base_url = Some(base_url.clone());
@@ -472,7 +472,7 @@ impl OAuthClient {
                 Ok(new_token) => return Ok(new_token),
                 // A policy refusal is not an expired grant: re-authorizing
                 // would only walk past it (MIK-7701).
-                Err(e) if is_policy_refusal(&e) => return Err(e),
+                Err(e) if destination::is_policy_refusal(&e) => return Err(e),
                 Err(_) => {}
             }
         }
@@ -557,7 +557,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| send_error("Client credentials request failed", &e))?;
+            .map_err(|e| destination::send_error("Client credentials request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -903,7 +903,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| send_error("Token request failed", &e))?;
+            .map_err(|e| destination::send_error("Token request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -966,7 +966,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| send_error("Token refresh failed", &e))?;
+            .map_err(|e| destination::send_error("Token refresh failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1054,7 +1054,7 @@ impl OAuthClient {
                         }
                     }
                 }
-                Err(e) if is_policy_refusal(&e) => return Err(e),
+                Err(e) if destination::is_policy_refusal(&e) => return Err(e),
                 Err(e) => {
                     debug!(error = %e, "Dynamic registration failed, using generated ID");
                 }
@@ -1124,7 +1124,7 @@ impl OAuthClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| send_error("Client registration failed", &e))?;
+            .map_err(|e| destination::send_error("Client registration failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1195,20 +1195,6 @@ fn open_browser(url: &str) -> bool {
     let result = std::process::Command::new(cmd).arg(url).spawn();
 
     result.is_ok()
-}
-
-/// Whether `error` is a destination-policy refusal, which no fallback may
-/// absorb.
-fn is_policy_refusal(error: &Error) -> bool {
-    matches!(error, Error::Protocol(message) if message.starts_with("SSRF blocked"))
-}
-
-/// The error an OAuth request's failed send surfaces as (MIK-7701).
-/// A destination-policy refusal stays `-32600 SSRF blocked`; anything else is
-/// an OAuth failure naming `context` and the error's category.
-pub(super) fn send_error(context: &str, error: &reqwest::Error) -> Error {
-    crate::security::http_diagnostics::ssrf_refusal(error)
-        .unwrap_or_else(|| Error::OAuth(format!("{context}: {}", request_error_category(error))))
 }
 
 #[cfg(test)]
