@@ -625,6 +625,8 @@ mod tests {
             account_strategies: None,
             process_policy: super::super::process::ProcessPolicy::default(),
             process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -641,6 +643,8 @@ mod tests {
             account_strategies: None,
             process_policy: super::super::process::ProcessPolicy::default(),
             process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

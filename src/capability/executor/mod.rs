@@ -29,7 +29,7 @@ mod params;
 mod process;
 pub mod rest;
 mod save_file;
-pub use save_file::{SaveEncoding, SaveFileSpec};
+pub use save_file::SaveFileSpec;
 mod xml;
 
 use std::sync::Arc;
