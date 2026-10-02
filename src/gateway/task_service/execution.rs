@@ -397,7 +397,7 @@ impl TaskExecutor {
     /// Spawn a task worker under the shutdown token. Every worker goes through
     /// here, so none can outlive a shutdown that cancelled the rest.
     fn spawn_worker(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
-        tokio::spawn(worker);
+        tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
     }
 
     fn cancel_signal(&self, id: &str) {
