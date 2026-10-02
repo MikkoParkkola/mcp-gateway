@@ -332,7 +332,16 @@ mod tests {
             checked_selection(Some(&answer), Selectable::LegacyOrModern).unwrap(),
             Some(MODERN_VERSIONS[0])
         );
-        assert!(checked_selection(Some(&answer), Selectable::Legacy).is_err());
+        let refusal = checked_selection(Some(&answer), Selectable::Legacy)
+            .unwrap_err()
+            .to_string();
+        assert!(!refusal.contains("accepts: 2026"), "{refusal}");
+
+        let unsupported = selecting("1999-01-01");
+        let refusal = checked_selection(Some(&unsupported), Selectable::LegacyOrModern)
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains(MODERN_VERSIONS[0]), "{refusal}");
     }
 
     #[test]

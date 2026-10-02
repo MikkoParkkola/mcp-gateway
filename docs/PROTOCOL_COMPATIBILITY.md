@@ -55,7 +55,9 @@ client at the revision it asked for. Tests:
   speaks fails the start. Nothing after the handshake states a revision.
 
 All three transports check the selection with `checked_selection`
-(`src/protocol/negotiate.rs`).
+(`src/protocol/negotiate.rs`). stdio and WebSocket also accept a selection of
+2026-07-28, and the era probe settles the dialect; HTTP requires a legacy
+selection, because its `MCP-Protocol-Version` header follows the selection.
 
 Each backend keeps its own revision. Tests:
 `tests/mik_7217_era_probe_acs.rs::discover_4_a_peer_that_rejects_the_probe_is_classified_legacy`,
