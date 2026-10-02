@@ -55,12 +55,23 @@ pub enum Reach {
     Bounded,                                // talks to its own vendor or local resource
     Arbitrary { reason: &'static str },     // can be pointed at any address (browser, fetch)
 }
-pub struct RegistryEntry { /* existing fields */, auth: Auth, reach: Reach }
+pub enum Setup {
+    Ready,                                  // starts with no arguments and no other service
+    NeedsArgs { hint: &'static str },       // e.g. filesystem: allowed directories; git: --repository
+    NeedsService { hint: &'static str },    // e.g. redis, postgres: a running server to point at
+}
+pub struct RegistryEntry { /* existing fields */, auth: Auth, reach: Reach, setup: Setup }
 impl RegistryEntry {
     pub fn needs_login(&self) -> bool { !matches!(self.auth, Auth::None) }
-    pub fn default_enabled(&self) -> bool { !self.needs_login() && matches!(self.reach, Reach::Bounded) }
+    /// The starter set `init` writes enabled. Product switch for arbitrary-reach servers:
+    /// delete the `Reach::Bounded` condition here (reach stays recorded on the entry).
+    pub fn default_enabled(&self) -> bool {
+        !self.needs_login() && matches!(self.reach, Reach::Bounded) && matches!(self.setup, Setup::Ready)
+    }
 }
 ```
+
+A test pins the starter set exactly: {memory, sequential-thinking, context7, time}.
 
 A unit test fails when `Auth::EnvVars` has an empty `required_env`, when `Auth::None` has a non-empty
 one, or when a `Header` value names a `${VAR}` that is not in `required_env`.
@@ -74,16 +85,22 @@ keep sharing it. For a registry entry it fills:
   OAuthConfig` matching the serde defaults). The first connection runs the existing flow. No second
   OAuth path.
 - `Auth::Header` -> `headers: { name: value }`, the `${VAR}` template written verbatim; expansion stays
-  in `expand_env_vars`.
-- Every `required_env` name -> `env: { NAME: "${NAME}" }`, unless `-e NAME=...` supplied a value. This
-  fixes the scrubbed-environment bug above with the existing expansion.
+  in `expand_env_vars`. If the user passed `-e VAR=value` for a variable the header names, the value is
+  substituted into the header instead (an `env:` entry cannot feed a header: `expand_env_vars` reads the
+  overlay, not `backend.env`), and VAR is not also written to `env:` for an HTTP backend.
+- Every `required_env` name of a stdio entry -> `env: { NAME: "${NAME}" }`, unless `-e NAME=...`
+  supplied a value. This fixes the scrubbed-environment bug above with the existing expansion.
 - HTTP entries: `streamable_http` is `false` only when the URL path ends in `/sse` (Asana), `true`
   otherwise. `false` means the legacy SSE handshake (`src/transport/http/mod.rs`).
 - `enabled`: `true`, except (a) `Reach::Arbitrary` -> `false`, printed with its reason and the switch
-  (`enabled: true` in gateway.yaml, or the UI toggle); (b) a `${VAR}` in `headers` or a `required_env`
-  name that is unset in both the process env and `-e` -> `false`, printed with the variable name. Rule
-  (b) exists because an enabled backend with an unset `${VAR}` makes the next config load fail (C4):
-  `add` must never write a config the gateway refuses.
+  (`enabled: true` in gateway.yaml, or the UI toggle); (b) any `${VAR}` left in the written
+  `headers`/`env` that the loader would refuse -> `false`, printed with the variable name. Readiness
+  is decided by the loader's own rule, not by `std::env`: the `EnvOverlay` built for the target config
+  (env_files included) and the non-empty test in `secret_ref::expand_field`, so an empty value counts as
+  unset. Rule (b) exists because an enabled backend with an unresolved `${VAR}` makes the next load fail
+  (C4). As the final guard, `add` loads the would-be config from a temporary file beside the target
+  through `Config::load` and writes the real file only if that load succeeds: `add` never writes a
+  config the gateway refuses.
 
 Explicit `--command`/`--url` keep today's behaviour (enabled, no auth fields).
 
@@ -107,9 +124,15 @@ before; the lead accepted the server reading below.
   copied into the config: the registry is the library, `add` turns one on. Existing configs are not
   touched (no upgrade migration adds backends to a user's file).
 - Capabilities (shared with MIK-7782 / CAP-EXEC): a capability is served only when its requirements are
-  met. For `auth.required: true` the requirement is that an `env:` `auth.key` resolves through the
-  config's `EnvOverlay` (env_files included) with the existing `SecretRef::parse(..).resolve(..)`
-  (`src/config/secret_ref.rs`), not `std::env`; `keychain:`/file keys are not decided at load (R2); CAP-EXEC adds the
+  met. For `auth.required: true` the requirement is that an environment-backed `auth.key` resolves
+  to a non-empty value. "Environment-backed" uses the executor's own spellings
+  (`src/capability/executor/credentials.rs`, `fetch_credential`): `env:NAME`, `{env.NAME}` and a bare
+  `NAME` that `looks_like_env_var_name` (e.g. `WOLFRAM_APPID`, `capabilities/knowledge/wolfram_llm.yaml`).
+  That key-to-variable mapping is extracted into one function both the executor and the gate call, and
+  the lookup uses the same live `EnvOverlay` the executor resolves with. The gate is evaluated when
+  tools are listed, searched or invoked, not cached at file load, so adding or removing a credential in
+  the process env or an env_file takes effect on the same schedule the executor already sees it.
+  `keychain:`, `file:` and `oauth:` keys are not decided by the gate (R2); CAP-EXEC adds the
   "binary present" requirement for `cli` capabilities through the same predicate. An unmet capability is
   listed by `mcp-gateway cap list` as `off: needs <X>` and is not exposed to clients. The user turns it
   on by providing the credential. Keyless capabilities stay on. An upgrade sees no change for any
@@ -140,6 +163,10 @@ gateway's private-network guard covers REST capabilities only, not this server. 
   `src/registry/**` or the check scripts, pushes to the release line and `main`, and a daily schedule
   (GitHub fires schedules from the default branch's copy). No workflow holds Linear credentials, so a
   scheduled failure fails that run loudly instead of filing an issue.
+- For `Auth::OAuth` entries the live check also requires that the endpoint advertises dynamic client
+  registration (protected-resource metadata -> authorization-server metadata with a
+  `registration_endpoint`), because the registry writes no `client_id`. `Auth::Header` entries must
+  answer an unauthenticated request with 401 or 403.
 - Every PR (`ci.yml`): the offline self-test plus `check-registry-packages.py --offline`, which parses the
   registry and enforces the pin and launcher rules without network.
 
@@ -167,6 +194,10 @@ CI job `registry-packages` keeps the list honest; README and docs counts are gen
 2. `resolve_transport("notion")` -> HTTP, `oauth.enabled`, streamable; `("github")` -> header template.
 3. `add playwright` -> written `enabled: false`, output names the reason.
 4. `add github` with `GITHUB_TOKEN` unset -> written `enabled: false` and the config still loads.
-5. `init` output contains exactly the `default_enabled()` set, enabled.
-6. Capability with `auth.required: true` and an unset `env:` key is not exposed; set -> exposed.
-7. README/docs count equals `all().len()`.
+5. `init` output contains exactly {memory, sequential-thinking, context7, time}, enabled.
+6. Capability with `auth.required: true` and an unset key is not exposed, for each spelling (`env:X`,
+   `{env.X}`, bare `X`); set non-empty -> exposed; set empty -> not exposed; `keychain:` -> exposed.
+7. `add github -e GITHUB_TOKEN=t` writes the token into the header and the config loads; `add github`
+   with the token only in an env_file -> enabled; empty -> disabled; the temporary-load guard refuses a
+   seeded unloadable config and leaves the target file byte-identical.
+8. README/docs count equals `all().len()`.
