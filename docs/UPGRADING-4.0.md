@@ -3407,8 +3407,9 @@ both sides speak; stdio and WebSocket now do the same.
   failed".
 - stdio diagnostics name the backend's error code, no longer its message, and stdio debug logs
   record line lengths, no longer the backend's lines or the frames sent to it.
-- The revisions the gateway speaks include `2026-07-28`: on every transport an `initialize`
-  answer selecting it is accepted, and the era probe settles the dialect.
+- On stdio and WebSocket an `initialize` answer selecting `2026-07-28` is accepted, and the era
+  probe settles the dialect. HTTP still requires a legacy selection, because its
+  `MCP-Protocol-Version` header follows the selection.
 
 **Action:** a backend that fails to start with "Backend selected protocol version" needs a
 revision from the supported list, or a `protocol_version` pin it accepts.

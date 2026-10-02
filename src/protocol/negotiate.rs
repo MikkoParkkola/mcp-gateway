@@ -152,9 +152,12 @@ pub(crate) fn checked_selection(
     } else {
         "a value that is not a protocol version"
     };
+    let speaks = match selectable {
+        Selectable::Legacy => SUPPORTED_VERSIONS.join(", "),
+        Selectable::LegacyOrModern => [MODERN_VERSIONS, SUPPORTED_VERSIONS].concat().join(", "),
+    };
     Err(Error::Protocol(format!(
-        "Backend selected protocol version {named}, which this gateway does not speak; it speaks: {}",
-        SUPPORTED_VERSIONS.join(", ")
+        "Backend selected protocol version {named}, which this handshake cannot adopt; it accepts: {speaks}"
     )))
 }
 
