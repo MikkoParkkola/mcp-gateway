@@ -649,6 +649,11 @@ fn with_relay_block(path: &std::path::Path) {
     let to_yaml = |value: Value| serde_yaml::to_value(value).expect("JSON maps to YAML");
     yaml["auth"]["enabled"] = serde_yaml::Value::Bool(true);
     yaml["auth"]["api_keys"] = to_yaml(json!([key("alice"), key("bob")]));
+    // Auth on requires a writable audit log (UPGRADING-4.0 section 43).
+    let audit = path.with_file_name("audit.jsonl");
+    yaml["security"]["transparency_log"] = to_yaml(json!({
+        "enabled": true, "path": audit.to_string_lossy()
+    }));
     yaml["security"]["firewall"]["collusion"] = to_yaml(json!({
         "action": "block", "window_secs": 600, "sources": [format!("{BACKEND}:*")]
     }));
