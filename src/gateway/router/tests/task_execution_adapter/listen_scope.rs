@@ -146,7 +146,7 @@ async fn a_listener_whose_token_is_revoked_is_closed_at_next_delivery() {
         StreamEvent::Message(m) => std::assert_eq!(
             m,
             json!({"jsonrpc": "2.0", "id": 3,
-                   "result": {"_meta": {"io.modelcontextprotocol/subscriptionId": 3}}}),
+                   "result": {"resultType": "complete", "_meta": {"io.modelcontextprotocol/subscriptionId": 3}}}),
             "a revoked token is told only that its subscription ended"
         ),
         StreamEvent::Closed => panic!("closed without the graceful end"),

@@ -263,7 +263,10 @@ impl SubscriptionId {
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": self.as_value(),
-            "result": { "_meta": { "io.modelcontextprotocol/subscriptionId": self.as_value() } },
+            "result": {
+                "resultType": "complete",
+                "_meta": { "io.modelcontextprotocol/subscriptionId": self.as_value() },
+            },
         })
     }
 
