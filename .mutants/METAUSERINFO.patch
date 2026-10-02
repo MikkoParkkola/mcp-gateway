@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/provider.rs b/src/personal_accounts/provider.rs
+index 0762c274d..0248f7baa 100644
+--- a/src/personal_accounts/provider.rs
++++ b/src/personal_accounts/provider.rs
+@@ -522,7 +522,7 @@ fn is_https_with_host(endpoint: &str) -> bool {
+     Url::parse(endpoint).is_ok_and(|url| {
+         url.scheme() == "https"
+             && url.host_str().is_some()
+-            && url.username().is_empty()
++            && true
+             && url.password().is_none()
+     })
+ }

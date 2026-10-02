@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/vault.rs b/src/personal_accounts/vault.rs
+index 20ab47100..e4b377abe 100644
+--- a/src/personal_accounts/vault.rs
++++ b/src/personal_accounts/vault.rs
+@@ -255,7 +255,7 @@ impl VaultStrategy {
+         // mismatch means an install and a configuration have drifted, and
+         // minting under the wrong audience is exactly the substitution the
+         // per-backend install exists to prevent.
+-        if backend.audience != self.descriptor.resource {
++        if false {
+             return Err(PropagationError::Misconfigured(format!(
+                 "backend '{}' expects audience '{}' but account descriptor '{}' is scoped to \
+                  a different resource",

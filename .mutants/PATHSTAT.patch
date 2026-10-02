@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage.rs b/src/personal_accounts/storage.rs
+index 68fb5af87..500c04d1b 100644
+--- a/src/personal_accounts/storage.rs
++++ b/src/personal_accounts/storage.rs
+@@ -287,7 +287,7 @@ fn validate_path(path: &Path) -> Result<(), AccountError> {
+             Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
+             Ok(_) => return Err(AccountError::InvalidConfiguration),
+             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+-            Err(_) => return Err(AccountError::StorageUnavailable),
++            Err(_) => {}
+         }
+     }
+     Ok(())

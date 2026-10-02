@@ -1,0 +1,12 @@
+diff --git a/src/personal_accounts/journey/callback.rs b/src/personal_accounts/journey/callback.rs
+index fe8992827..7f21fe3e1 100644
+--- a/src/personal_accounts/journey/callback.rs
++++ b/src/personal_accounts/journey/callback.rs
+@@ -186,7 +186,6 @@ impl PersonalAccountStore {
+         state: &str,
+         binding: Option<&str>,
+     ) -> Result<Admitted, JourneyError> {
+-        within_cap(state, binding)?;
+         self.journey_transition(now, limits, |tx| {
+             let (id, record) = admit(&self.config, tx, state, binding, now)?;
+             admitted(id, record)
