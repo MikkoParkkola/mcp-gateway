@@ -1,4 +1,4 @@
-sha256: fbf8c000299f143205b4e7a8141a8a127922dbf49b64ebadb477ec3790ed627c
+sha256: 86eb7928316b6272a5fbe775ea946a5f172b41719349295e696a0502076f3b85
 fulcrum: "1.0"
 name: gws_docs_write
 description: Create a new Google Docs document or write content to an existing one using batch update requests.
@@ -7,17 +7,16 @@ schema:
   input:
     type: object
     properties:
-      title:
-        type: string
-        description: "Document title (for creating new documents)"
       documentId:
         type: string
-        description: "Existing document ID to update (omit to create new)"
+        description: Existing document ID to update (omit to create new)
       text:
         type: string
-        description: "Text content to insert at the beginning of the document"
+        format: multiline
+        description: Text to append to the document
     required:
-      - title
+    - documentId
+    - text
   output:
     type: object
     properties:
@@ -36,14 +35,11 @@ providers:
     config:
       command: gws
       args:
-        - docs
-        - "+write"
-        - "--title"
-        - "{title}"
-        - "--document-id"
-        - "{documentId}"
-        - "--text"
-        - "{text}"
+      - docs
+      - +write
+      - --document={documentId}
+      - --text={text}
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -51,8 +47,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s docs"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/documents
 
 metadata:
   category: productivity

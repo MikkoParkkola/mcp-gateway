@@ -1,4 +1,4 @@
-sha256: 5b3b0ea5a74480d4cd98f38e60b7438507bdecb53b16b704799efd0adcd6b789
+sha256: 1cce0d19c5c09ff5933cc6f0f116a14a336a66042df495ed9e8fc8d68cd835be
 fulcrum: "1.0"
 name: gws_gmail_watch
 description: Set up Gmail push notifications via Cloud Pub/Sub. Watches for changes to the mailbox and sends notifications to the specified topic.
@@ -9,17 +9,17 @@ schema:
     properties:
       topicName:
         type: string
-        description: "Cloud Pub/Sub topic name (e.g., projects/myproject/topics/gmail-notifications)"
+        description: Cloud Pub/Sub topic name (e.g., projects/myproject/topics/gmail-notifications)
         examples:
-          - "projects/my-project/topics/gmail-watch"
+        - projects/my-project/topics/gmail-watch
       labelIds:
-        type: string
-        description: "Comma-separated label IDs to watch (e.g., INBOX). If empty, watches all labels."
-        examples:
-          - "INBOX"
-          - "INBOX,IMPORTANT"
+        type: array
+        items:
+          type: string
+        maxItems: 50
+        description: Label IDs to watch
     required:
-      - topicName
+    - topicName
   output:
     type: object
     properties:
@@ -36,13 +36,17 @@ providers:
     config:
       command: gws
       args:
-        - gmail
-        - users
-        - watch
-        - "--params"
-        - '{"userId": "me"}'
-        - "--json"
-        - '{"topicName": "{topicName}", "labelIds": ["{labelIds}"]}'
+      - gmail
+      - users
+      - watch
+      - json: --params=
+        value:
+          userId: me
+      - json: --json=
+        value:
+          topicName: '{topicName}'
+          labelIds: '{labelIds}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -50,8 +54,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s gmail"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/gmail.readonly
 
 metadata:
   category: productivity

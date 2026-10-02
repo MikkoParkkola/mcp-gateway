@@ -1,4 +1,4 @@
-sha256: 7cc39ac09e954f830626907c10df2857c51859d1612e22e082b7b5b761dfe4c5
+sha256: 335506bc42617df293150f178031eebf014c310e0d81bc651c7de4e4708306a5
 fulcrum: "1.0"
 name: gws_calendar_insert
 description: Create a new Google Calendar event. Supports setting title, time range, attendees, location, and description.
@@ -10,31 +10,34 @@ schema:
       calendarId:
         type: string
         description: Calendar ID (use "primary" for the main calendar)
-        default: "primary"
+        default: primary
       summary:
         type: string
-        description: "Event title/summary"
+        description: Event title/summary
       startDateTime:
         type: string
-        description: "Event start time (RFC3339, e.g., 2026-03-12T09:00:00+02:00)"
+        description: Event start time (RFC3339, e.g., 2026-03-12T09:00:00+02:00)
       endDateTime:
         type: string
-        description: "Event end time (RFC3339, e.g., 2026-03-12T10:00:00+02:00)"
+        description: Event end time (RFC3339, e.g., 2026-03-12T10:00:00+02:00)
       description:
         type: string
-        description: "Event description/notes"
+        format: multiline
+        description: Event description
       location:
         type: string
-        description: "Event location (address or room name)"
+        description: Event location (address or room name)
       attendees:
-        type: string
-        description: "Comma-separated attendee email addresses"
-        examples:
-          - "alice@company.com,bob@company.com"
+        type: array
+        items:
+          type: string
+          format: email
+        maxItems: 50
+        description: Attendee email addresses
     required:
-      - summary
-      - startDateTime
-      - endDateTime
+    - summary
+    - startDateTime
+    - endDateTime
   output:
     type: object
     properties:
@@ -53,22 +56,20 @@ providers:
     config:
       command: gws
       args:
-        - calendar
-        - "+insert"
-        - "--calendar-id"
-        - "{calendarId}"
-        - "--summary"
-        - "{summary}"
-        - "--start"
-        - "{startDateTime}"
-        - "--end"
-        - "{endDateTime}"
-        - "--description"
-        - "{description}"
-        - "--location"
-        - "{location}"
-        - "--attendees"
-        - "{attendees}"
+      - calendar
+      - +insert
+      - arg: --calendar={calendarId}
+        if: calendarId
+      - --summary={summary}
+      - --start={startDateTime}
+      - --end={endDateTime}
+      - arg: --description={description}
+        if: description
+      - arg: --location={location}
+        if: location
+      - each: attendees
+        arg: --attendee={item}
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -76,8 +77,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s calendar"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/calendar.events
 
 metadata:
   category: productivity
