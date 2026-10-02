@@ -1,0 +1,12 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index af934a974..dabf3e140 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -459,7 +459,6 @@ impl Store {
+             }
+             // The dead letter is the marker that keeps an outbox copy left by
+             // a failed unlink from being sent again: that copy goes first.
+-            remove_record_durable(&self.outbox_dir, &OutboxRecord::file(&id))?;
+             remove_record(&self.dead_dir, &OutboxRecord::file(&id))?;
+             if let Some((dead, _)) = state.dead.remove(&id) {
+                 evicted.push(Evicted {

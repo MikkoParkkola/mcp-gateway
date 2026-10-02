@@ -1,0 +1,19 @@
+head_sha	a617008f542e19e79b9199e512203e6280f4677b
+# batch 1 for #2651 (MIK-7630 I2 review fixes)
+M1	linux	m1.patch	--lib -- the_live_key_must_match_by_secret_be_unexpired_and_grant_the_backend
+M2	linux	m2.patch	--lib -- the_live_key_must_match_by_secret_be_unexpired_and_grant_the_backend
+M3	linux	m3.patch	--lib -- only_an_authenticated_api_key_is_kept_for_the_live_re_check
+M4	linux	m4.patch	--lib -- an_outbox_record_already_dead_is_dropped_on_reopen
+M5	linux	m5.patch	--lib -- a_repeated_enqueue_keeps_the_record_in_flight
+M6	linux	m6.patch	--lib -- records_of_expired_subscriptions_are_cancelled_but_suspended_ones_kept
+M7	linux	m7.patch	--lib -- a_failed_settlement_leaves_the_record_pending
+M8	linux	m8.patch	--lib -- an_attempt_past_its_bounds_is_overdue_before_it_is_sent
+M9	linux	m9.patch	--lib -- removed_names_only_the_types_the_reload_dropped
+M10	linux	m10.patch	--lib -- retain_forgets_subscriptions_that_are_gone
+M11	linux	m11.patch	--lib -- a_subscription_stored_with_a_bare_key_name_is_refused
+M12	linux	m12.patch	--lib -- unsubscribe_waits_out_a_claimed_attempt
+M13	linux	m13.patch	--lib -- evicting_a_dead_letter_takes_a_leftover_outbox_copy_first
+M14	linux	m14.patch	--lib -- retry_after_reads_seconds_and_http_dates
+M15	linux	m15.patch	--lib -- withdraw_deletes_only_the_removed_types
+M16	linux	m16.patch	--lib -- credentials_other_than_api_keys_bound_the_grant
+M17	linux	m17.patch	--lib -- credentials_other_than_api_keys_bound_the_grant

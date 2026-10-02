@@ -1,0 +1,14 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index f5010da85..12152db4e 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -107,9 +107,6 @@ impl Store {
+         }
+         // The same occurrence offered twice keeps the record already
+         // retrying or on the wire, attempt count and all.
+-        if state.outbox.contains_key(&record.event_id) {
+-            return Ok(Enqueued::Written);
+-        }
+         if state.outbox.len() >= caps.global {
+             return Ok(Enqueued::DroppedGlobal);
+         }

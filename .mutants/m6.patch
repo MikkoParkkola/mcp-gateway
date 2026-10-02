@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index f5010da85..1c4e1827b 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -144,7 +144,7 @@ impl Store {
+                 !state
+                     .subs
+                     .get(&r.subscription_id)
+-                    .is_some_and(|s| s.live(now))
++                    .is_some()
+             })
+             .map(|r| r.event_id.clone())
+             .collect();

@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 359362f15..c84b353c1 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -65,7 +65,7 @@ impl Services {
+                 k.key_sha256
+                     .as_deref()
+                     .and_then(crate::config::parse_api_key_digest)
+-                    .is_some_and(|digest| hex::encode(&digest[..6]) == key.principal)
++                    .is_some()
+             })
+             .is_some_and(|k| k.backends.iter().any(|b| b == "*" || b == backend))
+     }

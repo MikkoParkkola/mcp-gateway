@@ -1,0 +1,13 @@
+diff --git a/src/events/reload.rs b/src/events/reload.rs
+index 1d043a37b..b6d9516ae 100644
+--- a/src/events/reload.rs
++++ b/src/events/reload.rs
+@@ -79,7 +79,7 @@ pub(crate) fn refresh_webhooks(
+ /// The event names `old` has and `new` does not.
+ fn removed(old: &BTreeMap<String, Shape>, new: &BTreeMap<String, Shape>) -> Vec<String> {
+     old.keys()
+-        .filter(|name| !new.contains_key(*name))
++        .filter(|name| new.contains_key(*name))
+         .cloned()
+         .collect()
+ }

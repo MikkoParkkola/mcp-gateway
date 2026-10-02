@@ -1,0 +1,14 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 9a1cb31e0..b3e8e9113 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -191,9 +191,6 @@ fn bounded_by(
+     if !credential.bounded() {
+         return Ok(granted);
+     }
+-    if params.get("ttlMs").is_some_and(Value::is_null) {
+-        return Err(RpcError::invalid("ttlMs"));
+-    }
+     Ok(match (granted, credential.expires_at) {
+         (Some(granted), Some(ends)) => Some(granted.min(ends)),
+         (granted, ends) => granted.or(ends),

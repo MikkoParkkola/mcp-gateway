@@ -1,0 +1,15 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index f5010da85..fc5100d62 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -70,10 +70,6 @@ pub(super) fn load(
+             .insert(dead.record.event_id.clone(), (dead, size));
+     }
+     for (_, mut record) in load_records::<OutboxRecord>(outbox_dir) {
+-        if state.dead.contains_key(&record.event_id) {
+-            remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
+-            continue;
+-        }
+         if record.state == OutboxState::InFlight {
+             record.state = OutboxState::Pending;
+             record.next_attempt_at = now;

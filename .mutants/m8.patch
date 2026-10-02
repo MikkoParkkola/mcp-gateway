@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index d844d3f4f..3b88a59dc 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -341,7 +341,7 @@ fn overdue(
+     now: chrono::DateTime<Utc>,
+     policy: Retry,
+ ) -> bool {
+-    attempt > policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
++    attempt >= policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
+ }
+ 
+ /// Dead without a new HTTP status: the subscription's last error stands.

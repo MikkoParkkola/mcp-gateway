@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 359362f15..443feb548 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -73,7 +73,7 @@ impl Services {
+     /// [`Self::admits`] for a stored subscription. One stored before keys
+     /// were bound to their secret is refused.
+     pub(crate) fn admits_subscription(&self, sub: &Subscription, backend: &str) -> bool {
+-        sub.legacy_api_key_name.is_none() && self.admits(sub.api_key.as_ref(), backend)
++        self.admits(sub.api_key.as_ref(), backend)
+     }
+ 
+     /// Run the response firewall over `data`, redacting in place.

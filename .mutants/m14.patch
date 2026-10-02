@@ -1,0 +1,13 @@
+diff --git a/src/events/client.rs b/src/events/client.rs
+index 31e0491cc..67c94cf23 100644
+--- a/src/events/client.rs
++++ b/src/events/client.rs
+@@ -227,7 +227,7 @@ fn retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Durati
+     if let Ok(seconds) = value.parse::<u64>() {
+         return Some(Duration::from_secs(seconds));
+     }
+-    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
++    let at = chrono::DateTime::parse_from_rfc3339(value).ok()?;
+     Some(
+         (at.with_timezone(&chrono::Utc) - now)
+             .to_std()

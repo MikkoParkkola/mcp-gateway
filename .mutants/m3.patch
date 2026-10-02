@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers/events.rs b/src/gateway/router/handlers/events.rs
+index bc769941a..e66ad12bb 100644
+--- a/src/gateway/router/handlers/events.rs
++++ b/src/gateway/router/handlers/events.rs
+@@ -35,7 +35,7 @@ fn api_key(
+     client: Option<&crate::gateway::auth::AuthenticatedClient>,
+ ) -> Option<crate::events::ApiKeyRef> {
+     client
+-        .filter(|c| c.authenticated && c.credential_kind == CredentialKind::ApiKey)
++        .filter(|c| c.authenticated)
+         .map(|c| crate::events::ApiKeyRef {
+             name: c.name.clone(),
+             principal: c.principal.clone(),

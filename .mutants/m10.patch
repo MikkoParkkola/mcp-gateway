@@ -1,0 +1,13 @@
+diff --git a/src/events/rate.rs b/src/events/rate.rs
+index 0a7fc25c6..2df486088 100644
+--- a/src/events/rate.rs
++++ b/src/events/rate.rs
+@@ -36,7 +36,7 @@ impl RateLimits {
+ 
+     /// Keep only the buckets of subscriptions `keep` names.
+     pub(crate) fn retain(&self, keep: &HashSet<String>) {
+-        self.buckets.lock().retain(|id, _| keep.contains(id));
++        let _ = keep;
+     }
+ 
+     /// Take a token for `id`, or say how long until one is free.

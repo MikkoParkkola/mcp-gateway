@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 887c9fd58..2c1278160 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -149,7 +149,7 @@ impl EventsHub {
+         let tail = super::tail_policy(&self.config);
+         let now = Utc::now();
+         for sub in self.store.subscriptions() {
+-            if names.contains(&sub.name)
++            if !names.contains(&sub.name)
+                 && let Err(error) = self.store.remove(&sub.id, now, tail)
+             {
+                 tracing::warn!(%error, "events: withdrawn subscription not removed");

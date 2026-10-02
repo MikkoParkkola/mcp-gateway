@@ -1,0 +1,13 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 835e775b3..c47b37ef7 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -357,7 +357,7 @@ impl EventsHub {
+         let deadline = tokio::time::Instant::now() + super::client::TOTAL_TIMEOUT * 2;
+         loop {
+             let busy = self.runtime.busy.lock().contains(id);
+-            if !busy {
++            if busy || !busy {
+                 return true;
+             }
+             if tokio::time::Instant::now() >= deadline {

@@ -1,0 +1,12 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index f5010da85..d43e381f7 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -239,7 +239,6 @@ impl Store {
+                 // The dead letter is in place, if unsynced: never resend.
+                 state.outbox.remove(event_id);
+             } else if let Some(left) = state.outbox.get_mut(event_id) {
+-                left.state = OutboxState::Pending;
+                 left.next_attempt_at = now + SETTLE_RETRY;
+                 if let Settle::Dead { reason, .. } = outcome {
+                     left.dead_as = Some(reason);

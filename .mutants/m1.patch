@@ -1,0 +1,14 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 359362f15..e3793b50c 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -60,8 +60,7 @@ impl Services {
+             .api_keys
+             .iter()
+             .find(|k| k.name == key.name)
+-            .filter(|k| !k.is_expired_at(now))
+-            .filter(|k| {
++                        .filter(|k| {
+                 k.key_sha256
+                     .as_deref()
+                     .and_then(crate::config::parse_api_key_digest)
