@@ -321,9 +321,6 @@ pub(super) struct InterruptedTask {
 pub(crate) struct CommittedTask {
     pub(crate) task: Task,
     pub(crate) revision: u64,
-    /// The backend label the task was admitted under: an aggregate label for
-    /// a plan, so never proof of what a plan called.
-    pub(crate) backend: String,
     /// The calls that produced this snapshot's result; empty on a legacy row.
     pub(crate) targets: Vec<Target>,
     /// Whether the row was written by a gateway that records targets. An empty
@@ -341,7 +338,6 @@ impl CommittedTask {
         Self {
             task,
             revision: record.revision,
-            backend: record.backend.clone(),
             targets: record.targets.clone(),
             targets_recorded: record.version >= TARGET_VERSION,
             output_free: record.output_free,

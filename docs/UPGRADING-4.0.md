@@ -143,7 +143,7 @@ backend" and "fails a capability file" first.**
 | 116 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
 | 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp, writes no new `identity_grant_decision` record for 10 minutes; a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
-| 119 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is no longer delivered: `tasks/get` and a repeat of its task-augmented call answer -32003, because the row cannot name the tool it ran | Re-run the call to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
+| 119 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is no longer delivered: `tasks/get` and a repeat of its task-augmented call answer -32003, because the row cannot name the tool it ran | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3399,7 +3399,8 @@ from. A read of a finished task re-checks those tools against current policy (it
 for a beta row there is nothing to check: the backend's current tool list is no record of what
 ran. Such a row is now refused, plan or single call, unless it holds no backend output.
 
-**Action:** re-run the call to get a fresh result. Nothing for an upgrade from 3.5.x.
+**Action:** re-run the call under a new idempotency key (the old key finds the refused row).
+Nothing for an upgrade from 3.5.x.
 
 ## Upgrading from 3.5.x: a walkthrough
 
