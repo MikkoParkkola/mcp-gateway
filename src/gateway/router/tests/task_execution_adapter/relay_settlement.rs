@@ -66,23 +66,46 @@ async fn relay(state: &Arc<AppState>, id: i64) -> Value {
     post(state, "key-b", sync_invoke(id, json!({"text": PROSE}))).await
 }
 
+/// `key-a` starts one task, without reading it, once its dispatch has
+/// reached the backend's `calls`-th call.
+async fn start_task(state: &Arc<AppState>, mock: &MockBackend, id: i64, key: &str, calls: usize) {
+    let created = post(state, "key-a", task_invoke(id, key, json!({}))).await;
+    let _ = task_id(&created);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while mock.calls() < calls {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "base: the task never dispatched"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+/// `key-b` relays until refused or out of time, never reading the task: a
+/// `tasks/get` would renew the receipt and hide a missing settlement commit.
+async fn relay_until_refused(state: &Arc<AppState>) -> Value {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut id = 100;
+    loop {
+        let answer = relay(state, id).await;
+        if answer["error"]["code"] == -32002 || tokio::time::Instant::now() >= deadline {
+            return answer;
+        }
+        id += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn task_settlement_records() {
     let mock = MockBackend::answering(Answer::Sequence(vec![text(PROSE), text("ok")]));
     let (state, _store) = relay_state(&mock, 600).await;
-    let settled = run_task(&state, 1, "relay-m9a").await;
-    assert_eq!(
-        status_of(&settled),
-        "completed",
-        "base: the task completes: {settled}"
-    );
-    assert_eq!(mock.calls(), 1, "base: the task dispatched once");
-    let answer = relay(&state, 2).await;
+    start_task(&state, &mock, 1, "relay-m9a", 1).await;
+    let answer = relay_until_refused(&state).await;
     assert_eq!(
         answer["error"]["code"], -32002,
-        "relay not refused: {answer}"
+        "settlement recorded nothing: {answer}"
     );
-    assert_eq!(mock.calls(), 1, "the relay reached the backend: {answer}");
 }
 
 #[tokio::test]
@@ -91,6 +114,7 @@ async fn failed_task_records_nothing() {
     let answers = vec![injected, text("ok"), text(PROSE), text("ok")];
     let mock = MockBackend::answering(Answer::Sequence(answers));
     let (state, _store) = relay_state(&mock, 600).await;
+    // A read of a refused task renews nothing, so polling it is safe here.
     let refused = run_task(&state, 1, "relay-m9b").await;
     assert_ne!(
         status_of(&refused),
@@ -104,18 +128,12 @@ async fn failed_task_records_nothing() {
     );
     assert_eq!(mock.calls(), 2, "{answer}");
 
-    let settled = run_task(&state, 3, "relay-m9c").await;
-    assert_eq!(
-        status_of(&settled),
-        "completed",
-        "base: the task completes: {settled}"
-    );
-    let answer = relay(&state, 4).await;
+    start_task(&state, &mock, 3, "relay-m9c", 3).await;
+    let answer = relay_until_refused(&state).await;
     assert_eq!(
         answer["error"]["code"], -32002,
-        "relay not refused: {answer}"
+        "settlement recorded nothing: {answer}"
     );
-    assert_eq!(mock.calls(), 3, "the relay reached the backend: {answer}");
 }
 
 /// r3 #3: a `tasks/get` that delivers a completed single-target result
