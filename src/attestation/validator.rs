@@ -578,7 +578,7 @@ mod tests {
     }
 
     /// A receipt-domain signer sharing the validator's raw key material —
-    /// mirrors how `resolve_provenance_signer` (gateway/server/mod.rs) derives
+    /// mirrors how `resolve_provenance_signer` (gateway/server/provenance_signer.rs) derives
     /// the live receipt signer from the same configured key (MIK-6909 item 2).
     fn twin_receipt_signer() -> BnautAttestationSigner {
         BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
