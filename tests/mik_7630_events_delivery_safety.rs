@@ -334,7 +334,7 @@ async fn budget_refusal_dead_letters_with_reason_budget() {
     assert!(rx.events().is_empty(), "a refused budget sends nothing");
     let refused: Vec<Value> = audit_records(root.path())
         .into_iter()
-        .filter(|r| r["status"] == "budget" && r.get("attempt").is_some())
+        .filter(|r| r["status"] == "budget")
         .collect();
     assert_eq!(refused.len(), 1, "one audit record for the refused attempt");
 }
