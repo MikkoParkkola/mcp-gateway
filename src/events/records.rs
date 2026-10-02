@@ -57,6 +57,7 @@ pub(crate) struct Credential {
     pub principal: String,
     /// Set only for a configured API key: the one credential whose live
     /// scope the re-check can read.
+    // ci-allow-secret-debug: a key's name and digest-derived principal, never the secret.
     pub api_key: Option<ApiKeyRef>,
 }
 
