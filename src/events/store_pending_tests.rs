@@ -325,3 +325,28 @@ fn a_failed_settlement_leaves_the_record_pending() {
         "the claim wrote the verdict to disk"
     );
 }
+
+#[test]
+fn evicting_a_dead_letter_takes_a_leftover_outbox_copy_first() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    // A failed unlink leaves the outbox copy beside its dead letter.
+    store
+        .dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY)
+        .expect("io");
+    let later = now + chrono::Duration::hours(2);
+    assert_eq!(store.sweep_dead(later, ROOMY).expect("io").len(), 1);
+    assert!(
+        std::fs::read_dir(dir.path().join("outbox"))
+            .expect("dir")
+            .next()
+            .is_none(),
+        "no outbox copy outlives its marker"
+    );
+}

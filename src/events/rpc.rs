@@ -340,20 +340,28 @@ impl EventsHub {
         let tail = super::tail_policy(&self.config);
         let removed = id.clone();
         blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
-        // A concurrent unsubscribe of the same key waits too.
-        self.settled(&id).await;
-        Ok(json!({}))
+        // A concurrent unsubscribe of the same key waits too. An attempt
+        // still busy at the bound is not acknowledged as stopped.
+        if self.settled(&id).await {
+            Ok(json!({}))
+        } else {
+            Err(RpcError::internal())
+        }
     }
 
     /// Wait until an attempt claimed before subscription `id` was removed
     /// has settled, so nothing reaches the callback after the unsubscribe
-    /// answer (T23). Bounded by the client's own total timeout.
-    async fn settled(&self, id: &str) {
+    /// answer (T23). Bounded by the client's own total timeout; `false` when
+    /// the attempt is still busy at the bound.
+    async fn settled(&self, id: &str) -> bool {
         let deadline = tokio::time::Instant::now() + super::client::TOTAL_TIMEOUT * 2;
         loop {
             let busy = self.runtime.busy.lock().contains(id);
-            if !busy || tokio::time::Instant::now() >= deadline {
-                return;
+            if !busy {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }

@@ -455,6 +455,9 @@ impl Store {
             if !expired && count <= policy.max_records && bytes <= policy.max_bytes {
                 break;
             }
+            // The dead letter is the marker that keeps an outbox copy left by
+            // a failed unlink from being sent again: that copy goes first.
+            remove_record(&self.outbox_dir, &OutboxRecord::file(&id))?;
             remove_record(&self.dead_dir, &OutboxRecord::file(&id))?;
             if let Some((dead, _)) = state.dead.remove(&id) {
                 evicted.push(Evicted {
