@@ -479,7 +479,8 @@ impl StdioTransport {
     /// peer *request* is refused, because routing one to a pending caller would
     /// answer that caller with a frame carrying neither `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
-        debug!(line_len = line.len(), "Parsing response");
+        let line_len = line.len();
+        debug!(line_len, "Parsing response");
         let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {

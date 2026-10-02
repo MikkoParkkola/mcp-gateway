@@ -9,6 +9,7 @@ a caller parameter. Everything after it is reported back exactly as received.
   echo                  print {"argv", "stdin", "env_keys", "home", "cwd"} as JSON
   fail <code>           print a gws-style {"error": {...}} echoing argv, and the
                         same argv plus CAP_EXEC_TEST_* env values on stderr, exit <code>
+  unauthorized          print a gws-style 401 error, exit 2
   flood                 write 4 MiB to stdout
   grandchild <pidfile>  start a sleeping grandchild, write its pid, then sleep
 """
@@ -35,6 +36,9 @@ elif mode == "fail":
     owned = " ".join(v for k, v in os.environ.items() if k.startswith("CAP_EXEC_TEST_"))
     json.dump({"error": {"code": 400, "message": "bad request: " + " ".join(rest) + " " + owned}}, sys.stdout)
     sys.exit(code)
+elif mode == "unauthorized":
+    json.dump({"error": {"code": 401, "message": "invalid credentials"}}, sys.stdout)
+    sys.exit(2)
 elif mode == "flood":
     chunk = "x" * 65536
     for _ in range(64):

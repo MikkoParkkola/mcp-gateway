@@ -157,7 +157,7 @@ fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> TaskIntent {
 /// transport. The pinned path: without the carry the owner falls away.
 #[tokio::test]
 async fn a_stdio_task_dispatch_keeps_its_owner_mark() {
-    let fixture = fixture(None).await;
+    let fixture = Box::pin(fixture(None)).await;
     let retry = keyed("u1");
     let intent = intent(&fixture.tasks, TOOL, &retry);
     let live = intent.owned.host().upgrade().expect("the host is alive");
@@ -180,7 +180,7 @@ async fn a_stdio_task_dispatch_keeps_its_owner_mark() {
 /// U3: HTTP owner text cannot name the local operator's task.
 #[tokio::test]
 async fn http_owner_text_cannot_name_the_local_operator() {
-    let fixture = fixture(None).await;
+    let fixture = Box::pin(fixture(None)).await;
     let created = settle(&fixture, TOOL, "u3").await;
     let operator = TaskOwnerText::LocalOperator;
     assert!(
@@ -206,7 +206,7 @@ async fn http_owner_text_cannot_name_the_local_operator() {
 /// U4: a worker that outlives its stdio session cannot reach the host.
 #[tokio::test]
 async fn a_stdio_worker_outliving_its_session_settles_before_dispatch() {
-    let fixture = fixture(None).await;
+    let fixture = Box::pin(fixture(None)).await;
     let retry = keyed("u4");
     let intent = intent(&fixture.tasks, TOOL, &retry);
     let Fixture {
@@ -318,7 +318,7 @@ async fn reads(tasks: &StdioTasks, owner: &TaskOwnerText, id: &str) -> bool {
 /// is stored, and the repeat reaches the backend again.
 #[tokio::test]
 async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
-    let fixture = fixture(None).await;
+    let fixture = Box::pin(fixture(None)).await;
     settle(&fixture, TOOL, "u2-task").await;
     assert_eq!(fixture.rounds.load(Ordering::SeqCst), 1);
     let repeat = dispatch(&fixture, modern_call(2, TOOL, "u2-sync", false)).await;
@@ -337,7 +337,7 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
         deny: vec![DENIED.to_string()],
         ..ToolPolicyConfig::default()
     });
-    let fixture = fixture(Some(denying)).await;
+    let fixture = Box::pin(fixture(Some(denying))).await;
     // Settled terminal by its own worker: the authorizer refused it.
     settle(&fixture, DENIED, "u5-denied").await;
     assert_eq!(
@@ -421,7 +421,7 @@ async fn stdio_eof_releases_the_store_lease_before_returning() {
 /// handled as one it does (a cancel, say) on the caller's task id.
 #[tokio::test]
 async fn an_unnamed_tasks_method_fails_closed() {
-    let fixture = fixture(None).await;
+    let fixture = Box::pin(fixture(None)).await;
     let id = settle(&fixture, TOOL, "u7").await;
     let policy = ToolPolicy::default();
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
@@ -464,7 +464,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
 /// the extension, so it is neither refused nor made a task.
 #[tokio::test]
 async fn a_legacy_task_member_is_answered_synchronously() {
-    let fixture = fixture(None).await;
+    let fixture = Box::pin(fixture(None)).await;
     let legacy = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
         "name": "gateway_invoke",
         "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},

@@ -604,7 +604,7 @@ pub fn subscription_stream(
     mut listener: crate::gateway::subscription_registry::Listener,
     filter: crate::protocol::subscriptions::ListenRequest,
     subscription: crate::protocol::subscriptions::SubscriptionId,
-    acknowledgement: &crate::protocol::JsonRpcResponse,
+    acknowledgement: &Value,
     keep_alive_interval: Duration,
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;
@@ -618,6 +618,7 @@ pub fn subscription_stream(
         // `Response`, so nothing else pins the error type.
         yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
 
+        let mut graceful = true;
         loop {
             match listener.recv().await {
                 Ok(published) => {
@@ -653,9 +654,18 @@ pub fn subscription_stream(
                         missed,
                         "subscription stream fell behind; closing so the client re-subscribes"
                     );
+                    // Not graceful: updates were lost, and a success response
+                    // would tell the client its state is complete.
+                    graceful = false;
                     break;
                 }
             }
+        }
+        // The server ended the subscription (a client that hangs up drops the
+        // stream and never gets here). A lagged stream just closes: the
+        // abrupt end is the specification's non-graceful signal.
+        if graceful {
+            yield Ok(Event::default().event("message").data(subscription.graceful_end().to_string()));
         }
     };
 

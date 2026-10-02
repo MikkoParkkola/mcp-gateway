@@ -19,6 +19,8 @@ use crate::{Error, Result};
 pub(crate) const MAX_EACH_ITEMS: usize = 64;
 /// Most bytes all argv elements together may hold.
 pub(crate) const MAX_ARGV_BYTES: usize = 128 * 1024;
+/// Most bytes a call may write to a child's stdin.
+pub(crate) const MAX_STDIN_BYTES: usize = 1024 * 1024;
 
 /// A fully built CLI call: nothing in it is a template any more.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +94,14 @@ pub(crate) fn build_cli_invocation(
         Some(template) => Some(render_stdin(template, params)?),
         None => None,
     };
+    if let Some(text) = &stdin
+        && text.len() > MAX_STDIN_BYTES
+    {
+        return Err(invalid_params(format!(
+            "stdin is {} bytes, over the {MAX_STDIN_BYTES}-byte limit",
+            text.len()
+        )));
+    }
     Ok(CliInvocation {
         command: config.command.clone(),
         args,
@@ -147,12 +157,15 @@ fn render_element(
     let Some((start, end, name)) = single_placeholder(template)? else {
         return Ok(template.to_owned());
     };
-    // A value that starts the element could start with '-' and be read as an
-    // option. Only an operand after "--" may begin with a parameter; before it,
-    // a value must be bound inside a literal such as "--to={to}".
-    if start == 0 && !after_end_of_options {
+    // Before "--" a parameter may only be the VALUE of a fixed option, bound
+    // with '=' ("--to={to}"): anywhere else it could start an element and be
+    // read as an option, or choose the option's name ("--{opt}=x") or a
+    // subcommand ("get{what}"). After "--" every element is an operand.
+    let prefix = &template[..start];
+    if !(after_end_of_options || (prefix.starts_with('-') && prefix.contains('='))) {
         return Err(Error::Config(format!(
-            "CLI argument template '{template}' starts with a parameter before \"--\""
+            "CLI argument template '{template}' puts a parameter outside an option value \
+             before \"--\""
         )));
     }
     let value = required_text(params, name)?;

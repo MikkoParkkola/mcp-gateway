@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::resolve_command;
 use crate::capability::definition::{CliConfig, ProcessConfig};
 use crate::capability::executor::CapabilityExecutor;
-use crate::capability::{CapabilityDefinition, parse_capability};
+use crate::capability::{CapabilityDefinition, CapabilityExecutionContext, parse_capability};
 
 fn python() -> PathBuf {
     let name = if cfg!(windows) { "python" } else { "python3" };
@@ -48,7 +48,12 @@ fn config(cap: &CapabilityDefinition) -> &CliConfig {
 
 async fn call(cap: &CapabilityDefinition, params: Value) -> crate::Result<Value> {
     CapabilityExecutor::new()
-        .execute_cli(cap, config(cap), &params)
+        .execute_cli(
+            cap,
+            config(cap),
+            &params,
+            &CapabilityExecutionContext::default(),
+        )
         .await
 }
 
@@ -216,4 +221,98 @@ fn redaction_removes_secrets_at_any_length_and_caller_values_from_four_bytes() {
     assert!(!out.contains("abc") && !out.contains("=sk"), "{out}");
     assert!(!out.contains("VALUE1"), "{out}");
     assert!(out.contains("tiny=ab"), "short caller values stay: {out}");
+}
+
+#[test]
+fn an_allowlisted_name_cannot_override_the_private_directories() {
+    let workdir = Path::new("/private-workdir");
+    let lookup = |_: &str| Some(std::ffi::OsString::from("/operator/home"));
+    let allowed = [
+        "HOME".to_owned(),
+        "xdg_config_home".to_owned(),
+        "TmpDir".to_owned(),
+    ];
+    let env = super::child_env(workdir, &allowed, &lookup, Some(("HOME", "x")));
+    let home: Vec<_> = env.iter().filter(|(k, _)| k == "HOME").collect();
+    assert_eq!(home.len(), 1, "{env:?}");
+    assert_eq!(home[0].1.as_os_str(), workdir.as_os_str());
+    // PATH is resolved through the same lookup and legitimately carries its
+    // value; every directory the gateway makes private must not.
+    for (key, value) in &env {
+        if key != "PATH" {
+            assert_ne!(value, "/operator/home", "{key:?} was overridden: {env:?}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_refused_credential_is_the_typed_unauthorized_error() {
+    let cap = capability("unauthorized", "x", "", 30);
+    let err = call(&cap, json!({})).await.unwrap_err();
+    assert!(
+        crate::security::http_diagnostics::is_upstream_unauthorized(&err),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_typed_process_config_survives_serialization() {
+    let cap = capability("echo", "x", "", 30);
+    let out = serde_json::to_value(&cap.providers).unwrap();
+    assert_eq!(
+        out["named"]["primary"]["config"]["command"],
+        python().display().to_string()
+    );
+}
+
+/// T6: a `.cmd` shim (how npm installs gws on Windows) is resolved and run
+/// through std's batch-argument escaping: a hostile value arrives intact or the
+/// call is refused, and is never expanded or split by cmd.exe.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let shim = dir.path().join("probe.cmd");
+    std::fs::write(
+        &shim,
+        format!("@\"{}\" \"{}\" echo %*\r\n", python().display(), script()),
+    )
+    .unwrap();
+    let yaml = format!(
+        "name: cmd_probe\ndescription: Cmd probe.\nschema:\n  input:\n    type: object\n\
+         providers:\n  primary:\n    service: cli\n    timeout: 30\n    config:\n      \
+         command: '{}'\n      args: [\"--to={{to}}\", \"--\", \"{{file}}\"]\n",
+        shim.display()
+    );
+    let cap = parse_capability(&yaml).expect("cmd probe parses");
+    let plain = call(&cap, json!({"to": "plain", "file": "plain"}))
+        .await
+        .expect("a benign call through the shim succeeds");
+    assert_eq!(plain["argv"], json!(["--to=plain", "--", "plain"]));
+    for hostile in ["%PATH%", "^&|<>", "\"q\" 'q'", "a b", "!VAR!", "--draft"] {
+        match call(&cap, json!({"to": hostile, "file": hostile})).await {
+            Ok(out) => assert_eq!(
+                out["argv"],
+                json!([format!("--to={hostile}"), "--", hostile]),
+                "{hostile:?} was altered on its way through the shim"
+            ),
+            Err(e) => assert!(
+                e.to_string().contains("invalid input"),
+                "{hostile:?}: unexpected failure {e}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn a_secret_straddling_the_excerpt_cut_is_removed_whole() {
+    let secret = "SECRET-straddles-the-cut-7782";
+    // Before the fix the excerpt was cut first, at 2 KiB from the end: this
+    // places the secret across that boundary.
+    let text = format!("{}{secret}{}", "x".repeat(3000), "y".repeat(2040));
+    let out = super::super::cli::redact(&text, &[secret.to_owned()], &[]);
+    assert!(
+        !out.contains("SECRET-str") && !out.contains("cut-7782"),
+        "{out}"
+    );
 }

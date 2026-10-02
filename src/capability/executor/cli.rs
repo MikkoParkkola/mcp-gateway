@@ -38,6 +38,21 @@ impl CapabilityExecutor {
         refuse_egress(capability)?;
         let params = confine_paths(capability, params, &self.process_policy.files)?;
         let invocation = build_cli_invocation(config, &params, &capability.schema.input)?;
+        // The slot first: no credential is fetched and no directory made for a
+        // call that would then wait behind the capability's busy children.
+        let slots = Arc::clone(
+            self.process_slots
+                .entry(capability.name.clone())
+                .or_insert_with(|| {
+                    Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PER_CAPABILITY))
+                })
+                .value(),
+        );
+        let _slot = slots
+            .acquire_owned()
+            .await
+            .map_err(|_| Error::Internal("process slots closed".into()))?;
+
         let token = match &config.token_env {
             Some(name) => Some((name.as_str(), self.cli_token(capability, context).await?)),
             None => None,
@@ -69,19 +84,6 @@ impl CapabilityExecutor {
             .map(|v| v.to_string_lossy().into_owned())
             .chain(token.map(|(_, value)| value))
             .collect();
-
-        let slots = Arc::clone(
-            self.process_slots
-                .entry(capability.name.clone())
-                .or_insert_with(|| {
-                    Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_PER_CAPABILITY))
-                })
-                .value(),
-        );
-        let _slot = slots
-            .acquire_owned()
-            .await
-            .map_err(|_| Error::Internal("process slots closed".into()))?;
 
         let timeout = Duration::from_secs(
             capability
@@ -228,6 +230,13 @@ fn interpret(
             CliOutput::Text => Ok(json!({ "text": String::from_utf8_lossy(&outcome.stdout) })),
         };
     }
+    if unauthorized(outcome) {
+        return Err(Error::JsonRpc {
+            code: crate::security::http_diagnostics::CLI_UNAUTHORIZED,
+            message: format!("'{}' refused its credential", invocation.command),
+            data: None,
+        });
+    }
     let code = outcome
         .status
         .code()
@@ -237,6 +246,14 @@ fn interpret(
         "'{}' exited with {code}: {excerpt}",
         invocation.command
     )))
+}
+
+/// A JSON error with code 401 on stdout: the tool refused its credential.
+fn unauthorized(outcome: &CliOutcome) -> bool {
+    serde_json::from_slice::<Value>(&outcome.stdout)
+        .ok()
+        .and_then(|body| body.pointer("/error/code").and_then(Value::as_i64))
+        == Some(401)
 }
 
 /// The most useful text a failed child left: a JSON `error.message` on stdout
@@ -250,8 +267,9 @@ fn diagnostic(outcome: &CliOutcome) -> String {
             .and_then(Value::as_str)
             .map_or_else(|| error.to_string(), str::to_owned);
     }
-    let tail = &outcome.stderr[outcome.stderr.len().saturating_sub(EXCERPT_BYTES)..];
-    String::from_utf8_lossy(tail).trim().to_owned()
+    // The whole (capped) stream: `redact` removes secrets first and only then
+    // keeps the tail, so a secret cannot straddle the cut.
+    String::from_utf8_lossy(&outcome.stderr).trim().to_owned()
 }
 
 /// Every string, number and boolean the caller supplied.

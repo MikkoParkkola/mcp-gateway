@@ -154,7 +154,13 @@ pub(crate) fn status_refusal(
 /// status only, never from body text (ADR-008, `personal_accounts/refusal.rs`).
 pub(crate) fn is_upstream_unauthorized(error: &Error) -> bool {
     matches!(error, Error::Http(e) if e.status() == Some(StatusCode::UNAUTHORIZED))
+        || matches!(error, Error::JsonRpc { code, .. } if *code == CLI_UNAUTHORIZED)
 }
+
+/// The code a CLI capability's refusal of its credential is reported with
+/// (gws exits 2 with a JSON error whose code is 401), so the managed-account
+/// refresh runs for CLI calls exactly as for a REST 401 (MIK-7782).
+pub(crate) const CLI_UNAUTHORIZED: i32 = 401;
 
 /// OAuth token-endpoint / registration failure. Status stays; body does not.
 #[must_use]

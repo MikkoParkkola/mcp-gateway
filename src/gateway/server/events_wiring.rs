@@ -21,6 +21,7 @@ pub(super) fn install(
     meta_mcp: &MetaMcp,
     webhooks: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
+    credentials: crate::events::LiveCredentials,
 ) -> Result<()> {
     if config.webhooks.enabled {
         meta_mcp.set_webhook_registry(Arc::clone(webhooks));
@@ -36,7 +37,7 @@ pub(super) fn install(
         hub.set_webhook_registry(Arc::clone(webhooks));
         webhooks.write().set_events(Arc::clone(&hub));
     }
-    hub.start(meta_mcp.events_services(Arc::clone(live_config)));
+    hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
     meta_mcp.set_events(hub);
     Ok(())
 }

@@ -11,7 +11,7 @@ use super::ProviderConfig;
 use super::process::ProcessConfig;
 
 /// Provider configurations supporting both named and fallback arrays
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default)]
 pub struct ProvidersConfig {
     /// Named providers (primary, secondary, etc.)
     pub named: HashMap<String, ProviderConfig>,
@@ -20,18 +20,15 @@ pub struct ProvidersConfig {
     /// Keys under a provider that no field reads, as dotted paths from
     /// `providers` (`providers.primary.config.methd`). Serde ignores them, so a
     /// misspelling would load silently; the validator reports each (CAP-012).
-    #[serde(skip)]
     pub unread_keys: Vec<String>,
     /// Typed `config` of each provider whose `service` runs a local process
     /// (`cli`, `mcp`; MIK-7782), keyed like `named` (`fallback[i]` for a
     /// fallback entry). Filled at load only, so a definition built any other
     /// way has none and cannot run a process.
-    #[serde(skip)]
     pub process: HashMap<String, ProcessConfig>,
     /// Whether the file these providers came from carried a pin that matched.
     /// Only `parse_capability_file` sets [`Integrity::Verified`]; a process
     /// provider of an `Unpinned` definition never runs (MIK-7782).
-    #[serde(skip)]
     pub integrity: Integrity,
 }
 
@@ -62,6 +59,39 @@ impl ProvidersConfig {
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&ProviderConfig> {
         self.named.get(key)
+    }
+}
+
+/// Serialized as before (`named`, `fallback`), except that a process-running
+/// provider's `config` is its typed config, which serde would otherwise drop
+/// (the `config` it deserialized from was taken out at load).
+impl Serialize for ProvidersConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error as _, SerializeStruct as _};
+        let render = |key: &str, provider: &ProviderConfig| {
+            let mut value = serde_json::to_value(provider).map_err(S::Error::custom)?;
+            if let (Some(typed), Some(object)) = (self.process.get(key), value.as_object_mut()) {
+                object.insert(
+                    "config".to_owned(),
+                    serde_json::to_value(typed).map_err(S::Error::custom)?,
+                );
+            }
+            Ok::<_, S::Error>(value)
+        };
+        let mut named = serde_json::Map::new();
+        for (key, provider) in &self.named {
+            named.insert(key.clone(), render(key, provider)?);
+        }
+        let fallback = self
+            .fallback
+            .iter()
+            .enumerate()
+            .map(|(i, provider)| render(&format!("fallback[{i}]"), provider))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut out = serializer.serialize_struct("ProvidersConfig", 2)?;
+        out.serialize_field("named", &named)?;
+        out.serialize_field("fallback", &fallback)?;
+        out.end()
     }
 }
 
