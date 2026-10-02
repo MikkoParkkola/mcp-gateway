@@ -380,3 +380,6 @@ async fn delayed_http_body_keeps_reservation() {
         }
     }
 }
+
+#[path = "tenant_read_streams.rs"]
+mod streams;

@@ -23,6 +23,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 pub(crate) use rpc::Caller;
+pub(crate) use types::CallbackFailure;
 pub(crate) use types::RpcError;
 
 use crate::config::EventsConfig;

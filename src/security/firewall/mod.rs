@@ -43,6 +43,7 @@ pub mod principal_window;
 pub mod redactor;
 mod response;
 pub mod tenant_guard;
+pub(crate) mod tenant_reads;
 
 #[cfg(test)]
 mod anomaly_learning_tests;
