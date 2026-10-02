@@ -144,7 +144,7 @@ impl EventsHub {
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);
         let id = event_id.to_owned();
         match self
-            .blocking(move |store| store.revive(&id, dead_at, record, caps, Utc::now()))
+            .blocking(move |store| store.revive(&id, dead_at, record, caps, Utc::now))
             .await
         {
             Some(Revived::Written) => {

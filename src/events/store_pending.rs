@@ -246,9 +246,11 @@ impl Store {
         dead_at: DateTime<Utc>,
         record: OutboxRecord,
         caps: OutboxCaps,
-        now: DateTime<Utc>,
+        clock: impl FnOnce() -> DateTime<Utc>,
     ) -> std::io::Result<Revived> {
         let mut state = self.state.lock();
+        // Read under the lock: an expiry that lands while this waits counts.
+        let now = clock();
         if state
             .dead
             .get(event_id)
@@ -276,11 +278,14 @@ impl Store {
             Ok(Enqueued::DroppedGlobal | Enqueued::DroppedPerSubscription) => {
                 return Ok(Revived::Full);
             }
-            // Placed but not synced: the record stands and will deliver.
-            Err(error) if state.outbox.contains_key(event_id) => {
-                tracing::warn!(%error, "events store: replay record not synced");
+            // Placed but not durable: roll it back, so a crash cannot lose
+            // both copies. The dead letter stands.
+            Err(error) => {
+                if state.outbox.remove(event_id).is_some() {
+                    let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
+                }
+                return Err(error);
             }
-            Err(error) => return Err(error),
         }
         // The dead file must be unlinked before the replay counts: if it
         // cannot be, the new record is rolled back so one of the two stands.
