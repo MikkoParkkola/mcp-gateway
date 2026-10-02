@@ -19,7 +19,7 @@ use super::records::{
 
 #[path = "store_pending.rs"]
 mod pending;
-pub(crate) use pending::{Claim, Claimed, DeadSummary, Revived, Settle};
+pub(crate) use pending::{Claim, Claimed, Revived, Settle};
 
 /// Bounds on verification records whose last subscription has ended.
 #[derive(Debug, Clone, Copy)]
