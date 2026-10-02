@@ -1,5 +1,5 @@
-head_sha	aa3d7f67277cc02dea0bb549c65f866a930b6fe0
-# batch 1 for #2724 (identity minter enum)
+head_sha	092a61cf076f95a187b78d16f0c4a2acbe54e432
+# batch 2 for #2724 (identity minter enum)
 I1	linux	i1.patch	--lib -- revalidate_refuses_each_way_the_world_moved
 I2	linux	i2.patch	--lib -- a_reinstalled_minter_of_either_kind
 I3	linux	i3.patch	--lib -- a_revoke_after_the_mint_refuses

@@ -1,5 +1,5 @@
 diff --git a/src/identity_propagation/account_strategies.rs b/src/identity_propagation/account_strategies.rs
-index d68ca8e12..ee5f4c742 100644
+index 475e04e01..877a18184 100644
 --- a/src/identity_propagation/account_strategies.rs
 +++ b/src/identity_propagation/account_strategies.rs
 @@ -623,7 +623,7 @@ impl AccountStrategyRegistry {
