@@ -26,11 +26,22 @@ async fn start_backend(
     accepts: &str,
     selects: &str,
 ) -> (tempfile::TempDir, Arc<StdioTransport>, Result<()>) {
+    start_backend_with(accepts, selects, "").await
+}
+
+/// [`start_backend`], writing the lines in `before_answer` (each ending in
+/// `\n`) ahead of the accepted `initialize` answer.
+async fn start_backend_with(
+    accepts: &str,
+    selects: &str,
+    before_answer: &str,
+) -> (tempfile::TempDir, Arc<StdioTransport>, Result<()>) {
     let workspace = tempfile::tempdir().expect("workspace");
     let script = r#"while IFS= read -r request; do
     id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
     case "$request" in
         *'"method":"initialize"'*'"protocolVersion":"ACCEPTS"'*)
+            printf '%s' 'BEFORE'
             printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"SELECTS","capabilities":{}}}\n' "$id"
             ;;
         *'"method":"initialize"'*)
@@ -40,7 +51,8 @@ async fn start_backend(
 done
 "#
     .replace("ACCEPTS", accepts)
-    .replace("SELECTS", selects);
+    .replace("SELECTS", selects)
+    .replace("BEFORE", before_answer);
     std::fs::write(workspace.path().join("server.sh"), script).expect("write server");
 
     let transport = StdioTransport::new(
@@ -131,6 +143,42 @@ fn a_backend_line_is_never_written_to_the_log() {
     assert!(
         !records.is_empty(),
         "the capture must see the transport's records"
+    );
+    let leaked: Vec<_> = records
+        .iter()
+        .filter(|r| r.to_string().contains("sk-live"))
+        .collect();
+    assert!(leaked.is_empty(), "{leaked:#?}");
+}
+
+/// The peer's own fields are text it chose too: the method of a request or
+/// notification it sends, and the id of an answer nobody asked for, must not
+/// reach the log either.
+#[test]
+fn peer_methods_and_unmatched_ids_are_never_written_to_the_log() {
+    const PEER_LINES: &str = concat!(
+        r#"{"jsonrpc":"2.0","id":"sk-live-request-id","method":"sk-live-request"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","method":"sk-live-notification"}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":"sk-live-unmatched","result":{}}"#,
+        "\n",
+    );
+    let records = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let (_workspace, transport, outcome) =
+                    start_backend_with(PROTOCOL_VERSION, PROTOCOL_VERSION, PEER_LINES).await;
+                let _ = transport.close().await;
+                outcome.expect("the peer's extra lines must not stop the start");
+            });
+    });
+    assert!(
+        records.len() >= 3,
+        "the capture must see a record for each peer line: {records:#?}"
     );
     let leaked: Vec<_> = records
         .iter()
