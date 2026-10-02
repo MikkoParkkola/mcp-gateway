@@ -176,10 +176,16 @@ fn peer_methods_and_unmatched_ids_are_never_written_to_the_log() {
                 outcome.expect("the peer's extra lines must not stop the start");
             });
     });
-    assert!(
-        records.len() >= 3,
-        "the capture must see a record for each peer line: {records:#?}"
-    );
+    for seen in [
+        "Peer sent a request on the response stream",
+        "Ignoring peer notification",
+        "No pending request found for response",
+    ] {
+        assert!(
+            records.iter().any(|r| r.to_string().contains(seen)),
+            "the capture must see each peer line handled ({seen}): {records:#?}"
+        );
+    }
     let leaked: Vec<_> = records
         .iter()
         .filter(|r| r.to_string().contains("sk-live"))

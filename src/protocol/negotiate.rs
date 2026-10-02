@@ -304,4 +304,44 @@ mod tests {
     fn ignores_unrelated_error() {
         assert!(!is_version_mismatch_error("Method not found"));
     }
+
+    // ── checked_selection ────────────────────────────────────────────────────
+
+    fn selecting(version: &str) -> Value {
+        serde_json::json!({ "protocolVersion": version })
+    }
+
+    #[test]
+    fn a_legacy_selection_is_accepted_everywhere() {
+        let answer = selecting("2025-06-18");
+        for selectable in [Selectable::Legacy, Selectable::LegacyOrModern] {
+            assert_eq!(
+                checked_selection(Some(&answer), selectable).unwrap(),
+                Some("2025-06-18")
+            );
+        }
+    }
+
+    #[test]
+    fn a_modern_selection_is_accepted_only_where_no_header_follows_it() {
+        let answer = selecting(MODERN_VERSIONS[0]);
+        assert_eq!(
+            checked_selection(Some(&answer), Selectable::LegacyOrModern).unwrap(),
+            Some(MODERN_VERSIONS[0])
+        );
+        assert!(checked_selection(Some(&answer), Selectable::Legacy).is_err());
+    }
+
+    #[test]
+    fn an_answer_naming_no_revision_selects_nothing() {
+        let answer = serde_json::json!({ "capabilities": {} });
+        assert_eq!(
+            checked_selection(Some(&answer), Selectable::Legacy).unwrap(),
+            None
+        );
+        assert_eq!(
+            checked_selection(None, Selectable::LegacyOrModern).unwrap(),
+            None
+        );
+    }
 }
