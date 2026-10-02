@@ -69,6 +69,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retry, so two starts of one backend cannot delete the tree the other is
   installing into. The delete runs on the blocking pool. A refusal that a fresh
   install would meet identically (`EALLOWGIT`) is not treated as a damaged tree.
+- **An operator's npm settings now reach the package managers a backend
+  spawns.** `env_clear()` left a backend's installs with none of them, so a
+  setting that has to apply to every backend — a CA bundle, a log level, an
+  offline preference — had to be repeated in each backend's own `env:`. A short
+  explicit allowlist is forwarded instead: `npm_config_allow_git`,
+  `npm_config_cafile`, `npm_config_loglevel`, `npm_config_offline`,
+  `npm_config_prefer_offline` and `npm_config_strict_ssl`, matched the way npm
+  reads them (case-insensitively) and delivered in the operator's own spelling.
+  An allowlist rather than a deny list because npm's credential surface is
+  open-ended — `_password`, `certfile`, `keyfile`, `userconfig`, and registry or
+  proxy URLs with embedded userinfo all name secrets — and anything a deny rule
+  misses would reach every backend. A backend that needs a credential names it
+  in its own `env:`, as it already does for `allow_git`.
+
+  Because this is one operator value handed to every backend, setting
+  `strict_ssl`, `cafile` or `allow_git` in the gateway's own environment sets
+  that policy deployment-wide. A backend that needs a different value names it
+  in its own `env:`, in whichever spelling — the backend's setting is not
+  forwarded over, and it is the one the child keeps.
+
 - **`gateway_search_tools` finds a backend by its own name.** The match ran over
   each tool's name and description only, so a query naming the server returned
   nothing unless the caller happened to guess one of that server's tool names —
