@@ -255,6 +255,18 @@ impl SubscriptionId {
         }
     }
 
+    /// The listen request's own response, which ends the subscription
+    /// gracefully: the specification's signal that the server closed it, as
+    /// opposed to a transport drop, which carries no response.
+    #[must_use]
+    pub fn graceful_end(&self) -> Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": self.as_value(),
+            "result": { "_meta": { "io.modelcontextprotocol/subscriptionId": self.as_value() } },
+        })
+    }
+
     /// Tag a notification as belonging to this subscription.
     ///
     /// Into `params._meta`, which is where the specification's own example puts

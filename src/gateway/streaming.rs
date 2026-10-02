@@ -657,6 +657,9 @@ pub fn subscription_stream(
                 }
             }
         }
+        // Every way out of the loop is the server ending the subscription; a
+        // client that hangs up drops the stream and never gets here.
+        yield Ok(Event::default().event("message").data(subscription.graceful_end().to_string()));
     };
 
     Sse::new(stream)

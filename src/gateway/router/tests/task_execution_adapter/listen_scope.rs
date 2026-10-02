@@ -140,6 +140,18 @@ async fn a_listener_whose_token_is_revoked_is_closed_at_next_delivery() {
     );
     state.announce_tools_changed("alpha").await;
 
+    // MIK-7766: the server ends the subscription with the listen request's
+    // own response, which carries nothing but the subscription id.
+    match stream.next(super::helpers::ARRIVES_WITHIN).await {
+        StreamEvent::Message(m) => std::assert_eq!(
+            m,
+            json!({"jsonrpc": "2.0", "id": 3,
+                   "result": {"_meta": {"io.modelcontextprotocol/subscriptionId": 3}}}),
+            "a revoked token is told only that its subscription ended"
+        ),
+        StreamEvent::Closed => panic!("closed without the graceful end"),
+        StreamEvent::Silent => panic!("a revoked listener must be closed, not kept holding a slot"),
+    }
     match stream.next(super::helpers::ARRIVES_WITHIN).await {
         StreamEvent::Closed => {}
         StreamEvent::Message(m) => panic!("a revoked token was still told: {m}"),
