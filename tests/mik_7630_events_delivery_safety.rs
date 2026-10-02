@@ -339,6 +339,30 @@ async fn budget_refusal_dead_letters_with_reason_budget() {
     assert_eq!(refused.len(), 1, "one audit record for the refused attempt");
 }
 
+/// T28, charge clause: a delivery is charged through cost governance. A key
+/// budget of 1.5 against a 1.0 charge covers the first delivery and not the
+/// second: the first is posted and spends, the second is dead-lettered
+/// `budget`.
+#[tokio::test]
+async fn a_delivery_is_charged_against_the_key_budget() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({"cost_per_delivery_usd": 1.0}));
+    cfg["cost_governance"] = json!({"enabled": true, "budgets": {"per_key": {"alice": 1.5}}});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-28c-1", "o/r").await;
+    events_at_least(&rx, 1).await;
+    fire(&gw, "d-28c-2", "o/r").await;
+    dead_with_reason(root.path(), "budget").await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        rx.events().len(),
+        1,
+        "the charged delivery posted, the next did not"
+    );
+}
+
 /// T28, zero clause: a zero per-key budget is no limit, as for a tool call,
 /// so the delivery is posted.
 #[tokio::test]

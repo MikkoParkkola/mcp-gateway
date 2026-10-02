@@ -124,7 +124,7 @@ async fn every_delivery_attempt_writes_one_attributed_audit_record() {
     let gw = start_cfg(root.path(), &rx, cfg).await;
     subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
     rx.script([EventReply::Status(503), EventReply::Status(503)]);
-    fire(&gw, "d-29", "o/r").await;
+    fire(&gw, "d-29", "canary-owner/canary-repo").await;
     let posts = events_at_least(&rx, 3).await;
     let event_id = posts[0].json()["eventId"]
         .as_str()
@@ -159,6 +159,13 @@ async fn every_delivery_attempt_writes_one_attributed_audit_record() {
         assert!(
             record.get("tenants").is_some(),
             "tenant attribution: {text}"
+        );
+    }
+    // No record of the event, an attempt's or its outcome's, holds the body.
+    for record in audit_mentioning(root.path(), &event_id) {
+        assert!(
+            !record.to_string().contains("canary"),
+            "the audit record carries no body: {record}"
         );
     }
 }
