@@ -151,6 +151,7 @@ backend" and "fails a capability file" first.**
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 | 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
+| 127 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3558,6 +3559,26 @@ with a message. `mcp-gateway list --available` lists the whole library.
 
 **Action:** none for existing configs. After `add`, set any variable it names, then set
 `enabled: true` on the server.
+
+## 127. A capability that needs a login is listed once the login exists
+
+**Startup:** no notice
+
+The bundled catalogue is a library: it ships capabilities for many services, and most need an
+account. A capability that declares `auth.required: true` used to be listed whether or not its key
+existed, so a new install showed tools that could only fail. It is now left out of `tools/list` and
+search until its credential exists:
+
+- an `env:NAME` (or `{env.NAME}`, or bare `NAME`) key whose variable is set and non-empty in the
+  environment or an `env_files` entry;
+- an `oauth:<provider>` key whose provider has a stored login.
+
+A `keychain:` or `file:` key, and a per-caller account credential, cannot be checked without reading
+a secret or knowing the caller, so those capabilities stay listed. Calls are unchanged: a hidden
+capability invoked by name behaves as before.
+
+**Action:** if a capability you use disappeared from the list, set the variable it names; supplying
+the key lists it again.
 
 ## Upgrading from 3.5.x: a walkthrough
 
