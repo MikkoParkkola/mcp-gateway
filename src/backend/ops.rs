@@ -362,9 +362,8 @@ impl Backend {
                 }
             }
         };
-        // A call sent at most once moves its payload into its one send; only a
-        // resend copies it per attempt (NFR.WORKLOAD.1). `with_retry` under a
-        // disabled policy is exactly one call, so both arms send the same way.
+        // A call sent at most once (as `with_retry` sends under a disabled
+        // policy) moves its payload in; only a resend copies (NFR.WORKLOAD.1).
         let result = if matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled {
             send(params, extra_headers).await
         } else {
