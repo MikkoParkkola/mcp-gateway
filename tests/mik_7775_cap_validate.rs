@@ -73,3 +73,18 @@ fn a_clean_file_validates_with_no_issue_codes() {
     assert!(out.status.success(), "{text}");
     assert!(!text.contains("CAP-0"), "no issue codes: {text}");
 }
+
+/// AC1: `openpencil_design` could not execute (`service: mcp`, no URL) and is
+/// gone from the shipped catalog rather than listed as a tool that never runs.
+#[tokio::test]
+async fn the_shipped_catalog_has_no_openpencil_design() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/capabilities");
+    let caps = mcp_gateway::capability::CapabilityLoader::load_directory(root)
+        .await
+        .expect("load the shipped catalog");
+    assert!(!caps.is_empty(), "the catalog loaded");
+    assert!(
+        caps.iter().all(|c| c.name != "openpencil_design"),
+        "openpencil_design must not ship"
+    );
+}
