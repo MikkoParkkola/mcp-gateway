@@ -5705,6 +5705,12 @@ mod identity_propagation_enforcement_tests {
             .arg(script)
             .arg(&exe)
             .env(ENV_VAR, &path)
+            // Under a zero file-size limit the child's coverage profile is written
+            // empty and corrupts the measured set (#2573); give it its own file.
+            .env(
+                "LLVM_PROFILE_FILE",
+                std::env::temp_dir().join("mcp-gateway-fsize-child-%p.profraw"),
+            )
             .output()
             .expect("spawn fsize-limited child process");
 

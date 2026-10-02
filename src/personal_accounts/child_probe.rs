@@ -70,12 +70,23 @@ struct Probe {
 
 impl Drop for Probe {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        reap(&mut self.child);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
     }
+}
+
+/// Reap `child`. One that has answered is exiting and writing its coverage
+/// profile, and a kill mid-write leaves a corrupt profile (#2573), so it gets a
+/// bounded grace; one still blocked is killed after it.
+pub(super) fn reap(child: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Run `test_name` in a fresh process over `root` with `action`, bounded by
