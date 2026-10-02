@@ -465,8 +465,8 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
 /// 3, no `targets`) still recovers. The same journey as above, shortened: a
 /// real SDK job, a durable handle, the gateway stopped, the row rewritten to
 /// the exact v3 form while it is down, and the owner reading the result after
-/// a restart. A legacy row takes the backend-level fallback, and the backend
-/// is reachable, so the result is delivered.
+/// a restart. A legacy row's upstream descriptor names its one call, which
+/// current policy still admits, so the result is delivered (MIK-7686).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from_a_version_3_row() {
     pins::require_supported_trust_override();
