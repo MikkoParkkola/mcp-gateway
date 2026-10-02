@@ -294,5 +294,6 @@ fn subject_kind_rank(kind: CbomSubjectKind) -> u8 {
         CbomSubjectKind::Resource => 3,
         CbomSubjectKind::Runtime => 4,
         CbomSubjectKind::Dependency => 5,
+        CbomSubjectKind::Event => 6,
     }
 }
