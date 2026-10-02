@@ -47,28 +47,23 @@ pub(super) fn inspect_tools_call_response(
         ResponseArtifactKind::FinalResponse,
         ResponseMutationPolicy::Redact,
     ) {
+        // Counts computed before the macros so their lines are graded (MIK-7725).
+        let (targets, findings) = (response_targets.len(), verdict.findings.len());
         if !verdict.allowed || verdict.action == FirewallAction::Block {
-            warn!(
-                targets = response_targets.len(),
-                findings = verdict.findings.len(),
-                "Firewall: response blocked"
-            );
+            warn!(targets, findings, "Firewall: response blocked");
             true
         } else {
             if verdict.action == FirewallAction::Warn {
-                warn!(
-                    targets = response_targets.len(),
-                    findings = verdict.findings.len(),
-                    "Firewall: response warning"
-                );
+                warn!(targets, findings, "Firewall: response warning");
             }
             false
         }
     } else {
         // No authenticated target means nothing can admit this artifact; fail
         // closed exactly as a Block would.
+        let targets = response_targets.len();
         warn!(
-            targets = response_targets.len(),
+            targets,
             "Firewall: response inspection lacked a policy target"
         );
         true
@@ -142,5 +137,26 @@ mod tests {
             DeliveryInspection::AlreadyInspected
         );
         assert_eq!(fw.response_inspection_counts().inspections, 1);
+    }
+
+    /// MIK-7324.COV.3: with no policy target nothing can admit the artifact,
+    /// so the result is replaced by the delivery refusal exactly as a Block
+    /// would be, keeping the request id.
+    #[test]
+    fn a_response_with_no_policy_target_is_refused_as_a_block() {
+        let fw = firewall();
+        let mut call = JsonRpcResponse::success(RequestId::Number(7), json!({"content": []}));
+
+        let inspection = inspect_tools_call_response(Some(&fw), &mut call, &[], &correlation());
+
+        assert_eq!(inspection, DeliveryInspection::AlreadyInspected);
+        assert!(call.delivery_refusal, "the response is a delivery refusal");
+        assert!(call.result.is_none(), "the backend result is gone");
+        assert_eq!(
+            call.id,
+            Some(RequestId::Number(7)),
+            "the request id is kept"
+        );
+        assert_eq!(call.error.as_ref().map(|e| e.code), Some(-32600));
     }
 }
