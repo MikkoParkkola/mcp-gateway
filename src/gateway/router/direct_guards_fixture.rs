@@ -474,11 +474,27 @@ pub(crate) async fn send(
     params: Value,
     session: Option<&str>,
 ) -> (StatusCode, Value) {
+    send_with_headers(fx, uri, key, method, params, session, &[]).await
+}
+
+/// [`send`] plus extra request headers, such as the modern era's mirrors.
+pub(crate) async fn send_with_headers(
+    fx: &Fx,
+    uri: &str,
+    key: &str,
+    method: &str,
+    params: Value,
+    session: Option<&str>,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Value) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
         .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
     if let Some(session_id) = session {
         builder = builder.header("mcp-session-id", session_id);
     }

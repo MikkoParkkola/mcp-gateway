@@ -11,21 +11,34 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use crate::gateway::meta_mcp::signing::NONCE_META;
-use crate::gateway::router::direct_guards_fixture::{Answer, Fx, fixture_hardened_signed, send};
+use crate::gateway::router::direct_guards_fixture::{
+    Answer, Fx, fixture_hardened_signed, send_with_headers,
+};
+use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
 const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
 
-/// `tools/call read` on `backend` with `meta` as `params._meta`.
+/// `tools/call read` on `backend` as a modern-era request (the hardened
+/// posture serves the direct route no legacy `tools/call`), with `meta` merged
+/// into `params._meta`.
 async fn call(fx: &Fx, backend: &str, meta: Value) -> (StatusCode, Value) {
+    let mut meta = meta.as_object().cloned().unwrap_or_default();
+    meta.insert(KEY_PROTOCOL_VERSION.into(), json!(MODERN_VERSIONS[0]));
+    meta.insert(KEY_CLIENT_CAPABILITIES.into(), json!({}));
     let params = json!({"name": "read", "arguments": {}, "_meta": meta});
-    send(
+    send_with_headers(
         fx,
         &format!("/mcp/{backend}"),
         "k-std",
         "tools/call",
         params,
         None,
+        &[
+            ("mcp-protocol-version", MODERN_VERSIONS[0]),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", "read"),
+        ],
     )
     .await
 }
