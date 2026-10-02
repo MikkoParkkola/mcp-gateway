@@ -33,6 +33,7 @@ mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_dispatches;
 mod stdio_nonce;
+mod stdio_shutdown;
 mod stdio_tasks;
 mod stdio_writer;
 mod task_runtime;
@@ -154,29 +155,6 @@ async fn send_frame(
 /// Bounded rather than unbounded: past it the `JoinSet` aborts what is left,
 /// which is exactly the pre-concurrency behaviour and no worse (design §6).
 const STDIO_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// The teardown window after the stdio drain: `run_stdio_on` returns within
-/// `STDIO_DRAIN_TIMEOUT + STDIO_TEARDOWN_TIMEOUT` of EOF, whatever a backend
-/// stop, the custody store or a task does (MIK-7685). A step still running
-/// at the deadline is abandoned and logged; the process exits behind it.
-const STDIO_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Run one stdio teardown step under the shutdown deadline. `None` when it
-/// did not finish: the step is dropped, and the expiry logged by name.
-async fn bounded_step<F: std::future::Future>(
-    deadline: tokio::time::Instant,
-    step: &str,
-    future: F,
-) -> Option<F::Output> {
-    let finished = tokio::time::timeout_at(deadline, future).await.ok();
-    if finished.is_none() {
-        warn!(
-            step,
-            "stdio: shutdown step did not finish within the teardown deadline; abandoned"
-        );
-    }
-    finished
-}
 
 /// The stdio protocol-revision sink, shared by every spawned dispatch.
 ///
@@ -2739,7 +2717,7 @@ impl Gateway {
         // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. Every
         // await after them ends by `shutdown_deadline` (MIK-7685).
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
-        let shutdown_deadline = deadline + STDIO_TEARDOWN_TIMEOUT;
+        let shutdown_deadline = deadline + stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
         if tokio::time::timeout_at(deadline, async {
             while let Some(joined) = dispatches.join_next().await {
                 if let Err(e) = joined
@@ -2756,17 +2734,14 @@ impl Gateway {
                 timeout = ?STDIO_DRAIN_TIMEOUT,
                 "stdio: dispatch drain timed out; aborting what is left"
             );
-            dispatches.shutdown().await;
+            let abort = dispatches.shutdown();
+            stdio_shutdown::bounded_step(shutdown_deadline, "dispatch abort", abort).await;
         }
-        Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
-        // After the drain, so the last calls' spend is in the snapshot; the
-        // saver is stopped first so an older periodic save cannot land after.
+        Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink).await;
         #[cfg(feature = "cost-governance")]
         if let Some(enforcer) = &meta_mcp.budget_enforcer {
-            if let Some(saver) = cost_saver {
-                bounded_step(shutdown_deadline, "cost saver stop", saver.stop()).await;
-            }
-            persistence::save_costs(enforcer, &data_dir);
+            let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
+            stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir).await;
         }
         // Every sender gone, then the writer joined: the task drains its queue
         // and returns, which is what flushes the responses the drain produced.
@@ -2787,54 +2762,9 @@ impl Gateway {
         // any other exit path, which is the point of them.
         drop(idle_reaper);
         drop(health_loop);
-        // Awaited, not left to the drop guard: an abort is asynchronous, so a
-        // retry task mid-`ensure_started` would otherwise still be starting a
-        // backend while `stop_all` drains it — delaying shutdown and logging
-        // starts for a gateway that is on its way out. The guard remains the
-        // backstop for every path that does not reach this line.
-        bounded_step(
-            shutdown_deadline,
-            "warm-start cancel",
-            warm_start_tasks.cancel(),
-        )
-        .await;
-        // Tasks before custody and backends: a worker's dispatch IS a backend call.
-        if let Some((tasks, expiry)) = task_store {
-            let timeout = self.config.server.shutdown_timeout;
-            bounded_step(
-                shutdown_deadline,
-                "task store shutdown",
-                stdio_tasks::shutdown(&tasks, expiry, timeout),
-            )
+        self.stdio_teardown(shutdown_deadline, warm_start_tasks, task_store)
             .await;
-        }
-        // Release the custody store before the backends go. Reached on the EOF
-        // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
-        if let Some(Err(e)) = bounded_step(
-            shutdown_deadline,
-            "account custody shutdown",
-            self.shutdown_account_custody(),
-        )
-        .await
-        {
-            warn!(error = %e, "Personal account custody shutdown failed");
-        }
-        bounded_step(shutdown_deadline, "backend stop", self.backends.stop_all()).await;
         Ok(())
-    }
-
-    fn persist_stdio_protocol_telemetry(sink: &StdioTelemetry) {
-        let mut sink = sink
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(sink) = sink.as_mut()
-            && let Err(error) = sink.persist_global()
-        {
-            warn!(
-                %error,
-                "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
-            );
-        }
     }
 
     /// Run `fut` inside a notification scope, writing each notification the
