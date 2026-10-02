@@ -150,3 +150,38 @@ async fn certificate_keys_relay_and_recording() {
     )
     .await;
 }
+
+/// A signing failure replaces the result with a refusal: the caller is
+/// delivered nothing, so nothing is recorded and B sending the text is no
+/// relay.
+#[tokio::test]
+async fn a_signing_refusal_records_nothing() {
+    use crate::protocol::JsonRpcResponse;
+    use crate::security::message_signing::MessageSigner;
+
+    let (mut state, _store) = blocking_state().await;
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&state.backends));
+    let signer = MessageSigner::new(
+        b"relay-signing-key-sentinel-0123456789abcdef".to_vec(),
+        None,
+        "component-current".into(),
+    );
+    meta.enable_message_signing(signer, std::time::Duration::from_secs(300), false);
+    Arc::get_mut(&mut state).expect("state is unique").meta_mcp = Arc::new(meta);
+    let key = shared_key();
+    let subject = |id: &str| Who::Subject(GrantSubject::new("oidc:https://idp", id, None));
+    let (a, b) = (subject("alice"), subject("bob"));
+    let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
+    let mut response = JsonRpcResponse::success(RequestId::Number(1), delivered);
+    // An empty nonce is one the signer refuses.
+    let target = ("alpha", "read");
+    super::super::sign_and_record(&state, a.auth(&key), target, &mut response, Some(Some("")));
+    assert!(
+        response.result.is_none(),
+        "signing did not refuse: {response:?}"
+    );
+    assert!(
+        !refused(&state, b.auth(&key)),
+        "a result the caller never received was recorded"
+    );
+}

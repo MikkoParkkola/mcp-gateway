@@ -380,6 +380,19 @@ async fn a_relay_in_meta_is_refused() {
     assert_refused(&fx, &fx.call(Some("b"), &relay).await, 0);
 }
 
+/// A3b: an object key reaches the backend, so it is checked.
+#[tokio::test]
+async fn a_relay_in_an_argument_key_is_refused() {
+    let fx = fixture(Setup::default()).await;
+    fx.read(Some("a")).await;
+    let args = Value::Object([(PROSE.to_string(), json!(1))].into_iter().collect());
+    assert_refused(
+        &fx,
+        &fx.call(Some("b"), &call("send", &args, None, None)).await,
+        0,
+    );
+}
+
 /// A4: a caller-supplied `_context_integrity` in the arguments is content.
 #[tokio::test]
 async fn a_relay_in_argument_context_integrity_is_refused() {

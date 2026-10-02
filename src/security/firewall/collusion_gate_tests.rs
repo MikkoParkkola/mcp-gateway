@@ -115,19 +115,44 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
         .expect("nine principals can still be reached before a fingerprint saturates");
 }
 
-/// B3: responses skip the gateway's `_context_integrity`; arguments keep a
-/// caller-supplied one.
+/// B3: responses skip the gateway's own `_context_integrity` (top level, with
+/// its `schema_version`) and nothing else: a nested one, or one without the
+/// gateway's shape, is delivered content. Arguments keep a caller-supplied
+/// one. Object keys are text too: a key reaches the backend like a value.
 #[test]
 fn the_text_walker_skips_only_the_gateways_own_metadata_on_responses() {
-    let value =
-        json!({"content": [{"text": "one"}], "_context_integrity": {"note": "two"}, "n": 3});
-    assert_eq!(text_of(&value, true), "one");
-    let mut all: Vec<String> = text_of(&value, false)
-        .split('\n')
-        .map(String::from)
-        .collect();
-    all.sort();
-    assert_eq!(all, ["one", "two"]);
+    let value = json!({
+        "content": [{"text": "one"}],
+        "_context_integrity": {"schema_version": "v", "note": "two"},
+        "structuredContent": {"_context_integrity": {"note": "three"}},
+        "key four": 4,
+    });
+    let lines = |skip| -> Vec<String> {
+        text_of(&value, skip)
+            .split('\n')
+            .map(String::from)
+            .collect()
+    };
+    let response = lines(true);
+    for kept in ["one", "three", "key four", "content", "structuredContent"] {
+        assert!(
+            response.iter().any(|l| l == kept),
+            "{kept} missing: {response:?}"
+        );
+    }
+    assert!(!response.iter().any(|l| l == "two"), "{response:?}");
+    let forged = json!({"_context_integrity": {"note": "five"}});
+    assert!(
+        text_of(&forged, true).contains("five"),
+        "a backend's own is content"
+    );
+    let request = lines(false);
+    for kept in ["one", "two", "three", "key four"] {
+        assert!(
+            request.iter().any(|l| l == kept),
+            "{kept} missing: {request:?}"
+        );
+    }
 }
 
 /// B3: the adopted cap, pinned apart from the constant; at and below it the

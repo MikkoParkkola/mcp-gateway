@@ -1111,13 +1111,9 @@ async fn backend_handler_inner(
             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
                 crate::gateway::meta_mcp::invoke::audit::note_cached();
                 // A replay is a delivery too: it renews this caller's own copy.
-                #[cfg(feature = "firewall")]
-                record_direct_delivery(&state, auth, &name, call.tool, Some(&cached));
                 let mut response = JsonRpcResponse::success(id.clone(), cached);
-                if signs {
-                    let nonce = signing_nonce.as_deref();
-                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
-                }
+                let nonce = signs.then_some(signing_nonce.as_deref());
+                sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
                 return build_http_response(&response, StatusCode::OK);
             }
             Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
@@ -1172,12 +1168,8 @@ async fn backend_handler_inner(
                 let nonce = chain_nonce.as_deref();
                 state.meta_mcp.finish_direct(&mut response, &method, nonce);
                 // What the caller receives: after every gate and the finish.
-                #[cfg(feature = "firewall")]
-                record_direct_delivery(&state, auth, &name, call.tool, response.result.as_ref());
-                if signs {
-                    let nonce = signing_nonce.as_deref();
-                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
-                }
+                let nonce = signs.then_some(signing_nonce.as_deref());
+                sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
                 build_http_response(&response, StatusCode::OK)
             }
             // Settled as terminal unless raised before dispatch
@@ -1252,19 +1244,31 @@ async fn backend_handler_inner(
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
             let nonce = chain_nonce.as_deref();
             state.meta_mcp.finish_direct(&mut response, &method, nonce);
-            #[cfg(feature = "firewall")]
             if method == "tools/call" {
-                record_direct_delivery(&state, auth, &name, call.tool, response.result.as_ref());
-            }
-            if signs {
-                let nonce = signing_nonce.as_deref();
-                state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+                let nonce = signs.then_some(signing_nonce.as_deref());
+                sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
             }
             build_http_response(&response, StatusCode::OK)
         }
         // Settled, never dropped: an unsettled reservation releases the key and
         // lets a retry re-execute a side effect (ADR-012 consequence 1).
         Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
+    }
+}
+
+/// The direct caller's response, signed when `nonce` is `Some` and recorded as delivered.
+#[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
+fn sign_and_record(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    (server, tool): (&str, &str),
+    response: &mut JsonRpcResponse,
+    nonce: Option<Option<&str>>,
+) {
+    #[cfg(feature = "firewall")]
+    record_direct_delivery(state, auth, server, tool, response.result.as_ref());
+    if let Some(nonce) = nonce {
+        state.meta_mcp.sign_direct_delivery(response, nonce);
     }
 }
 
