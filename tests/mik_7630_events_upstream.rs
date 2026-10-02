@@ -754,7 +754,8 @@ async fn t39j_ineligible_backends_offer_no_upstream_events() {
                 json!({
                     "http_url": other.url,
                     "streamable_http": true,
-                    "identity_propagation": {"strategy": "passthrough", "session_mode": "per_user"},
+                    "identity_propagation": {"strategy": "passthrough",
+                    "audience": "https://idp.example", "session_mode": "per_user"},
                 }),
             ),
         ],
