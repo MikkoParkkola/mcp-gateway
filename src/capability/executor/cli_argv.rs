@@ -220,7 +220,7 @@ fn push_each(
 /// Walk a JSON template. A string that is exactly `"{p}"` becomes p's value
 /// with its type kept; `None` (p absent) drops the key or element. A string
 /// with text around one placeholder stays a string; serde escapes it.
-fn render_json(template: &Value, params: &Value) -> Result<Option<Value>> {
+pub(crate) fn render_json(template: &Value, params: &Value) -> Result<Option<Value>> {
     Ok(match template {
         Value::String(s) => match single_placeholder(s)? {
             Some((0, end, name)) if end == s.len() => {
