@@ -123,10 +123,19 @@ pub fn add_backend(
     }
     let mut backend = resolved.backend;
     let mut notes = Vec::new();
-    if let Some(entry) = resolved.entry
-        && let server_registry::Reach::Arbitrary { reason } = entry.reach
-    {
-        notes.push(format!("Added disabled. {reason}"));
+    if let Some(entry) = resolved.entry {
+        if let server_registry::Reach::Arbitrary { reason } = entry.reach
+            && !entry.reach_allows_on()
+        {
+            notes.push(format!("Added disabled. {reason}"));
+        }
+        if entry.auth == server_registry::Auth::OAuth {
+            notes.push(
+                "Logs in through your browser on first use. On a multi-user gateway the \
+                 stored token is refused to other users unless oauth.shared_account is true."
+                    .to_string(),
+            );
+        }
     }
     if backend.enabled {
         // The loader refuses an enabled backend whose reference resolves to

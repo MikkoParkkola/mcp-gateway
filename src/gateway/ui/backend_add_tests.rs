@@ -186,3 +186,29 @@ fn enabling_a_backend_with_an_unresolved_reference_is_refused() {
     assert!(message.contains("TAVILY_API_KEY"), "{message}");
     assert!(!config.backends["tavily"].enabled);
 }
+
+#[test]
+fn what_add_writes_survives_the_config_file_and_loads() {
+    // Disabled-with-unresolved and enabled-with-header must both persist and
+    // load: the point of the readiness rule is a file the gateway accepts.
+    let (dir, mut config) = config_with_env_file("TAVILY_API_KEY=\n");
+    add_backend(&mut config, "tavily", registry("tavily", &[])).unwrap();
+    add_backend(
+        &mut config,
+        "github",
+        registry("github", &[("GITHUB_TOKEN", "ghp_roundtrip")]),
+    )
+    .unwrap();
+    let path = dir.path().join("gateway.yaml");
+    write_config(&path, &config).unwrap();
+    let loaded = Config::load(Some(&path)).expect("the written config loads");
+    assert!(!loaded.backends["tavily"].enabled);
+    assert!(loaded.backends["github"].enabled);
+    assert_eq!(
+        loaded.backends["github"]
+            .headers
+            .get("Authorization")
+            .map(String::as_str),
+        Some("Bearer ghp_roundtrip")
+    );
+}

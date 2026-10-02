@@ -125,12 +125,10 @@ def fetch(url: str) -> tuple[int, bytes]:
     raise RuntimeError(f"unreachable after 3 attempts: {last}")
 
 
-def well_known(base: str, suffix: str) -> list[str]:
-    """RFC 8414 / RFC 9728 path insertion first, then the host root."""
+def well_known(base: str, suffix: str) -> str:
+    """RFC 8414 path insertion, as `src/oauth/metadata.rs` `well_known_url` builds it."""
     parts = urlsplit(base)
-    root = f"{parts.scheme}://{parts.netloc}/.well-known/{suffix}"
-    path = parts.path.rstrip("/")
-    return [root + path, root] if path else [root]
+    return f"{parts.scheme}://{parts.netloc}/.well-known/{suffix}{parts.path.rstrip('/')}"
 
 
 def fetch_json(url: str) -> dict:
@@ -142,17 +140,20 @@ def fetch_json(url: str) -> dict:
 
 
 def registration_endpoint(url: str) -> str | None:
-    """Follow protected-resource metadata to the authorization server's
-    `registration_endpoint`, as the gateway's backend OAuth client does."""
-    resource = next(filter(None, (fetch_json(u) for u in well_known(url, "oauth-protected-resource"))), {})
-    origin = "{0.scheme}://{0.netloc}".format(urlsplit(url))
-    for server in resource.get("authorization_servers") or [origin]:
-        for suffix in ("oauth-authorization-server", "openid-configuration"):
-            for candidate in well_known(server, suffix):
-                endpoint = fetch_json(candidate).get("registration_endpoint")
-                if endpoint:
-                    return endpoint
-    return None
+    """Discover the way the gateway's backend OAuth client does
+    (`src/oauth/client/mod.rs` `initialize`): protected-resource metadata at
+    the resource's origin, its FIRST authorization server (else the origin),
+    that server's RFC 8414 metadata with its issuer checked, then the
+    `registration_endpoint` the gateway registers at when it has no client_id."""
+    parts = urlsplit(url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    servers = fetch_json(well_known(origin, "oauth-protected-resource")).get("authorization_servers") or []
+    server, advertised = (servers[0], True) if servers else (origin, False)
+    meta = fetch_json(well_known(server, "oauth-authorization-server"))
+    issuer = meta.get("issuer", "")
+    if (issuer if advertised else issuer.rstrip("/")) != server:
+        return None
+    return meta.get("registration_endpoint")
 
 
 def probe(kind: str, target: str, version: str) -> str | None:

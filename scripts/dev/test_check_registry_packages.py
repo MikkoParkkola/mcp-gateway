@@ -78,13 +78,15 @@ answers["https://h/mcp"] = (405, b"")
 assert "without a credential" in crp.probe("http-header", "https://h/mcp", "")
 answers["https://h/mcp"] = (401, b"")
 assert crp.probe("http-header", "https://h/mcp", "") is None
-for url in ("https://h/.well-known/oauth-protected-resource/mcp", "https://h/.well-known/oauth-protected-resource",
-            "https://h/.well-known/oauth-authorization-server", "https://h/.well-known/openid-configuration"):
-    answers[url] = (404, b"")
+answers["https://h/.well-known/oauth-protected-resource"] = (404, b"")
+answers["https://h/.well-known/oauth-authorization-server"] = (404, b"")
 assert "no dynamic client registration" in crp.probe("http-oauth", "https://h/mcp", "")
-answers["https://h/.well-known/oauth-protected-resource/mcp"] = (200, json.dumps({"authorization_servers": ["https://as/x"]}).encode())
-answers["https://as/.well-known/oauth-authorization-server/x"] = (200, json.dumps({"registration_endpoint": "https://as/register"}).encode())
+# Discovery mirrors the runtime: origin PRM, first server, RFC 8414 path insertion, issuer checked.
+answers["https://h/.well-known/oauth-protected-resource"] = (200, json.dumps({"authorization_servers": ["https://as/x", "https://other"]}).encode())
+answers["https://as/.well-known/oauth-authorization-server/x"] = (200, json.dumps({"issuer": "https://as/x", "registration_endpoint": "https://as/register"}).encode())
 assert crp.probe("http-oauth", "https://h/mcp", "") is None
+answers["https://as/.well-known/oauth-authorization-server/x"] = (200, json.dumps({"issuer": "https://evil", "registration_endpoint": "https://as/register"}).encode())
+assert "no dynamic client registration" in crp.probe("http-oauth", "https://h/mcp", ""), "issuer mismatch must fail"
 check({"name": "x", "url": "https://h/mcp", "auth": "OAuth"}, ("http-oauth", "https://h/mcp", ""))
 check({"name": "x", "url": "https://h/mcp", "auth": "Header"}, ("http-header", "https://h/mcp", ""))
 assert crp.parse_entries('    RegistryEntry {\n        name: "o",\n        auth: Auth::OAuth,\n    },')[0]["auth"] == "OAuth"

@@ -53,6 +53,9 @@ pub struct AddBackendRequest {
     /// Environment variables as `{ "KEY": "VALUE" }` map.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Registry entry to add under `name` (the dashboard's registry mode). When
+    /// absent, `name` itself is looked up in the registry.
+    pub registry: Option<String>,
 }
 
 /// Request body for `PATCH /ui/api/backends/:name`.
@@ -197,7 +200,7 @@ async fn add_backend(
     // Resolve the whole backend: transport, description, and for a registry
     // entry its login, env templates and default state.
     let resolved = match resolve_backend(
-        &req.name,
+        req.registry.as_deref().unwrap_or(&req.name),
         req.command.as_deref(),
         req.url.as_deref(),
         req.description.as_deref(),
