@@ -110,3 +110,31 @@ async fn a_selection_that_is_not_a_version_is_refused_without_being_repeated() {
     assert!(matches!(error, Error::Protocol(_)), "{error:?}");
     assert!(!error.to_string().contains(NOT_A_VERSION), "{error}");
 }
+
+/// Neither a diagnostic nor the log may repeat what the backend sent: a
+/// backend can quote a credential back, and logs reach more readers than
+/// the caller does.
+#[test]
+fn a_backend_line_is_never_written_to_the_log() {
+    let records = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let (_workspace, transport, outcome) =
+                    start_backend(PROTOCOL_VERSION, NOT_A_VERSION).await;
+                let _ = transport.close().await;
+                assert!(outcome.is_err(), "the selection must be refused");
+            });
+    });
+    assert!(
+        !records.is_empty(),
+        "the capture must see the transport's records"
+    );
+    let leaked: Vec<_> = records
+        .iter()
+        .filter(|r| r.to_string().contains("sk-live"))
+        .collect();
+    assert!(leaked.is_empty(), "{leaked:#?}");
+}
