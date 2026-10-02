@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Negative control for check-registry-packages.py: every entry here is pinned
 // but must fail the live lookup (404 package, deprecated version, missing PyPI
-// release, 404 URL). The live workflow requires this file to fail.
+// release, 404 URL, a header endpoint that serves without a credential, an
+// OAuth endpoint without dynamic registration). The live workflow requires
+// this file to fail.
 static REGISTRY: &[RegistryEntry] = &[
     RegistryEntry {
         name: "missing-npm",
@@ -22,5 +24,24 @@ static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Http {
             default_url: "https://mcp.context7.com/does-not-exist-mik-7787",
         },
+    },
+    RegistryEntry {
+        name: "open-header",
+        command: "",
+        transport: Transport::Http {
+            default_url: "https://mcp.context7.com/mcp",
+        },
+        auth: Auth::Header {
+            name: "Authorization",
+            value: "Bearer ${NONE}",
+        },
+    },
+    RegistryEntry {
+        name: "oauth-without-dcr",
+        command: "",
+        transport: Transport::Http {
+            default_url: "https://mcp.hubspot.com",
+        },
+        auth: Auth::OAuth,
     },
 ];
