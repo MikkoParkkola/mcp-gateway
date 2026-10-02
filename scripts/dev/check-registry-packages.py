@@ -148,9 +148,16 @@ def main(argv: list[str]) -> int:
     offline = "--offline" in argv
     args = [a for a in argv[1:] if a != "--offline"]
     path = Path(args[0]) if args else DEFAULT_SOURCE
-    entries = parse_entries(path.read_text())
+    source = path.read_text()
+    entries = parse_entries(source)
     if not entries:
         print(f"FAIL: no registry entries parsed from {path}")
+        return 1
+    # A block whose closing brace is indented differently is not matched by
+    # ENTRY_RE; count the openings so it fails rather than goes unchecked.
+    declared = len(re.findall(r"^\s*RegistryEntry \{", source, re.M))
+    if declared != len(entries):
+        print(f"FAIL: {declared} RegistryEntry blocks in {path}, {len(entries)} parsed")
         return 1
     failures = []
     for entry in entries:

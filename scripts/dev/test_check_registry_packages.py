@@ -87,6 +87,14 @@ answers["https://pypi.org/pypi/q/1.0/json"] = (200, json.dumps({"urls": []}).enc
 assert "no distribution files" in crp.probe("pypi", "q", "1.0")
 
 
+# A block the entry pattern cannot match fails the whole check.
+import tempfile
+with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as drift:
+    drift.write('    RegistryEntry {\n        name: "a",\n        command: "npx -y a@1.0.0",\n    },\n'
+                '    RegistryEntry {\n        name: "b",\n        command: "npx -y b@1.0.0",\n      },\n')
+assert crp.main(["x", "--offline", drift.name]) == 1
+
+
 def unreachable(url):
     raise RuntimeError("down")
 
