@@ -17,10 +17,10 @@ name: {name}
 description: Test capability
 providers:
   primary:
-service: rest
-config:
-  base_url: https://example.com
-  path: /test
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /test
 "
     );
     crate::capability::parse_capability(&yaml).unwrap()
@@ -33,22 +33,22 @@ name: {name}
 description: Personal test capability
 schema:
   input:
-type: object
-properties:
-  required_value:
-    type: string
-required: [required_value]
+    type: object
+    properties:
+      required_value:
+        type: string
+    required: [required_value]
 metadata:
   exposure: personal
   identity_owner:
-authority: cloudflare_access
-subject: owner-1
+    authority: cloudflare_access
+    subject: owner-1
 providers:
   primary:
-service: rest
-config:
-  base_url: http://127.0.0.1:9
-  path: /test
+    service: rest
+    config:
+      base_url: http://127.0.0.1:9
+      path: /test
 "
     );
     crate::capability::parse_capability(&yaml).unwrap()
@@ -222,27 +222,27 @@ name: strict_selector
 description: Reject non-string selector values before schema coercion.
 schema:
   input:
-type: object
-properties:
-  category:
-    type: string
-    enum: ['1']
-    default: '1'
+    type: object
+    properties:
+      category:
+        type: string
+        enum: ['1']
+        default: '1'
 auth:
   required: true
   type: api_key
   key: env:PATH_SELECTOR_STRICT_TYPE_TEST_MISSING_20260718
 providers:
   primary:
-service: rest
-config:
-  base_url: https://example.com
-  path: /feeds/1
-  path_selector:
-    parameter: category
-    default: '1'
-    paths:
-      '1': /feeds/{category}
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /feeds/1
+      path_selector:
+        parameter: category
+        default: '1'
+        paths:
+          '1': /feeds/{category}
 ";
     let capability = crate::capability::parse_capability(yaml).unwrap();
     let backend = make_backend();
@@ -278,10 +278,10 @@ name: alpha
 description: Alpha tool
 providers:
   primary:
-service: rest
-config:
-  base_url: https://example.com
-  path: /alpha
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /alpha
 "
     )
     .unwrap();
@@ -325,10 +325,10 @@ name: alpha
 description: Alpha tool
 providers:
   primary:
-service: rest
-config:
-  base_url: https://example.com
-  path: /alpha
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /alpha
 "
     )
     .unwrap();
@@ -375,10 +375,10 @@ name: alpha
 description: Alpha tool
 providers:
   primary:
-service: rest
-config:
-  base_url: https://example.com
-  path: /alpha
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /alpha
 "
     )
     .unwrap();
@@ -419,30 +419,30 @@ name: linear_get_issue_test
 description: Test capability with output schema
 schema:
   input:
-type: object
-properties:
-  identifier:
-    type: string
-required: [identifier]
-  output:
-type: object
-properties:
-  issue:
     type: object
     properties:
-      id:
+      identifier:
         type: string
-      title:
-        type: string
-    required: [id, title]
-required: [issue]
+    required: [identifier]
+  output:
+    type: object
+    properties:
+      issue:
+        type: object
+        properties:
+          id:
+            type: string
+          title:
+            type: string
+        required: [id, title]
+    required: [issue]
 providers:
   primary:
-service: rest
-config:
-  base_url: "https://api.example.com"
-  path: /issue
-  method: GET
+    service: rest
+    config:
+      base_url: "https://api.example.com"
+      path: /issue
+      method: GET
 "#;
     let cap = crate::capability::parse_capability(yaml).unwrap();
     let result = build_success_tool_result(
@@ -499,10 +499,10 @@ name: rugtest
 description: Initially legit
 providers:
   primary:
-service: rest
-config:
-  base_url: https://example.com
-  path: /v1
+    service: rest
+    config:
+      base_url: https://example.com
+      path: /v1
 ";
     let hash = compute_capability_hash(body);
     let pinned = rewrite_with_pin(body, &hash);
