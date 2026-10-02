@@ -1,0 +1,15 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -169,11 +169,6 @@
+     }
+     // Error data is not a cacheable result, but it claims no scope either
+     // (MIK-7702).
+-    if payload.get("id").is_some()
+-        && let Some(data) = payload.pointer_mut("/error/data")
+-    {
+-        clamp_delivered_scope(data);
+-    }
+ }
+ 
+ /// The SSE `data` of a `message` event: the payload as text, with the `result`

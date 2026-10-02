@@ -1,0 +1,14 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -98,9 +98,7 @@
+ /// this one top-level slot is followed; nested tool data is never touched.
+ fn task_result_slot(result: &Value) -> Option<&Value> {
+     let task_id = result.get("taskId")?;
+-    if !task_id.is_string() {
+-        result.get("status")?;
+-    }
++    let _ = task_id;
+     result.get("result").filter(|slot| slot.is_object())
+ }
+ 

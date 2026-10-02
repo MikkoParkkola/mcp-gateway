@@ -1,0 +1,15 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -97,10 +97,7 @@
+ /// malformed backend's envelope, MIK-7702), whose `result` is an object. Only
+ /// this one top-level slot is followed; nested tool data is never touched.
+ fn task_result_slot(result: &Value) -> Option<&Value> {
+-    let task_id = result.get("taskId")?;
+-    if !task_id.is_string() {
+-        result.get("status")?;
+-    }
++    result.get("taskId")?.as_str()?;
+     result.get("result").filter(|slot| slot.is_object())
+ }
+ 
