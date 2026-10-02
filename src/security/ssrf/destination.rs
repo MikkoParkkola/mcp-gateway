@@ -68,19 +68,26 @@ impl DestinationPolicy {
     ///
     /// `Error::Protocol("{SSRF_BLOCKED}: ...")` (-32600).
     pub(crate) fn check_literal(self, url: &url::Url) -> Result<()> {
-        let Some(host) = url.host_str() else {
-            return Ok(());
-        };
+        self.literal_refusal(url)
+            .map_or(Ok(()), |refused| Err(Error::Protocol(refused)))
+    }
+
+    /// The bare `"{SSRF_BLOCKED}: ..."` refusal for `url`, or `None` when
+    /// [`Self::check_literal`] lets it pass. A caller that needs the message
+    /// without the error's `Display` prefix reads it here, so no other error
+    /// kind has to be handled.
+    pub(crate) fn literal_refusal(self, url: &url::Url) -> Option<String> {
+        let host = url.host_str()?;
         match host
             .trim_start_matches('[')
             .trim_end_matches(']')
             .parse::<IpAddr>()
         {
-            Ok(addr) if self.denies(addr) => Err(Error::Protocol(format!(
+            Ok(addr) if self.denies(addr) => Some(format!(
                 "{SSRF_BLOCKED}: host targets {}",
                 super::denied_address(addr)
-            ))),
-            _ => Ok(()),
+            )),
+            _ => None,
         }
     }
 }
