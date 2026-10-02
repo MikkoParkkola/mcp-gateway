@@ -1768,13 +1768,15 @@ impl MetaMcp {
         {
             let mut caps = cap.list_capabilities();
             caps.retain(|c| {
-                self.may_invoke(&cap.name, &c.name, scope, session_id)
-                    .is_ok()
+                cap.is_listed(&c.name)
+                    && self
+                        .may_invoke(&cap.name, &c.name, scope, session_id)
+                        .is_ok()
             });
             for c in &mut caps {
-                c.metadata
-                    .chains_with
-                    .retain(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok());
+                c.metadata.chains_with.retain(|t| {
+                    self.may_invoke(&cap.name, t, scope, session_id).is_ok() && cap.is_listed(t)
+                });
             }
             let routing = build_routing_instructions(&caps, &cap.name);
             if !routing.is_empty() {
@@ -2680,6 +2682,10 @@ mod account_entry_point_authz_tests;
 #[cfg(test)]
 #[path = "search_ranking_authz_tests.rs"]
 mod search_ranking_authz_tests;
+
+#[cfg(test)]
+#[path = "search_login_gate_tests.rs"]
+mod search_login_gate_tests;
 
 /// Whether the peer behind `backend` has had `method` removed from under it
 /// (MIK-7217, OUTBOUND.1).

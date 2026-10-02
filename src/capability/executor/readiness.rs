@@ -40,7 +40,13 @@ impl CapabilityExecutor {
         auth: &AuthConfig,
         oauth_seen: &mut HashMap<String, bool>,
     ) -> Option<String> {
-        if !auth.required || auth.account.is_some() {
+        // A per-caller account credential depends on who calls; a shared
+        // account is gateway-held, so its key is checked like any other.
+        let per_caller = auth
+            .account
+            .as_deref()
+            .is_some_and(|account| !self.account_is_shared(account));
+        if !auth.required || per_caller {
             return None;
         }
         if let Some(var) = env_var_of(&auth.key) {

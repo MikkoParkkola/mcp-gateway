@@ -187,7 +187,10 @@ impl MetaMcp {
             let admitted = cap
                 .list()
                 .iter()
-                .filter(|name| self.may_invoke(&cap.name, name, scope, session_id).is_ok())
+                .filter(|name| {
+                    cap.is_listed(name)
+                        && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+                })
                 .count();
             total = total.plus(admitted);
             servers += 1;

@@ -438,6 +438,17 @@ impl CapabilityBackend {
             .collect()
     }
 
+    /// Whether clients are shown the capability `name`: it exists and its
+    /// required login (if any) is in place. A name this backend does not hold
+    /// is not its to hide, so it counts as listed.
+    pub fn is_listed(&self, name: &str) -> bool {
+        self.capabilities.read().get(name).is_none_or(|entry| {
+            self.executor
+                .missing_credential(&entry.auth, &mut HashMap::new())
+                .is_none()
+        })
+    }
+
     /// Get a specific capability by name — O(1) via the name index.
     pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
         self.capabilities.read().get(name).cloned()
