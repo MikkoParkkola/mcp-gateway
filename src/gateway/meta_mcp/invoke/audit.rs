@@ -101,8 +101,7 @@ pub(super) fn noted_response(
     Value,
     Option<crate::security::tenant_reads::ReadAttribution>,
 ) {
-    let tenants = meta.response_tenants(&result);
-    let uninspected = meta.response_uninspected(&result);
+    let (tenants, uninspected) = meta.response_reading(&result);
     let read = crate::security::tenant_reads::in_read_scope()
         .then(|| crate::security::tenant_reads::ReadAttribution::of(tenants.clone(), uninspected));
     if !tenants.is_empty() {
@@ -277,6 +276,21 @@ impl MetaMcp {
         }
         let _ = result;
         BTreeSet::new()
+    }
+
+    /// The tenants a tool result names and whether part of it went unread, in
+    /// one walk. Empty without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn response_reading(&self, result: &Value) -> (BTreeSet<String>, bool) {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.tenant_guard().response_reading(result);
+        }
+        let _ = result;
+        (BTreeSet::new(), false)
     }
 
     /// MIN.1: whether tenant attribution is configured (a firewall with

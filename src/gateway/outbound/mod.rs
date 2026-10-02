@@ -131,9 +131,12 @@ impl OutboundFrame {
 
     /// Whether a sink bound to `destination` may write this frame. An
     /// unjudged frame carries no key and binds nowhere.
-    #[expect(
-        dead_code,
-        reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
+        )
     )]
     fn bound_to(&self, destination: &str) -> bool {
         self.key.as_deref().is_none_or(|key| key == destination)

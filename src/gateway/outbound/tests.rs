@@ -11,6 +11,7 @@
 
 use serde_json::{Value, json};
 
+use super::callback::{CallbackSend, send_callback};
 use super::*;
 use crate::protocol::RequestId;
 use crate::security::firewall::Firewall;
@@ -256,4 +257,58 @@ fn a_refusal_keeps_no_hidden_reading() {
         None,
         "a refusal charged its hidden B"
     );
+}
+
+/// A callback frame naming A for `KEY`, admitted under observe.
+fn callback_a(fw: &Firewall) -> OutboundFrame {
+    let read = attribute(fw, &json!({ "customer_id": A }));
+    match callback_frame(fw, KEY, json!({ "data": { "note": "x" } }), Some(&read)) {
+        Admission::Admitted(frame) => frame,
+        Admission::Blocked(e) => panic!("a first read is never blocked: {e:?}"),
+    }
+}
+
+/// Whether a B answer for `KEY` is flagged now.
+fn b_flagged(fw: &Firewall) -> bool {
+    let answer = JsonRpcResponse::success(RequestId::Number(9), json!({ "customer_id": B }));
+    delivered(fw, Some(KEY), Payload::Response(answer), None, None).verdict()
+        == Some(ReadVerdict::Flagged)
+}
+
+/// 2y: a callback commits once its body is handed over, whatever the answer;
+/// a send that never left the process releases it; a send cancelled in
+/// flight commits (review finding 4).
+#[tokio::test]
+async fn callback_commits_at_send() {
+    let fw = firewall(CrossTenantReads::Observe);
+    let sent = send_callback(callback_a(&fw), KEY, |_body| async {
+        CallbackSend::<()>::Sent(Err(crate::events::CallbackFailure::ConnectionRefused))
+    })
+    .await;
+    assert!(sent.is_err(), "premise: the recipient failed after reading");
+    assert!(
+        b_flagged(&fw),
+        "a body handed over commits, whatever the answer"
+    );
+
+    let fw = firewall(CrossTenantReads::Observe);
+    let _ = send_callback(callback_a(&fw), KEY, |_body| async {
+        CallbackSend::<()>::NotSent(crate::events::CallbackFailure::ConnectionRefused)
+    })
+    .await;
+    assert!(!b_flagged(&fw), "nothing left the process: released");
+
+    let fw = firewall(CrossTenantReads::Observe);
+    let cancelled = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        send_callback(callback_a(&fw), KEY, |_body| async {
+            std::future::pending::<CallbackSend<()>>().await
+        }),
+    )
+    .await;
+    assert!(
+        cancelled.is_err(),
+        "premise: the send was cancelled in flight"
+    );
+    assert!(b_flagged(&fw), "a send cancelled in flight still commits");
 }

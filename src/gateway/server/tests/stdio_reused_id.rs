@@ -17,7 +17,10 @@ use crate::protocol::RequestId;
 
 /// The next frame's written value.
 async fn recv(stdout: &mut mpsc::Receiver<OutboundFrame>) -> Option<Value> {
-    stdout.recv().await.and_then(|frame| frame.stdio_value())
+    stdout
+        .recv()
+        .await
+        .and_then(|frame| frame.stdio_value().map(std::borrow::Cow::into_owned))
 }
 
 const BOUND: Duration = Duration::from_secs(5);

@@ -6,6 +6,7 @@
 //! carries [`OutboundFrame`]s; the writer commits each after `stdout` took
 //! it, so a frame still queued counts as pending against the next one.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -27,16 +28,20 @@ impl OutboundFrame {
         Self::unjudged(Payload::Answer(value))
     }
 
-    /// The JSON value the stdio writer puts on `stdout`; `None` for a frame
-    /// that writes nothing.
-    pub(crate) fn stdio_value(&self) -> Option<Value> {
+    /// The JSON value the stdio writer puts on `stdout`, borrowed where the
+    /// frame already holds one (no copy on the default path); `None` for a
+    /// frame that writes nothing.
+    pub(crate) fn stdio_value(&self) -> Option<Cow<'_, Value>> {
         match &self.payload {
-            Payload::Answer(value) | Payload::Request(value) => Some(value.clone()),
-            Payload::Response(response) => Some(response.to_value_lossy()),
-            Payload::Notification(note) => serde_json::to_value(note).ok(),
-            Payload::Batch(items) => Some(Value::Array(
-                items.iter().filter_map(Self::stdio_value).collect(),
-            )),
+            Payload::Answer(value) | Payload::Request(value) => Some(Cow::Borrowed(value)),
+            Payload::Response(response) => Some(Cow::Owned(response.to_value_lossy())),
+            Payload::Notification(note) => serde_json::to_value(note).ok().map(Cow::Owned),
+            Payload::Batch(items) => Some(Cow::Owned(Value::Array(
+                items
+                    .iter()
+                    .filter_map(|item| item.stdio_value().map(Cow::into_owned))
+                    .collect(),
+            ))),
             Payload::Event(_) | Payload::Callback(_) | Payload::Withheld => None,
         }
     }

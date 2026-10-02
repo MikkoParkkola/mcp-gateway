@@ -204,6 +204,7 @@ mod tests {
             .await
             .expect("the request was never queued")
             .stdio_value()
+            .map(std::borrow::Cow::into_owned)
             .expect("a request writes a value");
         assert_eq!(
             sent.get("method").and_then(Value::as_str),
@@ -257,6 +258,7 @@ mod tests {
             .await
             .expect("the filler was queued")
             .stdio_value()
+            .map(std::borrow::Cow::into_owned)
             .expect("the filler writes a value");
         assert!(
             filler.get("filler").is_some(),

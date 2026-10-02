@@ -183,6 +183,12 @@ impl TenantGuard {
         self.scan_response(result).0
     }
 
+    /// [`Self::response_tenants`] and [`Self::response_uninspected`] in one
+    /// walk.
+    pub(crate) fn response_reading(&self, result: &Value) -> (BTreeSet<String>, bool) {
+        self.scan_response(result)
+    }
+
     /// Whether tenant attribution is configured (`arg_keys` set).
     pub(crate) fn attributes(&self) -> bool {
         !self.config.arg_keys.is_empty()

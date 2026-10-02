@@ -56,6 +56,7 @@ async fn a_notification_is_written_before_its_dispatch_returns() {
         .await
         .expect("nothing was queued")
         .stdio_value()
+        .map(std::borrow::Cow::into_owned)
         .expect("a notification writes a value");
     assert!(
         first.to_string().contains("notifications/progress"),
@@ -103,6 +104,7 @@ async fn a_late_notification_is_drained_before_the_response() {
         .await
         .expect("the late notification was dropped")
         .stdio_value()
+        .map(std::borrow::Cow::into_owned)
         .expect("a notification writes a value");
     assert!(late.to_string().contains("gw-late"));
 }
