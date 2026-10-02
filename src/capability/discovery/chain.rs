@@ -10,7 +10,7 @@ use futures::future::join_all;
 use reqwest::Client;
 use tracing::debug;
 
-use crate::security::ssrf::validate_url_not_ssrf;
+use crate::security::ssrf::{SSRF_BLOCKED, validate_url_not_ssrf};
 
 /// Ordered chain of spec probe strategies.
 pub struct DiscoveryChain<'a> {
@@ -154,7 +154,7 @@ impl<'a> DiscoveryChain<'a> {
         let mut source: Option<&dyn std::error::Error> = Some(error);
         while let Some(inner) = source {
             let text = inner.to_string();
-            if text.starts_with("SSRF blocked") {
+            if text.starts_with(SSRF_BLOCKED) {
                 self.ssrf_refusal
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)

@@ -843,7 +843,7 @@ async fn authenticate_request(
         // through to the anonymous identity below, exactly as before.
         if let Some((client, identity, via)) = key_server_credential(&state, &presented).await {
             debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
-            request.extensions_mut().insert(identity);
+            identity.insert_into(request.extensions_mut());
             request.extensions_mut().insert(client);
             return next.run(request).await;
         }
@@ -909,7 +909,7 @@ async fn authenticate_request(
             return deny;
         }
         debug!(client = %client.name, path = %path, "Authenticated via {via}");
-        request.extensions_mut().insert(identity);
+        identity.insert_into(request.extensions_mut());
         request.extensions_mut().insert(client);
         return next.run(request).await;
     }

@@ -18,14 +18,33 @@ pub(super) fn principal(owner: &str, auth_enabled: bool) -> Option<String> {
     (auth_enabled && !owner.is_empty()).then(|| owner.to_owned())
 }
 
-/// The credential `client` presented, as events keep it.
+/// The credential `client` presented, as events keep it. A key-server or
+/// delegated-bearer credential ends at its own expiry; a dashboard session
+/// at most one idle timeout from now, since activity alone extends it.
 pub(super) fn credential(
     client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    expiry: Option<crate::gateway::auth::live::CredentialExpiry>,
+    state: &super::super::AppState,
 ) -> crate::events::Credential {
+    let kind = CredentialKind::of(client);
+    let expires_at = match kind {
+        CredentialKind::DashboardSession => {
+            let idle = state
+                .live_config
+                .get()
+                .auth
+                .dashboard_session
+                .idle_timeout_secs;
+            let idle = chrono::Duration::seconds(i64::try_from(idle).unwrap_or(i64::MAX));
+            chrono::Utc::now().checked_add_signed(idle)
+        }
+        _ => expiry.map(|e| e.0),
+    };
     crate::events::Credential {
-        kind: CredentialKind::of(client),
+        kind,
         principal: client.map(|c| c.principal.clone()).unwrap_or_default(),
         api_key: api_key(client),
+        expires_at,
     }
 }
 

@@ -10,6 +10,7 @@ const POLICY: Retry = Retry {
     window: Duration::from_secs(900),
 };
 
+#[allow(clippy::unnecessary_wraps, reason = "judge reads the client's Result")]
 fn status(code: u16) -> Result<Answer, CallbackFailure> {
     Ok(Answer {
         status: code,

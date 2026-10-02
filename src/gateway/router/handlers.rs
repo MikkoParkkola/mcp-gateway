@@ -99,20 +99,6 @@ fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The owner key of a stateless task: the validated API-key credential. Only
-/// `route_task_owner` reads it (the firewall keys on `identity::caller_key`);
-/// tasks keep this encoding so an upgrade does not orphan stored ones. Empty
-/// when the caller is unauthenticated: that is not an identity.
-fn session_owner_key(client: Option<&AuthenticatedClient>) -> String {
-    client.map_or_else(String::new, |c| {
-        if c.authenticated && !c.principal.is_empty() {
-            format!("credential:{}", c.principal)
-        } else {
-            String::new()
-        }
-    })
-}
-
 /// The stateless path's answer to a protocol version this build cannot serve.
 ///
 /// The client is told which revisions it *could* retry on rather than left to
@@ -496,6 +482,11 @@ async fn meta_mcp_dispatch(
         .get::<OAuthAgentIdentity>()
         .cloned();
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
+    // MCP Events caps a subscription at the credential's own expiry.
+    let credential_expiry = http_request
+        .extensions()
+        .get::<crate::gateway::auth::live::CredentialExpiry>()
+        .copied();
 
     // === OWASP ASI03: per-agent identity ===
     //
@@ -897,7 +888,7 @@ async fn meta_mcp_dispatch(
     let owner = tasks::route_task_owner(
         &state,
         verified_identity.as_ref(),
-        &session_owner_key(client.as_ref()),
+        &tasks::session_owner_key(client.as_ref()),
     );
 
     // An empty owner key is not an identity — `session_owner_key` says so in
@@ -1109,7 +1100,7 @@ async fn meta_mcp_dispatch(
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
                 principal: events::principal(&owner, state.auth_config.enabled),
-                credential: events::credential(client.as_ref()),
+                credential: events::credential(client.as_ref(), credential_expiry, &state),
                 visible_backends: hub
                     .scope_backends()
                     .into_iter()

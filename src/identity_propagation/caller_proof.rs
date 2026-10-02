@@ -45,7 +45,7 @@ impl CallerProvenance {
     /// validated secret and is "Empty for an identity that presented no
     /// credential" (`AuthenticatedClient::principal`, `gateway/auth.rs`), which
     /// is exactly what a public path's caller carries — the same test
-    /// `handlers::session_owner_key` makes.
+    /// `handlers::tasks::session_owner_key` makes.
     ///
     /// Text never yields [`Self::LocalTransport`], whatever it spells, the stdio
     /// principal included (MIK-7272.OWNER.3): only

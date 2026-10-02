@@ -57,7 +57,22 @@ pub(crate) struct Credential {
     pub principal: String,
     /// Set only for a configured API key: the one credential whose live
     /// scope the re-check can read.
+    // ci-allow-secret-debug: a key's name and digest-derived principal, never the secret.
     pub api_key: Option<ApiKeyRef>,
+    /// When the credential itself stops being valid, if it says.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl Credential {
+    /// Whether delivery may outlive this credential only up to a bound: every
+    /// kind but an API key, whose expiry and grant every attempt re-reads.
+    pub(crate) const fn bounded(&self) -> bool {
+        !matches!(
+            self.kind,
+            crate::security::audit::CredentialKind::ApiKey
+                | crate::security::audit::CredentialKind::None
+        )
+    }
 }
 
 /// An API key as a caller presented it: its configured name and the
