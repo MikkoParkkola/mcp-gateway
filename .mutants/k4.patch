@@ -1,0 +1,12 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 8d1013067..1411fc211 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -148,7 +148,6 @@ impl Services {
+                     .is_some_and(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
+                 ks.config.delegated_bearer
+                     && provider_same
+-                    && young
+                     && ks
+                         .policy
+                         .resolve_scopes(

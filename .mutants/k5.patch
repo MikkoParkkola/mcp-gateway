@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 8d1013067..69851aabf 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -162,7 +162,7 @@ impl Services {
+             LiveBinding::StaticBearer => credentials
+                 .bearer_principal
+                 .as_deref()
+-                .is_some_and(|live| sub.credential_principal.as_deref() == Some(live)),
++                .is_some(),
+             LiveBinding::DashboardSession { session_sha256 } => {
+                 credentials.dashboard.as_ref().is_some_and(|dashboard| {
+                     let limits = crate::gateway::auth::SessionLimits::from(

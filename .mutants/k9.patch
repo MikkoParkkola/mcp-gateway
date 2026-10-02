@@ -1,0 +1,13 @@
+diff --git a/src/events/store.rs b/src/events/store.rs
+index cb6dfcbf3..37252e4da 100644
+--- a/src/events/store.rs
++++ b/src/events/store.rs
+@@ -387,7 +387,7 @@ impl Store {
+     ) -> std::io::Result<bool> {
+         let mut state = self.state.lock();
+         self.sweep(&mut state, now)?;
+-        let Some(sub) = state.subs.get(id).cloned().filter(|s| still(s)) else {
++        let Some(sub) = state.subs.get(id).cloned().filter(|s| still(s) || true) else {
+             self.trim_tails(&mut state, now, tail)?;
+             return Ok(false);
+         };

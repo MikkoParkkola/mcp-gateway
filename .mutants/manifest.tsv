@@ -1,0 +1,9 @@
+head_sha	e097856b172c54df16ddabeab5bfa4ed6fdc78c0
+# batch 1 for #2695 (MIK-7769)
+K1	linux	k1.patch	--lib -- key_server_credentials_are_rechecked_where_they_were_issued
+K2	linux	k2.patch	--lib -- a_delegated_bearer_is_rechecked_against_the_running_key_server
+K3	linux	k3.patch	--lib -- a_delegated_bearer_is_rechecked_against_the_running_key_server
+K4	linux	k4.patch	--lib -- a_delegated_bearer_is_rechecked_against_the_running_key_server
+K5	linux	k5.patch	--lib -- a_static_bearer_subscription_needs_the_same_running_bearer
+K7	linux	k7.patch	--lib -- a_static_bearer_subscription_needs_the_same_running_bearer
+K9	linux	k9.patch	--lib -- a_revocation_decided_on_an_old_row_spares_a_rebound_one

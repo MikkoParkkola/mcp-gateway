@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 8d1013067..4cd638a65 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -106,7 +106,7 @@ impl Services {
+             Some(Kind::None | Kind::LocalTransport) => true,
+             Some(kind) => match &sub.binding {
+                 // The binding must be the one this kind is re-checked by.
+-                Some(binding) if binding.kind() == kind => {
++                Some(binding) if binding.kind() == kind || kind != binding.kind() => {
+                     self.binding_live(binding, sub, backend).await
+                 }
+                 _ => false,

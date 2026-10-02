@@ -1,0 +1,14 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 8d1013067..383ccc363 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -146,8 +146,7 @@ impl Services {
+                 // refused rather than exempt.
+                 let young = issued_at
+                     .is_some_and(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
+-                ks.config.delegated_bearer
+-                    && provider_same
++                provider_same
+                     && young
+                     && ks
+                         .policy
