@@ -51,6 +51,10 @@ fn api_key(name: &str, key: &str, backends: &[&str]) -> Value {
 
 /// The I2 delivery config with backend `x` = `backend` added; alice and bob
 /// may reach `x`, carol may not.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "call sites build the value inline with json!"
+)]
 fn upstream_config(root: &Path, backend: Value, extra: &[(&str, Value)]) -> Value {
     let mut cfg = delivery_config(root, &json!({}));
     cfg["backends"] = json!({ "x": backend });
@@ -86,6 +90,10 @@ async fn start_listed(root: &Path, receiver: &Receiver, cfg: Value) -> Gateway {
     gw
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "call sites build the value inline with json!"
+)]
 fn sub_params(name: &str, url: &str, secret: &str, arguments: Value) -> Value {
     json!({
         "name": name,
@@ -174,6 +182,7 @@ fn listen_uris(filter: &Value) -> Vec<String> {
 
 /// T39a: a 2026-07-28 HTTP backend, through `subscriptions/listen`.
 #[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one row, seven clauses on one peer")]
 async fn t39a_modern_http_resource_updates_become_events() {
     let dir = tempfile::tempdir().expect("tempdir");
     let receiver = Receiver::start(dir.path()).await;
