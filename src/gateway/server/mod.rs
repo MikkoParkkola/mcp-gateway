@@ -1558,9 +1558,6 @@ impl Gateway {
             self.env.startup(),
         )?);
 
-        // Webhook registry into MetaMcp (gateway_webhook_status), and events.
-        events_wiring::install(&self.config, &meta_mcp, &webhook_registry)?;
-
         // Live config handle: shared by the hot-reload watcher (which swaps it
         // on every applied reload) and AppState (which reads control-plane role
         // mapping through it, so a reload takes effect without restart —
@@ -1570,6 +1567,8 @@ impl Gateway {
             LiveConfig::new(self.config.clone())
                 .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
         );
+        // Webhook registry into MetaMcp (gateway_webhook_status), and events.
+        events_wiring::install(&self.config, &meta_mcp, &webhook_registry, &live_config)?;
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
         // The control-plane base, resolved once: the export task, the store

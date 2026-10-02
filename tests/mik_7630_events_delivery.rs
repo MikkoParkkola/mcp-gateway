@@ -224,7 +224,9 @@ async fn exhausted_retries_dead_letter_within_the_window() {
         posts.len()
     );
     assert_eq!(ids(&posts).len(), 1, "the restart kept the webhook-id");
-    let span = posts[0].at.elapsed() - posts[posts.len() - 1].at.elapsed();
+    let span = posts[posts.len() - 1]
+        .at
+        .saturating_duration_since(posts[0].at);
     assert!(span < Duration::from_secs(15 * 60), "inside retry_window");
 }
 

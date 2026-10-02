@@ -34,6 +34,8 @@ pub(crate) struct ResponseCorrelation<'a> {
 pub(crate) enum ResponseArtifactKind {
     FinalResponse,
     BridgeChallenge,
+    /// The `data` of an MCP event before its first delivery (MIK-7630).
+    EventPayload,
 }
 
 /// A backend question must retain the meaning bound to its answer and state.
