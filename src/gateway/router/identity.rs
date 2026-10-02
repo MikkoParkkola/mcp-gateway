@@ -117,7 +117,9 @@ pub(super) async fn caller_grant_subject(
             "reason" => refusal.reason()
         )
         .increment(1);
-        warn!(mode = ?config.mode, reason = refusal.reason(), "caller identity header refused");
+        // Computed before the macro so its count is graded (MIK-7725).
+        let (mode, reason) = (&config.mode, refusal.reason());
+        warn!(mode = ?mode, reason, "caller identity header refused");
     })?;
 
     if let Some(verified) = verified_identity.and_then(grant_subject_from_verified_identity) {

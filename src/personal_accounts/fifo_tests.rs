@@ -108,8 +108,7 @@ impl AuthorityProbe {
 
 impl Drop for AuthorityProbe {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        super::probe::reap(&mut self.child);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }

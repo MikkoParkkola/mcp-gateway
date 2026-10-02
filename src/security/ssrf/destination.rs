@@ -112,7 +112,7 @@ impl DestinationPolicy {
 /// What `Private` reaches beyond `Public`: loopback, RFC 1918 and unique-local.
 /// Only an IPv4-mapped address is judged by the IPv4 it embeds; every other
 /// encoding (compatible, NAT64, 6to4, Teredo) stays denied.
-fn private_reachable(addr: IpAddr) -> bool {
+pub(super) fn private_reachable(addr: IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
