@@ -22,13 +22,16 @@ use icu_normalizer::ComposingNormalizerBorrowed;
 use parking_lot::Mutex;
 
 /// What the detector does. Mirrors the operator-facing `collusion.action`;
-/// `block` arrives with the request-path wiring that can refuse a call.
+/// the detector keeps the same state under both on-states, and the firewall
+/// decides whether a finding refuses the call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelayAction {
     /// No state is kept.
     Off,
     /// Findings are reported, calls proceed.
     Observe,
+    /// Findings are reported and the call is refused.
+    Block,
 }
 
 /// Detector tuning. Defaults are the design's documented values.
