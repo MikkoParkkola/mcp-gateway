@@ -153,6 +153,27 @@ fn ac_sub_1_the_acknowledgement_names_what_is_delivered() {
     assert_eq!(ack["params"]["notifications"], json!({}), "{ack}");
 }
 
+/// MIK-7766: a server-ended subscription closes with the listen request's
+/// own response, a complete result carrying only the subscription id.
+#[test]
+fn ac_sub_1_a_graceful_end_is_the_listen_response() {
+    for id in [RequestId::Number(4), RequestId::String("sub-b".into())] {
+        let subscription = SubscriptionId::of_request(id);
+        let wire = subscription.as_value();
+        assert_eq!(
+            subscription.graceful_end(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": wire,
+                "result": {
+                    "resultType": "complete",
+                    "_meta": { "io.modelcontextprotocol/subscriptionId": wire },
+                },
+            })
+        );
+    }
+}
+
 #[test]
 fn ac_sub_1_the_subscription_id_is_the_requests_own_id() {
     // "The value is the JSON-RPC ID of the subscriptions/listen request."

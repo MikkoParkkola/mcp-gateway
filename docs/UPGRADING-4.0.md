@@ -3472,6 +3472,9 @@ conformant client saw its stream close as it opened. The first event is now a
 `params._meta` under `io.modelcontextprotocol/subscriptionId`, and `params.notifications` names
 what the gateway delivers (`toolsListChanged`, and the task ids it accepted under `taskIds`).
 Prompt and resource changes are not delivered, so they are not acknowledged.
+When the gateway itself ends a subscription (its credential stops authenticating, or the
+reader falls behind), the last event is the listen request's own response, a `complete` result,
+which the specification defines as a graceful end.
 
 **Action:** a client written against the beta that read the subscription id from the response
 `result` reads it from the notification instead.
