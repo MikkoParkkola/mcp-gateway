@@ -121,7 +121,12 @@ class KeylessReadOnly(unittest.TestCase):
         self.assertEqual(mod.profile_problems({}), [])
         coding = {"default_routing_profile": "coding", "routing_profiles": {"coding": {"allow_tools": ["git_*"]}}}
         self.assertEqual(len(mod.profile_problems(coding)), 1)
-        self.assertEqual(len(mod.profile_problems({"default_routing_profile": "missing"})), 1)
+        self.assertEqual(mod.profile_problems({"default_routing_profile": "missing"}), [])
+        # An absent name is "default", which a config may define as filtering.
+        self.assertEqual(len(mod.profile_problems({"routing_profiles": {"default": {"allow_tools": ["a"]}}})), 1)
+        with mock.patch.dict("os.environ", {"MCP_GATEWAY_DEFAULT_ROUTING_PROFILE": "coding"}):
+            with self.assertRaises(mod.Unverifiable):
+                mod.env_override({}, [])
 
     def test_cli_exit_codes(self):  # T10
         with tempfile.TemporaryDirectory() as tmp:

@@ -68,7 +68,9 @@ ENV_KEY = "MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY"
 # unverifiable. The key name must appear literally for dotenv to set it, so
 # this cannot miss an assignment whatever the grammar.
 PLAIN = re.compile(r"^(?:export\s+)?" + ENV_KEY + r"\s*=\s*(['\"]?)(optional|required)\1\s*(?:#.*)?$")
-TOUCHES = ("MCP_GATEWAY_IDEMPOTENCY", ENV_KEY)
+# Routing keys too: they change which tools a capture can see.
+TOUCHES = ("MCP_GATEWAY_IDEMPOTENCY", ENV_KEY,
+           "MCP_GATEWAY_DEFAULT_ROUTING_PROFILE", "MCP_GATEWAY_ROUTING_PROFILES")
 
 
 class Unverifiable(Exception):
@@ -97,7 +99,7 @@ def env_override(config: dict, launcher_files: list[Path]) -> str | None:
     what it inherited (this process's environment stands in for that).
     """
     for key in os.environ:
-        if key.startswith("MCP_GATEWAY_IDEMPOTENCY"):
+        if key != ENV_KEY and key.startswith(TOUCHES):
             raise Unverifiable(f"process env sets {key}, which this check cannot grade")
     process = os.environ.get(ENV_KEY)
     for path in launcher_files:
@@ -112,10 +114,11 @@ def env_override(config: dict, launcher_files: list[Path]) -> str | None:
 
 def profile_problems(config: dict) -> list[str]:
     """A capture sees the default routing profile's view; it must be unfiltered."""
-    name = config.get("default_routing_profile")
-    if name is None:
-        return []
+    # As the gateway: an absent name is "default", an undefined profile allows all.
+    name = config.get("default_routing_profile") or "default"
     profile = (config.get("routing_profiles") or {}).get(name)
+    if profile is None:
+        return []
     if not isinstance(profile, dict) or {k: v for k, v in profile.items() if k != "description"} != {"allow_tools": ["*"]}:
         return [f"default routing profile {name!r} filters tools: a capture cannot see every tool"]
     return []
