@@ -98,7 +98,7 @@ struct Report {
 }
 
 /// Load the full production capability inventory (excludes `capabilities/examples/`,
-/// matching `capabilities/README.md`'s stated 119-capability count).
+/// matching the production count in `capabilities/README.md`).
 async fn load_candidate_pool() -> Vec<(String, String)> {
     let cap_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     let mut dirs: Vec<String> = Vec::new();
