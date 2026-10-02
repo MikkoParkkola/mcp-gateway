@@ -381,3 +381,38 @@ fn a_later_occurrence_under_a_dead_id_is_kept() {
         "evicting the old dead letter keeps the live record"
     );
 }
+
+#[test]
+fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    let old = now - chrono::Duration::days(1);
+    store
+        .dead_letter(record("a", "s1", old), DeadReason::Gone, old, ROOMY)
+        .expect("io");
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    // The newer occurrence's own dead letter cannot be written.
+    std::fs::remove_dir_all(dir.path().join("dead")).expect("rm");
+    let dead = Settle::Dead {
+        reason: DeadReason::TooLarge,
+        status: Some("http_4xx"),
+    };
+    assert!(store.settle("a", dead, now, ROOMY).is_err());
+    let due = store
+        .due(now + super::SETTLE_RETRY, &HashSet::new())
+        .expect("io");
+    assert_eq!(
+        due.ready.len(),
+        1,
+        "kept for another settlement, not dropped"
+    );
+}
