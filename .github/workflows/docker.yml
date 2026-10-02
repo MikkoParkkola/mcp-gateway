@@ -6,11 +6,13 @@ on:
     # checks) but publishes nothing: every publishing step below is main-only.
     branches: [main, docs/ranking-1-release-line]
     tags: ['v*']
-  # Pull requests into the release line no longer build the image: it builds
-  # once per merge (the push above). Main keeps its PR run because main
-  # requires the `build` check.
+  # A pull request into the release line runs this workflow so `scope` can
+  # decide: it builds only when the PR changes an image input (the list in
+  # `scope` below), and otherwise the image builds once per merge (the push
+  # above). Main keeps its PR run for every non-docs PR because main requires
+  # the `build` check.
   pull_request:
-    branches: [main]
+    branches: [main, docs/ranking-1-release-line]
 
 # A new push to a pull request or a branch supersedes that ref's older run
 # (a pull request's ref is refs/pull/N/merge, so it keeps its own group), so on
@@ -99,7 +101,7 @@ jobs:
           fi
           # A here-string, not a pipe: `grep -q` exiting early would make the
           # producer's SIGPIPE fail the pipeline under pipefail.
-          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/helm/)' <<<"$files"; then
+          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/helm/)' <<<"$files"; then
             decide true "image inputs changed"
           else
             decide false "no image inputs changed; the image builds after merge"

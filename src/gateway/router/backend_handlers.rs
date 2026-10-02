@@ -1162,8 +1162,7 @@ async fn backend_handler_inner(
         .await;
         let (params, client) = (params.as_ref(), client.as_ref());
         let seen = (&call, challenge.as_deref());
-        let forward =
-            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward);
+        let forward = DirectRouteGuards::after_dispatch(&state, seen, client, &warnings, forward);
         return match forward {
             Ok(mut response) => {
                 // Restore the caller's ID over the transport's own.
@@ -1216,9 +1215,8 @@ async fn backend_handler_inner(
         );
         let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
         if method == "tools/call" {
-            let (params, client) = (params.as_ref(), client.as_ref());
             let seen = (&call, challenge.as_deref());
-            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward)
+            DirectRouteGuards::after_dispatch(&state, seen, client.as_ref(), &warnings, forward)
         } else {
             forward.inspect(|_| record_client_success(&state, client.as_ref()))
         }

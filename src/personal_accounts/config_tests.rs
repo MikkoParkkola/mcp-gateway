@@ -405,6 +405,25 @@ fn each_unsafe_axis_is_refused_on_its_own() {
     );
 }
 
+/// The resolver refuses a literal on its own, not only behind the structural
+/// pass: the runtime-adapter path reaches it without that pass.
+#[test]
+fn resolve_key_refuses_a_literal_before_any_overlay_read() {
+    let env = CountingOverlay::new(&[(KEY_VAR, KEY_B64)]);
+
+    assert_eq!(
+        domain_err(resolve_key("current", KEY_B64, &env), "inline literal"),
+        AccountsConfigError::KeyNotAReference {
+            key_id: "current".into(),
+        }
+    );
+    assert!(env.lookups().is_empty(), "a literal reads nothing");
+    assert_eq!(
+        resolve_key("current", &format!("env:{KEY_VAR}"), &env).expect("a reference resolves"),
+        CURRENT_KEY.to_vec()
+    );
+}
+
 /// Key material axes need their own case: the reference resolves, and what it
 /// resolves TO is what is wrong.
 #[test]
