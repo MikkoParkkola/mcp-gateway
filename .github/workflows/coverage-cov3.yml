@@ -104,16 +104,16 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
-      - name: Task store and account storage tests
-        shell: bash
-        run: |
-          cargo test --all-features --lib -- diag_mik_7749 --nocapture > diag-run.log 2>&1 || true
-          cat diag-run.log | grep -E 'DIAG|panicked|test result' || true
-          cargo llvm-cov --all-features --lib --lcov --output-path store-one.lcov --ignore-run-fail -- open_runtime_creates_an_absent_store_directory_privately_and_reopens_it task_q_reopened_records_enumerate_import_and_preserve_deadline > store-one-run.log 2>&1 || true
-          grep -E 'test result|FAILED|panicked' store-one-run.log || true
-          cargo llvm-cov clean --workspace
-          cargo llvm-cov --all-features --lib --lcov --output-path windows.lcov --ignore-run-fail -- task_service personal_accounts > windows-run.log 2>&1
-          grep -E '^test result|FAILED|panicked' windows-run.log || true
+      # Set up like CI's Windows job: default (pwsh) shell, the same
+      # --all-features --tests --no-fail-fast invocation, no test filter, with
+      # the same symlink setting that job applies first.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      - name: Every test target, as CI runs them
+        run: cargo llvm-cov --all-features --tests --no-fail-fast --lcov --output-path windows.lcov -- --show-output 2>&1 | Tee-Object windows-run.log | Select-String -Pattern '^test result|FAILED|panicked'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -121,6 +121,3 @@ jobs:
           path: |
             windows.lcov
             windows-run.log
-            diag-run.log
-            store-one.lcov
-            store-one-run.log
