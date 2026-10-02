@@ -120,6 +120,39 @@ fn ac_sub_1_an_unrecognised_notification_type_is_ignored_not_refused() {
     assert!(request.wants(NotificationKind::ToolsListChanged));
 }
 
+/// MIK-7766: the stream opens with the acknowledgement NOTIFICATION, tagged
+/// and naming only what the gateway delivers; task ids go under
+/// `notifications.taskIds`, as the tasks extension names them.
+#[test]
+fn ac_sub_1_the_acknowledgement_names_what_is_delivered() {
+    let request = ListenRequest::from_params(Some(&json!({
+        "notifications": {
+            "toolsListChanged": true,
+            "promptsListChanged": true,
+            "resourceSubscriptions": ["file:///a"],
+        },
+        "taskIds": ["t-1"],
+    })))
+    .expect("a valid filter");
+    let ack = request.acknowledgement(&SubscriptionId::of_request(RequestId::Number(7)));
+    assert_eq!(
+        ack,
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/subscriptions/acknowledged",
+            "params": {
+                "_meta": { "io.modelcontextprotocol/subscriptionId": 7 },
+                "notifications": { "toolsListChanged": true, "taskIds": ["t-1"] },
+            },
+        })
+    );
+
+    let quiet = ListenRequest::from_params(Some(&json!({ "notifications": {} })))
+        .expect("an empty filter is valid");
+    let ack = quiet.acknowledgement(&SubscriptionId::of_request(RequestId::Number(8)));
+    assert_eq!(ack["params"]["notifications"], json!({}), "{ack}");
+}
+
 #[test]
 fn ac_sub_1_the_subscription_id_is_the_requests_own_id() {
     // "The value is the JSON-RPC ID of the subscriptions/listen request."

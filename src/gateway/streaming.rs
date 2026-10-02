@@ -604,7 +604,7 @@ pub fn subscription_stream(
     mut listener: crate::gateway::subscription_registry::Listener,
     filter: crate::protocol::subscriptions::ListenRequest,
     subscription: crate::protocol::subscriptions::SubscriptionId,
-    acknowledgement: &crate::protocol::JsonRpcResponse,
+    acknowledgement: &Value,
     keep_alive_interval: Duration,
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;

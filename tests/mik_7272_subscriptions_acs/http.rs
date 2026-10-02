@@ -249,14 +249,15 @@ async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
     );
 }
 
-/// MIK-7766: the honoured filter echoes what was asked for and the server
-/// serves, and drops what it does not recognise.
+/// MIK-7766: the honoured filter names only what the gateway delivers, and
+/// drops what it does not recognise.
 #[tokio::test]
 async fn ac_sub_1_the_acknowledgement_names_the_honoured_filter() {
     let (state, _store_dir) = state(true).await;
     let (status, _, mut stream) = open_listen(
         &state,
         json!({ "notifications": {
+            "toolsListChanged": true,
             "promptsListChanged": true,
             "resourcesListChanged": false,
             "resourceSubscriptions": ["file:///project/config.json"],
@@ -270,11 +271,9 @@ async fn ac_sub_1_the_acknowledgement_names_the_honoured_filter() {
         .expect("the ack opens the stream");
     assert_eq!(
         ack["params"]["notifications"],
-        json!({
-            "promptsListChanged": true,
-            "resourceSubscriptions": ["file:///project/config.json"],
-        }),
-        "{ack}"
+        json!({ "toolsListChanged": true }),
+        "only what the gateway delivers is acknowledged; prompt and resource \
+         changes are never published, so they are not promised: {ack}"
     );
 }
 
