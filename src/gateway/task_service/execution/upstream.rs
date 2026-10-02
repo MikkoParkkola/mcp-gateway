@@ -19,7 +19,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::settlement::strip_http_status;
+use super::settlement::{backend_output, strip_http_status};
 use super::{CommitFailure, TaskExecutor, TaskWrite, UpstreamAnswer, UpstreamHandle, WriteOutcome};
 use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, with_dispatch_scope};
 use crate::gateway::task_service::record::UpstreamRecord;
@@ -276,7 +276,7 @@ impl TaskExecutor {
                 // continue, or unreachable. The handle and the working record
                 // are retained; nothing is faked terminal or resubmitted.
                 UpstreamAnswer::Live | UpstreamAnswer::Unavailable => return None,
-                UpstreamAnswer::Completed(result) => match finish(result) {
+                UpstreamAnswer::Completed(result) => match finish(backend_output(result)) {
                     Ok(processed) => TaskTransition::Complete(processed),
                     // The same configured output policy that guards a live
                     // dispatch refused this payload. Its refusal is the outcome.

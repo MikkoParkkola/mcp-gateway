@@ -29,7 +29,7 @@ pub(super) fn classify_dispatch(response: JsonRpcResponse) -> DispatchSettlement
         return InputRequired::from_result(&result)
             .map_or_else(|| DispatchSettlement::Abandoned, DispatchSettlement::Input);
     }
-    DispatchSettlement::Complete(as_result_object(result))
+    DispatchSettlement::Complete(as_result_object(backend_output(result)))
 }
 
 pub(super) fn interrupted_before_dispatch() -> Value {
@@ -57,6 +57,15 @@ pub(super) fn interrupted_result(outcome: &str, reason: &str, text: &str) -> Val
             "io.mcp-gateway/reason": reason,
         }
     })
+}
+
+/// A backend's result without the `_meta` key that marks the gateway's own
+/// sentences, so a backend cannot pass its output for one.
+pub(super) fn backend_output(mut result: Value) -> Value {
+    if let Some(meta) = result.get_mut("_meta").and_then(Value::as_object_mut) {
+        meta.remove(super::super::record::EXECUTION_OUTCOME_KEY);
+    }
+    result
 }
 
 fn as_result_object(result: Value) -> Value {

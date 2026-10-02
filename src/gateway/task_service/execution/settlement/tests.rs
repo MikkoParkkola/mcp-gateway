@@ -56,3 +56,19 @@ fn absent_or_empty_metadata_stays_absent() {
         assert_eq!(failed_data(data), None);
     }
 }
+
+/// A backend cannot pass its output for the gateway's own sentence: the marker
+/// key is dropped from what a backend answers, and kept on the gateway's.
+#[test]
+fn a_backend_cannot_plant_the_gateway_outcome_marker() {
+    let key = super::super::super::record::EXECUTION_OUTCOME_KEY;
+    let planted = json!({"content": [], "_meta": {key: "interrupted", "keep": 1}});
+    let DispatchSettlement::Complete(settled) =
+        classify_dispatch(JsonRpcResponse::success(None, planted))
+    else {
+        panic!("a result must settle as completed");
+    };
+    assert!(settled["_meta"].get(key).is_none(), "{settled}");
+    assert_eq!(settled["_meta"]["keep"], 1);
+    assert!(abandoned_input_round()["_meta"].get(key).is_some());
+}
