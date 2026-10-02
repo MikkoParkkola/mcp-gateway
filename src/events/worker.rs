@@ -37,7 +37,7 @@ impl EventsHub {
                     .await;
                 services.audit_evictions(evicted.unwrap_or_default()).await;
                 // Gone subscriptions take their rate and failure state along.
-                let held = self.store.subscription_ids();
+                let held = self.store.live_subscription_ids(Utc::now());
                 self.runtime.rates.retain(&held);
                 self.runtime.failures.retain(&held);
             }
@@ -128,6 +128,9 @@ impl EventsHub {
             number: record.attempt,
             principal: &sub.principal,
             api_key_name: key,
+            credential_kind: sub
+                .credential_kind
+                .unwrap_or(crate::security::audit::CredentialKind::None),
             tenants: &record.tenants,
             callback_host: &host,
             status,

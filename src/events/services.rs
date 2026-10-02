@@ -167,6 +167,7 @@ pub(crate) struct Attempt<'a> {
     pub number: u32,
     pub principal: &'a str,
     pub api_key_name: Option<&'a str>,
+    pub credential_kind: crate::security::audit::CredentialKind,
     pub tenants: &'a [String],
     pub callback_host: &'a str,
     pub status: &'a str,
@@ -179,8 +180,7 @@ impl Services {
     /// blocking pool. Best effort: a down log is logged, not fatal.
     pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) {
         use crate::security::audit::{
-            AuditEnvelope, AuditOutcome, AuditWho, CredentialKind, InvocationRoute,
-            InvocationTarget,
+            AuditEnvelope, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
         };
         use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
         let Some(log) = &self.audit else {
@@ -205,8 +205,8 @@ impl Services {
                 AuditOutcome::Error(-32015)
             },
             who: AuditWho::from_parts(
-                CredentialKind::ApiKey,
-                None,
+                attempt.credential_kind,
+                Some(attempt.principal),
                 attempt.api_key_name.or(Some(attempt.principal)),
                 None,
             ),

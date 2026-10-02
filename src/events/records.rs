@@ -24,6 +24,10 @@ pub(crate) struct Subscription {
     /// The API key the principal presented, if any: every re-check
     /// resolves the key's expiry and backend scope from live config (I2).
     pub api_key: Option<ApiKeyRef>,
+    /// How the subscriber's credential was presented, for the audit
+    /// record's `who`. Absent on records written before it was kept.
+    #[serde(default)]
+    pub credential_kind: Option<crate::security::audit::CredentialKind>,
     /// An early record's bare key name, which binds no secret: such a
     /// subscription fails every re-check and is deleted. Never written.
     #[serde(default, rename = "api_key_name", skip_serializing)]
@@ -40,6 +44,15 @@ pub(crate) struct Subscription {
     pub failed_since: Option<DateTime<Utc>>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+/// The credential a caller presented, as events keep it: never the secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Credential {
+    pub kind: crate::security::audit::CredentialKind,
+    /// Set only for a configured API key: the one credential whose live
+    /// scope the re-check can read.
+    pub api_key: Option<ApiKeyRef>,
 }
 
 /// An API key as a caller presented it: its configured name and the

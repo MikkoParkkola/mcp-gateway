@@ -1109,7 +1109,7 @@ async fn meta_mcp_dispatch(
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
                 principal: events::principal(&owner, state.auth_config.enabled),
-                api_key: events::api_key(client.as_ref()),
+                credential: events::credential(client.as_ref()),
                 visible_backends: hub
                     .scope_backends()
                     .into_iter()

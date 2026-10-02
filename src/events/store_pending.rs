@@ -341,9 +341,15 @@ impl Store {
         self.touch(&mut state, id, |s| s.active = false)
     }
 
-    /// The id of every stored subscription.
-    pub(crate) fn subscription_ids(&self) -> HashSet<String> {
-        self.state.lock().subs.keys().cloned().collect()
+    /// The id of every subscription still live at `now`.
+    pub(crate) fn live_subscription_ids(&self, now: DateTime<Utc>) -> HashSet<String> {
+        self.state
+            .lock()
+            .subs
+            .values()
+            .filter(|s| s.live(now))
+            .map(|s| s.id.clone())
+            .collect()
     }
 
     /// Every subscription, for fan-out matching.

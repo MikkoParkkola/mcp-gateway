@@ -18,10 +18,20 @@ pub(super) fn principal(owner: &str, auth_enabled: bool) -> Option<String> {
     (auth_enabled && !owner.is_empty()).then(|| owner.to_owned())
 }
 
+/// The credential `client` presented, as events keep it.
+pub(super) fn credential(
+    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+) -> crate::events::Credential {
+    crate::events::Credential {
+        kind: CredentialKind::of(client),
+        api_key: api_key(client),
+    }
+}
+
 /// The API key `client` presented, if it presented one. Key-server tokens,
 /// the static bearer and the other credentials have no `api_keys` entry for
 /// the live re-check to read (design §3.7).
-pub(super) fn api_key(
+fn api_key(
     client: Option<&crate::gateway::auth::AuthenticatedClient>,
 ) -> Option<crate::events::ApiKeyRef> {
     client

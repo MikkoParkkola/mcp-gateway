@@ -24,6 +24,7 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
         id: format!("sub_{principal}_{}", url.len()),
         principal: principal.into(),
         api_key: None,
+        credential_kind: None,
         legacy_api_key_name: None,
         url: url.into(),
         name: "e".into(),

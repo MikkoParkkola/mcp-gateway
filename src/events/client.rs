@@ -150,8 +150,7 @@ impl CallbackClient {
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<u64>().ok())
-            .map(Duration::from_secs);
+            .and_then(|v| retry_after(v, chrono::Utc::now()));
         let mut answer = Answer {
             status: status.as_u16(),
             retry_after,
@@ -219,6 +218,21 @@ pub(crate) fn decode_whsec(secret: &str) -> Option<Vec<u8>> {
         .decode(secret.strip_prefix("whsec_")?)
         .ok()?;
     (24..=64).contains(&raw.len()).then_some(raw)
+}
+
+/// A `Retry-After` value: delta-seconds, or an HTTP-date (RFC 9110
+/// section 10.2.3), as the wait from `now`. A date in the past waits zero.
+fn retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    Some(
+        (at.with_timezone(&chrono::Utc) - now)
+            .to_std()
+            .unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]

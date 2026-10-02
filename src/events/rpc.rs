@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use super::EventsHub;
-use super::records::{ApiKeyRef, Subscription};
+use super::records::{Credential, Subscription};
 use super::store::{CapHit, Caps};
 use super::types::{EventDescriptor, RpcError, Visibility};
 
@@ -18,9 +18,8 @@ pub(crate) struct Caller {
     /// The canonical principal; `None` when the call is not authenticated
     /// (or authentication is off).
     pub principal: Option<String>,
-    /// The API key the caller presented, if any; other credentials have no
-    /// live scope to re-read.
-    pub api_key: Option<ApiKeyRef>,
+    /// The credential the caller presented.
+    pub credential: Credential,
     /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
     /// the ones the caller may see: the predicate `tools/list` filters with.
     pub visible_backends: std::collections::HashSet<String>,
@@ -31,7 +30,7 @@ impl Caller {
         match &descriptor.scope {
             Visibility::Backend(backend) => {
                 self.visible_backends.contains(backend)
-                    && hub.live_admits(self.api_key.as_ref(), backend)
+                    && hub.live_admits(self.credential.api_key.as_ref(), backend)
             }
             // Owner-scoped types (task events, I4) are listed to anyone who
             // can own a record; operator types land in 4.0.1.
@@ -252,7 +251,8 @@ impl EventsHub {
             v: 1,
             id: id.clone(),
             principal,
-            api_key: caller.api_key.clone(),
+            api_key: caller.credential.api_key.clone(),
+            credential_kind: Some(caller.credential.kind),
             legacy_api_key_name: None,
             url: url.as_str().to_owned(),
             name: descriptor.name.clone(),
