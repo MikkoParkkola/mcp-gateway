@@ -1,0 +1,3 @@
+head_sha	21e66d58d85a375141275613c60b231c9b0b9df5
+# batch 1 for #2694 (stdio handle_response)
+M1	linux	m1.patch	--lib -- handle_response_null_id_completes_no_pending_caller

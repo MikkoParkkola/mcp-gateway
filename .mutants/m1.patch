@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index d71d1fd18..c990a84af 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -524,7 +524,7 @@ impl StdioTransport {
+             }
+         };
+ 
+-        if let Some(ref id) = response.id {
++        if let Some(ref id) = response.id.clone().or(Some(RequestId::Number(1))) {
+             let key = id.to_string();
+             let pending_count = self.pending.len();
+             debug!(pending_count, "Looking for pending request");
