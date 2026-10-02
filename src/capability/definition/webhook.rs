@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use super::WebhookDefinition;
 
+/// Webhook senders POST; a route that names no method accepts that.
+pub(super) fn default_method() -> String {
+    "POST".to_string()
+}
+
 /// The `event:` block of a webhook route: the route becomes the event
 /// `webhook.<capability>.<route>.received`, projected from `transform.data`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
