@@ -26,7 +26,9 @@ be refused and why this check exists.
 
 The declared mode is the YAML value unless MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY
 overrides it: from this process's environment, the config's `env_files`, or
-any `--env-file` (pass the files the launcher sources). The `required` pass
+any `--env-file` (pass the files the launcher sources), with the gateway's
+precedence. Pass `--token-file` to capture from a gateway with auth enabled.
+The `required` pass
 does not depend on the declared mode.
 
 Limits: a backend whose tools/list drain stopped early (page cap or budget,
@@ -53,18 +55,31 @@ REVISION = "2025-11-25"
 ENV_KEY = "MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY"
 
 
-def env_override(config: dict, env_files: list[Path]) -> str | None:
-    """The env layer's idempotency mode, last file winning, the process env last."""
+def env_value(path: Path) -> str | None:
     found = None
-    paths = [Path(os.path.expanduser(str(p))) for p in (config.get("env_files") or [])] + env_files
-    for path in paths:
-        if not path.is_file():
-            continue
+    if path.is_file():
         for line in path.read_text().splitlines():
             key, sep, value = line.strip().removeprefix("export ").partition("=")
             if sep and key.strip() == ENV_KEY:
                 found = value.strip().strip("'\"")
-    return os.environ.get(ENV_KEY, found)
+    return found
+
+
+def env_override(config: dict, launcher_files: list[Path]) -> str | None:
+    """The idempotency mode the gateway's env layer would see.
+
+    As EnvOverlay::resolve (src/config/env_overlay.rs): a config `env_files`
+    assignment wins, later file over earlier; otherwise the process
+    environment, which the launcher builds by sourcing `launcher_files` over
+    what it inherited (this process's environment stands in for that).
+    """
+    process = os.environ.get(ENV_KEY)
+    for path in launcher_files:
+        process = env_value(path) or process
+    overlay = None
+    for entry in config.get("env_files") or []:
+        overlay = env_value(Path(os.path.expanduser(str(entry)))) or overlay
+    return overlay if overlay is not None else process
 
 
 def keyless_refused(mode: str, read_only: set[tuple[str, str]], server: str, tool: str) -> bool:
@@ -110,8 +125,8 @@ def problems(config: dict, catalog: dict[str, list[dict]], mode: str,
 class Session:
     """Minimal streamable-HTTP MCP client: initialize, then tools/call."""
 
-    def __init__(self, url: str):
-        self.url, self.sid, self.next_id = url, None, 0
+    def __init__(self, url: str, token: str | None = None):
+        self.url, self.token, self.sid, self.next_id = url, token, None, 0
         self.call("initialize", {"protocolVersion": REVISION, "capabilities": {},
                                  "clientInfo": {"name": "mcp-gateway-release-check", "version": "1"}})
         self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
@@ -119,6 +134,8 @@ class Session:
     def post(self, body: dict) -> dict | None:
         headers = {"Content-Type": "application/json",
                    "Accept": "application/json, text/event-stream"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
         if self.sid:
             headers["Mcp-Session-Id"] = self.sid
             headers["MCP-Protocol-Version"] = REVISION
@@ -149,12 +166,12 @@ class Session:
         return json.loads(result["content"][0]["text"])
 
 
-def capture(url: str) -> tuple[dict[str, list[dict]], int]:
+def capture(url: str, token: str | None = None) -> tuple[dict[str, list[dict]], int]:
     # Every server, not the aggregate tool list: that covers only backends
     # already started. A per-server list starts an idle backend, as a client
     # call would. A server that fails to list is left out, so the check
     # reports it as not enumerated; one that lists no tools is recorded empty.
-    session = Session(url)
+    session = Session(url, token)
     catalog: dict[str, list[dict]] = {}
     failed = 0
     for server in sorted(s["name"] for s in session.meta("gateway_list_servers", {})["servers"]):
@@ -172,6 +189,8 @@ def main(argv: list[str]) -> int:
     cap = sub.add_parser("capture")
     cap.add_argument("--url", required=True)
     cap.add_argument("--out", required=True, type=Path)
+    cap.add_argument("--token-file", type=Path,
+                     help="bearer key for a gateway with auth enabled (an all-backends operator)")
     chk = sub.add_parser("check")
     chk.add_argument("--config", required=True, type=Path)
     chk.add_argument("--catalog", required=True, type=Path)
@@ -179,7 +198,8 @@ def main(argv: list[str]) -> int:
     chk.add_argument("--env-file", action="append", default=[], type=Path)
     args = parser.parse_args(argv)
     if args.cmd == "capture":
-        catalog, failed = capture(args.url)
+        token = args.token_file.read_text().strip() if args.token_file else None
+        catalog, failed = capture(args.url, token)
         args.out.write_text(json.dumps(catalog, indent=1, sort_keys=True))
         print(f"captured {sum(map(len, catalog.values()))} tools from {len(catalog)} servers"
               f"; {failed} failed to list")

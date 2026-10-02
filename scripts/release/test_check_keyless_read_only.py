@@ -87,6 +87,19 @@ class KeylessReadOnly(unittest.TestCase):
             self.assertEqual(mod.env_override({}, [env]), "required")
         self.assertIsNone(mod.env_override({"env_files": ["/nonexistent"]}, []))
 
+    def test_config_env_files_win_over_the_process_layer(self):  # T12: EnvOverlay::resolve
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            (d / "a.env").write_text("MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=required\n")
+            (d / "b.env").write_text("MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=optional\n")
+            with mock.patch.dict("os.environ", {mod.ENV_KEY: "optional"}):
+                self.assertEqual(mod.env_override({"env_files": [str(d / "a.env")]}, [d / "b.env"]), "required")
+                self.assertEqual(mod.env_override({}, [d / "a.env"]), "required")
+                self.assertEqual(mod.env_override({}, []), "optional")
+                # Later config env file wins.
+                self.assertEqual(mod.env_override({"env_files": [str(d / "a.env"), str(d / "b.env")]}, []),
+                                 "optional")
+
     def test_cli_exit_codes(self):  # T10
         with tempfile.TemporaryDirectory() as tmp:
             d = pathlib.Path(tmp)
