@@ -259,4 +259,5 @@ mod reissue {
 // gateway serves it — which is the difference between a type and a feature.
 // ===========================================================================
 
+#[path = "mik_7272_subscriptions_acs/http.rs"]
 mod http;
