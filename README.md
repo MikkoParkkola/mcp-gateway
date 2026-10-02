@@ -160,7 +160,7 @@ Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex, and running
 
 #### Option B: add servers from the built-in registry
 
-28 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
+35 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
 
 ```bash
 mcp-gateway list --available                                 # browse the library: login, on/off
@@ -172,7 +172,7 @@ mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
 ```
 
 The registry is a library. `mcp-gateway init` turns on the servers that need no account (memory,
-sequential-thinking, context7); every other server is off until you `add` it:
+sequential-thinking, context7, time); every other server is off until you `add` it:
 
 - A server that needs a key gets `${VAR}` references in `gateway.yaml`. If a variable is not set (in
   the environment or an `env_files` entry), `add` writes the server disabled and names the variable;
@@ -180,10 +180,11 @@ sequential-thinking, context7); every other server is off until you `add` it:
 - A vendor-hosted server that logs in with OAuth (Notion, Atlassian, Linear, Sentry, ...) opens the
   login in your browser the first time it is used. A server that takes a token in a header (GitHub,
   Stripe) gets the header with a `${VAR}` reference.
-- Playwright and fetch are added **disabled**. They can open any address they are given, so a prompt
-  injection in a page or a tool result can steer them to your local network or a cloud metadata
-  address, and the gateway's private-network guard covers REST capabilities only, not these
-  servers. Set `enabled: true` on one if you accept that.
+- Playwright, Chrome DevTools and fetch are added **disabled**. They can open any address they are
+  given, so a prompt injection in a page or a tool result can steer them to your local network or a
+  cloud metadata address, and the gateway's private-network guard covers REST capabilities only, not
+  these servers. Set `enabled: true` on one if you accept that. Both browsers start with a
+  throwaway profile (`--isolated`); do not point them at your everyday browser profile.
 
 `mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one.
 
