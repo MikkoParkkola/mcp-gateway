@@ -3359,7 +3359,7 @@ impl Gateway {
                 }
             }
             // A task is admitted durably by its handoff, as on HTTP.
-            let admission = if caller.task.is_some() {
+            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
             } else {
                 meta_mcp.admit_meta_sync(

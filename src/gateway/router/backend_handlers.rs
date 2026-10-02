@@ -1104,15 +1104,19 @@ async fn backend_handler_inner(
     // guard, so a refused call consumes no nonce (MIK-7698), and before a
     // cached result is delivered, so it is signed against the replaying
     // request's own nonce. A refused admission releases a fresh reservation.
-    let admitted = DirectRouteGuards::admit_nonce(
-        &state,
-        (
-            client.as_ref(),
-            oauth_agent_identity.as_ref(),
-            cert_identity.as_ref(),
-        ),
-        signs.then_some(signing_nonce.as_deref()),
-    );
+    let admitted = if signs {
+        DirectRouteGuards::admit_nonce(
+            &state,
+            (
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            ),
+            signing_nonce.as_deref(),
+        )
+    } else {
+        Ok(())
+    };
     if let Err(e) = admitted {
         let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
         let code = e.to_rpc_code();

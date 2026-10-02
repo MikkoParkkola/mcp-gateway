@@ -85,11 +85,7 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCaller
 async fn an_admin_refusal_leaves_the_nonce_unspent() {
     let caller = ctx(&AllowAll);
     assert!(!caller.is_admin);
-    assert_unspent(
-        &meta(),
-        ("gateway_kill_server", json!({"server": "x"})),
-        &caller,
-    );
+    assert_unspent(&meta(), ("gateway_get_stats", json!({})), &caller);
 }
 
 /// An admin caller with no way to be asked (stdio and task contexts): the

@@ -35,8 +35,7 @@ impl DirectRouteGuards {
         Ok(())
     }
 
-    /// Admit a hardened direct call's nonce (`None`: this route does not sign)
-    /// in the replay store the meta route uses, keyed by the meta route's own
+    /// Admit a hardened direct call's nonce in the replay store the meta route uses, keyed by the meta route's own
     /// derivation (an authenticated key, then an OAuth agent, then a
     /// certificate), so one caller has one bucket on both.
     pub(crate) fn admit_nonce(
@@ -46,11 +45,8 @@ impl DirectRouteGuards {
             Option<&crate::gateway::oauth::AgentIdentity>,
             Option<&crate::mtls::CertIdentity>,
         ),
-        nonce: Option<Option<&str>>,
+        nonce: Option<&str>,
     ) -> Result<()> {
-        let Some(nonce) = nonce else {
-            return Ok(());
-        };
         let authorizer = super::authorization::RouterAuthorizer {
             state,
             client,

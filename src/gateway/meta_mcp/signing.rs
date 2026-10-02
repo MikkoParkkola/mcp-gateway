@@ -308,6 +308,16 @@ pub(crate) fn take_direct_nonce(params: Option<&mut Value>) -> crate::Result<Opt
     }
 }
 
+impl super::MetaMcpCallerContext<'_> {
+    /// A signed call whose nonce the signing layer left unadmitted: predicted
+    /// refused by dispatch (MIK-7698). It takes no execution admission, so a
+    /// retained result is never replayed past the gates that refuse it.
+    pub(crate) fn awaits_signing_admission(&self) -> bool {
+        self.signing
+            .is_some_and(SigningInvocationContext::awaits_admission)
+    }
+}
+
 impl super::MetaMcp {
     pub(crate) fn signing_enabled(&self) -> bool {
         self.message_signer.is_some()
@@ -339,10 +349,7 @@ impl super::MetaMcp {
         id: &crate::protocol::RequestId,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Option<crate::protocol::JsonRpcResponse> {
-        let unadmitted = caller
-            .signing
-            .is_some_and(SigningInvocationContext::awaits_admission);
-        (self.signing_enabled() && unadmitted).then(|| {
+        (self.signing_enabled() && caller.awaits_signing_admission()).then(|| {
             crate::protocol::JsonRpcResponse::error(
                 Some(id.clone()),
                 -32603,
