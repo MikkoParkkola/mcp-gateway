@@ -22,6 +22,9 @@ use super::types::CallbackFailure;
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
 /// Longest the worker sleeps with nothing scheduled (a safety net only).
 const IDLE: Duration = Duration::from_secs(5);
+/// Back off before the next attempt of a record that was refused before its
+/// POST: the access re-check failed or the audit log refused the record.
+const REFUSAL_RETRY: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
 
 impl EventsHub {
     /// Run the worker until the runtime stops.
@@ -147,7 +150,7 @@ impl EventsHub {
             // Removed: the record went with it and this settles nothing. Not
             // removed (a store error, or a refresh re-bound the row): the
             // record goes back to pending and the next attempt re-checks.
-            let next = Utc::now() + chrono::TimeDelta::seconds(30);
+            let next = Utc::now() + REFUSAL_RETRY;
             let retry = Settle::Retry {
                 next,
                 status: "access_revoked",
@@ -189,7 +192,7 @@ impl EventsHub {
             ..refused(SENDING)
         };
         if services.audit_attempt(&attempt).await.is_err() {
-            let next = Utc::now() + chrono::TimeDelta::seconds(30);
+            let next = Utc::now() + REFUSAL_RETRY;
             let retry = Settle::Retry {
                 next,
                 status: "audit_unavailable",
