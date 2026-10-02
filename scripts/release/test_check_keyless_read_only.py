@@ -96,14 +96,32 @@ class KeylessReadOnly(unittest.TestCase):
                 self.assertEqual(mod.env_override({"env_files": [str(d / "a.env")]}, [d / "b.env"]), "required")
                 self.assertEqual(mod.env_override({}, [d / "a.env"]), "required")
                 self.assertEqual(mod.env_override({}, []), "optional")
-                (d / "empty.env").write_text("MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=\n")
-                # An empty assignment still overrides, and then fails as a mode.
-                self.assertEqual(mod.env_override({"env_files": [str(d / "a.env"), str(d / "empty.env")]}, []), "")
-                with self.assertRaises(ValueError):
-                    mod.problems(config(), CATALOG, "declared", "")
                 # Later config env file wins.
                 self.assertEqual(mod.env_override({"env_files": [str(d / "a.env"), str(d / "b.env")]}, []),
                                  "optional")
+
+    def test_env_lines_it_cannot_model_fail_closed(self):  # T13
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            (d / "ok.env").write_text("# MCP_GATEWAY_IDEMPOTENCY__X=1\nMCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=\"required\" # rollout\n")
+            self.assertEqual(mod.env_override({}, [d / "ok.env"]), "required")
+            for text in ("MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=\n",
+                         "export\tMCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=${MODE}\n",
+                         "MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS=[]\n"):
+                (d / "bad.env").write_text(text)
+                with self.assertRaises(mod.Unverifiable, msg=text):
+                    mod.env_override({"env_files": [str(d / "bad.env")]}, [])
+        with mock.patch.dict("os.environ", {"MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS": "[]"}):
+            with self.assertRaises(mod.Unverifiable):
+                mod.env_override({}, [])
+
+    def test_a_filtering_default_profile_fails(self):  # T14
+        full = {"default_routing_profile": "full", "routing_profiles": {"full": {"description": "d", "allow_tools": ["*"]}}}
+        self.assertEqual(mod.profile_problems(full), [])
+        self.assertEqual(mod.profile_problems({}), [])
+        coding = {"default_routing_profile": "coding", "routing_profiles": {"coding": {"allow_tools": ["git_*"]}}}
+        self.assertEqual(len(mod.profile_problems(coding)), 1)
+        self.assertEqual(len(mod.profile_problems({"default_routing_profile": "missing"})), 1)
 
     def test_cli_exit_codes(self):  # T10
         with tempfile.TemporaryDirectory() as tmp:

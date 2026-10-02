@@ -31,7 +31,13 @@ precedence. Pass `--token-file` to capture from a gateway with auth enabled.
 The `required` pass
 does not depend on the declared mode.
 
-Limits: a backend whose tools/list drain stopped early (page cap or budget,
+The env layer is graded fail-closed: a plain `KEY=optional|required` is read;
+any other env line or variable naming an idempotency setting makes the check
+fail as unverifiable. A default routing profile other than `allow_tools: ['*']`
+also fails, since the capture sees only that profile's view.
+
+Limits: capability tools exposed only in another capability state are not
+captured. A backend whose tools/list drain stopped early (page cap or budget,
 src/backend/list_drain.rs) serves a partial catalog that `gateway_list_tools`
 does not flag, so its missing tools go unchecked. Backend `enabled` flags are
 read from the YAML only.
@@ -45,6 +51,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.request
 from pathlib import Path
@@ -55,13 +62,29 @@ REVISION = "2025-11-25"
 ENV_KEY = "MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY"
 
 
+# The env layer is graded fail-closed, not parsed: only a plain assignment of
+# the mode is understood. Any other line naming an idempotency setting (other
+# dotenv spellings, `MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS`) makes the grade
+# unverifiable. The key name must appear literally for dotenv to set it, so
+# this cannot miss an assignment whatever the grammar.
+PLAIN = re.compile(r"^(?:export\s+)?" + ENV_KEY + r"\s*=\s*(['\"]?)(optional|required)\1\s*(?:#.*)?$")
+TOUCHES = ("MCP_GATEWAY_IDEMPOTENCY", ENV_KEY)
+
+
+class Unverifiable(Exception):
+    """The env layer sets idempotency config in a form this check does not model."""
+
+
 def env_value(path: Path) -> str | None:
     found = None
     if path.is_file():
         for line in path.read_text().splitlines():
-            key, sep, value = line.strip().removeprefix("export ").partition("=")
-            if sep and key.strip() == ENV_KEY:
-                found = value.strip().strip("'\"")
+            text = line.strip()
+            if text.startswith("#") or not any(t in text for t in TOUCHES):
+                continue
+            if not (match := PLAIN.match(text)):
+                raise Unverifiable(f"{path}: env line sets idempotency config this check cannot grade")
+            found = match.group(2)
     return found
 
 
@@ -73,6 +96,9 @@ def env_override(config: dict, launcher_files: list[Path]) -> str | None:
     environment, which the launcher builds by sourcing `launcher_files` over
     what it inherited (this process's environment stands in for that).
     """
+    for key in os.environ:
+        if key.startswith("MCP_GATEWAY_IDEMPOTENCY"):
+            raise Unverifiable(f"process env sets {key}, which this check cannot grade")
     process = os.environ.get(ENV_KEY)
     for path in launcher_files:
         if (value := env_value(path)) is not None:
@@ -82,6 +108,17 @@ def env_override(config: dict, launcher_files: list[Path]) -> str | None:
         if (value := env_value(Path(os.path.expanduser(str(entry))))) is not None:
             overlay = value
     return overlay if overlay is not None else process
+
+
+def profile_problems(config: dict) -> list[str]:
+    """A capture sees the default routing profile's view; it must be unfiltered."""
+    name = config.get("default_routing_profile")
+    if name is None:
+        return []
+    profile = (config.get("routing_profiles") or {}).get(name)
+    if not isinstance(profile, dict) or {k: v for k, v in profile.items() if k != "description"} != {"allow_tools": ["*"]}:
+        return [f"default routing profile {name!r} filters tools: a capture cannot see every tool"]
+    return []
 
 
 def keyless_refused(mode: str, read_only: set[tuple[str, str]], server: str, tool: str) -> bool:
@@ -221,6 +258,10 @@ def main(argv: list[str]) -> int:
         config = yaml.safe_load(args.config.read_text()) or {}
         catalog = json.loads(args.catalog.read_text())
         found, stats = problems(config, catalog, args.mode, env_override(config, args.env_file))
+        found = profile_problems(config) + found
+    except Unverifiable as err:
+        print(err)
+        return 1
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
         print(f"unreadable input: {err}", file=sys.stderr)
         return 2
