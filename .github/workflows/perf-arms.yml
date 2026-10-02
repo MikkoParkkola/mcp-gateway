@@ -1,7 +1,7 @@
 name: Perf arms
 
 # Throwaway branch only (never merged). Builds the release binary of each
-# stacked L7 trim arm on aarch64 for price2 on the bench host.
+# L7 trim arm on aarch64 for price2 on the bench host.
 on:
   push:
     branches: ["throwaway/perf-arms-*"]
@@ -18,11 +18,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arm: B0, ref: c8070b4a98fb87338a7ea021896ee488df45c34c }
-          - { arm: M1, ref: 98b7e1f0fa8b8d7b259a08da365c02a20e04a368 }
-          - { arm: M2, ref: ca874c0cc8c71777b110b958d9c973b6a518cc89 }
-          - { arm: M3, ref: 6e2749e8a29ae2b6fbde5fbfaaa99ce0ed819aff }
-          - { arm: M4, ref: aeb80bb0a38708e025157d92cf5e4a2dd4c184b8 }
+          - { arm: B0, ref: d938cc2a4149a1767cdd9701c416b229daff5a56 }
+          - { arm: C1, ref: 22dc386326375aca4f0251ef8b2d58c34eb665a4 }
+          - { arm: C2, ref: 0fc56b045b68e97326fc8f7152714ad8a7f9c814 }
+          - { arm: C3, ref: 5424f28bfcd15ac8c4ecbd976a24695b04f5ba6e }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
