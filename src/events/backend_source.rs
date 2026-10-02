@@ -83,6 +83,14 @@ impl EventsHub {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
+        // A removed backend takes its subscriptions with it, as a reload that
+        // removes a webhook route does; re-adding the name starts clean.
+        if let Some(source) = self.source(SourceKind::BackendNotification)
+            && !source.offers(&event_name(backend))
+        {
+            self.withdraw(&[event_name(backend)]);
+            return;
+        }
         let generation = {
             // ponytail: an entry leaves the map when its report fires, so only
             // a backend that keeps changing stays in it.

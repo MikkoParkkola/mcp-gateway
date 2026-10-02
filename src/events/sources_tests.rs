@@ -67,3 +67,43 @@ async fn only_terminal_task_statuses_emit() {
         assert_eq!(keys.len(), 3, "taskId, status, settledAt only: {keys:?}");
     }
 }
+
+/// A backend that left the registry takes its event subscriptions with it.
+#[tokio::test]
+async fn a_removed_backend_withdraws_its_subscriptions() {
+    let (hub, _dir) = hub();
+    let names = Arc::new(parking_lot::Mutex::new(vec!["x".to_owned()]));
+    let live = Arc::clone(&names);
+    hub.install_backend_source(Arc::new(move || live.lock().clone()));
+    let row: records::Subscription = serde_json::from_value(serde_json::json!({
+        "v": 1, "id": "sub_x", "principal": "p", "url": "https://h/x",
+        "name": "backend.x.tools_changed", "arguments": {}, "secret": "whsec_x",
+        "previous_secret": null, "previous_until": null,
+        "granted_at": chrono::Utc::now(), "expires_at": null, "active": true,
+        "failed_since": null, "last_delivery_at": null, "last_error": null
+    }))
+    .expect("row");
+    let config = crate::config::EventsConfig::default();
+    hub.store
+        .admit(
+            row,
+            true,
+            store::Caps {
+                per_principal: 10,
+                global: 10,
+            },
+            chrono::Duration::zero(),
+            chrono::Utc::now(),
+            tail_policy(&config),
+        )
+        .expect("io")
+        .expect("admitted");
+    hub.backend_tools_changed("x");
+    assert_eq!(hub.store.subscriptions().len(), 1, "still offered: kept");
+    names.lock().clear();
+    hub.backend_tools_changed("x");
+    assert!(
+        hub.store.subscriptions().is_empty(),
+        "withdrawn with the backend"
+    );
+}

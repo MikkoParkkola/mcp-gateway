@@ -65,6 +65,11 @@ impl EventsHub {
         started: &mut HashSet<(SourceKind, String)>,
         key: (SourceKind, String),
     ) {
+        // A commit that failed after inserting its row (a durability error)
+        // leaves a live holder: the key stays started.
+        if self.live_keys().iter().any(|(live, ..)| *live == key) {
+            return;
+        }
         started.remove(&key);
         if let Some(source) = self.source_of_kind(key.0) {
             source.on_last_subscriber(&key.1).await;
