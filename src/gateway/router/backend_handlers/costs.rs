@@ -100,3 +100,7 @@ pub(in crate::gateway::router) async fn costs_handler(
 
     (StatusCode::OK, Json(body)).into_response()
 }
+
+#[cfg(test)]
+#[path = "costs_views_tests.rs"]
+mod views_tests;
