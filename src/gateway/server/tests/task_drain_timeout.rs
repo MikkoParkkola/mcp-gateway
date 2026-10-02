@@ -4,8 +4,8 @@
 //! cancelled before the task store closes, on both shutdown paths.
 //!
 //! `Gateway::run` (HTTP) and the stdio EOF teardown both end tasks through
-//! `task_runtime::shutdown`. The first row drives that helper directly with
-//! the HTTP budget; no test drives `Gateway::run` itself, whose shutdown is an
+//! `task_runtime::shutdown`. The first row drives that helper directly; no
+//! test drives `Gateway::run` itself, whose shutdown is an
 //! OS signal. The second row drives the stdio EOF path end to end.
 
 use std::sync::Arc;
@@ -88,7 +88,7 @@ async fn a_drain_timeout_cancels_the_running_worker_before_the_store_closes() {
             expiry,
             &fixture.tasks.executor,
             &fixture.tasks.service,
-            ShutdownBudget::http(Duration::from_secs(1)),
+            ShutdownBudget::within(Duration::from_secs(10), Duration::from_secs(1)),
         ),
     )
     .await

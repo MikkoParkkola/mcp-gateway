@@ -2207,7 +2207,7 @@ impl Gateway {
             expiry_sweep,
             &task_executor_for_shutdown,
             &task_service_for_shutdown,
-            task_runtime::ShutdownBudget::http(drain_timeout),
+            task_runtime::ShutdownBudget::within(drain_timeout, drain_timeout),
         )
         .await;
 

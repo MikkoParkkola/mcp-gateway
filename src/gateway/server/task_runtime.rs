@@ -62,19 +62,12 @@ pub(super) struct ShutdownBudget {
 }
 
 impl ShutdownBudget {
-    /// HTTP: the drain keeps the whole `shutdown_timeout`, and cancellation
-    /// gets as long again.
-    pub(super) fn http(timeout: Duration) -> Self {
-        Self {
-            drain: timeout,
-            cancel: timeout,
-        }
-    }
-
-    /// stdio: carved out of the `remaining` teardown window, which a
-    /// `shutdown_timeout` longer than the window would otherwise outlast and
-    /// leave the cancellation never run. A fifth of the window is held back
-    /// for cancelling and closing the store; cancelling gets half of that.
+    /// Carved out of the `remaining` shutdown window, which a drain as long as
+    /// the window would otherwise use up and leave the cancellation never run.
+    /// A fifth of the window is held back for cancelling and closing the
+    /// store; cancelling gets half of that. HTTP passes `shutdown_timeout` as
+    /// its window, so its task phase still ends within one timeout; stdio
+    /// passes what is left of its teardown deadline.
     pub(super) fn within(remaining: Duration, timeout: Duration) -> Self {
         let reserve = remaining / 5;
         Self {
