@@ -1,0 +1,10 @@
+head_sha	cac9b616bd9c4d34b4761e00776bfa09bebe298c
+# mutants for #2574
+EMPTYID	linux	EMPTYID.patch	--lib personal_accounts::config::config_tests::descriptor_identity_and_strategy_placement_are_refused -- --exact
+EMPTYPROV	linux	EMPTYPROV.patch	--lib personal_accounts::config::config_tests::descriptor_identity_and_strategy_placement_are_refused -- --exact
+FORBIDEXT	linux	FORBIDEXT.patch	--lib personal_accounts::config::config_tests::descriptor_identity_and_strategy_placement_are_refused -- --exact
+EXTREQUIRED	linux	EXTREQUIRED.patch	--lib personal_accounts::config::config_tests::an_external_descriptor_needs_a_minting_required_valid_strategy -- --exact
+EXTKIND	linux	EXTKIND.patch	--lib personal_accounts::config::config_tests::an_external_descriptor_needs_a_minting_required_valid_strategy -- --exact
+EXTVALIDATE	linux	EXTVALIDATE.patch	--lib personal_accounts::config::config_tests::an_external_descriptor_needs_a_minting_required_valid_strategy -- --exact
+FILEABS	linux	FILEABS.patch	--lib personal_accounts::config::adapters::secret_tests::a_relative_file_reference_is_refused_and_an_absolute_one_is_not -- --exact
+KEYLITERAL	linux	KEYLITERAL.patch	--lib personal_accounts::config::config_tests::adapter_runtime_refuses_a_literal_store_key_without_an_overlay_read -- --exact

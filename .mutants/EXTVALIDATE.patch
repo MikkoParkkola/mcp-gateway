@@ -1,0 +1,18 @@
+diff --git a/src/personal_accounts/config.rs b/src/personal_accounts/config.rs
+index 565d59c6d..13e07817c 100644
+--- a/src/personal_accounts/config.rs
++++ b/src/personal_accounts/config.rs
+@@ -612,12 +612,7 @@ fn validate_external(
+             problem: "external_strategy must set required: true for an account-bound external descriptor",
+         });
+     }
+-    strategy
+-        .validate()
+-        .map_err(|error| AccountsConfigError::DescriptorStrategy {
+-            account_id: account_id.to_string(),
+-            problem: error.to_string(),
+-        })
++    Ok(())
+ }
+ 
+ /// `external_strategy` on a non-external descriptor is a mode the operator did

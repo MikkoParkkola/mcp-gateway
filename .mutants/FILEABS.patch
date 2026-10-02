@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/config/adapters.rs b/src/personal_accounts/config/adapters.rs
+index bbfb392d4..8647cbe38 100644
+--- a/src/personal_accounts/config/adapters.rs
++++ b/src/personal_accounts/config/adapters.rs
+@@ -262,7 +262,7 @@ fn validate_secret_ref(index: usize, reference: &str) -> Result<(), AccountsConf
+     if let Some(path) = reference.strip_prefix("file:") {
+         // Whether the file is readable is `resolve_secrets`' question; its
+         // spelling is decidable here.
+-        if !std::path::Path::new(path).is_absolute() {
++        if false {
+             return Err(fail(
+                 "hmac_secret_ref file: reference must name an absolute path",
+             ));

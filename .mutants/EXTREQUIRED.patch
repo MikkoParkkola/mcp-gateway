@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/config.rs b/src/personal_accounts/config.rs
+index 565d59c6d..9baf23c0d 100644
+--- a/src/personal_accounts/config.rs
++++ b/src/personal_accounts/config.rs
+@@ -606,7 +606,7 @@ fn validate_external(
+             problem: "external_strategy accepts only signed_assertion or token_exchange",
+         });
+     }
+-    if !strategy.required {
++    if false {
+         return Err(AccountsConfigError::Descriptor {
+             account_id: account_id.to_string(),
+             problem: "external_strategy must set required: true for an account-bound external descriptor",
