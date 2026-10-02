@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use super::EventsHub;
-use super::records::Subscription;
+use super::records::{Credential, Subscription};
 use super::store::{CapHit, Caps};
 use super::types::{EventDescriptor, RpcError, Visibility};
 
@@ -18,17 +18,20 @@ pub(crate) struct Caller {
     /// The canonical principal; `None` when the call is not authenticated
     /// (or authentication is off).
     pub principal: Option<String>,
-    /// The API key the caller presented, if any.
-    pub api_key_name: Option<String>,
+    /// The credential the caller presented.
+    pub credential: Credential,
     /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
     /// the ones the caller may see: the predicate `tools/list` filters with.
     pub visible_backends: std::collections::HashSet<String>,
 }
 
 impl Caller {
-    fn sees(&self, descriptor: &EventDescriptor) -> bool {
+    fn sees(&self, hub: &EventsHub, descriptor: &EventDescriptor) -> bool {
         match &descriptor.scope {
-            Visibility::Backend(backend) => self.visible_backends.contains(backend),
+            Visibility::Backend(backend) => {
+                self.visible_backends.contains(backend)
+                    && hub.live_admits(self.credential.api_key.as_ref(), backend)
+            }
             // Owner-scoped types (task events, I4) are listed to anyone who
             // can own a record; operator types land in 4.0.1.
             Visibility::Owner => self.principal.is_some(),
@@ -66,7 +69,7 @@ impl EventsHub {
         let events: Vec<Value> = self
             .catalogue()
             .iter()
-            .filter(|d| caller.sees(d))
+            .filter(|d| caller.sees(self, d))
             .map(EventDescriptor::to_wire)
             .collect();
         Ok(json!({ "events": events }))
@@ -77,7 +80,7 @@ impl EventsHub {
     fn visible(&self, caller: &Caller, name: &str) -> Result<EventDescriptor, RpcError> {
         self.catalogue()
             .into_iter()
-            .find(|d| d.name == name && caller.sees(d))
+            .find(|d| d.name == name && caller.sees(self, d))
             .ok_or_else(RpcError::not_found)
     }
 }
@@ -131,6 +134,7 @@ fn subscribe_answer(
     id: &str,
     expires_at: Option<DateTime<Utc>>,
     existing: Option<&Subscription>,
+    throttled: bool,
 ) -> Value {
     let mut answer = json!({
         "id": id,
@@ -142,6 +146,7 @@ fn subscribe_answer(
         answer["deliveryStatus"] = json!({
             "active": old.active,
             "lastError": old.last_error,
+            "throttled": throttled,
         });
     }
     answer
@@ -173,6 +178,26 @@ fn granted_expiry(
     };
     let ttl = chrono::Duration::from_std(ttl).map_err(|_| RpcError::invalid("ttlMs"))?;
     Ok(Some(now + ttl))
+}
+
+/// A subscription made with a credential other than an API key ends no later
+/// than the credential (design F9): `ttlMs: null` is refused for it, and the
+/// grant is cut at the credential's own expiry when it has one.
+fn bounded_by(
+    credential: &Credential,
+    params: &Value,
+    granted: Option<DateTime<Utc>>,
+) -> Result<Option<DateTime<Utc>>, RpcError> {
+    if !credential.bounded() {
+        return Ok(granted);
+    }
+    if params.get("ttlMs").is_some_and(Value::is_null) {
+        return Err(RpcError::invalid("ttlMs"));
+    }
+    Ok(match (granted, credential.expires_at) {
+        (Some(granted), Some(ends)) => Some(granted.min(ends)),
+        (granted, ends) => granted.or(ends),
+    })
 }
 
 fn to_wire_time(at: Option<DateTime<Utc>>) -> Value {
@@ -226,6 +251,7 @@ impl EventsHub {
             .ok_or_else(|| RpcError::invalid("delivery.secret"))?;
         let now = Utc::now();
         let expires_at = granted_expiry(self, &params, now)?;
+        let expires_at = bounded_by(&caller.credential, &params, expires_at)?;
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
         let caps = Caps {
             per_principal: self.config.max_subscriptions_per_principal,
@@ -246,7 +272,10 @@ impl EventsHub {
             v: 1,
             id: id.clone(),
             principal,
-            api_key_name: caller.api_key_name.clone(),
+            api_key: caller.credential.api_key.clone(),
+            credential_kind: Some(caller.credential.kind),
+            credential_principal: Some(caller.credential.principal.clone()),
+            legacy_api_key_name: None,
             url: url.as_str().to_owned(),
             name: descriptor.name.clone(),
             arguments,
@@ -276,7 +305,17 @@ impl EventsHub {
             })
             .await?
             {
-                Ok(()) => return Ok(subscribe_answer(&id, expires_at, existing.as_ref())),
+                Ok(()) => {
+                    // A refresh may have reactivated a suspended row.
+                    self.runtime.wake.notify_one();
+                    let throttled = self.runtime.rates.throttled(&id);
+                    return Ok(subscribe_answer(
+                        &id,
+                        expires_at,
+                        existing.as_ref(),
+                        throttled,
+                    ));
+                }
                 Err(CapHit::Unverified) if verified => verified = false,
                 Err(hit) => return Err(cap_refusal(hit)),
             }
@@ -321,8 +360,33 @@ impl EventsHub {
         };
         let id = subscription_id(&principal, url.as_str(), name, &arguments);
         let tail = super::tail_policy(&self.config);
-        blocking(self, move |store| store.remove(&id, Utc::now(), tail)).await?;
-        Ok(json!({}))
+        let removed = id.clone();
+        blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
+        // A concurrent unsubscribe of the same key waits too. An attempt
+        // still busy at the bound is not acknowledged as stopped.
+        if self.settled(&id).await {
+            Ok(json!({}))
+        } else {
+            Err(RpcError::internal())
+        }
+    }
+
+    /// Wait until an attempt claimed before subscription `id` was removed
+    /// has settled, so nothing reaches the callback after the unsubscribe
+    /// answer (T23). Bounded by the client's own total timeout; `false` when
+    /// the attempt is still busy at the bound.
+    async fn settled(&self, id: &str) -> bool {
+        let deadline = tokio::time::Instant::now() + super::client::TOTAL_TIMEOUT * 2;
+        loop {
+            let busy = self.runtime.busy.lock().contains(id);
+            if !busy {
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 }
 

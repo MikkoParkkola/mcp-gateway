@@ -21,9 +21,20 @@ pub(crate) struct Subscription {
     pub v: u32,
     pub id: String,
     pub principal: String,
-    /// The API key the principal presented, if any: the fan-out re-check
-    /// resolves the key's backend scope from live config (I2).
-    pub api_key_name: Option<String>,
+    /// The API key the principal presented, if any: every re-check
+    /// resolves the key's expiry and backend scope from live config (I2).
+    pub api_key: Option<ApiKeyRef>,
+    /// How the subscriber's credential was presented, for the audit
+    /// record's `who`. Absent on records written before it was kept.
+    #[serde(default)]
+    pub credential_kind: Option<crate::security::audit::CredentialKind>,
+    /// The audit principal of that credential (a digest, never the secret).
+    #[serde(default)]
+    pub credential_principal: Option<String>,
+    /// An early record's bare key name, which binds no secret: such a
+    /// subscription fails every re-check and is deleted. Never written.
+    #[serde(default, rename = "api_key_name", skip_serializing)]
+    pub legacy_api_key_name: Option<String>,
     pub url: String,
     pub name: String,
     pub arguments: Value,
@@ -36,6 +47,41 @@ pub(crate) struct Subscription {
     pub failed_since: Option<DateTime<Utc>>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+/// The credential a caller presented, as events keep it: never the secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Credential {
+    pub kind: crate::security::audit::CredentialKind,
+    /// The audit principal: the validated credential's digest.
+    pub principal: String,
+    /// Set only for a configured API key: the one credential whose live
+    /// scope the re-check can read.
+    // ci-allow-secret-debug: a key's name and digest-derived principal, never the secret.
+    pub api_key: Option<ApiKeyRef>,
+    /// When the credential itself stops being valid, if it says.
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+impl Credential {
+    /// Whether delivery may outlive this credential only up to a bound: every
+    /// kind but an API key, whose expiry and grant every attempt re-reads.
+    pub(crate) const fn bounded(&self) -> bool {
+        !matches!(
+            self.kind,
+            crate::security::audit::CredentialKind::ApiKey
+                | crate::security::audit::CredentialKind::None
+        )
+    }
+}
+
+/// An API key as a caller presented it: its configured name and the
+/// principal derived from its secret's digest. A key replaced under the same
+/// name derives another principal, so it no longer matches (I2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ApiKeyRef {
+    pub name: String,
+    pub principal: String,
 }
 
 impl std::fmt::Debug for Subscription {
@@ -170,6 +216,14 @@ pub(crate) fn write_record<T: Serialize>(
         Ok(()) => Placed::Durable,
         Err(error) => Placed::NotSynced(error),
     })
+}
+
+/// Remove `dir/name` and sync `dir`; `Err` unless the removal is durable.
+pub(crate) fn remove_record_durable(dir: &Path, name: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(name)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => sync_dir(dir),
+    }
 }
 
 /// Remove `dir/name`; a missing file is already removed.

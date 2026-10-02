@@ -121,6 +121,11 @@ impl HandoffRegistry {
         self.accepted.lock().is_empty()
     }
 
+    /// How many handoffs are owned right now.
+    pub(crate) fn len(&self) -> usize {
+        self.accepted.lock().len()
+    }
+
     /// The one ownership removal. Reached only from [`Handoff::drop`].
     fn release(&self, id: &str) {
         self.accepted.lock().remove(id);
@@ -228,6 +233,15 @@ pub(crate) enum Acceptance {
 pub(crate) struct DrainOutcome {
     pub timed_out: bool,
     pub acquired: usize,
+}
+
+/// What cancelling the workers a timed-out drain left behind did: how many
+/// were still running, and whether every one of them had ended within the
+/// bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CancelOutcome {
+    pub cancelled: usize,
+    pub stopped: bool,
 }
 
 impl DrainOutcome {

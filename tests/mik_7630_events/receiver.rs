@@ -4,11 +4,12 @@
 //! counts connections. The receiver checks Standard Webhooks signatures with
 //! its own HMAC code, not the gateway's.
 
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -33,6 +34,20 @@ pub enum Reply {
     Replay,
     /// A bare status, no body.
     Status(u16),
+}
+
+/// How the receiver answers an event delivery (any POST that is not a
+/// verification). Scripted replies are used first, in order; then the default.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EventReply {
+    /// A bare status, no body.
+    Status(u16),
+    /// The status with a canary body and an `X-Canary` header carrying it.
+    Canary(u16, String),
+    /// `307` with `Location` set to the given URL.
+    Redirect(String),
+    /// Hold the request open this long, then answer with the status.
+    Hold(Duration, u16),
 }
 
 /// One request the receiver got.
@@ -76,6 +91,8 @@ impl Received {
 
 struct Shared {
     reply: Mutex<Reply>,
+    event_script: Mutex<VecDeque<EventReply>>,
+    event_default: Mutex<EventReply>,
     log: Mutex<Vec<Received>>,
 }
 
@@ -97,14 +114,46 @@ async fn hook(
     State(shared): State<Arc<Shared>>,
     headers: HeaderMap,
     body: Bytes,
-) -> (StatusCode, String) {
+) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let verification =
+        serde_json::from_slice::<Value>(&body).is_ok_and(|v| v["type"] == "verification");
+    if !verification {
+        shared.log.lock().expect("log").push(Received {
+            at: Instant::now(),
+            headers,
+            body: body.to_vec(),
+        });
+        let next = shared.event_script.lock().expect("script").pop_front();
+        let reply = next.unwrap_or_else(|| shared.event_default.lock().expect("default").clone());
+        return match reply {
+            EventReply::Status(code) => StatusCode::from_u16(code).expect("status").into_response(),
+            EventReply::Canary(code, canary) => (
+                StatusCode::from_u16(code).expect("status"),
+                [("x-canary", canary.clone())],
+                canary,
+            )
+                .into_response(),
+            EventReply::Redirect(to) => {
+                (StatusCode::TEMPORARY_REDIRECT, [("location", to)]).into_response()
+            }
+            EventReply::Hold(hold, code) => {
+                tokio::time::sleep(hold).await;
+                StatusCode::from_u16(code).expect("status").into_response()
+            }
+        };
+    }
+    verification_reply(&shared, headers, &body).into_response()
+}
+
+fn verification_reply(shared: &Shared, headers: HeaderMap, body: &Bytes) -> (StatusCode, String) {
     let reply = *shared.reply.lock().expect("reply");
     let mut log = shared.log.lock().expect("log");
     let previous = log
         .last()
         .and_then(|r| serde_json::from_slice::<Value>(&r.body).ok())
         .and_then(|v| v["challenge"].as_str().map(str::to_owned));
-    let challenge = serde_json::from_slice::<Value>(&body)
+    let challenge = serde_json::from_slice::<Value>(body)
         .ok()
         .and_then(|v| v["challenge"].as_str().map(str::to_owned))
         .unwrap_or_default();
@@ -124,7 +173,7 @@ async fn hook(
 }
 
 impl Receiver {
-    /// Generate a CA and a `127.0.0.1` leaf, serve, and write the CA to
+    /// Generate a CA and a `127.0.0.1` / `localhost` leaf, serve, and write the CA to
     /// `root/receiver-ca.pem` for the gateway child's `SSL_CERT_FILE`.
     pub async fn start(root: &Path) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -141,7 +190,10 @@ impl Receiver {
         let mut dn = DistinguishedName::new();
         dn.push(DnType::CommonName, "127.0.0.1");
         leaf.distinguished_name = dn;
-        leaf.subject_alt_names = vec![SanType::IpAddress(addr.ip())];
+        leaf.subject_alt_names = vec![
+            SanType::IpAddress(addr.ip()),
+            SanType::DnsName("localhost".try_into().expect("DNS SAN")),
+        ];
         let ca_key = KeyPair::from_pem(&ca.key_pem).expect("CA key");
         let issuer = Issuer::from_ca_cert_pem(&ca.cert_pem, ca_key).expect("CA cert");
         let leaf_pem = leaf.signed_by(&leaf_key, &issuer).expect("leaf").pem();
@@ -153,6 +205,8 @@ impl Receiver {
         .expect("rustls config");
         let shared = Arc::new(Shared {
             reply: Mutex::new(Reply::Echo),
+            event_script: Mutex::new(VecDeque::new()),
+            event_default: Mutex::new(EventReply::Status(200)),
             log: Mutex::new(Vec::new()),
         });
         let app = Router::new()
@@ -180,6 +234,35 @@ impl Receiver {
 
     pub fn reply(&self, reply: Reply) {
         *self.shared.reply.lock().expect("reply") = reply;
+    }
+
+    /// Answer the next event deliveries with `replies`, in order.
+    pub fn script(&self, replies: impl IntoIterator<Item = EventReply>) {
+        self.shared
+            .event_script
+            .lock()
+            .expect("script")
+            .extend(replies);
+    }
+
+    /// How event deliveries are answered once the script is used up.
+    pub fn event_default(&self, reply: EventReply) {
+        *self.shared.event_default.lock().expect("default") = reply;
+    }
+
+    /// The same receiver reached by name: `https://localhost:<port>/hook`.
+    pub fn localhost_url(&self) -> String {
+        self.url.replace("127.0.0.1", "localhost")
+    }
+
+    /// Event deliveries received so far (every POST but verifications).
+    pub fn events(&self) -> Vec<Received> {
+        self.received()
+            .into_iter()
+            .filter(|r| {
+                !serde_json::from_slice::<Value>(&r.body).is_ok_and(|v| v["type"] == "verification")
+            })
+            .collect()
     }
 
     pub fn received(&self) -> Vec<Received> {
