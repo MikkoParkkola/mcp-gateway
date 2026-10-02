@@ -358,7 +358,13 @@ async fn follow_upstream_job(
                     .meta_mcp()
                     .recover_task_result(&job.server, &job.tool, None, id, result)
                 {
-                    Ok(processed) => TaskTransition::Complete(processed),
+                    Ok(processed) => {
+                        crate::gateway::meta_mcp::invoke::relay::restage(
+                            (&job.server, &job.tool),
+                            &processed,
+                        );
+                        TaskTransition::Complete(processed)
+                    }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
                         code: -32603,
                         message: error.to_string(),
@@ -394,7 +400,9 @@ async fn follow_upstream_job(
             .meta_mcp()
             .audit_settlement(task, event, &notes, principal)
             .await;
+        let delivered = matches!(event, TaskTransition::Complete(_));
         executor.settle_cas(principal, id, revision, event).await;
+        state.meta_mcp().commit_staged_relay(delivered);
     }
     lease.release(executor, id).await;
 }

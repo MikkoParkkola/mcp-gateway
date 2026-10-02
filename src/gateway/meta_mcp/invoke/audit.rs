@@ -541,6 +541,7 @@ impl MetaMcp {
         replay: JsonRpcResponse,
         audit: Option<super::super::admission::ReplayAudit>,
     ) -> JsonRpcResponse {
+        self.stage_replay(tool_name, arguments, session_id, caller, &replay);
         let Some(log) = self.transparency_logger.as_ref() else {
             return replay;
         };
