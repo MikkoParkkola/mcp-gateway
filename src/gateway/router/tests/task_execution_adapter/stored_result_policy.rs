@@ -181,9 +181,10 @@ async fn a_legacy_plan_row_is_refused_by_its_task_tool_name() {
     );
 }
 
-/// A legacy row cannot name the tool it ran (`task.tool()` is the meta tool),
-/// so no current check can prove the caller may read it: it is refused even
-/// with its backend reachable and nothing withheld (MIK-7686, fail closed).
+/// A legacy row with no upstream descriptor cannot name the tool it ran
+/// (`task.tool()` is the meta tool), so no current check can prove the caller
+/// may read it: it is refused even with its backend reachable and nothing
+/// withheld (MIK-7686, fail closed).
 #[tokio::test]
 async fn a_legacy_single_backend_row_is_refused_though_nothing_is_withheld() {
     let mock = MockBackend::answering(Answer::ok());
@@ -194,6 +195,21 @@ async fn a_legacy_single_backend_row_is_refused_though_nothing_is_withheld() {
         &get_task(&state, "key-a", &id).await,
         "no recorded provenance",
     );
+}
+
+/// A legacy row whose upstream descriptor names its call is delivered while
+/// current policy admits that call, and refused once it is withheld.
+#[tokio::test]
+async fn a_legacy_row_with_a_descriptor_is_checked_against_its_call() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_invoke(&state, "b-legacy-descriptor").await;
+    strip_targets(&state, &id);
+    let store = &state.task_executor.service.store;
+    store.set_upstream_for_test(&id, (BACKEND, TOOL));
+    assert_carries_the_backend_result(&get_task(&state, "key-a", &id).await);
+    withhold(&state, TOOL);
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
 }
 
 pub(super) fn code_mode_call(id: i64, key: &str) -> Value {
