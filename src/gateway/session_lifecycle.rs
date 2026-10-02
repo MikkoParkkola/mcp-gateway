@@ -260,9 +260,9 @@ pub fn wire_session_lifecycle(
 /// Register the per-session stores `MetaMcp` owns with a lifecycle registry.
 ///
 /// Held as a `Weak` for the reason [`wire_session_lifecycle`] gives. Without
-/// this registration the profile, FSM state, cost, transition, cached-token
-/// and promoted-tool stores gain an entry per legacy session and never lose it
-/// (MIK-7215.CONTROL.5, gap G2).
+/// this registration the profile, FSM state, cost, transition and promoted-tool
+/// stores gain an entry per legacy session and never lose it (MIK-7215.CONTROL.5,
+/// gap G2). Transition entries keyed on a caller key go on its idle deadline.
 pub fn wire_meta_session_cleanup(
     lifecycle: &Arc<SessionLifecycle>,
     meta: &Arc<crate::gateway::meta_mcp::MetaMcp>,

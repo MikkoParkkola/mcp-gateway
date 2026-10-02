@@ -171,10 +171,15 @@ fn rotation_reanchors_and_resumes() {
 
     // D6: the recreated file opens with a record continuing the counter
     // (verify reports the deleted records as a gap); export resumes there.
+    // The deleted file held records `.hwm` counted, so the restart also
+    // writes the missing-mark finding (MIK-7712).
     let out = exp.poll(&sink).unwrap();
     assert!(out.reanchored, "shrunk file must re-anchor");
-    assert_eq!(out.forwarded, 2, "the open record, then the new entry");
-    assert_eq!(sink.delivered().len(), 4);
+    assert_eq!(
+        out.forwarded, 3,
+        "the open record, the missing-mark finding, then the new entry"
+    );
+    assert_eq!(sink.delivered().len(), 5);
 }
 
 // MIK-6700 HMAC.3 — the exporter authenticates each entry's sig when a

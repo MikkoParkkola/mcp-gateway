@@ -125,7 +125,8 @@ pub(super) async fn start_identity_grant_audit(
             Ok(Some(Arc::new(sink)))
         }
         Err(StartupFailure::Unrecorded(reason)) => {
-            error!(%reason, path = %path.display(), "identity grant changes could not be recorded at startup; serving no grants until restart");
+            let shown_path = path.display();
+            error!(%reason, path = %shown_path, "identity grant changes could not be recorded at startup; serving no grants until restart");
             publish(Vec::new());
             // No sink: every reload this run leaves grants empty. The next
             // start recovers and snapshots first (design section 6 step 6).
@@ -169,7 +170,8 @@ async fn audit_startup(
         // Refusing the start writes nothing: no baseline, no snapshot.
         Err(reason) if fail_on_error => return Err(StartupFailure::Unreadable(reason)),
         Err(reason) => {
-            warn!(%reason, path = %path.display(), "identity grants unreadable at startup; serving none until a reload reads them");
+            let shown_path = path.display();
+            warn!(%reason, path = %shown_path, "identity grants unreadable at startup; serving none until a reload reads them");
             auditor.seed_empty_baseline()?;
             auditor.snapshot(&[], chrono::Utc::now())?;
             drop(read.guard);

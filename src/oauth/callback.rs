@@ -369,7 +369,7 @@ fn escape_html(input: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::oauth) mod tests {
     use super::*;
 
     // =========================================================================
@@ -637,7 +637,7 @@ mod tests {
     /// A log capture for the current thread. A process-wide registry keeps
     /// every callsite's interest open, so an event is never filtered out by an
     /// interest cached on another thread before the scoped subscriber sees it.
-    fn capture() -> (
+    pub(in crate::oauth) fn capture() -> (
         tracing::subscriber::DefaultGuard,
         Arc<std::sync::Mutex<Vec<u8>>>,
     ) {

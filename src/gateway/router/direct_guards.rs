@@ -139,10 +139,11 @@ fn response_blocked(
     let session_id = format!("direct:{backend_name}");
     let verdict = fw.check_response(&session_id, backend_name, tool_name, result, caller_name);
     if verdict.action == FirewallAction::Warn {
+        let findings = verdict.findings.len();
         tracing::warn!(
             backend = %backend_name,
             tool = %tool_name,
-            findings = verdict.findings.len(),
+            findings,
             "Firewall: direct backend response warning"
         );
     }

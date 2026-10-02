@@ -28,6 +28,7 @@ providers: {}
 webhooks:
   push:
     path: /github/push
+    method: POST
     transform:
       event_type: "github.{action}"
       data: { repo: "{repository.full_name}", ref: "{ref}" }
@@ -212,7 +213,7 @@ impl Gateway {
     pub fn rewrite_config(&mut self, config: Value) {
         self.config = config;
         mcp_gateway::gateway::test_helpers::write_owner_only(
-            &self.root.join("gateway.yaml"),
+            self.root.join("gateway.yaml"),
             serde_yaml::to_string(&self.config).expect("config YAML"),
         )
         .expect("rewrite gateway config");

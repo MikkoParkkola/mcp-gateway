@@ -108,6 +108,7 @@ impl Fixture {
             evaluated.config.failsafe,
             Duration::from_secs(60),
         )
+        .expect("the registry pairs with the config")
         .with_env(env);
         Self {
             _directory: directory,

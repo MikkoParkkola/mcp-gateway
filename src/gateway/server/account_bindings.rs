@@ -131,14 +131,19 @@ pub(crate) fn install_account_strategies(
     // per-user credential store is unreachable (MIK-6744.STORE.1, open item O3).
     let sole_operator = sole_operator_asserted(config, mode);
     match mode {
-        ServeMode::Stdio => tracing::info!(
-            "stdio: managed accounts are served to the local operator that started this gateway"
-        ),
-        ServeMode::Http if sole_operator => tracing::info!(
-            "auth.single_user is asserted: managed accounts are served under one fixed \
-             sole-operator principal, to callers this gateway authenticates. Anyone holding \
-             this gateway's credential holds its stored OAuth grants."
-        ),
+        // Blocks, so each macro head stands alone on its line (MIK-7725).
+        ServeMode::Stdio => {
+            tracing::info!(
+                "stdio: managed accounts are served to the local operator that started this gateway"
+            );
+        }
+        ServeMode::Http if sole_operator => {
+            tracing::info!(
+                "auth.single_user is asserted: managed accounts are served under one fixed \
+                 sole-operator principal, to callers this gateway authenticates. Anyone holding \
+                 this gateway's credential holds its stored OAuth grants."
+            );
+        }
         ServeMode::Http => {}
     }
 
