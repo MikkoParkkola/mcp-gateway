@@ -317,6 +317,7 @@ impl MetaMcp {
     }
 
     /// Record every staged receipt when `delivered`; drop them either way.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn commit_staged_relay(&self, delivered: bool) {
         let receipts = RELAY_RECEIPTS
             .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
