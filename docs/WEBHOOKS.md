@@ -95,6 +95,12 @@ transform:
     assignee: "{data.assignee.name}"   # Extract nested field
 ```
 
+A mapping is a template: each `{path}` is replaced by the payload value at that
+dot-notation path, as text. Text with no braces is a literal, delivered as written
+(`source: "linear"`); it is never read as a payload path. A template that names a
+path the payload lacks leaves its key out of the notification and out of an MCP
+event's data.
+
 If no `data` mapping is specified, the entire webhook payload is included in the notification.
 
 ## MCP Notification Format
