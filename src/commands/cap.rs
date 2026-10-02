@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use mcp_gateway::{
     capability::{
-        AuthTemplate, CapabilityExecutor, CapabilityLoader, OpenApiConverter,
+        AuthTemplate, CapabilityExecutor, CapabilityLoader, IssueSeverity, OpenApiConverter,
         compute_capability_hash, parse_capability_file, rewrite_with_pin, validate_capability,
+        validate_capability_definition,
     },
     cli::CapCommand,
     discovery::{
@@ -80,6 +81,16 @@ async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
         Ok(cap) => {
             if let Err(e) = validate_capability(&cap) {
                 eprintln!("❌ Validation failed: {e}");
+                return ExitCode::FAILURE;
+            }
+            // The structural checks the loader runs: an error here means the
+            // gateway would skip the file, a warning that it loads with a smell.
+            let issues = validate_capability_definition(&cap, Some(&file.to_string_lossy()));
+            for issue in &issues {
+                eprintln!("{issue}");
+            }
+            if issues.iter().any(|i| i.severity == IssueSeverity::Error) {
+                eprintln!("❌ Validation failed: structural errors above");
                 return ExitCode::FAILURE;
             }
             println!("✅ {} - valid", cap.name);

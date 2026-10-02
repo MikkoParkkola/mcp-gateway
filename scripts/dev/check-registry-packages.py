@@ -38,40 +38,51 @@ from urllib.parse import urlsplit
 
 DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "src/registry/server_registry_entries.rs"
 ENTRY_RE = re.compile(r"RegistryEntry \{(.*?)\n    \},", re.S)
+# `\s*` around the value: rustfmt moves a long string onto the next line.
 FIELD_RE = {
-    "name": re.compile(r'\bname: "([^"]*)"'),
-    "command": re.compile(r'\bcommand: "([^"]*)"'),
-    "url": re.compile(r'\bdefault_url: "([^"]*)"'),
-    "auth": re.compile(r"\bauth: Auth::(\w+)"),
+    "name": re.compile(r'\bname:\s*"([^"]*)"'),
+    "command": re.compile(r'\bcommand:\s*"([^"]*)"'),
+    "url": re.compile(r'\bdefault_url:\s*"([^"]*)"'),
+    "auth": re.compile(r"\bauth:\s*Auth::(\w+)"),
 }
 # Exact versions only: a range or a dist-tag resolves to something new later.
-VERSION_RE = re.compile(r"^\d+(\.\d+)*([-.+][0-9A-Za-z.-]+)?$")
+# npm reads `pkg@1` and `pkg@1.2` as ranges, so npm needs all three parts;
+# `uvx pkg@1.2` pins `==1.2` exactly.
+VERSION_RE = {
+    "npm": re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$"),
+    "pypi": re.compile(r"^\d+(\.\d+)+([.-]?(a|b|rc|post|dev)\d+)*$"),
+}
 
 
 def parse_entries(source: str) -> list[dict[str, str]]:
+    """Every `RegistryEntry { .. }` block; one that yields no name is kept
+    with a placeholder so `classify` fails it instead of the check skipping it."""
     entries = []
-    for block in ENTRY_RE.findall(source):
+    for index, block in enumerate(ENTRY_RE.findall(source)):
         entry = {}
         for key, rx in FIELD_RE.items():
             m = rx.search(block)
             if m:
                 entry[key] = m.group(1)
-        if "name" in entry:
-            entries.append(entry)
+        if "name" not in entry:
+            entry = {"name": f"<entry #{index + 1}>", "unparsed": "1"}
+        entries.append(entry)
     return entries
 
 
-def split_pinned(spec: str) -> tuple[str, str] | None:
+def split_pinned(spec: str, kind: str) -> tuple[str, str] | None:
     """`@scope/pkg@1.2.3` -> (`@scope/pkg`, `1.2.3`); None when unpinned."""
     at = spec.rfind("@")
     if at <= 0:
         return None
     pkg, version = spec[:at], spec[at + 1 :]
-    return (pkg, version) if VERSION_RE.match(version) else None
+    return (pkg, version) if VERSION_RE[kind].match(version) else None
 
 
 def classify(entry: dict[str, str]) -> tuple[str, str, str] | str:
     """Return (kind, target, version) to probe, or an error string."""
+    if entry.get("unparsed"):
+        return "entry could not be parsed (no name field found)"
     if entry.get("url"):
         # The registry writes no client_id for an OAuth entry, so the endpoint
         # must offer dynamic client registration; a header entry must refuse
@@ -91,7 +102,7 @@ def classify(entry: dict[str, str]) -> tuple[str, str, str] | str:
         return f"unknown launcher '{tokens[0]}' (expected npx, uvx or an HTTP url)"
     if not rest or rest[0].startswith("-"):
         return "launcher has no package argument"
-    pinned = split_pinned(rest[0])
+    pinned = split_pinned(rest[0], kind)
     if pinned is None:
         return f"'{rest[0]}' is not pinned to an exact version (<package>@<x.y.z>)"
     return (kind, pinned[0], pinned[1])
@@ -158,7 +169,9 @@ def probe(kind: str, target: str, version: str) -> str | None:
             if status != 200:
                 return f"PyPI {target}=={version}: HTTP {status}"
             files = json.loads(body).get("urls", [])
-            if files and all(f.get("yanked") for f in files):
+            if not files:
+                return f"PyPI {target}=={version} has no distribution files"
+            if all(f.get("yanked") for f in files):
                 return f"PyPI {target}=={version} is yanked"
             return None
         status, _ = fetch(target)

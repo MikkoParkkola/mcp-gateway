@@ -88,6 +88,18 @@ assert crp.probe("http-oauth", "https://h/mcp", "") is None
 check({"name": "x", "url": "https://h/mcp", "auth": "OAuth"}, ("http-oauth", "https://h/mcp", ""))
 check({"name": "x", "url": "https://h/mcp", "auth": "Header"}, ("http-header", "https://h/mcp", ""))
 assert crp.parse_entries('    RegistryEntry {\n        name: "o",\n        auth: Auth::OAuth,\n    },')[0]["auth"] == "OAuth"
+# npm ranges are not pins; PyPI two-part versions are.
+check({"name": "x", "command": "npx -y pkg@1"}, "not pinned")
+check({"name": "x", "command": "npx -y pkg@1.2"}, "not pinned")
+check({"name": "x", "command": "uvx pkg@1.2"}, ("pypi", "pkg", "1.2"))
+check({"name": "x", "command": "uvx pkg@1.2rc1"}, ("pypi", "pkg", "1.2rc1"))
+# A wrapped name is still parsed; a block with no name is failed, not skipped.
+wrapped = crp.parse_entries('    RegistryEntry {\n        name:\n            "w",\n        command: "npx -y p@1.0.0",\n    },')
+assert wrapped[0]["name"] == "w", wrapped
+nameless = crp.parse_entries('    RegistryEntry {\n        command: "npx -y p@1.0.0",\n    },')
+check(nameless[0], "could not be parsed")
+answers["https://pypi.org/pypi/q/1.0/json"] = (200, json.dumps({"urls": []}).encode())
+assert "no distribution files" in crp.probe("pypi", "q", "1.0")
 
 
 def unreachable(url):

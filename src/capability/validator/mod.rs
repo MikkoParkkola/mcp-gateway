@@ -128,8 +128,8 @@ impl std::fmt::Display for Issue {
 
 /// Validate a single parsed capability definition.
 ///
-/// `file_path` is used only in duplicate-detection messages; pass `None` when
-/// validating in isolation (e.g., from `cap validate`).
+/// `file_path` feeds the file-name check (CAP-010); the loader and
+/// `cap validate` pass it, and `None` skips that check.
 ///
 /// Returns all [`Issue`]s found across every structural check.  An empty vec
 /// means the definition is structurally sound.
