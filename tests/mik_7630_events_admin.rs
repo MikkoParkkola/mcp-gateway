@@ -387,6 +387,15 @@ async fn gateway_search_finds_visible_events() {
             .unwrap_or_else(|| panic!("{tool}: no event entry in {found}"));
         assert_eq!(entry["name"], gateway::EVENT);
         assert_eq!(entry["inputSchema"], schema, "{tool}");
+        let miss = gw
+            .tool_call(ALICE, tool, json!({"query": "no-such-event-name"}))
+            .await;
+        assert!(
+            miss["matches"]
+                .as_array()
+                .is_some_and(|m| m.iter().all(|e| e["kind"] != "event")),
+            "{tool}: an unmatched query returns an event: {miss}"
+        );
         let hidden = gw.tool_call(BOB, tool, json!({"query": "push"})).await;
         let seen = hidden["matches"]
             .as_array()
@@ -457,4 +466,70 @@ async fn the_dead_letter_routes_answer_404_with_events_off() {
         .admin(Some(ADMIN), "POST", &format!("{LIST}/evt_x/replay"))
         .await;
     assert_eq!(status, 404);
+}
+
+/// Section 17: a replay re-checks access. After alice's backend grant is
+/// revoked by a config reload, her dead letter is not replayed.
+#[tokio::test]
+async fn replay_is_refused_once_access_is_revoked() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut gw = start(root.path(), &rx, json!({})).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    rx.script([EventReply::Status(410)]);
+    fire(&gw, "d-rev", "o/r").await;
+    let id = dead_with_reason(root.path(), "gone").await[0]["event_id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let mut cfg = gw.config().clone();
+    cfg["auth"]["api_keys"][0]["backends"] = json!(["other"]);
+    gw.rewrite_config(cfg);
+    // The reload is live once alice's `events/list` no longer shows the event.
+    let mut live = false;
+    for _ in 0..100 {
+        if !gw
+            .event_names(Some(ALICE), None)
+            .await
+            .iter()
+            .any(|n| n == gateway::EVENT)
+        {
+            live = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(live, "the reload hid the event from alice");
+    let (status, body) = gw
+        .admin(Some(ADMIN), "POST", &format!("{LIST}/{id}/replay"))
+        .await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["reason"], "access_revoked", "{body}");
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(rx.events().len(), 1, "nothing was re-sent");
+    assert_eq!(dead_letters(root.path()).len(), 1, "the dead letter stays");
+}
+
+/// Section 17: a replayed dead letter starts with a fresh attempt count, so
+/// an exhausted one is delivered, not exhausted again at once.
+#[tokio::test]
+async fn an_exhausted_dead_letter_replays_with_a_fresh_attempt_count() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, delivery::fast_retry()).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    rx.event_default(EventReply::Status(503));
+    fire(&gw, "d-exh", "o/r").await;
+    let id = dead_with_reason(root.path(), "exhausted").await[0]["event_id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let tried = rx.events().len();
+    rx.event_default(EventReply::Status(200));
+    let (status, body) = gw
+        .admin(Some(ADMIN), "POST", &format!("{LIST}/{id}/replay"))
+        .await;
+    assert_eq!(status, 200, "{body}");
+    events_at_least(&rx, tried + 1).await;
+    assert!(wait_until(DEADLINE, || dead_letters(root.path()).is_empty()).await);
 }

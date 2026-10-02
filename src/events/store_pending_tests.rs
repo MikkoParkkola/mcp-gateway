@@ -548,3 +548,67 @@ fn a_revocation_decided_on_an_old_row_spares_a_rebound_one() {
     assert!(!store.remove_where("s1", now, TAIL, same).expect("io"));
     assert!(store.get("s1").is_some(), "the rebound row survives");
 }
+
+#[test]
+fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
+    use super::Revived;
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let roomy = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    for (event, owner) in [("e1", "s1"), ("e2", "gone"), ("e3", "s1")] {
+        store
+            .dead_letter(record(event, owner, now), DeadReason::Gone, now, ROOMY)
+            .expect("io");
+    }
+    let fresh = |event: &str, owner: &str| record(event, owner, now);
+    let stale = now + chrono::Duration::seconds(1);
+    assert_eq!(
+        store
+            .revive("e1", stale, fresh("e1", "s1"), roomy)
+            .expect("io"),
+        Revived::Missing,
+        "a dead letter buried again since the scan is not revived"
+    );
+    assert_eq!(
+        store
+            .revive("e2", now, fresh("e2", "gone"), roomy)
+            .expect("io"),
+        Revived::NoSubscription
+    );
+    let full = OutboxCaps {
+        global: 0,
+        per_subscription: 0,
+    };
+    assert_eq!(
+        store
+            .revive("e3", now, fresh("e3", "s1"), full)
+            .expect("io"),
+        Revived::Full
+    );
+    assert_eq!(
+        store.dead_letters().len(),
+        3,
+        "every refusal keeps its letter"
+    );
+    assert_eq!(
+        store
+            .revive("e1", now, fresh("e1", "s1"), roomy)
+            .expect("io"),
+        Revived::Written
+    );
+    let left: Vec<String> = store
+        .dead_letters()
+        .into_iter()
+        .map(|(d, _)| d.record.event_id)
+        .collect();
+    assert_eq!(left, ["e2", "e3"], "only the revived letter left dead/");
+    assert!(!dir.path().join("dead/e1.json").exists(), "and its file");
+    let due = store.due(now, &HashSet::new()).expect("io");
+    assert_eq!(due.ready.len(), 1);
+    assert_eq!(due.ready[0].event_id, "e1");
+    assert_eq!(due.ready[0].attempt, 0);
+}
