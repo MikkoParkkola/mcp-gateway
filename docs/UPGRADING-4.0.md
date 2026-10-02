@@ -143,7 +143,8 @@ backend" and "fails a capability file" first.**
 | 116 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
 | 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp, writes no new `identity_grant_decision` record for 10 minutes; a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
-| 119 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
+| 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
+| 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1450,7 +1451,9 @@ backends:
   works.
 - **Legacy handshake only.** The transport always runs `initialize`. A `protocol_version` of
   `2026-07-28` or later on `ws_url` refuses the load, and a peer that only speaks the stateless
-  revision fails the start with "WebSocket MCP initialize failed".
+  revision fails the start with "WebSocket MCP initialize failed". A peer that rejects the proposed
+  revision and lists the ones it speaks is retried once at the highest revision both sides speak;
+  a peer that selects a revision the gateway does not speak fails the start.
 - **Public roots only.** `wss://` trusts the bundled web PKI roots; a private CA fails at start
   with a TLS error.
 - **Bounded start.** A peer that accepts TCP and stalls the upgrade fails the call after the
@@ -3390,7 +3393,28 @@ client polling once a second wrote about 86,400 identical records a day for one 
 
 **Action:** none for a healthy log. Investigate a new finding as tail loss or an edit.
 
-## 119. A task stored by a 4.0.0 beta is re-checked or refused
+## 119. stdio and WebSocket backends negotiate the protocol revision like HTTP
+
+**Startup:** no notice, a backend that selects a revision the gateway does not speak fails its start
+
+The client proposes a revision and the backend selects one. HTTP already refused a selection
+outside the revisions the gateway speaks and retried a version rejection at the highest revision
+both sides speak; stdio and WebSocket now do the same.
+
+- stdio: the selection is checked on the first answer and on the retry, and the retry's selection
+  is the revision used, not the one the retry proposed.
+- WebSocket: a rejection that lists the backend's revisions is retried once on the same socket.
+  A rejection that lists none, or none in common, still fails with "WebSocket MCP initialize
+  failed".
+- stdio diagnostics name the backend's error code, no longer its message, and stdio debug logs
+  record line lengths, no longer the backend's lines or the frames sent to it.
+- On stdio and WebSocket an `initialize` answer selecting `2026-07-28` is accepted, and the era
+  probe settles the dialect. HTTP still requires a legacy selection, because its
+  `MCP-Protocol-Version` header follows the selection.
+
+**Action:** a backend that fails to start with "Backend selected protocol version" needs a
+revision from the supported list, or a `protocol_version` pin it accepts.
+## 120. A task stored by a 4.0.0 beta is re-checked or refused
 
 **Startup:** no notice, `tasks/get` on such a task may answer -32003
 

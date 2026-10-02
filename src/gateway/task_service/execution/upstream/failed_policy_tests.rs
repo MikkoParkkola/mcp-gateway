@@ -35,6 +35,8 @@ enum Reply {
     FailedSecret,
     FailedBenign,
     Completed,
+    /// A completed result whose text carries the marker.
+    CompletedSecret,
 }
 
 struct StubPeer(Reply);
@@ -59,6 +61,10 @@ impl UpstreamRecovery for StubPeer {
             }),
             Reply::Completed => UpstreamAnswer::Completed(json!({
                 "content": [{"type": "text", "text": "finished upstream"}],
+                "isError": false,
+            })),
+            Reply::CompletedSecret => UpstreamAnswer::Completed(json!({
+                "content": [{"type": "text", "text": format!("finished upstream with {MARKER}")}],
                 "isError": false,
             })),
         }
@@ -148,12 +154,16 @@ async fn seed_capturable_task(
 /// Recover one seeded working row and return its committed wire projection,
 /// plus the store directory so the bytes on disk can be read back.
 async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
-    let (service, executor, id, directory) = seed_capturable_task(reply).await;
-
     // The gateway a reader would face: the product's own gates, in the mode an
     // operator enables to act on a finding rather than annotate it.
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.enable_response_inspection_action_mode();
+    recover_with(reply, meta).await
+}
+
+/// [`recover`] against a caller-built gateway.
+async fn recover_with(reply: Reply, meta: MetaMcp) -> (Value, tempfile::TempDir) {
+    let (service, executor, id, directory) = seed_capturable_task(reply).await;
     let meta = Arc::new(meta);
     let owner_digest = service
         .owner(OWNER)
@@ -276,5 +286,62 @@ async fn a_recovered_success_still_settles_completed() {
         wire.pointer("/result/content/0/text")
             .and_then(Value::as_str),
         Some("finished upstream")
+    );
+}
+
+/// A gateway whose ONLY armed gate is the response firewall: no inspection
+/// action mode, so the recovery call to `inspect_task_result` is the one thing
+/// that can refuse a recovered result.
+#[cfg(feature = "firewall")]
+fn firewall_only_gateway() -> MetaMcp {
+    use crate::security::firewall::{Firewall, FirewallConfig};
+
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.set_firewall(Some(Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            credential_redaction: true,
+            ..FirewallConfig::default()
+        },
+        None,
+    ))));
+    meta
+}
+
+/// MIK-7706.GH2439.1: a recovered completed upstream result holding a
+/// credential is refused by the firewall, and the credential is never stored.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_secret_bearing_recovered_result_is_refused_by_the_firewall() {
+    let (wire, directory) = recover_with(Reply::CompletedSecret, firewall_only_gateway()).await;
+    assert_eq!(
+        wire.pointer("/status").and_then(Value::as_str),
+        Some("failed"),
+        "{wire}"
+    );
+    assert_eq!(
+        wire.pointer("/error/message").and_then(Value::as_str),
+        Some("Response blocked by security firewall"),
+        "{wire}"
+    );
+    assert!(wire.pointer("/result").is_none_or(Value::is_null), "{wire}");
+    assert!(
+        !wire.to_string().contains(MARKER) && !stored_bytes(&directory).contains(MARKER),
+        "the canary reached the wire projection or the durable record"
+    );
+}
+
+/// The refusal above is the firewall's verdict on the credential, not a
+/// refusal of every recovered result.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_benign_recovered_result_passes_the_firewall() {
+    let (wire, _directory) = recover_with(Reply::Completed, firewall_only_gateway()).await;
+    assert_eq!(
+        wire.pointer("/status").and_then(Value::as_str),
+        Some("completed"),
+        "{wire}"
     );
 }

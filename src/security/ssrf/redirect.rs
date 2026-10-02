@@ -6,6 +6,7 @@
 //! public URL returns a 30x redirect to an internal address.  Every hop
 //! in the chain must pass the SSRF check before the gateway follows it.
 
+use super::SSRF_BLOCKED;
 use super::validate_url_not_ssrf;
 use crate::Error;
 use crate::Result;
@@ -24,7 +25,7 @@ use crate::Result;
 pub fn validate_redirect_chain(chain: &[&str]) -> Result<()> {
     for (i, url) in chain.iter().enumerate() {
         validate_url_not_ssrf(url)
-            .map_err(|e| Error::Protocol(format!("SSRF blocked at redirect hop {i}: {e}")))?;
+            .map_err(|e| Error::Protocol(format!("{SSRF_BLOCKED} at redirect hop {i}: {e}")))?;
     }
     Ok(())
 }
