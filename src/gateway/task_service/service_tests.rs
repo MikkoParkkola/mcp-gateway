@@ -397,3 +397,24 @@ async fn service_07_owns_all_is_all_or_nothing() {
     assert!(service.owns_all(ALICE, std::iter::empty::<&str>()));
     service.close().await.unwrap();
 }
+
+/// Mutant: an unattributable principal is allowed to own the (empty) id set, so
+/// an anonymous caller passes the subscription ownership check.
+#[tokio::test]
+async fn service_07b_an_unattributable_principal_owns_nothing_even_the_empty_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let service = service(dir.path()).await;
+    let task = task();
+    service
+        .create(request(ALICE, "k-1"), &task, BACKEND, allow_worker())
+        .await
+        .unwrap();
+    let oversized = "a".repeat(1 << 20);
+    for principal in ["", oversized.as_str()] {
+        assert!(!service.owns_all(principal, std::iter::empty::<&str>()));
+        assert!(!service.owns_all(principal, [task.id()]));
+    }
+    // Positive control: an attributable owner still owns the empty set.
+    assert!(service.owns_all(ALICE, std::iter::empty::<&str>()));
+    service.close().await.unwrap();
+}

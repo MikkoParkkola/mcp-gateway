@@ -149,10 +149,15 @@ struct Fixture {
 /// One surfaced tool on one backend. `shared` primes the shared slot with
 /// that hint; `None` leaves it cold.
 async fn fixture(config: BackendConfig, shared: Option<Hint>) -> Fixture {
+    fixture_on(SERVER, config, shared).await
+}
+
+/// [`fixture`] with the backend under a chosen name.
+async fn fixture_on(server: &str, config: BackendConfig, shared: Option<Hint>) -> Fixture {
     let wire = Canned::new(shared.unwrap_or(Hint::Harmless));
     // A zero TTL, so a second fetch re-reads the wire instead of the cache.
     let backend = Arc::new(Backend::new(
-        SERVER,
+        server,
         config,
         &FailsafeConfig::default(),
         Duration::ZERO,
@@ -167,12 +172,12 @@ async fn fixture(config: BackendConfig, shared: Option<Hint>) -> Fixture {
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(Arc::clone(&backend)), "fixture registers");
     let meta = MetaMcp::new(registry).with_surfaced_tools(vec![SurfacedToolConfig {
-        server: SERVER.to_string(),
+        server: server.to_string(),
         tool: TOOL.to_string(),
     }]);
     assert_eq!(
         meta.surfaced_tool_server(TOOL),
-        Some(SERVER),
+        Some(server),
         "premise: surfaced"
     );
     let mint = Arc::new(CountingMint(AtomicUsize::new(0)));
@@ -460,4 +465,164 @@ async fn an_anonymous_caller_is_classified_from_the_shared_slot() {
         };
         assert!(response.error.is_some(), "refused: {response:?}");
     }
+}
+
+fn refusal(outcome: &TaskConfirmation) -> (i32, String) {
+    let TaskConfirmation::Answer(response) = outcome else {
+        panic!("expected a refusal, got {outcome:?}");
+    };
+    assert!(
+        response.result.is_none(),
+        "a refusal is no result: {response:?}"
+    );
+    let error = response.error.as_ref().expect("a refusal is an error");
+    (error.code, error.message.clone())
+}
+
+/// A challenge answered with `accept`, and the payload sealed inside it.
+async fn accepted_challenge(fx: &Fixture) -> (RetryFields, crate::protocol::continuation::Payload) {
+    let (_, issued_key, state) = challenge(&ask(fx, &fresh(), elicitation()).await);
+    let payload = fx
+        .meta
+        .continuation
+        .keyring()
+        .open(&state, crate::protocol::continuation::now_unix_secs())
+        .expect("the issued grant is authentic");
+    let retry = RetryFields {
+        input_responses: Some(json!({ issued_key: { "action": "accept" } })),
+        request_state: Some(state),
+        ..fresh()
+    };
+    (retry, payload)
+}
+
+/// Mutant: the undeclared-capability refusal for a known destructive tool is
+/// dropped, or reworded to claim the tool is unclassified.
+#[tokio::test]
+async fn a_destructive_call_from_a_client_that_cannot_be_asked_is_refused() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let (code, message) = refusal(&ask(&fx, &fresh(), Declared::NONE).await);
+    assert_eq!(code, -32021);
+    assert!(message.contains("is destructive"), "{message}");
+    assert!(!message.contains("could not be classified"), "{message}");
+    // Positive control: the same call from a client that declared it can be asked.
+    challenge(&ask(&fx, &fresh(), elicitation()).await);
+}
+
+/// Mutant: a full hold table still mints a grant naming an exchange nobody holds.
+#[tokio::test]
+async fn a_full_hold_table_refuses_the_challenge_and_mints_no_grant() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let now = crate::protocol::continuation::now_unix_secs();
+    let table = fx.meta.continuation.in_flight();
+    let mut held = Vec::new();
+    while let Some(key) = table.hold("filler", now + 300, now).await {
+        held.push(key);
+        assert!(held.len() <= 1 << 16, "the hold table is bounded");
+    }
+    assert!(!held.is_empty());
+    assert_eq!(refusal(&ask(&fx, &fresh(), elicitation()).await).0, -32003);
+
+    // Positive control: one freed slot and the same call is asked again.
+    assert!(table.complete(&held[0], now).await);
+    challenge(&ask(&fx, &fresh(), elicitation()).await);
+}
+
+/// Mutant: a mint failure is answered with a challenge, or with the grant.
+#[tokio::test]
+async fn a_grant_that_cannot_be_sealed_refuses_the_challenge() {
+    // The backend's name is sealed into the envelope; one this long exceeds
+    // the envelope bound, which is how a mint refuses.
+    let long = "b".repeat(16 * 1024);
+    let fx = fixture_on(&long, BackendConfig::default(), Some(Hint::Destructive)).await;
+    assert_eq!(refusal(&ask(&fx, &fresh(), elicitation()).await).0, -32003);
+
+    // Positive control: an ordinary name seals.
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    challenge(&ask(&fx, &fresh(), elicitation()).await);
+}
+
+/// Mutant: the hold check removed, so a grant for an exchange this replica no
+/// longer holds is honoured, or the refusal also burns the caller's redemption.
+#[tokio::test]
+async fn a_grant_whose_hold_is_gone_is_refused_without_spending_it() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let (retry, payload) = accepted_challenge(&fx).await;
+    let now = crate::protocol::continuation::now_unix_secs();
+    assert!(
+        fx.meta
+            .continuation
+            .in_flight()
+            .complete(&payload.hold_key, now)
+            .await
+    );
+    assert_eq!(refusal(&ask(&fx, &retry, elicitation()).await).0, -32602);
+    assert!(
+        fx.meta
+            .continuation
+            .ledger()
+            .consume(&payload.jti, payload.expires_at, now)
+            .await,
+        "the refusal came before the spend"
+    );
+
+    // Positive control: a grant whose hold is still live is granted.
+    let (live, _) = accepted_challenge(&fx).await;
+    assert!(matches!(
+        ask(&fx, &live, elicitation()).await,
+        TaskConfirmation::Granted(_)
+    ));
+}
+
+/// Mutant: the spent check removed, so one grant is redeemed twice.
+#[tokio::test]
+async fn a_grant_already_spent_is_refused_and_a_fresh_one_is_granted_once() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let (retry, payload) = accepted_challenge(&fx).await;
+    let now = crate::protocol::continuation::now_unix_secs();
+    assert!(
+        fx.meta
+            .continuation
+            .ledger()
+            .consume(&payload.jti, payload.expires_at, now)
+            .await
+    );
+    assert_eq!(refusal(&ask(&fx, &retry, elicitation()).await).0, -32602);
+
+    // Positive control: an unspent grant is granted, and only once.
+    let (retry, _) = accepted_challenge(&fx).await;
+    assert!(matches!(
+        ask(&fx, &retry, elicitation()).await,
+        TaskConfirmation::Granted(_)
+    ));
+    assert_eq!(refusal(&ask(&fx, &retry, elicitation()).await).0, -32602);
+}
+
+/// Mutant: a caller with no verified identity is treated as having an
+/// already-admitted task, or replay recognition is dropped for everyone.
+#[test]
+fn an_unattributable_caller_is_never_an_admitted_replay() {
+    let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
+    let (arguments, retry) = (json!({ "id": 1 }), fresh());
+    let alice = identity();
+    // The same operation, held under the verified owner's key.
+    let owned =
+        super::task_admission_request(alice.stable_actor_id(), KEY.to_owned(), TOOL, &arguments);
+    let _held = admission.admit_task(owned.borrow());
+    let request = |who| TaskConfirmationRequest {
+        id: RequestId::Number(7),
+        tool_name: TOOL,
+        arguments: &arguments,
+        task: None,
+        retry: &retry,
+        verified_identity: who,
+        input_capabilities: Declared::NONE,
+        is_modern: true,
+        admission: &admission,
+    };
+    assert!(
+        MetaMcp::already_admitted(&request(Some(&alice)), KEY),
+        "control: the verified owner's operation is recognised"
+    );
+    assert!(!MetaMcp::already_admitted(&request(None), KEY));
 }
