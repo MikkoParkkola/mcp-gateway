@@ -310,9 +310,11 @@ pub(super) enum Walk {
     Delivery,
 }
 
-/// The text of `value` read as `walk`: every string leaf, contiguous and
-/// newline-joined (so content split over short fields still matches), then
-/// the keys `walk` reads. A delivery leaves out the top-level
+/// The text of `value` read as `walk`: every string leaf, newline-joined
+/// (content split over short fields at word boundaries still matches); on
+/// egress the leaves once more run together, since a copy split mid-word
+/// over fields shorter than a fingerprint is still one the backend can
+/// join; then the keys `walk` reads. A delivery leaves out the top-level
 /// `_context_integrity`: that slot is the gateway's verdict about the
 /// result, whose fixed wording would make unrelated results look alike; a
 /// backend writing its own content there is backend collusion (§9). A
@@ -324,27 +326,31 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
         }
         out.push_str(s);
     }
-    fn visit<'v>(value: &'v Value, out: &mut String, keys: &mut Vec<&'v str>) {
+    fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
         match value {
-            Value::String(s) => push(out, s),
-            Value::Array(items) => items.iter().for_each(|v| visit(v, out, keys)),
+            Value::String(s) => leaves.push(s),
+            Value::Array(items) => items.iter().for_each(|v| visit(v, leaves, keys)),
             Value::Object(map) => map.iter().for_each(|(k, v)| {
                 keys.push(k);
-                visit(v, out, keys);
+                visit(v, leaves, keys);
             }),
             _ => {}
         }
     }
-    let (mut out, mut keys): (String, Vec<&str>) = (String::new(), Vec::new());
+    let (mut leaves, mut keys): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
     match value {
         Value::Object(map) if walk == Walk::Delivery => map
             .iter()
             .filter(|(k, _)| k.as_str() != "_context_integrity")
             .for_each(|(k, v)| {
                 keys.push(k);
-                visit(v, &mut out, &mut keys);
+                visit(v, &mut leaves, &mut keys);
             }),
-        _ => visit(value, &mut out, &mut keys),
+        _ => visit(value, &mut leaves, &mut keys),
+    }
+    let mut out = leaves.join("\n");
+    if walk == Walk::Egress && leaves.len() > 1 {
+        push(&mut out, &leaves.concat());
     }
     for key in keys {
         if walk == Walk::Egress || key.chars().count() >= super::collusion::K {
