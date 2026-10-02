@@ -175,7 +175,13 @@ async fn a_signing_refusal_records_nothing() {
     let mut response = JsonRpcResponse::success(RequestId::Number(1), delivered);
     // An empty nonce is one the signer refuses.
     let target = ("alpha", "read");
-    super::super::sign_and_record(&state, a.auth(&key), target, &mut response, Some(Some("")));
+    super::super::sign_and_record(
+        &state,
+        a.auth(&key),
+        target,
+        &mut response,
+        Some(&Some(String::new())),
+    );
     assert!(
         response.result.is_none(),
         "signing did not refuse: {response:?}"

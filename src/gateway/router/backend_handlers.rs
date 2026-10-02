@@ -1112,7 +1112,7 @@ async fn backend_handler_inner(
                 crate::gateway::meta_mcp::invoke::audit::note_cached();
                 // A replay is a delivery too: it renews this caller's own copy.
                 let mut response = JsonRpcResponse::success(id.clone(), cached);
-                let nonce = signs.then_some(signing_nonce.as_deref());
+                let nonce = signs.then_some(&signing_nonce);
                 sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
                 return build_http_response(&response, StatusCode::OK);
             }
@@ -1168,7 +1168,7 @@ async fn backend_handler_inner(
                 let nonce = chain_nonce.as_deref();
                 state.meta_mcp.finish_direct(&mut response, &method, nonce);
                 // What the caller receives: after every gate and the finish.
-                let nonce = signs.then_some(signing_nonce.as_deref());
+                let nonce = signs.then_some(&signing_nonce);
                 sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
                 build_http_response(&response, StatusCode::OK)
             }
@@ -1245,7 +1245,7 @@ async fn backend_handler_inner(
             let nonce = chain_nonce.as_deref();
             state.meta_mcp.finish_direct(&mut response, &method, nonce);
             if method == "tools/call" {
-                let nonce = signs.then_some(signing_nonce.as_deref());
+                let nonce = signs.then_some(&signing_nonce);
                 sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
             }
             build_http_response(&response, StatusCode::OK)
@@ -1263,9 +1263,9 @@ fn sign_and_record(
     auth: BackendAuthContext<'_>,
     (server, tool): (&str, &str),
     response: &mut JsonRpcResponse,
-    nonce: Option<Option<&str>>,
+    nonce: Option<&Option<String>>,
 ) {
-    if let Some(nonce) = nonce {
+    if let Some(nonce) = nonce.map(Option::as_deref) {
         state.meta_mcp.sign_direct_delivery(response, nonce);
     }
     #[cfg(feature = "firewall")]
