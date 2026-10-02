@@ -99,7 +99,7 @@ impl Gateway {
         }
     }
 
-    /// The protocol telemetry save, on the blocking pool under `deadline`.
+    /// The protocol telemetry save, on a detached thread under `deadline`.
     pub(super) async fn persist_stdio_telemetry_bounded(
         deadline: Instant,
         sink: &Arc<StdioTelemetry>,
