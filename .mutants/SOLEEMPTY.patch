@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/bridge.rs b/src/gateway/router/accounts/bridge.rs
+index 7e0432311..0ce20a438 100644
+--- a/src/gateway/router/accounts/bridge.rs
++++ b/src/gateway/router/accounts/bridge.rs
+@@ -147,7 +147,7 @@ fn sole_cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
+             }
+         }
+     }
+-    found.filter(|value| !value.is_empty())
++    found
+ }
+ 
+ fn unix_now() -> i64 {

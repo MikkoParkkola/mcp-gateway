@@ -1,0 +1,13 @@
+diff --git a/src/config/account_bindings.rs b/src/config/account_bindings.rs
+index 3de68053d..f0f7f58b0 100644
+--- a/src/config/account_bindings.rs
++++ b/src/config/account_bindings.rs
+@@ -179,7 +179,7 @@ fn compile_one(
+             let strategy = descriptor.external_strategy.clone().ok_or_else(|| {
+                 Error::ConfigValidation(format!(
+                     "backend '{name}' references external account descriptor '{reference}', \
+-                     which declares no external_strategy"
++                     which declares nothing"
+                 ))
+             })?;
+             (Some(strategy), None)

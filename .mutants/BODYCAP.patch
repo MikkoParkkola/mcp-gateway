@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/accounts/journeys.rs b/src/gateway/router/accounts/journeys.rs
+index fd82b4a60..ae5c1f561 100644
+--- a/src/gateway/router/accounts/journeys.rs
++++ b/src/gateway/router/accounts/journeys.rs
+@@ -100,9 +100,6 @@ pub(super) async fn create(
+ /// Parse and cap the body, and match `return_path` byte-exactly against the
+ /// configured list. Returns the request and the hosted origin.
+ fn admissible(config: &Config, body: &Bytes) -> Option<(CreateRequest, String)> {
+-    if body.len() > BODY_MAX {
+-        return None;
+-    }
+     let request: CreateRequest = serde_json::from_slice(body).ok()?;
+     if request.account_id.len() > ACCOUNT_ID_MAX || request.return_path.len() > RETURN_PATH_MAX {
+         return None;

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/bridge.rs b/src/gateway/router/accounts/bridge.rs
+index 7e0432311..37a52dc64 100644
+--- a/src/gateway/router/accounts/bridge.rs
++++ b/src/gateway/router/accounts/bridge.rs
+@@ -61,7 +61,7 @@ pub(super) fn presents_session(session: &Session, headers: &HeaderMap) -> bool {
+         .filter_map(|line| line.to_str().ok())
+         .flat_map(|line| line.split(';'))
+         .filter_map(|pair| pair.trim().split_once('='))
+-        .any(|(key, _)| key == session.cookie_name)
++        .any(|(key, _)| key.starts_with(session.cookie_name.as_str()))
+ }
+ 
+ pub(super) struct OwuiSessionBridge {

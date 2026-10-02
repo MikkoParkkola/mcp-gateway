@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/account_bindings.rs b/src/gateway/server/account_bindings.rs
+index b529db6cc..53284e5de 100644
+--- a/src/gateway/server/account_bindings.rs
++++ b/src/gateway/server/account_bindings.rs
+@@ -171,7 +171,8 @@ pub(crate) fn install_account_strategies(
+         };
+         let Some(installed) = registry.installed(&bound.descriptor_id) else {
+             return Err(match propagation.strategy {
+-                PropagationStrategyKind::Vault => Error::Config(format!(
++                PropagationStrategyKind::Vault => return Ok(()),
++                PropagationStrategyKind::Passthrough => Error::Config(format!(
+                     "backend '{backend}' is bound to personal_managed account '{}' but no \
+                      account custody was started; the gateway refuses to serve a managed \
+                      account as though it were a shared one. Configure the accounts block \

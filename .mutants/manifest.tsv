@@ -1,0 +1,13 @@
+head_sha	a17a5d92eeff0802e83b1fbaad2df001d3c71d43
+# mutants for #2575
+SESSIONNAME	linux	SESSIONNAME.patch	--lib gateway::router::accounts::bridge::bridge_tests::presenting_a_session_means_naming_the_cookie_valid_or_not -- --exact
+SOLEDUP	linux	SOLEDUP.patch	--lib gateway::router::accounts::bridge::bridge_tests::only_one_nonempty_session_cookie_yields_a_token -- --exact
+SOLEEMPTY	linux	SOLEEMPTY.patch	--lib gateway::router::accounts::bridge::bridge_tests::only_one_nonempty_session_cookie_yields_a_token -- --exact
+BODYCAP	linux	BODYCAP.patch	--lib gateway::router::accounts::journeys::journeys_tests::a_create_body_is_capped_and_its_return_path_matched_exactly -- --exact
+RETURNPATH	linux	RETURNPATH.patch	--lib gateway::router::accounts::journeys::journeys_tests::a_create_body_is_capped_and_its_return_path_matched_exactly -- --exact
+OFFERRETRY	linux	OFFERRETRY.patch	--lib gateway::router::tests::openwebui_adapter::connect_offer::t_offer3_a_rate_limited_offer_keeps_todays_text_and_says_retry -- --exact
+INSTALLDISABLED	linux	INSTALLDISABLED.patch	--lib gateway::server::account_bindings::account_bindings_tests::a_disabled_backend_binding_is_skipped -- --exact
+INSTALLNOCUSTODY	linux	INSTALLNOCUSTODY.patch	--lib gateway::server::account_bindings::account_bindings_tests::a_managed_binding_with_no_custody_is_refused_not_installed_empty -- --exact
+MANAGEDSECRET	linux	MANAGEDSECRET.patch	--lib config::account_consumer_config_tests::managed_transport::managed_account_backend_refuses_injected_authorization_and_headerless_transports -- --exact
+MANAGEDTRANSPORT	linux	MANAGEDTRANSPORT.patch	--lib config::account_consumer_config_tests::managed_transport::managed_account_backend_refuses_injected_authorization_and_headerless_transports -- --exact
+EXTNOSTRATEGY	linux	EXTNOSTRATEGY.patch	--lib config::account_consumer_config_tests::managed_transport::an_external_descriptor_without_a_strategy_cannot_be_bound -- --exact

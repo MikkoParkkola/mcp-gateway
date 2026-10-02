@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/account_bindings.rs b/src/gateway/server/account_bindings.rs
+index b529db6cc..a96d6635a 100644
+--- a/src/gateway/server/account_bindings.rs
++++ b/src/gateway/server/account_bindings.rs
+@@ -160,9 +160,6 @@ pub(crate) fn install_account_strategies(
+     for (name, bound) in compile(config)? {
+         // A disabled backend was never registered, so installing a strategy
+         // for it would bind custody to something that cannot be dispatched to.
+-        if !config.backends.get(&name).is_some_and(|b| b.enabled) {
+-            continue;
+-        }
+         let backend = name.as_str();
+         let Some(propagation) = bound.propagation.as_ref() else {
+             // A `shared` descriptor names an account this deployment already

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/journeys.rs b/src/gateway/router/accounts/journeys.rs
+index fd82b4a60..ed665c822 100644
+--- a/src/gateway/router/accounts/journeys.rs
++++ b/src/gateway/router/accounts/journeys.rs
+@@ -111,7 +111,7 @@ fn admissible(config: &Config, body: &Bytes) -> Option<(CreateRequest, String)>
+     hosted
+         .return_paths
+         .iter()
+-        .any(|allowed| allowed.as_bytes() == request.return_path.as_bytes())
++        .any(|allowed| request.return_path.as_bytes().starts_with(allowed.as_bytes()))
+         .then(|| (request, hosted.public_origin.clone()))
+ }
+ 

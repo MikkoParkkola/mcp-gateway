@@ -1,0 +1,13 @@
+diff --git a/src/config/account_bindings.rs b/src/config/account_bindings.rs
+index 3de68053d..1bf6abfec 100644
+--- a/src/config/account_bindings.rs
++++ b/src/config/account_bindings.rs
+@@ -274,7 +274,7 @@ fn validate_managed_consumer(name: &str, reference: &str, backend: &BackendConfi
+         )));
+     }
+ 
+-    if !matches!(backend.transport, TransportConfig::Http { .. }) {
++    if false {
+         return Err(Error::ConfigValidation(format!(
+             "backend '{name}' is bound to personal_managed account '{reference}' but its \
+              transport cannot carry a per-request credential header (only http transports \
