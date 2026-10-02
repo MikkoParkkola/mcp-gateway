@@ -20,6 +20,14 @@ pub(crate) struct RelayKey<'a> {
     keyed: bool,
 }
 
+#[cfg(test)]
+impl<'a> RelayKey<'a> {
+    /// A test round's caller: unkeyed, in its own bucket.
+    pub(crate) fn unkeyed_for_test(key: &'a str) -> Self {
+        Self { key, keyed: false }
+    }
+}
+
 impl MetaMcpCallerContext<'_> {
     /// The relay principal: the HTTP caller key (inherited by playbooks,
     /// chains and HTTP tasks), else the stdio operator, one principal that no

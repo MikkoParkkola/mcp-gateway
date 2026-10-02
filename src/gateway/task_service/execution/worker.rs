@@ -655,7 +655,7 @@ impl TaskExecutor {
         if is_terminal(current.task.status()) {
             return false;
         }
-        match self
+        let settled = self
             .commit(TaskWrite::Settle {
                 principal,
                 id,
@@ -663,14 +663,12 @@ impl TaskExecutor {
                 event,
                 targets,
             })
-            .await
-        {
-            Ok(outcome) => stored_completed(&outcome),
-            Err(_) => {
-                tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
-                false
-            }
-        }
+            .await;
+        let Ok(outcome) = settled else {
+            tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
+            return false;
+        };
+        stored_completed(&outcome)
     }
 }
 
