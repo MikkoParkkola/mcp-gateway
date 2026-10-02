@@ -34,6 +34,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "src/registry/server_registry_entries.rs"
 ENTRY_RE = re.compile(r"RegistryEntry \{(.*?)\n    \},", re.S)
@@ -41,6 +42,7 @@ FIELD_RE = {
     "name": re.compile(r'\bname: "([^"]*)"'),
     "command": re.compile(r'\bcommand: "([^"]*)"'),
     "url": re.compile(r'\bdefault_url: "([^"]*)"'),
+    "auth": re.compile(r"\bauth: Auth::(\w+)"),
 }
 # Exact versions only: a range or a dist-tag resolves to something new later.
 VERSION_RE = re.compile(r"^\d+(\.\d+)*([-.+][0-9A-Za-z.-]+)?$")
@@ -71,7 +73,11 @@ def split_pinned(spec: str) -> tuple[str, str] | None:
 def classify(entry: dict[str, str]) -> tuple[str, str, str] | str:
     """Return (kind, target, version) to probe, or an error string."""
     if entry.get("url"):
-        return ("http", entry["url"], "")
+        # The registry writes no client_id for an OAuth entry, so the endpoint
+        # must offer dynamic client registration; a header entry must refuse
+        # an unauthenticated request rather than serve it.
+        kind = {"OAuth": "http-oauth", "Header": "http-header"}.get(entry.get("auth", ""), "http")
+        return (kind, entry["url"], "")
     tokens = entry.get("command", "").split()
     if not tokens:
         return "no command and no default_url"
@@ -108,6 +114,36 @@ def fetch(url: str) -> tuple[int, bytes]:
     raise RuntimeError(f"unreachable after 3 attempts: {last}")
 
 
+def well_known(base: str, suffix: str) -> list[str]:
+    """RFC 8414 / RFC 9728 path insertion first, then the host root."""
+    parts = urlsplit(base)
+    root = f"{parts.scheme}://{parts.netloc}/.well-known/{suffix}"
+    path = parts.path.rstrip("/")
+    return [root + path, root] if path else [root]
+
+
+def fetch_json(url: str) -> dict:
+    try:
+        status, body = fetch(url)
+        return json.loads(body) if status == 200 else {}
+    except (RuntimeError, ValueError):
+        return {}
+
+
+def registration_endpoint(url: str) -> str | None:
+    """Follow protected-resource metadata to the authorization server's
+    `registration_endpoint`, as the gateway's backend OAuth client does."""
+    resource = next(filter(None, (fetch_json(u) for u in well_known(url, "oauth-protected-resource"))), {})
+    origin = "{0.scheme}://{0.netloc}".format(urlsplit(url))
+    for server in resource.get("authorization_servers") or [origin]:
+        for suffix in ("oauth-authorization-server", "openid-configuration"):
+            for candidate in well_known(server, suffix):
+                endpoint = fetch_json(candidate).get("registration_endpoint")
+                if endpoint:
+                    return endpoint
+    return None
+
+
 def probe(kind: str, target: str, version: str) -> str | None:
     """Return None when the target resolves, else the reason it does not."""
     try:
@@ -126,7 +162,13 @@ def probe(kind: str, target: str, version: str) -> str | None:
                 return f"PyPI {target}=={version} is yanked"
             return None
         status, _ = fetch(target)
-        return f"{target}: HTTP {status}" if status in (404, 410) else None
+        if status in (404, 410):
+            return f"{target}: HTTP {status}"
+        if kind == "http-header" and status not in (401, 403):
+            return f"{target}: HTTP {status} without a credential (a header entry must refuse it)"
+        if kind == "http-oauth" and not registration_endpoint(target):
+            return f"{target}: no dynamic client registration in its OAuth metadata"
+        return None
     except RuntimeError as e:
         return f"{target}: {e}"
 

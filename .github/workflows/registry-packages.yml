@@ -43,8 +43,9 @@ jobs:
         with:
           persist-credentials: false
       # A lookup that cannot fail checks nothing: these entries are known dead
-      # (404 package, deprecated version, missing release, 404 URL) and must be
-      # refused, live, before the real list is trusted.
+      # (404 package, deprecated version, missing release, 404 URL, an open
+      # header endpoint, OAuth without registration) and must be refused, live,
+      # before the real list is trusted.
       - name: Check the live lookup refuses known-dead entries
         run: |
           set +e
@@ -52,12 +53,14 @@ jobs:
           rc=$?
           set -e
           printf '%s\n' "$out"
-          # Each of the four must be refused for its own reason, not one outage.
+          # Each must be refused for its own reason, not one outage.
           [ "$rc" -eq 1 ] || { echo "expected exit 1, got $rc"; exit 1; }
-          grep -qx '0/4 registry entries resolve' <<<"$out"
+          grep -qx '0/6 registry entries resolve' <<<"$out"
           grep -q '^FAIL missing-npm: .*HTTP 404' <<<"$out"
           grep -q '^FAIL deprecated-npm: .*is deprecated' <<<"$out"
           grep -q '^FAIL missing-pypi: .*HTTP 404' <<<"$out"
           grep -q '^FAIL missing-url: .*HTTP 404' <<<"$out"
+          grep -q '^FAIL open-header: .*without a credential' <<<"$out"
+          grep -q '^FAIL oauth-without-dcr: .*no dynamic client registration' <<<"$out"
       - name: Check every registry entry resolves
         run: python3 scripts/dev/check-registry-packages.py
