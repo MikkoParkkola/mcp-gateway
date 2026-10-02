@@ -181,6 +181,9 @@ struct Entry {
     /// stale. Dangling for every entry not published by a reservation — a
     /// terminal state ages out on the clock and never consults it.
     owner: Weak<OwnerToken>,
+    /// MIK-7116.MIN.2: what the dispatch behind a completed result read
+    /// before any transform, kept in the same entry as the result.
+    read: Option<crate::security::tenant_reads::ReadAttribution>,
 }
 
 impl Entry {
@@ -189,6 +192,7 @@ impl Entry {
             state,
             fingerprint: fingerprint.to_string(),
             owner: Weak::new(),
+            read: None,
         }
     }
 
@@ -198,6 +202,7 @@ impl Entry {
             state: IdempotencyState::InFlight(Instant::now()),
             fingerprint: fingerprint.to_string(),
             owner: Arc::downgrade(owner),
+            read: None,
         }
     }
 
@@ -493,19 +498,41 @@ impl IdempotencyCache {
     /// fingerprint matches every later request, so a result stored that way
     /// would answer any call reusing the key.
     pub(crate) fn mark_completed_bound(&self, key: &str, result: Value, fingerprint: &str) -> bool {
+        self.mark_completed_read(key, result, fingerprint, None)
+    }
+
+    /// [`Self::mark_completed_bound`] with the dispatch's reading kept in the
+    /// same entry (MIN.2).
+    fn mark_completed_read(
+        &self,
+        key: &str,
+        result: Value,
+        fingerprint: &str,
+        read: Option<crate::security::tenant_reads::ReadAttribution>,
+    ) -> bool {
         if !crate::protocol::cacheable::is_final(&result) {
             self.entries.remove(key);
             debug!(key, "Refused to cache a non-final result");
             return false;
         }
-        self.entries.insert(
-            key.to_string(),
-            Entry::new(
-                IdempotencyState::Completed(result, Instant::now()),
-                fingerprint,
-            ),
+        let mut entry = Entry::new(
+            IdempotencyState::Completed(result, Instant::now()),
+            fingerprint,
         );
+        entry.read = read;
+        self.entries.insert(key.to_string(), entry);
         true
+    }
+
+    /// The reading kept beside `key`'s completed result (MIN.2).
+    pub(crate) fn completed_read(
+        &self,
+        key: &str,
+    ) -> Option<crate::security::tenant_reads::ReadAttribution> {
+        self.entries.get(key).and_then(|entry| match entry.state {
+            IdempotencyState::Completed(..) => entry.read.clone(),
+            _ => None,
+        })
     }
 
     /// Store `error` as the terminal outcome for `key`, bound to the admitting
@@ -727,9 +754,18 @@ impl IdempotencyReservation {
     /// key first and may still store a structured error result afterwards, which
     /// is the behaviour the invoke path already relied on.
     pub fn complete(&mut self, result: &Value) -> bool {
+        self.complete_read(result, None)
+    }
+
+    /// [`Self::complete`] with the dispatch's reading kept in the entry (MIN.2).
+    pub(crate) fn complete_read(
+        &mut self,
+        result: &Value,
+        read: Option<crate::security::tenant_reads::ReadAttribution>,
+    ) -> bool {
         self.settled = true;
         self.cache
-            .mark_completed_bound(&self.key, result.clone(), &self.fingerprint)
+            .mark_completed_read(&self.key, result.clone(), &self.fingerprint, read)
     }
 
     /// Record that the protected side effect has committed.

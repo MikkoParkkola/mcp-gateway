@@ -1,94 +1,58 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7116.MIN.2 row 14 for the Meta-MCP response cache and the idempotency
-//! store (design §4.4): a stored result carries, inside the entry itself,
-//! what its own dispatch read before any transform, and a hit restores that
-//! into the request's read scope. A hit with no reading counts as unread.
+//! stores (design §4.4): a stored result keeps, in the same entry, what its
+//! own dispatch read before any transform, and a hit restores that into the
+//! request's read scope. A hit with no reading counts as unread.
 //!
-//! The reading is the dispatch's own: what the read scope gained while this
-//! call ran (its raw response, a capability's pre-transform reading), plus the
-//! tenants its own arguments name. A sibling dispatch of the same request is
-//! not attributed to it.
+//! "Its own dispatch": each invocation runs in a read scope of its own
+//! (`tenant_reads::with_dispatch_reads`), so the reading stored is exactly
+//! what that dispatch noted, plus the tenants its own arguments name.
 
-use std::borrow::Cow;
-
-use serde_json::Value;
+use std::collections::BTreeSet;
 
 use crate::security::tenant_reads::{self, ReadAttribution};
 
-/// The member a stored result carries its reading under; stripped before a
-/// hit is delivered, so a client never sees it.
-const READ_MEMBER: &str = "_gatewayRead";
-
-/// What the read scope has noted before this dispatch; `None` outside one.
-pub(super) fn mark() -> Option<ReadAttribution> {
-    tenant_reads::in_read_scope().then(|| tenant_reads::noted().unwrap_or_default())
+/// The reading to store beside this dispatch's result; `None` outside a read
+/// scope, so the default config stores nothing.
+pub(crate) fn reading(request: impl FnOnce() -> BTreeSet<String>) -> Option<ReadAttribution> {
+    if !tenant_reads::in_read_scope() {
+        return None;
+    }
+    let mut reading = tenant_reads::noted().unwrap_or_default();
+    reading.extend(&ReadAttribution::of(request(), false));
+    Some(reading)
 }
 
-/// `result` as a store keeps it: with this dispatch's reading inside, when a
-/// read scope is collecting. `before` is [`mark`]'s snapshot; `request` the
-/// tenants this call's own arguments name.
-pub(crate) fn stamped<'v>(
-    result: &'v Value,
-    before: Option<&ReadAttribution>,
-    request: impl FnOnce() -> std::collections::BTreeSet<String>,
-) -> Cow<'v, Value> {
-    let (Some(before), Some(now), true) = (before, tenant_reads::noted(), result.is_object())
-    else {
-        return Cow::Borrowed(result);
-    };
-    let mut stored = result.clone();
-    let Value::Object(map) = &mut stored else {
-        return Cow::Borrowed(result);
-    };
-    let mut reading = ReadAttribution {
-        tenants: now.tenants.difference(&before.tenants).cloned().collect(),
-        uninspected: now.uninspected && !before.uninspected,
-    };
-    reading.extend(&ReadAttribution::of(request(), false));
-    if let Ok(value) = serde_json::to_value(reading) {
-        map.insert(READ_MEMBER.to_string(), value);
-    }
-    Cow::Owned(stored)
+/// A hit of a stored result: restore its reading into the read scope, or
+/// count it unread when it was stored without one.
+pub(crate) fn restore(read: Option<&ReadAttribution>) {
+    tenant_reads::note_restored(read);
 }
 
 impl super::super::MetaMcp {
-    /// [`stamped`] with the tenants `args`' own arguments name.
-    pub(super) fn stamped<'v>(
-        &self,
-        result: &'v Value,
-        before: Option<&ReadAttribution>,
-        args: &Value,
-    ) -> Cow<'v, Value> {
-        stamped(result, before, || {
+    /// [`reading`] with the tenants `args`' own arguments name.
+    pub(super) fn dispatch_reading(&self, args: &serde_json::Value) -> Option<ReadAttribution> {
+        reading(|| {
             let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
-            self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null))
+            self.request_tenants(arguments.as_ref().unwrap_or(&serde_json::Value::Null))
         })
     }
-}
-
-/// A hit of a stored result: restore its reading into the read scope (or
-/// count it unread when it carries none) and strip it from the value.
-pub(crate) fn restored(mut stored: Value) -> Value {
-    let reading = stored
-        .as_object_mut()
-        .and_then(|map| map.remove(READ_MEMBER))
-        .and_then(|value| serde_json::from_value::<ReadAttribution>(value).ok());
-    tenant_reads::note_restored(reading.as_ref());
-    stored
 }
 
 #[cfg(all(test, feature = "firewall"))]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use serde_json::json;
 
     use super::*;
+    use crate::cache::ResponseCache;
     use crate::security::firewall::tenant_guard::TenantGuardConfig;
     use crate::security::firewall::{Firewall, FirewallConfig};
     use crate::security::hash_argument;
-    use crate::security::tenant_reads::with_read_scope;
+    use crate::security::tenant_reads::{with_dispatch_reads, with_read_scope};
 
     fn firewall() -> Arc<Firewall> {
         Arc::new(Firewall::from_config(
@@ -103,41 +67,50 @@ mod tests {
         ))
     }
 
-    fn b() -> ReadAttribution {
-        ReadAttribution::of([String::from("cust-b")].into(), false)
+    fn tenant(id: &str) -> ReadAttribution {
+        ReadAttribution::of([id.to_string()].into(), false)
     }
 
-    /// Row 14: a hit restores what the stored dispatch read, and only that:
-    /// a sibling dispatch's reading before it is not stored with it. An
-    /// entry with no reading counts as unread; the member never reaches the
-    /// client.
+    /// Row 14: two dispatches of one request both read B, then a third reads
+    /// A; each stored entry keeps its own reading. A hit restores B, the
+    /// sibling's A stays out, the value is untouched; an entry stored without
+    /// a reading is unread.
     #[tokio::test]
     async fn cache_hit_restores_pre_transform() {
-        let fw = firewall();
-        let a = ReadAttribution::of([String::from("cust-a")].into(), false);
-        let (stored, _) = with_read_scope(Arc::clone(&fw), async {
-            tenant_reads::note_attribution(Some(a));
-            let before = mark();
-            tenant_reads::note_attribution(Some(b()));
-            stamped(&json!({ "note": "x" }), before.as_ref(), Default::default).into_owned()
+        let (fw, cache) = (firewall(), ResponseCache::new());
+        let ttl = Duration::from_secs(60);
+        with_read_scope(Arc::clone(&fw), async {
+            for (key, read) in [
+                ("first", "cust-b"),
+                ("second", "cust-b"),
+                ("third", "cust-a"),
+            ] {
+                let ((), mine) = with_dispatch_reads(async {
+                    tenant_reads::note_attribution(Some(tenant(read)));
+                    let stored = reading(BTreeSet::new);
+                    assert!(cache.set_read(key, json!({ "note": "x" }), stored, ttl));
+                })
+                .await;
+                tenant_reads::note_attribution(mine);
+            }
         })
         .await;
-        let (delivered, reading) =
-            with_read_scope(Arc::clone(&fw), async { restored(stored) }).await;
-        assert_eq!(delivered, json!({ "note": "x" }), "the member is stripped");
+        let (value, read) = cache.get_read("second").expect("stored");
+        assert_eq!(value, json!({ "note": "x" }), "the value is untouched");
+        let ((), restored) =
+            with_read_scope(Arc::clone(&fw), async { restore(read.as_ref()) }).await;
         assert!(
-            reading.tenants.contains(&hash_argument(&json!("cust-b"))),
-            "the hit restores B: {reading:?}"
+            restored.tenants.contains(&hash_argument(&json!("cust-b"))),
+            "the second dispatch's own B is restored, though the first read B too: {restored:?}"
         );
         assert!(
-            !reading.tenants.contains(&hash_argument(&json!("cust-a"))),
-            "a sibling dispatch's A is not this entry's reading: {reading:?}"
+            !restored.tenants.contains(&hash_argument(&json!("cust-a"))),
+            "the sibling's A is not this entry's reading: {restored:?}"
         );
 
-        let ((), bare) = with_read_scope(fw, async {
-            let _ = restored(json!({ "note": "y" }));
-        })
-        .await;
+        assert!(cache.set("bare", json!({ "note": "y" }), ttl));
+        let (_, read) = cache.get_read("bare").expect("stored");
+        let ((), bare) = with_read_scope(fw, async { restore(read.as_ref()) }).await;
         assert!(bare.uninspected, "an entry without a reading is unread");
     }
 }

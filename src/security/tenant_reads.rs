@@ -359,6 +359,20 @@ pub(crate) fn note_restored(stored: Option<&ReadAttribution>) {
     });
 }
 
+/// Run one dispatch in a read scope of its own nested in the request's, so
+/// what it reads is collected apart from its siblings (a cache entry stores
+/// exactly that). Returns its reading; the caller merges it into the
+/// request's scope with [`note_attribution`] once the dispatch passed its
+/// gates. Outside a scope it just runs `fut`.
+#[cfg(feature = "firewall")]
+pub(crate) async fn with_dispatch_reads<F: Future>(fut: F) -> (F::Output, Option<ReadAttribution>) {
+    let Ok(firewall) = READS.try_with(|cell| Arc::clone(&cell.borrow().0)) else {
+        return (fut.await, None);
+    };
+    let (output, reading) = with_read_scope(firewall, fut).await;
+    (output, Some(reading))
+}
+
 /// Whether a read scope is collecting on this task, with attribution on.
 #[cfg(feature = "firewall")]
 pub(crate) fn in_read_scope() -> bool {
@@ -387,6 +401,14 @@ pub(crate) fn noted() -> Option<ReadAttribution> {
 #[cfg(not(feature = "firewall"))]
 pub(crate) fn note_read(_value: &Value) -> Option<ReadAttribution> {
     None
+}
+
+/// Without the firewall there is no read scope.
+#[cfg(not(feature = "firewall"))]
+pub(crate) async fn with_dispatch_reads<F: std::future::Future>(
+    fut: F,
+) -> (F::Output, Option<ReadAttribution>) {
+    (fut.await, None)
 }
 
 /// Without the firewall there is no read scope.

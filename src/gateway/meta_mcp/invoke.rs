@@ -1218,7 +1218,15 @@ impl MetaMcp {
             // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
             let traced =
                 Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
-            let (result, notes) = audit::with_dispatch_scope(traced).await;
+            // MIN.2: read in a scope of its own, counted for the request only
+            // when the call delivered (design §4.4).
+            let ((result, notes), reading) = crate::security::tenant_reads::with_dispatch_reads(
+                audit::with_dispatch_scope(traced),
+            )
+            .await;
+            if result.is_ok() {
+                crate::security::tenant_reads::note_attribution(reading);
+            }
             // Single delivery boundary: unwrap the guard-sealed result.
             let (result, source, upstream) = match result.map(GuardedValue::into_parts) {
                 Ok((value, source, upstream)) => (Ok(value), source, upstream),
@@ -1555,8 +1563,6 @@ impl MetaMcp {
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
-        // MIN.2 row 14: what the request had read before this dispatch.
-        let read_mark = cache_reads::mark();
 
         self.check_or_stamp(args, session_id, caller, (server, tool))?;
 
@@ -1779,7 +1785,7 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
-                    let cached = cache_reads::restored(cached);
+                    cache_reads::restore(idem_cache.completed_read(key).as_ref());
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }
@@ -1888,8 +1894,9 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && let Some(cached) = cache.get(&cache_key)
+            && let Some((cached, read)) = cache.get_read(&cache_key)
         {
+            cache_reads::restore(read.as_ref());
             debug!(server, tool, trace_id, "Cache hit");
             if let Some(ref stats) = self.stats {
                 stats.record_cache_hit();
@@ -1903,9 +1910,8 @@ impl MetaMcp {
             // Terminal state on the response-cache-hit return: settle through
             // the reservation, or its `Drop` would remove what was just stored.
             if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.complete(&cached);
+                reservation.complete_read(&cached, read);
             }
-            let cached = cache_reads::restored(cached);
             let predictions =
                 self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
             return Ok(GuardedValue::from_cache(cached).augment(|v| {
@@ -2548,9 +2554,10 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && cache.set(
+            && cache.set_read(
                 &cache_key,
-                self.stamped(&result, read_mark.as_ref(), args).into_owned(),
+                result.clone(),
+                self.dispatch_reading(args),
                 self.default_cache_ttl,
             )
         {
@@ -2558,7 +2565,7 @@ impl MetaMcp {
         }
 
         if let Some(reservation) = idem_reservation.as_mut()
-            && reservation.complete(&self.stamped(&result, read_mark.as_ref(), args))
+            && reservation.complete_read(&result, self.dispatch_reading(args))
         {
             debug!(
                 server,

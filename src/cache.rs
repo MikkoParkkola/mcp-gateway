@@ -29,6 +29,9 @@ pub struct ResponseCache {
 struct CachedResponse {
     /// The cached JSON value
     value: Value,
+    /// MIK-7116.MIN.2: what the dispatch that produced `value` read before
+    /// any transform; `None` when stored with attribution off.
+    read: Option<crate::security::tenant_reads::ReadAttribution>,
     /// When this entry was cached
     cached_at: Instant,
     /// Time-to-live duration
@@ -150,6 +153,17 @@ impl ResponseCache {
     /// Returns `None` if the key doesn't exist or the entry has expired.
     /// Expired entries are automatically evicted.
     pub fn get(&self, key: &str) -> Option<Value> {
+        self.get_read(key).map(|(value, _)| value)
+    }
+
+    /// [`Self::get`] with the reading stored beside the value (MIN.2).
+    pub(crate) fn get_read(
+        &self,
+        key: &str,
+    ) -> Option<(
+        Value,
+        Option<crate::security::tenant_reads::ReadAttribution>,
+    )> {
         if let Some(entry) = self.entries.get(key) {
             if entry.is_expired() {
                 // Entry expired - evict it
@@ -161,7 +175,7 @@ impl ResponseCache {
             } else {
                 // Cache hit
                 self.stats.hits.fetch_add(1, Ordering::Relaxed);
-                Some(entry.value.clone())
+                Some((entry.value.clone(), entry.read.clone()))
             }
         } else {
             // Cache miss
@@ -189,6 +203,18 @@ impl ResponseCache {
     /// Returns whether the value was stored, so a caller cannot log a write
     /// that a refusal silently skipped.
     pub fn set(&self, key: &str, value: Value, ttl: Duration) -> bool {
+        self.set_read(key, value, None, ttl)
+    }
+
+    /// [`Self::set`] with the reading of the dispatch that produced `value`
+    /// kept beside it, in the same entry (MIN.2).
+    pub(crate) fn set_read(
+        &self,
+        key: &str,
+        value: Value,
+        read: Option<crate::security::tenant_reads::ReadAttribution>,
+        ttl: Duration,
+    ) -> bool {
         // A result the backend has not finished producing is not stored:
         // replaying an `input_required` from the cache returns the request for
         // input rather than the answer, so the exchange could never complete.
@@ -212,6 +238,7 @@ impl ResponseCache {
 
         let entry = CachedResponse {
             value,
+            read,
             cached_at: Instant::now(),
             ttl,
         };
