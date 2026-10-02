@@ -1,0 +1,74 @@
+sha256: efbabe845be51d542c19c3daef4b309e0913dd30e46cd02ff0c2825bd0c3df8b
+fulcrum: "1.0"
+name: sentry_list_issues
+description: |
+  List unresolved issues in a Sentry organization (sentry.io, US region),
+  newest first. Filter with Sentry search syntax, e.g. "is:unresolved level:error".
+
+schema:
+  input:
+    type: object
+    properties:
+      organization:
+        type: string
+        description: Sentry organization slug
+        pattern: "^[a-z0-9][a-z0-9_-]*$"
+      query:
+        type: string
+        description: Sentry issue search query
+        default: "is:unresolved"
+      project:
+        type: string
+        description: Numeric project ID to restrict to
+      statsPeriod:
+        type: string
+        description: Time window, e.g. "24h", "14d"
+        default: "14d"
+      limit:
+        type: integer
+        default: 25
+        minimum: 1
+        maximum: 100
+    required:
+      - organization
+  output:
+    type: array
+    items:
+      type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 20
+    config:
+      base_url: https://sentry.io
+      path: /api/0/organizations/{organization}/issues/
+      method: GET
+      params:
+        query: "{query}"
+        project: "{project}"
+        statsPeriod: "{statsPeriod}"
+        limit: "{limit}"
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: bearer
+  key: "env:SENTRY_AUTH_TOKEN"
+  description: >
+    Create a user auth token with event:read and org:read at
+    https://sentry.io/settings/account/api/auth-tokens/ and set
+    SENTRY_AUTH_TOKEN. EU-region organizations (de.sentry.io) are not covered.
+
+metadata:
+  category: observability
+  tags: [sentry, errors, issues, observability]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  chains_with: [sentry_get_issue]
+  docs: https://docs.sentry.io/api/events/list-an-organizations-issues/
