@@ -63,15 +63,20 @@ pub enum Setup {
 pub struct RegistryEntry { /* existing fields */, auth: Auth, reach: Reach, setup: Setup }
 impl RegistryEntry {
     pub fn needs_login(&self) -> bool { !matches!(self.auth, Auth::None) }
-    /// The starter set `init` writes enabled. Product switch for arbitrary-reach servers:
-    /// delete the `Reach::Bounded` condition here (reach stays recorded on the entry).
+    /// The one product switch for arbitrary-reach servers; `add` and `init` both read it.
+    pub fn reach_allows_on(&self) -> bool { matches!(self.reach, Reach::Bounded) }
+    /// The starter set `init` writes enabled.
     pub fn default_enabled(&self) -> bool {
-        !self.needs_login() && matches!(self.reach, Reach::Bounded) && matches!(self.setup, Setup::Ready)
+        !self.needs_login() && self.reach_allows_on() && matches!(self.setup, Setup::Ready)
     }
 }
 ```
 
-A test pins the starter set exactly: {memory, sequential-thinking, context7, time}.
+A test pins the starter set exactly. With the repointed catalogue (D6) it is {memory,
+sequential-thinking, context7}; the additions PR (top-15: `time`, `git`, `chrome-devtools`, ...)
+adds `time` and updates the pinned sets in the same change. semgrep is not in it: the gateway
+warm-starts every configured backend at boot to prefetch tools (`src/gateway/server/warmstart.rs`), so
+its ~100 MB engine would download at start, not on first use (lead, 2026-10-02).
 
 A unit test fails when `Auth::EnvVars` has an empty `required_env`, when `Auth::None` has a non-empty
 one, or when a `Header` value names a `${VAR}` that is not in `required_env`.
@@ -99,8 +104,11 @@ keep sharing it. For a registry entry it fills:
   is decided by the loader's own rule, not by `std::env`: the `EnvOverlay` built for the target config
   (env_files included) and the non-empty test in `secret_ref::expand_field`, so an empty value counts as
   unset. Rule (b) exists because an enabled backend with an unresolved `${VAR}` makes the next load fail
-  (C4). As the final guard, `add` loads the would-be config from a temporary file beside the target
-  through `Config::load` and writes the real file only if that load succeeds: `add` never writes a
+  (C4). As the final guard, the persistence path (`config_persistence::write_config`, which already
+  validates and writes through an exclusive scratch file and a rename) refuses when the backend being
+  added or enabled carries an unresolved reference, using the loader's own `expand_field` rule; the
+  check is scoped to that backend, so a reference only the running gateway can resolve in another
+  backend does not block an unrelated `add`: `add` never writes a
   config the gateway refuses.
 
 Explicit `--command`/`--url` keep today's behaviour (enabled, no auth fields). `add_backend` takes the
@@ -116,7 +124,7 @@ instead of writing a config the next reload rejects.
 - CLI: `mcp-gateway list --available [--json]` prints the registry: name, category, transport, login
   (`none` / `env: X, Y` / `oauth` / `header: X`), and `default on` / `off: <reason>`. A flag on the
   existing `list`, not a new verb.
-- UI: `RegistryEntryJson` gains `auth`, `needs_login`, `default_enabled`, `reach_reason`; the registry
+- UI: `RegistryEntryJson` gains `auth`, `needs_login`, `default_enabled`, `reach_reason`, `setup` and its hint; the registry
   tab shows them. No new endpoint.
 
 ### D4 "No-login entries on by default" (ACCEPTED by the lead, 2026-10-02)
@@ -153,7 +161,7 @@ before; the lead accepted the server reading below.
 ### D5 Arbitrary-reach servers (operator-confirmed default off, chat 2026-10-02)
 
 Classified by rule, not by name: a no-login server whose tools take a URL or drive a browser is
-`Reach::Arbitrary`. Today that is Playwright, Chrome DevTools and fetch (puppeteer is removed by D6).
+`Reach::Arbitrary`. Playwright and fetch today, Chrome DevTools with the additions PR (puppeteer is removed by D6).
 A registry test lists the Arbitrary set exactly, so a new browser/fetch entry must be classified on
 purpose.
 
@@ -162,8 +170,8 @@ Playwright, Chrome DevTools and fetch are `Reach::Arbitrary`. The private-networ
 the gateway cannot stop it reaching localhost, the LAN or cloud metadata. Default: off, with that
 reason printed by `add` and shown by `list --available`. The switches are one line each:
 - per user: `enabled: true` under the backend in gateway.yaml (or the UI toggle);
-- for the product, if the operator rules them on: in `server_registry.rs`, change the entry's
-  `reach: Reach::Arbitrary { reason: ... }` to `reach: Reach::Bounded`.
+- for the product, if the operator rules them on: the body of `RegistryEntry::reach_allows_on` becomes
+  `true`. `add` (rule (a)) and `init` both read it; `reach` stays recorded on each entry.
 
 User-facing reason (docs and `add` output): "This server can open any address it is given. A prompt
 injection in a page or a tool result can steer it to your local network or a cloud metadata address. The
