@@ -340,7 +340,7 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
             _ => {}
         }
     }
-    let (mut out, mut keys) = (String::new(), Vec::new());
+    let (mut out, mut keys): (String, Vec<&str>) = (String::new(), Vec::new());
     match value {
         Value::Object(map) if walk == Walk::Delivery => map
             .iter()
