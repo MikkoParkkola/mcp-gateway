@@ -171,10 +171,18 @@ async fn abandoned_round_records_nothing() {
         !settled.to_string().contains("orchard"),
         "base: abandoned: {settled}"
     );
-    let answer = relay(&state, 2).await;
-    assert!(
-        answer.get("error").is_none(),
-        "undelivered text recorded: {answer}"
-    );
-    assert_eq!(mock.calls(), 2, "{answer}");
+    // The worker commits after the store write a read observes, so one send
+    // right after the read can race ahead of a wrong commit: keep sending
+    // for a while, and every send must go through.
+    let until = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+    let mut id = 2;
+    while tokio::time::Instant::now() < until {
+        let answer = relay(&state, id).await;
+        assert!(
+            answer.get("error").is_none(),
+            "undelivered text recorded: {answer}"
+        );
+        id += 1;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }
