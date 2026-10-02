@@ -22,6 +22,7 @@ mod runtime;
 mod services;
 mod store;
 mod types;
+mod upstream;
 mod webhook_source;
 mod worker;
 

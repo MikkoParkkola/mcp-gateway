@@ -147,6 +147,7 @@ backend" and "fails a capability file" first.**
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
+| 123 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating or (multi-user) per-user-credential backend answers `-32014` naming the reason, never a silent subscription | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3459,6 +3460,31 @@ no provider and loads without a warning.
 
 **Action:** delete the `fallback` block from your capability files, and fix or delete any entry
 that does not parse.
+
+## 123. Backend upstream events are refused where the gateway cannot listen
+
+**Startup:** no notice, a subscription to such an event answers -32014
+
+MCP Events turns a backend's `notifications/resources/updated`,
+`notifications/resources/list_changed` and `notifications/prompts/list_changed` into the events
+`backend.<name>.resource_updated`, `backend.<name>.resources_changed` and
+`backend.<name>.prompts_changed`. The gateway listens on one shared connection per backend, so
+four kinds of backend cannot offer them in 4.0:
+
+| Backend | `data.reason` | Why |
+|---|---|---|
+| `http_url` without `streamable_http: true` (the SSE handshake, `/sse` or not) | `sse_handshake_transport` | the handshake stream is read only up to its `endpoint` event |
+| `a2a_url` | `a2a_transport` | A2A carries no MCP notifications |
+| an `identity_propagation` block (`required: false` included) | `identity_propagation` | the shared connection would observe under the gateway's credential, not the subscriber's |
+| a per-user OAuth login or a personal account, on a multi-user gateway | `per_user_credential` | as above: the credential is one person's |
+
+`events/list` does not list these names for such a backend. `events/subscribe` on one answers
+`-32014 Unsupported` with `data = {"feature": "backendEvents", "value": <name>, "reason": <reason>}`,
+before any callback traffic, to a caller who may reach the backend; any other caller gets
+`-32011`, the answer for a name that does not exist.
+
+**Action:** set `streamable_http: true` on an HTTP backend that speaks streamable HTTP. For the
+others, poll `resources/list` or `prompts/list` instead.
 
 ## Upgrading from 3.5.x: a walkthrough
 
