@@ -78,7 +78,6 @@
 884 src/gateway/meta_mcp/search.rs
 874 src/personal_accounts/provider/provider_tests.rs
 857 src/mtls/cert_manager.rs
-856 src/transport/stdio.rs
 852 src/protocol/types.rs
 849 tests/mik_7214_acs.rs
 840 src/personal_accounts/worker_tests.rs

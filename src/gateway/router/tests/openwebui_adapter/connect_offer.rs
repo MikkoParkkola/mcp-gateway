@@ -292,6 +292,29 @@ async fn t_offer_both_dispatch_sites_offer_one_journey_owned_by_the_caller() {
     assert_eq!(foreign["error"]["code"], "not_found", "{foreign}");
 }
 
+/// Mutant: a rate-limited offer still mints a journey or leaks a connect URL,
+/// or its refusal loses the retry hint.
+#[tokio::test]
+async fn t_offer3_a_rate_limited_offer_keeps_todays_text_and_says_retry() {
+    // GIVEN: the one creation per minute spent by another caller
+    let gw = gateway(Shape::Bridged).await;
+    let first = invoke(&gw, Caller::Bridged, "alice").await;
+    offered(&first, "account_not_connected");
+
+    // WHEN: a second caller's dispatch asks for an offer
+    for response in [
+        invoke(&gw, Caller::Bridged, "bob").await,
+        direct(&gw, Caller::Bridged, "bob").await,
+    ] {
+        // THEN: no journey URL, the account text unchanged, and a retry hint
+        let data = &response["error"]["data"];
+        assert!(data["connect_url"].is_null(), "{response}");
+        assert!(!response.to_string().contains("/journeys/"), "{response}");
+        assert_eq!(data["error"]["retryable"], true, "{response}");
+        assert!(data["retry_after"].is_number(), "{response}");
+    }
+}
+
 #[tokio::test]
 async fn t_offer2_an_unbridged_caller_or_an_unhosted_gateway_reads_todays_text() {
     for (shape, caller) in [
