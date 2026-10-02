@@ -155,14 +155,15 @@ async fn mint_write_failure_is_fail_closed() {
     );
     let script =
         format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
+    let profile_dir = tempfile::tempdir().expect("private profile dir");
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
         .arg(&exe)
         .env(ENV_VAR, &path)
         // Under a zero file-size limit the child's coverage profile is written
-        // empty and corrupts the measured set (#2573); give it its own file.
-        .env("LLVM_PROFILE_FILE", std::env::temp_dir().join("mcp-gateway-fsize-child-%p.profraw"))
+        // empty and corrupts the measured set (#2573); give it a private file.
+        .env("LLVM_PROFILE_FILE", profile_dir.path().join("child-%p.profraw"))
         .output()
         .expect("spawn fsize-limited child process");
 
