@@ -115,33 +115,36 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
         .expect("nine principals can still be reached before a fingerprint saturates");
 }
 
-/// B3: a delivery is read as string leaves, nothing skipped: this route
-/// attaches no metadata of its own, so a backend's `_context_integrity`,
-/// at any depth and in any shape, is delivered content. Egress also reads
-/// object keys, which reach the backend like values.
+/// B3: nothing is skipped: this route attaches no metadata of its own, so
+/// a backend's `_context_integrity`, at any depth and in any shape, is
+/// delivered content. Values are read first, contiguous, so content split
+/// over several short fields still matches; keys follow. Egress reads every
+/// key (a key reaches the backend like a value); a delivery reads only keys
+/// long enough to fingerprint alone, so short schema keys never make two
+/// unrelated payloads alike.
 #[test]
-fn the_text_walker_reads_keys_on_egress_and_skips_nothing() {
+fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
+    let long_key = "k".repeat(48);
     let value = json!({
-        "content": [{"text": "one"}],
-        "_context_integrity": {"schema_version": "v", "note": "two"},
-        "structuredContent": {"_context_integrity": {"note": "three"}},
+        "a": [{"text": "one"}],
+        "b": {"_context_integrity": {"schema_version": "two"}},
+        "c": {"_context_integrity": {"note": "three"}},
         "key four": 4,
+        long_key.clone(): 5,
     });
-    let lines = |walk| -> Vec<String> {
-        text_of(&value, walk)
-            .split('\n')
-            .map(String::from)
-            .collect()
-    };
-    let mut delivered = lines(Walk::Delivery);
-    delivered.sort();
-    assert_eq!(delivered, ["one", "three", "two"]);
-    let egress = lines(Walk::Egress);
-    for kept in ["one", "two", "three", "key four", "_context_integrity"] {
-        assert!(
-            egress.iter().any(|l| l == kept),
-            "{kept} missing: {egress:?}"
-        );
+    let delivered = text_of(&value, Walk::Delivery);
+    assert!(delivered.starts_with("one\ntwo\nthree\n"), "{delivered:?}");
+    assert!(delivered.contains(&long_key), "{delivered:?}");
+    assert!(!delivered.contains("key four"), "{delivered:?}");
+    let egress = text_of(&value, Walk::Egress);
+    assert!(egress.starts_with("one\ntwo\nthree\n"), "{egress:?}");
+    for key in [
+        "key four",
+        "_context_integrity",
+        "schema_version",
+        long_key.as_str(),
+    ] {
+        assert!(egress.contains(key), "{key} missing: {egress:?}");
     }
 }
 
