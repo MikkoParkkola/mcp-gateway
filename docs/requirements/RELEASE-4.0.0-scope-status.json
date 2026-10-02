@@ -1648,11 +1648,15 @@
     },
     {
       "id": "MIK-7630.EVENTS.6",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs",
+        "tests/mik_7630_events_delivery_store.rs",
+        "src/events/fanout_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at 6c6c845ac (PR #2704, I3). Red first: CI run 37051669167 on tests-only head b8254e4b9 failed T20 (the _meta key set) and T30 (subject_kind) at their own assertions; every other test passed. Green: CI run 37067835025 at head 54a95a946 (Tests, Clippy, Windows, macOS, feature checks). Mutants P1 (receipt left unsigned while stamping is on), P2 (event receipt given the runtime subject kind), P3 (receipt moved off the provenance key) all RED on 0d740ca02 (run 37064030765); later commits moved no executable line. Reviews: gpt and grok SHIP on the implementation, gpt SHIP on the test delta; four Copilot threads answered FIXED. T20 (tests/mik_7630_events_delivery.rs:86): the body keys are exactly eventId, name, timestamp, data, cursor, _meta, data equals the transform output and _meta holds only the provenance key. T42b (tests/mik_7630_events_delivery_store.rs:121): an unresolved mapping is omitted, never replaced by the raw body."
     },
     {
       "id": "MIK-7630.EVENTS.7",
@@ -1741,11 +1745,15 @@
     },
     {
       "id": "MIK-7630.SAFETY.6",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs",
+        "src/events/services.rs",
+        "src/trust/result_provenance.rs"
+      ],
+      "note": "Graded 2026-10-03 at 6c6c845ac (PR #2704, I3). Red first: CI run 37051669167 on tests-only head b8254e4b9 failed T20 (the _meta key set) and T30 (subject_kind) at their own assertions; every other test passed. Green: CI run 37067835025 at head 54a95a946 (Tests, Clippy, Windows, macOS, feature checks). Mutants P1 (receipt left unsigned while stamping is on), P2 (event receipt given the runtime subject kind), P3 (receipt moved off the provenance key) all RED on 0d740ca02 (run 37064030765); later commits moved no executable line. Reviews: gpt and grok SHIP on the implementation, gpt SHIP on the test delta; four Copilot threads answered FIXED. T30 (tests/mik_7630_events_delivery.rs:134): with stamping on the receipt in _meta has subject kind event, verifies against the gateway key, and sits inside the body the webhook signature covers; with stamping off (T20) the bare receipt is unsigned. Linux-only for SSL_CERT_FILE."
     },
     {
       "id": "MIK-7630.RELIABLE.1",
