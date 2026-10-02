@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index fd458edbc..8e410a4d2 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -1118,7 +1118,7 @@ async fn backend_handler_inner(
+             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
+                 crate::gateway::meta_mcp::invoke::audit::note_cached();
+                 let mut response = JsonRpcResponse::success(id.clone(), cached);
+-                if signs {
++                if false {
+                     let nonce = signing_nonce.as_deref();
+                     state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+                 }

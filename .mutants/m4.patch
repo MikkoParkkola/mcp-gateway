@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers/tasks.rs b/src/gateway/router/handlers/tasks.rs
+index 60f413a0b..049fc5f06 100644
+--- a/src/gateway/router/handlers/tasks.rs
++++ b/src/gateway/router/handlers/tasks.rs
+@@ -109,7 +109,7 @@ pub(super) fn task_intent_for_call(
+     if !req.is_modern {
+         return Ok(None);
+     }
+-    if req.retry.request_state.is_some() || req.retry.input_responses.is_some() {
++    if req.retry.request_state.is_some() && req.retry.input_responses.is_some() {
+         return Ok(None);
+     }
+     if !is_task_dispatchable(&state.meta_mcp, req.tool_name) {

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index fd458edbc..469d09686 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -1175,7 +1175,7 @@ async fn backend_handler_inner(
+                 settle_direct_idempotency(idem_reservation.as_mut(), &response);
+                 let nonce = chain_nonce.as_deref();
+                 state.meta_mcp.finish_direct(&mut response, &method, nonce);
+-                if signs {
++                if false {
+                     let nonce = signing_nonce.as_deref();
+                     state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+                 }

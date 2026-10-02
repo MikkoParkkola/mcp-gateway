@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/costs.rs b/src/gateway/router/backend_handlers/costs.rs
+index 3776e9620..cda2e9112 100644
+--- a/src/gateway/router/backend_handlers/costs.rs
++++ b/src/gateway/router/backend_handlers/costs.rs
+@@ -79,7 +79,7 @@ pub(in crate::gateway::router) async fn costs_handler(
+         match tracker.key_snapshot(key_name) {
+             Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
+             None => serde_json::json!({
+-                "error": format!("No data for key '{key_name}'")
++                "error": format!("No data for '{key_name}'")
+             }),
+         }
+     } else if let Some(session_id) = session {

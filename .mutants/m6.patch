@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/costs.rs b/src/gateway/router/backend_handlers/costs.rs
+index 3776e9620..e99d89906 100644
+--- a/src/gateway/router/backend_handlers/costs.rs
++++ b/src/gateway/router/backend_handlers/costs.rs
+@@ -94,7 +94,7 @@ pub(in crate::gateway::router) async fn costs_handler(
+         serde_json::json!({
+             "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::json!(null)),
+             "sessions": serde_json::to_value(tracker.all_sessions()).unwrap_or(serde_json::json!([])),
+-            "keys": serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
++            "keys": serde_json::json!([]),
+         })
+     };
+ 

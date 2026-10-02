@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/identity.rs b/src/gateway/router/identity.rs
+index 1c309aaea..c6f1b1464 100644
+--- a/src/gateway/router/identity.rs
++++ b/src/gateway/router/identity.rs
+@@ -199,7 +199,7 @@ async fn cloudflare_access_identity(
+     headers: &HeaderMap,
+     verifier: Option<&OidcVerifier>,
+ ) -> Result<Option<GrantSubject>, IdentityHeaderRefusal> {
+-    if any_present(headers, &GATEWAY_IDENTITY_HEADERS) {
++    if false && any_present(headers, &GATEWAY_IDENTITY_HEADERS) {
+         return Err(IdentityHeaderRefusal::WrongModeHeader);
+     }
+     let Some(assertion) =

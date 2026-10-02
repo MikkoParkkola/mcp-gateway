@@ -1,0 +1,10 @@
+head_sha	41f2983d839092ba3f42f78ab5c16bfe3fd04bb7
+# batch 1 for #2657 (router P2/P3)
+M1	linux	m1.patch	--lib -- a_blank_issuer_or_subject_yields_no_grant_subject
+M2	linux	m2.patch	--lib -- a_gateway_identity_header_is_refused_in_access_mode
+M3	linux	m3.patch	--lib -- auth_on_without_a_verified_identity_refuses_task_creation
+M4	linux	m4.patch	--lib -- a_resumed_call_is_not_a_new_task
+M5	linux	m5.patch	--lib -- a_key_or_session_with_no_spend_answers_no_data
+M6	linux	m6.patch	--lib -- a_recorded_key_and_the_aggregate_carry_the_spend
+M7	linux	m7.patch	--lib -- a_retained_result_is_signed_over_the_new_nonce
+M8	linux	m8.patch	--lib -- a_hardened_direct_call_is_signed_and_its_nonce_cannot_replay

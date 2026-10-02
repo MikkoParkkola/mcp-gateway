@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/identity.rs b/src/gateway/router/identity.rs
+index 1c309aaea..b6e1934e0 100644
+--- a/src/gateway/router/identity.rs
++++ b/src/gateway/router/identity.rs
+@@ -270,7 +270,7 @@ fn strict_header(
+ pub(crate) fn grant_subject_from_verified_identity(
+     identity: &VerifiedIdentity,
+ ) -> Option<GrantSubject> {
+-    if identity.subject.is_empty() || identity.issuer.is_empty() {
++    if identity.subject.is_empty() && identity.issuer.is_empty() {
+         return None;
+     }
+     // The label is operator-facing display text, never a key, so it keeps the
