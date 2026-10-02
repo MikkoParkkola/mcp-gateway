@@ -112,7 +112,8 @@ class KeylessReadOnly(unittest.TestCase):
                          "MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS=[]\n",
                          "MCP_GATEWAY_server__idempotency_key=${MODE}\n",
                          "MCP_GATEWAY_ENV_FILES=[/x.env]\n",
-                         "HOME=/elsewhere\n"):
+                         "HOME=/elsewhere\n",
+                         "mcp_gateway_server__idempotency_key=optional\n"):
                 (d / "bad.env").write_text(text)
                 with self.assertRaises(mod.Unverifiable, msg=text):
                     mod.env_override({"env_files": [str(d / "bad.env")]}, [])

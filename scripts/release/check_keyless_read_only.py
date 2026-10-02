@@ -67,8 +67,9 @@ ENV_KEY = "MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY"
 # dotenv spellings, `MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS`) makes the grade
 # unverifiable. The key name must appear literally for dotenv to set it, so
 # this cannot miss an assignment whatever the grammar.
-PLAIN = re.compile(r"^(?:export\s+)?" + ENV_KEY + r"\s*=\s*(['\"]?)(optional|required)\1\s*(?:#.*)?$",
-                   re.IGNORECASE)
+# Exact MCP_GATEWAY_ prefix, case-free segments after it (OverlayEnv::data).
+PLAIN = re.compile(r"^(?:export\s+)?MCP_GATEWAY_(?i:SERVER__IDEMPOTENCY_KEY)\s*=\s*(['\"]?)"
+                   r"((?i:optional|required))\1\s*(?:#.*)?$")
 # Routing keys too: they change which tools a capture can see.
 # The gateway lowercases path segments after MCP_GATEWAY_, so matching is
 # case-insensitive. ENV_FILES and HOME change which env files are read.
