@@ -421,4 +421,8 @@ fn a_numeric_origin_needs_a_parseable_same_scheme_origin_on_a_public_bind() {
         !p.origin_ok_at("http://attacker.example:39400", authority),
         "a named Origin is not the numeric address this request was sent to"
     );
+    assert!(
+        !p.origin_ok_at("http://gw.example:39400", "gw.example:39400"),
+        "the numeric rule never admits a name, even the request's own authority"
+    );
 }
