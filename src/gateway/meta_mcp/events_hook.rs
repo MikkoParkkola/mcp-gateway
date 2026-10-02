@@ -29,7 +29,18 @@ impl MetaMcp {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
-            hub.reconcile_catalogue();
+            // Disk work, off the async workers; a removal that failed is
+            // retried, the worker held meanwhile.
+            loop {
+                let hub = Arc::clone(&hub);
+                if tokio::task::spawn_blocking(move || hub.reconcile_catalogue())
+                    .await
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
         });
     }
 
@@ -104,7 +115,9 @@ impl MetaMcp {
             return;
         }
         match crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities()) {
-            Ok(removed) => hub.withdraw(&removed),
+            Ok(removed) => {
+                hub.withdraw(&removed);
+            }
             Err(event) => tracing::error!(
                 %event,
                 "capability reload not applied to webhook routes: it removes a filter or \

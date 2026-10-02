@@ -190,6 +190,14 @@ impl Gateway {
         }
     }
 
+    /// Stop the child and wait for it to exit; the directory and store stay.
+    /// `restart` then starts a new one.
+    pub async fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill().await;
+        }
+    }
+
     /// Stop the child and start a new one on the same directory and store.
     pub async fn restart(&mut self) {
         if let Some(mut child) = self.child.take() {
