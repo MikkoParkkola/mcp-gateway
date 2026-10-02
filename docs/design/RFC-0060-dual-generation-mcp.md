@@ -98,9 +98,12 @@ This prevents uncertainty from making a revision look safe to remove. Revisions
 with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: started 2026-10-02 13:16:03 CEST (unix 1790939763), ends 2026-10-09 13:16:03 CEST (604,800 s)** (live gateway 4.0.0-a87d8f28, PID 31766; baseline scrape sha256 8ab2e4ec…; a restart invalidates it; two earlier windows that day ended with a reboot and a planned redeploy). **HTTP half only:** the durable stdio window was not archived, so it still starts 2026-09-05 and `production_retirement_decision` would answer `WindowMisaligned`; an aligned restart is a lead decision. The procedure below is how a full window is set up; this one skipped its archive step. Stop all gateway processes, archive any
+**Production window: started 2026-10-02 18:03:50 CEST (unix 1790957030), ends 2026-10-09 18:03:50 CEST (604,800 s)** (live gateway 4.0.0-a87d8f28, PID 96175; baseline scrape sha256 40a109d2…; durable stdio start 1790957030, the same second, so aligned; a restart invalidates it). The procedure below is how it was set up. Stop all gateway processes, archive any
 earlier `protocol-revision-telemetry` directory, deploy, and then start the
-gateways. The new durable file's `started_at_unix_seconds` is the stdio baseline;
+gateways. The HTTP service never creates the durable file; a stdio-mode gateway
+does, so start one (a config with no backends, stdin closed) on the real data
+directory and take the HTTP scrape in the same second. The new durable file's
+`started_at_unix_seconds` is the stdio baseline;
 take the HTTP baseline scrape after all bounded metric series have been
 registered at zero. Record these fields after deployment:
 
