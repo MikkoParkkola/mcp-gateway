@@ -207,6 +207,8 @@ struct Inner {
     /// the token is the whole correlation. See `StdioTransport`'s field of the
     /// same name for why this holds destinations rather than payloads.
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
+    /// Upstream-notification taps of the events listener (MIK-7630 I5).
+    pub(crate) taps: super::upstream_tap::Taps,
 }
 
 impl Inner {
@@ -219,6 +221,7 @@ impl Inner {
             request_id: AtomicU64::new(1),
             task: parking_lot::Mutex::new(None),
             progress_destinations: dashmap::DashMap::new(),
+            taps: super::upstream_tap::Taps::default(),
         })
     }
 }
@@ -452,7 +455,11 @@ impl WebSocketTransport {
 
         match frame {
             McpFrame::Response(response) => {
-                if let Some(ref id) = response.id {
+                if let Some(ref id) = response.id
+                    && inner.taps.response_to(id, response.result.as_ref())
+                {
+                    // A listen is never a pending request (I5 design §4).
+                } else if let Some(ref id) = response.id {
                     let key = id.to_string();
                     if let Some((_, tx)) = inner.pending.remove(&key) {
                         let _ = tx.send(response);
@@ -468,6 +475,9 @@ impl WebSocketTransport {
                 debug!("Received application-level pong");
             }
             McpFrame::Notification { method, params } => {
+                if inner.taps.notification(&method, params.as_ref()) {
+                    return Ok(());
+                }
                 route_progress(
                     inner,
                     JsonRpcNotification {

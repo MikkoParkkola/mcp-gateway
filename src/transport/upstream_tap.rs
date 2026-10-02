@@ -283,6 +283,15 @@ impl Taps {
         }
     }
 
+    /// [`Self::response`] for a transport's typed id.
+    pub(crate) fn response_to(
+        &self,
+        id: &crate::protocol::RequestId,
+        result: Option<&Value>,
+    ) -> bool {
+        serde_json::to_value(id).is_ok_and(|id| self.response(&id, result))
+    }
+
     /// Offer a response. `true` when its id is a registered listen: the
     /// compatible first-frame acknowledgement is routed, anything else ends
     /// the listen, whose sender is removed whether or not `End` fit, so a

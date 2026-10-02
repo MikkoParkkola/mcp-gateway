@@ -117,6 +117,8 @@ pub struct StdioTransport {
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
     /// How the last start ended if the child died before `initialize` (#526).
     start: early_exit::StartState,
+    /// Upstream-notification taps of the events listener (MIK-7630 I5).
+    pub(crate) taps: super::upstream_tap::Taps,
 }
 
 impl StdioTransport {
@@ -146,6 +148,7 @@ impl StdioTransport {
             protocol_version: RwLock::new(protocol_version),
             progress_destinations: dashmap::DashMap::new(),
             start: early_exit::StartState::default(),
+            taps: super::upstream_tap::Taps::default(),
         })
     }
 
@@ -467,6 +470,15 @@ impl StdioTransport {
     // over stdio; a per-request stream is what would carry them, and stdio has
     // none. Named as a design event in the SUB.2b note rather than papered over.
     fn capture_notification(&self, notification: JsonRpcNotification) {
+        // The listener's taps first: a frame tagged with a live listen, or
+        // one of the three resource/prompt notifications while a legacy tap
+        // is open. Never progress, so the route below is unchanged.
+        if self
+            .taps
+            .notification(&notification.method, notification.params.as_ref())
+        {
+            return;
+        }
         // Note the asymmetry with the outgoing side: a request carries the
         // token under `params._meta`, a `notifications/progress` carries it as
         // a direct member of `params`.
@@ -523,6 +535,12 @@ impl StdioTransport {
             }
         };
 
+        if let Some(ref id) = response.id
+            && self.taps.response_to(id, response.result.as_ref())
+        {
+            // A listen is never a pending request (design §4).
+            return Ok(());
+        }
         if let Some(ref id) = response.id {
             let key = id.to_string();
             let pending_count = self.pending.len();
@@ -745,6 +763,10 @@ mod early_exit;
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stdio_tap_tests.rs"]
+mod tap_tests;
 
 // Unix-only: the fake backend is a `sh` script.
 #[cfg(all(test, unix))]
