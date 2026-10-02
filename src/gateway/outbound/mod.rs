@@ -20,6 +20,7 @@ mod callback;
 mod http;
 #[cfg(feature = "firewall")]
 mod judge;
+mod stdio;
 mod stream;
 
 use std::sync::Arc;
@@ -33,7 +34,8 @@ pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, recorded};
 pub(crate) use http::to_http;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, callback_frame, delivered};
-pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_message};
+pub(crate) use stdio::StdioReads;
+pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_data, sse_message};
 
 /// The firewall that carries the tenant guard and the read history. Without
 /// the `firewall` feature nothing is judged, and this has no values.
@@ -55,14 +57,8 @@ pub(crate) enum Payload {
     Notification(JsonRpcNotification),
     /// An answer already rendered as a JSON value (the direct route).
     Answer(Value),
-    /// A server-to-client request, including proxy request envelopes.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "stdio bridged requests convert to it (design §4.3)"
-        )
-    )]
+    /// A server-to-client request or a JSON-RPC document built as a value
+    /// (bridged stdio requests, `subscriptions/listen` events).
     Request(Value),
     /// An SSE document that is not JSON-RPC (webhook bodies).
     #[cfg_attr(
@@ -79,6 +75,9 @@ pub(crate) enum Payload {
         )
     )]
     Callback(Value),
+    /// A stdio JSON-RPC batch answer: items judged one by one, written as
+    /// one array, each committed after the array is written (S1).
+    Batch(Vec<OutboundFrame>),
     /// A blocked non-answer item: a sink writes nothing for it.
     Withheld,
 }

@@ -29,7 +29,7 @@ use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::gateway::auth::AuthState;
 use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
-use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_message};
+use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_data, sse_message};
 use crate::gateway::session_id::{SessionId, SessionOwner, session_fp};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
@@ -54,7 +54,10 @@ pub struct TaggedNotification {
 #[derive(Debug, Clone)]
 pub struct SessionFrame {
     note: TaggedNotification,
-    mark: Option<crate::gateway::outbound::StreamMark>,
+    /// Boxed: every session's ring buffer holds `buffer_size` of these up
+    /// front, so the verdict-off default pays one pointer per slot, not a
+    /// whole judged frame.
+    mark: Option<Box<crate::gateway::outbound::StreamMark>>,
 }
 
 impl std::ops::Deref for SessionFrame {
@@ -196,7 +199,7 @@ impl NotificationMultiplexer {
             None => None,
             Some(judge) => {
                 match judge.judge(key, &notification.data, &notification.event_type, hidden) {
-                    Ok(mark) => mark,
+                    Ok(mark) => mark.map(Box::new),
                     Err(()) => return false,
                 }
             }
@@ -645,12 +648,13 @@ pub fn create_sse_response(
 ///
 /// No resumability and no event ids — MCP 2026-07-28 removed both, so there is
 /// nothing for a client to resume from and nothing to number.
-pub fn subscription_stream(
+pub(crate) fn subscription_stream(
     mut listener: crate::gateway::subscription_registry::Listener,
     filter: crate::protocol::subscriptions::ListenRequest,
     subscription: crate::protocol::subscriptions::SubscriptionId,
     acknowledgement: &crate::protocol::JsonRpcResponse,
     keep_alive_interval: Duration,
+    judge: StreamJudge,
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;
 
@@ -684,9 +688,14 @@ pub fn subscription_stream(
                         }
                     }
                     let tagged = subscription.tag(published.notification);
-                    yield Ok(Event::default()
-                        .event("message")
-                        .data(tagged.to_string()));
+                    // MIN.2 (H8): judged for the listener's caller, recorded,
+                    // and committed as it is written; withheld when blocked.
+                    let Some(frame) = judge.judge_document(tagged) else {
+                        continue;
+                    };
+                    if let Some(data) = sse_data(&judge.record(frame).await) {
+                        yield Ok(Event::default().event("message").data(data));
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(missed)) => {

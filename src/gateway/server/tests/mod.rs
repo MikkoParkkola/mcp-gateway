@@ -34,6 +34,8 @@ mod stdio_listing_scope;
 mod stdio_response_firewall;
 
 mod stdio_initialize_order;
+#[cfg(feature = "firewall")]
+mod stdio_tenant_reads;
 
 mod stdio_sole_operator;
 

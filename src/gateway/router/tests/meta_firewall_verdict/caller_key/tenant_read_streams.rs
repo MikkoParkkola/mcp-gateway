@@ -228,3 +228,74 @@ async fn webhook_and_event_scan_root() {
         }
     }
 }
+
+/// A modern `subscriptions/listen` stream under the fixture key, past its
+/// acknowledgement.
+async fn open_listen(router: &axum::Router) -> Stream {
+    let body = json!({
+        "jsonrpc": "2.0", "id": 9, "method": "subscriptions/listen",
+        "params": {
+            "notifications": { "toolsListChanged": true },
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+            },
+        },
+    });
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer key-one")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "subscriptions/listen")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::OK,
+        "listen opens"
+    );
+    let mut stream = Stream {
+        body: response.into_body().into_data_stream(),
+        buffer: String::new(),
+    };
+    let ack = stream.drain(QUIET).await;
+    assert!(
+        ack.iter().any(|e| e.contains("subscriptionId")),
+        "the acknowledgement opens the stream: {ack:?}"
+    );
+    stream
+}
+
+/// Rows 2k and 11 (H8): a `subscriptions/listen` event naming B, after a
+/// POST read of A under the same key, is withheld in block mode.
+#[tokio::test]
+async fn listen_keyed_on_caller_key() {
+    let who = caller();
+    for mode in [CrossTenantReads::Off, CrossTenantReads::Block] {
+        let (state, _store) = split_state(mode, 3600).await;
+        let router = create_router(Arc::clone(&state));
+        let mut listen = open_listen(&router).await;
+        let (a, _, body) = send(&router, call_with(&who, true, None, 0, &reading(A))).await;
+        assert_eq!(a, Delivered, "{body}");
+        state.subscriptions.publish(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": { "customer_id": B },
+        }));
+        let got = listen.drain(QUIET).await;
+        if mode == CrossTenantReads::Off {
+            assert!(
+                mentions(&got, B),
+                "control: off delivers the event: {got:?}"
+            );
+        } else {
+            assert!(
+                !mentions(&got, B),
+                "a listen event naming B reached an A reader: {got:?}"
+            );
+        }
+    }
+}

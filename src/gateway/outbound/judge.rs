@@ -62,6 +62,13 @@ fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
             guard.scan_document(doc, &["jsonrpc", "id"])
         }
         Payload::Event(doc) | Payload::Callback(doc) => guard.scan_frame(&[doc], &[]),
+        Payload::Batch(items) => {
+            let mut all = ReadAttribution::default();
+            for item in items.iter().filter_map(OutboundFrame::assessment) {
+                all.extend(&item.attribution);
+            }
+            return all;
+        }
         Payload::Withheld => return ReadAttribution::default(),
     };
     ReadAttribution::of(tenants, uninspected)
@@ -112,6 +119,15 @@ fn withholds(verdict: Option<ReadVerdict>, block: bool) -> bool {
     }
 }
 
+/// Whether an answer carries a result rather than an error.
+fn delivers_result(payload: &Payload) -> bool {
+    match payload {
+        Payload::Response(response) => response.error.is_none(),
+        Payload::Answer(answer) => answer.get("error").is_none(),
+        _ => false,
+    }
+}
+
 /// Judge a frame carrying backend-derived content for `key`. `request` is
 /// the params of the request it answers; `hidden` is attribution the frame
 /// no longer shows (pre-transform, cached, stored). A blocked answer is
@@ -129,7 +145,11 @@ pub(crate) fn delivered(
     };
     let block = mode == CrossTenantReads::Block;
     let mut attribution = scan(guard, &payload);
-    if let Some(request) = request {
+    // The request's tenants are read only by an answer that delivered a
+    // result. An error answer (a refusal above all) charges only what its
+    // own payload names, so a refused B request does not count as a read of
+    // B (row 7).
+    if let Some(request) = request.filter(|_| delivers_result(&payload)) {
         attribution.extend(&ReadAttribution::of(guard.request_tenants(request), false));
     }
     if let Some(hidden) = hidden {

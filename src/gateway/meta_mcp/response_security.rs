@@ -153,6 +153,37 @@ pub(crate) struct ResponseDeliveryContext<'a> {
 }
 
 impl super::MetaMcp {
+    /// A read judge for one stream written to `key` (MIK-7116.MIN.2).
+    pub(crate) fn stream_judge(
+        &self,
+        guard: Option<std::sync::Arc<crate::gateway::outbound::Guard>>,
+        key: Option<String>,
+    ) -> crate::gateway::outbound::StreamJudge {
+        let judge = crate::gateway::outbound::StreamJudge::new(
+            guard,
+            self.rejection_audit(),
+            self.transparency_logger.clone(),
+        );
+        if let Some(key) = key {
+            judge.bind(key);
+        }
+        judge
+    }
+
+    /// The stdio transport's read judge, over this Meta-MCP's firewall
+    /// (MIK-7116.MIN.2).
+    pub(crate) fn stdio_reads(&self) -> crate::gateway::outbound::StdioReads {
+        #[cfg(feature = "firewall")]
+        let guard = self.firewall.clone();
+        #[cfg(not(feature = "firewall"))]
+        let guard = None;
+        crate::gateway::outbound::StdioReads::new(
+            guard,
+            self.rejection_audit(),
+            self.transparency_logger.clone(),
+        )
+    }
+
     /// Complete all output mutations before recording the attempted response.
     pub(crate) async fn finalize_response_for_delivery(
         &self,

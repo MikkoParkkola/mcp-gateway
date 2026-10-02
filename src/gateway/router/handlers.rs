@@ -1140,12 +1140,17 @@ async fn meta_mcp_dispatch(
                 "subscriptions/listen opened"
             );
 
+            // MIN.2 (H8): every event is judged for this caller as it is written.
+            let judge = state
+                .meta_mcp
+                .stream_judge(read_guard.clone(), read_key.clone());
             return crate::gateway::streaming::subscription_stream(
                 listener,
                 request,
                 subscription,
                 &acknowledgement,
                 state.streaming_config.keep_alive_interval,
+                judge,
             );
         }
         // MIK-7630. Answered here, never proxied; with events off the guard

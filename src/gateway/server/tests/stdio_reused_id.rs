@@ -12,7 +12,13 @@ use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use super::super::stdio_dispatches::StdioDispatches;
+use crate::gateway::outbound::OutboundFrame;
 use crate::protocol::RequestId;
+
+/// The next frame's written value.
+async fn recv(stdout: &mut mpsc::Receiver<OutboundFrame>) -> Option<Value> {
+    stdout.recv().await.and_then(|frame| frame.stdio_value())
+}
 
 const BOUND: Duration = Duration::from_secs(5);
 
@@ -24,7 +30,7 @@ fn id() -> RequestId {
 /// returned sender before it returns.
 async fn answered_but_unreaped(
     dispatches: &mut StdioDispatches,
-    writer: &mpsc::Sender<Value>,
+    writer: &mpsc::Sender<OutboundFrame>,
     frame: Value,
 ) -> oneshot::Sender<()> {
     let (release, held) = oneshot::channel::<()>();
@@ -33,7 +39,11 @@ async fn answered_but_unreaped(
     let answers = Some(id());
     dispatches.spawn(Some(id()), async move {
         let permit = writer.reserve().await.expect("the writer is open");
-        cancelled.send_unless_cancelled(answers.as_ref(), permit, frame);
+        cancelled.send_unless_cancelled(
+            answers.as_ref(),
+            permit,
+            OutboundFrame::gateway_stdio(frame),
+        );
         let _ = held.await;
     });
     release
@@ -43,9 +53,9 @@ async fn answered_but_unreaped(
 #[tokio::test]
 async fn a_reused_id_is_cancellable_before_its_predecessor_is_joined() {
     let mut dispatches = StdioDispatches::default();
-    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let (writer, mut stdout) = mpsc::channel::<OutboundFrame>(4);
     let _release = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
-    let first = tokio::time::timeout(BOUND, stdout.recv()).await;
+    let first = tokio::time::timeout(BOUND, recv(&mut stdout)).await;
     assert_eq!(first.expect("answered in time"), Some(json!("first")));
 
     // The client has its answer, so it may send the id again.
@@ -68,9 +78,9 @@ async fn a_reused_id_is_cancellable_before_its_predecessor_is_joined() {
 #[tokio::test]
 async fn a_late_cancel_does_not_silence_a_reused_id() {
     let mut dispatches = StdioDispatches::default();
-    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let (writer, mut stdout) = mpsc::channel::<OutboundFrame>(4);
     let _release = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
-    let first = tokio::time::timeout(BOUND, stdout.recv()).await;
+    let first = tokio::time::timeout(BOUND, recv(&mut stdout)).await;
     assert_eq!(first.expect("answered in time"), Some(json!("first")));
 
     dispatches.cancel(&id());
@@ -79,10 +89,14 @@ async fn a_late_cancel_does_not_silence_a_reused_id() {
     let answers = Some(id());
     dispatches.spawn(Some(id()), async move {
         let permit = second_writer.reserve().await.expect("the writer is open");
-        cancelled.send_unless_cancelled(answers.as_ref(), permit, json!("second"));
+        cancelled.send_unless_cancelled(
+            answers.as_ref(),
+            permit,
+            OutboundFrame::gateway_stdio(json!("second")),
+        );
     });
 
-    let second = tokio::time::timeout(BOUND, stdout.recv()).await;
+    let second = tokio::time::timeout(BOUND, recv(&mut stdout)).await;
     assert_eq!(
         second.expect("the reused id was answered, not silenced by the late cancel"),
         Some(json!("second"))
@@ -95,12 +109,12 @@ async fn a_late_cancel_does_not_silence_a_reused_id() {
 #[tokio::test]
 async fn joining_a_predecessor_keeps_its_successors_marks() {
     let mut dispatches = StdioDispatches::default();
-    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let (writer, mut stdout) = mpsc::channel::<OutboundFrame>(4);
     let first = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
-    let answered = tokio::time::timeout(BOUND, stdout.recv()).await;
+    let answered = tokio::time::timeout(BOUND, recv(&mut stdout)).await;
     assert_eq!(answered.expect("first answered"), Some(json!("first")));
     let _second = answered_but_unreaped(&mut dispatches, &writer, json!("second")).await;
-    let answered = tokio::time::timeout(BOUND, stdout.recv()).await;
+    let answered = tokio::time::timeout(BOUND, recv(&mut stdout)).await;
     assert_eq!(answered.expect("second answered"), Some(json!("second")));
 
     // Only the first dispatch can finish, so this joins exactly it.
@@ -150,9 +164,9 @@ async fn a_cancelled_id_is_reusable_before_its_dispatch_is_joined() {
 #[tokio::test]
 async fn joining_a_predecessor_keeps_the_reused_ids_mapping() {
     let mut dispatches = StdioDispatches::default();
-    let (writer, mut stdout) = mpsc::channel::<Value>(4);
+    let (writer, mut stdout) = mpsc::channel::<OutboundFrame>(4);
     let first = answered_but_unreaped(&mut dispatches, &writer, json!("first")).await;
-    let answered = tokio::time::timeout(BOUND, stdout.recv()).await;
+    let answered = tokio::time::timeout(BOUND, recv(&mut stdout)).await;
     assert_eq!(answered.expect("first answered"), Some(json!("first")));
 
     let (alive, dropped) = oneshot::channel::<()>();

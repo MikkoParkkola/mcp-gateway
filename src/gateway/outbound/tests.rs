@@ -198,3 +198,36 @@ async fn rejection_audit_admission_bounded() {
         "every rejection without a permit is a recorded audit failure"
     );
 }
+
+/// Row 7: a refused B request, then A: the refusal is not a read of B, so A
+/// is ordinary. Control: a delivered B answer then A is flagged.
+#[test]
+fn gateway_refusal_charges_nothing() {
+    let fw = firewall(CrossTenantReads::Observe);
+    let refusal = JsonRpcResponse::error(Some(RequestId::Number(1)), -32600, "refused");
+    let b = delivered(
+        &fw,
+        Some(KEY),
+        Payload::Response(refusal),
+        Some(&json!({ "customer_id": B })),
+        None,
+    );
+    b.written();
+    drop(b);
+    assert_eq!(read_a(&fw).verdict(), None, "a refused B charged B");
+
+    let fw = firewall(CrossTenantReads::Observe);
+    let answer = JsonRpcResponse::success(RequestId::Number(1), json!({ "ok": true }));
+    let _b = delivered(
+        &fw,
+        Some(KEY),
+        Payload::Response(answer),
+        Some(&json!({ "customer_id": B })),
+        None,
+    );
+    assert_eq!(
+        read_a(&fw).verdict(),
+        Some(ReadVerdict::Flagged),
+        "control: a delivered B answer is a read of B"
+    );
+}

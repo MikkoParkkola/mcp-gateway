@@ -61,17 +61,15 @@ impl StreamJudge {
         let _ = self.key.set(key);
     }
 
-    /// Judge one notification for this stream. `None` when it is withheld;
-    /// the rejection is then handed to the bounded detached audit. Before
-    /// the caller is bound a tenant-bearing notification is unattributable.
-    pub(crate) fn judge(&self, notification: JsonRpcNotification) -> Option<OutboundFrame> {
+    /// Judge one document (a `subscriptions/listen` event) for this stream;
+    /// `None` when it is withheld.
+    pub(crate) fn judge_document(&self, document: serde_json::Value) -> Option<OutboundFrame> {
+        self.admit(Payload::Request(document))
+    }
+
+    fn admit(&self, payload: Payload) -> Option<OutboundFrame> {
         let key = self.key.get().map(String::as_str);
-        match admission(
-            self.guard.as_deref(),
-            key,
-            Payload::Notification(notification),
-            None,
-        ) {
+        match admission(self.guard.as_deref(), key, payload, None) {
             Admission::Admitted(frame) => Some(frame),
             Admission::Blocked(evidence) => {
                 self.audit.submit(evidence);
@@ -79,11 +77,23 @@ impl StreamJudge {
             }
         }
     }
+
+    /// Judge one notification for this stream. `None` when it is withheld;
+    /// the rejection is then handed to the bounded detached audit. Before
+    /// the caller is bound a tenant-bearing notification is unattributable.
+    pub(crate) fn judge(&self, notification: JsonRpcNotification) -> Option<OutboundFrame> {
+        self.admit(Payload::Notification(notification))
+    }
 }
 
 /// Frame `frame` as one `event: message` SSE event and commit it. `None`
 /// for a withheld frame or one that does not serialize.
 pub(crate) fn sse_message(frame: &OutboundFrame) -> Option<String> {
+    sse_data(frame).map(|data| format!("event: message\ndata: {data}\n\n"))
+}
+
+/// The `data` of `frame`'s SSE event, committed as it is handed over.
+pub(crate) fn sse_data(frame: &OutboundFrame) -> Option<String> {
     let data = match &frame.payload {
         Payload::Notification(notification) => serde_json::to_string(notification),
         Payload::Response(response) => serde_json::to_string(response),
@@ -91,11 +101,11 @@ pub(crate) fn sse_message(frame: &OutboundFrame) -> Option<String> {
         | Payload::Request(value)
         | Payload::Event(value)
         | Payload::Callback(value) => serde_json::to_string(value),
-        Payload::Withheld => return None,
+        Payload::Batch(_) | Payload::Withheld => return None,
     }
     .ok()?;
     frame.written();
-    Some(format!("event: message\ndata: {data}\n\n"))
+    Some(data)
 }
 
 /// The judge of the GET session streams (H7): installed on the multiplexer
