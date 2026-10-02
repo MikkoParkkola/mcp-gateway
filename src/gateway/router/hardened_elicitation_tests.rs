@@ -24,23 +24,39 @@ const ELICITATION: &str = "client must declare elicitation (security.posture=har
 /// A personal admin key: a per-caller identity (row 8) that may call
 /// `gateway_kill_server`.
 const OPERATOR: &str = "hardened-elicitation-operator-0123456789";
+/// A second personal key: another session owner.
+const OTHER: &str = "hardened-elicitation-other-caller-01234567";
 const MODERN: &str = "2026-07-28";
 
 async fn gateway(posture: SecurityPosture) -> (Arc<AppState>, tempfile::TempDir) {
     let auth = AuthConfig {
         enabled: true,
-        api_keys: vec![ApiKeyConfig {
-            key: None,
-            key_sha256: Some(crate::config::api_key_digest_spec(OPERATOR.as_bytes())),
-            expires_at: None,
-            name: "operator".to_string(),
-            rate_limit: 0,
-            backends: vec!["*".to_string()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: true,
-            kind: ApiKeyKind::Personal,
-        }],
+        api_keys: vec![
+            ApiKeyConfig {
+                key: None,
+                key_sha256: Some(crate::config::api_key_digest_spec(OPERATOR.as_bytes())),
+                expires_at: None,
+                name: "operator".to_string(),
+                rate_limit: 0,
+                backends: vec!["*".to_string()],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: true,
+                kind: ApiKeyKind::Personal,
+            },
+            ApiKeyConfig {
+                key: None,
+                key_sha256: Some(crate::config::api_key_digest_spec(OTHER.as_bytes())),
+                expires_at: None,
+                name: "other".to_string(),
+                rate_limit: 0,
+                backends: vec!["*".to_string()],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: false,
+                kind: ApiKeyKind::Personal,
+            },
+        ],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
     };
@@ -275,6 +291,57 @@ async fn hardened_legacy_request_without_session_refused() {
     );
 }
 
+/// Row 9, session half, under hardened: only its owner resumes a session.
+/// Another caller naming its id is answered as if no session existed, on POST
+/// and on GET, and nothing is minted; the owner still resumes it.
+#[tokio::test]
+async fn hardened_resume_refuses_another_owner() {
+    let (state, _store) = gateway(SecurityPosture::Hardened).await;
+    let session = send(
+        &state,
+        legacy_post("/mcp", &initialize(&json!({"elicitation": {}})), None),
+    )
+    .await
+    .session
+    .expect("a declaring initialize gets a session");
+    let before = state.multiplexer.session_count();
+    let as_other = format!("Bearer {OTHER}");
+
+    let mut post = legacy_post("/mcp", &tools_list(), Some(&session));
+    post.headers_mut()
+        .insert("authorization", as_other.parse().unwrap());
+    let reply = send(&state, post).await;
+    assert_elicitation_refused(&reply, "another owner's POST into the session");
+    let get = Request::builder()
+        .method("GET")
+        .uri("/mcp")
+        .header("accept", "text/event-stream")
+        .header("authorization", as_other.as_str())
+        .header("mcp-session-id", session.as_str())
+        .body(Body::empty())
+        .unwrap();
+    let reply = send(&state, get).await;
+    assert_elicitation_refused(&reply, "another owner's GET of the session");
+    assert_eq!(
+        state.multiplexer.session_count(),
+        before,
+        "a refused resume minted a session"
+    );
+
+    let reply = send(&state, legacy_post("/mcp", &tools_list(), Some(&session))).await;
+    assert_eq!(
+        reply.status,
+        StatusCode::OK,
+        "the owner resumes: {}",
+        reply.body
+    );
+    assert!(
+        reply.body.contains("\"result\""),
+        "no result: {}",
+        reply.body
+    );
+}
+
 /// Row 10: a modern request mints no session, so it cannot hand a legacy
 /// request one to resume.
 #[tokio::test]
@@ -361,6 +428,9 @@ async fn hardened_direct_legacy_refused() {
     )
     .await;
     assert_elicitation_refused(&reply, "a direct legacy initialize without elicitation");
+    let notification = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+    let reply = send(&state, legacy_post("/mcp/alpha", &notification, None)).await;
+    assert_elicitation_refused(&reply, "a direct legacy notification");
 
     let reply = send(
         &state,

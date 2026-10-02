@@ -201,3 +201,29 @@ pub(super) fn seed_private(path: &Path, bytes: &[u8]) {
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
 }
+
+/// Poison `store` as a failed final directory sync does: the record is renamed
+/// into place, durability is uncertain, and the store stops serving, with every
+/// row still held in memory. Unlike `close`, nothing is cleared, so a readiness
+/// guard removed from a read or write path shows as an answer instead of an
+/// absence.
+pub(super) async fn poison(store: &TaskStore, owner: &str, id: &str, revision: u64) {
+    store
+        .set_hook(Some(Arc::new(|stage| {
+            if stage == CommitStage::DirectorySync {
+                Err(std::io::Error::other("injected poison"))
+            } else {
+                Ok(())
+            }
+        })))
+        .await;
+    assert_eq!(
+        store
+            .mark_dispatched(owner, id, revision)
+            .await
+            .unwrap_err(),
+        StoreError::Storage
+    );
+    store.set_hook(None).await;
+    assert!(!store.ready(), "the store is poisoned, not closed");
+}

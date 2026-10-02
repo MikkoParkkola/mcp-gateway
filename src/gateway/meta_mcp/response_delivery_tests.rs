@@ -800,3 +800,5 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
 
 #[path = "response_delivery_tests/minted.rs"]
 mod minted;
+#[path = "response_delivery_scope_tests.rs"]
+mod scope_tests;

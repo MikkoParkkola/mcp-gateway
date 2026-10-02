@@ -31,6 +31,8 @@ pub(crate) enum SecretFile {
     TlsKey,
     /// An OAuth token file under `~/.mcp-gateway/oauth/`.
     OAuthToken,
+    /// An MCP Events store record (a subscription holds its `whsec` secret).
+    EventsRecord,
     /// A capability `file:/path.json:field` credential.
     CredentialFile,
     /// `mtls.server_cert` or `mtls.ca_cert`.
@@ -69,6 +71,7 @@ impl SecretFile {
             Self::Reference => "secret file",
             Self::TlsKey => "TLS private key",
             Self::OAuthToken => "OAuth token file",
+            Self::EventsRecord => "events store record",
             Self::CredentialFile => "credential file",
             Self::TlsCert => "TLS certificate",
             Self::TlsCrl => "certificate revocation list",
@@ -273,7 +276,7 @@ fn check_acl(
     path: &Path,
     what: SecretFile,
 ) -> std::result::Result<(), GuardedRead> {
-    use crate::private_fs::{PrivacyRefusal, file_refusals_for, windows_remediation};
+    use crate::private_fs::{file_refusals_for, refusal_detail};
 
     let found = file_refusals_for(file, what.protects());
     if found.is_empty() {
@@ -281,26 +284,7 @@ fn check_acl(
     }
     let shown = path.display().to_string();
     let head = format!("Refusing to load {} {shown}", what.noun());
-    let text = if found
-        .iter()
-        .any(|r| matches!(r, PrivacyRefusal::ReparsePoint | PrivacyRefusal::NotRegular))
-    {
-        format!(
-            "{head} ({found:?}): it is not a regular file. Write the content, then replace the file."
-        )
-    } else {
-        let mut text = format!(
-            "{head}{}",
-            windows_remediation(&shown, &found, what.protects())
-        );
-        if what.protects() == Protects::Integrity {
-            text.push_str(
-                "This file may be read by others, so the repair keeps them as readers; \
-                 an owner-only repair would also lock out legitimate readers.\n",
-            );
-        }
-        text
-    };
+    let text = format!("{head}{}", refusal_detail(&shown, &found, what.protects()));
     Err(GuardedRead::Refused(text))
 }
 
@@ -445,6 +429,8 @@ pub(crate) enum CheckedFile {
     TlsCrl,
     /// An OAuth token file.
     OAuthToken,
+    /// An MCP Events store record.
+    EventsRecord,
     /// A capability `file:/path.json:field` credential.
     CredentialFile,
     /// The identity-grants file.
@@ -478,6 +464,7 @@ fn checked_class(what: CheckedFile) -> SecretFile {
         CheckedFile::TlsCert => SecretFile::TlsCert,
         CheckedFile::TlsCrl => SecretFile::TlsCrl,
         CheckedFile::OAuthToken => SecretFile::OAuthToken,
+        CheckedFile::EventsRecord => SecretFile::EventsRecord,
         CheckedFile::CredentialFile => SecretFile::CredentialFile,
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,

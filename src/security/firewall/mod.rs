@@ -28,7 +28,7 @@ use crate::security::ResponseScanner;
 use crate::transition::TransitionTracker;
 
 pub mod anomaly;
-mod anomaly_config;
+pub(crate) mod anomaly_config;
 mod anomaly_gate;
 use anomaly_config::{default_anomaly_min_observations, default_anomaly_threshold};
 pub mod audit;

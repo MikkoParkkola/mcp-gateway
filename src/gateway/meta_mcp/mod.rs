@@ -86,6 +86,7 @@ mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
 mod effects;
+mod events_hook;
 pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
@@ -139,10 +140,9 @@ pub(crate) const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
 
 /// Authenticated caller context for a `tools/call` dispatch.
 ///
-/// Deliberately has **no `Default`**: the authorizer is mandatory, and a
-/// derived default would let a construction site acquire one by omission. Every
-/// site names the authorizer it means, which in tests makes a permissive one
-/// visible in the test source rather than hidden in a struct default.
+/// Deliberately has **no `Default`**: the authorizer is mandatory, and a derived default would let
+/// a construction site acquire one by omission. Every site names the authorizer it means, which in
+/// tests makes a permissive one visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
     /// Explicit request era, classified by the transport from reserved metadata.
     pub is_modern: bool,
@@ -195,19 +195,19 @@ pub struct MetaMcpCallerContext<'a> {
     /// Set by the two stdio context builders only (no constructor outside
     /// `gateway::server`); binds continuations to the stdio client.
     pub(crate) stdio_nonce: Option<&'a crate::gateway::server::StdioNonce>,
-    /// Whether the caller holds admin. Carried here because meta-tools with
-    /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
-    /// `router::authorization`, which only knows whole tools.
+    /// The caller's `router::identity::caller_key`, set by HTTP only; see `experiment_key`.
+    pub(crate) caller_key: Option<&'a str>,
+    /// Whether the caller holds admin: meta-tools with admin-only PARAMETERS cannot be gated by
+    /// the tool-name allow-list in `router::authorization`, which knows only whole tools.
     pub is_admin: bool,
     /// What this caller declared on **this** request.
     ///
-    /// A parsed set rather than a single "may be asked for input" bit, because
-    /// MRTR.9 refuses per requested method and MRTR.9a per requested *mode*: a
-    /// client that declared `elicitation` and not `sampling` may be sent one
-    /// and not the other, and one that declared elicitation in form mode alone
-    /// may not be sent a url request. On stdio a modern call reads its own
-    /// `_meta` and a legacy call the handshake; absent means absent, and a
-    /// caller that declared nothing is never sent a continuation.
+    /// A parsed set rather than a single "may be asked for input" bit, because MRTR.9 refuses per
+    /// requested method and MRTR.9a per requested *mode*: a client that declared `elicitation` and
+    /// not `sampling` may be sent one and not the other, and one that declared elicitation in form
+    /// mode alone may not be sent a url request. On stdio a modern call reads its own `_meta` and a
+    /// legacy call the handshake; absent means absent, and a caller that declared nothing is never
+    /// sent a continuation.
     pub input_capabilities: Declared,
     /// How this caller can be asked to confirm a destructive action.
     ///
@@ -317,6 +317,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,
+            caller_key: self.caller_key,
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),
@@ -400,10 +401,14 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
     pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
+    /// MCP Events hub (MIK-7630); unset while events are off or on stdio.
+    pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// MIK-7692: the last written stored-delivery re-check decisions.
+    pub(super) grant_repeats: Arc<grant_audit::DecisionDedupe>,
     /// One bounded execution owner shared by the meta and direct transports.
     ///
     /// The ledger is in-memory and owned per [`MetaMcp`]: `State.entries` is a
@@ -679,10 +684,12 @@ impl MetaMcp {
         Self {
             backends,
             change_feed: std::sync::OnceLock::new(),
+            events: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            grant_repeats: Arc::default(),
             execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             unkeyed: admission::UnkeyedPolicy::default(),
@@ -1682,6 +1689,7 @@ impl MetaMcp {
             self.change_feed(),
         );
 
+        let capabilities = self.capabilities_with_events(capabilities);
         serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
@@ -1744,7 +1752,8 @@ impl MetaMcp {
         // `protocol::meta::classify_request` records.
         let result =
             build_initialize_result(negotiated_version, &instructions, era, self.change_feed());
-        JsonRpcResponse::success_serialized(id, result)
+        let result = self.initialize_with_events(result);
+        JsonRpcResponse::success(id, result)
     }
 
     /// The initialize instructions as this caller may read them: counts over
@@ -2753,5 +2762,21 @@ mod grant_decision_audit_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
 #[cfg(test)]
+mod grant_replay_dedupe_tests;
+#[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+
+mod session_end;
+
+#[cfg(test)]
+#[path = "session_bound_tests.rs"]
+mod session_bound_tests;
+
+#[cfg(test)]
+#[path = "session_cleanup_tests.rs"]
+mod session_cleanup_tests;
+
+#[cfg(test)]
+#[path = "session_inflight_tests.rs"]
+mod session_inflight_tests;

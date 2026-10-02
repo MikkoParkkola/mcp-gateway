@@ -42,7 +42,7 @@ Three options. **Recommendation was B; U4 resolved it to C.** The original reaso
 
 **Why B was wrong.** It assumed the SDK could not dual-speak, so the negotiation logic had to live somewhere we controlled. U4 shows rmcp models every revision we care about, including the two-generation dispatch that is the entire difficulty. Building a shared crate would mean maintaining a worse copy of a solved problem.
 
-**The gateway remains the open question**, and it is a genuine one: rmcp is built for *servers*, and the gateway is a *proxy* that must forward a request whose protocol generation it did not choose. Whether rmcp's model types can be used for pass-through routing without paying a full deserialise-reserialise on every call is **U5**, below — and if the answer is no, the gateway alone stays hand-rolled while everything else converges.
+**The gateway was the open question**, and a genuine one: rmcp is built for *servers*, and the gateway is a *proxy* that must forward a request whose protocol generation it did not choose. Whether rmcp's model types can be used for pass-through routing without paying a full deserialise-reserialise on every call is **U5**, below — and if the answer is no, the gateway alone stays hand-rolled while everything else converges. *(Answered 2026-10-01 for routing: see U5 below and RFC-0061 Decision 1.)*
 
 ## Decision 2 — the compatibility window
 
@@ -98,7 +98,7 @@ This prevents uncertainty from making a revision look safe to remove. Revisions
 with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: not started.** Stop all gateway processes, archive any
+**Production window: started 2026-10-02 01:22:04 CEST, ends 2026-10-09 01:22:04 CEST (604,800 s)** (live gateway 4.0.0-e2c34b78; baseline scrape sha256 87133a1c…; a restart invalidates it). The procedure below is how it was set up. Stop all gateway processes, archive any
 earlier `protocol-revision-telemetry` directory, deploy, and then start the
 gateways. The new durable file's `started_at_unix_seconds` is the stdio baseline;
 take the HTTP baseline scrape after all bounded metric series have been
@@ -122,7 +122,7 @@ on partial data. Decision 2 stays unfrozen. No revision is retired.
 
 ## Unknowns, each with a fail-fast (§P1)
 
-An unknown without a scheduled check is a defect. Five; one resolved, four outstanding:
+An unknown without a scheduled check is a defect. Seven. U3 and U4 resolved; U5 answered 2026-10-01; U7 answered by the session-keyed inventory (MIK-7211.PARENT.7); U2 moved out of 4.0.0 (MIK-7628); U1 and U6 outstanding:
 
 | # | Question | The check | Blocks |
 |---|---|---|---|
@@ -132,7 +132,7 @@ An unknown without a scheduled check is a defect. Five; one resolved, four outst
 | ~~U4~~ | ~~Does `rmcp` 3.x support more than one generation?~~ | **RESOLVED 2026-08-22** — see below | ~~Decisions 1 and 3~~ |
 | **U6** | Does rmcp's *wire behaviour* match its type surface across all three revisions? U4 concluded from an enum and module names, not from bytes on the wire. | Three-revision conformance spike: client, server, transport, discovery, MRTR, caching, removed-session behaviour. | Whether U4's resolution holds. Raised by adversarial review 2026-08-22. |
 | **U7** | What else is keyed by session besides hebb's patch and the list caches — auth, subscriptions, progress, cancellation, backend affinity? | Inventory every session-keyed behaviour across all six surfaces; name each replacement. | Everything. Removing sessions without this is the largest risk in the design. |
-| **U5** | Can rmcp's model types carry a **proxy** pass-through, or do they force a full deserialise-reserialise per hop? | Prototype one gateway route on rmcp 3.1.4; measure added latency and allocations against the current hand-rolled path. | Whether the gateway converges with everything else or stays hand-rolled alone. **Now the load-bearing unknown.** |
+| **U5** | Can rmcp's model types carry a **proxy** pass-through, or do they force a full deserialise-reserialise per hop? | Prototype one gateway route on rmcp 3.1.4; measure added latency and allocations against the current hand-rolled path. | Whether the gateway converges with everything else or stays hand-rolled alone. **ANSWERED 2026-10-01, no prototype:** the 2026 Streamable HTTP `Mcp-Method`/`Mcp-Name` headers carry the routing key, so the gateway routes on them and keeps the body opaque (see *The header contract answers U5 without a prototype* below); RFC-0061 Decision 1 records the outcome: the gateway stays hand-rolled and rmcp is not adopted for it. The answer is about routing: the gateway still validates the header against the body before authorizing or executing (RFC-0061 `:99`, `:364`). Paths without these headers (stdio, the legacy HTTP revisions) are covered by the same outcome, because RFC-0061 Decision 1 keeps the gateway hand-rolled on every path; the prototype check in this row is superseded. |
 
 ### U3 — RESOLVED: `server/discover` does NOT retire warm-start
 
@@ -176,7 +176,7 @@ Legacy mode must keep per-connection list responses. Modern mode requires that `
 
 Revised 2026-08-22 after adversarial review found three contradictions in the previous ordering.
 
-1. **Resolve U1, U2, U5.** Nothing else starts. U5 first — it decides whether the gateway is in scope for convergence at all. (U3 already resolved; U4 resolved but see U6 below.)
+1. **Resolve U1, U2, U5.** *(2026-10-01: U5 answered; U2 moved to MIK-7628; U1 open, see Decision 2.)* Nothing else starts. U5 first — it decides whether the gateway is in scope for convergence at all. (U3 already resolved; U4 resolved but see U6 below.)
 2. **Session-state inventory (U7).** Before removing anything, enumerate every behaviour currently keyed by connection or `Mcp-Session-Id` across all six surfaces — authentication, subscriptions, progress, cancellation, backend affinity — and name each one's stateless replacement. The previous version of this design removed sessions having inventoried only hebb's reconnect patch and the list caches, which is not an inventory.
 3. **`server/discover` on every surface** — additive, no breakage, immediate compatibility benefit.
 4. **`CacheableResult` and deterministic ordering, in the baseline — not deferred.** `ttlMs` and `cacheScope` are **required** by the specification on five endpoints. Deferring them to "capability adoption" while claiming complete 2026-07-28 support is a contradiction: a surface that omits them is non-compliant, not merely unoptimised. Their safe computation (step 5) ships with them.
@@ -200,7 +200,7 @@ This is not a gap in the design. It is a defect the design would have shipped.
 
 Grok's sharpest point, and it inverts the plan. 2026 Streamable HTTP **requires `Mcp-Method` and `Mcp-Name` on every POST** and rejects disagreement as `HeaderMismatch` (-32020) — SEP-2243, which this RFC filed under "minor changes" and never mentioned again.
 
-**Those headers exist so a gateway can route without parsing the body.** U5 asked whether rmcp's types can carry a proxy pass-through without deserialise-reserialise per hop; the specification already answered it by putting the routing key in the headers. Dispatch from `Mcp-Method`/`Mcp-Name`, keep the JSON body opaque except at the Meta-MCP chokepoint, and the question closes without building anything.
+**Those headers exist so a gateway can route without parsing the body.** U5 asked whether rmcp's types can carry a proxy pass-through without deserialise-reserialise per hop; the specification already answered it by putting the routing key in the headers. Dispatch from `Mcp-Method`/`Mcp-Name`, keep the JSON body opaque except at the Meta-MCP chokepoint, and the question closes without building anything. This answers routing only: the header is still checked against the body before authorization or execution (RFC-0061 `:99`, `:364`).
 
 ### `tools/list` already varies per connection, five ways
 

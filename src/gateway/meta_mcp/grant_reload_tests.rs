@@ -89,6 +89,7 @@ fn reload_ctx(meta: &MetaMcp, path: &std::path::Path) -> ReloadContext {
         crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(300),
     )
+    .expect("the registry pairs with the config")
     .with_identity_grant_sink(Arc::new(IdentityGrantSink::new(
         store,
         epoch,
@@ -589,6 +590,7 @@ async fn t9_a_config_refusal_still_reports_and_applies_the_revocation() {
         crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(300),
     )
+    .expect("the registry pairs with the config")
     .with_identity_grant_sink(Arc::new(IdentityGrantSink::new(
         store,
         epoch,

@@ -242,7 +242,8 @@ impl StdioTransport {
             loop {
                 match reader.next_line().await {
                     Ok(Some(line)) => {
-                        debug!(line_len = line.len(), "Received line from stdout");
+                        let line_len = line.len();
+                        debug!(line_len, "Received line from stdout");
                         let Some(transport) = transport.upgrade() else {
                             debug!("Transport dropped while reading; stopping reader task");
                             return;
@@ -525,16 +526,17 @@ impl StdioTransport {
             })
             .flatten();
 
+        let method = &notification.method;
         match token.and_then(|t| self.progress_destinations.get(&t)) {
             Some(destination) => {
-                debug!(method = %notification.method, "Delivering peer notification to its caller");
+                debug!(method = %method, "Delivering peer notification to its caller");
                 // Sent, not queued, and from the reader task: `deliver` uses
                 // `try_send`, because a blocking send here would park the only
                 // reader of this backend's stdout.
                 destination.deliver(notification);
             }
             None => {
-                debug!(method = %notification.method, "Ignoring peer notification");
+                debug!(method = %method, "Ignoring peer notification");
             }
         }
     }
@@ -563,7 +565,8 @@ impl StdioTransport {
 
         if let Some(ref id) = response.id {
             let key = id.to_string();
-            debug!(id = %key, pending_keys = ?self.pending.iter().map(|r| r.key().clone()).collect::<Vec<_>>(), "Looking for pending request");
+            let pending_count = self.pending.len();
+            debug!(id = %key, pending_count, "Looking for pending request");
             if let Some((_, sender)) = self.pending.remove(&key) {
                 debug!(id = %key, "Found pending request, sending response");
                 let _ = sender.send(response);
@@ -786,6 +789,10 @@ mod tests;
 #[cfg(test)]
 #[path = "stdio_cache_tests.rs"]
 mod cache_tests;
+
+#[cfg(test)]
+#[path = "stdio_start_refusal_tests.rs"]
+mod start_refusal_tests;
 
 #[cfg(test)]
 mod spawn_classification_tests {

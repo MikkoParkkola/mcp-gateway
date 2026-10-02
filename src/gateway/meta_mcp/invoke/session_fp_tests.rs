@@ -12,6 +12,9 @@ fn the_projection_event_logs_the_session_by_fingerprint() {
     let (captured, guard) = capture_debug();
     super::emit_projection_ab_event(
         Some(id),
+        // A legacy session is its own experiment key; it is logged by
+        // fingerprint in both fields.
+        id,
         "srv",
         "tool",
         crate::projection::AbRecord {

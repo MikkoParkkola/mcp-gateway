@@ -63,7 +63,8 @@ pub use features::{
     RuntimeConfig, RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig,
     TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
 };
-pub(crate) use features::{api_key_expired, parse_api_key_digest};
+pub use features::{EventsConfig, EventsRateLimit, EventsSourcesConfig};
+pub(crate) use features::{api_key_expired, parse_api_key_digest, parse_cidr};
 
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
@@ -139,6 +140,8 @@ pub struct Config {
     /// Durable tasks extension: store directory, worker cap, record limits.
     #[serde(default)]
     pub tasks: TasksConfig,
+    /// MCP Events (MIK-7630): webhook-delivered event subscriptions.
+    pub events: EventsConfig,
     /// Optional managed personal-account custody. Omitted enables none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accounts: Option<AccountsConfig>,
@@ -784,6 +787,7 @@ impl Config {
         self.validate_identity_sources()?;
         self.error_budget.validate()?;
         self.tasks.validate()?;
+        self.events.validate()?;
         self.capabilities.egress_proxy_url()?;
         // Descriptor structure first, and separately: a `personal_managed`
         // descriptor under `enabled: false` must refuse, and the arm below

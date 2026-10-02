@@ -179,7 +179,8 @@ impl AuthorizationServerMetadata {
             )));
         }
 
-        info!(issuer = %metadata.issuer, "Discovered authorization server");
+        let issuer = &metadata.issuer;
+        info!(issuer = %issuer, "Discovered authorization server");
         Ok(metadata)
     }
 
@@ -672,5 +673,26 @@ mod tests {
         }"#;
         let meta: AuthorizationServerMetadata = serde_json::from_str(json).unwrap();
         assert_eq!(meta.scopes_supported, vec!["read", "write", "admin"]);
+    }
+
+    /// MIK-7324.COV.3: a metadata endpoint that answers with an error status
+    /// is a refusal, not an empty document to take endpoints from.
+    #[tokio::test]
+    async fn discovery_refuses_a_non_success_metadata_response() {
+        use axum::{Router, http::StatusCode, routing::get};
+
+        let app = Router::new().route(
+            "/.well-known/oauth-authorization-server",
+            get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let client = Client::builder().no_proxy().build().unwrap();
+        let error = AuthorizationServerMetadata::discover(&client, &base, IssuerSource::Origin)
+            .await
+            .expect_err("an error status is not metadata");
+        assert!(error.to_string().contains("HTTP 500"), "{error}");
     }
 }

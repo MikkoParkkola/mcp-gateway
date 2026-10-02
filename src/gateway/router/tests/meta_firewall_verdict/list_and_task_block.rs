@@ -318,3 +318,54 @@ async fn a_blocked_task_result_is_refused_on_tasks_get() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
+
+/// MIK-7708: a direct listing the firewall refuses is not a client success, so
+/// it does not reset the caller's consecutive-failure count. With a threshold
+/// of two, failure + refused listing + failure opens the circuit.
+#[tokio::test]
+async fn a_blocked_direct_tool_list_is_not_a_client_success() {
+    use crate::failsafe::CircuitState;
+    let auth = crate::config::AuthConfig {
+        enabled: true,
+        bearer_token: None,
+        api_keys: vec![crate::config::ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(b"lister-key")),
+            expires_at: None,
+            name: "lister".to_string(),
+            rate_limit: 0,
+            backends: vec!["demo".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
+        }],
+        client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 2,
+            success_threshold: 1,
+            reset_timeout: std::time::Duration::from_secs(60),
+        }),
+        ..crate::config::AuthConfig::default()
+    };
+    let fw = super::response_firewall(Vec::new());
+    let (state, _store) = super::state_with_firewalls_and_auth(Arc::clone(&fw), fw, &auth).await;
+    state
+        .backends
+        .get("demo")
+        .expect("the fixture registers demo")
+        .set_transport_for_test(Arc::new(LeakyListTransport {
+            description: format!("echo; uses token {CANARY}"),
+        }) as Arc<dyn Transport>);
+    state.auth_config.record_client_failure("lister");
+    let body = json!({"jsonrpc": "2.0", "id": "d2", "method": "tools/list"});
+    let headers = [("authorization", "Bearer lister-key")];
+    let (_status, body) = post(&state, "/mcp/demo", &headers, &body).await;
+    assert_refused(&body);
+    state.auth_config.record_client_failure("lister");
+    assert_eq!(
+        state.auth_config.client_circuit_state("lister"),
+        Some(CircuitState::Open),
+        "the refused listing must not have reset the failure count"
+    );
+}

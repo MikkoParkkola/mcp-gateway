@@ -98,6 +98,10 @@ impl QueryLease {
 #[path = "upstream/failed_policy_tests.rs"]
 mod failed_policy_tests;
 
+#[cfg(test)]
+#[path = "upstream/refusal_tests.rs"]
+mod refusal_tests;
+
 impl TaskExecutor {
     /// Durably attach the handle and its recovery descriptor to a working row.
     ///

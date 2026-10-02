@@ -416,6 +416,7 @@ async fn t3cd_failed_snapshot_append_serves_nothing() {
             crate::config::FailsafeConfig::default(),
             Duration::from_secs(300),
         )
+        .expect("the registry pairs with the config")
         .with_identity_grant_sink_opt(sink);
         let _ = ctx.reload_identity_grants().await;
         assert!(
@@ -454,6 +455,7 @@ async fn a_tolerated_missing_grant_file_still_reloads() {
         crate::config::FailsafeConfig::default(),
         Duration::from_secs(300),
     )
+    .expect("the registry pairs with the config")
     .with_identity_grant_sink_opt(s.sink.clone());
     let _ = ctx.reload_identity_grants().await;
 
@@ -472,6 +474,7 @@ async fn reload_with(config: &Config, sink: Option<Arc<crate::config_reload::Ide
         crate::config::FailsafeConfig::default(),
         Duration::from_secs(300),
     )
+    .expect("the registry pairs with the config")
     .with_identity_grant_sink_opt(sink);
     let _ = ctx.reload_identity_grants().await;
 }

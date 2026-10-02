@@ -25,9 +25,12 @@ line listing the five forced controls and their effective values. When `hardened
 1. **Preset floor.** `monitor_only`/`local_developer`/`audit_only` become `team_shared`;
    `team_shared`/`enterprise_strict` are kept; `non_bypassable=true`.
 2. **Signing.** `message_signing.enabled` is forced; no secret refuses start. Every successful
-   `tools/call` result on both routes is signed with the v2 MAC (`sign_json_rpc_response_at`);
-   its nonce comes from `params._meta["io.mcp-gateway/nonce"]` and is checked before dispatch,
-   like `gateway_invoke`'s (`meta_mcp/signing.rs:48-60`). `require_nonce` stays operator choice.
+   `tools/call` result on both routes whose nonce was admitted is signed with the v2 MAC
+   (`sign_json_rpc_response_at`); its nonce comes from `params._meta["io.mcp-gateway/nonce"]` and
+   is checked before dispatch, like `gateway_invoke`'s (`meta_mcp/signing.rs:48-60`);
+   an answer given before admission (the task-augmented gate's challenge or refusal and, on the
+   direct route, a tool-policy or undeclared-key refusal) is delivered unsigned and leaves the
+   nonce unspent (increment 5, row 7). `require_nonce` stays operator choice.
 3. **Anomaly blocking.** `firewall.enabled` and `anomaly_detection` are forced; the block
    threshold is 1.0 unless set within `[0.9, 1.0]`. At 1.0 only a transition never seen after a
    warmed predecessor blocks; at 0.95 all 20 distinct successors of a diverse predecessor would.
@@ -58,7 +61,7 @@ line listing the five forced controls and their effective values. When `hardened
    with the policy on the backend HTTP client (`transport/http/mod.rs:632`) and OAuth client
    (`backend/lifecycle.rs:526`); websocket validates once, connects TCP to that address, then
    runs TLS and upgrade with the original SNI/Host (`client_async_tls`). IP literals are checked
-   before backend start; before OAuth discovery, registration (`oauth/client/mod.rs:1126`) and
+   before backend start; before OAuth discovery, registration (the discovered registration endpoint, `oauth/client/destination.rs` `check_advertised_endpoints`) and
    token requests; and on each redirect hop (`ssrf/redirect.rs:54`). Denial: typed error →
    `-32600 "SSRF blocked"`. stdio unaffected.
 5. **Per-caller identity.** Every HTTP MCP request on both routes must resolve a grant subject
@@ -155,13 +158,25 @@ CHANGELOG `[Unreleased]`; OWASP ASI03/ASI07/ASI10 cite this.
 | 9 | subjects behind one token get separate buckets and sessions; same subject across token exchanges keeps one bucket; same subject, two credentials with different scopes, never share a session | `caller_key_separates_subjects`, `cross_subject_session_refused`, `token_exchange_keeps_bucket`, `same_subject_other_credential_new_session` | key on the credential / drop the credential from session ownership |
 | 10 | no elicitation: refused before session on POST and GET; on the direct route every legacy request except an elicitation-declaring `initialize` is refused | `hardened_refuses_legacy_without_elicitation_no_session`, `..._get`, `hardened_direct_legacy_refused` | check after mint / skip GET / skip direct |
 | 11 | a legacy-shaped destructive call is refused | `hardened_legacy_confirmation_policy_refuses` | keep `for_legacy()` |
-| 12 | private hostname or literal refused at start, OAuth discovery, registration, redirect; websocket keeps SNI; an `HTTPS_PROXY` env does not bypass the policy | `hardened_private_destination_refused_everywhere`, `pinned_websocket_keeps_sni`, `proxy_env_does_not_bypass_policy` | skip registration / connect by IP / drop `no_proxy` |
+| 12 | private hostname or literal refused at start, OAuth discovery, registration, redirect; websocket keeps SNI; an `HTTPS_PROXY` env does not bypass the policy | `hardened_startup_backend_is_pinned`, `hardened_oauth_refuses_private_authorization_server`, `hardened_oauth_refuses_private_registration`, `hardened_oauth_client_refuses_a_literal_redirect`, `pinned_websocket_keeps_sni`, `proxy_env_does_not_bypass_policy` | skip registration / connect by IP / drop `no_proxy` |
 | 12b | under hardened, a set `capabilities.egress_proxy` refuses startup (#1881) | `hardened_refuses_capability_egress_proxy` | accept the key under hardened |
 | 13 | listed backend reaches an RFC 1918 literal and hostname but never 169.254.169.254 | `listed_private_backend_policy` | apply the list to the resolver only |
 | 14 | a posture change on reload is refused | `reload_refuses_posture_change` | drop the posture diff check |
 | 15 | the WARN and doctor agree | `doctor_and_startup_share_unhardened_predicate` (table over auth shapes) | doctor passes `has_oidc=false` |
 | 16 | `standard` applies none of the posture overrides (rows 5-8, 10-14); row 9's `CallerKey` is posture-independent | `standard_posture_applies_no_override` | apply any override under standard |
 | 17 | each startup refusal fires: no firewall feature, short secret, no configured backend named, block threshold < 0.9 | `hardened_startup_refusals` (table) | drop any one check |
+
+As built (MIK-7633). Rows 3c and 4c run on the firewall a hardened `Config::load` produces
+(`src/security/firewall/anomaly_learning_tests.rs`). Row 15 is two tests over one table: the
+startup warning is crate-private and `doctor` lives in the binary, so one test cannot drive
+both. `src/security/posture_auth_shapes_tests.rs` is the single table, declared by `#[path]` from
+`posture.rs` and `commands/doctor/posture.rs`; it is read by `startup_warn_matches_unhardened_table`
+and `doctor_row_matches_unhardened_table`. Row 17's short secret is set under `enabled: false`,
+so only the posture's forcing makes it refuse.
+Row 9's session half is also driven under `hardened`, where a resume never mints:
+`hardened_resume_refuses_another_owner` (`src/gateway/router/hardened_elicitation_tests.rs`)
+has a second personal key name the first key's session on POST and GET, and both are refused.
+Row 12 has one test per destination check rather than one test for all of them.
 
 ## 7. Out of scope: forced `require_nonce`; tracker persistence, cross-replica state (new store);
 A2A; stdio identity; #1441; ASI04; the `direct:{backend}` fix itself (#1785; `CallerKey` is here).

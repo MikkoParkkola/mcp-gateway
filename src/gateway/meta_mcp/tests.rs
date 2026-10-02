@@ -50,6 +50,7 @@ fn allow_all_ctx_named<'a>(
         agent_declared: None,
         grant_subject: None,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -84,6 +85,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         agent_declared: None,
         grant_subject: None,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: None,
         is_admin: false,
         input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -808,6 +810,7 @@ providers:
                     agent_declared: None,
                     grant_subject: Some(subject),
                     stdio_nonce: None,
+                    caller_key: None,
                     verified_identity: None,
                     is_admin: false,
                     input_capabilities: crate::protocol::meta::Declared::NONE,
@@ -1407,13 +1410,16 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
 
     let registry = Arc::new(BackendRegistry::new());
     let live_config = Arc::new(LiveConfig::new(old_config.clone()));
-    let reload_ctx = Arc::new(ReloadContext::new(
-        config_path,
-        Arc::clone(&live_config),
-        Arc::clone(&registry),
-        old_config.failsafe.clone(),
-        old_config.meta_mcp.cache_ttl,
-    ));
+    let reload_ctx = Arc::new(
+        ReloadContext::new(
+            config_path,
+            Arc::clone(&live_config),
+            Arc::clone(&registry),
+            old_config.failsafe.clone(),
+            old_config.meta_mcp.cache_ttl,
+        )
+        .expect("the registry pairs with the config"),
+    );
 
     let mm = MetaMcp::new(Arc::clone(&registry));
     mm.set_reload_context(reload_ctx);
@@ -3116,6 +3122,7 @@ fn allow_all_ctx_declaring(
         agent_declared: None,
         grant_subject: None,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity: Some(&NAMED_CALLER),
         is_admin: false,
         input_capabilities: declared,
