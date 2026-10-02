@@ -29,7 +29,9 @@ fn registry(name: &str, user_env: &[(&str, &str)]) -> ResolvedBackend {
 fn config_with_env_file(vars: &str) -> (tempfile::TempDir, Config) {
     let dir = tempfile::tempdir().unwrap();
     let path: PathBuf = dir.path().join("secrets.env");
-    std::fs::write(&path, vars).unwrap();
+    // Owner-only: a group- or world-readable env file is refused (CONFIG.2),
+    // which would fall back to the process environment.
+    crate::gateway::test_helpers::write_owner_only(&path, vars).unwrap();
     let config = Config {
         env_files: vec![path.display().to_string()],
         ..Config::default()
