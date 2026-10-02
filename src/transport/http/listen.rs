@@ -161,9 +161,8 @@ async fn read_stream(
     let mut decoder = SseDecoder::new(FRAME_CAP);
     let mut first = true;
     loop {
-        let chunk = match response.chunk().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) | Err(_) => return,
+        let Ok(Some(chunk)) = response.chunk().await else {
+            return;
         };
         let Ok(events) = decoder.push(&chunk) else {
             debug!("listen frame over the cap; ending the stream");
