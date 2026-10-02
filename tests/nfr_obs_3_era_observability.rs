@@ -29,6 +29,13 @@ use tracing::subscriber::set_global_default;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::registry::Registry;
 
+// A shell-script peer on a stalled Windows runner can answer the start probe
+// after the 2 s cap; the probe then reads as silence and the era stays
+// assumed, so a read that should hit the cache misses (MIK-7774).
+#[path = "common/era_probe_cap.rs"]
+mod era_probe_cap;
+use era_probe_cap::widen_probe_cap;
+
 // ---------------------------------------------------------------------------
 // Captured events — the second observability surface
 // ---------------------------------------------------------------------------
@@ -234,6 +241,7 @@ impl Fixture {
     }
 
     fn backend(&self, name: &str) -> Backend {
+        widen_probe_cap();
         let config = BackendConfig {
             description: format!("era observability fixture: {name}"),
             enabled: true,
