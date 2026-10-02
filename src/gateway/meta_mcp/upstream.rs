@@ -448,7 +448,7 @@ impl MetaMcp {
             server: server.to_owned(),
             tool: tool.to_owned(),
         };
-        let _ = &target; // MUTANT MIK-7706: inspection removed
+        let _ = (&target, &mut gated); // MUTANT MIK-7706: inspection removed
         Ok(gated)
     }
 
