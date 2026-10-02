@@ -33,10 +33,14 @@ mod anomaly_gate;
 use anomaly_config::{default_anomaly_min_observations, default_anomaly_threshold};
 pub mod audit;
 pub mod budget_guard;
-// Pure module; increment 2 of the ASI10 design adds its first caller, at
-// which point this `expect` stops being fulfilled and must be removed.
+// The direct route calls the detector through `collusion_gate` (increment
+// 2a-i). Its counters and `RelayFinding::tool` have no reader until the
+// metrics increment, which is when this `expect` must be removed.
 #[cfg_attr(not(test), expect(dead_code))]
 mod collusion;
+mod collusion_gate;
+pub(crate) use collusion_gate::RelayCaller;
+pub use collusion_gate::{CollusionAction, CollusionConfig};
 pub mod input_scanner;
 pub mod memory_scanner;
 pub mod principal_window;
@@ -134,6 +138,18 @@ pub struct FirewallConfig {
     /// [`budget_guard`] for why the key is the principal, not the session.
     #[serde(default)]
     pub budget: budget_guard::BudgetGuardConfig,
+    /// Verbatim cross-principal relay detection (OWASP ASI10, COLLUDE.1).
+    ///
+    /// ```yaml
+    /// security:
+    ///   firewall:
+    ///     collusion:
+    ///       action: observe          # off (default) | observe | block
+    ///       sources: ["crm:*"]       # results always treated as sensitive
+    ///       non_egress: ["notes:read_*"]
+    /// ```
+    #[serde(default)]
+    pub collusion: CollusionConfig,
 }
 
 impl Default for FirewallConfig {
@@ -153,6 +169,7 @@ impl Default for FirewallConfig {
             anomaly_min_observations: default_anomaly_min_observations(),
             tenant_guard: tenant_guard::TenantGuardConfig::default(), // opt-in: enabled=false
             budget: budget_guard::BudgetGuardConfig::default(),
+            collusion: CollusionConfig::default(), // opt-in: action=off
         }
     }
 }
@@ -213,6 +230,9 @@ pub enum ScanType {
     CrossTenantReach,
     /// Principal exceeded its call budget for the window (MIK-7215.CONTROL.2).
     BudgetExceeded,
+    /// Content delivered to one principal left through another's call
+    /// (OWASP ASI10, COLLUDE.1).
+    CollusionRelay,
 }
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
@@ -243,6 +263,8 @@ pub struct Firewall {
     tenant_guard: tenant_guard::TenantGuard,
     /// Principal-keyed call budget (MIK-7215.CONTROL.2).
     budget: Option<budget_guard::BudgetGuard>,
+    /// Relay detection state (OWASP ASI10, COLLUDE.1).
+    relay: collusion_gate::RelayGate,
     /// Structured audit logger.
     audit: Option<audit::AuditLogger>,
     #[cfg(test)]
@@ -382,6 +404,7 @@ impl Firewall {
             .budget
             .enabled
             .then(|| budget_guard::BudgetGuard::new(config.budget.clone()));
+        let relay = collusion_gate::RelayGate::from_config(&config.collusion);
 
         Self {
             config,
@@ -394,6 +417,7 @@ impl Firewall {
             anomaly,
             tenant_guard,
             budget,
+            relay,
             audit,
             #[cfg(test)]
             response_observer: response_observer::ResponseObserver::default(),
@@ -704,12 +728,23 @@ impl FirewallVerdict {
     /// Callers should use JSON-RPC error code `-32002` for anomaly blocks to
     /// distinguish them from generic security blocks (`-32600`).
     pub fn is_anomaly_block(&self) -> bool {
+        self.blocked_only_by(|_| false)
+    }
+
+    /// [`Self::is_anomaly_block`] widened to relay findings (OWASP ASI10,
+    /// COLLUDE.1): every finding is a high `SequenceAnomaly` or a
+    /// `CollusionRelay`. Crate-internal so the public meaning stays put.
+    pub(crate) fn is_asi10_block(&self) -> bool {
+        self.blocked_only_by(|f| f.scan_type == ScanType::CollusionRelay)
+    }
+
+    fn blocked_only_by(&self, also: impl Fn(&Finding) -> bool) -> bool {
         !self.allowed
             && !self.findings.is_empty()
-            && self
-                .findings
-                .iter()
-                .all(|f| f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
+            && self.findings.iter().all(|f| {
+                (f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
+                    || also(f)
+            })
     }
 
     /// Returns `true` when a blocking verdict must stop the response payload
@@ -795,55 +830,7 @@ const fn decide_firewall_action(
 }
 
 #[cfg(kani)]
-mod verification {
-    use super::*;
-
-    fn any_firewall_action() -> FirewallAction {
-        match kani::any::<u8>() % 3 {
-            0 => FirewallAction::Allow,
-            1 => FirewallAction::Warn,
-            _ => FirewallAction::Block,
-        }
-    }
-
-    fn any_severity() -> Severity {
-        match kani::any::<u8>() % 3 {
-            0 => Severity::High,
-            1 => Severity::Medium,
-            _ => Severity::Low,
-        }
-    }
-
-    #[kani::proof]
-    fn firewall_action_resolution_contract() {
-        let has_findings: bool = kani::any();
-        let has_matching_rule: bool = kani::any();
-
-        let highest_severity = if has_findings {
-            Some(any_severity())
-        } else {
-            None
-        };
-        let matching_rule_action = if has_matching_rule {
-            Some(any_firewall_action())
-        } else {
-            None
-        };
-
-        let action = decide_firewall_action(matching_rule_action, highest_severity);
-
-        match highest_severity {
-            None => assert_eq!(action, FirewallAction::Allow),
-            Some(severity) => {
-                if let Some(rule_action) = matching_rule_action {
-                    assert_eq!(action, rule_action);
-                } else {
-                    assert_eq!(action, default_action_for_severity(severity));
-                }
-            }
-        }
-    }
-}
+mod verification;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
