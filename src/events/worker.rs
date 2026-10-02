@@ -140,7 +140,7 @@ impl EventsHub {
         };
         if !services.admits_subscription(&sub, &record.backend).await {
             services.audit_attempt(&refused("access_revoked")).await;
-            if !self.revoke(&sub.id).await {
+            if !self.revoke(&sub).await {
                 // The removal did not reach the store: the record goes back to
                 // pending, so the next attempt re-checks and revokes again.
                 let next = Utc::now() + chrono::TimeDelta::seconds(30);

@@ -148,22 +148,18 @@ pub(super) async fn key_server_credential(
     token: &str,
 ) -> Option<(AuthenticatedClient, KeyServerSubject, &'static str)> {
     let ks = state.key_server.as_ref()?;
-    let (mut client, identity, exp, jti, via) =
+    let (mut client, identity, exp, jti, issued_at, via) =
         if let Some((client, temporary)) = ks.validate_token(token).await {
             let (exp, jti) = (Some(temporary.exp), Some(temporary.jti.clone()));
-            (
-                client,
-                temporary.identity.clone(),
-                exp,
-                jti,
-                "temporary token",
-            )
+            let identity = temporary.identity.clone();
+            (client, identity, exp, jti, None, "temporary token")
         } else if ks.config.delegated_bearer && super::looks_like_jwt(token) {
             // Gated on config and a cheap JWT-shape check so JWKS verification
             // never runs on an opaque or static token.
             let (client, identity) = ks.verify_bearer_identity(token).await?;
             let exp = bearer_deadline(token, ks.config.max_oidc_token_age_secs);
-            (client, identity, exp, None, "delegated OIDC bearer")
+            let iat = jwt_claim(token, "iat");
+            (client, identity, exp, None, iat, "delegated OIDC bearer")
         } else {
             return None;
         };
@@ -177,8 +173,13 @@ pub(super) async fn key_server_credential(
     Some((
         client,
         KeyServerSubject {
+            facts: CredentialFacts {
+                expires_at,
+                jti,
+                issued_at,
+                provider_sha256: provider_fingerprint(ks, &identity.issuer),
+            },
             identity,
-            facts: CredentialFacts { expires_at, jti },
         },
         via,
     ))
@@ -192,6 +193,21 @@ pub(super) async fn key_server_credential(
 pub(crate) struct CredentialFacts {
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub jti: Option<String>,
+    /// A delegated bearer's `iat`, re-checked against the running max age.
+    pub issued_at: Option<u64>,
+    /// The verifying provider's configuration digest: a delivery re-check
+    /// refuses the binding once a restart changes what that provider accepts.
+    pub provider_sha256: Option<String>,
+}
+
+/// SHA-256 of the configuration of the provider that verifies `issuer`.
+pub(crate) fn provider_fingerprint(
+    ks: &crate::key_server::KeyServer,
+    issuer: &str,
+) -> Option<String> {
+    let provider = ks.config.oidc.iter().find(|p| p.issuer == issuer)?;
+    let bytes = serde_json::to_vec(provider).ok()?;
+    Some(crate::hashing::sha256_hex(&bytes))
 }
 
 /// The verified subject behind a key-server credential, and its facts.
@@ -212,18 +228,22 @@ impl KeyServerSubject {
 /// accepted: its `exp`, or `iat + max_age` when that is sooner (the
 /// verifier's own replay bound, `TokenAgeCap::MaxIat`).
 fn bearer_deadline(token: &str, max_age: u64) -> Option<u64> {
+    let exp = jwt_claim(token, "exp")?;
+    let aged = jwt_claim(token, "iat").map(|iat| iat.saturating_add(max_age));
+    Some(aged.map_or(exp, |aged| exp.min(aged)))
+}
+
+/// A numeric claim of a JWT the key server has already verified.
+fn jwt_claim(token: &str, claim: &str) -> Option<u64> {
     use base64::Engine as _;
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload.trim_end_matches('='))
         .ok()?;
-    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    let exp = claims.get("exp")?.as_u64()?;
-    let aged = claims
-        .get("iat")
-        .and_then(serde_json::Value::as_u64)
-        .map(|iat| iat.saturating_add(max_age));
-    Some(aged.map_or(exp, |aged| exp.min(aged)))
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()?
+        .get(claim)?
+        .as_u64()
 }
 
 #[cfg(test)]

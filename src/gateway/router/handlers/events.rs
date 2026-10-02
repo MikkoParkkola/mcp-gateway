@@ -53,6 +53,8 @@ impl Presented {
         let facts = self.facts.clone().unwrap_or(CredentialFacts {
             expires_at: None,
             jti: None,
+            issued_at: None,
+            provider_sha256: None,
         });
         let expires_at = match kind {
             CredentialKind::DashboardSession => {
@@ -73,6 +75,8 @@ impl Presented {
                     subject: id.subject.clone(),
                     email: id.email.clone(),
                     groups: id.groups.clone(),
+                    issued_at: facts.issued_at,
+                    provider_sha256: facts.provider_sha256.clone(),
                 })
             }
             CredentialKind::StaticBearer => Some(LiveBinding::StaticBearer),

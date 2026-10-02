@@ -123,6 +123,8 @@ impl Services {
                 subject,
                 email,
                 groups,
+                issued_at,
+                provider_sha256,
             } => credentials.key_server.as_ref().is_some_and(|ks| {
                 let identity = crate::key_server::oidc::VerifiedIdentity {
                     subject: subject.clone(),
@@ -131,7 +133,17 @@ impl Services {
                     groups: groups.clone(),
                     issuer: issuer.clone(),
                 };
+                // The provider must still accept what it accepted, and the
+                // bearer must still be young enough for the running max age.
+                let provider_same = provider_sha256.is_some()
+                    && crate::gateway::auth::live::provider_fingerprint(ks, issuer)
+                        == *provider_sha256;
+                let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(u64::MAX);
+                let young = issued_at
+                    .is_none_or(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
                 ks.config.delegated_bearer
+                    && provider_same
+                    && young
                     && ks
                         .policy
                         .resolve_scopes(
@@ -465,9 +477,19 @@ mod tests {
     }
 
     fn key_server(delegated: bool) -> Arc<crate::key_server::KeyServer> {
+        key_server_with(delegated, "a", 3600)
+    }
+
+    fn key_server_with(
+        delegated: bool,
+        audience: &str,
+        max_age: u64,
+    ) -> Arc<crate::key_server::KeyServer> {
         let config = serde_json::from_value(serde_json::json!({
             "enabled": true,
             "delegated_bearer": delegated,
+            "max_oidc_token_age_secs": max_age,
+            "oidc": [{"issuer": "https://idp", "audiences": [audience]}],
             "policies": [{
                 "match": {"issuer": "https://idp", "domain": "corp.example"},
                 "scopes": {"backends": ["x"]}
@@ -549,38 +571,70 @@ mod tests {
             "no key server, nothing to vouch for the token"
         );
 
-        // Delegated bearer: the live policy must still grant the backend.
-        let oidc = bound(
-            Kind::OidcBearer,
-            Some(LiveBinding::OidcBearer {
-                issuer: identity.issuer.clone(),
-                subject: identity.subject.clone(),
-                email: identity.email.clone(),
-                groups: Vec::new(),
-            }),
-        );
-        let delegated = with(LiveCredentials {
-            key_server: Some(key_server(true)),
-            ..LiveCredentials::default()
-        });
-        assert!(
-            delegated.admits_subscription(&oidc, "x").await,
-            "the domain rule grants x"
-        );
-        assert!(
-            !delegated.admits_subscription(&oidc, "y").await,
-            "no grant for y"
-        );
-        let disabled = with(LiveCredentials {
-            key_server: Some(key_server(false)),
-            ..LiveCredentials::default()
-        });
-        assert!(
-            !disabled.admits_subscription(&oidc, "x").await,
-            "delegated bearers switched off"
-        );
         let unbound = bound(Kind::KeyServerToken, None);
         assert!(!live.admits_subscription(&unbound, "x").await);
+    }
+
+    /// Design F9 (MIK-7769): a delegated bearer is re-checked against the
+    /// running key server: its policy grant, the delegated-bearer switch, the
+    /// verifying provider's configuration and the max token age.
+    #[tokio::test]
+    async fn a_delegated_bearer_is_rechecked_against_the_running_key_server() {
+        use crate::security::audit::CredentialKind as Kind;
+        let ks = key_server(true);
+        let now = u64::try_from(chrono::Utc::now().timestamp()).expect("now");
+        let oidc = |issued_at| {
+            bound(
+                Kind::OidcBearer,
+                Some(LiveBinding::OidcBearer {
+                    issuer: "https://idp".into(),
+                    subject: "u".into(),
+                    email: "u@corp.example".into(),
+                    groups: Vec::new(),
+                    issued_at: Some(issued_at),
+                    provider_sha256: crate::gateway::auth::live::provider_fingerprint(
+                        &ks,
+                        "https://idp",
+                    ),
+                }),
+            )
+        };
+        let running = |ks| {
+            with(LiveCredentials {
+                key_server: Some(ks),
+                ..LiveCredentials::default()
+            })
+        };
+        let fresh = oidc(now);
+        assert!(
+            running(key_server(true))
+                .admits_subscription(&fresh, "x")
+                .await
+        );
+        assert!(
+            !running(key_server(true))
+                .admits_subscription(&fresh, "y")
+                .await,
+            "no grant"
+        );
+        assert!(
+            !running(key_server(false))
+                .admits_subscription(&fresh, "x")
+                .await,
+            "delegated bearers switched off"
+        );
+        assert!(
+            !running(key_server_with(true, "b", 3600))
+                .admits_subscription(&fresh, "x")
+                .await,
+            "the provider now expects another audience"
+        );
+        assert!(
+            !running(key_server_with(true, "a", 60))
+                .admits_subscription(&oidc(now - 600), "x")
+                .await,
+            "older than the running max age"
+        );
     }
 
     /// Design F9 (MIK-7769): a dashboard session's subscription stops once the

@@ -85,6 +85,12 @@ pub(crate) enum LiveBinding {
         subject: String,
         email: String,
         groups: Vec<String>,
+        /// The bearer's `iat`: the running max token age still bounds it.
+        #[serde(default)]
+        issued_at: Option<u64>,
+        /// The verifying provider's configuration digest at subscribe time.
+        #[serde(default)]
+        provider_sha256: Option<String>,
     },
     /// The static bearer; its principal is the credential principal.
     StaticBearer,
