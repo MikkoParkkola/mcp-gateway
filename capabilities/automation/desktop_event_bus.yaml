@@ -1,12 +1,12 @@
-sha256: 212c4ac81d40d178db2ed4b362d679bf581a842bf9194473123c9c3931f7b055
+sha256: f8efc7918c687a27cfc61c5a7ef84c79de4ea3842637a08af8ac6283a07fbb11
 fulcrum: "1.0"
 name: desktop_event_bus
 description: >
   Desktop events from a Mac (app launch, activate and quit, window focus and creation,
   system notifications), delivered as MCP events that agents subscribe to with events/subscribe.
   Fed by a Hammerspoon script that signs each event; see docs/capabilities/desktop_event_bus.md.
-  Electron DOM mutations and automation rules are not provided: no tool produces DOM events, and
-  rules belong to the subscribing agent.
+  Electron DOM mutations over CDP and automation rules are not provided: no tool produces DOM
+  events, and rules belong to the subscribing agent.
 schema:
   input:
     type: object
