@@ -1,0 +1,5 @@
+head_sha	b90d471ac2f9d348bb522a638a0472bdd81422f4
+# mutants for #2581
+EMPTYTOKEN	linux	EMPTYTOKEN.patch	--lib identity_propagation::token_exchange::refusal_tests::an_unparsable_or_empty_sts_answer_is_refused_and_a_good_one_is_not -- --exact
+EXPIREDSERVED	linux	EXPIREDSERVED.patch	--lib identity_propagation::token_exchange::refusal_tests::an_expired_cached_exchange_is_never_served -- --exact
+EXPIREDLATE	linux	EXPIREDLATE.patch	--lib identity_propagation::token_exchange::refusal_tests::an_expired_cached_exchange_is_never_served -- --exact

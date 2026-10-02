@@ -1,0 +1,13 @@
+diff --git a/src/identity_propagation/token_exchange.rs b/src/identity_propagation/token_exchange.rs
+index f4e4ce430..a12597982 100644
+--- a/src/identity_propagation/token_exchange.rs
++++ b/src/identity_propagation/token_exchange.rs
+@@ -320,7 +320,7 @@ impl TokenExchangeStrategy {
+         let body: TokenExchangeResponseBody = resp.json().await.map_err(|e| {
+             PropagationError::Refuse(format!("token-exchange response unparsable: {e}"))
+         })?;
+-        if body.access_token.trim().is_empty() {
++        if false {
+             return Err(PropagationError::Refuse(
+                 "token-exchange response missing access_token".to_string(),
+             ));
