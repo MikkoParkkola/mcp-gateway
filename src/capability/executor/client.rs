@@ -8,6 +8,7 @@ use std::time::Duration;
 use reqwest::Client;
 
 use crate::security::validate_url_not_ssrf;
+use crate::{Error, Result};
 
 /// Build a pooled HTTP client suitable for capability execution.
 ///
@@ -48,4 +49,97 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
         }))
         .build()
         .expect("Failed to create HTTP client")
+}
+
+/// Maximum number of send attempts (1 initial + 2 retries) for transient
+/// outbound transport failures.
+pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
+
+/// Send an outbound HTTP request, retrying transient transport failures with
+/// exponential backoff, and recording the transport outcome on `health`.
+///
+/// Capability calls run inside the gateway's own tokio runtime, so a transient
+/// connect failure reaching an upstream (e.g. a momentary blip reaching
+/// `api.linear.app` under host load) otherwise surfaces directly as a
+/// `BACKEND_ERROR` to the caller (MIK-5081).
+///
+/// Retry policy:
+/// - **Connection** failures are always retried — no request bytes were sent,
+///   so a retry is side-effect-free.
+/// - **Timeout** failures are retried only when `retry_timeouts` is true (i.e.
+///   the request is idempotent). A timeout on a non-idempotent POST may mean
+///   the upstream already processed it, so blindly replaying it could duplicate
+///   a side effect.
+/// - HTTP error *statuses* (4xx/5xx) are returned unchanged (never retried) and
+///   count as a live backend for health purposes.
+///
+/// Health: a transport success (any HTTP status) records success; exhausting
+/// retries records a failure. The request is cloned per attempt; a
+/// non-cloneable body is sent once.
+/// Render an outbound transport error without the URL it was built from.
+///
+/// `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim
+/// (`reqwest-0.13.4/src/error.rs:279-280`), and reqwest's own docs on
+/// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
+/// Backend URLs here are operator-configured and a query-string API key is a
+/// common shape, so the raw error must never reach a log sink or a client.
+fn redact_url(e: reqwest::Error) -> reqwest::Error {
+    e.without_url()
+}
+
+pub(super) async fn send_with_retry(
+    request: reqwest::RequestBuilder,
+    label: &str,
+    retry_timeouts: bool,
+    health: &crate::failsafe::HealthTracker,
+) -> Result<reqwest::Response> {
+    let started = std::time::Instant::now();
+    let mut backoff_ms: u64 = 100;
+    for attempt in 1..=MAX_SEND_ATTEMPTS {
+        let Some(attempt_req) = request.try_clone() else {
+            // Non-cloneable body: a single attempt is the best we can do.
+            return match request.send().await {
+                Ok(resp) => {
+                    health.record_success(started.elapsed());
+                    Ok(resp)
+                }
+                Err(e) => Err(
+                    crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
+                        health.record_failure();
+                        Error::Transport(format!("{label} failed: {}", redact_url(e)))
+                    }),
+                ),
+            };
+        };
+        match attempt_req.send().await {
+            Ok(resp) => {
+                health.record_success(started.elapsed());
+                return Ok(resp);
+            }
+            Err(e) => {
+                // A refused destination is refused again: one attempt, no health mark.
+                if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+                    return Err(refused);
+                }
+                let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+                let e = redact_url(e);
+                if transient && attempt < MAX_SEND_ATTEMPTS {
+                    tracing::warn!(
+                        label = label,
+                        attempt = attempt,
+                        backoff_ms = backoff_ms,
+                        error = %e,
+                        "transient outbound transport error; retrying"
+                    );
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms *= 2;
+                    continue;
+                }
+                health.record_failure();
+                return Err(Error::Transport(format!("{label} failed: {e}")));
+            }
+        }
+    }
+    // The final attempt always returns above; the loop cannot fall through.
+    unreachable!("send_with_retry exhausted attempts without returning")
 }
