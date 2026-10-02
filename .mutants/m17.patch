@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/events_hook.rs b/src/gateway/meta_mcp/events_hook.rs
+index 15bd068b5..6988b218c 100644
+--- a/src/gateway/meta_mcp/events_hook.rs
++++ b/src/gateway/meta_mcp/events_hook.rs
+@@ -43,8 +43,7 @@ impl MetaMcp {
+             .flatten();
+         hub.search(query, limit, |scope| match scope {
+             Visibility::Backend(backend) => {
+-                self.admits_backend(backend, caller.scope(), session_id)
+-                    && hub.live_admits(api_key.as_ref(), backend)
++                true
+             }
+             Visibility::Owner => caller.credential_principal.is_some(),
+             Visibility::Operator => false,

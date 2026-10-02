@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/search.rs b/src/gateway/meta_mcp/search.rs
+index 2936e7d90..20cde64bb 100644
+--- a/src/gateway/meta_mcp/search.rs
++++ b/src/gateway/meta_mcp/search.rs
+@@ -844,7 +844,6 @@ impl MetaMcp {
+         // Event types join after the limit: a handful, and never crowded out.
+         let events = self.event_search_matches(&query, usize::MAX, caller, session_id);
+         let total_found = total_found + events.len();
+-        matches.extend(events.into_iter().take(limit));
+ 
+         // Annotate tool families with differential descriptions so LLMs can
+         // distinguish siblings (e.g. gmail_search vs gmail_send vs gmail_batch_modify).

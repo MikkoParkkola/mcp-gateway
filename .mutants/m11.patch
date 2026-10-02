@@ -1,0 +1,12 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 80fc75ab6..277f89a7a 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -87,7 +87,6 @@ impl EventsHub {
+         let query = query.to_lowercase();
+         self.catalogue()
+             .iter()
+-            .filter(|d| visible(&d.scope))
+             .filter(|d| {
+                 d.name.to_lowercase().contains(&query)
+                     || d.description.to_lowercase().contains(&query)

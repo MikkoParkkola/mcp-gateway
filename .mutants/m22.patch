@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index a428a2e5b..3a95f5960 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -128,7 +128,7 @@ impl EventsHub {
+         body["data"] = data;
+         let bytes = serde_json::to_vec(&body).map_err(|_| ReplayRefusal::Unavailable)?;
+         if bytes.len() > MAX_BODY {
+-            return Err(ReplayRefusal::TooLarge);
++            ();
+         }
+         let record = OutboxRecord {
+             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),

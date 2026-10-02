@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/events.rs b/src/gateway/ui/events.rs
+index b0576ed93..24d5fb884 100644
+--- a/src/gateway/ui/events.rs
++++ b/src/gateway/ui/events.rs
+@@ -110,7 +110,7 @@ async fn replay_all(
+         Ok(hub) => hub,
+         Err(answer) => return *answer,
+     };
+-    let (Some("1"), Some(subscription)) = (query.all.as_deref(), query.subscription.as_deref())
++    let (_, Some(subscription)) = (query.all.as_deref(), query.subscription.as_deref())
+     else {
+         return flat_error(
+             StatusCode::BAD_REQUEST,

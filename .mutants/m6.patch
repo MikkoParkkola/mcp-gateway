@@ -1,0 +1,12 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 384428c1b..3e4463ba2 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -250,7 +250,6 @@ impl Store {
+             let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
+             return Err(error);
+         }
+-        state.dead.remove(event_id);
+         Ok(Revived::Written)
+     }
+ 

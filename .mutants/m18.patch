@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index a428a2e5b..193513c24 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -127,7 +127,7 @@ impl EventsHub {
+         }
+         body["data"] = data;
+         let bytes = serde_json::to_vec(&body).map_err(|_| ReplayRefusal::Unavailable)?;
+-        if bytes.len() > MAX_BODY {
++        if false && bytes.len() > MAX_BODY {
+             return Err(ReplayRefusal::TooLarge);
+         }
+         let record = OutboxRecord {

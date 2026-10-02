@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 384428c1b..e9c19cca0 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -217,7 +217,7 @@ impl Store {
+         if state
+             .dead
+             .get(event_id)
+-            .is_none_or(|(dead, _)| dead.dead_at != dead_at)
++            .is_none_or(|(_dead, _)| false)
+         {
+             return Ok(Revived::Missing);
+         }

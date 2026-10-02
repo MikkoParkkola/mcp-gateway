@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index a428a2e5b..1ae889b65 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -70,7 +70,7 @@ impl EventsHub {
+             .dead_summaries()
+             .into_iter()
+             .filter(|d| subscription.is_none_or(|s| d.subscription_id == s))
+-            .filter(|d| reason.is_none_or(|r| d.reason == r))
++            .filter(|_d| reason.is_none_or(|_r| true))
+             .map(|d| {
+                 json!({
+                     "eventId": d.event_id,

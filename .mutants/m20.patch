@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 384428c1b..27f50b9dd 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -231,7 +231,7 @@ impl Store {
+         }
+         // The same occurrence is already pending: nothing to place, and the
+         // dead letter is not dropped for a record that is not the replay.
+-        if state.outbox.contains_key(event_id) {
++        if false {
+             return Ok(Revived::AlreadyPending);
+         }
+         match self.enqueue_locked(&mut state, record, caps)? {

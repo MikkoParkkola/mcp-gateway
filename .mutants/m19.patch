@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 384428c1b..ddcaaf108 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -225,7 +225,7 @@ impl Store {
+         if !state
+             .subs
+             .get(&record.subscription_id)
+-            .is_some_and(|s| s.live(now))
++            .is_some()
+         {
+             return Ok(Revived::NoSubscription);
+         }

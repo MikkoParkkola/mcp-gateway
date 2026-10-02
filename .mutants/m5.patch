@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 384428c1b..400bfe3de 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -245,7 +245,7 @@ impl Store {
+         // rolls the new record back, so exactly one of the two stands.
+         // ponytail: a failed rollback unlink leaves a stray outbox file; the
+         // next claim of the same id finds it and delivers it once.
+-        if let Err(error) = remove_record_durable(&self.dead_dir, &OutboxRecord::file(event_id)) {
++        if let Err(error) = Ok::<(), std::io::Error>(()) {
+             state.outbox.remove(event_id);
+             let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
+             return Err(error);

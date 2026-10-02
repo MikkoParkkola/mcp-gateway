@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/search.rs b/src/gateway/meta_mcp/search.rs
+index 2936e7d90..ab6266539 100644
+--- a/src/gateway/meta_mcp/search.rs
++++ b/src/gateway/meta_mcp/search.rs
+@@ -403,7 +403,6 @@ impl MetaMcp {
+ 
+         let events = self.event_search_matches(&query, usize::MAX, caller, session_id);
+         let total_found = total_found + events.len();
+-        matches.extend(events.into_iter().take(limit));
+ 
+         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
+         self.inspect_discovery_value(&mut out)?;
