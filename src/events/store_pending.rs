@@ -96,6 +96,18 @@ fn dead_size(dead: &DeadLetter) -> u64 {
     serde_json::to_vec_pretty(dead).map_or(0, |b| u64::try_from(b.len()).unwrap_or(u64::MAX))
 }
 
+/// What [`Store::revive`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Revived {
+    Written,
+    /// The subscription is gone or expired.
+    NoSubscription,
+    /// The outbox is at a cap.
+    Full,
+    /// The dead letter was swept, evicted or replayed meanwhile.
+    Missing,
+}
+
 /// Whether `sub` may be attempted at `now`.
 fn sendable(sub: &Subscription, now: DateTime<Utc>) -> bool {
     sub.active && sub.live(now)
@@ -110,6 +122,15 @@ impl Store {
         caps: OutboxCaps,
     ) -> std::io::Result<Enqueued> {
         let mut state = self.state.lock();
+        self.enqueue_locked(&mut state, record, caps)
+    }
+
+    fn enqueue_locked(
+        &self,
+        state: &mut State,
+        record: OutboxRecord,
+        caps: OutboxCaps,
+    ) -> std::io::Result<Enqueued> {
         if !state.subs.contains_key(&record.subscription_id) {
             return Ok(Enqueued::NoSubscription);
         }
@@ -137,6 +158,48 @@ impl Store {
         state.outbox.insert(record.event_id.clone(), record);
         placed.durable()?;
         Ok(Enqueued::Written)
+    }
+
+    /// Every dead letter with its file size, oldest first.
+    pub(crate) fn dead_letters(&self) -> Vec<(DeadLetter, u64)> {
+        let state = self.state.lock();
+        let mut all: Vec<(DeadLetter, u64)> = state.dead.values().cloned().collect();
+        all.sort_by(|a, b| {
+            (a.0.dead_at, &a.0.record.event_id).cmp(&(b.0.dead_at, &b.0.record.event_id))
+        });
+        all
+    }
+
+    /// Move dead letter `event_id` back to the outbox as `record` (the same
+    /// event id, a fresh attempt count), in one locked step: the dead letter
+    /// leaves `dead/` only once the record is placed. `dead_at` names the
+    /// dead letter the caller scanned, so one buried again meanwhile is not
+    /// replayed on the old verdict.
+    pub(crate) fn revive(
+        &self,
+        event_id: &str,
+        dead_at: DateTime<Utc>,
+        record: OutboxRecord,
+        caps: OutboxCaps,
+    ) -> std::io::Result<Revived> {
+        let mut state = self.state.lock();
+        if !state
+            .dead
+            .get(event_id)
+            .is_some_and(|(dead, _)| dead.dead_at == dead_at)
+        {
+            return Ok(Revived::Missing);
+        }
+        match self.enqueue_locked(&mut state, record, caps)? {
+            Enqueued::Written => {}
+            Enqueued::NoSubscription => return Ok(Revived::NoSubscription),
+            Enqueued::DroppedGlobal | Enqueued::DroppedPerSubscription => {
+                return Ok(Revived::Full);
+            }
+        }
+        remove_record_durable(&self.dead_dir, &OutboxRecord::file(event_id))?;
+        state.dead.remove(event_id);
+        Ok(Revived::Written)
     }
 
     /// Due records, at most one per subscription not in `busy`, each the

@@ -38,7 +38,9 @@ pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
 pub use config_export::run_config_export;
 #[cfg(feature = "webui")]
-pub use dashboard_link::{LinkTlsFlags, dashboard_link_base, run_dashboard_link_command};
+pub use dashboard_link::{
+    LinkTlsFlags, dashboard_link_base, run_dashboard_link_command, run_dead_letters_command,
+};
 pub use doctor::{StdioProbe, run_doctor_command, run_doctor_shadow_command};
 pub use hash_key::run_hash_key_command;
 pub use identity::run_identity_command;

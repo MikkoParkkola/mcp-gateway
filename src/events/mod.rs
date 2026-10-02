@@ -9,6 +9,7 @@
 //! only: webhook mode needs an authenticated principal, which a stdio
 //! session does not carry.
 
+mod admin;
 mod client;
 mod dedupe;
 mod fanout;
@@ -31,11 +32,12 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+pub(crate) use admin::{ReplayRefusal, is_dead_reason};
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
 pub(crate) use services::{LiveCredentials, Services};
-pub(crate) use types::RpcError;
+pub(crate) use types::{RpcError, Visibility};
 pub(crate) use webhook_source::Inbound;
 
 use crate::config::EventsConfig;

@@ -155,8 +155,35 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 ///
 /// A message carrying the gateway's status or the transport failure.
 pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
+    let body = admin_call(
+        reqwest::Method::POST,
+        base,
+        "/ui/api/dashboard-link",
+        token,
+        tls,
+    )
+    .await?;
+    body["link"]
+        .as_str()
+        .map(ToString::to_string)
+        .ok_or_else(|| "the gateway's answer carried no link".to_string())
+}
+
+/// One admin request to the gateway at `base`; the JSON answer of a success.
+///
+/// # Errors
+///
+/// A message carrying the gateway's status and reason, or the transport
+/// failure.
+pub(crate) async fn admin_call(
+    method: reqwest::Method,
+    base: &str,
+    path: &str,
+    token: &str,
+    tls: &LinkTls,
+) -> Result<serde_json::Value, String> {
     check_target(base)?;
-    let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
+    let endpoint = format!("{}{path}", base.trim_end_matches('/'));
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
     // credential off this machine even to a loopback URL. No redirects either:
     // `check_target` vetted only this URL, and a same-host, same-port hop
@@ -174,7 +201,7 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
         .build()
         .map_err(|e| format!("could not build the HTTP client: {e}"))?;
     let response = client
-        .post(&endpoint)
+        .request(method, &endpoint)
         .timeout(std::time::Duration::from_secs(30))
         .bearer_auth(token)
         .send()
@@ -183,13 +210,85 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
     let status = response.status();
     let body: serde_json::Value = response.json().await.unwrap_or_default();
     if !status.is_success() {
-        let reason = body["error"].as_str().unwrap_or("no reason given");
+        let reason = body["reason"]
+            .as_str()
+            .or_else(|| body["error"].as_str())
+            .unwrap_or("no reason given");
         return Err(format!("the gateway answered {status}: {reason}"));
     }
-    body["link"]
-        .as_str()
-        .map(ToString::to_string)
-        .ok_or_else(|| "the gateway's answer carried no link".to_string())
+    Ok(body)
+}
+
+/// `mcp-gateway events dead-letters`: the request the arguments describe.
+///
+/// # Errors
+///
+/// A usage message when the arguments do not name a request.
+pub(crate) fn dead_letters_request(
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+) -> Result<(reqwest::Method, String), String> {
+    use mcp_gateway::cli::events::DeadLetterAction;
+    const BASE: &str = "/ui/api/events/dead-letters";
+    let enc = |v: &str| url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>();
+    match (args.action, args.id.as_deref(), args.all) {
+        (DeadLetterAction::List, None, false) => {
+            let mut query = Vec::new();
+            if let Some(s) = &args.subscription {
+                query.push(format!("subscription={}", enc(s)));
+            }
+            if let Some(r) = &args.reason {
+                query.push(format!("reason={}", enc(r)));
+            }
+            let query = if query.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", query.join("&"))
+            };
+            Ok((reqwest::Method::GET, format!("{BASE}{query}")))
+        }
+        (DeadLetterAction::Replay, Some(id), false) => {
+            Ok((reqwest::Method::POST, format!("{BASE}/{}/replay", enc(id))))
+        }
+        (DeadLetterAction::Replay, None, true) => {
+            let subscription = args
+                .subscription
+                .as_deref()
+                .ok_or("replay --all needs --subscription")?;
+            Ok((
+                reqwest::Method::POST,
+                format!("{BASE}/replay?all=1&subscription={}", enc(subscription)),
+            ))
+        }
+        _ => Err("use `list`, `replay ID` or `replay --all --subscription S`".to_string()),
+    }
+}
+
+/// Run `events dead-letters` against the gateway at `base`.
+pub async fn run_dead_letters_command(
+    base: &str,
+    tls: &LinkTls,
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+) -> ExitCode {
+    let result = match (
+        read_token(|name| std::env::var(name).ok()),
+        dead_letters_request(args),
+    ) {
+        (Ok(token), Ok((method, path))) => admin_call(method, base, &path, &token, tls).await,
+        (Err(message), _) | (_, Err(message)) => Err(message),
+    };
+    match result {
+        Ok(body) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&body).unwrap_or_default()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("events dead-letters: {message}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>, String> {
