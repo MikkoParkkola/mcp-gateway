@@ -38,7 +38,7 @@ fn initialize(version: &str) -> Value {
     })
 }
 
-fn request(id: i64, method: &str, params: Value) -> Value {
+fn request(id: i64, method: &str, params: &Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
 }
 
@@ -50,7 +50,7 @@ fn tools_call(id: i64) -> Value {
     request(
         id,
         "tools/call",
-        json!({ "name": META_TOOL, "arguments": {} }),
+        &json!({ "name": META_TOOL, "arguments": {} }),
     )
 }
 
@@ -168,6 +168,21 @@ async fn http_post(
     }
 }
 
+async fn http_delete(state: &Arc<AppState>, session: &str, version: &str) -> StatusCode {
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/mcp")
+        .header("mcp-session-id", session)
+        .header("mcp-protocol-version", version)
+        .body(Body::empty())
+        .expect("request");
+    create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("router must answer")
+        .status()
+}
+
 async fn http_full_session(version: &str) {
     let (state, _store_dir) = state(Fixture::default()).await;
 
@@ -185,12 +200,17 @@ async fn http_full_session(version: &str) {
         StatusCode::ACCEPTED,
         "a notification is answered 202"
     );
+    assert_eq!(
+        ack.session.as_deref(),
+        sid,
+        "notifications/initialized must stay on the session initialize minted"
+    );
 
     // 3-5. tools/list, tools/call, ping: on the same session throughout.
     let legs = [
-        (request(2, "tools/list", json!({})), "tools/list"),
+        (request(2, "tools/list", &json!({})), "tools/list"),
         (tools_call(3), "tools/call"),
-        (request(4, "ping", json!({})), "ping"),
+        (request(4, "ping", &json!({})), "ping"),
     ];
     for (frame, leg) in legs {
         let reply = http_post(&state, &frame, sid, v).await;
@@ -212,22 +232,17 @@ async fn http_full_session(version: &str) {
         }
     }
 
-    // 6. DELETE: the client ends the session it owns.
-    let delete = Request::builder()
-        .method("DELETE")
-        .uri("/mcp")
-        .header("mcp-session-id", &session)
-        .header("mcp-protocol-version", version)
-        .body(Body::empty())
-        .expect("request");
-    let response = create_router(Arc::clone(&state))
-        .oneshot(delete)
-        .await
-        .expect("router must answer");
+    // 6. DELETE: the client ends the session it owns; a second DELETE finds
+    // nothing, so the first really ended it.
     assert_eq!(
-        response.status(),
+        http_delete(&state, &session, version).await,
         StatusCode::NO_CONTENT,
         "the session's owner can end it"
+    );
+    assert_eq!(
+        http_delete(&state, &session, version).await,
+        StatusCode::NOT_FOUND,
+        "an ended session is gone"
     );
 }
 
@@ -255,7 +270,7 @@ async fn stdio_full_session(version: &str) {
 
     session.send(&initialized()).await;
 
-    session.send(&request(2, "tools/list", json!({}))).await;
+    session.send(&request(2, "tools/list", &json!({}))).await;
     let (_, list) = session.read_until_id(2).await;
     assert_tools_list(&list.expect("tools/list answered"));
 
@@ -263,7 +278,7 @@ async fn stdio_full_session(version: &str) {
     let (_, call) = session.read_until_id(3).await;
     assert_tools_call(&call.expect("tools/call answered"));
 
-    session.send(&request(4, "ping", json!({}))).await;
+    session.send(&request(4, "ping", &json!({}))).await;
     let (_, ping) = session.read_until_id(4).await;
     result(&ping.expect("ping answered"), "ping");
 
