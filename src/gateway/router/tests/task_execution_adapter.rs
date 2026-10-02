@@ -62,6 +62,8 @@ mod grant_decisions;
 
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
 mod attestation_tasks;
+/// G4: a task keys its arm and hints on its caller.
+mod caller_keyed_hints;
 mod capacity;
 mod client_extensions;
 mod confirmation;

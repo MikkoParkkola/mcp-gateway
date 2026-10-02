@@ -179,7 +179,8 @@ impl AuthorizationServerMetadata {
             )));
         }
 
-        info!(issuer = %metadata.issuer, "Discovered authorization server");
+        let issuer = &metadata.issuer;
+        info!(issuer = %issuer, "Discovered authorization server");
         Ok(metadata)
     }
 

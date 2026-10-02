@@ -549,7 +549,13 @@ impl InputBridge<'_> {
                     reason: refused.reason,
                 });
             }
-            Self::plan(&interim, declared, slice)?;
+            // Handed back, not asked, but still requests this call makes the
+            // client answer: they count against the same budget (MIK-7691).
+            let prompts = Self::plan(&interim, declared, slice)?;
+            spent = spent.saturating_add(u32::try_from(prompts.len()).unwrap_or(u32::MAX));
+            if spent > self.bounds.requests {
+                return Err(BridgeError::RequestBudgetExhausted);
+            }
             self.gate
                 .admit(&Self::handed_back(body))
                 .map_err(|error| match error {
