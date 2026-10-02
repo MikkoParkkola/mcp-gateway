@@ -1,0 +1,25 @@
+{
+  "webhook.github.push.received": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "event_type": { "type": "string" },
+        "repo": { "type": "string" },
+        "ref": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "payloadSchema": {
+      "type": "object",
+      "properties": {
+        "event_type": { "type": "string" },
+        "fields": {
+          "type": "object",
+          "properties": { "repo": {}, "ref": {} },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

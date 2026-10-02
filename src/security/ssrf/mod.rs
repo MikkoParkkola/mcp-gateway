@@ -113,8 +113,8 @@ use ranges::{is_private_ipv4, is_private_ipv6};
 use crate::{Error, Result};
 use std::net::IpAddr;
 
-pub(crate) use resolver::ssrf_denial;
 pub use resolver::{HostResolver, PinningResolver, SystemResolver, resolve_and_validate_host};
+pub(crate) use resolver::{in_allowed, ssrf_denial};
 
 pub use redirect::validate_redirect_chain;
 pub(crate) use redirect::{RedirectDecision, redirect_decision};

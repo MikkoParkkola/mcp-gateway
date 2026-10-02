@@ -388,3 +388,41 @@ fn origin_matching_is_case_and_slash_insensitive() {
     assert!(!p.origin_ok("http://127.0.0.1:39401"));
     assert!(!p.origin_ok("http://attacker.example"));
 }
+
+/// MIK-7324.COV.3: on a non-loopback bind, a numeric Origin is admitted only
+/// as a full origin match against the authority this request was addressed
+/// to. An Origin that does not parse, or that names another scheme, is
+/// refused before any host comparison; the matching origin is the control.
+#[test]
+fn a_numeric_origin_needs_a_parseable_same_scheme_origin_on_a_public_bind() {
+    let p = policy_for(ServerConfig {
+        host: "0.0.0.0".to_string(),
+        ..ServerConfig::default()
+    });
+    let authority = "203.0.113.7:39400";
+
+    assert!(
+        p.origin_ok_at("http://203.0.113.7:39400", authority),
+        "control: the page this gateway served is admitted"
+    );
+    assert!(
+        !p.origin_ok_at("not a url", authority),
+        "an Origin that does not parse is refused"
+    );
+    assert!(
+        !p.origin_ok_at("https://203.0.113.7:39400", authority),
+        "an Origin naming another scheme than the listener's is refused"
+    );
+    assert!(
+        !p.origin_ok("http://203.0.113.7:39400"),
+        "without a request authority nothing numeric can be admitted"
+    );
+    assert!(
+        !p.origin_ok_at("http://attacker.example:39400", authority),
+        "a named Origin is not the numeric address this request was sent to"
+    );
+    assert!(
+        !p.origin_ok_at("http://gw.example:39400", "gw.example:39400"),
+        "the numeric rule never admits a name, even the request's own authority"
+    );
+}

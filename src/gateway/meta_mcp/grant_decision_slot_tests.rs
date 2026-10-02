@@ -28,6 +28,7 @@ fn note(server: &str, tool: &str, trace: Option<&str>, allowed: bool) -> GrantNo
         allowed,
         fields: serde_json::Map::new(),
         subject: None,
+        repeat: None,
     }
 }
 

@@ -231,7 +231,7 @@ impl MetaMcp {
             if !self.admits_backend(&b.name, scope, session_id) {
                 continue;
             }
-            let hidden = self.has_no_view_for(&b, proof);
+            let hidden = self.has_no_view_for(&b, proof).await;
             let admitted = if hidden {
                 0
             } else {

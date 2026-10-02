@@ -11,6 +11,9 @@ use crate::identity_grants::{CapabilityExposure, GrantSubject};
 use crate::protocol::ToolAnnotations;
 use crate::transform::TransformConfig;
 
+mod webhook;
+pub use webhook::WebhookEvent;
+
 /// A capability definition describing how to call a REST API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilityDefinition {
@@ -801,23 +804,9 @@ pub struct WebhookDefinition {
     /// Payload transform configuration
     #[serde(default)]
     pub transform: WebhookTransform,
-}
-
-// Manual `Debug` that redacts the HMAC verification secret (CWE-532, mirrors
-// PR #323). A derived `Debug` would print the webhook `secret` verbatim into
-// any trace or error context; only its presence is surfaced.
-impl std::fmt::Debug for WebhookDefinition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
-        f.debug_struct("WebhookDefinition")
-            .field("path", &self.path)
-            .field("method", &self.method)
-            .field("secret", &redact_opt(&self.secret))
-            .field("signature_header", &self.signature_header)
-            .field("notify", &self.notify)
-            .field("transform", &self.transform)
-            .finish()
-    }
+    /// Opt-in MCP event for this route (MIK-7630); absent = no event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<WebhookEvent>,
 }
 
 fn default_notify() -> bool {
@@ -1089,6 +1078,7 @@ mod cwe532_debug_redaction {
             signature_header: Some("X-Linear-Signature".to_string()),
             notify: true,
             transform: WebhookTransform::default(),
+            event: None,
         };
         let dbg = format!("{w:?}");
         assert!(!dbg.contains(SENTINEL), "leaked webhook secret: {dbg}");
