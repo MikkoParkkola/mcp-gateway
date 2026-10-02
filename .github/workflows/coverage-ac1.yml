@@ -1,0 +1,78 @@
+# Throwaway: MIK-7635.GH2573.1 acceptance probe. Lives only on a throwaway
+# branch; never merged. Runs the contract command exactly as
+# docs/release/v4.0.0-critical-path-coverage.md "The command" writes it, with
+# the pinned Python task SDK and Redis installed (a run without them is not
+# clean), then fails on any corrupt profile, any profile the report step
+# dropped or warned about, or a missing report.
+name: Coverage AC1 probe
+
+on:
+  push:
+    branches: ["throwaway/coverage-*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: contract command, zero corrupt or dropped profiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov and Python venv support
+        run: |
+          cargo install cargo-llvm-cov --locked
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-venv
+      - name: Pinned task SDK and Redis (as scripts/test-task-sdk-recovery.sh)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --disable-pip-version-check \
+            'fastmcp==4.0.3' 'fastmcp-tasks==4.0.3' 'pydocket==0.25.0'
+          image='redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf'
+          c="$(docker run --detach --rm --publish 127.0.0.1::6379 --memory 256m \
+            --tmpfs /data:rw,nosuid,nodev,size=64m "$image" redis-server --save '' --appendonly no)"
+          port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}' "$c")"
+          echo "MCP_GATEWAY_TASK_SDK_PYTHON=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          echo "MCP_GATEWAY_TASK_SDK_REDIS_URL=redis://127.0.0.1:$port/0" >> "$GITHUB_ENV"
+      - name: The contract command
+        run: |
+          cargo llvm-cov clean --workspace
+          set +e
+          cargo llvm-cov --all-features --tests --ignore-run-fail --summary-only --json --output-path cov.json > run.log 2>&1
+          echo "contract-exit=$?" | tee contract-exit.txt
+          grep -E '^test result|FAILED|panicked' run.log || true
+      - name: Grade profiles and report
+        run: |
+          tool="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
+          total=0; bad=0
+          for f in target/llvm-cov-target/*.profraw; do
+            [ -e "$f" ] || continue
+            total=$((total+1))
+            if ! "$tool" show "$f" > /dev/null 2>&1; then bad=$((bad+1)); echo "CORRUPT $(stat -c %s "$f") $f"; fi
+          done
+          echo "profiles: $total, corrupt profiles: $bad"
+          warn=$(grep -ciE 'profdata|corrupt|dropp|no profile|invalid instrumentation' run.log || true)
+          grep -iE 'profdata|corrupt|dropp|no profile|invalid instrumentation' run.log || true
+          failed=$(grep -cE '^test .* FAILED$' run.log || true)
+          echo "report warnings: $warn, failed tests: $failed"
+          cat contract-exit.txt
+          grep -q '^contract-exit=0$' contract-exit.txt
+          test -s cov.json
+          test "$total" -gt 0
+          test "$bad" -eq 0
+          test "$warn" -eq 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-ac1
+          path: |
+            run.log
+            cov.json
