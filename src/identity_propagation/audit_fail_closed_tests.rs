@@ -163,7 +163,10 @@ async fn mint_write_failure_is_fail_closed() {
         .env(ENV_VAR, &path)
         // Under a zero file-size limit the child's coverage profile is written
         // empty and corrupts the measured set (#2573); give it a private file.
-        .env("LLVM_PROFILE_FILE", profile_dir.path().join("child-%p.profraw"))
+        .env(
+            "LLVM_PROFILE_FILE",
+            profile_dir.path().join("child-%p.profraw"),
+        )
         .output()
         .expect("spawn fsize-limited child process");
 
