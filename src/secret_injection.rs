@@ -191,6 +191,39 @@ impl SecretInjector {
         self.rules.get(backend).map_or(0, Vec::len)
     }
 
+    /// Drop from `arguments` the keys [`Self::inject`] sets for `backend:tool`
+    /// whatever the caller sent, since the value the caller put there never
+    /// leaves the gateway. A rule whose credential resolves empty (injection
+    /// skips it) or fails keeps the caller's value in view.
+    pub(crate) fn strip_overwritten(
+        &self,
+        backend: &str,
+        tool: &str,
+        arguments: &mut serde_json::Value,
+    ) {
+        let (Some(rules), Some(obj)) = (self.rules.get(backend), arguments.as_object_mut()) else {
+            return;
+        };
+        for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+            if !self
+                .resolver
+                .resolve(&rule.value)
+                .is_ok_and(|v| !v.is_empty())
+            {
+                continue;
+            }
+            match rule.inject_as {
+                InjectTarget::Argument => {
+                    obj.remove(&rule.inject_key);
+                }
+                InjectTarget::Query => {
+                    obj.remove(&format!("__query_{}", rule.inject_key));
+                }
+                InjectTarget::Header => {}
+            }
+        }
+    }
+
     /// Inject credentials for a tool call on a specific backend.
     ///
     /// Resolves all matching credential rules and returns an [`InjectionResult`]
