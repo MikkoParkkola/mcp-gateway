@@ -149,7 +149,8 @@ backend" and "fails a capability file" first.**
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
-| 125 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
+| 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
+| 126 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3510,7 +3511,25 @@ Removed, because no maintained server exists at a resolvable package:
 **Action:** none for existing configs. To keep using a removed server, add it with an explicit
 command or URL: `mcp-gateway add <name> -- <command>` or `mcp-gateway add --url <url> <name>`.
 
-## 125. Backend upstream events are refused where the gateway cannot listen
+## 125. A listen stream opens with the acknowledgement notification
+
+**Startup:** no notice
+
+A 4.0 beta answered `subscriptions/listen` with a JSON-RPC response as the first event on the
+stream. The 2026-07-28 specification defines that response as the end of the subscription, so a
+conformant client saw its stream close as it opened. The first event is now a
+`notifications/subscriptions/acknowledged` notification: the subscription id is in
+`params._meta` under `io.modelcontextprotocol/subscriptionId`, and `params.notifications` names
+what the gateway delivers (`toolsListChanged`, and the task ids it accepted under `taskIds`).
+Prompt and resource changes are not delivered, so they are not acknowledged.
+When the gateway itself ends a subscription (for example, its credential stops
+authenticating), the last event is the listen request's own response, a `complete` result,
+which the specification defines as a graceful end. A reader that falls too far behind has lost
+updates, so its stream just closes, with no response.
+
+**Action:** a client written against the beta that read the subscription id from the response
+`result` reads it from the notification instead.
+## 126. Backend upstream events are refused where the gateway cannot listen
 
 **Startup:** no notice, a subscription to such an event answers -32014
 
