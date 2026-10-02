@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Refusals the meta route and its body reader give before any dispatch: a
+//! Refusals the meta route and its body reader give: a
 //! malformed chain nonce on `/mcp`, and a body that fails to read for a
 //! reason other than its size.
 
@@ -13,7 +13,7 @@ use super::helpers::read_body;
 use crate::protocol::mrtr::CHAIN_NONCE_META;
 
 #[tokio::test]
-async fn a_malformed_chain_nonce_is_refused_before_dispatch() {
+async fn a_malformed_chain_nonce_on_the_meta_route_is_refused() {
     let fx = fixture(Answer::Ok, |_| {}).await;
     let params = json!({
         "name": "gateway_search_tools",
