@@ -3421,9 +3421,9 @@ revision from the supported list, or a `protocol_version` pin it accepts.
 
 Before, a task whose backend call outlasted `server.shutdown_timeout` kept running after the task
 store closed, and could still call its backend while the backends were stopping. Now the drain
-cancels it, waits a bounded time for it to end, and only then closes the store; the drain, the
-cancellation and the close together stay within one `server.shutdown_timeout`, so the drain itself
-now gets four fifths of it. The record stays `working` until the next start settles it through the
+cancels it, waits a bounded time for it to end, and only then closes the store; the drain and
+the cancellation together take at most nine tenths of `server.shutdown_timeout`, so the drain
+itself now gets four fifths of it. The record stays `working` until the next start settles it through the
 interrupted-task table (`gateway_restart_after_dispatch`, or `gateway_restart_before_dispatch` when
 the task was cancelled before it reached the backend); a task whose backend is a configured `tasks.recovery_adapters`
 entry with a durable upstream handle stays managed `working`, as after any restart, and an owner

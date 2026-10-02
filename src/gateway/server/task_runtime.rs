@@ -66,8 +66,9 @@ impl ShutdownBudget {
     /// the window would otherwise use up and leave the cancellation never run.
     /// A fifth of the window is held back for cancelling and closing the
     /// store; cancelling gets half of that. HTTP passes `shutdown_timeout` as
-    /// its window, so its task phase still ends within one timeout; stdio
-    /// passes what is left of its teardown deadline.
+    /// its window, so draining and cancelling take at most nine tenths of
+    /// one timeout (the expiry join and the store close are not bounded
+    /// here); stdio passes what is left of its teardown deadline.
     pub(super) fn within(remaining: Duration, timeout: Duration) -> Self {
         let reserve = remaining / 5;
         Self {
