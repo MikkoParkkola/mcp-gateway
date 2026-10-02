@@ -1,0 +1,33 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The MCP Events hub on the meta layer (MIK-7630), shared by every
+//! surface that reports capabilities.
+
+use std::sync::Arc;
+
+use super::MetaMcp;
+use crate::events::EventsHub;
+
+impl MetaMcp {
+    /// Install the events hub. Called once by the HTTP server when
+    /// `events.enabled`; a second call is ignored.
+    pub(crate) fn set_events(&self, hub: Arc<EventsHub>) {
+        let _ = self.events.set(hub);
+    }
+
+    /// The events hub, when events are on for this transport.
+    pub(crate) fn events(&self) -> Option<&Arc<EventsHub>> {
+        self.events.get()
+    }
+
+    /// Add `events: {listChanged: true}` to a capabilities object when the
+    /// hub is installed and some source offers an event type (design §6.1).
+    /// With events off the object is untouched, byte for byte.
+    pub(super) fn advertise_events(&self, capabilities: &mut serde_json::Value) {
+        if let Some(advertised) = self.events().and_then(|hub| hub.capability())
+            && let Some(map) = capabilities.as_object_mut()
+        {
+            map.insert("events".to_owned(), advertised);
+        }
+    }
+}

@@ -14,6 +14,7 @@ mod cleartext;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
+mod events_wiring;
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
@@ -1556,10 +1557,8 @@ impl Gateway {
             self.env.startup(),
         )?);
 
-        // Wire webhook registry into MetaMcp for gateway_webhook_status.
-        if self.config.webhooks.enabled {
-            meta_mcp.set_webhook_registry(Arc::clone(&webhook_registry));
-        }
+        // Webhook registry into MetaMcp (gateway_webhook_status), and events.
+        events_wiring::install(&self.config, &meta_mcp, &webhook_registry)?;
 
         // Live config handle: shared by the hot-reload watcher (which swaps it
         // on every applied reload) and AppState (which reads control-plane role
