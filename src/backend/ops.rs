@@ -329,16 +329,22 @@ impl Backend {
 
         // Execute with retry
         let name = self.name.clone();
-        // Own the identity key so the retry closure (Fn, invoked once per
+        // Own the identity key so the retry closure (invoked once per
         // attempt) can hand a borrow to each attempt's future without tying the
         // closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
         let (perm, policy) = Self::resend_decision(&entry, method, params.as_ref());
-        let attempt = || {
+        // A call sent at most once moves its payload in; only a resend copies.
+        let once = matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled;
+        let mut payload = Some((params, extra_headers));
+        let mut attempt = || {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
-            let params = params.clone();
-            let extra_headers = extra_headers.clone();
+            let (params, extra_headers) = if once {
+                payload.take().unwrap_or_default()
+            } else {
+                payload.clone().unwrap_or_default()
+            };
             let identity_key = identity_key.clone();
             async move {
                 match attempts {
