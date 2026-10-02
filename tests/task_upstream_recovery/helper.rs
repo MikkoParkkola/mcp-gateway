@@ -96,6 +96,10 @@ impl Peer {
         *self.state.lock() = next;
     }
 
+    #[expect(
+        dead_code,
+        reason = "peer payload override; no case in this target sets a custom payload yet"
+    )]
     pub fn set_payload(&self, payload: Value) {
         *self.payload.lock() = payload;
     }
