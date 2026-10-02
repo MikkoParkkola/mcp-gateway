@@ -502,3 +502,55 @@ fn source_fingerprints_capped() {
     let dropped = d.fingerprints(&big).len() - 1_024;
     assert_eq!(d.source_truncated(), u64::try_from(dropped).unwrap());
 }
+
+// MIK-7696: a holder dated after the egress ───────────────────────────────
+//
+// Calls reach the lock out of time order, so a delivery stamped after an
+// egress can be recorded before that egress is checked. Only copies held at
+// the egress instant may excuse it or witness it.
+
+/// B's copy from T is stamped after B's egress: it cannot excuse the egress.
+#[test]
+fn future_holder_does_not_excuse_earlier_egress() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now);
+    d.record_delivery_at(T, B, false, &s, now + Duration::from_millis(1));
+    assert!(
+        d.check_egress_at(B, U, &s, now).is_some(),
+        "a copy B got after sending cannot excuse the send"
+    );
+}
+
+/// A's only sensitive copy is stamped after B's egress: no witness yet.
+#[test]
+fn future_sensitive_does_not_flag_earlier_egress() {
+    let d = detector();
+    let now = Instant::now();
+    let later = now + Duration::from_millis(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, later);
+    assert!(
+        d.check_egress_at(B, U, &s, now).is_none(),
+        "A's later copy is not evidence for an earlier send"
+    );
+    // Positive control: the same text after A's delivery is a relay.
+    assert!(d.check_egress_at(B, U, &s, later).is_some());
+}
+
+/// Merging keeps the earliest copy too: B held T before the egress and again
+/// after it, so the egress stays excused.
+#[test]
+fn earlier_copy_still_excuses_after_a_future_redelivery() {
+    let d = detector();
+    let earlier = Instant::now();
+    let now = earlier + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, earlier);
+    d.record_delivery_at(T, B, false, &s, earlier);
+    d.record_delivery_at(T, B, false, &s, now + Duration::from_millis(1));
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+    // Positive control: a principal that never got T is flagged.
+    assert!(d.check_egress_at("principal-c", U, &s, now).is_some());
+}
