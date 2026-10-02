@@ -1,0 +1,120 @@
+# Throwaway: MIK-7324.COV.3 instrument check. Lives only on throwaway/coverage-*; never merged.
+name: Coverage probe
+
+on:
+  push:
+    branches: ["throwaway/coverage-*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The contract command on pwsh, no test skipped: the five Windows-only rows.
+  windows-contract:
+    name: llvm-cov Windows, contract command
+    runs-on: windows-2025
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      - name: Contract command, every test target
+        run: cargo llvm-cov --all-features --tests --ignore-run-fail --lcov --output-path windows.lcov 2>&1 | Tee-Object windows-run.log | Select-String -Pattern '^test result|FAILED|panicked'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-windows
+          path: |
+            windows.lcov
+            windows-run.log
+
+  # Discriminator: windows_env skipped (as in run 37023604714) plus one
+  # deliberately failing lib test. If the lib profile collapses, any failing
+  # Windows test target loses its whole profile.
+  windows-injected-failure:
+    name: llvm-cov Windows, one injected failure
+    runs-on: windows-2025
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      - name: Inject one failing lib test
+        shell: pwsh
+        run: Add-Content -Path src/lib.rs -Value "`n#[cfg(test)]`nmod injected_probe_failure {`n    #[test]`n    fn fails_on_purpose() {`n        panic!(`"probe: deliberate failure`");`n    }`n}"
+      - name: Lib tests, windows_env skipped
+        run: cargo llvm-cov --all-features --lib --ignore-run-fail --lcov --output-path inject.lcov -- --skip windows_env 2>&1 | Tee-Object inject-run.log | Select-String -Pattern '^test result|FAILED|panicked'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-windows-inject
+          path: |
+            inject.lcov
+            inject-run.log
+
+  # Linux contract command with the pinned task SDK and Redis the
+  # task-sdk-recovery job provides, the SDK binary single-threaded as that job runs it.
+  linux-contract:
+    name: llvm-cov Linux, contract command with task SDK
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Pinned task SDK and Redis
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv "$RUNNER_TEMP/sdk"
+          "$RUNNER_TEMP/sdk/bin/python" -m pip install --disable-pip-version-check \
+            'fastmcp==4.0.3' 'fastmcp-tasks==4.0.3' 'pydocket==0.25.0'
+          echo "MCP_GATEWAY_TASK_SDK_PYTHON=$RUNNER_TEMP/sdk/bin/python" >> "$GITHUB_ENV"
+          c="$(docker run --detach --rm --publish 127.0.0.1::6379 \
+            redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf \
+            redis-server --save '' --appendonly no)"
+          port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}' "$c")"
+          echo "MCP_GATEWAY_TASK_SDK_REDIS_URL=redis://127.0.0.1:$port/0" >> "$GITHUB_ENV"
+      - name: SDK journey alone, single-threaded
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --no-report --all-features --test task_upstream_recovery_sdk -- --nocapture --test-threads 1 > sdk-run.log 2>&1 || echo "sdk pass exit $?"
+          grep -E '^test |^test result|panicked' sdk-run.log || true
+      - name: Every other test target
+        run: |
+          cargo llvm-cov --no-report --all-features --tests --ignore-run-fail -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result > all-run.log 2>&1
+          grep -E '^test result|FAILED|panicked' all-run.log || true
+          ls target/llvm-cov-target/*.profraw | wc -l
+          cargo llvm-cov report --lcov --output-path all.lcov
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-linux
+          path: |
+            all.lcov
+            all-run.log
+            sdk-run.log
