@@ -215,6 +215,7 @@ impl super::MetaMcp {
             use crate::security::firewall::FirewallAction;
             use crate::security::response_policy::ResponseArtifactKind;
 
+            let snapshot = self.relay_snapshot(result);
             let verdict = firewall.check_response_artifact(
                 result,
                 context.targets,
@@ -222,6 +223,7 @@ impl super::MetaMcp {
                 ResponseArtifactKind::FinalResponse,
                 context.mutation,
             );
+            super::invoke::relay::discard_if_changed(snapshot, Some(&*result));
             if !verdict
                 .is_ok_and(|verdict| verdict.allowed && verdict.action != FirewallAction::Block)
             {

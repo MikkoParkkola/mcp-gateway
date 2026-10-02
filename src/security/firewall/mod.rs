@@ -39,8 +39,8 @@ pub mod budget_guard;
 #[cfg_attr(not(test), expect(dead_code))]
 mod collusion;
 mod collusion_gate;
-pub(crate) use collusion_gate::RelayCaller;
 pub use collusion_gate::{CollusionAction, CollusionConfig};
+pub(crate) use collusion_gate::{DeliveryDigest, RelayCaller};
 pub mod input_scanner;
 pub mod memory_scanner;
 pub mod principal_window;

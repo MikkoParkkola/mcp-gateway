@@ -163,3 +163,24 @@ fn a_row_serves_backend_output_by_status() {
         "gateway-only failure"
     );
 }
+
+/// A completed row's stored result is backend output, unless it is the
+/// gateway's own interrupted or abandoned sentence (or the row is output-free).
+#[test]
+fn a_gateway_authored_result_is_not_backend_output() {
+    use crate::protocol::tasks::TaskTransition;
+    let complete = |result: serde_json::Value, output_free: bool| {
+        let mut task = Task::create("gateway_invoke");
+        task.transition(TaskTransition::Complete(result), chrono::Utc::now())
+            .expect("a working task completes");
+        let mut record = row(&task, TARGET_VERSION, None);
+        record.output_free = output_free;
+        CommittedTask::of(task, &record)
+    };
+    let backend = json!({"content": [{"type": "text", "text": "rows"}], "isError": false});
+    assert!(complete(backend.clone(), false).backend_result().is_some());
+    assert!(complete(backend, true).backend_result().is_none());
+    let own = json!({"content": [], "isError": true,
+                     "_meta": {(super::EXECUTION_OUTCOME_KEY): "interrupted"}});
+    assert!(complete(own, false).backend_result().is_none());
+}

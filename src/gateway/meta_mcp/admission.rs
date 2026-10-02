@@ -19,7 +19,9 @@ mod plan;
 /// Borrowed by inner dispatches, owned by the outer request future. Dropping the
 /// future drops its one lease, including after a transport cancellation.
 pub(crate) struct SyncLease {
-    state: Mutex<(Lease, bool)>,
+    /// The lease and how many dispatches marked it: a composite marks once
+    /// per step.
+    state: Mutex<(Lease, u32)>,
     playbook: Option<crate::playbook::PlaybookDefinition>,
     /// The invocation record's facts about this execution, kept for a replay.
     audit: Mutex<Option<ReplayAudit>>,
@@ -40,7 +42,18 @@ impl SyncLease {
     pub(crate) fn mark_dispatched(&self) {
         let mut state = self.state.lock();
         state.0.mark_dispatched();
-        state.1 = true;
+        state.1 = state.1.saturating_add(1);
+    }
+
+    /// A dispatch this lease marked was refused before the backend acted (a
+    /// relay caught mid-exchange): unmark it, unless an earlier step of the
+    /// same execution did act, whose protection stays.
+    pub(crate) fn withdraw_dispatch(&self) {
+        let mut state = self.state.lock();
+        state.1 = state.1.saturating_sub(1);
+        if state.1 == 0 {
+            state.0.dispatched = false;
+        }
     }
 
     /// The HTTP owner calls this only after the existing response security
@@ -55,9 +68,9 @@ impl SyncLease {
         response: &JsonRpcResponse,
         signing: Option<&super::signing::SigningInvocationContext>,
     ) {
-        let (lease, dispatched) = self.state.into_inner();
+        let (lease, dispatches) = self.state.into_inner();
         let audit = self.audit.into_inner();
-        if !dispatched
+        if dispatches == 0
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
             })
@@ -331,7 +344,7 @@ impl MetaMcp {
         };
         match admission {
             Ok(Admission::Owned(lease)) => Ok(SyncAdmission::Owned(SyncLease {
-                state: Mutex::new((lease, false)),
+                state: Mutex::new((lease, 0)),
                 playbook: None,
                 audit: Mutex::new(None),
             })),

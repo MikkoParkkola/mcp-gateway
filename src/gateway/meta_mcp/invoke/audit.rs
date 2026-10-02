@@ -334,7 +334,7 @@ impl MetaMcp {
 
 /// The tool value a `gateway_invoke` result carries: its `structuredContent`,
 /// else its first text block parsed as JSON.
-fn invoke_value(result: &Value) -> Option<Value> {
+pub(super) fn invoke_value(result: &Value) -> Option<Value> {
     result.get("structuredContent").cloned().or_else(|| {
         let text = result.pointer("/content/0/text")?.as_str()?;
         serde_json::from_str(text).ok()
@@ -577,6 +577,7 @@ impl MetaMcp {
         replay: JsonRpcResponse,
         audit: Option<super::super::admission::ReplayAudit>,
     ) -> JsonRpcResponse {
+        self.stage_replay(tool_name, arguments, session_id, caller, &replay);
         let Some(log) = self.transparency_logger.as_ref() else {
             return replay;
         };

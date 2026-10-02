@@ -362,7 +362,21 @@ impl CommittedTask {
             output_free: record.output_free,
         }
     }
+
+    /// The stored result when it is backend output. A row holding only the
+    /// gateway's own sentence (a bounded failure, an interrupted or abandoned
+    /// round) has none: nothing the backend said was delivered with it.
+    pub(crate) fn backend_result(&self) -> Option<&serde_json::Value> {
+        let result = self.task.result()?;
+        let gateway_authored = result
+            .get("_meta")
+            .is_some_and(|meta| meta.get(EXECUTION_OUTCOME_KEY).is_some());
+        (!self.output_free && !gateway_authored).then_some(result)
+    }
 }
+
+/// The `_meta` key only the gateway's own interrupted results carry.
+pub(super) const EXECUTION_OUTCOME_KEY: &str = "io.mcp-gateway/executionOutcome";
 
 /// The one call a legacy row (before [`TARGET_VERSION`]) made, read from its
 /// own upstream descriptor: the backend tool the trusted dispatch path
