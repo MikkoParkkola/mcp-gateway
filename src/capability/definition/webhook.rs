@@ -43,3 +43,16 @@ impl std::fmt::Debug for WebhookDefinition {
             .finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::WebhookDefinition;
+
+    /// The documented default: a route that names no method accepts POST,
+    /// the verb every webhook sender uses (MIK-7758).
+    #[test]
+    fn a_route_without_a_method_accepts_post() {
+        let route: WebhookDefinition = serde_yaml::from_str("path: /acme/hook").unwrap();
+        assert_eq!(route.method, "POST");
+    }
+}
