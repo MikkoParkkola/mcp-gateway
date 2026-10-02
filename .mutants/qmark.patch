@@ -1,0 +1,15 @@
+diff --git a/src/capability/definition/providers.rs b/src/capability/definition/providers.rs
+index d09dbc483..4eaa2c754 100644
+--- a/src/capability/definition/providers.rs
++++ b/src/capability/definition/providers.rs
+@@ -157,6 +157,9 @@ fn key_segments(path: &serde_ignored::Path<'_>, out: &mut Vec<String>) -> Option
+         }
+         Path::Some { parent }
+         | Path::NewtypeStruct { parent }
+-        | Path::NewtypeVariant { parent } => key_segments(parent, out),
++        | Path::NewtypeVariant { parent } => {
++            out.push("?".to_string());
++            key_segments(parent, out)
++        }
+     }
+ }

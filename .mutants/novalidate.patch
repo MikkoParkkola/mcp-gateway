@@ -1,0 +1,12 @@
+diff --git a/src/commands/cap.rs b/src/commands/cap.rs
+index eb771b3fe..313053afb 100644
+--- a/src/commands/cap.rs
++++ b/src/commands/cap.rs
+@@ -86,6 +86,7 @@ async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
+             // The structural checks the loader runs: an error here means the
+             // gateway would skip the file, a warning that it loads with a smell.
+             let issues = validate_capability_definition(&cap, Some(&file.to_string_lossy()));
++            let issues: Vec<mcp_gateway::capability::Issue> = Vec::new();
+             for issue in &issues {
+                 eprintln!("{issue}");
+             }

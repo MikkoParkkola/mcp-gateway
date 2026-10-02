@@ -1,0 +1,13 @@
+diff --git a/src/capability/definition/providers.rs b/src/capability/definition/providers.rs
+index d09dbc483..f65800708 100644
+--- a/src/capability/definition/providers.rs
++++ b/src/capability/definition/providers.rs
+@@ -130,7 +130,7 @@ impl<'de> DeserializeSeed<'de> for Tracked<'_> {
+         serde_ignored::deserialize(deserializer, |path| {
+             let mut segments = Vec::new();
+             let leaf = key_segments(&path, &mut segments);
+-            if !leaf.is_some_and(|k| k.starts_with('_') || k.starts_with("x-")) {
++            if true {
+                 unread.push(format!("providers.{name}.{}", segments.join(".")));
+             }
+         })

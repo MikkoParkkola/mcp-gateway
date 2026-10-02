@@ -1,0 +1,7 @@
+head_sha	5e8215e80fedaec70745826028d77341c24c65fb
+# MIK-7775 CAP-012 and cap validate
+NOREPORT	linux	noreport.patch	--lib capability::validator::tests::unread_keys::a_misspelled_provider_config_key_is_warned_with_its_path -- --exact
+NORECORD	linux	norecord.patch	--lib capability::validator::tests::unread_keys::every_unread_key_is_named -- --exact
+ANNOT	linux	annot.patch	--lib capability::validator::tests::unread_keys::an_annotation_key_is_not_reported -- --exact
+QMARK	linux	qmark.patch	--lib capability::validator::tests::unread_keys::a_key_inside_path_selector_is_named_without_option_markers -- --exact
+NOVALIDATE	linux	novalidate.patch	--test mik_7775_cap_validate
