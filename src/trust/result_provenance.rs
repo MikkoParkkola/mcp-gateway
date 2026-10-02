@@ -69,7 +69,9 @@ pub struct RuntimeProvenanceReceipt {
     /// observed (NOT zero — see module contract).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
-    /// Whether the backend reported success (`isError == false`).
+    /// Whether the backend reported success (`isError == false`). For an
+    /// event receipt this is `true` by construction (there is no tool result
+    /// to judge): read `subject_kind` first.
     pub backend_ok: bool,
     /// Opaque gateway call id (`gw-<uuid>`), equal to the result-level
     /// `trace_id` this receipt describes. This is the join key that ties the
