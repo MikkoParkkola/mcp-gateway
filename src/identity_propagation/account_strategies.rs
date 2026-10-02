@@ -67,21 +67,44 @@ pub(crate) struct InstalledAccount {
     pub(crate) required: bool,
     pub(crate) token_exchange_endpoint: Option<String>,
     pub(crate) token_exchange_scope: Option<String>,
-    /// The strategy instance. Shared with the per-backend install for the same
-    /// descriptor, so two consumers can never drift onto two strategies.
-    pub(crate) strategy: Arc<dyn IdentityPropagation>,
-    /// The SAME instance as [`Self::strategy`], typed, when this descriptor is
-    /// `personal_managed`.
-    ///
-    /// Not a second install and not a second strategy: the installer builds one
-    /// `Arc<VaultStrategy>`, hands it here and coerces that very `Arc` into the
-    /// trait object above and into the per-backend MCP map, so one descriptor
-    /// has one key, one resolver and one store no matter which consumer reaches
-    /// it. It is retained typed because durable custody is not expressible
-    /// through [`IdentityPropagation`]: `propagate` mints, and a recheck must
-    /// NOT mint. `None` for an external descriptor, whose published expiry and
-    /// strategy behaviour stay exactly what they were.
-    pub(crate) managed: Option<Arc<crate::personal_accounts::VaultStrategy>>,
+    /// What mints for this descriptor. Shared with the per-backend install for
+    /// the same descriptor, so two consumers can never drift onto two strategies.
+    pub(crate) minter: Minter,
+}
+
+/// The one strategy instance an installed descriptor mints through.
+///
+/// ONE FIELD, NOT TWO. A managed descriptor's vault is kept typed because
+/// durable custody is not expressible through [`IdentityPropagation`]:
+/// `propagate` mints, and a recheck must NOT mint. Holding it as its own variant
+/// (rather than a trait object plus an optional typed copy) makes "a vault
+/// strategy with no custody handle" or "a custody handle for some other
+/// strategy" unrepresentable: one descriptor has one key, one resolver and one
+/// store no matter which consumer reaches it.
+pub(crate) enum Minter {
+    /// `personal_managed`: the vault the installer built.
+    Managed(Arc<crate::personal_accounts::VaultStrategy>),
+    /// `external`: the strategy's published expiry and behaviour, unchanged.
+    External(Arc<dyn IdentityPropagation>),
+}
+
+impl Minter {
+    /// The trait object the per-backend MCP map holds: for a managed
+    /// descriptor the vault itself, coerced, so it is the same allocation.
+    pub(crate) fn strategy(&self) -> Arc<dyn IdentityPropagation> {
+        match self {
+            Self::Managed(vault) => Arc::clone(vault) as Arc<dyn IdentityPropagation>,
+            Self::External(strategy) => Arc::clone(strategy),
+        }
+    }
+
+    /// The managed vault, when this descriptor is `personal_managed`.
+    pub(crate) fn managed(&self) -> Option<&Arc<crate::personal_accounts::VaultStrategy>> {
+        match self {
+            Self::Managed(vault) => Some(vault),
+            Self::External(_) => None,
+        }
+    }
 }
 
 /// What resolving an account reference produced.
@@ -271,7 +294,7 @@ impl AccountStrategyRegistry {
         &self,
         descriptor_id: Option<&str>,
     ) -> Option<Arc<crate::personal_accounts::VaultStrategy>> {
-        self.installed(descriptor_id?)?.managed.clone()
+        self.installed(descriptor_id?)?.minter.managed().cloned()
     }
 
     /// Attach the durable audit sink. Called by `MetaMcp::enable_transparency_log`
@@ -522,7 +545,7 @@ impl AccountStrategyRegistry {
                 cache_binding: credential.cache_binding,
                 expires_at: credential.expires_at,
                 minted_at,
-                strategy: Arc::clone(&installed.strategy),
+                strategy: installed.minter.strategy(),
                 managed,
                 headers: credential.headers,
             },
@@ -596,9 +619,20 @@ impl AccountStrategyRegistry {
         if installed.audience != prepared.audience {
             return refuse("the installed audience changed after the credential was minted");
         }
-        if !Arc::ptr_eq(&installed.strategy, &prepared.strategy) {
-            return refuse("the installed strategy was replaced after the credential was minted");
-        }
+        // One match decides that the installed minter is still the one that
+        // minted: same kind, same instance. A replaced strategy of either kind,
+        // or a descriptor re-installed as the other kind, refuses here.
+        let custody = match (&installed.minter, prepared.managed.as_ref()) {
+            (Minter::External(current), None) if Arc::ptr_eq(current, &prepared.strategy) => None,
+            (Minter::Managed(current), Some(lease)) if lease.minted_by(current) => {
+                Some((lease, current))
+            }
+            _ => {
+                return refuse(
+                    "the installed strategy was replaced after the credential was minted",
+                );
+            }
+        };
         // The SAME question `resolve` asked, asked the same way: the registry
         // as it stands NOW decides who this call is made as. A descriptor whose
         // managed install was replaced by one with a different sole-operator
@@ -616,17 +650,8 @@ impl AccountStrategyRegistry {
         // THE DURABLE HALF. Last, because the checks above are cheap and this
         // one takes the store's authority lock; first in importance, because it
         // is the only one that can see a revocation committed since the mint.
-        if let Some(managed) = prepared.managed.as_ref() {
-            // `recheck` also refuses when the installed vault is not the very
-            // instance that released this lease: a descriptor re-installed
-            // against different custody cannot be rechecked with the previous
-            // one. That refusal names itself, so it is passed through as is.
-            let Some(current) = installed.managed.as_ref() else {
-                return refuse(
-                    "the managed custody backing it was replaced after the credential was minted",
-                );
-            };
-            if let Err(error) = managed.recheck(current).await {
+        if let Some((lease, current)) = custody {
+            if let Err(error) = lease.recheck(current).await {
                 // The custody refusal text names the account state (revoked,
                 // reconnect required, retired lease), never a token.
                 return refuse(&format!("durable custody refused its lease: {error}"));
@@ -646,8 +671,8 @@ impl AccountStrategyRegistry {
         backend: &BackendDescriptor,
     ) -> std::result::Result<(super::PropagatedCredential, Option<ManagedLease>), PropagationError>
     {
-        match installed.managed.as_ref() {
-            Some(vault) => vault
+        match &installed.minter {
+            Minter::Managed(vault) => vault
                 .prepare_held(principal, backend)
                 .await
                 .map(|(credential, managed)| (credential, Some(managed))),
@@ -657,9 +682,8 @@ impl AccountStrategyRegistry {
             // the verified arm by construction — and it refuses rather than
             // assuming so, because a credential path should not rely on a
             // property enforced somewhere else.
-            None => match principal.verified() {
-                Some(identity) => installed
-                    .strategy
+            Minter::External(strategy) => match principal.verified() {
+                Some(identity) => strategy
                     .propagate(identity, backend)
                     .await
                     .map(|credential| (credential, None)),
@@ -682,11 +706,11 @@ impl AccountStrategyRegistry {
         installed: &InstalledAccount,
         caller: CallerProof<'a>,
     ) -> Option<Principal<'a>> {
-        match installed.managed.as_ref() {
-            Some(vault) => vault.principal(caller),
+        match &installed.minter {
+            Minter::Managed(vault) => vault.principal(caller),
             // No managed custody, no assertion to consult: an external
             // descriptor has always needed a verified caller and still does.
-            None => caller.verified().map(Principal::Verified),
+            Minter::External(_) => caller.verified().map(Principal::Verified),
         }
     }
 
