@@ -1,0 +1,16 @@
+diff --git a/src/gateway/meta_mcp/mod.rs b/src/gateway/meta_mcp/mod.rs
+--- a/src/gateway/meta_mcp/mod.rs
++++ b/src/gateway/meta_mcp/mod.rs
+@@ -272,9 +272,9 @@
+         if self.stdio_nonce.is_some() {
+             return Some(LOCAL_OPERATOR_PRINCIPAL);
+         }
+-        self.credential_principal
+-            .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX))
+-            .or_else(|| support::proven_subject_owner(self))
++        support::proven_subject_owner(self).or(self
++            .credential_principal
++            .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX)))
+     }
+ 
+     /// How this caller was established. The stdio transport's mark decides

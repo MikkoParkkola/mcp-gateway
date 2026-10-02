@@ -1,0 +1,11 @@
+diff --git a/src/gateway/meta_mcp/mod.rs b/src/gateway/meta_mcp/mod.rs
+--- a/src/gateway/meta_mcp/mod.rs
++++ b/src/gateway/meta_mcp/mod.rs
+@@ -274,7 +274,6 @@
+         }
+         self.credential_principal
+             .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX))
+-            .or_else(|| support::proven_subject_owner(self))
+     }
+ 
+     /// How this caller was established. The stdio transport's mark decides

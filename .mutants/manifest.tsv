@@ -1,0 +1,8 @@
+head_sha	1a58e4cb95695b89b29b7c0734bf07193a2bb4e8
+# MIK-7688 PR 2692
+FALLBACK0	linux	fallback.patch	--lib gateway::router::tests::task_execution_adapter::proven_subject_admission::an_agent_only_keyed_call_is_admitted_on_its_client_id -- --exact
+FALLBACK1	linux	fallback.patch	--lib gateway::router::tests::task_execution_adapter::proven_subject_admission::a_certificate_only_keyed_call_is_admitted_on_its_subject -- --exact
+EMPTY0	linux	empty.patch	--lib gateway::router::tests::task_execution_adapter::proven_subject_admission::an_agent_only_keyed_call_is_admitted_on_its_client_id -- --exact
+EMPTY1	linux	empty.patch	--lib gateway::meta_mcp::support::proven_owner_tests::a_credential_less_agent_owns_by_its_subject_key -- --exact
+AUTHORITY0	linux	authority.patch	--lib gateway::meta_mcp::support::proven_owner_tests::a_header_identity_is_no_owner -- --exact
+PRECEDENCE0	linux	precedence.patch	--lib gateway::meta_mcp::support::proven_owner_tests::a_credential_wins_over_a_proven_subject -- --exact

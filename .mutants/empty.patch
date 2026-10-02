@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/mod.rs b/src/gateway/meta_mcp/mod.rs
+--- a/src/gateway/meta_mcp/mod.rs
++++ b/src/gateway/meta_mcp/mod.rs
+@@ -273,7 +273,7 @@
+             return Some(LOCAL_OPERATOR_PRINCIPAL);
+         }
+         self.credential_principal
+-            .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX))
++            .filter(|text| !text.starts_with(LOCAL_OPERATOR_PREFIX))
+             .or_else(|| support::proven_subject_owner(self))
+     }
+ 

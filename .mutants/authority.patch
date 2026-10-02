@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/support.rs b/src/gateway/meta_mcp/support.rs
+--- a/src/gateway/meta_mcp/support.rs
++++ b/src/gateway/meta_mcp/support.rs
+@@ -202,9 +202,6 @@
+     caller: &super::MetaMcpCallerContext<'a>,
+ ) -> Option<&'a str> {
+     let authority = caller.grant_subject.as_ref()?.authority.as_str();
+-    if !matches!(authority, "agent_oauth" | "mtls") {
+-        return None;
+-    }
+     caller.caller_key.filter(|key| key.starts_with("subject:"))
+ }
+ 
