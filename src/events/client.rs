@@ -17,7 +17,7 @@ use super::types::CallbackFailure;
 use crate::security::ssrf::{PinningResolver, SystemResolver, in_allowed, ssrf_denial};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 /// The verification echo is the only body the gateway reads.
 const MAX_READ: usize = 4096;
 

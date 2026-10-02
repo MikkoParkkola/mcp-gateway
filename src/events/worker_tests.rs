@@ -84,3 +84,23 @@ fn retry_after_is_honoured_inside_the_window() {
         "clamped to the window"
     );
 }
+
+#[test]
+fn an_attempt_past_its_bounds_is_overdue_before_it_is_sent() {
+    let first = Utc::now();
+    let inside = first + chrono::Duration::seconds(899);
+    let after = first + chrono::Duration::seconds(900);
+    assert!(
+        !overdue(1, first, after, POLICY),
+        "a first attempt always goes"
+    );
+    assert!(
+        !overdue(5, first, inside, POLICY),
+        "the last allowed attempt"
+    );
+    assert!(overdue(6, first, inside, POLICY), "past max_attempts");
+    assert!(
+        overdue(2, first, after, POLICY),
+        "a retry at the window's end"
+    );
+}

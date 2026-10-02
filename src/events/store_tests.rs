@@ -23,7 +23,7 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
         v: 1,
         id: format!("sub_{principal}_{}", url.len()),
         principal: principal.into(),
-        api_key_name: None,
+        api_key: None,
         url: url.into(),
         name: "e".into(),
         arguments: serde_json::json!({}),

@@ -4,6 +4,7 @@
 //! fan-out task and the delivery worker, started once the gateway hands
 //! over the services every payload must pass.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -14,6 +15,7 @@ use super::dedupe::Seen;
 use super::fanout::SourceEvent;
 use super::outbox::{DeadPolicy, OutboxCaps};
 use super::rate::{FailureWindows, RateLimits};
+use super::records::ApiKeyRef;
 use super::services::Services;
 use super::store::Store;
 use super::types::SourceKind;
@@ -29,6 +31,8 @@ pub(crate) struct Runtime {
     pub seen: Seen,
     pub rates: RateLimits,
     pub failures: FailureWindows,
+    /// Subscriptions with an attempt between its claim and its settlement.
+    pub busy: Mutex<HashSet<String>>,
     /// The gateway's controls, once [`EventsHub::start`] ran.
     pub services: std::sync::OnceLock<Arc<Services>>,
     dropped: AtomicU64,
@@ -45,6 +49,7 @@ impl Runtime {
             seen: Seen::new(store_dir.join("seen"), config.seen_max_per_route),
             rates: RateLimits::new(&config.rate_limit_per_subscription),
             failures: FailureWindows::new(config.suspend_window, config.suspend_min_attempts),
+            busy: Mutex::new(HashSet::new()),
             services: std::sync::OnceLock::new(),
             dropped: AtomicU64::new(0),
             projection_failed: AtomicU64::new(0),
@@ -95,7 +100,7 @@ impl EventsHub {
     /// the live config: the one check `events/list`, subscribe, fan-out and
     /// every attempt share. Before the pipeline starts there is no live
     /// config to consult and the transport's own check stands.
-    pub(crate) fn live_admits(&self, key: Option<&str>, backend: &str) -> bool {
+    pub(crate) fn live_admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
         self.runtime
             .services
             .get()

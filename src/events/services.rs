@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
+use super::records::ApiKeyRef;
 use crate::config_reload::LiveConfig;
 use crate::security::TransparencyLogger;
 
@@ -44,19 +45,28 @@ pub(crate) struct Subject<'a> {
 
 impl Services {
     /// Whether a subscription made with API key `key` may still see
-    /// `backend` under the live config. A key that left the config sees
-    /// nothing; a principal without an API key has no live scope to
-    /// re-read, so its subscribe-time check stands.
-    pub(crate) fn admits(&self, key: Option<&str>, backend: &str) -> bool {
+    /// `backend` under the live config. A key that left the config, expired,
+    /// or was replaced under the same name sees nothing; a principal without
+    /// an API key has no live scope to re-read, so its subscribe-time check
+    /// stands.
+    pub(crate) fn admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
         let Some(key) = key else {
             return true;
         };
+        let now = chrono::Utc::now();
         self.live
             .get()
             .auth
             .api_keys
             .iter()
-            .find(|k| k.name == key)
+            .find(|k| k.name == key.name)
+            .filter(|k| !k.is_expired_at(now))
+            .filter(|k| {
+                k.key_sha256
+                    .as_deref()
+                    .and_then(crate::config::parse_api_key_digest)
+                    .is_some_and(|digest| hex::encode(&digest[..6]) == key.principal)
+            })
             .is_some_and(|k| k.backends.iter().any(|b| b == "*" || b == backend))
     }
 
@@ -148,7 +158,7 @@ pub(crate) struct Attempt<'a> {
     pub event_id: &'a str,
     pub name: &'a str,
     pub backend: &'a str,
-    pub attempt: u32,
+    pub number: u32,
     pub principal: &'a str,
     pub api_key_name: Option<&'a str>,
     pub tenants: &'a [String],
@@ -173,7 +183,7 @@ impl Services {
         let mut extra = Map::new();
         extra.insert("subscription_id".into(), attempt.subscription_id.into());
         extra.insert("event_id".into(), attempt.event_id.into());
-        extra.insert("attempt".into(), attempt.attempt.into());
+        extra.insert("attempt".into(), attempt.number.into());
         extra.insert("principal".into(), attempt.principal.into());
         extra.insert("callback_host".into(), attempt.callback_host.into());
         extra.insert("status".into(), attempt.status.into());
@@ -246,5 +256,74 @@ impl Services {
                 tracing::warn!(%error, "events: eviction audit record not written");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ApiKeyConfig, ApiKeyKind, Config, api_key_digest_spec};
+
+    fn key(
+        name: &str,
+        secret: &str,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> ApiKeyConfig {
+        ApiKeyConfig {
+            key: None,
+            key_sha256: Some(api_key_digest_spec(secret.as_bytes())),
+            expires_at,
+            name: name.to_owned(),
+            rate_limit: 0,
+            backends: vec!["x".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            kind: ApiKeyKind::Shared,
+        }
+    }
+
+    fn services(keys: Vec<ApiKeyConfig>) -> Services {
+        let mut config = Config::default();
+        config.auth.api_keys = keys;
+        Services {
+            live: Arc::new(LiveConfig::new(config)),
+            #[cfg(feature = "firewall")]
+            firewall: None,
+            audit: None,
+            #[cfg(feature = "cost-governance")]
+            budget: None,
+        }
+    }
+
+    fn presented(name: &str, secret: &str) -> ApiKeyRef {
+        ApiKeyRef {
+            name: name.to_owned(),
+            principal: crate::gateway::auth::principal_of(secret),
+        }
+    }
+
+    #[test]
+    fn the_live_key_must_match_by_secret_be_unexpired_and_grant_the_backend() {
+        let alice = presented("alice", "s1");
+        assert!(services(vec![key("alice", "s1", None)]).admits(Some(&alice), "x"));
+        assert!(
+            !services(vec![key("alice", "s1", None)]).admits(Some(&alice), "y"),
+            "backend not granted"
+        );
+        assert!(
+            !services(vec![key("alice", "s2", None)]).admits(Some(&alice), "x"),
+            "replaced under the same name"
+        );
+        let past = chrono::Utc::now() - chrono::Duration::seconds(1);
+        assert!(
+            !services(vec![key("alice", "s1", Some(past))]).admits(Some(&alice), "x"),
+            "expired"
+        );
+        assert!(!services(Vec::new()).admits(Some(&alice), "x"), "removed");
+        assert!(
+            services(Vec::new()).admits(None, "x"),
+            "no API key to re-read"
+        );
     }
 }

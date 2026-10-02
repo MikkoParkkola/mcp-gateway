@@ -4,7 +4,7 @@
 //! that suspends a subscription (design §6.5). In memory: a restart starts
 //! both afresh, which only ever errs towards sending.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
@@ -34,10 +34,12 @@ impl RateLimits {
         }
     }
 
+    /// Keep only the buckets of subscriptions `keep` names.
+    pub(crate) fn retain(&self, keep: &HashSet<String>) {
+        self.buckets.lock().retain(|id, _| keep.contains(id));
+    }
+
     /// Take a token for `id`, or say how long until one is free.
-    ///
-    /// ponytail: buckets of deleted subscriptions are never pruned; bounded
-    /// in practice by subscription churn, prune on unsubscribe if it shows.
     pub(crate) fn take(&self, id: &str, now: Instant) -> Result<(), Duration> {
         let mut buckets = self.buckets.lock();
         let bucket = buckets.entry(id.to_owned()).or_insert(Bucket {
@@ -80,6 +82,11 @@ impl FailureWindows {
             min_attempts: usize::try_from(min_attempts).unwrap_or(usize::MAX),
             seen: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Keep only the windows of subscriptions `keep` names.
+    pub(crate) fn retain(&self, keep: &HashSet<String>) {
+        self.seen.lock().retain(|id, _| keep.contains(id));
     }
 
     /// Record one attempt; `true` when the subscription must now be
@@ -133,5 +140,26 @@ mod tests {
         }
         assert!(windows.record("s", false, t0), "fifth failure suspends");
         assert!(!windows.record("s", false, t0), "window cleared");
+    }
+
+    #[test]
+    fn retain_forgets_subscriptions_that_are_gone() {
+        let limits = RateLimits::new(&EventsRateLimit {
+            per_minute: 60,
+            burst: 1,
+        });
+        let windows = FailureWindows::new(Duration::from_secs(60), 2);
+        let t0 = Instant::now();
+        for id in ["kept", "gone"] {
+            assert!(limits.take(id, t0).is_ok());
+            assert!(!windows.record(id, false, t0));
+        }
+        let keep = HashSet::from(["kept".to_owned()]);
+        limits.retain(&keep);
+        windows.retain(&keep);
+        assert!(limits.take("kept", t0).is_err(), "kept its spent bucket");
+        assert!(limits.take("gone", t0).is_ok(), "a fresh bucket");
+        assert!(windows.record("kept", false, t0), "kept its failure");
+        assert!(!windows.record("gone", false, t0), "a fresh window");
     }
 }

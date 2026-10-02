@@ -33,7 +33,7 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         v: 1,
         id: id.into(),
         principal: "p".into(),
-        api_key_name: None,
+        api_key: None,
         url: format!("https://h/{id}"),
         name: "e".into(),
         arguments: serde_json::json!({}),
@@ -196,4 +196,111 @@ fn dead_letters_are_capped_oldest_first() {
     let later = now + chrono::Duration::hours(2);
     let swept = store.sweep_dead(later, policy).expect("io");
     assert_eq!(swept.len(), 2, "retention sweeps the rest");
+}
+
+#[test]
+fn an_outbox_record_already_dead_is_dropped_on_reopen() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    // A crash between the dead letter and the unlink leaves both on disk.
+    store
+        .dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY)
+        .expect("io");
+    drop(store);
+    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    assert!(matches!(store.claim("a", now).expect("io"), Claim::Skip));
+    assert!(
+        std::fs::read_dir(dir.path().join("outbox"))
+            .expect("dir")
+            .next()
+            .is_none(),
+        "the stale outbox file is removed"
+    );
+}
+
+#[test]
+fn a_repeated_enqueue_keeps_the_record_in_flight() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    assert_eq!(
+        store.enqueue(record("a", "s1", now), caps).expect("io"),
+        Enqueued::Written
+    );
+    assert!(
+        matches!(store.claim("a", now).expect("io"), Claim::Skip),
+        "still in flight, not reset to pending"
+    );
+}
+
+#[test]
+fn records_of_expired_subscriptions_are_cancelled_but_suspended_ones_kept() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["live", "paused"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "live", now), caps).expect("io");
+    store.enqueue(record("b", "paused", now), caps).expect("io");
+    store.suspend("paused").expect("io");
+    assert_eq!(store.due(now, &HashSet::new()).expect("io").ready.len(), 1);
+    let on_disk = || {
+        std::fs::read_dir(dir.path().join("outbox"))
+            .expect("dir")
+            .count()
+    };
+    assert_eq!(on_disk(), 2, "the suspended subscription keeps its record");
+    let past_expiry = now + chrono::Duration::hours(2);
+    store.due(past_expiry, &HashSet::new()).expect("io");
+    assert_eq!(on_disk(), 0, "expired: their records are cancelled");
+}
+
+#[test]
+fn a_failed_settlement_leaves_the_record_pending() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    // The dead-letter directory is gone, so burying the record fails.
+    std::fs::remove_dir_all(dir.path().join("dead")).expect("rm");
+    let dead = Settle::Dead {
+        reason: DeadReason::Gone,
+        status: Some("http_4xx"),
+    };
+    assert!(store.settle("a", dead, now, ROOMY).is_err());
+    let retry_at = now + super::SETTLE_RETRY;
+    assert!(
+        store
+            .due(now, &HashSet::new())
+            .expect("io")
+            .ready
+            .is_empty()
+    );
+    let due = store.due(retry_at, &HashSet::new()).expect("io");
+    assert_eq!(due.ready.len(), 1, "pending again, not stranded in flight");
 }

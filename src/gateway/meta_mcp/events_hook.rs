@@ -73,7 +73,7 @@ impl MetaMcp {
     /// Only while events are on: without them the routes keep today's
     /// startup-only registration.
     pub(crate) fn events_capabilities_reloaded(&self, backend: &str) {
-        let (Some(_), Some(capabilities), Some(registry)) = (
+        let (Some(hub), Some(capabilities), Some(registry)) = (
             self.events(),
             self.get_capabilities(),
             self.get_webhook_registry(),
@@ -83,14 +83,19 @@ impl MetaMcp {
         if capabilities.name != backend || !capabilities.initial_scan_complete() {
             return;
         }
-        if let Err(event) =
-            crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities())
-        {
-            tracing::error!(
+        match crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities()) {
+            Ok(removed) if !removed.is_empty() => {
+                let hub = std::sync::Arc::clone(hub);
+                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                    runtime.spawn(async move { hub.withdraw(&removed).await });
+                }
+            }
+            Ok(_) => {}
+            Err(event) => tracing::error!(
                 %event,
                 "capability reload not applied to webhook routes: it removes a filter or \
                  mapped field of a live event type; the previous routes stay live"
-            );
+            ),
         }
     }
 }

@@ -71,7 +71,7 @@ impl EventsHub {
             .filter(|s| source.matches(&s.arguments, event))
             .collect();
         for sub in matching {
-            if !services.admits(sub.api_key_name.as_deref(), &event.backend) {
+            if !services.admits(sub.api_key.as_ref(), &event.backend) {
                 self.revoke(&sub.id).await;
                 continue;
             }
@@ -138,6 +138,21 @@ impl EventsHub {
                 tracing::warn!(?dropped, subscription = %sub.id, "events: outbox full, occurrence dropped");
             }
             None => self.runtime.count_drop(),
+        }
+    }
+
+    /// Delete every subscription to an event type a reload removed; their
+    /// pending records go with them (design §9).
+    pub(crate) async fn withdraw(self: &Arc<Self>, names: &[String]) {
+        let ids: Vec<String> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .filter(|s| names.contains(&s.name))
+            .map(|s| s.id)
+            .collect();
+        for id in ids {
+            self.revoke(&id).await;
         }
     }
 

@@ -5,12 +5,10 @@
 //! it re-checks access, takes a rate token and charges the budget; then it
 //! signs the stored bytes afresh and POSTs, audits, and settles the record.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use parking_lot::Mutex;
 use tokio::sync::Semaphore;
 
 use super::EventsHub;
@@ -25,13 +23,9 @@ const SWEEP_EVERY: Duration = Duration::from_secs(30);
 /// Longest the worker sleeps with nothing scheduled (a safety net only).
 const IDLE: Duration = Duration::from_secs(5);
 
-/// Subscriptions with an attempt on the wire.
-type Busy = Arc<Mutex<HashSet<String>>>;
-
 impl EventsHub {
     /// Run the worker until the runtime stops.
     pub(super) async fn deliver_forever(self: Arc<Self>, services: &Arc<Services>) {
-        let busy: Busy = Arc::new(Mutex::new(HashSet::new()));
         let slots = Arc::new(Semaphore::new(self.config.max_in_flight));
         let mut swept: Option<Instant> = None;
         loop {
@@ -42,8 +36,12 @@ impl EventsHub {
                     .blocking(move |store| store.sweep_dead(Utc::now(), policy))
                     .await;
                 services.audit_evictions(evicted.unwrap_or_default()).await;
+                // Gone subscriptions take their rate and failure state along.
+                let held = self.store.subscription_ids();
+                self.runtime.rates.retain(&held);
+                self.runtime.failures.retain(&held);
             }
-            let wait = self.dispatch(services, &busy, &slots).await;
+            let wait = self.dispatch(services, &slots).await;
             tokio::select! {
                 () = self.runtime.wake.notified() => {}
                 () = tokio::time::sleep(wait) => {}
@@ -56,10 +54,9 @@ impl EventsHub {
     async fn dispatch(
         self: &Arc<Self>,
         services: &Arc<Services>,
-        busy: &Busy,
         slots: &Arc<Semaphore>,
     ) -> Duration {
-        let held = busy.lock().clone();
+        let held = self.runtime.busy.lock().clone();
         let Some(due) = self
             .blocking(move |store| store.due(Utc::now(), &held))
             .await
@@ -86,11 +83,14 @@ impl EventsHub {
                 drop(permit);
                 continue;
             }
-            busy.lock().insert(record.subscription_id.clone());
-            let (hub, services, busy) = (Arc::clone(self), Arc::clone(services), Arc::clone(busy));
+            self.runtime
+                .busy
+                .lock()
+                .insert(record.subscription_id.clone());
+            let (hub, services) = (Arc::clone(self), Arc::clone(services));
             tokio::spawn(async move {
                 hub.attempt(&services, &record.event_id).await;
-                busy.lock().remove(&record.subscription_id);
+                hub.runtime.busy.lock().remove(&record.subscription_id);
                 drop(permit);
                 hub.runtime.wake.notify_one();
             });
@@ -112,33 +112,50 @@ impl EventsHub {
             record,
             subscription: sub,
         } = *claimed;
-        let key = sub.api_key_name.as_deref();
-        if !services.admits(key, &record.backend) {
+        let key = sub.api_key.as_ref().map(|k| k.name.as_str());
+        let url = url::Url::parse(&sub.url).ok();
+        let host = url
+            .as_ref()
+            .and_then(url::Url::host_str)
+            .unwrap_or_default()
+            .to_owned();
+        // Every attempt is audited, a refused one too (§3.7).
+        let refused = |status: &'static str| Attempt {
+            subscription_id: &sub.id,
+            event_id,
+            name: &record.name,
+            backend: &record.backend,
+            number: record.attempt,
+            principal: &sub.principal,
+            api_key_name: key,
+            tenants: &record.tenants,
+            callback_host: &host,
+            status,
+            body_sha256: "",
+            delivered: false,
+        };
+        if !services.admits(sub.api_key.as_ref(), &record.backend) {
+            services.audit_attempt(&refused("access_revoked")).await;
             self.revoke(&sub.id).await;
             return;
         }
-        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
-            self.settle(
-                services,
-                event_id,
-                Settle::Dead {
-                    reason: DeadReason::Budget,
-                    status: None,
-                },
-            )
-            .await;
+        // A record a crash or a long suspension carried past its bounds is
+        // dead before it is sent again, never after (§6.5).
+        if self.overdue(&record, now) {
+            services.audit_attempt(&refused("exhausted")).await;
+            self.settle(services, event_id, quiet_dead(DeadReason::Exhausted))
+                .await;
             return;
         }
-        let (Some(body), Ok(url)) = (record.body(), url::Url::parse(&sub.url)) else {
-            self.settle(
-                services,
-                event_id,
-                Settle::Dead {
-                    reason: DeadReason::Exhausted,
-                    status: None,
-                },
-            )
-            .await;
+        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
+            services.audit_attempt(&refused("budget")).await;
+            self.settle(services, event_id, quiet_dead(DeadReason::Budget))
+                .await;
+            return;
+        }
+        let (Some(body), Some(url)) = (record.body(), url) else {
+            self.settle(services, event_id, quiet_dead(DeadReason::Exhausted))
+                .await;
             return;
         };
         let body_sha256 = {
@@ -150,18 +167,9 @@ impl EventsHub {
         let delivered = matches!(outcome, Settle::Delivered);
         services
             .audit_attempt(&Attempt {
-                subscription_id: &sub.id,
-                event_id,
-                name: &record.name,
-                backend: &record.backend,
-                attempt: record.attempt,
-                principal: &sub.principal,
-                api_key_name: key,
-                tenants: &record.tenants,
-                callback_host: url.host_str().unwrap_or_default(),
-                status,
                 body_sha256: &body_sha256,
                 delivered,
+                ..refused(status)
             })
             .await;
         if self
@@ -214,17 +222,32 @@ impl EventsHub {
 }
 
 impl EventsHub {
+    fn retry_policy(&self) -> Retry {
+        Retry {
+            base: self.config.retry_base,
+            max_attempts: self.config.retry_max_attempts,
+            window: self.config.retry_window,
+        }
+    }
+
+    /// Whether claimed attempt `record.attempt` lies past the attempt limit
+    /// or the retry window.
+    fn overdue(&self, record: &super::outbox::OutboxRecord, now: chrono::DateTime<Utc>) -> bool {
+        overdue(
+            record.attempt,
+            record.first_attempt_at.unwrap_or(now),
+            now,
+            self.retry_policy(),
+        )
+    }
+
     /// Settle an answer under the configured retry policy, with jitter.
     fn judge(
         &self,
         record: &super::outbox::OutboxRecord,
         answer: &Result<super::client::Answer, CallbackFailure>,
     ) -> (Settle, &'static str) {
-        let policy = Retry {
-            base: self.config.retry_base,
-            max_attempts: self.config.retry_max_attempts,
-            window: self.config.retry_window,
-        };
+        let policy = self.retry_policy();
         let now = Utc::now();
         let first = record.first_attempt_at.unwrap_or(now);
         judge(
@@ -272,10 +295,7 @@ fn judge(
             _ => ("http_other", None),
         },
     };
-    let window_end = chrono::Duration::from_std(policy.window)
-        .ok()
-        .and_then(|w| first.checked_add_signed(w))
-        .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC);
+    let window_end = window_end(first, policy.window);
     if attempt >= policy.max_attempts || now >= window_end {
         return (dead(DeadReason::Exhausted, status), status);
     }
@@ -290,6 +310,34 @@ fn judge(
         .and_then(|d| now.checked_add_signed(d))
         .map_or(window_end, |at| at.min(window_end));
     (Settle::Retry { next, status }, status)
+}
+
+/// The end of the retry window that opened at `first`.
+fn window_end(first: chrono::DateTime<Utc>, window: Duration) -> chrono::DateTime<Utc> {
+    chrono::Duration::from_std(window)
+        .ok()
+        .and_then(|w| first.checked_add_signed(w))
+        .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC)
+}
+
+/// Whether attempt number `attempt` (1-based, already claimed) may not be
+/// sent: past the attempt limit, or a retry at or after the window's end.
+/// The first attempt is never overdue.
+fn overdue(
+    attempt: u32,
+    first: chrono::DateTime<Utc>,
+    now: chrono::DateTime<Utc>,
+    policy: Retry,
+) -> bool {
+    attempt > policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
+}
+
+/// Dead without a new HTTP status: the subscription's last error stands.
+const fn quiet_dead(reason: DeadReason) -> Settle {
+    Settle::Dead {
+        reason,
+        status: None,
+    }
 }
 
 const fn dead(reason: DeadReason, status: &'static str) -> Settle {

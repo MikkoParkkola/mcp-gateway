@@ -21,9 +21,9 @@ pub(crate) struct Subscription {
     pub v: u32,
     pub id: String,
     pub principal: String,
-    /// The API key the principal presented, if any: the fan-out re-check
-    /// resolves the key's backend scope from live config (I2).
-    pub api_key_name: Option<String>,
+    /// The API key the principal presented, if any: every re-check
+    /// resolves the key's expiry and backend scope from live config (I2).
+    pub api_key: Option<ApiKeyRef>,
     pub url: String,
     pub name: String,
     pub arguments: Value,
@@ -36,6 +36,15 @@ pub(crate) struct Subscription {
     pub failed_since: Option<DateTime<Utc>>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+/// An API key as a caller presented it: its configured name and the
+/// principal derived from its secret's digest. A key replaced under the same
+/// name derives another principal, so it no longer matches (I2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ApiKeyRef {
+    pub name: String,
+    pub principal: String,
 }
 
 impl std::fmt::Debug for Subscription {

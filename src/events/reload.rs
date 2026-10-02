@@ -43,7 +43,8 @@ fn first_incompatible(
 }
 
 /// Re-register the webhook routes of `capabilities`, unless the reload
-/// narrows a live event type.
+/// narrows a live event type. Returns the event types the reload removed:
+/// their subscriptions are deleted (design §9).
 ///
 /// # Errors
 /// The name of the event type the reload would narrow; the registry is
@@ -51,7 +52,7 @@ fn first_incompatible(
 pub(crate) fn refresh_webhooks(
     registry: &Arc<parking_lot::RwLock<WebhookRegistry>>,
     capabilities: &[CapabilityDefinition],
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let old: BTreeMap<String, Shape> = registry
         .read()
         .event_routes()
@@ -72,7 +73,15 @@ pub(crate) fn refresh_webhooks(
         return Err(name);
     }
     registry.write().replace_capabilities(capabilities);
-    Ok(())
+    Ok(removed(&old, &new))
+}
+
+/// The event names `old` has and `new` does not.
+fn removed(old: &BTreeMap<String, Shape>, new: &BTreeMap<String, Shape>) -> Vec<String> {
+    old.keys()
+        .filter(|name| !new.contains_key(*name))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -101,5 +110,19 @@ mod tests {
             None,
             "removal is not narrowing"
         );
+    }
+
+    #[test]
+    fn removed_names_only_the_types_the_reload_dropped() {
+        let old = BTreeMap::from([
+            ("kept".to_owned(), shape(&[], &["a"])),
+            ("gone".to_owned(), shape(&[], &["a"])),
+        ]);
+        let new = BTreeMap::from([
+            ("kept".to_owned(), shape(&[], &["a"])),
+            ("added".to_owned(), shape(&[], &["a"])),
+        ]);
+        assert_eq!(removed(&old, &new), vec!["gone".to_owned()]);
+        assert!(removed(&old, &old).is_empty());
     }
 }

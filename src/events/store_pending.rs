@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Outbox and dead letters inside the store (design §5). They share the
 //! subscription lock, so an unsubscribe and a worker's claim serialise: once
-//! the unsubscribe commits, no attempt for that subscription can start.
+//! the unsubscribe commits, no attempt for that subscription can start, and
+//! the unsubscribe answer waits out one already claimed.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -14,6 +15,10 @@ use crate::events::outbox::{
     DeadLetter, DeadPolicy, DeadReason, Enqueued, Evicted, OutboxCaps, OutboxRecord, OutboxState,
 };
 use crate::events::records::{Subscription, load_records, remove_record, write_record};
+
+/// How long a record whose settlement the disk refused waits to be tried
+/// again.
+const SETTLE_RETRY: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
 
 /// A record the worker may now send, with the subscription as it is now.
 pub(crate) struct Claimed {
@@ -48,27 +53,33 @@ pub(crate) struct Due {
     pub next: Option<DateTime<Utc>>,
 }
 
-/// Load `outbox/` and `dead/` into `state`. A record left `in_flight` by a
+/// Load `dead/` and `outbox/` into `state`. A record left `in_flight` by a
 /// crash returns to `pending`, due now, with its id and bytes unchanged (F1).
+/// An outbox record whose dead letter is already written was settled before
+/// the crash: it is removed, never sent again.
 pub(super) fn load(
     state: &mut State,
     outbox_dir: &Path,
     dead_dir: &Path,
     now: DateTime<Utc>,
 ) -> std::io::Result<()> {
+    for (_, dead) in load_records::<DeadLetter>(dead_dir) {
+        let size = dead_size(&dead);
+        state
+            .dead
+            .insert(dead.record.event_id.clone(), (dead, size));
+    }
     for (_, mut record) in load_records::<OutboxRecord>(outbox_dir) {
+        if state.dead.contains_key(&record.event_id) {
+            remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
+            continue;
+        }
         if record.state == OutboxState::InFlight {
             record.state = OutboxState::Pending;
             record.next_attempt_at = now;
             write_record(outbox_dir, &OutboxRecord::file(&record.event_id), &record)?.durable()?;
         }
         state.outbox.insert(record.event_id.clone(), record);
-    }
-    for (_, dead) in load_records::<DeadLetter>(dead_dir) {
-        let size = dead_size(&dead);
-        state
-            .dead
-            .insert(dead.record.event_id.clone(), (dead, size));
     }
     Ok(())
 }
@@ -94,6 +105,11 @@ impl Store {
         if !state.subs.contains_key(&record.subscription_id) {
             return Ok(Enqueued::NoSubscription);
         }
+        // The same occurrence offered twice keeps the record already
+        // retrying or on the wire, attempt count and all.
+        if state.outbox.contains_key(&record.event_id) {
+            return Ok(Enqueued::Written);
+        }
         if state.outbox.len() >= caps.global {
             return Ok(Enqueued::DroppedGlobal);
         }
@@ -117,13 +133,19 @@ impl Store {
 
     /// Due records, at most one per subscription not in `busy`, each the
     /// oldest due record of a subscription that may be attempted now.
-    /// Records whose subscription is gone are cancelled here.
+    /// Records whose subscription is gone or expired are cancelled here; a
+    /// suspended subscription keeps its records.
     pub(crate) fn due(&self, now: DateTime<Utc>, busy: &HashSet<String>) -> std::io::Result<Due> {
         let mut state = self.state.lock();
         let orphans: Vec<String> = state
             .outbox
             .values()
-            .filter(|r| !state.subs.contains_key(&r.subscription_id))
+            .filter(|r| {
+                !state
+                    .subs
+                    .get(&r.subscription_id)
+                    .is_some_and(|s| s.live(now))
+            })
             .map(|r| r.event_id.clone())
             .collect();
         for id in orphans {
@@ -184,7 +206,11 @@ impl Store {
         record.first_attempt_at.get_or_insert(now);
         let placed = write_record(&self.outbox_dir, &OutboxRecord::file(event_id), &record)?;
         state.outbox.insert(event_id.to_owned(), record.clone());
-        placed.durable()?;
+        // The claim is in place; an unsynced one can only mean one more
+        // duplicate after a crash, so the attempt goes ahead (F1).
+        if let Err(error) = placed.durable() {
+            tracing::warn!(%error, "events store: claim not synced");
+        }
         Ok(Claim::Ready(Box::new(Claimed {
             record,
             subscription,
@@ -192,7 +218,9 @@ impl Store {
     }
 
     /// Record how an attempt ended. A record cancelled while its POST was
-    /// on the wire stays cancelled: nothing is written back for it.
+    /// on the wire stays cancelled: nothing is written back for it. A
+    /// settlement the disk refused leaves the record pending, due after
+    /// [`SETTLE_RETRY`], never stranded in flight.
     pub(crate) fn settle(
         &self,
         event_id: &str,
@@ -201,43 +229,77 @@ impl Store {
         policy: DeadPolicy,
     ) -> std::io::Result<Vec<Evicted>> {
         let mut state = self.state.lock();
-        let Some(mut record) = state.outbox.get(event_id).cloned() else {
+        let Some(record) = state.outbox.get(event_id).cloned() else {
             return Ok(Vec::new());
         };
         let sub_id = record.subscription_id.clone();
+        let settled = self.settle_record(&mut state, record, outcome, now, policy);
+        if settled.is_err() {
+            if state.dead.contains_key(event_id) {
+                // The dead letter is in place, if unsynced: never resend.
+                state.outbox.remove(event_id);
+            } else if let Some(left) = state.outbox.get_mut(event_id) {
+                left.state = OutboxState::Pending;
+                left.next_attempt_at = now + SETTLE_RETRY;
+            }
+        }
+        let (delivered, error) = match outcome {
+            Settle::Delivered => (true, None),
+            Settle::Retry { status, .. }
+            | Settle::Dead {
+                status: Some(status),
+                ..
+            } => (false, Some(status)),
+            Settle::Dead { status: None, .. } => return settled,
+        };
+        // The subscription's delivery history is a status line: a failed
+        // write of it never undoes the settlement.
+        if let Err(error) = self.touch(&mut state, &sub_id, |s| {
+            if delivered {
+                s.last_delivery_at = Some(now);
+            }
+            s.last_error = error.map(str::to_owned);
+        }) {
+            tracing::warn!(%error, "events store: subscription status not written");
+        }
+        settled
+    }
+
+    /// Move `record` to its settled place: gone, pending again, or dead.
+    /// Memory changes only once the disk has.
+    fn settle_record(
+        &self,
+        state: &mut State,
+        mut record: OutboxRecord,
+        outcome: Settle,
+        now: DateTime<Utc>,
+        policy: DeadPolicy,
+    ) -> std::io::Result<Vec<Evicted>> {
+        let event_id = record.event_id.clone();
+        let file = OutboxRecord::file(&event_id);
         match outcome {
             Settle::Delivered => {
-                remove_record(&self.outbox_dir, &OutboxRecord::file(event_id))?;
-                state.outbox.remove(event_id);
-                self.touch(&mut state, &sub_id, |s| {
-                    s.last_delivery_at = Some(now);
-                    s.last_error = None;
-                })?;
+                remove_record(&self.outbox_dir, &file)?;
+                state.outbox.remove(&event_id);
                 Ok(Vec::new())
             }
             Settle::Retry { next, status } => {
                 record.state = OutboxState::Pending;
                 record.next_attempt_at = next;
                 record.last_status = Some(status.to_owned());
-                let placed =
-                    write_record(&self.outbox_dir, &OutboxRecord::file(event_id), &record)?;
-                state.outbox.insert(event_id.to_owned(), record);
-                placed.durable()?;
-                self.touch(&mut state, &sub_id, |s| {
-                    s.last_error = Some(status.to_owned())
-                })?;
+                write_record(&self.outbox_dir, &file, &record)?.durable()?;
+                state.outbox.insert(event_id, record);
                 Ok(Vec::new())
             }
             Settle::Dead { reason, status } => {
                 if let Some(status) = status {
                     record.last_status = Some(status.to_owned());
-                    self.touch(&mut state, &sub_id, |s| {
-                        s.last_error = Some(status.to_owned())
-                    })?;
                 }
-                state.outbox.remove(event_id);
-                let evicted = self.bury(&mut state, record, reason, now, policy)?;
-                remove_record(&self.outbox_dir, &OutboxRecord::file(event_id))?;
+                // Buried first: once the dead letter is durable, load drops
+                // the outbox file even if the unlink below never happens.
+                let evicted = self.bury(state, record, reason, now, policy)?;
+                state.outbox.remove(&event_id);
+                remove_record(&self.outbox_dir, &file)?;
                 Ok(evicted)
             }
         }
@@ -271,6 +333,11 @@ impl Store {
     pub(crate) fn suspend(&self, id: &str) -> std::io::Result<()> {
         let mut state = self.state.lock();
         self.touch(&mut state, id, |s| s.active = false)
+    }
+
+    /// The id of every stored subscription.
+    pub(crate) fn subscription_ids(&self) -> HashSet<String> {
+        self.state.lock().subs.keys().cloned().collect()
     }
 
     /// Every subscription, for fan-out matching.

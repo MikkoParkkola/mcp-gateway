@@ -31,6 +31,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+pub(crate) use records::ApiKeyRef;
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
 pub(crate) use services::Services;

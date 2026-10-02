@@ -224,10 +224,8 @@ async fn exhausted_retries_dead_letter_within_the_window() {
         posts.len()
     );
     assert_eq!(ids(&posts).len(), 1, "the restart kept the webhook-id");
-    let span = posts[posts.len() - 1]
-        .at
-        .saturating_duration_since(posts[0].at);
-    assert!(span < Duration::from_secs(15 * 60), "inside retry_window");
+    // The window bound itself is pinned where a clock can pass it:
+    // `worker::tests::an_attempt_past_its_bounds_is_overdue_before_it_is_sent`.
 }
 
 /// T33 (RELIABLE.2), fan-out and retry clauses: one inbound delivery fanned
