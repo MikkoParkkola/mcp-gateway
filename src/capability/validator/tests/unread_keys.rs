@@ -47,13 +47,39 @@ fn an_unread_key_beside_config_is_warned_too() {
 
 #[test]
 fn every_unread_key_is_named() {
-    let issues = cap012(&format!("{HEAD}      command: gws\n      args: [a]\n"));
+    let issues = cap012(&format!("{HEAD}      comand: gws\n      argz: [a]\n"));
     let text = format!("{issues:?}");
-    assert!(text.contains("providers.primary.config.command"), "{text}");
-    assert!(text.contains("providers.primary.config.args"), "{text}");
+    assert!(text.contains("providers.primary.config.comand"), "{text}");
+    assert!(text.contains("providers.primary.config.argz"), "{text}");
 }
 
 #[test]
 fn a_provider_with_only_known_keys_has_no_cap012() {
     assert!(cap012(HEAD).is_empty());
+}
+
+#[test]
+fn a_fallback_entry_key_is_named_by_its_index() {
+    let yaml = format!(
+        "{HEAD}  fallback:\n    - config:\n        base_url: https://b.invalid\n        pth: /v1\n"
+    );
+    let text = format!("{:?}", cap012(&yaml));
+    assert!(text.contains("providers.fallback[0].config.pth"), "{text}");
+}
+
+#[test]
+fn an_annotation_key_is_not_reported() {
+    assert!(cap012(&format!("{HEAD}      _note: why\n      x-owner: me\n")).is_empty());
+}
+
+#[test]
+fn a_key_inside_path_selector_is_named_without_option_markers() {
+    let yaml = format!(
+        "{HEAD}      path_selector:\n        parameter: kind\n        default: a\n        paths:\n          a: /a\n        dflt: b\n"
+    );
+    let text = format!("{:?}", cap012(&yaml));
+    assert!(
+        text.contains("providers.primary.config.path_selector.dflt"),
+        "{text}"
+    );
 }
