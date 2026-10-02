@@ -68,6 +68,9 @@ pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url:
     }
     match destination.check_literal(target) {
         Ok(()) => Hop::Follow,
+        // The bare "SSRF blocked: ..." message, not the error's Display, which
+        // adds a "Protocol error: " prefix the refusal would then carry twice.
+        Err(Error::Protocol(refused)) => Hop::Refuse(refused),
         Err(refused) => Hop::Refuse(refused.to_string()),
     }
 }

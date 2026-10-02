@@ -467,10 +467,14 @@ impl OAuthClient {
             token.as_ref().and_then(|t| t.refresh_token.clone())
         };
 
-        if let Some(refresh_token) = refresh_token_opt
-            && let Ok(new_token) = self.refresh_token(&refresh_token).await
-        {
-            return Ok(new_token);
+        if let Some(refresh_token) = refresh_token_opt {
+            match self.refresh_token(&refresh_token).await {
+                Ok(new_token) => return Ok(new_token),
+                // A policy refusal is not an expired grant: re-authorizing
+                // would only walk past it (MIK-7701).
+                Err(e) if is_policy_refusal(&e) => return Err(e),
+                Err(_) => {}
+            }
         }
 
         // Need to authorize from scratch
@@ -821,7 +825,13 @@ impl OAuthClient {
         let callback_url = callback_server.callback_url.clone();
 
         // Now ensure we have a client ID, passing the actual callback URL for registration
-        let client_id = self.ensure_client_id_with_redirect(&callback_url).await?;
+        let client_id = match self.ensure_client_id_with_redirect(&callback_url).await {
+            Ok(client_id) => client_id,
+            Err(e) => {
+                callback_server.stop();
+                return Err(e);
+            }
+        };
 
         // Build authorization URL with the ACTUAL callback URL
         let auth_url = self.build_authorize_url(
