@@ -64,11 +64,9 @@
 1004 src/ranking/tests.rs
 1002 src/runtime/provider.rs
 984 src/idempotency/admission.rs
-979 tests/mik_7272_subscriptions_acs.rs
 978 src/gateway/server/support.rs
 970 src/ranking/mod.rs
 964 src/gateway/meta_mcp_tool_defs.rs
-956 src/gateway/ui/backend_ops.rs
 954 src/commands/protocol_import.rs
 944 src/discovery/shadow.rs
 944 src/commands/doctor.rs

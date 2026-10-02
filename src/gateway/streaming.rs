@@ -729,7 +729,7 @@ pub(crate) fn subscription_stream(
     mut listener: crate::gateway::subscription_registry::Listener,
     filter: crate::protocol::subscriptions::ListenRequest,
     subscription: crate::protocol::subscriptions::SubscriptionId,
-    acknowledgement: OutboundFrame,
+    acknowledgement: Value,
     keep_alive_interval: Duration,
     judge: StreamJudge,
 ) -> axum::response::Response {
@@ -740,19 +740,18 @@ pub(crate) fn subscription_stream(
         // thing to read rather than a body and then a stream.
         // Annotated because this function erases the stream into a
         // `Response`, so nothing else pins the error type.
-        // MIN.2: the acknowledgement is judged as the listen request's answer
-        // (its params can name a tenant) and recorded; a refused one, or one
-        // its record replaced, ends the stream.
-        let acknowledgement = judge.record(acknowledgement).await;
-        let opened = acknowledgement
-            .response()
-            .is_some_and(|ack| ack.error.is_none());
-        if let Some(ack) = sse_data(&acknowledgement) {
-            yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
-        }
-        if !opened {
+        // MIN.2: the acknowledgement is a document the stream writes like any
+        // other, so it is judged and recorded first; one withheld, or one its
+        // record replaced, ends the stream before it opens.
+        let Some(frame) = judge.judge_document(acknowledgement) else {
             return;
-        }
+        };
+        let Some(ack) = sse_data(&judge.record(frame).await) else {
+            return;
+        };
+        yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
+
+        let mut graceful = true;
         loop {
             match listener.recv().await {
                 Ok(published) => {
@@ -793,9 +792,18 @@ pub(crate) fn subscription_stream(
                         missed,
                         "subscription stream fell behind; closing so the client re-subscribes"
                     );
+                    // Not graceful: updates were lost, and a success response
+                    // would tell the client its state is complete.
+                    graceful = false;
                     break;
                 }
             }
+        }
+        // The server ended the subscription (a client that hangs up drops the
+        // stream and never gets here). A lagged stream just closes: the
+        // abrupt end is the specification's non-graceful signal.
+        if graceful {
+            yield Ok(Event::default().event("message").data(subscription.graceful_end().to_string()));
         }
     };
 

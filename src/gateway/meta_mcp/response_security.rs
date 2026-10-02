@@ -170,29 +170,6 @@ impl super::MetaMcp {
         judge
     }
 
-    /// The judge of one `subscriptions/listen` stream for `key`, and its
-    /// acknowledgement judged as the listen request's answer (its params
-    /// can name a tenant).
-    pub(crate) fn listen_judge(
-        &self,
-        guard: Option<std::sync::Arc<crate::gateway::outbound::Guard>>,
-        key: Option<String>,
-        acknowledgement: crate::protocol::JsonRpcResponse,
-        params: Option<&serde_json::Value>,
-    ) -> (
-        crate::gateway::outbound::StreamJudge,
-        crate::gateway::outbound::OutboundFrame,
-    ) {
-        let ack = crate::gateway::outbound::answer(
-            guard.as_deref(),
-            key.as_deref(),
-            acknowledgement,
-            params,
-            None,
-        );
-        (self.stream_judge(guard, key), ack)
-    }
-
     /// The stdio transport's read judge, over this Meta-MCP's firewall
     /// (MIK-7116.MIN.2).
     pub(crate) fn stdio_reads(&self) -> crate::gateway::outbound::StdioReads {

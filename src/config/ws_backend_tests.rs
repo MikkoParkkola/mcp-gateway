@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use super::super::{BackendConfig, Config, OAuthConfig, TransportConfig};
-use crate::gateway::ui::backend_ops::resolve_transport;
+use crate::gateway::ui::backend_ops::resolve_parts;
 use crate::identity_propagation::IdentityPropagationConfig;
 use crate::secret_injection::CredentialRule;
 
@@ -222,7 +222,7 @@ fn t11_for_url_selects_websocket_by_scheme_in_any_case() {
 #[test]
 fn t11_admin_ui_and_cli_add_store_a_pasted_wss_url_as_websocket() {
     for url in ["wss://h/mcp", "WS://h/mcp"] {
-        let (transport, _) = resolve_transport("rt", None, Some(url), None).unwrap();
+        let (transport, _) = resolve_parts("rt", None, Some(url), None).unwrap();
         match transport {
             TransportConfig::WebSocket { ws_url, .. } => assert_eq!(ws_url, url),
             other => panic!("{url}: expected WebSocket, got {other:?}"),
