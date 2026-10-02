@@ -20,18 +20,15 @@ pub struct ProvidersConfig {
     /// Keys under a provider that no field reads, as dotted paths from
     /// `providers` (`providers.primary.config.methd`). Serde ignores them, so a
     /// misspelling would load silently; the validator reports each (CAP-012).
-    #[serde(skip)]
     pub unread_keys: Vec<String>,
     /// Typed `config` of each provider whose `service` runs a local process
     /// (`cli`, `mcp`; MIK-7782), keyed like `named` (`fallback[i]` for a
     /// fallback entry). Filled at load only, so a definition built any other
     /// way has none and cannot run a process.
-    #[serde(skip)]
     pub process: HashMap<String, ProcessConfig>,
     /// Whether the file these providers came from carried a pin that matched.
     /// Only `parse_capability_file` sets [`Integrity::Verified`]; a process
     /// provider of an `Unpinned` definition never runs (MIK-7782).
-    #[serde(skip)]
     pub integrity: Integrity,
 }
 

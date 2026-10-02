@@ -162,7 +162,7 @@ fn render_element(
     // read as an option, or choose the option's name ("--{opt}=x") or a
     // subcommand ("get{what}"). After "--" every element is an operand.
     let prefix = &template[..start];
-    if !after_end_of_options && !(prefix.starts_with('-') && prefix.contains('=')) {
+    if !(after_end_of_options || (prefix.starts_with('-') && prefix.contains('='))) {
         return Err(Error::Config(format!(
             "CLI argument template '{template}' puts a parameter outside an option value \
              before \"--\""

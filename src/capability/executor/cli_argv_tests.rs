@@ -249,3 +249,12 @@ fn a_parameter_cannot_name_an_option_or_a_subcommand_before_end_of_options() {
     let after = cfg("command: tool\nargs: ['--', 'get{what}']\n");
     assert_eq!(argv(&after, &json!({"what": "--x"})), ["--", "get--x"]);
 }
+
+#[test]
+fn stdin_is_capped_at_exactly_one_mebibyte() {
+    let config = cfg("command: tool\nstdin: '{text}'\n");
+    let at_limit = "é".repeat(super::MAX_STDIN_BYTES / 2);
+    assert!(build_cli_invocation(&config, &json!({"text": at_limit}), &json!({})).is_ok());
+    let over = format!("{at_limit}x");
+    assert!(build_cli_invocation(&config, &json!({"text": over}), &json!({})).is_err());
+}

@@ -282,6 +282,10 @@ async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
         shim.display()
     );
     let cap = parse_capability(&yaml).expect("cmd probe parses");
+    let plain = call(&cap, json!({"to": "plain", "file": "plain"}))
+        .await
+        .expect("a benign call through the shim succeeds");
+    assert_eq!(plain["argv"], json!(["--to=plain", "--", "plain"]));
     for hostile in ["%PATH%", "^&|<>", "\"q\" 'q'", "a b", "!VAR!", "--draft"] {
         match call(&cap, json!({"to": hostile, "file": hostile})).await {
             Ok(out) => assert_eq!(
@@ -290,9 +294,22 @@ async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
                 "{hostile:?} was altered on its way through the shim"
             ),
             Err(e) => assert!(
-                e.to_string().contains("could not start") || e.to_string().contains("invalid"),
+                e.to_string().contains("invalid input"),
                 "{hostile:?}: unexpected failure {e}"
             ),
         }
     }
+}
+
+#[test]
+fn a_secret_straddling_the_excerpt_cut_is_removed_whole() {
+    let secret = "SECRET-straddles-the-cut-7782";
+    // Before the fix the excerpt was cut first, at 2 KiB from the end: this
+    // places the secret across that boundary.
+    let text = format!("{}{secret}{}", "x".repeat(3000), "y".repeat(2040));
+    let out = super::super::cli::redact(&text, &[secret.to_owned()], &[]);
+    assert!(
+        !out.contains("SECRET-str") && !out.contains("cut-7782"),
+        "{out}"
+    );
 }
