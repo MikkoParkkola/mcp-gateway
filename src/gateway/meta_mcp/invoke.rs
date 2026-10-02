@@ -107,6 +107,7 @@ pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
+mod cache_reads;
 pub(super) use bridge_settle::arm_for_dispatch;
 pub(super) use bridge_settle::classify_bridged_dispatch_error;
 use bridge_settle::{arm, refuse_if_killed};
@@ -1887,6 +1888,7 @@ impl MetaMcp {
             && let Some(cached) = cache.get(&cache_key)
         {
             debug!(server, tool, trace_id, "Cache hit");
+            cache_reads::restore(cache, &cache_key);
             if let Some(ref stats) = self.stats {
                 stats.record_cache_hit();
             }
@@ -2546,6 +2548,7 @@ impl MetaMcp {
             && cache.set(&cache_key, result.clone(), self.default_cache_ttl)
         {
             debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
+            cache_reads::remember(cache, &cache_key, self.default_cache_ttl);
         }
 
         if let Some(reservation) = idem_reservation.as_mut()

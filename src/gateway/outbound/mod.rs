@@ -298,14 +298,7 @@ pub(crate) async fn read_scoped<F: std::future::Future>(
 
 /// What the read scope around this task has noted so far.
 pub(crate) fn noted_reads() -> Option<ReadAttribution> {
-    #[cfg(feature = "firewall")]
-    {
-        crate::security::tenant_reads::noted()
-    }
-    #[cfg(not(feature = "firewall"))]
-    {
-        None
-    }
+    crate::security::tenant_reads::noted()
 }
 
 #[cfg(all(test, feature = "firewall"))]

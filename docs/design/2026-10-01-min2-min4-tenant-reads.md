@@ -843,6 +843,6 @@ a stated gap.
 | H9 direct | `OutboundHttp` | every answer judged in `audited_call` and written by `to_http` | |
 | S1/S2 stdio | queue of frames | as designed; key `stdio`; batch items judged and committed after the array | rows 3/4 stdio |
 | Bridged stdio requests | refusal to the waiter | judged; a withheld one returns `NoSession` at once, audited first | |
-| Hidden attribution | dispatch notes, caches, tasks | dispatch raw reading noted once its response gates pass (rows 13, 18); capability executor and its cache (F1, F2) | meta response cache, idempotency stores, `StoredDelivery` and task rows not yet (row 14, 15; §4.9 allows task rows later) |
+| Hidden attribution | dispatch notes, caches, tasks | dispatch raw reading noted once its response gates pass (rows 13, 18); capability executor and its cache (F1, F2); the Meta-MCP response cache keeps the reading under a sibling key with the same TTL, a bare hit is unread (row 14) | idempotency replays and `StoredDelivery` replay the same request, whose params name its tenant; task rows later (§4.9) |
 | Request params | always | only for an answer that delivered a result (row 7) | a refusal charges nothing |
 | H10-H13, clippy tripwire, trybuild rows | | not built | gateway-built bodies with no backend content |

@@ -395,6 +395,12 @@ pub(crate) fn in_read_scope() -> bool {
     false
 }
 
+/// Without the firewall nothing is noted.
+#[cfg(not(feature = "firewall"))]
+pub(crate) fn noted() -> Option<ReadAttribution> {
+    None
+}
+
 /// Without the firewall nothing is attributed.
 #[cfg(not(feature = "firewall"))]
 pub(crate) fn note_attribution(_read: Option<ReadAttribution>) {}
