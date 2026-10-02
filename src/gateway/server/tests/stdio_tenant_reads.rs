@@ -142,3 +142,71 @@ async fn stdio_a_then_b_block_refuses() {
         "a stdio read of B after A must be refused: {b}"
     );
 }
+
+/// S1 (review finding 5): a stdio batch answering A then B is judged item by
+/// item with each item's own reading: block refuses only the B item.
+#[tokio::test]
+async fn stdio_batch_items_judged() {
+    let backend_url = spawn_backend().await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let yaml = format!(
+        "backends:\n  {BACKEND}:\n    http_url: \"{backend_url}\"\n    streamable_http: true\n\
+         tasks:\n  store_dir: {}\n\
+         security:\n  firewall:\n    tenant_guard:\n      arg_keys: [customer_id]\n      cross_tenant_reads: block\n",
+        serde_json::to_string(&dir.path().join("tasks").display().to_string())
+            .expect("a JSON string")
+    );
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
+    let config = Config::load(Some(&path)).expect("config loads");
+    let gateway = Gateway::new(config)
+        .await
+        .expect("gateway boots")
+        .with_data_dir(dir.path().to_path_buf());
+    let (mut client, input) = tokio::io::duplex(64 * 1024);
+    let (output, reader) = tokio::io::duplex(1 << 20);
+    let task = tokio::spawn(async move {
+        drop(gateway.run_stdio_on(input, output, None).await);
+    });
+    let mut lines = BufReader::new(reader).lines();
+    let init = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "min2", "version": "0"}},
+    });
+    client
+        .write_all(format!("{init}\n").as_bytes())
+        .await
+        .expect("stdin");
+    let _ = answer(&mut lines, 1).await;
+    let batch: Value =
+        serde_json::from_str(&format!("[{},{}]", call(2, "cust-a"), call(3, "cust-b")))
+            .expect("batch");
+    client
+        .write_all(format!("{batch}\n").as_bytes())
+        .await
+        .expect("stdin");
+    let line = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+        .await
+        .expect("the batch answer within the bound")
+        .expect("stdout readable")
+        .expect("stdout open");
+    let answers: Vec<Value> = serde_json::from_str(&line).expect("one JSON array");
+    drop(client);
+    task.abort();
+    let by_id = |id: i64| {
+        answers
+            .iter()
+            .find(|a| a.get("id").and_then(Value::as_i64) == Some(id))
+            .cloned()
+            .unwrap_or_else(|| panic!("no answer for {id}: {answers:?}"))
+    };
+    assert!(
+        by_id(2).get("result").is_some(),
+        "the A item is delivered: {answers:?}"
+    );
+    assert!(
+        by_id(3).get("error").is_some(),
+        "the B item after A in one batch is refused: {answers:?}"
+    );
+}

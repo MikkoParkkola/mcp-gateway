@@ -348,6 +348,16 @@ impl MetaMcp {
             use crate::security::security_metrics::{DenialRoute, denied};
             denied(DenialRoute::Meta, reason);
         }
+        // MIK-7116.MIN.2: a delivered inner invocation read the tenants its own
+        // arguments name (a playbook step the outer request does not show),
+        // with or without a logger (design §4.4, row 18).
+        if result.is_ok() && crate::security::tenant_reads::in_read_scope() {
+            let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
+            let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
+            crate::security::tenant_reads::note_attribution(Some(
+                crate::security::tenant_reads::ReadAttribution::of(tenants, false),
+            ));
+        }
         let Some(log) = self.transparency_logger.as_ref() else {
             return result;
         };

@@ -1777,6 +1777,7 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
+                    cache_reads::restore_idempotent(idem_cache, key);
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }
@@ -2561,6 +2562,9 @@ impl MetaMcp {
                 trace_id,
                 "Idempotency entry marked completed"
             );
+            if let Some(idem) = &self.idempotency_cache {
+                cache_reads::remember_idempotent(idem, reservation.key());
+            }
         }
 
         let predictions = self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());

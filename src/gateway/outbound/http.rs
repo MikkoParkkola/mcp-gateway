@@ -50,8 +50,15 @@ pub(crate) fn to_http(
     response
 }
 
+/// The request id of an answer whose body holds a reservation, so a late
+/// replacer (`slot_http`) can refuse it without reading, and so committing,
+/// the body it drops.
+#[derive(Debug, Clone)]
+pub(crate) struct HeldAnswerId(pub(crate) Option<crate::protocol::RequestId>);
+
 /// The configured path with a reservation: bytes now, commit at first poll.
 fn held_body(frame: OutboundFrame) -> axum::response::Response {
+    let id = frame.answer_id();
     let bytes = match &frame.payload {
         Payload::Response(answer) => serde_json::to_vec(answer),
         Payload::Answer(answer) => serde_json::to_vec(answer),
@@ -68,5 +75,6 @@ fn held_body(frame: OutboundFrame) -> axum::response::Response {
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response.extensions_mut().insert(HeldAnswerId(id));
     response
 }

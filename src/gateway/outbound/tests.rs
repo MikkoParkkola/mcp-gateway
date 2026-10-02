@@ -231,3 +231,29 @@ fn gateway_refusal_charges_nothing() {
         "control: a delivered B answer is a read of B"
     );
 }
+
+/// Row 9 / review F6: a refusal that replaced backend content at
+/// finalization charges nothing for the content it withheld.
+#[test]
+fn a_refusal_keeps_no_hidden_reading() {
+    let fw = firewall(CrossTenantReads::Observe);
+    let hidden = ReadAttribution {
+        tenants: [hash_argument(&json!(B))].into(),
+        uninspected: false,
+    };
+    let refusal = JsonRpcResponse::error(Some(RequestId::Number(1)), -32600, "blocked");
+    let b = delivered(
+        &fw,
+        Some(KEY),
+        Payload::Response(refusal),
+        None,
+        Some(&hidden),
+    );
+    b.written();
+    drop(b);
+    assert_eq!(
+        read_a(&fw).verdict(),
+        None,
+        "a refusal charged its hidden B"
+    );
+}

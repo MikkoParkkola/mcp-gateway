@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use crate::cache::ResponseCache;
+use crate::idempotency::{CheckOutcome, IdempotencyCache};
 use crate::security::tenant_reads;
 
 /// The sibling key holding `key`'s read attribution.
@@ -36,6 +37,31 @@ pub(super) fn restore(cache: &ResponseCache, key: &str) {
     let read = cache
         .get(&read_key(key))
         .and_then(|value| serde_json::from_value(value).ok());
+    tenant_reads::note_restored(read.as_ref());
+}
+
+/// After an idempotency entry `key` completed: keep this request's reading
+/// beside it, as for the response cache.
+pub(super) fn remember_idempotent(cache: &IdempotencyCache, key: &str) {
+    if !tenant_reads::in_read_scope() {
+        return;
+    }
+    let read = tenant_reads::noted().unwrap_or_default();
+    if let Ok(value) = serde_json::to_value(read) {
+        cache.mark_completed(&read_key(key), value);
+    }
+}
+
+/// On an idempotent replay of `key`: restore the reading kept beside it, or
+/// count the replay as unread.
+pub(super) fn restore_idempotent(cache: &IdempotencyCache, key: &str) {
+    if !tenant_reads::in_read_scope() {
+        return;
+    }
+    let read = match cache.check(&read_key(key)) {
+        CheckOutcome::Completed(value) => serde_json::from_value(value).ok(),
+        _ => None,
+    };
     tenant_reads::note_restored(read.as_ref());
 }
 
@@ -86,5 +112,29 @@ mod tests {
         assert!(cache.set("bare", json!({ "note": "y" }), ttl));
         let ((), restored) = with_read_scope(fw, async { restore(&cache, "bare") }).await;
         assert!(restored.uninspected, "an entry without a reading is unread");
+    }
+
+    /// Row 14, idempotency half: a replay restores the first execution's
+    /// reading; a replay with none kept counts as unread.
+    #[tokio::test]
+    async fn idempotent_replay_restores_the_reading() {
+        let (fw, idem) = (firewall(), IdempotencyCache::new());
+        let b = ReadAttribution::of([String::from("cust-b")].into(), false);
+        with_read_scope(Arc::clone(&fw), async {
+            tenant_reads::note_attribution(Some(b));
+            remember_idempotent(&idem, "k");
+        })
+        .await;
+        let ((), restored) =
+            with_read_scope(Arc::clone(&fw), async { restore_idempotent(&idem, "k") }).await;
+        assert!(
+            restored.tenants.contains(&hash_argument(&json!("cust-b"))),
+            "the replay restores B: {restored:?}"
+        );
+        let ((), restored) = with_read_scope(fw, async { restore_idempotent(&idem, "bare") }).await;
+        assert!(
+            restored.uninspected,
+            "a replay with no reading kept is unread"
+        );
     }
 }

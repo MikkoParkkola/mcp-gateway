@@ -89,6 +89,8 @@ impl SyncLease {
             response: secured,
             chain,
             audit,
+            read: crate::security::tenant_reads::in_read_scope()
+                .then(|| crate::security::tenant_reads::noted().unwrap_or_default()),
         };
         lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
@@ -106,6 +108,10 @@ struct StoredDelivery {
     /// invocation record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     audit: Option<ReplayAudit>,
+    /// MIK-7116.MIN.2: what the first execution read before any transform,
+    /// restored into a replay's read scope; absent, a replay is unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read: Option<crate::security::tenant_reads::ReadAttribution>,
 }
 
 /// #2472: the first execution's invocation-record outcome and response hash,
@@ -174,12 +180,14 @@ enum StoredChain {
 /// envelope and replays without a link.
 fn stored_response(bytes: &[u8]) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
     if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
+        crate::security::tenant_reads::note_restored(stored.read.as_ref());
         let mut response: JsonRpcResponse = serde_json::from_value(stored.response).ok()?;
         if stored.chain == StoredChain::Backend {
             response.chain_source = crate::protocol::ChainSource::Replay;
         }
         return Some((response, stored.audit));
     }
+    crate::security::tenant_reads::note_restored(None);
     serde_json::from_slice(bytes)
         .ok()
         .map(|response| (response, None))

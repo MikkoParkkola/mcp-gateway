@@ -2562,14 +2562,15 @@ impl Gateway {
                 // lives across the `select!` in the helper, so leaving it inline
                 // would put the whole thing on the reader loop's stack frame.
                 let requests = reads.judges().then(|| request.clone());
-                let (responses, hidden) = Self::dispatch_streaming_notifications(
-                    Box::pin(Self::dispatch_batch_with_sink(
+                let (responses, _) = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_batch_read(
                         &meta_mcp,
                         &tool_policy,
                         &mtls_policy,
                         request,
                         session_id,
                         &protocol_telemetry_sink,
+                        reads.guard(),
                     )),
                     &writer,
                     &reads,
@@ -2577,7 +2578,7 @@ impl Gateway {
                 .await;
                 Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    let frame = reads.batch(responses, requests.as_ref(), hidden.as_ref());
+                    let frame = reads.batch(responses, requests.as_ref());
                     drop(writer.send(frame.await).await);
                 }
                 continue;
@@ -3393,58 +3394,6 @@ impl Gateway {
             &StdioTelemetry::default(),
         )
         .await
-    }
-
-    async fn dispatch_batch_with_sink(
-        meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
-        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
-        batch: serde_json::Value,
-        session_id: &str,
-        protocol_telemetry_sink: &StdioTelemetry,
-    ) -> Vec<serde_json::Value> {
-        let serde_json::Value::Array(requests) = batch else {
-            return vec![
-                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
-                    .to_value_lossy(),
-            ];
-        };
-
-        if requests.is_empty() {
-            return vec![
-                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
-                    .to_value_lossy(),
-            ];
-        }
-
-        let mut responses = Vec::new();
-        for req in requests {
-            if let Some(resp) = Box::pin(Self::dispatch_single_with_sink(
-                meta_mcp,
-                tool_policy,
-                mtls_policy,
-                req,
-                StdioClient {
-                    session_id,
-                    // A batch is dispatched sequentially inside the serve
-                    // loop's own task, so there is no reader to deliver a
-                    // reply: batch concurrency is out of scope for MIK-7387 by
-                    // design. Nothing to declare to either — a retained
-                    // handshake would widen a channel that cannot ask.
-                    channel: &crate::gateway::input_bridge::NoClientChannel,
-                    handshake_capabilities: crate::protocol::meta::Declared::NONE,
-                    // A batch is a legacy shape; it serves no `tasks/*`.
-                    tasks: None,
-                    modern: false,
-                },
-                protocol_telemetry_sink,
-            ))
-            .await
-            {
-                responses.push(resp);
-            }
-        }
-        responses
     }
 }
 

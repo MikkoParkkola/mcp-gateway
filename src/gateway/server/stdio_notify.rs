@@ -68,4 +68,89 @@ impl Gateway {
             warn!(%method, "stdio: notification withheld");
         }
     }
+
+    /// A JSON-RPC batch, each answer beside what its own dispatch read before
+    /// any transform (MIN.2: judged one by one, design S1).
+    pub(super) async fn dispatch_batch_read(
+        meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
+        tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
+        mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
+        batch: serde_json::Value,
+        session_id: &str,
+        protocol_telemetry_sink: &super::StdioTelemetry,
+        guard: Option<std::sync::Arc<crate::gateway::outbound::Guard>>,
+    ) -> Vec<(serde_json::Value, Option<ReadAttribution>)> {
+        let serde_json::Value::Array(requests) = batch else {
+            return vec![(
+                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
+                    .to_value_lossy(),
+                None,
+            )];
+        };
+
+        if requests.is_empty() {
+            return vec![(
+                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
+                    .to_value_lossy(),
+                None,
+            )];
+        }
+
+        let mut responses = Vec::new();
+        for req in requests {
+            let (resp, read) = crate::gateway::outbound::read_scoped(
+                guard.clone(),
+                Box::pin(Self::dispatch_single_with_sink(
+                    meta_mcp,
+                    tool_policy,
+                    mtls_policy,
+                    req,
+                    super::StdioClient {
+                        session_id,
+                        // A batch is dispatched sequentially inside the serve
+                        // loop's own task, so there is no reader to deliver a
+                        // reply: batch concurrency is out of scope for MIK-7387 by
+                        // design. Nothing to declare to either — a retained
+                        // handshake would widen a channel that cannot ask.
+                        channel: &crate::gateway::input_bridge::NoClientChannel,
+                        handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                        // A batch is a legacy shape; it serves no `tasks/*`.
+                        tasks: None,
+                        modern: false,
+                    },
+                    protocol_telemetry_sink,
+                )),
+            )
+            .await;
+            if let Some(resp) = resp {
+                responses.push((resp, read));
+            }
+        }
+        responses
+    }
+
+    /// [`Self::dispatch_batch_read`] without the readings.
+    #[cfg(test)]
+    pub(super) async fn dispatch_batch_with_sink(
+        meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
+        tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
+        mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
+        batch: serde_json::Value,
+        session_id: &str,
+        protocol_telemetry_sink: &super::StdioTelemetry,
+    ) -> Vec<serde_json::Value> {
+        Self::dispatch_batch_read(
+            meta_mcp,
+            tool_policy,
+            mtls_policy,
+            batch,
+            session_id,
+            protocol_telemetry_sink,
+            None,
+        )
+        .await
+        .into_iter()
+        .map(|(answer, _)| answer)
+        .collect()
+    }
 }

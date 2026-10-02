@@ -53,7 +53,7 @@ async fn notifications_are_framed_ahead_of_the_result() {
             note("notifications/progress"),
             note("notifications/message"),
         ],
-        &judge(),
+        judge(),
     )
     .await;
 
@@ -76,7 +76,7 @@ async fn a_stream_with_no_notifications_still_carries_the_result() {
     let response = request_scoped_event_stream(
         json_response(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
         Vec::new(),
-        &judge(),
+        judge(),
     )
     .await;
 
@@ -97,7 +97,7 @@ async fn an_answer_that_is_already_a_stream_is_passed_through() {
         .into_response();
 
     let response =
-        request_scoped_event_stream(already, vec![note("notifications/progress")], &judge()).await;
+        request_scoped_event_stream(already, vec![note("notifications/progress")], judge()).await;
     let body = body_text(response).await;
     assert!(
         !body.contains("notifications/progress"),

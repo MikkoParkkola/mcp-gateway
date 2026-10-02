@@ -828,9 +828,10 @@ mod session_ownership_tests {
 pub(crate) async fn request_scoped_event_stream(
     response: axum::response::Response,
     notifications: Vec<OutboundFrame>,
-    judge: &StreamJudge,
+    judge: Arc<StreamJudge>,
 ) -> axum::response::Response {
     use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+    use futures::StreamExt as _;
 
     // `subscriptions/listen` already answered with a stream of its own, and a
     // refusal that never reached the dispatch has no result to frame.
@@ -844,21 +845,22 @@ pub(crate) async fn request_scoped_event_stream(
     }
 
     let (mut parts, body) = response.into_parts();
-    let Ok(result_frame) = axum::body::to_bytes(body, usize::MAX).await else {
-        // The body is in memory already; a read that fails here has no result
-        // left to send, and inventing one would be worse than the plain error.
-        return (parts, axum::body::Body::empty()).into_response();
-    };
-
-    let mut sse = String::new();
-    for frame in notifications {
-        if let Some(event) = sse_message(&judge.record(frame).await) {
-            sse.push_str(&event);
+    // Lazy, frame by frame: each notification is committed, and the answer's
+    // body read (which commits its reservation, MIK-7116.MIN.2 F3), only as
+    // the client reads this stream, never while it is being built.
+    let sse = stream! {
+        for frame in notifications {
+            if let Some(event) = sse_message(&judge.record(frame).await) {
+                yield Ok::<_, Infallible>(axum::body::Bytes::from(event));
+            }
         }
-    }
-    sse.push_str("event: message\ndata: ");
-    sse.push_str(&String::from_utf8_lossy(&result_frame));
-    sse.push_str("\n\n");
+        yield Ok(axum::body::Bytes::from_static(b"event: message\ndata: "));
+        let mut result = body.into_data_stream();
+        while let Some(Ok(chunk)) = result.next().await {
+            yield Ok(chunk);
+        }
+        yield Ok(axum::body::Bytes::from_static(b"\n\n"));
+    };
 
     parts.headers.insert(
         CONTENT_TYPE,
@@ -871,7 +873,7 @@ pub(crate) async fn request_scoped_event_stream(
     // The re-framed body is a different length; a stale one truncates it.
     parts.headers.remove(CONTENT_LENGTH);
 
-    (parts, axum::body::Body::from(sse)).into_response()
+    (parts, axum::body::Body::from_stream(sse)).into_response()
 }
 
 /// One SSE frame carrying `data`, in the `event: message` shape both arms use.
@@ -946,7 +948,7 @@ where
             while let Ok(notification) = rx.try_recv() {
                 drained.push(notification);
             }
-            return request_scoped_event_stream(response, drained, &judge).await;
+            return request_scoped_event_stream(response, drained, judge).await;
         }
     };
 

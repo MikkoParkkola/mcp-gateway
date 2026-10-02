@@ -83,3 +83,26 @@ async fn refused_dispatch_notes_nothing() {
         "a refused dispatch must not count as a read: {noted:?}"
     );
 }
+
+/// Row 18, argument half: an inner invocation whose own arguments name B
+/// reads B, though the outer request and the answer show neither.
+#[tokio::test]
+async fn inner_invocation_arguments_are_a_read() {
+    use crate::gateway::authz::AllowAll;
+    use crate::gateway::meta_mcp::authz_tests::{counted_backend, ctx};
+
+    let fw = firewall();
+    let (registry, _calls) = counted_backend("alpha");
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&fw)));
+    let args =
+        json!({ "server": "alpha", "tool": "read", "arguments": { "customer_id": "cust-b" } });
+    let caller = ctx(&AllowAll);
+    let (result, noted) =
+        with_read_scope(Arc::clone(&fw), meta.invoke_tool(&args, None, &caller)).await;
+    assert!(result.is_ok(), "premise: the step is delivered: {result:?}");
+    assert!(
+        noted.tenants.contains(&hash_argument(&json!("cust-b"))),
+        "the step's own arguments named B: {noted:?}"
+    );
+}

@@ -152,7 +152,9 @@ pub(crate) fn delivered(
     if let Some(request) = request.filter(|_| delivers_result(&payload)) {
         attribution.extend(&ReadAttribution::of(guard.request_tenants(request), false));
     }
-    if let Some(hidden) = hidden {
+    // Likewise what the answer no longer shows: a refusal that replaced the
+    // backend content at finalization delivered none of it.
+    if let Some(hidden) = hidden.filter(|_| delivers_result(&payload)) {
         attribution.extend(hidden);
     }
     let (assessment, ticket) = assess(firewall, guard, block, key, attribution);

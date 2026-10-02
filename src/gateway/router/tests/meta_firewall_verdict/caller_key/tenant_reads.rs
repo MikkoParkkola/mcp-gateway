@@ -394,5 +394,38 @@ async fn delayed_http_body_keeps_reservation() {
     }
 }
 
+/// F3 on POST-SSE (review finding 1): a dispatch-first stream answering A,
+/// held unread past the window while B is admitted: B is still refused,
+/// because nothing commits A before the stream is read.
+#[tokio::test]
+async fn delayed_sse_body_keeps_reservation() {
+    use tower::ServiceExt;
+    let who = caller();
+    for mode in [CrossTenantReads::Off, CrossTenantReads::Block] {
+        let (router, _store) = windowed_router(mode, 1).await;
+        let mut request = call_with(&who, true, None, 0, &reading(A));
+        request.headers_mut().insert(
+            axum::http::header::ACCEPT,
+            axum::http::HeaderValue::from_static("application/json, text/event-stream"),
+        );
+        let held = router.clone().oneshot(request).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+        let (b, _, body) = send(&router, call_with(&who, true, None, 1, &reading(B))).await;
+        let a = axum::body::to_bytes(held.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let a = String::from_utf8_lossy(&a).into_owned();
+        assert!(a.contains(r#""result""#), "the held A answer: {a}");
+        if mode == CrossTenantReads::Off {
+            assert_eq!(b, Delivered, "control: off delivers B: {body}");
+        } else {
+            assert_ne!(
+                b, Delivered,
+                "B was admitted while the A stream was still unread: {body}"
+            );
+        }
+    }
+}
+
 #[path = "tenant_read_streams.rs"]
 mod streams;
