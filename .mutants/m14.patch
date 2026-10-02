@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/events.rs b/src/gateway/ui/events.rs
+index b56f75abf..9ae27b711 100644
+--- a/src/gateway/ui/events.rs
++++ b/src/gateway/ui/events.rs
+@@ -59,7 +59,7 @@ fn admitted(
+ 
+ fn refusal(why: ReplayRefusal) -> axum::response::Response {
+     let status = match why {
+-        ReplayRefusal::NotFound => StatusCode::NOT_FOUND,
++        ReplayRefusal::NotFound => StatusCode::CONFLICT,
+         ReplayRefusal::OutboxFull | ReplayRefusal::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+         _ => StatusCode::CONFLICT,
+     };

@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index 8d42ae21a..7fdacea97 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -132,7 +132,7 @@ impl EventsHub {
+         }
+         let record = OutboxRecord {
+             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+-            attempt: 0,
++            attempt: dead.record.attempt,
+             next_attempt_at: now,
+             first_attempt_at: None,
+             created_at: now,

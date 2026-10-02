@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/search.rs b/src/gateway/meta_mcp/search.rs
+index 90d883424..d3c52802d 100644
+--- a/src/gateway/meta_mcp/search.rs
++++ b/src/gateway/meta_mcp/search.rs
+@@ -402,7 +402,7 @@ impl MetaMcp {
+         };
+ 
+         let total_found =
+-            total_found + self.add_event_matches(&query, limit, caller, session_id, &mut matches);
++            total_found;
+ 
+         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
+         self.inspect_discovery_value(&mut out)?;

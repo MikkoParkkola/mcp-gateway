@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/events_hook.rs b/src/gateway/meta_mcp/events_hook.rs
+index e32c91beb..43584796c 100644
+--- a/src/gateway/meta_mcp/events_hook.rs
++++ b/src/gateway/meta_mcp/events_hook.rs
+@@ -64,7 +64,7 @@ impl MetaMcp {
+         let events = self.event_search_matches(query, usize::MAX, caller, session_id);
+         let found = events.len();
+         matches.extend(events.into_iter().take(limit));
+-        found
++        0
+     }
+ 
+     /// `capabilities` as JSON, with `events` advertised when it applies.

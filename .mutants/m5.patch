@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 25673e050..4d579c43a 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -293,7 +293,7 @@ impl Store {
+         // ponytail: a failed rollback unlink leaves a stray outbox file that
+         // delivers once after a restart; stage records outside outbox/ if
+         // double faults ever matter.
+-        if let Err(error) = remove_record(&self.dead_dir, &OutboxRecord::file(event_id)) {
++        if let Err(error) = Ok::<(), std::io::Error>(()) {
+             state.outbox.remove(event_id);
+             let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
+             return Err(error);

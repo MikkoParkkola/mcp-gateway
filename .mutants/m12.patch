@@ -1,0 +1,14 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 255f65248..c8e05a4ff 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -89,8 +89,7 @@ impl EventsHub {
+             .iter()
+             .filter(|d| visible(&d.scope))
+             .filter(|d| {
+-                d.name.to_lowercase().contains(&query)
+-                    || d.description.to_lowercase().contains(&query)
++                true
+             })
+             .take(limit)
+             .map(|d| {

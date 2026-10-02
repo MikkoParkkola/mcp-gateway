@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index 8d42ae21a..4687050f4 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -108,7 +108,7 @@ impl EventsHub {
+             .admits_subscription(&sub, &dead.record.backend)
+             .await
+         {
+-            return Err(ReplayRefusal::AccessRevoked);
++            ();
+         }
+         let bytes = base64::engine::general_purpose::STANDARD
+             .decode(&dead.record.body_b64)

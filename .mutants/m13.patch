@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index 8d42ae21a..c7843ee92 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -55,7 +55,7 @@ pub(crate) fn is_dead_reason(reason: &str) -> bool {
+         DeadReason::Budget,
+     ]
+     .iter()
+-    .any(|r| r.as_str() == reason)
++    .any(|_r| true)
+ }
+ 
+ impl EventsHub {
