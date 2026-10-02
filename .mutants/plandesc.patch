@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -357,9 +357,6 @@
+ /// descriptor never speaks for the plan, and a row without a consistent one
+ /// has no recoverable provenance.
+ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
+-    if matches!(task.tool(), "gateway_execute" | "gateway_run_playbook") {
+-        return Vec::new();
+-    }
+     record
+         .upstream
+         .iter()

@@ -1,0 +1,10 @@
+head_sha	d2431973f433e96628bc0fb62e484e8eaf342a61
+# MIK-7686 PR 2620
+LEGACY0	linux	legacy.patch	--lib gateway::router::tests::task_execution_adapter::stored_result_policy::a_legacy_single_backend_row_is_refused_though_nothing_is_withheld -- --exact
+LEGACY1	linux	legacy.patch	--lib gateway::router::tests::task_execution_adapter::stored_result_policy::a_legacy_row_is_refused_on_repeat -- --exact
+LEGACY2	linux	legacy.patch	--lib gateway::router::tests::task_execution_adapter::stored_result_policy::a_legacy_row_is_refused_when_its_disabled_tool_is_no_longer_listed -- --exact
+LEGACY3	linux	legacy.patch	--lib gateway::router::tests::task_execution_adapter::stored_result_policy::a_legacy_plan_row_is_refused_by_its_task_tool_name -- --exact
+NODESC0	linux	nodesc.patch	--lib gateway::task_service::record::legacy_tests::a_legacy_row_without_a_consistent_descriptor_names_nothing -- --exact
+PLANDESC0	linux	plandesc.patch	--lib gateway::task_service::record::legacy_tests::a_legacy_plan_row_names_nothing_even_with_a_descriptor -- --exact
+DESC0	linux	desc.patch	--lib gateway::task_service::record::legacy_tests::a_legacy_row_names_the_call_its_descriptor_captured -- --exact
+CURRENT0	linux	current.patch	--lib gateway::task_service::record::legacy_tests::a_current_row_keeps_recorded_targets_over_its_descriptor -- --exact

@@ -1,0 +1,12 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -338,7 +338,7 @@
+     /// authorizes delivery checks the snapshot it returns.
+     pub(super) fn of(task: Task, record: &Record) -> Self {
+         Self {
+-            targets: if record.version >= TARGET_VERSION {
++            targets: if false {
+                 record.targets.clone()
+             } else {
+                 legacy_targets(&task, record)

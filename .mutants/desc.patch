@@ -1,0 +1,12 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -341,7 +341,7 @@
+             targets: if record.version >= TARGET_VERSION {
+                 record.targets.clone()
+             } else {
+-                legacy_targets(&task, record)
++                Vec::new()
+             },
+             task,
+             revision: record.revision,

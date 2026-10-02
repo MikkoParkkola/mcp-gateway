@@ -1,0 +1,11 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -363,7 +363,6 @@
+     record
+         .upstream
+         .iter()
+-        .filter(|upstream| upstream.consistent_with(&record.admission))
+         .map(|upstream| Target {
+             server: upstream.backend.clone(),
+             tool: upstream.tool.clone(),
