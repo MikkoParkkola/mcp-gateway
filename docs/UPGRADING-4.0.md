@@ -3405,7 +3405,10 @@ both sides speak; stdio and WebSocket now do the same.
 - WebSocket: a rejection that lists the backend's revisions is retried once on the same socket.
   A rejection that lists none, or none in common, still fails with "WebSocket MCP initialize
   failed".
-- stdio diagnostics name the backend's error code, no longer its message.
+- stdio diagnostics name the backend's error code, no longer its message, and stdio debug logs
+  record line lengths, no longer the backend's lines or the frames sent to it.
+- The revisions the gateway speaks include `2026-07-28`: on every transport an `initialize`
+  answer selecting it is accepted, and the era probe settles the dialect.
 
 **Action:** a backend that fails to start with "Backend selected protocol version" needs a
 revision from the supported list, or a `protocol_version` pin it accepts.
