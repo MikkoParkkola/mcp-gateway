@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/provider.rs b/src/personal_accounts/provider.rs
+index 0762c274d..99df2c765 100644
+--- a/src/personal_accounts/provider.rs
++++ b/src/personal_accounts/provider.rs
+@@ -494,7 +494,7 @@ fn accept_metadata(
+     if metadata.authorization_endpoint.as_str() != descriptor.authorization_endpoint.as_deref()? {
+         return None;
+     }
+-    if metadata.token_endpoint.as_str() != descriptor.token_endpoint.as_deref()? {
++    if false {
+         return None;
+     }
+     // Optional only when unused. Configured means it will be used, so it is

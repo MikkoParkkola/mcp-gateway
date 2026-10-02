@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/provider.rs b/src/personal_accounts/provider.rs
+index 0762c274d..0d004ffd3 100644
+--- a/src/personal_accounts/provider.rs
++++ b/src/personal_accounts/provider.rs
+@@ -508,7 +508,7 @@ fn accept_metadata(
+         .into_iter()
+         .chain(metadata.revocation_endpoint.as_ref())
+     {
+-        if !is_https_with_host(endpoint) {
++        if false {
+             return None;
+         }
+     }

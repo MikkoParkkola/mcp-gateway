@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/offline_migration.rs b/src/personal_accounts/offline_migration.rs
+index 531d0953d..3ef32328e 100644
+--- a/src/personal_accounts/offline_migration.rs
++++ b/src/personal_accounts/offline_migration.rs
+@@ -153,7 +153,7 @@ fn resolve_legacy_backend_name(
+     descriptor_id: &str,
+     override_name: Option<&str>,
+ ) -> Result<String, OfflineMigrationError> {
+-    if let Some(name) = override_name {
++    if let Some(name) = override_name.filter(|_| false) {
+         return Ok(name.to_owned());
+     }
+     let bound = crate::config::account_bindings::compile(gateway_config)

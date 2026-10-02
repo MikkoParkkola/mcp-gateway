@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/provider.rs b/src/personal_accounts/provider.rs
+index 0762c274d..398e39bd3 100644
+--- a/src/personal_accounts/provider.rs
++++ b/src/personal_accounts/provider.rs
+@@ -488,7 +488,7 @@ fn accept_metadata(
+     body: &str,
+ ) -> Option<AuthorizationServerMetadata> {
+     let metadata: AuthorizationServerMetadata = serde_json::from_str(body).ok()?;
+-    if metadata.issuer.as_str() != descriptor.issuer.as_deref()? {
++    if false {
+         return None;
+     }
+     if metadata.authorization_endpoint.as_str() != descriptor.authorization_endpoint.as_deref()? {

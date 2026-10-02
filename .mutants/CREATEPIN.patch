@@ -1,0 +1,12 @@
+diff --git a/src/personal_accounts/storage.rs b/src/personal_accounts/storage.rs
+index 68fb5af87..97880ff92 100644
+--- a/src/personal_accounts/storage.rs
++++ b/src/personal_accounts/storage.rs
+@@ -323,7 +323,6 @@ fn create_directory(path: &Path) -> Result<(), AccountError> {
+     {
+         return Err(AccountError::StorageUnavailable);
+     }
+-    private_directory(path)?;
+     sync_directory(parent)
+ }
+ 

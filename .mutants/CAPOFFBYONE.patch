@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/journey/callback.rs b/src/personal_accounts/journey/callback.rs
+index fe8992827..8b0ff4c13 100644
+--- a/src/personal_accounts/journey/callback.rs
++++ b/src/personal_accounts/journey/callback.rs
+@@ -156,7 +156,7 @@ fn consume(
+ 
+ /// Refused before any store access (the oversize-state review row).
+ fn within_cap(state: &str, binding: Option<&str>) -> Result<(), JourneyError> {
+-    let over = |value: &str| value.len() > CALLBACK_SECRET_MAX;
++    let over = |value: &str| value.len() >= CALLBACK_SECRET_MAX;
+     if over(state) || binding.is_some_and(over) {
+         return Err(JourneyError::Refused(JourneyRefusal::InvalidRequest));
+     }

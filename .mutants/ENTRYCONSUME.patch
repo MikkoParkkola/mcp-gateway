@@ -1,0 +1,12 @@
+diff --git a/src/personal_accounts/journey/callback.rs b/src/personal_accounts/journey/callback.rs
+index fe8992827..3a2cc583a 100644
+--- a/src/personal_accounts/journey/callback.rs
++++ b/src/personal_accounts/journey/callback.rs
+@@ -201,7 +201,6 @@ impl PersonalAccountStore {
+         state: &str,
+         binding: Option<&str>,
+     ) -> Result<Consumed, JourneyError> {
+-        within_cap(state, binding)?;
+         self.journey_transition(now, limits, |tx| {
+             consume(&self.config, tx, state, binding, now)
+         })
