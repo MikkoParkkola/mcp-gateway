@@ -52,7 +52,7 @@ impl SyncLease {
         let mut state = self.state.lock();
         state.1 = state.1.saturating_sub(1);
         if state.1 == 0 {
-            state.0.unmark_dispatched();
+            state.0.dispatched = false;
         }
     }
 

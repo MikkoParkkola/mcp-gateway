@@ -90,7 +90,7 @@ impl MetaMcp {
         #[cfg(feature = "firewall")]
         {
             use crate::security::firewall::{FirewallAction, RelayCaller};
-            let fw = self.firewall.as_ref()?;
+            let fw = self.firewall.as_ref().filter(|fw| fw.relay_active())?;
             let capability = self
                 .get_capabilities()
                 .is_some_and(|cap| server == cap.name);

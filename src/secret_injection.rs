@@ -193,8 +193,8 @@ impl SecretInjector {
 
     /// Drop from `arguments` the keys [`Self::inject`] sets for `backend:tool`
     /// whatever the caller sent, since the value the caller put there never
-    /// leaves the gateway (an empty resolved credential skips its rule, which
-    /// is a misconfiguration this does not model).
+    /// leaves the gateway. A rule whose credential resolves empty (injection
+    /// skips it) or fails keeps the caller's value in view.
     pub(crate) fn strip_overwritten(
         &self,
         backend: &str,
@@ -205,6 +205,13 @@ impl SecretInjector {
             return;
         };
         for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+            if !self
+                .resolver
+                .resolve(&rule.value)
+                .is_ok_and(|v| !v.is_empty())
+            {
+                continue;
+            }
             match rule.inject_as {
                 InjectTarget::Argument => {
                     obj.remove(&rule.inject_key);
