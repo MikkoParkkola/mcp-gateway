@@ -91,6 +91,7 @@ impl CapabilityExecutor {
         context: &CapabilityExecutionContext,
     ) -> Result<Value> {
         admit(&self.process_policy, capability, process)?;
+        let params = &with_schema_defaults(params, &capability.schema.input);
         match process {
             ProcessConfig::Cli(config) => {
                 self.execute_cli(capability, config, params, context).await
@@ -100,6 +101,27 @@ impl CapabilityExecutor {
             }
         }
     }
+}
+
+/// The call's parameters plus every schema `default` the caller left out.
+///
+/// Validation does not apply defaults, and an argv template cannot invent one,
+/// so a property such as `calendarId: primary` would otherwise be missing.
+fn with_schema_defaults(params: &Value, input_schema: &Value) -> Value {
+    let mut merged = params.clone();
+    if let (Some(map), Some(props)) = (
+        merged.as_object_mut(),
+        input_schema.get("properties").and_then(Value::as_object),
+    ) {
+        for (name, prop) in props {
+            if let Some(default) = prop.get("default")
+                && map.get(name).is_none_or(Value::is_null)
+            {
+                map.insert(name.clone(), default.clone());
+            }
+        }
+    }
+    merged
 }
 
 #[cfg(test)]

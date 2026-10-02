@@ -4,7 +4,7 @@
 //! file whose pin matched, names an allowed invocation exactly, and the switch
 //! is on. Everything else is refused before anything is resolved or spawned.
 
-use super::{ProcessPolicy, admit};
+use super::{ProcessPolicy, admit, with_schema_defaults};
 use crate::capability::definition::{Integrity, ProcessConfig};
 use crate::capability::{
     CapabilityDefinition, compute_capability_hash, parse_capability, parse_capability_file,
@@ -126,4 +126,17 @@ async fn an_operator_list_replaces_the_shipped_one() {
         admit(&policy, &gws, process(&gws)).is_err(),
         "shipped list replaced"
     );
+}
+
+#[test]
+fn schema_defaults_fill_only_missing_or_null() {
+    let schema = serde_json::json!({"properties": {
+        "calendar_id": {"default": "primary"},
+        "format": {"default": "json"},
+        "n": {"type": "integer"}
+    }});
+    let merged = with_schema_defaults(&serde_json::json!({"format": "csv"}), &schema);
+    assert_eq!(merged["calendar_id"], "primary");
+    assert_eq!(merged["format"], "csv");
+    assert!(merged.get("n").is_none());
 }
