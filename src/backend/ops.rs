@@ -137,11 +137,10 @@ impl Backend {
         ) else {
             return headers;
         };
-        if let Some(mirrors) = self.with_cached_tool_for(identity_key, name, |tool| {
+        let mirrors = self.with_cached_tool_for(identity_key, name, |tool| {
             mirror_headers(&tool.input_schema, arguments)
-        }) {
-            headers.extend(mirrors);
-        }
+        });
+        headers.extend(mirrors.into_iter().flatten());
         headers
     }
 
