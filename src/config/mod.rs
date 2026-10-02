@@ -56,13 +56,14 @@ pub use features::{
     AgentAuthConfig, AgentDefinitionConfig, AgentIdentityConfig, ApiKeyConfig, ApiKeyKind,
     AuthConfig, CacheConfig, CapabilityConfig, CapabilityErrorBudgetSection, ChainEmit, ChainMode,
     CircuitBreakerConfig, CodeModeConfig, ContextIntegrityConfig, ContextIntegrityPresetConfig,
-    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig,
+    DEFAULT_MAX_WORKERS, DashboardSessionConfig, ErrorBudgetSection, FailsafeConfig, FileRoots,
     HealthCheckConfig, IdempotencyConfig, IdempotencyReadOnlyTool, IdentityGrantsConfig,
     KeyServerConfig, KeyServerOidcConfig, KeyServerPolicyConfig, KeyServerProviderConfig,
-    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, RateLimitConfig,
-    RemoteServerSigningConfig, ResponseContractConfig, RetryConfig, RuntimeAvailabilityConfig,
-    RuntimeConfig, RuntimeProfileConfig, SecurityConfig, SignatureChainConfig, StreamingConfig,
-    TasksConfig, ToolContractConfig, WebhookConfig, api_key_digest_spec,
+    PlaybooksConfig, PolicyMatchConfig, PolicyScopesConfig, ProcessCommand, ProcessExecution,
+    RateLimitConfig, RemoteServerSigningConfig, ResponseContractConfig, RetryConfig,
+    RuntimeAvailabilityConfig, RuntimeConfig, RuntimeProfileConfig, SecurityConfig,
+    SignatureChainConfig, StreamingConfig, TasksConfig, ToolContractConfig, WebhookConfig,
+    api_key_digest_spec,
 };
 pub use features::{EventsConfig, EventsRateLimit, EventsSourcesConfig};
 pub(crate) use features::{api_key_expired, parse_api_key_digest, parse_cidr};
