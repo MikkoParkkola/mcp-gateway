@@ -1,0 +1,8 @@
+head_sha	f1ba3dca6dfc6b9c02fae9e553560ed2a3910928
+# MIK-7698 + MIK-7699 PR 2675
+EXPOSE0	linux	expose.patch	--lib gateway::meta_mcp::signing::unspent_tests::a_hidden_gateway_invoke_leaves_the_nonce_unspent -- --exact
+ANSWERS0	linux	answers.patch	--test hardened_signing_e2e a_refused_meta_call_leaves_its_nonce_unspent -- --exact
+ADMIN0	linux	admin.patch	--lib gateway::meta_mcp::signing::unspent_tests::an_admin_refusal_leaves_the_nonce_unspent -- --exact
+UNCONF0	linux	unconf.patch	--lib gateway::meta_mcp::signing::unspent_tests::an_unconfirmable_destructive_call_leaves_the_nonce_unspent -- --exact
+FAILSAFE0	linux	failsafe.patch	--lib gateway::meta_mcp::signing::unspent_tests::dispatch_refuses_a_signed_call_left_unadmitted -- --exact
+TASKGATE0	linux	taskgate.patch	--lib gateway::router::tests::task_execution_adapter::confirmation::hardened_signing::the_task_gate_challenge_is_unsigned_and_its_follow_up_spends_the_nonce -- --exact

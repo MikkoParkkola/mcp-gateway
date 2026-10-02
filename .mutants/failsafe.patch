@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -349,7 +349,7 @@
+         id: &crate::protocol::RequestId,
+         caller: &super::MetaMcpCallerContext<'_>,
+     ) -> Option<crate::protocol::JsonRpcResponse> {
+-        (self.signing_enabled() && caller.awaits_signing_admission()).then(|| {
++        false.then(|| {
+             crate::protocol::JsonRpcResponse::error(
+                 Some(id.clone()),
+                 -32603,

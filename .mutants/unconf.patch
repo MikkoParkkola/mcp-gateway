@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -379,7 +379,7 @@
+         // leave unspent, and its refusal stays as cheap as it was.
+         if self.refused_before_dispatch(tool_name, caller)
+             || (context.nonce_value()?.is_some()
+-                && super::confirmation::unconfirmable(tool_name, caller))
++                && false)
+         {
+             return Ok(());
+         }

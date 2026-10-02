@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -336,8 +336,7 @@
+     ) -> bool {
+         !self.meta_tool_exposure.is_exposed(tool_name)
+             || caller.retry.solicited_input_responses().is_err()
+-            || !crate::gateway::router::CallerStanding::of_admin_flag(caller.is_admin)
+-                .permits(tool_name)
++
+     }
+ 
+     /// Dispatch's refusal of a signed call whose nonce was left unadmitted.

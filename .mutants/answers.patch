@@ -1,0 +1,11 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -335,7 +335,6 @@
+         caller: &super::MetaMcpCallerContext<'_>,
+     ) -> bool {
+         !self.meta_tool_exposure.is_exposed(tool_name)
+-            || caller.retry.solicited_input_responses().is_err()
+             || !crate::gateway::router::CallerStanding::of_admin_flag(caller.is_admin)
+                 .permits(tool_name)
+     }

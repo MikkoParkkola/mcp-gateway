@@ -1,0 +1,29 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -251,7 +251,7 @@
+     }
+ 
+     /// The captured nonce, or the refusal of a malformed one.
+-    fn nonce_value(&self) -> crate::Result<Option<&str>> {
++    pub(crate) fn nonce_value(&self) -> crate::Result<Option<&str>> {
+         match &self.nonce {
+             CapturedNonce::Missing => Ok(None),
+             CapturedNonce::Value(value) => Ok(Some(value.as_str())),
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -1404,6 +1404,13 @@
+             // Awaited into its own binding before the match, so the borrow of
+             // `retry` ends with the statement and the `NotRequired` arm can hand
+             // the same fields straight back.
++            if let Some(context) = signing_context.as_ref()
++                && let Ok(nonce) = context.nonce_value()
++            {
++                let principal = crate::gateway::authz::ToolAuthorizer::quota_principal(&router_authorizer)
++                    .map_or("anonymous", crate::gateway::auth::QuotaPrincipal::as_store_key);
++                let _ = state.meta_mcp.admit_signing_nonce(nonce, principal);
++            }
+             let confirmation = state
+                 .meta_mcp
+                 .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
