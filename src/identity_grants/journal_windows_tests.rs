@@ -46,6 +46,31 @@ fn an_existing_journal_others_can_write_is_refused_on_append() {
     );
 }
 
+/// MIK-7711.GH2304.2: the refusal carries the Integrity-class PowerShell
+/// repair the guarded reader prints for the same file, not a `Debug` list.
+#[test]
+fn the_append_refusal_prints_the_integrity_repair() {
+    let row = "7711-W1";
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("j");
+    std::fs::write(&journal, "old\n").unwrap();
+    plant_file_with(row, &journal, EVERYONE_WRITE);
+
+    let text = append_line(&journal, b"new\n").unwrap_err().to_string();
+
+    // A short-name temp path (RUNNER~1) fails the printer's path allowlist and
+    // gets the prose repair, so accept either form; both name the gateway
+    // account by SID and carry the Integrity-class trust of SYSTEM and
+    // Administrators. The old `Debug` list and hint carry neither.
+    let me = crate::private_fs::user_sid_string().expect("the runner's SID");
+    assert!(
+        text.contains(&me)
+            && (text.contains("(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;WD)")
+                || text.contains("SYSTEM, Administrators")),
+        "WT-ASSERT {row}: no Integrity repair for SID {me} in {text}"
+    );
+}
+
 #[test]
 fn an_existing_journal_others_can_only_read_is_appended_to() {
     let row = "1718-W6b";
