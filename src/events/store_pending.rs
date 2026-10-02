@@ -96,6 +96,13 @@ fn dead_size(dead: &DeadLetter) -> u64 {
     serde_json::to_vec_pretty(dead).map_or(0, |b| u64::try_from(b.len()).unwrap_or(u64::MAX))
 }
 
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "dead-letter administration is served by the web UI router"
+    )
+)]
 /// A dead letter without its body, for the admin listing.
 #[derive(Debug, Clone)]
 pub(crate) struct DeadSummary {
@@ -108,6 +115,13 @@ pub(crate) struct DeadSummary {
     pub attempts: u32,
 }
 
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "dead-letter administration is served by the web UI router"
+    )
+)]
 /// What [`Store::revive`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Revived {
@@ -174,6 +188,13 @@ impl Store {
         Ok(Enqueued::Written)
     }
 
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "dead-letter administration is served by the web UI router"
+        )
+    )]
     /// Every dead letter's metadata, oldest first: never a body, so a full
     /// directory is listed without copying it.
     pub(crate) fn dead_summaries(&self) -> Vec<DeadSummary> {
@@ -195,11 +216,25 @@ impl Store {
         all
     }
 
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "dead-letter administration is served by the web UI router"
+        )
+    )]
     /// Dead letter `event_id`, body included.
     pub(crate) fn dead_letter_by_id(&self, event_id: &str) -> Option<DeadLetter> {
         self.state.lock().dead.get(event_id).map(|(d, _)| d.clone())
     }
 
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "dead-letter administration is served by the web UI router"
+        )
+    )]
     /// Move dead letter `event_id` back to the outbox as `record` (the same
     /// event id, a fresh attempt count), in one locked step: the dead letter
     /// leaves `dead/` only once the record is placed. `dead_at` names the

@@ -9,6 +9,13 @@
 //! only: webhook mode needs an authenticated principal, which a stdio
 //! session does not carry.
 
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "dead-letter administration is served by the web UI router"
+    )
+)]
 mod admin;
 mod client;
 mod dedupe;
