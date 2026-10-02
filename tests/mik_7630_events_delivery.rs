@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7630 increment I2: delivery protocol rows (design §10: T15-T17, T20
-//! without `_meta`, T29, T31-T33 fan-out and retry clauses, T43).
+//! MIK-7630 increments I2 and I3: delivery protocol rows (design §10: T15-T17,
+//! T20, T29, T30, T31-T33 fan-out and retry clauses, T43).
 //!
 //! Events are triggered by POSTs to the inbound webhook route; today the route
 //! accepts them and emits nothing, so every row goes red at its first
@@ -26,7 +26,7 @@ use delivery::{
     DEADLINE, audit_mentioning, dead_with_reason, delivery_config, events_at_least, fast_retry,
     fire, sha256_hex, start, start_cfg, subscribe, unsubscribe, wait_until,
 };
-use gateway::{ALICE, EVENT};
+use gateway::{ALICE, EVENT, Gateway};
 use receiver::{ConnCounter, EventReply, Received, Receiver, whsec};
 use serde_json::{Value, json};
 
@@ -76,8 +76,12 @@ async fn retries_keep_webhook_id_and_resign() {
     }
 }
 
-/// T20 (EVENTS.6), without the `_meta` clause (I3): the body is exactly the
-/// protocol fields and the transform output, nothing the gateway invented.
+/// The `_meta` key the gateway's provenance receipt rides under (§3.6).
+const PROVENANCE: &str = "io.github.mikkoparkkola/provenance";
+
+/// T20 (EVENTS.6): the body is exactly the protocol fields and the
+/// transform output, nothing the gateway invented; `_meta` holds only the
+/// provenance receipt (I3).
 #[tokio::test]
 async fn delivered_body_contains_only_protocol_fields_and_source_data() {
     let root = tempfile::tempdir().expect("root");
@@ -95,8 +99,14 @@ async fn delivered_body_contains_only_protocol_fields_and_source_data() {
         .collect();
     assert_eq!(
         keys,
-        BTreeSet::from(["cursor", "data", "eventId", "name", "timestamp"])
+        BTreeSet::from(["_meta", "cursor", "data", "eventId", "name", "timestamp"])
     );
+    let meta: Vec<&String> = body["_meta"]
+        .as_object()
+        .expect("_meta object")
+        .keys()
+        .collect();
+    assert_eq!(meta, [PROVENANCE], "_meta holds only the receipt");
     assert_eq!(body["name"], EVENT);
     assert_eq!(body["cursor"], Value::Null);
     assert_eq!(
@@ -107,6 +117,53 @@ async fn delivered_body_contains_only_protocol_fields_and_source_data() {
         body["eventId"].as_str(),
         posts[0].header("webhook-id").as_deref(),
         "webhook-id carries the eventId"
+    );
+}
+
+/// T30 (SAFETY.6): the provenance receipt rides in `_meta` with subject kind
+/// `event`, verifies against the gateway's provenance key when stamping is
+/// on, and sits inside the body the webhook signature covers.
+#[tokio::test]
+async fn provenance_rides_in_meta_and_is_signed() {
+    const KEY: &str = "events-provenance-test-key-0123456789";
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["security"]["provenance_stamping"] = json!(true);
+    let (trust, bundle) = rx.trust_env();
+    let gw = Gateway::start_with_env(
+        root.path(),
+        cfg,
+        &[
+            (trust, &bundle),
+            ("GATEWAY_ATTESTATION_SIGNING_KEY", KEY),
+            ("GATEWAY_ATTESTATION_KEY_ID", "events-test"),
+        ],
+    )
+    .await;
+    gw.event_names(Some(ALICE), Some(EVENT)).await;
+    let secret = whsec(32);
+    subscribe(&gw, ALICE, &rx.url, &secret, json!({})).await;
+    fire(&gw, "d-30", "o/r").await;
+    let posts = events_at_least(&rx, 1).await;
+    assert!(
+        posts[0].signed_by(&secret),
+        "the receipt is inside the signed body"
+    );
+    let stamped = posts[0].json()["_meta"][PROVENANCE].clone();
+    assert_eq!(stamped["receipt"]["subject_kind"], "event");
+    assert_eq!(stamped["receipt"]["tool"], EVENT);
+    let signed: mcp_gateway::trust::SignedResultProvenance =
+        serde_json::from_value(stamped).expect("a signed receipt");
+    let validator = mcp_gateway::attestation::AttestationValidator::new(
+        mcp_gateway::attestation::BnautAttestationSigner::new(
+            KEY.as_bytes().to_vec(),
+            "events-test",
+        ),
+    );
+    assert!(
+        validator.verify_result_provenance(&signed),
+        "signed with the gateway's provenance key"
     );
 }
 
