@@ -149,6 +149,10 @@ impl StdioTransport {
         // `npx`/`uvx`-style launchers otherwise leave the real server behind.
         let mut wrap = CommandWrap::from(cmd);
         wrap.wrap(KillOnDrop);
+        #[cfg(unix)]
+        wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
+        #[cfg(windows)]
+        wrap.wrap(process_wrap::tokio::JobObject);
         let mut child = wrap.spawn().map_err(|e| match e.kind() {
             // A command path that does not exist, or a file that is not
             // executable. No amount of waiting fixes either, and warm-start
@@ -719,9 +723,16 @@ async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
     frame: &mut Vec<u8>,
 ) -> std::io::Result<Option<String>> {
     frame.clear();
-    let read = reader.read_until(b'\n', frame).await?;
+    let limit = u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX) + 1;
+    let read = reader.take(limit).read_until(b'\n', frame).await?;
     if read == 0 {
         return Ok(None);
+    }
+    if frame.len() > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("stdio frame over {MAX_FRAME_BYTES} bytes"),
+        ));
     }
     if frame.last() == Some(&b'\n') {
         frame.pop();
