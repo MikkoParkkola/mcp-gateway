@@ -421,3 +421,54 @@ async fn a_legacy_row_is_refused_when_its_tool_is_disabled_by_policy() {
     }
     assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
 }
+
+/// A catalogue that is gone is not a catalogue with nothing withheld: the
+/// legacy row is refused while its backend's list is absent (MIK-7686).
+#[tokio::test]
+async fn a_legacy_row_is_refused_when_its_backend_catalogue_is_absent() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_invoke(&state, "b-legacy-absent").await;
+    strip_targets(&state, &id);
+    let backend = state.backends.get(BACKEND).expect("the mock is registered");
+    let _ = backend.remember_listed_tools(None, false, &[]);
+    backend.invalidate_tools_cache();
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+}
+
+/// A backend that forwards caller identity lists per caller, so the shared
+/// catalogue says nothing about what this caller may call (MIK-7686).
+#[tokio::test]
+async fn a_legacy_row_is_refused_when_its_backend_lists_per_caller() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let id = finished_invoke(&state, "b-legacy-per-caller").await;
+    strip_targets(&state, &id);
+    assert!(state.backends.remove(BACKEND));
+    let backend = Arc::new(Backend::new(
+        BACKEND,
+        BackendConfig {
+            enabled: true,
+            identity_propagation: Some(crate::identity_propagation::IdentityPropagationConfig {
+                strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
+                audience: "legacy".to_string(),
+                required: true,
+                session_mode: crate::identity_propagation::SessionMode::PerUser,
+                token_exchange_endpoint: None,
+                token_exchange_scope: None,
+            }),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::clone(&mock) as Arc<dyn Transport>);
+    let listed = json!({"name": TOOL, "description": "Reads.", "inputSchema": {"type": "object"}});
+    let _ = backend.remember_listed_tools(None, false, &[listed]);
+    assert!(
+        backend.cached_tools_known(),
+        "the shared catalogue is filled"
+    );
+    assert!(state.backends.register(backend));
+    assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
+}
