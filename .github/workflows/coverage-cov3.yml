@@ -41,9 +41,14 @@ jobs:
             b=$(basename "$f")
             pid=$(printf '%s' "$b" | sed -E 's/^.*-([0-9]+)-[0-9]+_[0-9]+\.profraw$/\1/')
             size=$(stat -c %s "$f")
+            mtime=$(stat -c %.9Y "$f")
             if "$tool" show "$f" > /dev/null 2>&1; then s=ok; else s=CORRUPT; bad=$((bad+1)); fi
-            printf '%s %s %s %s\n' "$pid" "$s" "$size" "$b"
+            printf '%s %s %s %s %s\n' "$mtime" "$pid" "$s" "$size" "$b"
           done | sort -n > profiles.txt
+          # A test binary writes its profile when it exits, after its children,
+          # and binaries run one at a time: map each corrupt profile to the
+          # test binary whose profile follows it in time.
+          grep -n -A4 CORRUPT profiles.txt || true
           cat profiles.txt
           n=$(grep -c ' CORRUPT ' profiles.txt || true)
           echo "corrupt profiles: $n"
