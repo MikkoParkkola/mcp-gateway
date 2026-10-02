@@ -128,6 +128,10 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           python3 scripts/ci/test_throwaway_routing.py
+      - name: Validate that release-line PRs changing the image build it
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/test_docker_pr_scope.py
       - name: Validate docs-only gating (classifier and job routing)
         run: |
           bash scripts/ci/changed-scope.sh --self-test
