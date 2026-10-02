@@ -510,3 +510,23 @@ async fn d6b_stdio_with_a_missing_config_offers_the_reload_tool_for_its_fallback
     let missing = dir.path().join("missing.yaml").display().to_string();
     assert_stdio_offers_reload(dir.path(), &["--config", &missing]).await;
 }
+
+/// MIK-7634: a gateway configured with `server.port: 0` serves on the port it
+/// reports, so no test hands a port to the child and waits for it to bind.
+#[tokio::test]
+async fn d6_a_gateway_on_port_zero_serves_on_the_port_it_reports() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_owner_only(&dir.path().join(".env"), "DISCOVERED_VALUE=one\n");
+    write_owner_only(
+        &dir.path().join("gateway.yaml"),
+        &http_config(0, ".env", false, false),
+    );
+    let gateway = HttpGateway::spawn(dir.path(), dir.path(), 0, &[]).await;
+    assert_ne!(gateway.port, 0, "the reported port replaces the configured 0");
+    let probe = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{}/livez", gateway.port))
+        .send()
+        .await
+        .expect("the gateway answers on the port it reported");
+    assert!(probe.status().is_success(), "{}", gateway.logs());
+}
