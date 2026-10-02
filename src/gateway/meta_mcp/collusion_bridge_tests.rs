@@ -13,11 +13,11 @@ use crate::backend::BackendRegistry;
 use crate::gateway::input_bridge::{ClientChannel, DeliveryError, NoClientChannel};
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::RequestId;
+use crate::protocol::meta::Era;
 use crate::protocol::mrtr::{NO_RETRY, RetryFields};
 use crate::security::firewall::{
     CollusionAction, CollusionConfig, Firewall, FirewallConfig, RelayCaller,
 };
-use Era;
 
 /// Ordinary prose, long enough for several fingerprints.
 const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \

@@ -4,6 +4,7 @@
 //! a task whose result the firewall refused records nothing.
 use super::super::*;
 use super::support::*;
+use pretty_assertions::assert_eq;
 
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
