@@ -327,10 +327,41 @@ impl CapabilityExecutor {
         params: &Value,
         context: &CapabilityExecutionContext,
     ) -> Result<Value> {
-        let _ = (capability, config, params, context);
-        Err(Error::Config(
-            "MCP capability execution is not implemented yet".into(),
-        ))
+        let params = super::cli::confine_paths(capability, params, &self.process_policy.files)?;
+        let (tool, template, prepare) = select(config, &params)?;
+        let principal = principal(capability, context, self.multi_user.load(Ordering::Acquire))?;
+        self.mcp_children.ensure_sweeper();
+        let (backend, _busy) = self
+            .mcp_children
+            .acquire(capability, config, &principal, || {
+                self.start_mcp(capability, config)
+            })?;
+
+        let mut args = arguments(template, &params)?;
+        if let Some(prepare) = prepare {
+            let first = call_tool(
+                &backend,
+                &prepare.tool,
+                arguments(prepare.arguments.as_ref(), &params)?,
+            )
+            .await?;
+            let object = prepare_object(first).ok_or_else(|| {
+                Error::Protocol(format!(
+                    "prepare tool '{}' returned no object",
+                    prepare.tool
+                ))
+            })?;
+            for (arg, field) in &prepare.bind {
+                let value = object.get(field).cloned().ok_or_else(|| {
+                    Error::Protocol(format!(
+                        "prepare tool '{}' returned no '{field}'",
+                        prepare.tool
+                    ))
+                })?;
+                args.insert(arg.clone(), value);
+            }
+        }
+        call_tool(&backend, tool, args).await
     }
 
     /// A new backend for one caller's child, in its own directory tree.
