@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """NFR.BUILD.1 C6 sampler: hash-ordered Critical rows per named path.
-usage: c6-sampler.py NONCE [INVENTORY]  -> prints every Critical row ranked
-within its path (rank, path, file, qualified, occurrence, reason); the first
-QUOTA[path] ranks are the sample, the next ranks are understudies."""
+usage: c6_mutation_sample.py NONCE [INVENTORY] -> prints every Critical row
+ranked within its path as rank, status, path, file, qualified, occurrence,
+reason; the first QUOTA[path] ranks are SAMPLE, later ranks understudies."""
 import sys, hashlib
 P = {"startup": ["src/gateway/server/"], "OAuth": ["src/oauth/"],
      "HTTP dispatch": ["src/transport/http/", "src/gateway/router/"],
@@ -15,11 +15,14 @@ P = {"startup": ["src/gateway/server/"], "OAuth": ["src/oauth/"],
 QUOTA = {"account paths": 16, "HTTP dispatch": 16}  # others 8 (bridge has 4)
 nonce, inv = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "docs/release/v4.0.0-critical-functions.tsv")
 by = {}
-for line in open(inv):
+for line in open(inv, encoding="utf-8"):
     f = line.rstrip("\n").split("\t")
     if line.startswith(("#", "path\t")) or f[3] != "critical":
         continue
-    path = max(((p, k) for k, ps in P.items() for p in ps if f[0].startswith(p)), key=lambda x: len(x[0]))[1]
+    hits = [(p, k) for k, ps in P.items() for p in ps if f[0].startswith(p)]
+    if not hits:
+        sys.exit(f"{f[0]}: Critical row outside every named path; update P")
+    path = max(hits, key=lambda x: len(x[0]))[1]
     by.setdefault(path, []).append(f)
 for path, rows in sorted(by.items()):
     key = lambda f: hashlib.sha256("\t".join([nonce, f[0], f[5], f[2]]).encode()).hexdigest()

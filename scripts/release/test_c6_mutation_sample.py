@@ -16,7 +16,7 @@ RANKING = ROOT / "docs/release/v4.0.0-c6-mutation-ranking.tsv"
 
 class C6Sample(unittest.TestCase):
     def test_published_ranking_reproduces(self):
-        text = RANKING.read_text()
+        text = RANKING.read_text(encoding="utf-8")
         nonce = re.search(r"c6_mutation_sample\.py ([0-9a-f]{32})", text).group(1)
         published = [l for l in text.splitlines() if l and not l.startswith(("#", "rank\t"))]
         drawn = subprocess.run(
@@ -26,10 +26,14 @@ class C6Sample(unittest.TestCase):
         self.assertEqual(published, drawn)
 
     def test_sample_quotas(self):
-        rows = [l.split("\t") for l in RANKING.read_text().splitlines()
+        rows = [l.split("\t") for l in RANKING.read_text(encoding="utf-8").splitlines()
                 if l and not l.startswith(("#", "rank\t"))]
-        sample = [r for r in rows if r[1] == "SAMPLE"]
-        self.assertEqual(len(sample), 68)
+        counts = {}
+        for r in rows:
+            if r[1] == "SAMPLE":
+                counts[r[2]] = counts.get(r[2], 0) + 1
+        self.assertEqual(counts, {"account paths": 16, "HTTP dispatch": 16, "startup": 8,
+                                  "OAuth": 8, "stdio dispatch": 8, "tasks": 8, "bridge": 4})
 
 
 if __name__ == "__main__":
