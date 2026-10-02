@@ -14,6 +14,7 @@ use crate::gateway::meta_mcp::{LOCAL_OPERATOR_PRINCIPAL, MetaMcp, MetaMcpCallerC
 
 /// Who a relay is keyed on: a caller's key, or the unkeyed fallback bucket.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) struct RelayKey<'a> {
     key: &'a str,
     keyed: bool,
@@ -46,12 +47,13 @@ pub(super) fn outbound_params(
     prompt_cache_key: Option<&str>,
     retry: &OutboundRetry,
 ) -> Value {
-    let mut params = serde_json::json!({ "name": tool, "arguments": arguments });
-    if let Some(meta) = build_outbound_meta(inbound_meta, prompt_cache_key)
-        && let Value::Object(map) = &mut params
-    {
+    let mut map = serde_json::Map::new();
+    map.insert("name".to_string(), Value::String(tool.to_owned()));
+    map.insert("arguments".to_string(), arguments);
+    if let Some(meta) = build_outbound_meta(inbound_meta, prompt_cache_key) {
         map.insert("_meta".to_string(), meta);
     }
+    let mut params = Value::Object(map);
     retry.apply(&mut params);
     params
 }
@@ -190,12 +192,15 @@ impl super::BridgeDispatcher<'_> {
 }
 
 /// One result staged for recording, committed only once it is delivered.
+/// It holds the capped recording text, never the whole result.
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 struct Receipt {
     key: String,
     keyed: bool,
     server: String,
     tool: String,
-    value: Value,
+    #[cfg(feature = "firewall")]
+    digest: crate::security::firewall::DeliveryDigest,
 }
 
 tokio::task_local! {
@@ -215,26 +220,70 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
 impl MetaMcp {
     /// Stage `value`, the result `server:tool` answered `who` with, as gated.
     /// A no-op outside a collector or with relay detection off.
-    // ponytail: the value is held whole until commit; stage the capped text
-    // instead if large results show up in memory profiles.
     pub(crate) fn stage_relay_receipt(
+        &self,
+        who: RelayKey<'_>,
+        target: (&str, &str),
+        value: &Value,
+    ) {
+        if let Some(receipt) = self.receipt(who, target, value) {
+            let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().push(receipt));
+        }
+    }
+
+    /// An upstream task's gated result, staged for `who` at settlement: it
+    /// replaces the `working` stub its dispatch staged under `server:tool`,
+    /// or is added when gates refused that stub.
+    pub(crate) fn stage_upstream_result(
+        &self,
+        who: RelayKey<'_>,
+        target: (&str, &str),
+        value: &Value,
+    ) {
+        let Some(receipt) = self.receipt(who, target, value) else {
+            return;
+        };
+        let _ = RELAY_RECEIPTS.try_with(|receipts| {
+            let mut receipts = receipts.borrow_mut();
+            let stub = receipts.iter().rposition(|r| {
+                (r.server.as_str(), r.tool.as_str()) == target && r.key == receipt.key
+            });
+            match stub {
+                Some(at) => receipts[at] = receipt,
+                None => receipts.push(receipt),
+            }
+        });
+    }
+
+    /// `value` reduced to a receipt for `who`; `None` with relay detection
+    /// off or outside a collector.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
+    fn receipt(
         &self,
         who: RelayKey<'_>,
         (server, tool): (&str, &str),
         value: &Value,
-    ) {
-        if !self.relay_on() {
-            return;
-        }
-        let _ = RELAY_RECEIPTS.try_with(|receipts| {
-            receipts.borrow_mut().push(Receipt {
+    ) -> Option<Receipt> {
+        RELAY_RECEIPTS.try_with(|_| ()).ok()?;
+        #[cfg(feature = "firewall")]
+        {
+            let digest = self
+                .firewall
+                .as_ref()?
+                .delivery_digest(server, tool, value)?;
+            Some(Receipt {
                 key: who.key.to_owned(),
                 keyed: who.keyed,
                 server: server.to_owned(),
                 tool: tool.to_owned(),
-                value: value.clone(),
-            });
-        });
+                digest,
+            })
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            let _ = (who, server, tool, value);
+            None
+        }
     }
 
     /// Record every staged receipt, when `response` is a delivered result
@@ -251,13 +300,15 @@ impl MetaMcp {
         if !delivered {
             return;
         }
-        for receipt in receipts {
-            let who = RelayKey {
-                key: &receipt.key,
-                keyed: receipt.keyed,
-            };
-            self.record_relay_delivery(who, (&receipt.server, &receipt.tool), &receipt.value);
+        #[cfg(feature = "firewall")]
+        if let Some(fw) = self.firewall.as_ref() {
+            for r in receipts {
+                let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
+                fw.record_digest(caller, &r.server, &r.tool, &r.digest);
+            }
         }
+        #[cfg(not(feature = "firewall"))]
+        drop(receipts);
     }
 
     /// A copy of `result` to compare after a final check, when receipts are
@@ -288,8 +339,19 @@ impl MetaMcp {
             self.surfaced_tool_server(tool_name)
                 .map(|server| (server, tool_name))
         };
-        if let (Some(target), Some(result)) = (target, replay.result.as_ref()) {
-            self.stage_relay_receipt(caller.relay_caller(session_id), target, result);
+        let Some(result) = replay.result.as_ref() else {
+            return;
+        };
+        // A `gateway_invoke` answer wraps the tool's value as JSON text: stage
+        // that value, verdict slot included, as a live call stages it.
+        let unwrapped = if tool_name == "gateway_invoke" {
+            super::audit::invoke_value(result)
+        } else {
+            None
+        };
+        if let Some(target) = target {
+            let value = unwrapped.as_ref().unwrap_or(result);
+            self.stage_relay_receipt(caller.relay_caller(session_id), target, value);
         }
     }
 
@@ -326,26 +388,17 @@ impl MetaMcp {
     }
 }
 
-/// An upstream task's gated result replaces the `working` stub its dispatch
-/// staged under `server:tool`, so settlement records what was delivered.
-pub(crate) fn restage((server, tool): (&str, &str), value: &Value) {
-    let _ = RELAY_RECEIPTS.try_with(|receipts| {
-        let mut receipts = receipts.borrow_mut();
-        let staged = receipts
-            .iter_mut()
-            .rev()
-            .find(|r| r.server == server && r.tool == tool);
-        if let Some(staged) = staged {
-            staged.value = value.clone();
-        }
-    });
+/// Drop every staged receipt: what was staged was never delivered (a
+/// state-only round the gateway answered for itself).
+pub(crate) fn discard_staged() {
+    let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().clear());
 }
 
 /// A final check that changed the delivered result (a redaction) leaves the
 /// staged receipts describing text the caller never got: drop them all.
 #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
-pub(crate) fn discard_if_changed(snapshot: Option<Value>, result: &Value) {
-    if snapshot.is_some_and(|before| before != *result) {
+pub(crate) fn discard_if_changed(snapshot: Option<Value>, result: Option<&Value>) {
+    if snapshot.is_some_and(|before| Some(&before) != result) {
         let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().clear());
     }
 }

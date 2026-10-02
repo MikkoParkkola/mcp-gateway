@@ -280,9 +280,20 @@ impl Firewall {
         tool: &str,
         result: &Value,
     ) {
-        let Some(detector) = self.relay_detector() else {
-            return;
-        };
+        if let Some(digest) = self.delivery_digest(server, tool, result) {
+            self.record_digest(caller, server, tool, &digest);
+        }
+    }
+
+    /// What recording `result` from `server:tool` needs, taken now: its
+    /// capped text and sensitivity. `None` when relay detection is off.
+    pub(crate) fn delivery_digest(
+        &self,
+        server: &str,
+        tool: &str,
+        result: &Value,
+    ) -> Option<DeliveryDigest> {
+        self.relay_detector()?;
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
             || context_integrity_sensitive(result);
@@ -290,8 +301,31 @@ impl Firewall {
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
         }
-        detector.record_delivery_at(&source, caller.key(), sensitive, &text, Instant::now());
+        Some(DeliveryDigest { text, sensitive })
     }
+
+    /// Record `digest` as delivered to `caller` from `server:tool`.
+    pub(crate) fn record_digest(
+        &self,
+        caller: RelayCaller<'_>,
+        server: &str,
+        tool: &str,
+        digest: &DeliveryDigest,
+    ) {
+        let Some(detector) = self.relay_detector() else {
+            return;
+        };
+        let source = format!("{server}:{tool}");
+        let (text, sensitive) = (&digest.text, digest.sensitive);
+        detector.record_delivery_at(&source, caller.key(), sensitive, text, Instant::now());
+    }
+}
+
+/// A delivery reduced to what recording it needs, so a staged receipt holds
+/// at most [`RECORD_CAP`] of text rather than the whole result.
+pub(crate) struct DeliveryDigest {
+    text: String,
+    sensitive: bool,
 }
 
 fn relay_finding(description: String, matched: String) -> Finding {

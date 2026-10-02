@@ -80,10 +80,10 @@ impl<'a> Settling<'a> {
         loop {
             let round = match classify_dispatch(response) {
                 DispatchSettlement::Complete(result) => {
-                    return self.settle(TaskTransition::Complete(result)).await;
+                    return self.settle(TaskTransition::Complete(result), true).await;
                 }
                 DispatchSettlement::Fail(error) => {
-                    return self.settle(TaskTransition::Fail(error)).await;
+                    return self.settle(TaskTransition::Fail(error), false).await;
                 }
                 DispatchSettlement::Input(round) => round,
             };
@@ -96,9 +96,11 @@ impl<'a> Settling<'a> {
             state_only += 1;
             if state_only > STATE_ONLY_CEILING {
                 return self
-                    .settle(TaskTransition::Complete(abandoned_input_round()))
+                    .settle(TaskTransition::Complete(abandoned_input_round()), false)
                     .await;
             }
+            // A state-only round reached nobody: what it staged was not delivered.
+            crate::gateway::meta_mcp::invoke::relay::discard_staged();
             let retry = self.owned.continuation(round.request_state, None);
             let Some(next) = dispatch(self.state, self.owned, self.call, &retry, cancel_rx).await
             else {
@@ -125,8 +127,11 @@ impl<'a> Settling<'a> {
         })
     }
 
-    async fn settle(&self, event: TaskTransition) {
-        self.executor
+    /// Settle `event`. Staged relay receipts are recorded only when it is
+    /// the dispatched result (`dispatched`) and the store kept it as such.
+    async fn settle(&self, event: TaskTransition, dispatched: bool) {
+        let stored = self
+            .executor
             .settle_cas_with(
                 self.principal,
                 self.id,
@@ -134,6 +139,9 @@ impl<'a> Settling<'a> {
                 (event, self.plan_targets()),
             )
             .await;
+        self.state
+            .meta_mcp()
+            .commit_staged_relay(dispatched && stored);
     }
 
     /// Record a parked plan's calls so far; the resume's log starts empty.
@@ -160,12 +168,12 @@ impl<'a> Settling<'a> {
     async fn park(&self, round: InputRequired) {
         if !self.park_targets().await {
             return self
-                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .settle(TaskTransition::Complete(abandoned_input_round()), false)
                 .await;
         }
         let Ok(owner) = self.executor.service.owner(self.principal) else {
             return self
-                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .settle(TaskTransition::Complete(abandoned_input_round()), false)
                 .await;
         };
         // The continuation the resume will redeem dies at its own deadline;
@@ -176,7 +184,7 @@ impl<'a> Settling<'a> {
             round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
         else {
             return self
-                .settle(TaskTransition::Complete(abandoned_input_round()))
+                .settle(TaskTransition::Complete(abandoned_input_round()), false)
                 .await;
         };
         let stored = InputRound {
@@ -210,16 +218,19 @@ impl<'a> Settling<'a> {
             // A semantic fault in a well-formed round (empty set, reused key,
             // non-object value): terminal, never a stuck `working` row.
             Err(StoreError::InvalidTransition) => {
-                self.settle(TaskTransition::Fail(JsonRpcError {
-                    code: -32603,
-                    message: "the backend's input round is invalid".to_owned(),
-                    data: None,
-                }))
+                self.settle(
+                    TaskTransition::Fail(JsonRpcError {
+                        code: -32603,
+                        message: "the backend's input round is invalid".to_owned(),
+                        data: None,
+                    }),
+                    false,
+                )
                 .await;
             }
             // The continuation does not fit the record: today's abandoned result.
             Err(StoreError::Capacity) => {
-                self.settle(TaskTransition::Complete(abandoned_input_round()))
+                self.settle(TaskTransition::Complete(abandoned_input_round()), false)
                     .await;
             }
             // A cancel already moved the row; its commit is the answer.
@@ -229,7 +240,7 @@ impl<'a> Settling<'a> {
             // finish it: settle the abandoned result instead.
             Err(error) => {
                 tracing::warn!(task_id = %self.id, %error, "input round not committed");
-                self.settle(TaskTransition::Complete(abandoned_input_round()))
+                self.settle(TaskTransition::Complete(abandoned_input_round()), false)
                     .await;
             }
         }

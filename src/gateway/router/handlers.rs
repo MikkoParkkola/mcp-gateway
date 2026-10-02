@@ -1691,6 +1691,8 @@ async fn meta_mcp_dispatch(
             if call_response.discovery_inspected {
                 delivery_inspection = DeliveryInspection::AlreadyInspected;
             } else {
+                let snapshot = (call_response.result.as_ref())
+                    .and_then(|result| state.meta_mcp.relay_snapshot(result));
                 delivery_inspection = super::response_pass::inspect_tools_call_response(
                     state.firewall.as_deref(),
                     &mut call_response,
@@ -1702,6 +1704,9 @@ async fn meta_mcp_dispatch(
                         external_tool: &external_tool,
                     },
                 );
+                // A redaction changed the delivery: its staged receipts go.
+                let delivered = call_response.result.as_ref();
+                crate::gateway::meta_mcp::invoke::relay::discard_if_changed(snapshot, delivered);
             }
 
             call_response

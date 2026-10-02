@@ -192,7 +192,7 @@ impl super::MetaMcp {
                 ResponseArtifactKind::FinalResponse,
                 context.mutation,
             );
-            super::invoke::relay::discard_if_changed(snapshot, result);
+            super::invoke::relay::discard_if_changed(snapshot, Some(&*result));
             if !verdict
                 .is_ok_and(|verdict| verdict.allowed && verdict.action != FirewallAction::Block)
             {

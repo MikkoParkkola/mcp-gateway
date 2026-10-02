@@ -248,13 +248,12 @@ async fn run_dispatched(
             &principal,
             &id,
             revision,
-            (job, handle),
+            (job, handle, caller.relay_caller(session_id.as_deref())),
             &mut cancel_rx,
         )
         .await;
     } else {
         let response = inspect_settled(&state, &call, &id, response);
-        state.meta_mcp().commit_relay_receipts(&response);
         Settling::new(
             &executor,
             &state,
@@ -282,10 +281,14 @@ async fn follow_upstream_job(
     principal: &str,
     id: &str,
     revision: u64,
-    dispatched: (crate::gateway::meta_mcp::upstream::DirectJob, String),
+    dispatched: (
+        crate::gateway::meta_mcp::upstream::DirectJob,
+        String,
+        crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
+    ),
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
-    let (job, handle) = dispatched;
+    let (job, handle, relay) = dispatched;
     let captured = executor
         .capture_upstream(
             principal,
@@ -359,10 +362,9 @@ async fn follow_upstream_job(
                     .recover_task_result(&job.server, &job.tool, None, id, result)
                 {
                     Ok(processed) => {
-                        crate::gateway::meta_mcp::invoke::relay::restage(
-                            (&job.server, &job.tool),
-                            &processed,
-                        );
+                        let target = (job.server.as_str(), job.tool.as_str());
+                        let meta = state.meta_mcp();
+                        meta.stage_upstream_result(relay, target, &processed);
                         TaskTransition::Complete(processed)
                     }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
@@ -400,9 +402,8 @@ async fn follow_upstream_job(
             .meta_mcp()
             .audit_settlement(task, event, &notes, principal)
             .await;
-        let delivered = matches!(event, TaskTransition::Complete(_));
-        executor.settle_cas(principal, id, revision, event).await;
-        state.meta_mcp().commit_staged_relay(delivered);
+        let stored = executor.settle_cas(principal, id, revision, event).await;
+        state.meta_mcp().commit_staged_relay(stored);
     }
     lease.release(executor, id).await;
 }
@@ -532,11 +533,14 @@ pub(super) fn inspect_settled(
     );
     let targets =
         crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);
-    if state
+    let snapshot = state.meta_mcp().relay_snapshot(result);
+    let refused = state
         .meta_mcp()
         .inspect_task_result(&targets, id, result)
-        .is_err()
-    {
+        .is_err();
+    // A redaction changed what the task will deliver: its receipts go.
+    crate::gateway::meta_mcp::invoke::relay::discard_if_changed(snapshot, Some(&*result));
+    if refused {
         response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
             response.id,
             -32600,
@@ -609,9 +613,9 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         event: TaskTransition,
-    ) {
+    ) -> bool {
         self.settle_cas_with(principal, id, revision, (event, None))
-            .await;
+            .await
     }
 
     /// [`Self::settle_cas`] committing a plan's dispatched `targets` in the same
@@ -623,7 +627,7 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         (event, targets): (TaskTransition, Option<Vec<Target>>),
-    ) {
+    ) -> bool {
         match self
             .commit(TaskWrite::Settle {
                 principal,
@@ -634,24 +638,24 @@ impl TaskExecutor {
             })
             .await
         {
-            Ok(_) => return,
+            Ok(outcome) => return stored_completed(&outcome),
             Err(CommitFailure::RevisionConflict) => {}
             Err(_) => {
                 tracing::warn!(task_id = %id, "task settlement write failed");
-                return;
+                return false;
             }
         }
 
         let Ok(owner) = self.service.owner(principal) else {
-            return;
+            return false;
         };
         let Ok(current) = self.service.store.get(owner.as_digest(), id) else {
-            return;
+            return false;
         };
         if is_terminal(current.task.status()) {
-            return;
+            return false;
         }
-        if self
+        match self
             .commit(TaskWrite::Settle {
                 principal,
                 id,
@@ -660,11 +664,24 @@ impl TaskExecutor {
                 targets,
             })
             .await
-            .is_err()
         {
-            tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
+            Ok(outcome) => stored_completed(&outcome),
+            Err(_) => {
+                tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
+                false
+            }
         }
     }
+}
+
+/// Whether a settlement stored a completed result with output: what a relay
+/// receipt may be committed for. A bounded settlement stores no output.
+fn stored_completed(outcome: &WriteOutcome) -> bool {
+    matches!(
+        outcome,
+        WriteOutcome::Transitioned(stored)
+            if stored.task.status() == TaskStatus::Completed && !stored.output_free
+    )
 }
 
 fn is_terminal(status: TaskStatus) -> bool {
