@@ -1,0 +1,12 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 7005743c6..6abe26436 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -243,7 +243,6 @@ impl Store {
+         let Some(record) = state
+             .outbox
+             .get(event_id)
+-            .filter(|r| r.created_at == created_at)
+             .cloned()
+         else {
+             return Ok(Vec::new());

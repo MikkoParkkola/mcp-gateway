@@ -1,0 +1,6 @@
+head_sha	ddfde20297d37432c3721298041f13131c459911
+# batch 3 for #2651 (rows changed after batch 2)
+C1	linux	c1.patch	--lib -- an_old_answer_does_not_settle_a_later_occurrence
+C2	linux	c2.patch	--lib -- a_cancelled_claim_has_no_signing_row_even_under_a_reused_id
+C3	linux	c3.patch	--lib -- a_resubscribe_after_expiry_inherits_no_pending_record
+C4	linux	c4.patch	--lib -- a_reload_keeps_the_rate_limit_bucket_of_a_route_that_stays

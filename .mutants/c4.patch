@@ -1,0 +1,13 @@
+diff --git a/src/gateway/webhooks/events.rs b/src/gateway/webhooks/events.rs
+index 5e8ed16f9..391d79278 100644
+--- a/src/gateway/webhooks/events.rs
++++ b/src/gateway/webhooks/events.rs
+@@ -34,7 +34,7 @@ impl WebhookRegistry {
+             }
+         }
+         for (path, limiter) in &mut self.limiters {
+-            if let Some(kept) = old_limiters.get(path) {
++            if let Some(kept) = old_limiters.get(&format!("{path}~")) {
+                 *limiter = Arc::clone(kept);
+             }
+         }

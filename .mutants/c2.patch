@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 7005743c6..dcbf46340 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -370,7 +370,7 @@ impl Store {
+         let claimed = state
+             .outbox
+             .get(&record.event_id)
+-            .is_some_and(|r| r.state == OutboxState::InFlight && r.created_at == record.created_at);
++            .is_some_and(|r| r.state == OutboxState::InFlight);
+         if claimed {
+             state.subs.get(&record.subscription_id).cloned()
+         } else {
