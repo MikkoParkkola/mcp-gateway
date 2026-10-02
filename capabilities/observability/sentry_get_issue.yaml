@@ -1,4 +1,4 @@
-sha256: 03fe483c0cec2d72a64e8ee4cf0bddf4081847ac8b61707ed071c4192fafe8b6
+sha256: 3021c487feda21f08bab8353b0c906cd998299f46399732d88f19095d58892e6
 fulcrum: "1.0"
 name: sentry_get_issue
 description: |
@@ -14,9 +14,9 @@ schema:
         description: Sentry organization slug
         pattern: "^[a-z0-9][a-z0-9_-]*$"
       issue_id:
-        type: string
+        type: integer
         description: Numeric issue ID
-        pattern: "^[0-9]+$"
+        minimum: 1
     required:
       - organization
       - issue_id

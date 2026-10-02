@@ -1,4 +1,4 @@
-sha256: ee101be36a514121739dbeca0f95053012dbff0de0d04d54a66eec8aaa34725d
+sha256: fc65d346e683b439810753815ee18485dc4afc66a9b63d0846a7029c6595a082
 fulcrum: "1.0"
 name: brave_web_search
 description: |
@@ -47,6 +47,8 @@ providers:
       method: GET
       headers:
         Accept: "application/json"
+      static_params:
+        count: "10"
       params:
         q: "{q}"
         count: "{count}"

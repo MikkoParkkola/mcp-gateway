@@ -1,4 +1,4 @@
-sha256: 543a0677dd0583dc1002ba1a834498462d0991b65116293b232803a99f922d3a
+sha256: b5169d02e64e341b4ce6072afdf7028ab1fc087ee04588c0357a518d9e5e93e3
 fulcrum: "1.0"
 name: tavily_extract
 description: |
@@ -15,6 +15,7 @@ schema:
         description: Page URLs to extract (up to 20)
         items:
           type: string
+        minItems: 1
         maxItems: 20
         examples:
           - ["https://modelcontextprotocol.io/introduction"]

@@ -1,4 +1,4 @@
-sha256: efbabe845be51d542c19c3daef4b309e0913dd30e46cd02ff0c2825bd0c3df8b
+sha256: 9bb262b5f6db602ffa53e8ebe74c5bd8f94802a4a7742e02e6902fc41fe61c1c
 fulcrum: "1.0"
 name: sentry_list_issues
 description: |
@@ -15,16 +15,18 @@ schema:
         pattern: "^[a-z0-9][a-z0-9_-]*$"
       query:
         type: string
-        description: Sentry issue search query
+        description: >
+          Sentry issue search query. Left out or empty, Sentry returns unresolved issues;
+          use "is:resolved OR is:unresolved" for all of them.
         default: "is:unresolved"
       project:
         type: string
-        description: Numeric project ID to restrict to
+        description: Project ID or slug to restrict to
       statsPeriod:
         type: string
         description: Time window, e.g. "24h", "14d"
         default: "14d"
-      limit:
+      per_page:
         type: integer
         default: 25
         minimum: 1
@@ -45,11 +47,13 @@ providers:
       base_url: https://sentry.io
       path: /api/0/organizations/{organization}/issues/
       method: GET
+      static_params:
+        per_page: "25"
       params:
         query: "{query}"
         project: "{project}"
         statsPeriod: "{statsPeriod}"
-        limit: "{limit}"
+        per_page: "{per_page}"
 
 cache:
   strategy: exact
