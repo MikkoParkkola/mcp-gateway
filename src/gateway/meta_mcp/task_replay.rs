@@ -76,8 +76,9 @@ impl MetaMcp {
     /// tool name, never the backend label) has no provenance and is refused;
     /// anything else faces the backend-level checks, and then, because the row
     /// cannot name the tool it ran (`task.tool()` is the meta tool), is refused
-    /// while any tool its backend lists is withheld from this caller, or while
-    /// that list is not known in full (MIK-7686).
+    /// while any tool its backend lists is withheld from this caller, while
+    /// that list is absent, empty or not known in full, or while the backend
+    /// lists per caller (MIK-7686).
     fn authorize_legacy_row(
         &self,
         stored: &CommittedTask,
@@ -119,8 +120,17 @@ impl MetaMcp {
         let Some(backend) = self.backends.get(server) else {
             return Err(withheld());
         };
-        let (tools, truncated) = backend.cached_tools_snapshot_and_truncated();
-        if !backend.cached_tools_known() || truncated || backend.withholds_any_tool() {
+        // A backend that forwards caller identity lists per caller, so the
+        // shared catalogue cannot speak for this one.
+        if backend.identity_propagation_config().is_some() {
+            return Err(withheld());
+        }
+        // The list first, then the blocked set: a block landing between the
+        // two is still seen by the second read.
+        let Some(tools) = backend.cached_tools_complete().filter(|t| !t.is_empty()) else {
+            return Err(withheld());
+        };
+        if backend.withholds_any_tool() {
             return Err(withheld());
         }
         for tool in tools.iter() {
