@@ -479,6 +479,17 @@ fn a_cancelled_claim_has_no_signing_row_even_under_a_reused_id() {
         store.signing_row(&claimed.record).is_none(),
         "the cancelled claim is not signed with the new row"
     );
+    // Not even once a later occurrence under the same id is in flight.
+    let later = now + chrono::Duration::minutes(30);
+    store.enqueue(record("a", "s1", later), caps).expect("io");
+    let Claim::Ready(newer) = store.claim("a", later).expect("io") else {
+        panic!("the later occurrence is claimable");
+    };
+    assert!(store.signing_row(&newer.record).is_some());
+    assert!(
+        store.signing_row(&claimed.record).is_none(),
+        "the old claim does not borrow the later occurrence's flight"
+    );
 }
 
 #[test]
