@@ -159,9 +159,8 @@ impl EventsHub {
 
     /// Delete subscription `refused`, the snapshot the access check refused,
     /// with its pending records (F9), unless a refresh has since re-bound it
-    /// to another credential. `false` when the store could not record the
-    /// removal.
-    pub(super) async fn revoke(self: &Arc<Self>, refused: &Subscription) -> bool {
+    /// to another credential.
+    pub(super) async fn revoke(self: &Arc<Self>, refused: &Subscription) {
         let tail = super::tail_policy(&self.config);
         let snapshot = refused.clone();
         let removed = self
@@ -176,7 +175,6 @@ impl EventsHub {
         if removed == Some(true) {
             tracing::info!("events: subscription revoked, access no longer granted");
         }
-        removed.is_some()
     }
 }
 
