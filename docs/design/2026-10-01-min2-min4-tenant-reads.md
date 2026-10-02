@@ -805,3 +805,24 @@ This is the last design round. From here, any finding becomes a red test and
 is fixed in implementation. Only a new path that sends an MCP frame outside
 `OutboundFrame` reopens the design. Implementation starts with §6.1, and
 it does not pass the red tests until the cost gate (§4.8) has passed.
+
+## 11. Design frozen (2026-10-02, after review round 5)
+
+Round 5: one seat SHIP (no CRITICAL/HIGH, no bypass or type hole); one seat SHIP-WITH-FIXES with
+3 CRITICAL and 1 HIGH, all inside the type (attribution capture point, an attribution-contract
+cache, ticket lifetime, audit admission). None is a path that emits an MCP frame or delivers
+backend content without the outbound type, so per the freeze rule they become red tests, fixed in
+implementation:
+
+| # | Red test | Fix in implementation |
+|---|---|---|
+| F1 | `capability_transform_keeps_pre_transform_tenants`: a capability `response_transform` that drops B's tenant key, after a read of A, is flagged | capture attribution before executor and capability transforms; carry it only while the content survives its gates |
+| F2 | `capability_executor_cache_restores_attribution`: a cached transformed B value hit after A is flagged; an entry without stored attribution counts as `U` | the executor cache (src/capability/executor/mod.rs:398) joins the attribution contract |
+| F3 | `delayed_http_body_keeps_reservation`: an A body held by backpressure past the window, then B admitted, then A emitted: B flagged | the HTTP ticket stays reserved until the body bytes are yielded or dropped; history refreshes at emission |
+| F4 | `rejection_audit_admission_bounded`: a flood of rejected notifications spawns at most the permit count; saturation is a recorded audit failure and content stays withheld | acquire a bounded non-blocking audit permit before spawning |
+
+Concurrency tests either control reservation order or accept either tenant as the first admitted.
+Seat-2 improvements are taken in implementation: `SseMeta` and the bound key are private fields of
+`OutboundFrame`; compile-fail that the reply types do not implement `IntoResponse`; stdio judged
+before `slot_rpc` under the same late-replacer rule; corpus method and SSE-name rows written as JSON
+the scan attributes.
