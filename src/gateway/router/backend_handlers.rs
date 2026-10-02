@@ -1064,39 +1064,8 @@ async fn backend_handler_inner(
     } else {
         None
     };
-    // Admitted once, here: after every refusal above, so a refused call
-    // consumes no nonce, and before the cache below, so a replayed result is
-    // signed against the replaying request's own nonce. The store is the one
-    // the meta route admits into.
-    if signs {
-        // The meta route's own derivation (an authenticated key, then an OAuth
-        // agent, then a certificate), so one caller has one bucket on both.
-        let authorizer = super::authorization::RouterAuthorizer {
-            state: state.as_ref(),
-            client: client.as_ref(),
-            oauth_agent_identity: oauth_agent_identity.as_ref(),
-            cert_identity: cert_identity.as_ref(),
-            principal: None,
-        };
-        let principal = crate::gateway::authz::ToolAuthorizer::quota_principal(&authorizer).map_or(
-            "anonymous",
-            crate::gateway::auth::QuotaPrincipal::as_store_key,
-        );
-        if let Err(e) = state
-            .meta_mcp
-            .admit_signing_nonce(signing_nonce.as_deref(), principal)
-        {
-            let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
-            return build_http_error_response(
-                Some(id.clone()),
-                e.to_rpc_code(),
-                message,
-                StatusCode::BAD_REQUEST,
-            );
-        }
-    }
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
-    if method == "tools/call" {
+    let guarded = if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
             retry.idempotency_key.as_deref(),
             &name,
@@ -1107,23 +1076,7 @@ async fn backend_handler_inner(
             crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
             params.as_ref(),
         ) {
-            Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
-                crate::gateway::meta_mcp::invoke::audit::note_cached();
-                // A replay is a delivery too: it renews this caller's own copy.
-                let mut response = JsonRpcResponse::success(id.clone(), cached);
-                let nonce = signs.then_some(&signing_nonce);
-                sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
-                return build_http_response(&response, StatusCode::OK);
-            }
-            Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
-                crate::gateway::meta_mcp::invoke::audit::note_cached();
-                let response = cached_error_response(Some(id.clone()), &error);
-                return build_http_response(&response, StatusCode::OK);
-            }
-            Ok(Some(crate::idempotency::GuardOutcome::Proceed(reservation))) => {
-                idem_reservation = Some(reservation);
-            }
-            Ok(None) => {}
+            Ok(outcome) => outcome,
             Err(e) => {
                 let code = e.to_rpc_code();
                 let status = u16::try_from(code)
@@ -1133,6 +1086,49 @@ async fn backend_handler_inner(
                 return build_http_error_response(Some(id.clone()), code, e.to_string(), status);
             }
         }
+    } else {
+        None
+    };
+    // Admitted once, here: after every refusal above and the idempotency
+    // guard, so a refused call consumes no nonce (MIK-7698), and before a
+    // cached result is delivered, so it is signed against the replaying
+    // request's own nonce. A refused admission releases a fresh reservation.
+    let admitted = if signs {
+        DirectRouteGuards::admit_nonce(
+            &state,
+            (
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            ),
+            signing_nonce.as_deref(),
+        )
+    } else {
+        Ok(())
+    };
+    if let Err(e) = admitted {
+        let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+        let code = e.to_rpc_code();
+        return build_http_error_response(Some(id.clone()), code, message, StatusCode::BAD_REQUEST);
+    }
+    match guarded {
+        Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
+            crate::gateway::meta_mcp::invoke::audit::note_cached();
+            // A replay is a delivery too: it renews this caller's own copy.
+            let mut response = JsonRpcResponse::success(id.clone(), cached);
+            let nonce = signs.then_some(&signing_nonce);
+            sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
+            return build_http_response(&response, StatusCode::OK);
+        }
+        Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
+            crate::gateway::meta_mcp::invoke::audit::note_cached();
+            let response = cached_error_response(Some(id.clone()), &error);
+            return build_http_response(&response, StatusCode::OK);
+        }
+        Some(crate::idempotency::GuardOutcome::Proceed(reservation)) => {
+            idem_reservation = Some(reservation);
+        }
+        None => {}
     }
 
     if let Some(sanitized_params) = sanitized {

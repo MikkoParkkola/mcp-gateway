@@ -1569,8 +1569,9 @@ async fn meta_mcp_dispatch(
                 },
             };
             if let Some(context) = signing_context.as_mut()
-                && let Err(error) = state.meta_mcp.prepare_signing_invocation(
+                && let Err(error) = state.meta_mcp.prepare_signing_for_call(
                     context,
+                    tool_name,
                     &arguments,
                     Some(&session_id),
                     &caller,
@@ -1594,7 +1595,7 @@ async fn meta_mcp_dispatch(
             // backend work, and the invocation policy the sync admission would
             // have pre-applied is applied again at the dispatch chokepoint that
             // the worker's own call goes through.
-            let admission = if caller.task.is_some() {
+            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected)
             } else {
                 state.meta_mcp.admit_meta_sync(

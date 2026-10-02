@@ -147,7 +147,8 @@ backend" and "fails a capability file" first.**
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
-| 123 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
+| 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
+| 124 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3461,7 +3462,24 @@ no provider and loads without a warning.
 **Action:** delete the `fallback` block from your capability files, and fix or delete any entry
 that does not parse.
 
-## 123. A listen stream opens with the acknowledgement notification
+## 123. Unread capability provider keys are warned, and `cap validate` checks structure
+
+**Startup:** no notice, a capability with a provider key the gateway does not read logs a CAP-012 warning per key and is still served
+
+A key under `providers.<name>` that no provider field reads (a misspelled `methd`, say) used to be
+dropped without a word. It now logs CAP-012 naming its path, for example
+`providers.primary.config.methd`. Keys starting with `_` or `x-` are notes and are not reported.
+Capabilities that declare `command`, `args` or `transport` warn too until this gateway version reads
+those keys.
+
+`mcp-gateway cap validate` used to run only the basic check and print "valid". It now runs the same
+structural checks as the loader: it prints each warning, and exits non-zero on a structural error,
+the same file the loader would skip.
+
+**Action:** fix or delete the keys CAP-012 names. A script that runs `cap validate` should expect a
+failure for a file the loader would refuse.
+
+## 124. A listen stream opens with the acknowledgement notification
 
 **Startup:** no notice
 
@@ -3474,7 +3492,8 @@ what the gateway delivers (`toolsListChanged`, and the task ids it accepted unde
 Prompt and resource changes are not delivered, so they are not acknowledged.
 When the gateway itself ends a subscription (its credential stops authenticating, or the
 reader falls behind), the last event is the listen request's own response, a `complete` result,
-which the specification defines as a graceful end.
+which the specification defines as a graceful end. A reader that falls too far behind has lost
+updates, so its stream just closes, with no response.
 
 **Action:** a client written against the beta that read the subscription id from the response
 `result` reads it from the notification instead.
