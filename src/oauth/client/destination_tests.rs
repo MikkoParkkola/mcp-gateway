@@ -454,3 +454,35 @@ async fn a_refused_registration_redirect_is_not_walked_past() {
         .expect_err("a refused registration hop must surface");
     assert!(error.to_string().contains("SSRF blocked"), "{error}");
 }
+
+/// A token refresh whose endpoint redirects to a refused address answers
+/// `-32600 SSRF blocked` from the refresh entry point itself.
+#[tokio::test]
+async fn a_refused_token_refresh_redirect_is_typed_ssrf_blocked() {
+    let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
+    let port = serve(&Advertised {
+        authorization_server: REACHABLE,
+        token: Box::leak(format!("http://127.0.0.1:{refused}/token").into_boxed_str()),
+        registration: "http://localhost:{port}/register",
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let mut client = OAuthClient::with_destination(
+        DestinationPolicy::Private,
+        super::http_client(DestinationPolicy::Private).unwrap(),
+        "listed-backend".to_string(),
+        format!("http://localhost:{port}/mcp"),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    client.initialize().await.expect("discovery is reachable");
+    *client.client_id.write() = Some("listed-client".to_string());
+    let error = client
+        .refresh_token("refresh")
+        .await
+        .expect_err("a refused refresh hop must surface");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+    assert_eq!(error.to_rpc_code(), -32600, "{error}");
+}
