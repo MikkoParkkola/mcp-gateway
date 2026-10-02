@@ -70,6 +70,10 @@ pub(crate) trait EventSource: Send + Sync {
     }
     /// May `principal` hold this subscription? Called at subscribe and at
     /// every fan-out. The default admits: visibility is the catalogue's.
+    #[allow(
+        dead_code,
+        reason = "scaffold: fan-out and subscribe call it in the implementation commit"
+    )]
     async fn authorize(
         &self,
         _principal: &str,
