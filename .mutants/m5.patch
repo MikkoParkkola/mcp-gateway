@@ -1,0 +1,15 @@
+diff --git a/src/protocol/subscriptions.rs b/src/protocol/subscriptions.rs
+index 318a5a0d4..c12d6accd 100644
+--- a/src/protocol/subscriptions.rs
++++ b/src/protocol/subscriptions.rs
+@@ -92,9 +92,7 @@ impl NotificationKind {
+ pub fn names_task_ids(params: &Value) -> bool {
+     let key = NotificationKind::Tasks.opt_in_field();
+     params.get(key).is_some()
+-        || params
+-            .get("notifications")
+-            .is_some_and(|filter| filter.get(key).is_some())
++
+ }
+ 
+ /// The task ids a `subscriptions/listen` names: the tasks extension's

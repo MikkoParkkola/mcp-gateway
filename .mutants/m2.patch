@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index a807229a3..84979206c 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -948,7 +948,7 @@ async fn meta_mcp_dispatch(
+                     if let Some(filter) = map
+                         .get_mut("notifications")
+                         .and_then(Value::as_object_mut)
+-                        .filter(|filter| filter.contains_key("taskIds"))
++                        .filter(|filter| filter.contains_key("taskIds") && false)
+                     {
+                         filter.insert("taskIds".into(), json!([]));
+                     }

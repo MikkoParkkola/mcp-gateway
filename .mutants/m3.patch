@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index c9e1f3761..6f5a92bab 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -462,7 +462,7 @@ fn is_task_method(method: &str, params: Option<&Value>) -> bool {
+         .get(..6)
+         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("tasks/"))
+         || (method.eq_ignore_ascii_case("subscriptions/listen")
+-            && params.is_some_and(crate::protocol::subscriptions::names_task_ids))
++            && params.is_some_and(|p| p.get("taskIds").is_some()))
+ }
+ 
+ /// Backend handler (POST /mcp/{name})
