@@ -21,7 +21,8 @@ pass through, and lets the compiler enforce that.
 - **Actor:** an authenticated principal (API key, OAuth or OIDC subject, mTLS
   identity, or the stdio client). It may call any method it is authorised
   for, retry, replay, run playbooks, and hold several sessions.
-- **Channels:** every JSON-RPC frame the gateway writes to the principal,
+- **Channels:** event deliveries to the principal's HTTPS callback (MIK-7630,
+  E1 in §4.1), and every JSON-RPC frame the gateway writes to the principal,
   whether result, error, notification or server-to-client request, on every
   transport. Sampling and elicitation forward backend text (proxy.rs:226-420),
   so they are in scope.
@@ -44,9 +45,13 @@ pass through, and lets the compiler enforce that.
 ## 2. What exists
 
 - **Attribution (MIN.1).**
-  - `TenantGuard::scan_response` makes one private walk that returns tenants
-    and `uninspected` (PR:181-188). `response_tenants` and
-    `response_uninspected` (PR:163-177) each call it.
+  - On the release line, `TenantGuard::scan_response` makes one private walk
+    (REL:tenant_guard.rs:181, with `walk_response` at :190-212) that returns tenants
+    and `uninspected`. `response_tenants` and `response_uninspected`
+    (REL:163-177) each call it. This worktree's base predates the merge: its
+    tenant_guard.rs:152-218 still has `texts()` at :184. The implementation
+    targets the release line, and `frame_attribution` wraps `scan_response`
+    there.
   - `request_tenants` walks request params (PR:154-158).
   - Attribution is off when `arg_keys` is empty (PR:168-170, :182-184).
 - **`PrincipalWindow`** (principal_window.rs) drops the oldest observation at
@@ -115,13 +120,19 @@ enum FrameOrigin<'a> {                   // private: callers cannot pick an orig
     Gateway { replaces: Option<Assessment> }, // gateway-built; never itself refused
 }
 // Gateway frames come only from fixed constructors in outbound.rs:
-// gateway_error(id, code, message), replacement(original, refusal),
-// sse_connected(), sse_lagged(n), stdio_busy(id), origin_forbidden(message).
-// A backend-derived payload has no route to a Gateway origin.
+// gateway_error(id, GatewayError), replacement(original, GatewayError),
+// sse_connected(), sse_lagged(n), stdio_busy(id), origin_forbidden(OriginRefusal).
+// GatewayError and OriginRefusal are closed enums. Their text is rendered inside
+// outbound.rs from fixed strings, and no constructor takes a String or a Value.
+// A backend-derived diagnostic (for example a backend error message) is a
+// Delivered frame and is judged.
 pub(crate) fn judge_frame(reads: &ReadHistory, guard: &TenantGuard, key: Option<&str>,
     payload: Payload, origin: FrameOrigin<'_>) -> OutboundFrame
 // sinks, all private to outbound.rs: to_http(OutboundHttp) -> Response,
 // sse_event(OutboundFrame) -> String, stdio_write(&mut W, OutboundFrame) -> bool
+// Stream frames also carry SseMeta { event: &'static str | backend event type,
+// id: Option<String> }, so sse_event keeps connected / message / lagged /
+// webhook event names and Last-Event-ID (streaming.rs:487-524).
 ```
 
 `judge_frame` is the only constructor of `OutboundFrame`. Only the sinks in
@@ -200,6 +211,7 @@ Every place that builds an MCP JSON-RPC body today, and how it routes:
 | H12 | `jsonrpc_error_body` (http_error.rs:40) via `jsonrpc_error_response` (middleware/errors.rs:33-42), for example `circuit_open_response` (:28-30) | middleware JSON-RPC errors | Built by `outbound::gateway_error` and written through `to_http` |
 | S1 | stdio batch array (server/mod.rs:2568) | batch answers | `Payload::Batch` of individually judged frames. `stdio_write` serializes the array inside `outbound.rs` and commits every item's ticket after the array is written |
 | S2 | stdio busy refusal, `try_send` (server/mod.rs:2588-2600) | overload refusal | `outbound::stdio_busy(id)` builds the frame; `try_send` takes an `OutboundFrame` |
+| E1 | MIK-7630 event deliveries to HTTPS callbacks, designed in docs/design/2026-10-01-mik-7630-mcp-events.md:300-312 (scope-update.md:165-167), not yet in source | event `data` delivered to the subscription principal | The delivery writer takes an `OutboundFrame` built by `judge_frame(.., Delivered)` with the subscription principal's `caller_key`, on the same process `Arc<ReadHistory>`, not an events-own window. The ticket commits on a 2xx callback write. A block dead-letters with reason `tenant`, and the rejection audit is that design's SAFETY.2 attempt record |
 
 **Enforcement: the type plus module privacy.** `outbound` is a private
 module. Its frame types are sealed, and their fields are private, so they
@@ -252,25 +264,30 @@ one `caller_key` share one history.
 
 ### 4.3 Notifications and server-to-client requests
 
-- **POST-scoped notifications.** These go through
-  `notification_sink::publish` (transport/notification_sink.rs:109) into the
-  scope opened by `meta_mcp_handler` (`scope` :64, `collect` :86). The scope
-  now also carries the guard and `caller_key`, so `publish` builds an
-  `OutboundFrame` through `judge_frame(.., Delivered{request: None, hidden:
-  None})`. The H5 stream and the H6 fallback consume them, and commit as they
-  write. The scope has a mode, `NotificationScope::{Stream, Discard}`. In the
-  buffered arm (handlers.rs:466-470), the mode is `Discard` and `publish`
-  drops each notification before judging it. A notification that is never
-  written therefore reserves nothing, and it cannot get the delivered answer
-  refused.
+- **Request-scoped notifications.** Both delivery paths, the batched
+  `publish` (transport/notification_sink.rs:109) and the backend-reader
+  `DeliveryHandle::deliver` (:191, which snapshots the sink), end in one
+  funnel: `send_or_count` (:131-134; the comment at :124-129 states this). The
+  sink channel becomes `mpsc::Sender<OutboundFrame>`, so `send_or_count` is
+  where `judge_frame(.., Delivered{request: None, hidden: None})` runs. The
+  guard, `caller_key` and mode travel with the scope, including into the
+  `DeliveryHandle` snapshot. The mode is `NotificationScope::{Stream,
+  Discard}`.
+  - `scope` (:64) is `Stream`. The H5 stream and the H6 fallback consume the
+    frames and commit as they write.
+  - `collect` (:86) is `Discard` by construction. That covers both of its
+    production sites: the buffered POST arm (handlers.rs:466-470) and the
+    direct route's `dispatch_in_scope` (backend_handlers.rs:449), whose
+    notifications are discarded. In `Discard` mode `send_or_count` drops the
+    notification before judging it, so a frame that is never written reserves
+    nothing.
 - **Session-stream items** (H7). These come from proxy.rs (sampling and
   elicitation, :226-420; list-changed, :482) and webhooks (webhooks/mod.rs:605),
   and are judged at enqueue (H7) with the session's stored key. In block mode
   a notification is not enqueued, and a request makes `send_to_session`
   return `Refused`, so the proxy completes its pending waiter with a
   `Gateway` refusal (proxy.rs:153-201) rather than waiting for a timeout. The
-  ticket commits at the stream's yield (`sse_event`). With several
-  subscribers it commits once, on the first write.
+  ticket follows the single lifecycle rule in §4.5.
 - **stdio.** The queue type (server/mod.rs:2435) becomes
   `mpsc::Sender<OutboundFrame>`, so every producer must judge:
   - `send_frame` (:147);
@@ -350,14 +367,21 @@ flags. The principal map is capped at 100,000. Expired entries are swept
 first; if the map is still full, a new principal is `Unattributable`. Live
 history is never evicted.
 
-**Delayed delivery: the ticket stays live until emission.** A frame that is
-queued but not yet written holds its pending reservation until its last copy
-is written or dropped. This applies to a GET-stream copy waiting in a slow
-subscriber's broadcast buffer, a POST-SSE notification, and a stdio frame in
-the queue. A shared ticket is an `Arc` (one allocation, configured path
-only). Each write upserts `committed` at that write's time. Dropping the last
-copy, including a broadcast slot overwritten on `Lagged`, releases the
-reservation.
+**Ticket lifecycle: one rule.** A ticket's reservation stays pending until
+its last copy is written or dropped. Every copy-write refreshes the tenants'
+last-seen time in `committed`. Only the write of the last copy, the moment
+the `Arc` strong count reaches zero after a write, releases the pending
+counts. If the last copy is dropped unwritten instead, the counts are released
+with no commit, unless an earlier copy was written, in which case that write's
+last-seen time stands. There is no first-write commit.
+
+This applies to every frame:
+- a single-copy frame (POST answer, stdio frame), whose one write is its last;
+- POST-SSE notifications;
+- GET-stream copies held in several subscribers' broadcast buffers, where a
+  `Lagged` overwrite drops a copy.
+
+A shared ticket is an `Arc` (one allocation, on the configured path only).
 
 Why this fails closed: pending entries count as live in step 4 of the judge.
 So whenever a B frame is judged, every A frame not yet written to that
@@ -427,6 +451,16 @@ Each event carries the `caller_key` beside the display name, `tenants`
 `judge_frame(.., Gateway)`, which drops the ticket. Tenant ids are compared
 across all backends and keys (§6).
 
+**Rejection audit.** Some blocked frames are never written: a blocked
+notification is not enqueued, and a blocked bridged request resolves its
+waiter (H7; stdio `send_request`). For these, `judge_frame` appends one
+`tenant_read` event at the moment of rejection. The event carries
+`cross_tenant_read=blocked` and the original assessment (hashed denied
+tenants), never the content, and it is written before the frame is
+discarded or the waiter is answered. A failed append under `FailClosed`
+changes nothing that reaches the caller, because the content is already
+withheld. It is logged, and the refusal to the waiter goes out regardless.
+
 ### 4.8 Performance (NFR.WORKLOAD.1 already shows an 8% p50 regression)
 
 - **No new task, channel or `Mutex`.** The writer is a type and a function
@@ -456,7 +490,11 @@ The test plan (§6) measures all of this:
   ticket lifecycle (reserve, plus commit or drop) as at most two shard-lock
   acquisitions per tenant frame;
 - a `criterion` bench row runs `judge_frame` on and off;
-- the NFR.WORKLOAD.1 k6 run (tests/load/k6_gateway.js) is repeated at the
+- lock accounting covers the whole shared-ticket lifecycle: cloned tickets,
+  repeated copy-writes, last-copy commit, and last-copy cancellation;
+- the NFR.WORKLOAD.1 k6 run (tests/load/k6_gateway.js) runs twice, once with
+  the default config and once with `arg_keys` set in observe mode. It is
+  repeated at the
   tip, with the default config, before merge.
 
 ### 4.9 Increment split
@@ -523,7 +561,7 @@ under its mutant. Row 1 opens the plan.
 | 2f | `blocked_evidence_survives_replacement` | a blocked B frame then a `slot_http` failure: the event still carries `blocked` and `h(B)` | assessment lost on replacement |
 | 2g | `refusal_with_json_id_terminates` | a request id that is a JSON string naming B, refused after A: exactly one refusal, which is never re-refused | scanning `id`; `Gateway` frames refusable |
 | 2h | `origin_refusal_built_by_outbound` | a Host-mismatch refusal is produced through `outbound.rs` | `forbidden` keeps its own `Json` (origin_guard.rs:416-424) |
-| 2i | `delayed_subscriber_copy_fails_closed` | A queued to a stalled GET subscriber; the window passes; B judged; then the A copy is written: B flagged (A still pending), and the A write upserts at emission time. A `Lagged` drop releases the reservation | commit at first copy, or commit time taken at enqueue |
+| 2i | `delayed_subscriber_copy_fails_closed` | Two subscribers under one key: one fast, one stalled. A is written to the fast one; the window passes; B is judged while the stalled A copy is pending: B flagged. The stalled A write then refreshes last-seen, and only it releases the pending counts. A `Lagged` drop of the last copy releases without a commit | first-write commit; commit time taken at enqueue |
 | 2j | `stdio_batch_items_judged` | a stdio batch answering A then B: B item flagged/refused, the array written once, all tickets committed after the write | the batch as `Request(Value)` or unjudged |
 | 2k | `listen_is_a_stream_reply` | `subscriptions/listen` returns `OutboundReply::Stream`; its B event after A is flagged | listen kept on `Event::data` |
 | 2l | `event_hash_is_after_slot_http` | a `slot_http` failure after a judged A answer: the delivery event hashes the refusal that was sent and carries A's original assessment | event written before `slot_http` |
@@ -532,6 +570,12 @@ under its mutant. Row 1 opens the plan.
 | 2o | `middleware_errors_through_outbound` | the circuit-open and busy refusals come from `outbound` constructors (H12, S2) | `jsonrpc_error_body` kept raw |
 | 2p | `broadcast_to_backend_judged_per_session` | list-changed fan-out to two keys: each judged with its own key | one judged frame reused across keys |
 | 2q | `sse_bytes_equal_judged_payload` | GET-stream message bytes equal the judged, clamped payload, with no second clamp | `message_event_data` at yield |
+| 2r | `gateway_text_is_closed` | compile-fail: `gateway_error` and `origin_forbidden` reject a `String`; a backend error message is a `Delivered` frame and is judged | a constructor taking free text |
+| 2s | `rejection_is_audited` | a blocked notification and a blocked bridged request each write one `tenant_read` event (blocked, `h(B)`) before discard or waiter resolution; under a failing logger the waiter still gets its refusal | no audit on rejection |
+| 2t | `direct_notifications_discarded_unjudged` | a backend notification naming B on `/mcp/{name}` after A: no flag, no reservation | `collect` judging |
+| 2u | `reader_task_deliver_is_judged` | a subprocess-reader notification via `DeliveryHandle::deliver` naming B on a POST-SSE stream after A: flagged, with the scope's key | `deliver` bypassing the judge |
+| 2v | `events_share_history` (with MIK-7630) | A via `tools/call`, then an event delivery naming B to the same principal's callback: flagged (observe) or dead-lettered `tenant` (block) | events with their own window |
+| 2w | `sse_meta_preserved` | `connected`, `lagged` and webhook event names and `Last-Event-ID` unchanged after the move | `SseMeta` dropped |
 | 3 | `a_then_b_two_events` (POST JSON, POST-SSE, GET stream, listen, stdio, direct) | A event with `tenants=[h(A)]` and no verdict; B event with `cross_tenant_read=flagged` | a sink built without `judge_frame` |
 | 4 | `a_then_b_block_refuses` (each transport) | B replaced by the refusal (response) or dropped (notification); event `blocked` | verdict computed but not applied |
 | 5 | `request_only_tenant_any_method` | `prompts/get` with `customer_id: B` in args and an unkeyed result, after A: flagged (HTTP and stdio) | request params not passed to `Delivered` |
@@ -632,3 +676,15 @@ every frame is an `OutboundFrame`. The history is in git, up to commit
 | `opaque_only_multi` in the zero-flag gate (MEDIUM and HIGH) | Fixed: moved to the known-false-positive group and excluded from gate 1 |
 | `jsonrpc_error_body` and busy `try_send` outside the type (MEDIUM) | Fixed by routing: H12 (http_error.rs:40, middleware/errors.rs:28-42) and S2 (server/mod.rs:2588-2600). Test 2o |
 | Improvements | Taken: fixed `Gateway` constructors with a private `FrameOrigin`; a terminal audit-failure path (one replacement-audit attempt); clippy covering `Json<Value>`; `broadcast_to_backend` (streaming.rs:304) judged per session; `sse_event` serializes the payload clamped before judging, with no `message_event_data` re-clamp (cacheable.rs:160-168, streaming.rs:498-500); `#[serde(skip)]` on `read`, as on `discovery_inspected` (messages.rs:78-79) |
+
+### Review dispositions (C design, round 3)
+
+| Finding | Disposition |
+|---|---|
+| First-write commit contradicts the last-copy reservation (CRITICAL, HIGH) | Fixed: one lifecycle rule (§4.5); first-write commit removed everywhere. Test 2i now has a fast and a stalled subscriber |
+| Message-taking `Gateway` constructors (CRITICAL) | Fixed: closed `GatewayError` / `OriginRefusal` enums rendered in `outbound.rs`; backend diagnostics are `Delivered`. Test 2r |
+| Blocked notifications and requests unaudited (HIGH) | Fixed: rejection audit (§4.7). Test 2s |
+| MIK-7630 event deliveries unjudged (HIGH) | Fixed by routing: E1 on the shared `ReadHistory` (mik-7630-mcp-events.md:300-312 already makes each delivery a MIN.2 read). Test 2v |
+| Direct notifications judged (MEDIUM) | Fixed: `collect` is `Discard` at both sites (handlers.rs:466-470, backend_handlers.rs:449). Test 2t |
+| `scan_response` cited but absent (improvement) | Partly refuted: it is present on the release line at REL:tenant_guard.rs:181 (`walk_response` :190-212). This worktree's older base has `texts()` at :184, and §2 now says so |
+| Other improvements | Taken: `DeliveryHandle::deliver` covered through `send_or_count` (notification_sink.rs:131-134, :191); full ticket-lifecycle lock accounting; `SseMeta` for event type and id; k6 with `arg_keys` set |
