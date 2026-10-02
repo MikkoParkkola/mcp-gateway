@@ -29,47 +29,57 @@ const MAX_CLASSIFICATION_TEXT_BYTES: usize = 64 * 1024;
 const CLASSIFICATION_TEXT_EDGE_BYTES: usize = MAX_CLASSIFICATION_TEXT_BYTES / 2;
 
 static PERSONAL_DATA_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
-    RegexSet::new([
+    regex::RegexSetBuilder::new([
         r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
         r"\b(?:\+?\d[\d .-]{7,}\d)\b",
         r"\b\d{3}-\d{2}-\d{4}\b",
     ])
+    .dfa_size_limit(64 << 20)
+    .build()
     .expect("personal data patterns must compile")
 });
 
 static FINANCIAL_DATA_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
-    RegexSet::new([
+    regex::RegexSetBuilder::new([
         r"\b(?:\d[ -]?){13,19}\b",
         r"(?i)\biban\b[:\s]+[A-Z0-9 ]{12,}\b",
     ])
+    .dfa_size_limit(64 << 20)
+    .build()
     .expect("financial data patterns must compile")
 });
 
 static DESTRUCTIVE_ACTION_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
-    RegexSet::new([
+    regex::RegexSetBuilder::new([
         r"(?i)\b(delete|remove|wipe|drop|truncate)\s+(all|database|table|files|records)\b",
         r"(?i)\btransfer\s+(funds|money|assets)\b",
         r"(?i)\brevoke\s+(all\s+)?access\b",
         r"(?i)\bdisable\s+(audit|logging|monitoring)\b",
     ])
+    .dfa_size_limit(64 << 20)
+    .build()
     .expect("destructive action patterns must compile")
 });
 
 static TOOL_ACCESS_ESCALATION_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
-    RegexSet::new([
+    regex::RegexSetBuilder::new([
         r"(?i)\bgrant\s+(me|this\s+tool|the\s+tool|it)\s+(access|permission|admin)\b",
         r"(?i)\benable\s+(admin|privileged|restricted)\s+tool",
         r"(?i)\bcall\s+[\w.-]*admin[\w.-]*\b",
         r"(?i)\buse\s+[\w.-]*admin[\w.-]*\s+to\b",
     ])
+    .dfa_size_limit(64 << 20)
+    .build()
     .expect("tool access escalation patterns must compile")
 });
 
 static EXFILTRATION_PATTERNS: LazyLock<RegexSet> = LazyLock::new(|| {
-    RegexSet::new([
+    regex::RegexSetBuilder::new([
         r"(?i)\b(send|post|upload|transmit)\s+(all\s+)?(data|content|records)\s+(to|via)\b",
         r"(?i)\bhttps?://[^\s]+/(collect|ingest|exfil|upload)\b",
     ])
+    .dfa_size_limit(64 << 20)
+    .build()
     .expect("exfiltration patterns must compile")
 });
 

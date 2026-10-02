@@ -194,7 +194,7 @@ const PATTERNS: &[(&str, &str, Severity, &str)] = &[
 
 static PATTERN_SET: LazyLock<RegexSet> = LazyLock::new(|| {
     let patterns: Vec<&str> = PATTERNS.iter().map(|(p, _, _, _)| *p).collect();
-    RegexSet::new(patterns).expect("All response inspection patterns must compile")
+    regex::RegexSetBuilder::new(patterns).dfa_size_limit(64 << 20).build().expect("All response inspection patterns must compile")
 });
 
 /// Inspect response text for security patterns.

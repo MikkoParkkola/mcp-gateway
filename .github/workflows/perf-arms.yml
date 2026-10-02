@@ -1,8 +1,7 @@
 name: Perf arms
 
-# Throwaway branch only (never merged). This commit runs a diagnostic: does
-# each production RegexSet search faster with a larger lazy-DFA cache?
-# (A RegexSet whose lazy DFA cannot be built runs on the PikeVM.)
+# Throwaway branch only (never merged). Experiment arm: the tip with a larger
+# lazy-DFA cache on the context-integrity and response-inspection RegexSets.
 on:
   push:
     branches: ["throwaway/perf-arms-*"]
@@ -11,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  probe:
-    name: Regex engine probe
+  build:
+    name: Build experiment arm
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:
@@ -22,8 +21,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.98.0
-      - name: Probe
+      - name: Build
         shell: bash
         run: |
-          cargo test --release --locked --lib l7_probe -- --nocapture --test-threads=1 2>&1 | grep -E "L7PROBE|test result|error" | tee probe.txt
-          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat probe.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cargo build --release --locked --bin mcp-gateway
+          mkdir -p out
+          cp target/release/mcp-gateway out/mcp-gateway-X
+          git rev-parse HEAD > out/ref-X.txt
+          (cd out && sha256sum mcp-gateway-X > sha256-X.txt)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-arm-X-${{ github.sha }}
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
