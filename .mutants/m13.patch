@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+index d5de9ad68..d0d50287b 100644
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -343,7 +343,7 @@ impl CommittedTask {
+         !self.output_free
+             && matches!(
+                 self.task.status(),
+-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::InputRequired
++                TaskStatus::Completed | TaskStatus::Failed
+             )
+     }
+ 

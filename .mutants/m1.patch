@@ -1,0 +1,32 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 79281714e..45f919b35 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -812,7 +812,6 @@ pub(crate) async fn request_scoped_event_stream(
+     judge: Arc<StreamJudge>,
+ ) -> axum::response::Response {
+     use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+-    use futures::StreamExt as _;
+ 
+     // `subscriptions/listen` already answered with a stream of its own, and a
+     // refusal that never reached the dispatch has no result to frame.
+@@ -826,6 +825,7 @@ pub(crate) async fn request_scoped_event_stream(
+     }
+ 
+     let (mut parts, body) = response.into_parts();
++    let eager = axum::body::to_bytes(body, usize::MAX).await.unwrap_or_default();
+     // Lazy, frame by frame: each notification is committed, and the answer's
+     // body read (which commits its reservation, MIK-7116.MIN.2 F3), only as
+     // the client reads this stream, never while it is being built.
+@@ -836,10 +836,7 @@ pub(crate) async fn request_scoped_event_stream(
+             }
+         }
+         yield Ok(axum::body::Bytes::from_static(b"event: message\ndata: "));
+-        let mut result = body.into_data_stream();
+-        while let Some(Ok(chunk)) = result.next().await {
+-            yield Ok(chunk);
+-        }
++        yield Ok(eager);
+         yield Ok(axum::body::Bytes::from_static(b"\n\n"));
+     };
+ 

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index 7b8e4dd8f..c0b893194 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -154,7 +154,7 @@ pub(crate) fn delivered(
+     }
+     // Likewise what the answer no longer shows: a refusal that replaced the
+     // backend content at finalization delivered none of it.
+-    if let Some(hidden) = hidden.filter(|_| delivers_result(&payload)) {
++    if let Some(hidden) = hidden {
+         attribution.extend(hidden);
+     }
+     let (assessment, ticket) = assess(firewall, guard, block, key, attribution);

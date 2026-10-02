@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/cache_reads.rs b/src/gateway/meta_mcp/invoke/cache_reads.rs
+index 6664a68a3..21d1b4163 100644
+--- a/src/gateway/meta_mcp/invoke/cache_reads.rs
++++ b/src/gateway/meta_mcp/invoke/cache_reads.rs
+@@ -44,7 +44,7 @@ impl super::super::MetaMcp {
+             return;
+         }
+         tenant_reads::note_attribution(reading);
+-        if responded {
++        if false && responded {
+             let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
+             let tenants =
+                 self.request_tenants(arguments.as_ref().unwrap_or(&serde_json::Value::Null));
