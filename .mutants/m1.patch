@@ -1,0 +1,15 @@
+diff --git a/src/gateway/router/origin_guard.rs b/src/gateway/router/origin_guard.rs
+index b0e3bf5d4..2a941e554 100644
+--- a/src/gateway/router/origin_guard.rs
++++ b/src/gateway/router/origin_guard.rs
+@@ -181,9 +181,7 @@ impl OriginPolicy {
+         // Scheme must be the one this listener speaks. Same-socket cross-scheme
+         // cannot really occur, but comparing it costs nothing and keeps the
+         // check a full origin comparison rather than an authority one.
+-        if parsed.scheme() != self.listener_scheme {
+-            return false;
+-        }
++
+         let Some(origin_host) = parsed.host_str() else {
+             return false;
+         };

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/response_pass.rs b/src/gateway/router/response_pass.rs
+index 6d76bca19..0581fbca5 100644
+--- a/src/gateway/router/response_pass.rs
++++ b/src/gateway/router/response_pass.rs
+@@ -66,7 +66,7 @@ pub(super) fn inspect_tools_call_response(
+             targets,
+             "Firewall: response inspection lacked a policy target"
+         );
+-        true
++        false
+     };
+     if refused {
+         // Not an early HTTP return: the shared owned-execution finalization

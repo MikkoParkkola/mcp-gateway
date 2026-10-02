@@ -1,0 +1,15 @@
+diff --git a/src/gateway/router/origin_guard.rs b/src/gateway/router/origin_guard.rs
+index b0e3bf5d4..0b8cbfcb0 100644
+--- a/src/gateway/router/origin_guard.rs
++++ b/src/gateway/router/origin_guard.rs
+@@ -187,9 +187,7 @@ impl OriginPolicy {
+         let Some(origin_host) = parsed.host_str() else {
+             return false;
+         };
+-        if !is_numeric_host(strip_brackets(origin_host)) {
+-            return false;
+-        }
++
+         let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
+         let origin = canonical_authority(
+             &format!("{}:{}", origin_host, parsed.port().unwrap_or(default_port)),

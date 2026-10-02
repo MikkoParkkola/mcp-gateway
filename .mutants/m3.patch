@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/origin_guard.rs b/src/gateway/router/origin_guard.rs
+index b0e3bf5d4..76677b3e7 100644
+--- a/src/gateway/router/origin_guard.rs
++++ b/src/gateway/router/origin_guard.rs
+@@ -176,7 +176,7 @@ impl OriginPolicy {
+             return false;
+         };
+         let Ok(parsed) = url::Url::parse(&candidate) else {
+-            return false;
++            return true;
+         };
+         // Scheme must be the one this listener speaks. Same-socket cross-scheme
+         // cannot really occur, but comparing it costs nothing and keeps the
