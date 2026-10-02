@@ -22,6 +22,7 @@ mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
 mod params;
+mod readiness;
 pub mod rest;
 mod xml;
 
