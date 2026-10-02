@@ -448,3 +448,35 @@ fn a_resubscribe_after_expiry_inherits_no_pending_record() {
         "the expired subscription's retry went with it"
     );
 }
+
+#[test]
+fn a_cancelled_claim_has_no_signing_row_even_under_a_reused_id() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    let Claim::Ready(claimed) = store.claim("a", now).expect("io") else {
+        panic!("claimable");
+    };
+    assert!(store.signing_row(&claimed.record).is_some(), "claim alive");
+    store.remove("s1", now, TAIL).expect("io");
+    store
+        .admit(
+            sub("s1", now),
+            true,
+            CAPS,
+            chrono::Duration::zero(),
+            now,
+            TAIL,
+        )
+        .expect("io")
+        .expect("admitted");
+    assert!(
+        store.signing_row(&claimed.record).is_none(),
+        "the cancelled claim is not signed with the new row"
+    );
+}

@@ -167,7 +167,7 @@ impl EventsHub {
         // An unsubscribe that waited past its bound has removed the
         // subscription by now: nothing is charged or sent for it. Otherwise
         // the current row signs, so a secret rotated since the claim counts.
-        let Some(current) = self.store.get(&sub.id) else {
+        let Some(current) = self.store.signing_row(&record) else {
             return;
         };
         if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {

@@ -354,6 +354,22 @@ impl Store {
         self.touch(&mut state, id, |s| s.active = false)
     }
 
+    /// The subscription row to sign claimed `record` with, read now: `None`
+    /// once the claim was cancelled (unsubscribe, revocation, expiry), even
+    /// if a resubscribe has since re-created the same subscription id.
+    pub(crate) fn signing_row(&self, record: &OutboxRecord) -> Option<Subscription> {
+        let state = self.state.lock();
+        let claimed = state
+            .outbox
+            .get(&record.event_id)
+            .is_some_and(|r| r.state == OutboxState::InFlight && r.created_at == record.created_at);
+        if claimed {
+            state.subs.get(&record.subscription_id).cloned()
+        } else {
+            None
+        }
+    }
+
     /// The id of every subscription still live at `now`.
     pub(crate) fn live_subscription_ids(&self, now: DateTime<Utc>) -> HashSet<String> {
         self.state
