@@ -142,7 +142,7 @@ fn reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked(
             .load(std::sync::atomic::Ordering::Acquire)
     );
 
-    hub.reconcile_catalogue();
+    assert!(hub.reconcile_catalogue());
 
     let left: Vec<String> = hub
         .store

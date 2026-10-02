@@ -53,6 +53,8 @@ async fn restart_after(
         wait_until(DEADLINE, || !records(&root, "outbox").is_empty()).await,
         "the failed delivery is pending a retry"
     );
+    // Down first: a live gateway would reload the change itself.
+    gw.stop().await;
     change(&mut gw);
     gw.restart().await;
     (dir, rx, gw, posts)
