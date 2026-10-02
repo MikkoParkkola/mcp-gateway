@@ -137,6 +137,21 @@ pub fn add_backend(
             );
         }
     }
+    if let Some(entry) = resolved.entry {
+        // The child environment is cleared, so an optional variable the gateway
+        // itself holds (process env or env_files) reaches the server only when
+        // named. Forward it when set and non-empty; leave it out otherwise, so
+        // an unset one neither blocks enabling nor reaches the child empty.
+        let overlay = config.env_overlay();
+        for var in entry.optional_env {
+            if overlay.resolve(var).is_some_and(|v| !v.is_empty()) {
+                backend
+                    .env
+                    .entry((*var).to_string())
+                    .or_insert_with(|| format!("${{{var}}}"));
+            }
+        }
+    }
     if backend.enabled {
         // The loader refuses an enabled backend whose reference resolves to
         // nothing (C4); writing one would break the next start.

@@ -212,3 +212,20 @@ fn what_add_writes_survives_the_config_file_and_loads() {
         Some("Bearer ghp_roundtrip")
     );
 }
+
+#[test]
+fn an_optional_variable_the_gateway_holds_is_forwarded_and_an_unset_one_is_left_out() {
+    let (_dir, mut config) = config_with_env_file("AWS_PROFILE=work\nAWS_REGION=\n");
+    add_backend(&mut config, "aws", registry("aws", &[])).unwrap();
+    let aws = &config.backends["aws"];
+    assert!(aws.enabled, "optional variables never block enabling");
+    assert_eq!(
+        aws.env.get("AWS_PROFILE").map(String::as_str),
+        Some("${AWS_PROFILE}"),
+        "a profile chosen in the gateway environment must reach the cleared child"
+    );
+    assert!(
+        !aws.env.contains_key("AWS_REGION"),
+        "an empty optional variable is not forwarded"
+    );
+}
