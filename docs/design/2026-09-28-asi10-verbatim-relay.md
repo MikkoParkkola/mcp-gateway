@@ -432,3 +432,16 @@ is lane policy (operator decision 2026-09-29), not something the workflow enforc
 - `is_anomaly_block` truth table;
 - the shared detector: the `MetaMcp` and `AppState` firewalls hold the same `Arc`;
 - the absent-feature table test.
+
+### 13.2 Review fixes at rebuild (#2644, replaces #2484)
+
+- **Sanitize parity.** Fingerprinting first drops every character input sanitization strips
+  (`security/sanitize.rs` `is_unsafe_control`: C0/C1 controls, zero-width characters, BOM,
+  U+2028/2029), then NFC and whitespace collapse. Before this, a copy interleaved with such
+  characters every < 48 chars matched nothing, and sanitization then delivered the clean text to
+  the backend. Applies to both recording and egress, so it covers every route.
+- **`common_principals` is at most 9.** A tracked fingerprint holds 8 tuples; the 9th saturates
+  it, so at most 9 distinct principals are ever counted. A larger value could never be met and
+  is refused at load.
+- **Delivery point.** Direct-route recording runs after `finish_direct` (scope clamp, chain
+  strip and origin link), on the value the caller receives; replays record the stored value.
