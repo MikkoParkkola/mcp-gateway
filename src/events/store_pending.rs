@@ -72,7 +72,13 @@ pub(super) fn load(
             .insert(dead.record.event_id.clone(), (dead, size));
     }
     for (_, mut record) in load_records::<OutboxRecord>(outbox_dir) {
-        if state.dead.contains_key(&record.event_id) {
+        // The same occurrence, not a later one re-admitted under the same id
+        // once the inbound dedupe window passed: its fan-out time matches.
+        let settled = state
+            .dead
+            .get(&record.event_id)
+            .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
+        if settled {
             remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
             continue;
         }
@@ -458,8 +464,11 @@ impl Store {
                 break;
             }
             // The dead letter is the marker that keeps an outbox copy left by
-            // a failed unlink from being sent again: that copy goes first.
-            remove_record_durable(&self.outbox_dir, &OutboxRecord::file(&id))?;
+            // a failed unlink from being sent again: that copy goes first,
+            // unless the outbox holds a later occurrence under the same id.
+            if !state.outbox.contains_key(&id) {
+                remove_record_durable(&self.outbox_dir, &OutboxRecord::file(&id))?;
+            }
             remove_record(&self.dead_dir, &OutboxRecord::file(&id))?;
             if let Some((dead, _)) = state.dead.remove(&id) {
                 evicted.push(Evicted {

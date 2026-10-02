@@ -332,12 +332,13 @@ fn evicting_a_dead_letter_takes_a_leftover_outbox_copy_first() {
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
     let store = open_with(dir.path(), now, &["s1"]);
-    let caps = OutboxCaps {
-        global: 10,
-        per_subscription: 10,
-    };
-    store.enqueue(record("a", "s1", now), caps).expect("io");
-    // A failed unlink leaves the outbox copy beside its dead letter.
+    // A failed unlink left the outbox file behind; memory already let go.
+    crate::events::records::write_record(
+        &dir.path().join("outbox"),
+        &OutboxRecord::file("a"),
+        &record("a", "s1", now),
+    )
+    .expect("io");
     store
         .dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY)
         .expect("io");
@@ -349,5 +350,34 @@ fn evicting_a_dead_letter_takes_a_leftover_outbox_copy_first() {
             .next()
             .is_none(),
         "no outbox copy outlives its marker"
+    );
+}
+
+#[test]
+fn a_later_occurrence_under_a_dead_id_is_kept() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    // Dead a day ago; the same upstream id re-admitted after the dedupe window.
+    let old = now - chrono::Duration::days(1);
+    store
+        .dead_letter(record("a", "s1", old), DeadReason::Gone, old, ROOMY)
+        .expect("io");
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    drop(store);
+    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    assert!(
+        matches!(store.claim("a", now).expect("io"), Claim::Ready(_)),
+        "the new occurrence survives the reload"
+    );
+    let later = now + chrono::Duration::hours(2);
+    store.sweep_dead(later, ROOMY).expect("io");
+    assert!(
+        dir.path().join("outbox").join("a.json").exists(),
+        "evicting the old dead letter keeps the live record"
     );
 }

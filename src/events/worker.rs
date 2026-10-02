@@ -140,7 +140,16 @@ impl EventsHub {
         };
         if !services.admits_subscription(&sub, &record.backend) {
             services.audit_attempt(&refused("access_revoked")).await;
-            self.revoke(&sub.id).await;
+            if !self.revoke(&sub.id).await {
+                // The removal did not reach the store: the record goes back to
+                // pending, so the next attempt re-checks and revokes again.
+                let next = Utc::now() + chrono::TimeDelta::seconds(30);
+                let retry = Settle::Retry {
+                    next,
+                    status: "access_revoked",
+                };
+                self.settle(services, event_id, retry).await;
+            }
             return;
         }
         // A record a crash or a long suspension carried past its bounds is
