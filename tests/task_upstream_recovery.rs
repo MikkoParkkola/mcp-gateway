@@ -562,3 +562,97 @@ async fn a_read_without_a_task_id_is_refused_before_anything_else() {
         "and causes no upstream call whatsoever"
     );
 }
+
+/// Long enough for several relay fingerprints, with nothing any other
+/// scanner reacts to.
+const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+    the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
+    August, and which crew pruned the older trees after the second frost. It closes with the \
+    count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
+
+/// COLLUDE.1 M15: an upstream-followed task's recovered result is a delivery
+/// to its owner, recorded at settlement. Alice's task completes upstream with
+/// [`PROSE`]; Bob, who never received it, sending it is refused. A `working`
+/// stub recorded in its place would hold none of the text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn meta_upstream_task_result_recorded() {
+    let root = temp_root("upstream-relay-receipt");
+    let peer = serve_peer(Upstream::Working).await;
+    peer.peer.set_payload(json!({
+        "content": [{ "type": "text", "text": PROSE }],
+        "isError": false,
+    }));
+    let config = write_config(
+        root.path(),
+        &Fixture {
+            name: "gateway.yaml",
+            backend_url: &peer.url,
+            adapters: vec![BACKEND.into()],
+            forbid_marker: false,
+        },
+    );
+    with_relay_block(&config);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("bounded fixture HTTP client");
+    let mut gateway = Gateway::start(root.path(), &config, "gateway.log");
+    gateway.wait_until_ready(&client).await;
+    let created = gateway
+        .post_as(
+            &client,
+            &task_invoke(1, "relay-upstream-key"),
+            Some("alice"),
+        )
+        .await;
+    let _ = task_id_of(&created);
+    peer.peer.wait_for_queries(1).await;
+    peer.peer.set(Upstream::Completed);
+
+    // Bob's relay rides `_meta.progressToken`, which reaches the backend: no
+    // argument key the peer's empty schema would refuse first. Never a task
+    // read, which would renew a receipt of its own.
+    let mut relay = modern(
+        2,
+        "tools/call",
+        json!({
+            "name": "gateway_invoke",
+            "arguments": { "server": BACKEND, "tool": helper::TOOL, "arguments": {} },
+            "_meta": { "progressToken": PROSE },
+        }),
+    );
+    relay["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    let deadline = tokio::time::Instant::now() + helper::OBSERVE_BOUND;
+    let answer = loop {
+        let answer = gateway.post_as(&client, &relay, Some("bob")).await;
+        if answer["error"]["code"] == -32002 || tokio::time::Instant::now() >= deadline {
+            break answer;
+        }
+        tokio::time::sleep(helper::POLL_GAP).await;
+    };
+    gateway.terminate().await;
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "the recovered result was not recorded for its owner: {answer}"
+    );
+}
+
+/// Turn on authentication for `alice` and `bob` and relay detection in
+/// `block`, every result of the fixture backend sensitive.
+fn with_relay_block(path: &std::path::Path) {
+    let text = std::fs::read_to_string(path).expect("the fixture config reads");
+    let mut yaml: serde_yaml::Value = serde_yaml::from_str(&text).expect("the config parses");
+    let key = |secret: &str| {
+        json!({ "key_sha256": mcp_gateway::config::api_key_digest_spec(secret.as_bytes()),
+                "name": secret })
+    };
+    let to_yaml = |value: Value| serde_yaml::to_value(value).expect("JSON maps to YAML");
+    yaml["auth"]["enabled"] = serde_yaml::Value::Bool(true);
+    yaml["auth"]["api_keys"] = to_yaml(json!([key("alice"), key("bob")]));
+    yaml["security"]["firewall"]["collusion"] = to_yaml(json!({
+        "action": "block", "window_secs": 600, "sources": [format!("{BACKEND}:*")]
+    }));
+    let yaml = serde_yaml::to_string(&yaml).expect("the config serializes");
+    mcp_gateway::gateway::test_helpers::write_owner_only(path, yaml)
+        .expect("the config is rewritten inside the test's own temp root");
+}
