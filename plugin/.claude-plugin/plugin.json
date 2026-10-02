@@ -3,11 +3,15 @@
   "version": "3.5.1",
   "description": "Local MCP gateway that searches and invokes tools from a catalogue on this machine. It listens on localhost and is not a public hosted server.",
   "author": {
-    "name": "Mikko Parkkola"
+    "name": "Mikko Parkkola",
+    "url": "https://github.com/MikkoParkkola"
   },
-  "license": "PolyForm-Noncommercial-1.0.0",
-  "homepage": "https://github.com/MikkoParkkola/mcp-gateway",
+  "homepage": "https://github.com/MikkoParkkola/mcp-gateway/tree/directory/plugin-ready/plugin",
   "repository": "https://github.com/MikkoParkkola/mcp-gateway",
+  "documentationUrl": "https://github.com/MikkoParkkola/mcp-gateway/blob/directory/plugin-ready/plugin/README.md",
+  "privacyPolicyUrl": "https://github.com/MikkoParkkola/mcp-gateway/blob/directory/plugin-ready/plugin/PRIVACY.md",
+  "supportUrl": "https://github.com/MikkoParkkola/mcp-gateway/issues",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "keywords": ["mcp", "gateway", "tools"],
   "mcpServers": "./.mcp.json"
 }

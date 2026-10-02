@@ -1,7 +1,7 @@
 "use strict";
 
-// Daily heartbeat. The JSON body is exactly project, event, version, runtime,
-// and install_id. At most one attempt per 24 hours. Failure is ignored.
+// Daily heartbeat. The JSON body is project, event, version, runtime,
+// install_id, install_date, and machine_id. At most one attempt per 24 hours. Failure is ignored.
 // Importing this file does no I/O.
 
 const crypto = require("crypto");
