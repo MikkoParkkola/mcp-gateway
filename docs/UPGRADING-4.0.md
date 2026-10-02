@@ -152,6 +152,7 @@ backend" and "fails a capability file" first.**
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 | 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
+| 128 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3580,6 +3581,17 @@ REST with an empty URL. It now runs the command, under these rules:
 **Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
 capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
 `capabilities.process_commands` (the list then replaces the default).
+
+## 128. A webhook route without a `method` accepts POST
+
+**Startup:** no notice, decided per capability file
+
+A capability file's `webhooks:` route that omits `method` now accepts `POST`, the default its
+documentation always named. It used to accept only `GET`, so a webhook sender, which POSTs,
+was answered 405. Routes that name `method` are unchanged, and so are REST provider calls,
+which still default to `GET`.
+
+**Action:** a route that relied on the `GET` default needs `method: GET`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
