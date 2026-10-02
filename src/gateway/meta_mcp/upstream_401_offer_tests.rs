@@ -24,17 +24,26 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::config::AccountDescriptor;
 use crate::personal_accounts::refusal::offer_data;
 use crate::personal_accounts::{
-    AccountKey, CallbackOutcome, CallbackRequest, JourneyCreated, JourneyLimits, JourneyResult,
-    JourneyService, JourneyStarted, JourneyView,
+    AccountKey, CallbackOutcome, CallbackRequest, CustodyError, JourneyCreated, JourneyError,
+    JourneyLimits, JourneyRefusal, JourneyResult, JourneyService, JourneyStarted, JourneyView,
 };
 
 const FRESH: u64 = u64::MAX;
 const INSTALLATION: &str = "owui-a11";
 const ORIGIN: &str = "https://chat.a11.invalid";
 const JOURNEY: &str = "journey-a11-offer";
+const RETRY_AFTER: u64 = 9;
 
 /// Answers the one call a dispatch-site offer makes; nothing else is reached.
-struct OfferingJourneys;
+#[derive(Clone, Copy)]
+enum OfferingJourneys {
+    /// A journey is created and its link offered.
+    Created,
+    /// The creation budget is spent: a retry hint, no link.
+    Limited,
+    /// Custody cannot answer: no offer at all.
+    Down,
+}
 
 #[async_trait::async_trait]
 impl JourneyService for OfferingJourneys {
@@ -55,10 +64,16 @@ impl JourneyService for OfferingJourneys {
         _: AccountDescriptor,
         _: String,
     ) -> JourneyResult<JourneyCreated> {
-        Ok(Ok(JourneyCreated {
-            journey_id: JOURNEY.to_string(),
-            expires_at: u64::MAX,
-        }))
+        match self {
+            Self::Created => Ok(Ok(JourneyCreated {
+                journey_id: JOURNEY.to_string(),
+                expires_at: u64::MAX,
+            })),
+            Self::Limited => Ok(Err(JourneyError::Refused(JourneyRefusal::RateLimited {
+                retry_after: RETRY_AFTER,
+            }))),
+            Self::Down => Err(CustodyError::Busy),
+        }
     }
 
     async fn status(
@@ -144,7 +159,10 @@ async fn meta_route_revoked_grant_401_carries_the_reconnect_offer() {
         &slots,
     );
     let live = Arc::new(LiveConfig::new(offering_config()));
-    meta.install_connect_offers(ConnectOffers::new(Arc::new(OfferingJourneys), live));
+    meta.install_connect_offers(ConnectOffers::new(
+        Arc::new(OfferingJourneys::Created),
+        live,
+    ));
     dispatches.answer_with(&[401]);
 
     let error = Box::pin(execute(&meta, "mail", Some(&caller)))
@@ -165,4 +183,48 @@ async fn meta_route_revoked_grant_401_carries_the_reconnect_offer() {
     assert_eq!(data["error"]["code"], "reconnect_required", "{data}");
     assert_eq!(custody.refreshes(), 1, "exactly one forced refresh");
     assert_eq!(dispatches.calls().len(), 1);
+}
+
+/// The two answers the live offer path cannot script: a spent creation budget
+/// keeps the refusal and adds a retry hint, and custody that cannot answer
+/// leaves the refusal exactly as it was. Mutant: the hint dropped, or a failed
+/// offer still sealed as one.
+#[tokio::test]
+async fn an_offer_custody_limits_or_cannot_make_keeps_the_refusal() {
+    const TEXT: &str = "account is not connected";
+    let caller = bridged_caller();
+    let refused = || {
+        crate::personal_accounts::refusal::mark(
+            crate::Error::Config(TEXT.to_string()),
+            &crate::identity_propagation::PropagationError::AccountNotConnected(TEXT.to_string()),
+            Some(WORK),
+        )
+    };
+    for journeys in [OfferingJourneys::Limited, OfferingJourneys::Down] {
+        let meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
+            crate::backend::BackendRegistry::new(),
+        ));
+        let live = Arc::new(LiveConfig::new(offering_config()));
+        meta.install_connect_offers(ConnectOffers::new(Arc::new(journeys), live));
+
+        let error = meta
+            .with_connect_offer::<()>(Err(refused()), Some(&caller))
+            .await
+            .expect_err("a refusal stays a refusal");
+
+        assert!(error.to_string().contains(TEXT), "{error}");
+        match journeys {
+            OfferingJourneys::Limited => {
+                assert_eq!(error.to_rpc_code(), -32001, "{error}");
+                let data = offer_data(&error).expect("a sealed retry hint");
+                assert_eq!(data["error"]["retryable"], true, "{data}");
+                assert_eq!(data["retry_after"], RETRY_AFTER, "{data}");
+                assert!(data.get("connect_url").is_none(), "{data}");
+            }
+            _ => {
+                assert!(offer_data(&error).is_none(), "{error}");
+                assert!(matches!(error, crate::Error::Config(_)), "{error}");
+            }
+        }
+    }
 }
