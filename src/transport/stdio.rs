@@ -249,7 +249,7 @@ impl StdioTransport {
                             return;
                         };
                         if let Err(e) = transport.handle_response(&line) {
-                            error!(error = %e, line = %line, "Failed to handle response");
+                            error!(error = %e, line_len, "Failed to handle response");
                         }
                     }
                     Ok(None) => {
@@ -507,7 +507,7 @@ impl StdioTransport {
     /// peer *request* is refused, because routing one to a pending caller would
     /// answer that caller with a frame carrying neither `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
-        debug!(line = %line, "Parsing response");
+        debug!(line_len = line.len(), "Parsing response");
         let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
@@ -541,7 +541,7 @@ impl StdioTransport {
 
     /// Write a message to stdin
     async fn write_message(&self, message: &str) -> Result<()> {
-        debug!(message_len = message.len(), message = %message, "Writing to stdin");
+        debug!(message_len = message.len(), "Writing to stdin");
         let mut writer = self.writer.lock().await;
         if let Some(ref mut stdin) = *writer {
             stdin

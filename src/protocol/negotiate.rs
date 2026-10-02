@@ -8,6 +8,7 @@
 //! transports.
 
 use super::SUPPORTED_VERSIONS;
+use super::meta::MODERN_VERSIONS;
 use crate::{Error, Result};
 use serde_json::Value;
 use tracing::debug;
@@ -111,11 +112,13 @@ pub(crate) fn initialize_params(version: &str) -> Value {
 ///
 /// The client proposes and the server selects, so the selection is what
 /// governs the session -- which is why it must be a revision this gateway
-/// speaks.
+/// speaks: a legacy one, or a modern one, whose dialect the era probe then
+/// settles (a backend may answer `initialize` naming `2026-07-28`).
 ///
 /// # Errors
 ///
-/// [`Error::Protocol`] when the selection is not in [`SUPPORTED_VERSIONS`].
+/// [`Error::Protocol`] when the selection is in neither [`SUPPORTED_VERSIONS`]
+/// nor [`MODERN_VERSIONS`].
 /// The selection is backend-controlled text, so the diagnostic names it only
 /// when it is shaped like a version: a backend must not be able to echo a
 /// credential the gateway sent it into an error.
@@ -126,7 +129,7 @@ pub(crate) fn checked_selection(result: Option<&Value>) -> Result<Option<&str>> 
     else {
         return Ok(None);
     };
-    if SUPPORTED_VERSIONS.contains(&selected) {
+    if SUPPORTED_VERSIONS.contains(&selected) || MODERN_VERSIONS.contains(&selected) {
         return Ok(Some(selected));
     }
     let named = if is_version_token(selected) {
@@ -135,7 +138,8 @@ pub(crate) fn checked_selection(result: Option<&Value>) -> Result<Option<&str>> 
         "a value that is not a protocol version"
     };
     Err(Error::Protocol(format!(
-        "Backend selected protocol version {named}, which this gateway does not speak; it speaks: {}",
+        "Backend selected protocol version {named}, which this gateway does not speak; it speaks: {}, {}",
+        MODERN_VERSIONS.join(", "),
         SUPPORTED_VERSIONS.join(", ")
     )))
 }

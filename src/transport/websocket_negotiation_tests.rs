@@ -7,6 +7,7 @@
 //! speaks.
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::{Transport, WebSocketTransport};
@@ -62,6 +63,11 @@ async fn a_version_rejection_is_retried_at_the_highest_shared_revision() {
         vec![PROTOCOL_VERSION.to_string(), HIGHEST_SHARED.to_string()],
         "one rejected proposal, then one retry at the highest revision both sides speak"
     );
+    assert_eq!(
+        peer.seen.accepts.load(Ordering::SeqCst),
+        1,
+        "the retry must ride the same socket, not a reconnect"
+    );
     outcome.expect("a backend that speaks an older shared revision must start");
 }
 
@@ -104,4 +110,21 @@ async fn a_first_answer_that_selects_an_unsupported_revision_is_refused() {
     );
     assert!(matches!(error, Error::Protocol(_)), "{error:?}");
     assert!(error.to_string().contains(UNSUPPORTED), "{error}");
+}
+
+/// The selection is backend-controlled text: one that is not shaped like a
+/// version is refused without being repeated, so a backend cannot echo a
+/// credential into the error.
+#[tokio::test]
+async fn a_selection_that_is_not_a_version_is_refused_unnamed() {
+    const NOT_A_VERSION: &str = "Bearer sk-live-quoted-back";
+    let (_peer, outcome) = connect(Behaviour::Negotiates {
+        speaks: PEER_SPEAKS,
+        selects: NOT_A_VERSION,
+    })
+    .await;
+
+    let error = outcome.expect_err("a selection that is not a version must not be adopted");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert!(!error.to_string().contains("sk-live"), "{error}");
 }
