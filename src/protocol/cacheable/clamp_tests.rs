@@ -160,6 +160,8 @@ fn a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result() {
         Some(Value::Null),
         Some(json!({"state": "done"})),
         Some(json!("shipped")),
+        Some(json!("inputRequired")),
+        Some(json!({"completed": null})),
     ] {
         let mut odd = json!({"taskId": 7, "result": {"cacheScope": "public"}});
         if let Some(status) = not_a_status.clone() {
@@ -169,6 +171,23 @@ fn a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result() {
         assert_eq!(
             odd["result"]["cacheScope"], "public",
             "a non-string taskId without a task status is not an envelope: {not_a_status:?}"
+        );
+    }
+
+    for status in [
+        "working",
+        "input_required",
+        "completed",
+        "failed",
+        "cancelled",
+    ] {
+        let mut envelope = json!({
+            "taskId": 7, "status": status, "result": {"cacheScope": "public"}
+        });
+        clamp_delivered_scope(&mut envelope);
+        assert_eq!(
+            envelope["result"]["cacheScope"], "private",
+            "status {status}"
         );
     }
 
@@ -206,14 +225,17 @@ fn the_retained_slot_is_followed_once_not_recursively() {
 fn error_data_is_clamped_at_its_top_level_only() {
     let mut response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "failed");
     response.error.as_mut().expect("an error").data = Some(json!({
+        "cacheScope": "public",
         "taskId": 7, "status": "completed", "result": {"cacheScope": "public"}
     }));
     let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert_eq!(wire["error"]["data"]["cacheScope"], "private", "{wire}");
     assert_eq!(
         wire["error"]["data"]["result"]["cacheScope"], "public",
         "{wire}"
     );
     let data: Value = serde_json::from_str(&message_event_data(&wire)).expect("JSON");
+    assert_eq!(data["error"]["data"]["cacheScope"], "private", "{data}");
     assert_eq!(
         data["error"]["data"]["result"]["cacheScope"], "public",
         "{data}"

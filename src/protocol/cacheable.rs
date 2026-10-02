@@ -100,8 +100,9 @@ fn task_result_slot(result: &Value) -> Option<&Value> {
     let task_id = result.get("taskId")?;
     if !task_id.is_string() {
         // Only a status the typed task wire accepts makes it an envelope.
-        let status = result.get("status")?.clone();
-        serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status).ok()?;
+        // A string only: serde also reads a unit variant from `{"completed": null}`.
+        let status = result.get("status")?.as_str()?;
+        serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status.into()).ok()?;
     }
     result.get("result").filter(|slot| slot.is_object())
 }
