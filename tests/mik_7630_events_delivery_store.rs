@@ -43,6 +43,7 @@ providers: {}
 webhooks:
   dedup:
     path: /acme/dedup
+    method: POST
     transform:
       event_type: "acme.{action}"
       data: { repo: "{repository.full_name}" }
@@ -51,6 +52,7 @@ webhooks:
       dedupe: body
   plain:
     path: /acme/plain
+    method: POST
     transform:
       event_type: "acme.{action}"
       data: { repo: "{repository.full_name}" }

@@ -274,7 +274,7 @@ async fn per_subscription_rate_limit_delays_not_drops() {
 }
 
 /// T28 (SAFETY.5): with cost governance on, a delivery that alice's key
-/// budget cannot cover is dead-lettered `budget` and never POSTed. A budget
+/// budget cannot cover is dead-lettered `budget` and never posted. A budget
 /// of 0.01 against a 1.0 charge stands in for "0" (a zero limit divides by
 /// zero in the alert percentage). The ledger clause is not asserted: a
 /// refused check records no spend in `costs.json`.
