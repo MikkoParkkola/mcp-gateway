@@ -1,0 +1,46 @@
+# Throwaway: measure per-path line coverage for MIK-7324.COV.3.
+# Lives only on throwaway/coverage-* branches; never merged.
+name: Coverage probe
+
+on:
+  push:
+    branches: ["throwaway/coverage-*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The five Critical rows compiled only on Windows (task store and account
+  # storage) are graded from this report, unioned with the Linux one.
+  coverage-windows:
+    name: llvm-cov Windows-only rows
+    runs-on: windows-2025
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      # Set up like CI's Windows job: default (pwsh) shell, the same
+      # --all-features --tests --no-fail-fast invocation, no test filter, with
+      # the same symlink setting that job applies first.
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      - name: Every test target, as CI runs them
+        run: cargo llvm-cov --all-features --lib --ignore-run-fail --lcov --output-path windows.lcov -- --show-output 2>&1 | Tee-Object windows-run.log | Select-String -Pattern '^test result|FAILED|panicked'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-windows
+          path: |
+            windows.lcov
+            windows-run.log
