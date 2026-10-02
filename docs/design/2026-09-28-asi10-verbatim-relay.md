@@ -634,10 +634,9 @@ These amend the r2 text above; where they disagree, r3 wins.
      context-integrity evaluation as a tool result (`apply_context_integrity`). Sensitivity is read
      from the copy's classes, and the copy's top-level `_context_integrity` is removed before its
      text is recorded. M6 runs with `sources` empty.
-7. Gateway metadata (from #2644's delta review): `text_of` has no `_context_integrity` skip
-   anymore (`Walk::Delivery` reads every string leaf). Every meta stage point therefore stages a
-   copy of the gated value with the top-level `_context_integrity` the gateway attached
-   (`invoke.rs:2879`) removed, after reading its sensitivity.
+7. Gateway metadata: `Walk::Delivery` skips the top-level `_context_integrity`, the gateway's
+   verdict slot (§13.2), so every stage point stages the gated value as is, and `record_delivery`
+   reads its sensitivity from that slot.
 8. Added rows:
    - M14 `meta_modern_retry_relay_refused`: a modern (non-bridged) retry whose redeemed
      `inputResponses` carry A's text is refused at site 1 (mutant: omit `outbound_retry` from the
