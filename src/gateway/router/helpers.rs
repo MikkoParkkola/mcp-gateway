@@ -70,6 +70,7 @@ pub(crate) fn read_guard(
 }
 
 /// Build an HTTP response with a `mcp-session-id` header from an arbitrary JSON body.
+#[cfg(test)] // its last production caller became bodiless (MIK-7759)
 pub(super) fn build_json_response(
     body: Value,
     session_id: &str,
@@ -142,9 +143,23 @@ pub(super) fn build_http_error_response(
     build_http_response(&JsonRpcResponse::error(id, code, message.into()), status)
 }
 
-/// Build a `202 Accepted` response with an empty JSON body and session header.
+/// Build a bodiless `202 Accepted` with the session header. Streamable HTTP
+/// (2025-06-18, 2025-11-25): an accepted notification or client response gets
+/// 202 with no body (MIK-7759).
 pub(super) fn build_accepted_response(session_id: &str) -> axum::response::Response {
-    build_json_response(json!({}), session_id, StatusCode::ACCEPTED)
+    let mut response = StatusCode::ACCEPTED.into_response();
+    attach_session_header(response.headers_mut(), session_id);
+    response
+}
+
+/// The direct `/mcp/{name}` answer on the wire. Its 202 is only ever an
+/// accepted notification, whose placeholder body the audit layer has already
+/// read; the spec gives it no body (MIK-7759).
+pub(super) fn bodiless_accepted(answer: (StatusCode, Json<Value>)) -> axum::response::Response {
+    if answer.0 == StatusCode::ACCEPTED {
+        return StatusCode::ACCEPTED.into_response();
+    }
+    answer.into_response()
 }
 
 /// Parse `sampling/createMessage` params from raw JSON, returning an early

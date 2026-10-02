@@ -35,6 +35,7 @@ use crate::config::WebhookConfig;
 use crate::secrets::SecretResolver;
 
 mod errors;
+mod events;
 
 // ============================================================================
 // Stats types
@@ -139,6 +140,9 @@ pub struct WebhookRegistry {
     /// The backend that serves these capabilities: a session receives a
     /// webhook notification only if its caller may access this backend.
     backend: String,
+    /// The MCP Events hub (MIK-7630) when events are on: `event:` routes
+    /// emit through it.
+    events: Option<Arc<crate::events::EventsHub>>,
 }
 
 impl WebhookRegistry {
@@ -151,6 +155,7 @@ impl WebhookRegistry {
             limiters: HashMap::new(),
             env: Arc::new(crate::config::LiveEnv::default()),
             backend: String::new(),
+            events: None,
         }
     }
 
@@ -285,6 +290,7 @@ impl WebhookRegistry {
                 env: Arc::clone(&self.env),
                 backend: self.backend.clone(),
                 limiter: self.limiters.get(path).cloned(),
+                events: self.events.clone(),
             };
 
             let method_filter = method_to_filter(&webhook_def.method);
@@ -335,6 +341,8 @@ struct WebhookHandlerState {
     backend: String,
     /// This endpoint's `rate_limit` bucket; `None` when unlimited.
     limiter: Option<Arc<EndpointLimiter>>,
+    /// The MCP Events hub, when events are on.
+    events: Option<Arc<crate::events::EventsHub>>,
 }
 
 /// A per-endpoint request budget (`webhooks.rate_limit` per minute).
@@ -394,13 +402,14 @@ async fn dynamic_webhook_handler(
             .into_response();
     }
 
-    let (config, env, backend, limiter) = {
+    let (config, env, backend, limiter, events) = {
         let registry = state.registry.read();
         (
             registry.config.clone(),
             Arc::clone(&registry.env),
             registry.backend.clone(),
             registry.limiters.get(&path).cloned(),
+            registry.events.clone(),
         )
     };
     let handler_state = WebhookHandlerState {
@@ -413,6 +422,7 @@ async fn dynamic_webhook_handler(
         env,
         backend,
         limiter,
+        events,
     };
 
     webhook_handler(State(handler_state), headers, body)
@@ -494,6 +504,9 @@ async fn webhook_handler(
             return transformation_failed(&request_id).into_response();
         }
     };
+
+    // An `event:` route emits an MCP event whether or not it notifies.
+    events::emit(&state, &headers, &body, &payload, &notification.event_type).await;
 
     // Deliver to in-scope SSE sessions if enabled: a webhook carries one
     // integration's data, so a caller without access to the capability
@@ -602,16 +615,7 @@ fn transform_payload(
         format!("webhook.{}.{}", state.capability_name, state.webhook_name)
     };
 
-    // Transform data fields.
-    let mut transformed_data = serde_json::Map::new();
-    for (key, template) in &transform.data {
-        if let Ok(value) = extract_template_value(template, payload) {
-            transformed_data.insert(key.clone(), Value::String(value));
-        } else if let Some(value) = extract_json_path(template, payload) {
-            // If string template extraction fails, try raw JSON path extraction.
-            transformed_data.insert(key.clone(), value.clone());
-        }
-    }
+    let transformed_data = project_data(transform, payload);
 
     // If no transform data specified, use the entire payload.
     let data = if transformed_data.is_empty() {
@@ -626,6 +630,24 @@ fn transform_payload(
         data,
         event_id: None,
     })
+}
+
+/// Each mapped key whose template resolves: a string template first, then
+/// a raw JSON path. Unresolved keys are omitted.
+fn project_data(
+    transform: &crate::capability::WebhookTransform,
+    payload: &Value,
+) -> serde_json::Map<String, Value> {
+    let mut transformed_data = serde_json::Map::new();
+    for (key, template) in &transform.data {
+        if let Ok(value) = extract_template_value(template, payload) {
+            transformed_data.insert(key.clone(), Value::String(value));
+        } else if let Some(value) = extract_json_path(template, payload) {
+            // If string template extraction fails, try raw JSON path extraction.
+            transformed_data.insert(key.clone(), value.clone());
+        }
+    }
+    transformed_data
 }
 
 /// Extract value from template (supports `{field.nested}` syntax).

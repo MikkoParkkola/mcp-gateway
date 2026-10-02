@@ -17,9 +17,27 @@ use super::types::CallbackFailure;
 use crate::security::ssrf::{PinningResolver, SystemResolver, in_allowed, ssrf_denial};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const TOTAL_TIMEOUT: Duration = Duration::from_secs(10);
 /// The verification echo is the only body the gateway reads.
 const MAX_READ: usize = 4096;
+
+/// Whether a POST reads the answer's body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadBody {
+    /// Read a 2xx body up to `MAX_READ` (the verification echo).
+    Echo,
+    /// Read nothing: a delivery needs only the status.
+    Discard,
+}
+
+/// What the endpoint answered. Only the status and `Retry-After` are kept;
+/// headers and the body of a delivery answer are never read.
+#[derive(Debug)]
+pub(crate) struct Answer {
+    pub status: u16,
+    pub retry_after: Option<Duration>,
+    pub body: Vec<u8>,
+}
 
 /// The hardened callback client.
 pub(crate) struct CallbackClient {
@@ -78,9 +96,17 @@ impl CallbackClient {
             "msg_verification_{}",
             hex::encode(rand::random::<[u8; 16]>())
         );
-        let echoed = self.post(url, subscription_id, &id, &[key], body).await?;
+        let answer = self
+            .post(url, subscription_id, &id, &[key], body, ReadBody::Echo)
+            .await?;
+        match answer.status {
+            400..=499 => return Err(CallbackFailure::Http4xx),
+            500..=599 => return Err(CallbackFailure::Http5xx),
+            200..=299 => {}
+            _ => return Err(CallbackFailure::ChallengeFailed),
+        }
         let answer: serde_json::Value =
-            serde_json::from_slice(&echoed).map_err(|_| CallbackFailure::ChallengeFailed)?;
+            serde_json::from_slice(&answer.body).map_err(|_| CallbackFailure::ChallengeFailed)?;
         let got = answer
             .get("challenge")
             .and_then(serde_json::Value::as_str)
@@ -92,7 +118,9 @@ impl CallbackClient {
         }
     }
 
-    /// One signed POST; a 2xx answers with its body, read up to `MAX_READ`.
+    /// One signed POST, signed with a fresh timestamp: the only function
+    /// that puts callback bytes on the wire. A transport failure is its
+    /// category; any HTTP answer is returned for the caller to judge.
     pub(crate) async fn post(
         &self,
         url: &url::Url,
@@ -100,7 +128,8 @@ impl CallbackClient {
         webhook_id: &str,
         keys: &[&[u8]],
         body: Vec<u8>,
-    ) -> Result<Vec<u8>, CallbackFailure> {
+        read: ReadBody,
+    ) -> Result<Answer, CallbackFailure> {
         self.check_literal(url)?;
         let timestamp = chrono::Utc::now().timestamp().to_string();
         let signature = sign(keys, webhook_id, &timestamp, &body);
@@ -117,23 +146,26 @@ impl CallbackClient {
             .await
             .map_err(|e| classify(&e))?;
         let status = response.status();
-        if status.is_client_error() {
-            return Err(CallbackFailure::Http4xx);
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| retry_after(v, chrono::Utc::now()));
+        let mut answer = Answer {
+            status: status.as_u16(),
+            retry_after,
+            body: Vec::new(),
+        };
+        if read == ReadBody::Discard || !status.is_success() {
+            return Ok(answer);
         }
-        if status.is_server_error() {
-            return Err(CallbackFailure::Http5xx);
-        }
-        if !status.is_success() {
-            return Err(CallbackFailure::ChallengeFailed);
-        }
-        let mut read = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|e| classify(&e))? {
-            if read.len() + chunk.len() > MAX_READ {
+            if answer.body.len() + chunk.len() > MAX_READ {
                 return Err(CallbackFailure::ChallengeFailed);
             }
-            read.extend_from_slice(&chunk);
+            answer.body.extend_from_slice(&chunk);
         }
-        Ok(read)
+        Ok(answer)
     }
 }
 
@@ -186,6 +218,21 @@ pub(crate) fn decode_whsec(secret: &str) -> Option<Vec<u8>> {
         .decode(secret.strip_prefix("whsec_")?)
         .ok()?;
     (24..=64).contains(&raw.len()).then_some(raw)
+}
+
+/// A `Retry-After` value: delta-seconds, or an HTTP-date (RFC 9110
+/// section 10.2.3), as the wait from `now`. A date in the past waits zero.
+fn retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+    Some(
+        (at.with_timezone(&chrono::Utc) - now)
+            .to_std()
+            .unwrap_or_default(),
+    )
 }
 
 #[cfg(test)]

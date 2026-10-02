@@ -149,6 +149,11 @@ pub(super) async fn audited_call(
         Some(call) => record(&state, &name, call, answer, notes).await,
         None => answer,
     };
+    if status == StatusCode::ACCEPTED {
+        // An accepted notification: the gateway's own placeholder, sent
+        // with no body (MIK-7759), carries nothing to judge.
+        return super::super::helpers::bodiless_accepted((status, Json(body)));
+    }
     let frame = crate::gateway::outbound::answer_value(
         guard.as_deref(),
         reads.key.as_deref(),

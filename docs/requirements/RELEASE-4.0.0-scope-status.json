@@ -1630,15 +1630,21 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T22's TTL clause requests 1000 ms against a 1 s floor, so the upward clamp to min_ttl is not exercised; stays pending under MIK-7783."
     },
     {
       "id": "MIK-7630.EVENTS.5",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_delivery_safety.rs",
+        "tests/mik_7630_events_delivery.rs",
+        "tests/mik_7630_events_delivery_lifecycle.rs",
+        "src/events/worker_tests.rs"
+      ],
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T13 private callback addresses refused before any connection; T14 the address checked per connection; T15 a redirect is never followed; T16 the receiver's answer surfaces only as a status category; T17 one webhook-id, identical bytes and a fresh signature per attempt; T31 410 and 413 tried once and a body over 262 144 bytes never sent; T47 sustained failure suspends the subscription."
     },
     {
       "id": "MIK-7630.EVENTS.6",
@@ -1650,11 +1656,16 @@
     },
     {
       "id": "MIK-7630.EVENTS.7",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_subscribe.rs",
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_delivery_lifecycle.rs",
+        "src/events/rpc_tests.rs"
+      ],
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T11 authorisation, T23 idempotent and caller-scoped with the pending retry cancelled, T55 nothing sent after the unsubscribe answer; unit unsubscribe_waits_out_a_claimed_attempt."
     },
     {
       "id": "MIK-7630.EVENTS.8",
@@ -1694,7 +1705,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but replay re-scanning lands with I6 (T35); stays pending."
     },
     {
       "id": "MIK-7630.SAFETY.2",
@@ -1702,7 +1713,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending."
     },
     {
       "id": "MIK-7630.SAFETY.3",
@@ -1726,7 +1737,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T28 substitutes a 0.01 budget for 0 and does not assert the budget-ledger charge attempt; stays pending under MIK-7783."
     },
     {
       "id": "MIK-7630.SAFETY.6",
@@ -1742,7 +1753,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but retry_window is not capped at 15 minutes (MIK-7784); stays pending."
     },
     {
       "id": "MIK-7630.RELIABLE.2",
