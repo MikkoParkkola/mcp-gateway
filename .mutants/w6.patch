@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage_windows.rs b/src/personal_accounts/storage_windows.rs
+index 6ab5ea7c4..c6f5b7920 100644
+--- a/src/personal_accounts/storage_windows.rs
++++ b/src/personal_accounts/storage_windows.rs
+@@ -23,7 +23,7 @@ pub(super) fn private_directory(path: &Path) -> Result<crate::fs_lock::DirPin, A
+         .metadata()
+         .map_err(|_| AccountError::StorageUnavailable)?;
+     if !metadata.is_dir() {
+-        return Err(AccountError::InvalidConfiguration);
++        return Err(AccountError::StorageUnavailable);
+     }
+     private_fs::judge_dir(&dir, path).map_err(|reason| {
+         let shown_path = path.display();

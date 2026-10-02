@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage_windows.rs b/src/personal_accounts/storage_windows.rs
+index 6ab5ea7c4..76fa8207c 100644
+--- a/src/personal_accounts/storage_windows.rs
++++ b/src/personal_accounts/storage_windows.rs
+@@ -40,7 +40,7 @@ pub(super) fn create_directory(path: &Path) -> Result<(), AccountError> {
+         Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => return Ok(()),
+         Ok(_) => return Err(AccountError::InvalidConfiguration),
+         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+-        Err(_) => return Err(AccountError::StorageUnavailable),
++        Err(_) => return Err(AccountError::InvalidConfiguration),
+     }
+     let parent = path.parent().ok_or(AccountError::InvalidConfiguration)?;
+     create_directory(parent)?;

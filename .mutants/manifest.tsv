@@ -1,0 +1,9 @@
+head_sha	f019c3c55150b7400c63ecf01c03692481804002
+# batch 1 for #2673 (windows custody rows)
+W1	windows	w1.patch	--lib -- judge_store_dir_refuses_an_absent_path_and_a_shared_directory
+W2	windows	w2.patch	--lib -- open_record_refuses_an_absent_record_and_a_shared_one
+W3	windows	w3.patch	--lib -- open_record_refuses_an_absent_record_and_a_shared_one
+W4	windows	w4.patch	--lib -- create_directory_reports_a_name_the_filesystem_rejects
+W5	windows	w5.patch	--lib -- create_directory_refuses_a_file_in_the_way
+W6	windows	w6.patch	--lib -- private_directory_refuses_an_absent_path_a_file_and_a_shared_directory
+W7	windows	w7.patch	--lib -- private_directory_refuses_an_absent_path_a_file_and_a_shared_directory

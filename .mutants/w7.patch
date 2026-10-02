@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage_windows.rs b/src/personal_accounts/storage_windows.rs
+index 6ab5ea7c4..d8be6ee78 100644
+--- a/src/personal_accounts/storage_windows.rs
++++ b/src/personal_accounts/storage_windows.rs
+@@ -28,7 +28,7 @@ pub(super) fn private_directory(path: &Path) -> Result<crate::fs_lock::DirPin, A
+     private_fs::judge_dir(&dir, path).map_err(|reason| {
+         let shown_path = path.display();
+         tracing::warn!(?reason, path = %shown_path, "account store directory is not private");
+-        AccountError::InvalidConfiguration
++        AccountError::StorageUnavailable
+     })?;
+     Ok(crate::fs_lock::DirPin(dir))
+ }

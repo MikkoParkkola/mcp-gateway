@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store_windows.rs b/src/gateway/task_service/store_windows.rs
+index 204018a94..780879019 100644
+--- a/src/gateway/task_service/store_windows.rs
++++ b/src/gateway/task_service/store_windows.rs
+@@ -27,7 +27,7 @@ pub(super) fn judge_store_dir(dir: &Path) -> Result<crate::fs_lock::DirPin, Stor
+     private_fs::judge_dir(&handle, dir).map_err(|reason| {
+         let shown_path = dir.display();
+         tracing::warn!(?reason, path = %shown_path, "task store directory is not private");
+-        StoreError::UnsafeStore
++        StoreError::Unavailable
+     })?;
+     Ok(crate::fs_lock::DirPin(handle))
+ }

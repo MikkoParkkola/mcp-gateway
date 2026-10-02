@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store_windows.rs b/src/gateway/task_service/store_windows.rs
+index 204018a94..4473007dd 100644
+--- a/src/gateway/task_service/store_windows.rs
++++ b/src/gateway/task_service/store_windows.rs
+@@ -67,7 +67,7 @@ pub(super) fn open_record(path: &Path) -> Result<fs::File, StoreError> {
+     private_fs::judge_file(&file).map_err(|reason| {
+         let shown_path = path.display();
+         tracing::warn!(?reason, path = %shown_path, "task record is not private");
+-        StoreError::UnsafeStore
++        StoreError::Unavailable
+     })?;
+     Ok(file)
+ }
