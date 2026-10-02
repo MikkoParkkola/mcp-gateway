@@ -89,7 +89,7 @@ src/gateway/router/handlers.rs	meta_mcp_dispatch	1	critical	a,b,c,d	meta_mcp_dis
 src/gateway/router/handlers.rs	metrics_handler	1	critical	a,b	metrics_handler	Constant-time bearer comparison against metrics_token; 401 otherwise.
 src/gateway/router/handlers.rs	get_era_refusal	1	standard	d	get_era_refusal	Refuses the removed GET /mcp (405) or an unsupported 2026 version.
 src/gateway/router/handlers.rs	reaches_tasks_extension	1	standard	borderline	reaches_tasks_extension	Hand-maintained list that gates the tasks extension; a missing arm is unguarded.
-src/gateway/router/handlers.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
+src/gateway/router/handlers/tasks.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
 src/gateway/router/handlers/owner.rs	request_session_owner	1	critical	a,c	request_session_owner	Resolves the grant subject, refuses bad identity headers, applies the hardened refusal.
 src/gateway/router/handlers/owner.rs	owner_of	1	standard	borderline	owner_of	Session owner rule (subject plus held-credential digest) used by both routes.
 src/gateway/router/handlers/owner.rs	session_owner	1	standard	borderline	session_owner	Owner from the validated principal, not the display name.
