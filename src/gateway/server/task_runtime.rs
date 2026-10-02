@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use crate::config::Config;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::subscription_registry::SubscriptionRegistry;
-use crate::gateway::task_service::execution::ExpirySweep;
+use crate::gateway::task_service::execution::{CancelOutcome, ExpirySweep};
 use crate::gateway::task_service::{ServiceError, StoreLimits, TaskExecutor, TaskService};
 
 /// Open the store at `dir` with recovery, sharing meta-MCP's admission
@@ -52,37 +52,81 @@ pub(super) async fn open(
     .await
 }
 
+/// How long the task half of shutdown may spend on each phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ShutdownBudget {
+    /// Waiting for running workers to finish on their own.
+    pub drain: Duration,
+    /// After a drain that ran out: waiting for the cancelled workers to end.
+    pub cancel: Duration,
+}
+
+impl ShutdownBudget {
+    /// HTTP: the drain keeps the whole `shutdown_timeout`, and cancellation
+    /// gets as long again.
+    pub(super) fn http(timeout: Duration) -> Self {
+        Self {
+            drain: timeout,
+            cancel: timeout,
+        }
+    }
+
+    /// stdio: carved out of the `remaining` teardown window, which a
+    /// `shutdown_timeout` longer than the window would otherwise outlast and
+    /// leave the cancellation never run. A fifth of the window is held back
+    /// for cancelling and closing the store; cancelling gets half of that.
+    pub(super) fn within(remaining: Duration, timeout: Duration) -> Self {
+        let reserve = remaining / 5;
+        Self {
+            drain: timeout.min(remaining - reserve),
+            cancel: reserve / 2,
+        }
+    }
+}
+
 /// The task half of shutdown, in this order:
+/// - workers drain within `budget.drain` (a worker's dispatch IS a backend
+///   call, so this precedes any backend teardown);
+/// - a drain that ran out cancels the workers still running and waits up to
+///   `budget.cancel` for them to end, so none commits into a closed store or
+///   outlives the backends. Their rows stay `working` and the next start
+///   settles them through the interrupted-task table;
 /// - the expiry sweep is joined while the store is still open, so a deletion
-///   already in flight finishes and no new one starts;
-/// - workers drain within `timeout` (a worker's dispatch IS a backend call,
-///   so this precedes any backend teardown);
+///   already in flight finishes and no new one starts. After the workers,
+///   because its join has no bound of its own;
 /// - the store closes, joining any writer still in flight and giving the
 ///   directory lease back.
+///
+/// Returns what a drain that ran out cancelled, or `None` after a clean drain.
 pub(super) async fn shutdown(
     expiry: ExpirySweep,
     executor: &TaskExecutor,
     service: &TaskService,
-    timeout: Duration,
-) {
+    budget: ShutdownBudget,
+) -> Option<CancelOutcome> {
+    info!(timeout = ?budget.drain, "Draining in-flight tasks...");
+    let drained = executor.drain(budget.drain).await;
+    let cancelled = if drained.timed_out {
+        let outcome = executor.cancel_remaining(budget.cancel).await;
+        warn!(
+            cancelled = outcome.cancelled,
+            all_stopped = outcome.stopped,
+            "Task drain timeout reached; cancelled the remaining tasks"
+        );
+        Some(outcome)
+    } else {
+        info!("All in-flight tasks completed");
+        None
+    };
     if let Err(error) = expiry.shutdown().await {
         warn!(%error, "Task expiry sweep did not stop cleanly");
     } else {
         info!("Task expiry sweep stopped");
     }
-    info!(timeout = ?timeout, "Draining in-flight tasks...");
-    let drained = executor.drain(timeout).await;
-    if drained.timed_out {
-        warn!(
-            acquired_workers = drained.acquired,
-            "Task drain timeout reached, proceeding with shutdown"
-        );
-    } else {
-        info!("All in-flight tasks completed");
-    }
     if let Err(error) = service.shutdown().await {
         warn!(%error, "Task store did not release its lease cleanly");
     }
+    cancelled
 }
 
 /// Whether `dir` lies under the operator's real `~/.mcp-gateway`.

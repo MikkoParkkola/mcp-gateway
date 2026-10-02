@@ -14,7 +14,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tracing::warn;
 
-use super::{Gateway, StdioTelemetry, stdio_tasks, warmstart::WarmStartTasks};
+use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::WarmStartTasks};
 
 /// The teardown window after the stdio drain window.
 pub(super) const STDIO_TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -133,7 +133,14 @@ impl Gateway {
             bounded_step(
                 deadline,
                 "task store shutdown",
-                stdio_tasks::shutdown(&tasks, expiry, timeout),
+                stdio_tasks::shutdown(
+                    &tasks,
+                    expiry,
+                    task_runtime::ShutdownBudget::within(
+                        deadline.saturating_duration_since(Instant::now()),
+                        timeout,
+                    ),
+                ),
             )
             .await;
         }
