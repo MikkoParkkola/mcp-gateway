@@ -1,0 +1,14 @@
+head_sha	16020e061aa721b6bce936eeb4cdb0be47cceea7
+# COLLUDE.1 direct route (#2644): one row per behaviour
+M1a	linux	m1.patch	--lib -- grant_subject_keys_relay_and_recording
+M1b	linux	m1.patch	--lib -- certificate_keys_relay_and_recording
+M2a	linux	m2.patch	--lib -- grant_subject_keys_relay_and_recording
+M2b	linux	m2.patch	--lib -- certificate_keys_relay_and_recording
+M3	linux	m3.patch	--lib -- a_relay_is_refused_before_dispatch_and_reserves_nothing
+M4	linux	m4.patch	--lib -- a_signing_refusal_records_nothing
+M5	linux	m5.patch	--lib -- a_relay_in_an_argument_key_is_refused
+M6	linux	m6.patch	--lib -- the_text_walker_reads_values_then_keys_and_skips_nothing
+M7	linux	m7.patch	--lib -- copy_interleaved_with_stripped_characters_detected
+M8	linux	m8.patch	--lib -- collusion_settings_are_checked_at_load_and_off_loads_anything
+M9	linux	m9.patch	--lib -- the_text_walker_reads_values_then_keys_and_skips_nothing
+M10	linux	m10.patch	--lib -- the_text_walker_reads_values_then_keys_and_skips_nothing

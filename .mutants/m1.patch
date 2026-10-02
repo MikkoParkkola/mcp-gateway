@@ -1,0 +1,15 @@
+diff --git a/src/gateway/router/backend_handlers/relay.rs b/src/gateway/router/backend_handlers/relay.rs
+index 95da0bb93..9039fef95 100644
+--- a/src/gateway/router/backend_handlers/relay.rs
++++ b/src/gateway/router/backend_handlers/relay.rs
+@@ -37,8 +37,8 @@ pub(super) fn direct_control_identity(
+ /// on this route, relay detection included.
+ fn direct_caller(auth: BackendAuthContext<'_>, per_backend: &str) -> (String, bool) {
+     let key = crate::gateway::router::identity::caller_key(
+-        auth.grant_subject,
+-        auth.cert_identity,
++        None,
++        None,
+         auth.client,
+     );
+     if key.is_empty() {

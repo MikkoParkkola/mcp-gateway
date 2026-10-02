@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/relay.rs b/src/gateway/router/backend_handlers/relay.rs
+index 95da0bb93..446358b5d 100644
+--- a/src/gateway/router/backend_handlers/relay.rs
++++ b/src/gateway/router/backend_handlers/relay.rs
+@@ -92,7 +92,7 @@ pub(super) fn record_direct_delivery(
+     let (Some(fw), Some(result)) = (state.firewall.as_ref(), result) else {
+         return;
+     };
+-    let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
++    let (key, keyed) = (auth.client.map(|c| c.principal.clone()).unwrap_or_default(), true);
+     fw.record_delivery(RelayCaller::new(&key, keyed), server, tool, result);
+ }
+ 

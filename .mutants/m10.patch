@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index 2eb34dd84..2ead87451 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -339,7 +339,7 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
+     match value {
+         Value::Object(map) if walk == Walk::Delivery => map
+             .iter()
+-            .filter(|(k, _)| k.as_str() != "_context_integrity")
++            .filter(|_| true)
+             .for_each(|(k, v)| {
+                 keys.push(k);
+                 visit(v, &mut out, &mut keys);

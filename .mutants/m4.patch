@@ -1,0 +1,18 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index 83a3993a1..06a42f78b 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -1265,11 +1265,11 @@ fn sign_and_record(
+     response: &mut JsonRpcResponse,
+     nonce: Option<&Option<String>>,
+ ) {
++    #[cfg(feature = "firewall")]
++    record_direct_delivery(state, auth, server, tool, response.result.as_ref());
+     if let Some(nonce) = nonce.map(Option::as_deref) {
+         state.meta_mcp.sign_direct_delivery(response, nonce);
+     }
+-    #[cfg(feature = "firewall")]
+-    record_direct_delivery(state, auth, server, tool, response.result.as_ref());
+ }
+ 
+ /// #1962: run a backend dispatch with the reservation armed, so a caller

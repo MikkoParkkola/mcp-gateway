@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index 2eb34dd84..6237b384a 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -76,7 +76,7 @@ impl CollusionConfig {
+         if self.min_matches == 0 {
+             return field("min_matches", "must be at least 1");
+         }
+-        if !(2..=MAX_COMMON_PRINCIPALS).contains(&self.common_principals) {
++        if !(2..=MAX_COMMON_PRINCIPALS + 1).contains(&self.common_principals) {
+             return field(
+                 "common_principals",
+                 &format!("must be between 2 and {MAX_COMMON_PRINCIPALS}"),
