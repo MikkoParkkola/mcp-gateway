@@ -12,8 +12,7 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, timeout};
 
 use crate::backend::Backend;
-use crate::config::{BackendConfig, Config};
-use crate::failsafe::FailsafeConfig;
+use crate::config::{BackendConfig, Config, FailsafeConfig};
 use crate::gateway::Gateway;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
