@@ -37,6 +37,22 @@ pub(super) fn task_principal(
 /// admission request refuses an empty principal.
 pub(super) const AUTH_DISABLED_TASK_OWNER: &str = "local:auth-disabled:tasks:v1";
 
+/// The owner key of a stateless task: the validated API-key credential. Only
+/// `route_task_owner` reads it (the firewall keys on `identity::caller_key`);
+/// tasks keep this encoding so an upgrade does not orphan stored ones. Empty
+/// when the caller is unauthenticated: that is not an identity.
+pub(super) fn session_owner_key(
+    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+) -> String {
+    client.map_or_else(String::new, |c| {
+        if c.authenticated && !c.principal.is_empty() {
+            format!("credential:{}", c.principal)
+        } else {
+            String::new()
+        }
+    })
+}
+
 /// The ONE owner every task-touching arm of a request uses.
 ///
 /// Resolved once per request and then reused for create, get, update, cancel,

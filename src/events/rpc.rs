@@ -180,6 +180,26 @@ fn granted_expiry(
     Ok(Some(now + ttl))
 }
 
+/// A subscription made with a credential other than an API key ends no later
+/// than the credential (design F9): `ttlMs: null` is refused for it, and the
+/// grant is cut at the credential's own expiry when it has one.
+fn bounded_by(
+    credential: &Credential,
+    params: &Value,
+    granted: Option<DateTime<Utc>>,
+) -> Result<Option<DateTime<Utc>>, RpcError> {
+    if !credential.bounded() {
+        return Ok(granted);
+    }
+    if params.get("ttlMs").is_some_and(Value::is_null) {
+        return Err(RpcError::invalid("ttlMs"));
+    }
+    Ok(match (granted, credential.expires_at) {
+        (Some(granted), Some(ends)) => Some(granted.min(ends)),
+        (granted, ends) => granted.or(ends),
+    })
+}
+
 fn to_wire_time(at: Option<DateTime<Utc>>) -> Value {
     at.map_or(Value::Null, |t| {
         json!(t.format("%Y-%m-%dT%H:%M:%SZ").to_string())
@@ -231,6 +251,7 @@ impl EventsHub {
             .ok_or_else(|| RpcError::invalid("delivery.secret"))?;
         let now = Utc::now();
         let expires_at = granted_expiry(self, &params, now)?;
+        let expires_at = bounded_by(&caller.credential, &params, expires_at)?;
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
         let caps = Caps {
             per_principal: self.config.max_subscriptions_per_principal,

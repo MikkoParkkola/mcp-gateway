@@ -40,6 +40,7 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
             kind: crate::security::audit::CredentialKind::None,
             principal: String::new(),
             api_key: None,
+            expires_at: None,
         },
         visible_backends: std::collections::HashSet::new(),
     };
@@ -57,4 +58,51 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
         .await
         .expect("answer");
     assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+}
+
+/// Design F9 (MIK-7630 I2): a subscription made with any credential but an
+/// API key ends no later than the credential and never runs unbounded.
+#[test]
+fn credentials_other_than_api_keys_bound_the_grant() {
+    use crate::security::audit::CredentialKind;
+    let now = Utc::now();
+    let granted = Some(now + chrono::Duration::hours(1));
+    let ends = now + chrono::Duration::minutes(5);
+    let credential = |kind, expires_at| Credential {
+        kind,
+        principal: "p".to_owned(),
+        api_key: None,
+        expires_at,
+    };
+    for kind in [
+        CredentialKind::KeyServerToken,
+        CredentialKind::OidcBearer,
+        CredentialKind::StaticBearer,
+        CredentialKind::DashboardSession,
+    ] {
+        let held = credential(kind, Some(ends));
+        assert_eq!(
+            bounded_by(&held, &json!({}), granted).expect("granted"),
+            Some(ends),
+            "{kind:?}: cut at the credential's expiry"
+        );
+        assert_eq!(
+            bounded_by(&held, &json!({}), None).expect("granted"),
+            Some(ends),
+            "{kind:?}: an unbounded grant is bounded too"
+        );
+        let refused = bounded_by(&held, &json!({"ttlMs": null}), None).expect_err("refused");
+        assert_eq!(refused.code, -32602, "{kind:?}: ttlMs null refused");
+        let later = credential(kind, Some(now + chrono::Duration::hours(2)));
+        assert_eq!(
+            bounded_by(&later, &json!({}), granted).expect("ok"),
+            granted
+        );
+    }
+    let key = credential(CredentialKind::ApiKey, None);
+    assert_eq!(
+        bounded_by(&key, &json!({"ttlMs": null}), None).expect("ok"),
+        None,
+        "an API key is re-checked live instead"
+    );
 }
