@@ -650,12 +650,12 @@ impl AccountStrategyRegistry {
         // THE DURABLE HALF. Last, because the checks above are cheap and this
         // one takes the store's authority lock; first in importance, because it
         // is the only one that can see a revocation committed since the mint.
-        if let Some((lease, current)) = custody {
-            if let Err(error) = lease.recheck(current).await {
-                // The custody refusal text names the account state (revoked,
-                // reconnect required, retired lease), never a token.
-                return refuse(&format!("durable custody refused its lease: {error}"));
-            }
+        // The custody refusal text names the account state (revoked, reconnect
+        // required, retired lease), never a token.
+        if let Some((lease, current)) = custody
+            && let Err(error) = lease.recheck(current).await
+        {
+            return refuse(&format!("durable custody refused its lease: {error}"));
         }
         Ok(())
     }
