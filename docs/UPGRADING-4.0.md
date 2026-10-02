@@ -3417,7 +3417,7 @@ revision from the supported list, or a `protocol_version` pin it accepts.
 
 ## 120. A task still running when the shutdown drain runs out is cancelled
 
-**Shutdown:** no notice, a long task is cut off at shutdown instead of running on
+**Startup:** no notice, a long task is cut off at shutdown instead of running on
 
 Before, a task whose backend call outlasted `server.shutdown_timeout` kept running after the task
 store closed, and could still call its backend while the backends were stopping. Now the drain
