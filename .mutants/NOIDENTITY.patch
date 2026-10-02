@@ -1,0 +1,13 @@
+diff --git a/src/identity_propagation/account_strategies.rs b/src/identity_propagation/account_strategies.rs
+index fb9d93518..f61980e51 100644
+--- a/src/identity_propagation/account_strategies.rs
++++ b/src/identity_propagation/account_strategies.rs
+@@ -605,7 +605,7 @@ impl AccountStrategyRegistry {
+         // setting therefore fails the actor comparison below rather than being
+         // rechecked as though nothing changed.
+         let Some(principal) = Self::principal(installed.as_ref(), caller) else {
+-            return refuse("the request carries no verified end-user identity");
++            return Ok(());
+         };
+         if principal.stable_actor_id() != prepared.actor_id {
+             return refuse("it was minted for a different caller");

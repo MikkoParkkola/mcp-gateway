@@ -1,0 +1,13 @@
+diff --git a/src/identity_propagation/account_strategies.rs b/src/identity_propagation/account_strategies.rs
+index fb9d93518..4411e875f 100644
+--- a/src/identity_propagation/account_strategies.rs
++++ b/src/identity_propagation/account_strategies.rs
+@@ -593,7 +593,7 @@ impl AccountStrategyRegistry {
+         let Some(installed) = self.installed(descriptor_id) else {
+             return refuse("no account strategy is installed for it any more");
+         };
+-        if installed.audience != prepared.audience {
++        if false {
+             return refuse("the installed audience changed after the credential was minted");
+         }
+         if !Arc::ptr_eq(&installed.strategy, &prepared.strategy) {
