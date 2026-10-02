@@ -1058,6 +1058,22 @@ jobs:
       - name: Check the OWASP self-assessment cites the current tree
         run: python3 scripts/dev/test_check_owasp_citations.py
 
+  registry-packages:
+    name: Built-in server registry resolves (MIK-7787)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # `mcp-gateway add <name>` writes what src/registry/server_registry.rs
+    # says. 30 of its 45 npm packages were 404 and nothing failed. Every entry
+    # must name a pinned npm/PyPI release that exists and is not deprecated or
+    # yanked, or a hosted URL that answers. Live lookups: an npm or PyPI outage
+    # turns this red, never green.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/dev/test_check_registry_packages.py
+      - name: Check every registry entry resolves
+        run: python3 scripts/dev/check-registry-packages.py
+
   docker-build:
     name: Docker (${{ matrix.arch }})
     # `matrix.os`, not a name of this job's own choosing: the hosted-runner
