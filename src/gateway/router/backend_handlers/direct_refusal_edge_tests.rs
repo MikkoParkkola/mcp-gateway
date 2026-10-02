@@ -53,7 +53,9 @@ async fn call(params: Value) -> (StatusCode, Value, usize) {
     let reached = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "demo",
-        BackendConfig::default(),
+        // R2 off: the Counting transport lists no tools, and a cold listing
+        // would refuse the call before the sanitizer is reached.
+        BackendConfig::r2_off(),
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
