@@ -281,6 +281,8 @@ pub struct HttpTransport {
 
     /// Request ID counter
     request_id: AtomicU64,
+    /// Ends every listen body task when the transport closes (MIK-7630 I5).
+    listen_cancel: tokio_util::sync::CancellationToken,
     /// Redirect hops this client has followed, ever (MIK-7272.SUB.4).
     ///
     /// Incremented by the redirect policy closure on the `Follow` arm, which
@@ -419,6 +421,7 @@ impl HttpTransport {
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
             request_id: AtomicU64::new(1),
+            listen_cancel: tokio_util::sync::CancellationToken::new(),
             redirects_followed,
             connected: AtomicBool::new(false),
             timeout,
@@ -1590,6 +1593,7 @@ impl Transport for HttpTransport {
 
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
+        self.listen_cancel.cancel();
 
         // Abort the OAuth token-refresh background task, if any. Otherwise a
         // stopped or hot-reloaded backend leaves an orphaned task that still
@@ -1654,6 +1658,11 @@ impl Drop for HttpTransport {
 
 mod client;
 mod extra_headers;
+#[allow(
+    dead_code,
+    reason = "MIK-7630 I5: opened by the listener once I4 lands"
+)]
+mod listen;
 mod modern_meta;
 mod redirect_policy;
 mod sse_decoder;
