@@ -54,6 +54,48 @@ async fn listing(gw: &Gateway, query: &str) -> Vec<Value> {
         .clone()
 }
 
+/// The listing holds exactly dead letter `id`, with the permitted fields
+/// only, and its filters work.
+async fn assert_listing_is_payload_free(gw: &Gateway, id: &str, callback: &str) {
+    let entries = listing(gw, "").await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["eventId"], id);
+    assert_eq!(entries[0]["reason"], "gone");
+    let mut keys: Vec<&str> = entries[0]
+        .as_object()
+        .expect("entry object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "attempts",
+            "deadAt",
+            "eventId",
+            "name",
+            "reason",
+            "sizeBytes",
+            "subscriptionId"
+        ]
+    );
+    let (_, raw) = gw.admin(Some(ADMIN), "GET", LIST).await;
+    let text = raw.to_string();
+    for forbidden in ["canary-payload", "secret", "whsec", "callback", callback] {
+        assert!(
+            !text.contains(forbidden),
+            "listing leaks {forbidden}: {text}"
+        );
+    }
+    assert_eq!(listing(gw, "?reason=gone").await.len(), 1);
+    assert!(listing(gw, "?reason=budget").await.is_empty());
+    let (status, _) = gw
+        .admin(Some(ADMIN), "GET", &format!("{LIST}?reason=nope"))
+        .await;
+    assert_eq!(status, 400, "a reason that is not one of ours");
+}
+
 /// T35 (RELIABLE.3, SAFETY.1): an admin replay re-delivers with the same
 /// `eventId`, signed with the current secret, after a fresh firewall scan (a
 /// policy tightened in between blocks it); a non-admin caller gets 403; the
@@ -68,22 +110,12 @@ async fn dead_letters_replay_through_admin_route_only() {
     let (old, new) = (whsec(32), whsec(32));
     subscribe(&gw, ALICE, &rx.url, &old, json!({})).await;
     rx.script([EventReply::Status(410)]);
-    fire(&gw, "d-35", "o/r").await;
+    fire(&gw, "d-35", "o/canary-payload-7f3").await;
     let dead = dead_with_reason(root.path(), "gone").await;
     let id = dead[0]["event_id"].as_str().expect("event id").to_owned();
     let first = events_at_least(&rx, 1).await;
 
-    let entries = listing(&gw, "").await;
-    assert_eq!(entries.len(), 1, "{entries:?}");
-    assert_eq!(entries[0]["eventId"], id);
-    assert_eq!(entries[0]["reason"], "gone");
-    let text = Value::Array(entries).to_string();
-    for forbidden in ["body", "secret", "whsec", "callback", &rx.url] {
-        assert!(
-            !text.contains(forbidden),
-            "listing leaks {forbidden}: {text}"
-        );
-    }
+    assert_listing_is_payload_free(&gw, &id, &rx.url).await;
 
     let replay = format!("{LIST}/{id}/replay");
     for key in [Some(ALICE), Some(BOB), None] {
@@ -136,7 +168,23 @@ async fn dead_letters_replay_through_admin_route_only() {
     let (status, _) = gw
         .admin(Some(ADMIN), "POST", &format!("{LIST}/evt_unknown/replay"))
         .await;
-    assert_eq!(status, 404, "an unknown id");
+    assert_eq!(status, 404, "an id nobody holds");
+
+    // A deleted subscription takes no replay.
+    let gone = gw
+        .rpc(
+            Some(ALICE),
+            "events/unsubscribe",
+            json!({"name": gateway::EVENT, "arguments": {}, "delivery": {"url": rx.url}}),
+        )
+        .await;
+    assert!(gone.get("error").is_none(), "{gone}");
+    let (status, body) = gw
+        .admin(Some(ADMIN), "POST", &format!("{LIST}/{blocked_id}/replay"))
+        .await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["reason"], "subscription_gone");
+    assert_eq!(dead_letters(root.path()).len(), 1, "the dead letter stays");
 }
 
 /// T54 (RELIABLE.3): bulk replay for S1 re-delivers S1's three dead letters
@@ -189,6 +237,12 @@ async fn bulk_replay_replays_only_the_named_subscription() {
     }
     let left = listing(&gw, "").await;
     assert_eq!(left.len(), 2, "{left:?}");
+    assert_eq!(listing(&gw, &format!("?subscription={s2}")).await.len(), 2);
+    assert!(
+        listing(&gw, &format!("?subscription={s1}"))
+            .await
+            .is_empty()
+    );
     assert!(left.iter().all(|d| d["subscriptionId"] == s2));
 }
 
@@ -227,19 +281,22 @@ async fn a_swept_dead_letter_leaves_the_listing() {
     fire(&gw, "d-49l", "o/r").await;
     dead_with_reason(root.path(), "gone").await;
     assert_eq!(listing(&gw, "").await.len(), 1);
-    tokio::time::sleep(Duration::from_secs(4)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    fire(&gw, "d-49l-young", "o/r").await;
+    assert!(wait_until(DEADLINE, || dead_letters(root.path()).len() == 2).await);
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     gw.restart().await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
-    let mut empty = false;
+    let mut swept = false;
     for _ in 0..100 {
-        if listing(&gw, "").await.is_empty() {
-            empty = true;
+        if listing(&gw, "").await.len() == 1 {
+            swept = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(empty, "the swept dead letter is still listed");
-    assert!(dead_letters(root.path()).is_empty());
+    assert!(swept, "the old dead letter is still listed");
+    assert_eq!(dead_letters(root.path()).len(), 1, "the young one stays");
 }
 
 /// T21 (SAFETY.4), admin clause: the listing and the replay answer carry
@@ -258,14 +315,18 @@ async fn admin_answers_carry_no_secret() {
         .as_str()
         .expect("id")
         .to_owned();
-    let (_, listed) = gw.admin(Some(ADMIN), "GET", LIST).await;
-    let (_, replayed) = gw
+    let (status, listed) = gw.admin(Some(ADMIN), "GET", LIST).await;
+    assert_eq!(status, 200, "{listed}");
+    let (status, replayed) = gw
         .admin(Some(ADMIN), "POST", &format!("{LIST}/{id}/replay"))
         .await;
-    let (_, refused) = gw
+    assert_eq!(status, 200, "{replayed}");
+    let (status, refused) = gw
         .admin(Some(ADMIN), "POST", &format!("{LIST}/replay?all=1"))
         .await;
+    assert_eq!(status, 400, "{refused}");
     let haystack = format!("{listed}{replayed}{refused}{}", gw.all_logs());
+    assert!(!haystack.contains(&rx.url), "the callback URL leaked");
     assert!(
         listed["deadLetters"].is_array(),
         "the listing answered: {listed}"
@@ -327,10 +388,13 @@ async fn gateway_search_finds_visible_events() {
         assert_eq!(entry["name"], gateway::EVENT);
         assert_eq!(entry["inputSchema"], schema, "{tool}");
         let hidden = gw.tool_call(BOB, tool, json!({"query": "push"})).await;
-        let none = hidden["matches"]
+        let seen = hidden["matches"]
             .as_array()
-            .is_none_or(|m| m.iter().all(|e| e["kind"] != "event"));
-        assert!(none, "{tool}: bob sees an event: {hidden}");
+            .unwrap_or_else(|| panic!("{tool}: bob's search answers matches: {hidden}"));
+        assert!(
+            seen.iter().all(|e| e["kind"] != "event"),
+            "{tool}: bob sees an event: {hidden}"
+        );
     }
 }
 
@@ -348,7 +412,9 @@ async fn the_cli_lists_and_replays_through_the_admin_route() {
         .as_str()
         .expect("id")
         .to_owned();
-    let (url, home) = (gw.url.clone(), root.path().to_path_buf());
+    // A home with no store: a CLI that opened the store would see nothing.
+    let empty_home = tempfile::tempdir().expect("home");
+    let (url, home) = (gw.url.clone(), empty_home.path().to_path_buf());
     let run = move |args: Vec<String>, token: &'static str| {
         let (url, home) = (url.clone(), home.clone());
         async move {
@@ -376,4 +442,19 @@ async fn the_cli_lists_and_replays_through_the_admin_route() {
     let replayed = run(vec!["replay".into(), id.clone()], ADMIN).await;
     assert!(replayed.status.success(), "{replayed:?}");
     events_at_least(&rx, 2).await;
+}
+
+/// Section 17: with events off the admin routes answer 404, not an empty list.
+#[tokio::test]
+async fn the_dead_letter_routes_answer_404_with_events_off() {
+    let root = tempfile::tempdir().expect("root");
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["events"] = json!({"enabled": false});
+    let gw = Gateway::start(root.path(), cfg).await;
+    let (status, _) = gw.admin(Some(ADMIN), "GET", LIST).await;
+    assert_eq!(status, 404);
+    let (status, _) = gw
+        .admin(Some(ADMIN), "POST", &format!("{LIST}/evt_x/replay"))
+        .await;
+    assert_eq!(status, 404);
 }

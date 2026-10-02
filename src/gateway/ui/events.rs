@@ -47,16 +47,14 @@ struct BulkQuery {
 fn admitted(
     state: &AppState,
     client: Option<Extension<AuthenticatedClient>>,
-) -> Result<Arc<EventsHub>, axum::response::Response> {
+) -> Result<Arc<EventsHub>, Box<axum::response::Response>> {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
-        return Err(admin_auth_required().into_response());
+        return Err(Box::new(admin_auth_required().into_response()));
     }
-    state
-        .meta_mcp
-        .events()
-        .map(Arc::clone)
-        .ok_or_else(|| flat_error(StatusCode::NOT_FOUND, "Events are not enabled").into_response())
+    state.meta_mcp.events().map(Arc::clone).ok_or_else(|| {
+        Box::new(flat_error(StatusCode::NOT_FOUND, "Events are not enabled").into_response())
+    })
 }
 
 fn refusal(why: ReplayRefusal) -> axum::response::Response {
@@ -79,7 +77,7 @@ async fn list(
 ) -> axum::response::Response {
     let hub = match admitted(&state, client) {
         Ok(hub) => hub,
-        Err(answer) => return answer,
+        Err(answer) => return *answer,
     };
     if query.reason.as_deref().is_some_and(|r| !is_dead_reason(r)) {
         return flat_error(StatusCode::BAD_REQUEST, "Unknown dead-letter reason").into_response();
@@ -95,7 +93,7 @@ async fn replay_one(
 ) -> axum::response::Response {
     let hub = match admitted(&state, client) {
         Ok(hub) => hub,
-        Err(answer) => return answer,
+        Err(answer) => return *answer,
     };
     match hub.replay_dead(&id).await {
         Ok(()) => Json(json!({"eventId": id, "status": "queued"})).into_response(),
@@ -110,7 +108,7 @@ async fn replay_all(
 ) -> axum::response::Response {
     let hub = match admitted(&state, client) {
         Ok(hub) => hub,
-        Err(answer) => return answer,
+        Err(answer) => return *answer,
     };
     let (Some("1"), Some(subscription)) = (query.all.as_deref(), query.subscription.as_deref())
     else {

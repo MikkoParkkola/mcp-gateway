@@ -183,10 +183,10 @@ impl Store {
         caps: OutboxCaps,
     ) -> std::io::Result<Revived> {
         let mut state = self.state.lock();
-        if !state
+        if state
             .dead
             .get(event_id)
-            .is_some_and(|(dead, _)| dead.dead_at == dead_at)
+            .is_none_or(|(dead, _)| dead.dead_at != dead_at)
         {
             return Ok(Revived::Missing);
         }

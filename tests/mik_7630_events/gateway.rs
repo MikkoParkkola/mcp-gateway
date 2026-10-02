@@ -292,7 +292,7 @@ impl Gateway {
     }
 
     /// One request to the admin HTTP API as `api_key`: the status and the JSON
-    /// body (`Null` when the answer carried none).
+    /// body (the raw text when it is not JSON).
     pub async fn admin(&self, api_key: Option<&str>, method: &str, path: &str) -> (u16, Value) {
         let method = reqwest::Method::from_bytes(method.as_bytes()).expect("HTTP method");
         let mut request = self.client.request(method, format!("{}{path}", self.url));
@@ -305,7 +305,10 @@ impl Gateway {
             .unwrap_or_else(|e| panic!("{path}: {e}; logs={}", self.logs()));
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
-        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        )
     }
 
     /// `tools/call` of meta-tool `tool` as `api_key`: the document the tool
