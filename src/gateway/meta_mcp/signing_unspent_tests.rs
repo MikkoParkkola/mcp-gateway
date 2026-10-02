@@ -57,20 +57,14 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCaller
 
     let permitted = ctx(&AllowAll);
     let (mut later, arguments) = captured("gateway_list_servers", json!({}), NONCE);
-    meta.prepare_signing_invocation(&mut later, &arguments,
-        None,
-        &permitted,
-    )
-    .expect("the refused call left the nonce unspent");
+    meta.prepare_signing_invocation(&mut later, &arguments, None, &permitted)
+        .expect("the refused call left the nonce unspent");
     assert!(later.admitted, "the later call admits it");
 
     let (mut replay, arguments) = captured("gateway_list_servers", json!({}), NONCE);
     assert!(
-        meta.prepare_signing_invocation(&mut replay, &arguments,
-            None,
-            &permitted
-        )
-        .is_err(),
+        meta.prepare_signing_invocation(&mut replay, &arguments, None, &permitted)
+            .is_err(),
         "and the nonce is a real one: its replay is refused"
     );
 }
