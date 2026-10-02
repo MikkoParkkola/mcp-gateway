@@ -80,7 +80,7 @@ mod tests {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
-            principal: "0123456789ab".to_owned(),
+            principal: crate::gateway::auth::principal_of("secret"),
             quota_principal: None,
             authenticated,
             credential_kind: kind,
@@ -92,10 +92,8 @@ mod tests {
     #[test]
     fn only_an_authenticated_api_key_is_kept_for_the_live_re_check() {
         let key = api_key(Some(&client(CredentialKind::ApiKey, true))).expect("an API key");
-        assert_eq!(
-            (key.name.as_str(), key.principal.as_str()),
-            ("alice", "0123456789ab")
-        );
+        assert_eq!(key.name, "alice");
+        assert_eq!(key.principal, crate::gateway::auth::principal_of("secret"));
         for kind in [
             CredentialKind::KeyServerToken,
             CredentialKind::OidcBearer,
