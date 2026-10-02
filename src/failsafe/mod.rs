@@ -14,6 +14,7 @@ pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;
 pub use retry::{RetryPolicy, with_retry};
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::FailsafeConfig;
@@ -29,6 +30,8 @@ pub struct Failsafe {
     pub retry_policy: RetryPolicy,
     /// Health tracker
     pub health_tracker: Arc<HealthTracker>,
+    /// Metric keys for the backend this slot serves, built on first use.
+    metrics: std::sync::OnceLock<crate::metrics::BackendMetrics>,
 }
 
 impl Failsafe {
@@ -40,6 +43,21 @@ impl Failsafe {
             rate_limiter: Arc::new(RateLimiter::new(&config.rate_limit)),
             retry_policy: RetryPolicy::new(&config.retry),
             health_tracker: Arc::new(HealthTracker::new(name)),
+            metrics: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// This slot's per-request metric keys for `backend`. The keys are built
+    /// once; a caller naming another backend gets fresh keys for that name,
+    /// so the label is always the one passed, exactly as the macros wrote it.
+    pub(crate) fn metrics(&self, backend: &str) -> Cow<'_, crate::metrics::BackendMetrics> {
+        let cached = self
+            .metrics
+            .get_or_init(|| crate::metrics::BackendMetrics::new(backend));
+        if cached.is_for(backend) {
+            Cow::Borrowed(cached)
+        } else {
+            Cow::Owned(crate::metrics::BackendMetrics::new(backend))
         }
     }
 
@@ -75,7 +93,9 @@ impl Failsafe {
     /// `CircuitOpen` while the breaker refuses.
     pub(crate) fn check_circuit(&self, backend: &str) -> crate::Result<()> {
         let closed = self.circuit_breaker.can_proceed();
-        telemetry_metrics::gauge!("mcp_backend_circuit_state", "backend" => backend.to_string())
+        self.metrics(backend)
+            .circuit_state
+            .gauge()
             .set(if closed { 1.0_f64 } else { 0.0_f64 });
         if !closed {
             return Err(crate::Error::circuit_open(backend, &self.circuit_breaker));

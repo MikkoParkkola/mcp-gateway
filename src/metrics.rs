@@ -52,3 +52,85 @@ pub fn render() -> String {
         .map(PrometheusHandle::render)
         .unwrap_or_default()
 }
+
+/// One metric labelled by `backend`, built and retained once.
+///
+/// The `gauge!`/`counter!`/`histogram!` macros rebuild their key on every
+/// write: a label `String`, a label `Vec`, a hash, and the Prometheus
+/// recorder's own retained copy. On the per-request path that cost lands on
+/// every `tools/call` (NFR.WORKLOAD.1). A retained key clones by reference
+/// count. Each write still resolves the recorder current at that moment, as
+/// the macros do, so a test's local recorder sees the same series.
+#[derive(Clone, Debug)]
+pub(crate) struct BackendMetric(telemetry_metrics::Key);
+
+/// What the macros would pass from here; every recorder in the tree ignores it.
+static METADATA: telemetry_metrics::Metadata<'static> = telemetry_metrics::Metadata::new(
+    module_path!(),
+    telemetry_metrics::Level::INFO,
+    Some(module_path!()),
+);
+
+impl BackendMetric {
+    /// `name{backend, extra...}`, labels in the order the macros used.
+    fn new(name: &'static str, backend: &str, extra: &[(&'static str, &'static str)]) -> Self {
+        let labels = std::iter::once(telemetry_metrics::Label::new("backend", backend.to_owned()))
+            .chain(
+                extra
+                    .iter()
+                    .map(|&(k, v)| telemetry_metrics::Label::from_static_parts(k, v)),
+            )
+            .collect::<Vec<_>>();
+        Self(telemetry_metrics::Key::from_parts(name, labels).to_retained())
+    }
+
+    pub(crate) fn gauge(&self) -> telemetry_metrics::Gauge {
+        telemetry_metrics::with_recorder(|r| r.register_gauge(&self.0, &METADATA))
+    }
+
+    pub(crate) fn counter(&self) -> telemetry_metrics::Counter {
+        telemetry_metrics::with_recorder(|r| r.register_counter(&self.0, &METADATA))
+    }
+
+    pub(crate) fn histogram(&self) -> telemetry_metrics::Histogram {
+        telemetry_metrics::with_recorder(|r| r.register_histogram(&self.0, &METADATA))
+    }
+}
+
+/// The per-request series of one backend, keyed once per slot.
+#[derive(Clone, Debug)]
+pub(crate) struct BackendMetrics {
+    backend: String,
+    /// `mcp_backend_circuit_state{backend}`.
+    pub(crate) circuit_state: BackendMetric,
+    /// `mcp_backend_requests_total{backend, status="ok"}`.
+    pub(crate) requests_ok: BackendMetric,
+    /// `mcp_backend_requests_total{backend, status="rate_limited"}`.
+    pub(crate) requests_rate_limited: BackendMetric,
+    /// `mcp_backend_request_duration_seconds{backend}`.
+    pub(crate) request_duration: BackendMetric,
+}
+
+impl BackendMetrics {
+    pub(crate) fn new(backend: &str) -> Self {
+        let requests = |status| {
+            BackendMetric::new("mcp_backend_requests_total", backend, &[("status", status)])
+        };
+        Self {
+            backend: backend.to_owned(),
+            circuit_state: BackendMetric::new("mcp_backend_circuit_state", backend, &[]),
+            requests_ok: requests("ok"),
+            requests_rate_limited: requests("rate_limited"),
+            request_duration: BackendMetric::new(
+                "mcp_backend_request_duration_seconds",
+                backend,
+                &[],
+            ),
+        }
+    }
+
+    /// Whether these keys carry `backend` as their label.
+    pub(crate) fn is_for(&self, backend: &str) -> bool {
+        self.backend == backend
+    }
+}
