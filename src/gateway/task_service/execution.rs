@@ -133,6 +133,10 @@ pub(crate) enum WriteOutcome {
     Transitioned(CommittedTask),
 }
 
+/// A callback told of each committed task transition.
+pub(crate) type PublicationHook =
+    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>) + Send + Sync>;
+
 /// The one owner of a committed task record.
 ///
 /// A `begin` accepts a handoff, spawns the future that commits and dispatches
@@ -140,10 +144,6 @@ pub(crate) enum WriteOutcome {
 /// the spawned owner from that moment, so a request future that goes away
 /// cannot take it back. [`Self::drain`] joins those owners. Nothing here closes
 /// the executor: a drained executor still admits.
-/// A callback told of each committed task transition.
-pub(crate) type PublicationHook =
-    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>) + Send + Sync>;
-
 pub struct TaskExecutor {
     pub(crate) service: Arc<TaskService>,
     subscriptions: Arc<SubscriptionRegistry>,

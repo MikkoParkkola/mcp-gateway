@@ -304,29 +304,9 @@ impl EventsHub {
             if !verified {
                 self.challenge(&url, &id, &key).await?;
             }
-            let attempt = record.clone();
-            let fresh = !verified;
-            // One lock over start, commit and the started-set insert: a stop
-            // for another key cannot land between them (lifecycle.rs).
-            let mut started = self.lifecycle.lock().await;
-            let begun = self
-                .start_key(
-                    &mut started,
-                    &record.principal,
-                    &record.name,
-                    &record.arguments,
-                )
-                .await?;
-            let outcome = blocking(self, move |store| {
-                store.admit(attempt, fresh, caps, grace, now, tail)
-            })
-            .await;
-            if !matches!(outcome, Ok(Ok(())))
-                && let Some(key) = begun
-            {
-                self.undo_start(&mut started, key).await;
-            }
-            drop(started);
+            let outcome = self
+                .commit_started(&record, !verified, (caps, grace, tail), now)
+                .await;
             match outcome? {
                 Ok(()) => {
                     // A refresh may have reactivated a suspended row.
@@ -344,6 +324,39 @@ impl EventsHub {
             }
         }
         Err(RpcError::internal())
+    }
+
+    /// Start the source's upstream work for the subscription (when it is the
+    /// first of its key) and commit it, under one lifecycle lock: a stop for
+    /// another key cannot land between them (lifecycle.rs). A commit that
+    /// fails undoes the start it made.
+    async fn commit_started(
+        self: &Arc<Self>,
+        record: &Subscription,
+        fresh: bool,
+        (caps, grace, tail): (Caps, chrono::Duration, super::store::TailPolicy),
+        now: DateTime<Utc>,
+    ) -> Result<Result<(), CapHit>, RpcError> {
+        let attempt = record.clone();
+        let mut started = self.lifecycle.lock().await;
+        let begun = self
+            .start_key(
+                &mut started,
+                &record.principal,
+                &record.name,
+                &record.arguments,
+            )
+            .await?;
+        let outcome = blocking(self, move |store| {
+            store.admit(attempt, fresh, caps, grace, now, tail)
+        })
+        .await;
+        if !matches!(outcome, Ok(Ok(())))
+            && let Some(key) = begun
+        {
+            self.undo_start(&mut started, key).await;
+        }
+        outcome
     }
 
     /// Challenge the callback once: literal check, per-host limit, then the
