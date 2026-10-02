@@ -295,7 +295,16 @@ async fn per_subscription_rate_limit_delays_not_drops() {
         fire(&gw, &format!("d-27-{n}"), "o/r").await;
     }
     events_at_least(&rx, 10).await;
-    let status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
+    // A refreshed bucket reads false for the instant before the next take
+    // spends it again; with records still waiting, it converges on true.
+    let mut status = json!(null);
+    for _ in 0..100 {
+        status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
+        if status["throttled"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(status["throttled"], true, "{status}");
     let posts = events_at_least(&rx, 20).await;
     assert_eq!(posts.len(), 20, "every event delivered once");
