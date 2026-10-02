@@ -1644,7 +1644,7 @@
         "tests/mik_7630_events_delivery_lifecycle.rs",
         "src/events/worker_tests.rs"
       ],
-      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T13 (no redirects, I1), T14 connect-time address check, T15-T17 size cap, stable webhook-id with a fresh signature per attempt, no retry on 410/413, T31, T47."
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T13 private callback addresses refused before any connection; T14 the address checked per connection; T15 a redirect is never followed; T16 the receiver's answer surfaces only as a status category; T17 one webhook-id, identical bytes and a fresh signature per attempt; T31 410 and 413 tried once and a body over 262 144 bytes never sent; T47 sustained failure suspends the subscription."
     },
     {
       "id": "MIK-7630.EVENTS.6",
