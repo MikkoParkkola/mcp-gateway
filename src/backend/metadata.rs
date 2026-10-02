@@ -184,11 +184,25 @@ impl Backend {
     /// One tool by exact name from `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tool_for(&self, binding: Option<&str>, name: &str) -> Option<Tool> {
+        self.with_cached_tool_for(binding, name, Tool::clone)
+    }
+
+    /// Read one tool by exact name from `binding`'s slot in place
+    /// (non-blocking), under the same withheld-name rule as
+    /// [`Self::get_cached_tool_for`]. Per-call readers take only what they
+    /// need instead of cloning the whole tool, schemas included
+    /// (NFR.WORKLOAD.1). `read` runs under the cache's read guard.
+    pub(crate) fn with_cached_tool_for<R>(
+        &self,
+        binding: Option<&str>,
+        name: &str,
+        read: impl FnOnce(&Tool) -> R,
+    ) -> Option<R> {
         if self.is_blocked_tool(name) {
             return None;
         }
         self.tools_slot(binding).tools_cache.with_cached(|tools| {
-            tools.and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
+            tools.and_then(|tools| tools.iter().find(|t| t.name == name).map(read))
         })
     }
 
