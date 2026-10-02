@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 79281714e..4e0aea43a 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -764,7 +764,7 @@ pub(crate) fn subscription_stream(
+                     let tagged = subscription.tag(published.notification);
+                     // MIN.2 (H8): judged for the listener's caller, recorded,
+                     // and committed as it is written; withheld when blocked.
+-                    let Some(frame) = judge.judge_document(tagged) else {
++                    let Some(frame) = Some(crate::gateway::outbound::OutboundFrame::gateway_stdio(tagged)) else {
+                         continue;
+                     };
+                     if let Some(data) = sse_data(&judge.record(frame).await) {

@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/admission.rs b/src/gateway/meta_mcp/admission.rs
+index b3f3b79f3..0e4e210cc 100644
+--- a/src/gateway/meta_mcp/admission.rs
++++ b/src/gateway/meta_mcp/admission.rs
+@@ -180,7 +180,6 @@ enum StoredChain {
+ /// envelope and replays without a link.
+ fn stored_response(bytes: &[u8]) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
+     if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
+-        crate::security::tenant_reads::note_restored(stored.read.as_ref());
+         let mut response: JsonRpcResponse = serde_json::from_value(stored.response).ok()?;
+         if stored.chain == StoredChain::Backend {
+             response.chain_source = crate::protocol::ChainSource::Replay;

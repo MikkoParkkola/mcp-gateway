@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/stdio.rs b/src/gateway/outbound/stdio.rs
+index 9ce5ecb35..a32282002 100644
+--- a/src/gateway/outbound/stdio.rs
++++ b/src/gateway/outbound/stdio.rs
+@@ -103,7 +103,7 @@ impl StdioReads {
+         hidden: Option<&ReadAttribution>,
+     ) -> OutboundFrame {
+         let frame = answer_value(
+-            self.guard.as_deref(),
++            None,
+             Some(STDIO_KEY),
+             value,
+             request,

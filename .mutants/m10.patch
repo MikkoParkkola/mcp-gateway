@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/cache_reads.rs b/src/gateway/meta_mcp/invoke/cache_reads.rs
+index 6664a68a3..f9ebf3990 100644
+--- a/src/gateway/meta_mcp/invoke/cache_reads.rs
++++ b/src/gateway/meta_mcp/invoke/cache_reads.rs
+@@ -27,7 +27,7 @@ pub(crate) fn reading(request: impl FnOnce() -> BTreeSet<String>) -> Option<Read
+ /// A hit of a stored result: restore its reading into the read scope, or
+ /// count it unread when it was stored without one.
+ pub(crate) fn restore(read: Option<&ReadAttribution>) {
+-    tenant_reads::note_restored(read);
++    let _ = read;
+ }
+ 
+ impl super::super::MetaMcp {

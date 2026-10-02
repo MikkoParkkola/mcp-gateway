@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 1bd7f2124..5f55e5477 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -1414,7 +1414,7 @@ impl MetaMcp {
+ 
+         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+         // MIN.2: past every gate, so this dispatch's raw reading counts.
+-        crate::security::tenant_reads::note_attribution(raw_read);
++        let _ = raw_read;
+         Ok(delivered)
+     }
+ 
