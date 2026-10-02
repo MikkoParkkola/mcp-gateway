@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/journey/callback.rs b/src/personal_accounts/journey/callback.rs
+index fe8992827..6aa8b4110 100644
+--- a/src/personal_accounts/journey/callback.rs
++++ b/src/personal_accounts/journey/callback.rs
+@@ -118,7 +118,7 @@ fn admit<'tx>(
+ /// account key, so admission refuses it like a state it does not know.
+ fn admitted(id: JourneyId, record: &JourneyRecord) -> Result<Admitted, JourneyRefusal> {
+     let (Some(owner_authority), Some(owner_subject)) =
+-        (record.owner_authority.clone(), record.owner_subject.clone())
++        (Some(record.owner_authority.clone().unwrap_or_default()), Some(record.owner_subject.clone().unwrap_or_default()))
+     else {
+         return Err(JourneyRefusal::UnknownState);
+     };

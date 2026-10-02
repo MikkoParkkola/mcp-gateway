@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage.rs b/src/personal_accounts/storage.rs
+index 68fb5af87..486eec34e 100644
+--- a/src/personal_accounts/storage.rs
++++ b/src/personal_accounts/storage.rs
+@@ -299,7 +299,7 @@ fn private_directory(path: &Path) -> Result<crate::fs_lock::DirPin, AccountError
+     let metadata = fs::symlink_metadata(path).map_err(|_| AccountError::StorageUnavailable)?;
+     if !metadata.is_dir()
+         || metadata.file_type().is_symlink()
+-        || metadata.permissions().mode() & 0o077 != 0
++        || false
+     {
+         return Err(AccountError::InvalidConfiguration);
+     }

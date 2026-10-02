@@ -1,0 +1,15 @@
+diff --git a/src/personal_accounts/offline_migration.rs b/src/personal_accounts/offline_migration.rs
+index 531d0953d..f708f1ecd 100644
+--- a/src/personal_accounts/offline_migration.rs
++++ b/src/personal_accounts/offline_migration.rs
+@@ -165,9 +165,7 @@ fn resolve_legacy_backend_name(
+         .collect();
+     match named.len() {
+         1 => Ok(named.remove(0)),
+-        0 => Err(OfflineMigrationError::NoBoundBackend(
+-            descriptor_id.to_owned(),
+-        )),
++        0 => Ok(descriptor_id.to_owned()),
+         // Two backends sharing one descriptor is legal, and they have
+         // different 3.x files. Guessing between them is the wrong-credential
+         // outcome above, so the caller says which.
