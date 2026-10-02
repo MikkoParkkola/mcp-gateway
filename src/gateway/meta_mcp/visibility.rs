@@ -198,6 +198,25 @@ impl MetaMcp {
         (total, servers)
     }
 
+    /// The capabilities the initialize guide may name for this caller: listed
+    /// ones it could invoke, each with its chain hints cut the same way.
+    pub(super) fn guide_capabilities(
+        &self,
+        cap: &crate::capability::CapabilityBackend,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Vec<crate::capability::CapabilityDefinition> {
+        let allowed = |name: &str| {
+            cap.is_listed(name) && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+        };
+        let mut caps = cap.list_capabilities();
+        caps.retain(|c| allowed(&c.name));
+        for c in &mut caps {
+            c.metadata.chains_with.retain(|t| allowed(t));
+        }
+        caps
+    }
+
     /// Whether a bare tool `name` (as a cost alternative carries it) resolves
     /// to at least one `(server, tool)` this caller could invoke.
     #[cfg(feature = "cost-governance")]
