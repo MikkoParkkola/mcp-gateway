@@ -170,9 +170,9 @@ fn shared_store_relay_not_excused() {
 // Row 6 ────────────────────────────────────────────────────────────────────
 
 /// A holds it sensitive; `others` more principals hold it from other sources.
-fn spread(others: usize) -> CollusionDetector {
+/// Deliveries are stamped `now`, so the caller checks egress at the same instant.
+fn spread(others: usize, now: Instant) -> CollusionDetector {
     let d = detector();
-    let now = Instant::now();
     let s = secret();
     d.record_delivery_at(T, A, true, &s, now);
     for i in 0..others {
@@ -186,9 +186,9 @@ fn common_content_skipped() {
     let now = Instant::now();
     let s = secret();
     // 4 distinct holders: below common_principals (5), still a relay.
-    assert!(spread(3).check_egress_at(B, U, &s, now).is_some());
+    assert!(spread(3, now).check_egress_at(B, U, &s, now).is_some());
     // 5 distinct holders: Common, skipped.
-    assert!(spread(4).check_egress_at(B, U, &s, now).is_none());
+    assert!(spread(4, now).check_egress_at(B, U, &s, now).is_none());
 }
 
 // Row 7 ────────────────────────────────────────────────────────────────────
@@ -425,12 +425,11 @@ fn excuse_holds_when_b_first() {
 /// Optional excuse for B first, then A's sensitive copy, then `fillers` more
 /// (source, principal) tuples. `Common` is set out of reach so only the
 /// tuple bound is in play.
-fn crowded(with_excuse: bool, fillers: usize) -> CollusionDetector {
+fn crowded(with_excuse: bool, fillers: usize, now: Instant) -> CollusionDetector {
     let d = CollusionDetector::new(RelayParams {
         common_principals: 100,
         ..observe()
     });
-    let now = Instant::now();
     let s = secret();
     if with_excuse {
         d.record_delivery_at(T, B, false, &s, now);
@@ -447,14 +446,22 @@ fn saturated_fingerprint_never_flags() {
     let now = Instant::now();
     let s = secret();
     // Controls at 8 tuples: the excuse holds, and without it the relay flags.
-    assert!(crowded(true, 6).check_egress_at(B, U, &s, now).is_none());
-    assert!(crowded(false, 7).check_egress_at(B, U, &s, now).is_some());
+    assert!(
+        crowded(true, 6, now)
+            .check_egress_at(B, U, &s, now)
+            .is_none()
+    );
+    assert!(
+        crowded(false, 7, now)
+            .check_egress_at(B, U, &s, now)
+            .is_some()
+    );
     // A 9th tuple saturates: evicting the oldest would drop B's excuse.
-    let d = crowded(true, 7);
+    let d = crowded(true, 7, now);
     assert!(d.saturated() > 0);
     assert!(d.check_egress_at(B, U, &s, now).is_none());
     // Saturated never counts, even with no excuse to hide behind.
-    let bare = crowded(false, 8);
+    let bare = crowded(false, 8, now);
     assert!(bare.saturated() > 0);
     assert!(bare.check_egress_at(B, U, &s, now).is_none());
 }
@@ -501,4 +508,85 @@ fn source_fingerprints_capped() {
     );
     let dropped = d.fingerprints(&big).len() - 1_024;
     assert_eq!(d.source_truncated(), u64::try_from(dropped).unwrap());
+}
+
+// MIK-7696: a holder dated after the egress ───────────────────────────────
+//
+// Calls reach the lock out of time order, so a delivery stamped after an
+// egress can be recorded before that egress is checked. Only copies held at
+// the egress instant may excuse it or witness it.
+
+/// B's copy from T is stamped after B's egress: it cannot excuse the egress.
+#[test]
+fn future_holder_does_not_excuse_earlier_egress() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now);
+    d.record_delivery_at(T, B, false, &s, now + Duration::from_millis(1));
+    assert!(
+        d.check_egress_at(B, U, &s, now).is_some(),
+        "a copy B got after sending cannot excuse the send"
+    );
+}
+
+/// A's only sensitive copy is stamped after B's egress: no witness yet.
+#[test]
+fn future_sensitive_does_not_flag_earlier_egress() {
+    let d = detector();
+    let now = Instant::now();
+    let later = now + Duration::from_millis(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, later);
+    assert!(
+        d.check_egress_at(B, U, &s, now).is_none(),
+        "A's later copy is not evidence for an earlier send"
+    );
+    // Positive control: the same text after A's delivery is a relay.
+    assert!(d.check_egress_at(B, U, &s, later).is_some());
+}
+
+/// Merging keeps the earliest copy too: B held T before the egress and again
+/// after it, so the egress stays excused.
+#[test]
+fn earlier_copy_still_excuses_after_a_future_redelivery() {
+    let d = detector();
+    let earlier = Instant::now();
+    let now = earlier + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, earlier);
+    d.record_delivery_at(T, B, false, &s, earlier);
+    d.record_delivery_at(T, B, false, &s, now + Duration::from_millis(1));
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+    // Positive control: a principal that never got T is flagged.
+    assert!(d.check_egress_at("principal-c", U, &s, now).is_some());
+}
+
+/// The witness ages on sensitive copies only: A's plain copy before the
+/// egress does not date A's later sensitive copy back. Recorded latest first.
+#[test]
+fn earlier_plain_copy_does_not_backdate_a_future_sensitive_one() {
+    let d = detector();
+    let earlier = Instant::now();
+    let now = earlier + Duration::from_secs(1);
+    let later = now + Duration::from_millis(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, later);
+    d.record_delivery_at(T, A, false, &s, earlier);
+    assert!(d.check_egress_at(B, U, &s, now).is_none());
+    // Positive control: once A's sensitive copy exists, the same send flags.
+    assert!(d.check_egress_at(B, U, &s, later).is_some());
+}
+
+/// Two sensitive copies straddle the egress, recorded latest first: the
+/// earlier one is still evidence.
+#[test]
+fn earlier_sensitive_copy_survives_a_later_one_recorded_first() {
+    let d = detector();
+    let earlier = Instant::now();
+    let now = earlier + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now + Duration::from_millis(1));
+    d.record_delivery_at(T, A, true, &s, earlier);
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
 }

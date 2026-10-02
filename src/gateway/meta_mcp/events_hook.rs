@@ -20,10 +20,31 @@ impl MetaMcp {
         self.events.get()
     }
 
+    /// `capabilities` as JSON, with `events` advertised when it applies.
+    pub(super) fn capabilities_with_events(
+        &self,
+        capabilities: impl serde::Serialize,
+    ) -> serde_json::Value {
+        let mut capabilities = serde_json::to_value(capabilities).unwrap_or_default();
+        self.advertise_events(&mut capabilities);
+        capabilities
+    }
+
+    /// An initialize result as JSON, with `events` advertised in its
+    /// capabilities when it applies.
+    pub(super) fn initialize_with_events(
+        &self,
+        result: impl serde::Serialize,
+    ) -> serde_json::Value {
+        let mut result = serde_json::to_value(result).unwrap_or_default();
+        self.advertise_events(&mut result["capabilities"]);
+        result
+    }
+
     /// Add `events: {listChanged: true}` to a capabilities object when the
     /// hub is installed and some source offers an event type (design §6.1).
     /// With events off the object is untouched, byte for byte.
-    pub(super) fn advertise_events(&self, capabilities: &mut serde_json::Value) {
+    fn advertise_events(&self, capabilities: &mut serde_json::Value) {
         if let Some(advertised) = self.events().and_then(|hub| hub.capability())
             && let Some(map) = capabilities.as_object_mut()
         {

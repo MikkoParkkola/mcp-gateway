@@ -1595,11 +1595,13 @@
     },
     {
       "id": "MIK-7630.EVENTS.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_surface.rs"
+      ],
+      "note": "Graded 2026-10-02 at a84c72dde (PR #2608). Red first: CI run 36922255851 failed T1 and T2 at their assertions (no capability; -32601 with events on). Green: CI run 36945723301 at head a24ffa471. T1 discover_advertises_events_only_when_enabled proves the capability appears only with events on and an event type offered; T2 events_methods_are_not_found_when_disabled_and_never_proxied proves -32601 with events off and that a backend answering events/list receives no events/* request. Scope: HTTP transport; stdio neither advertises nor serves events (design §15)."
     },
     {
       "id": "MIK-7630.EVENTS.2",
@@ -1611,11 +1613,16 @@
     },
     {
       "id": "MIK-7630.EVENTS.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_subscribe.rs",
+        "tests/mik_7630_events_surface.rs",
+        "src/events/client_tests.rs",
+        "src/events/rpc_tests.rs"
+      ],
+      "note": "Graded 2026-10-02 at a84c72dde (PR #2608). Red first: CI run 36922255851 failed T5-T10 and T53 at their assertions. Green: CI run 36945723301. Deterministic id over principal, URL, name and JCS-canonical arguments (T7 end to end for key order; unit subscription_id_is_canonical_over_arguments for numbers); whsec 24-64 decoded bytes (T6, unit whsec_bounds); single-use challenge compared with subtle::ConstantTimeEq (T8, T9, T53); verification cached per principal and URL (T10) and kept for its subscriptions plus a bounded tail (T46 I1 clauses). Mutants run 36935910797 (batch on head e80c3d3a6) killed M1-M2 (whsec bounds), M3 (challenge compare) and M4 (principal and URL cache key). Scope: HTTP transport (stdio answers -32601, design §15); rows needing a verified HTTPS callback run on Linux, where the client honours SSL_CERT_FILE."
     },
     {
       "id": "MIK-7630.EVENTS.4",
