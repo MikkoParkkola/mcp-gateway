@@ -84,13 +84,7 @@ impl MetaMcp {
             return;
         }
         match crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities()) {
-            Ok(removed) if !removed.is_empty() => {
-                let hub = std::sync::Arc::clone(hub);
-                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                    runtime.spawn(async move { hub.withdraw(&removed).await });
-                }
-            }
-            Ok(_) => {}
+            Ok(removed) => hub.withdraw(&removed),
             Err(event) => tracing::error!(
                 %event,
                 "capability reload not applied to webhook routes: it removes a filter or \

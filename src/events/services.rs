@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
-use super::records::ApiKeyRef;
+use super::records::{ApiKeyRef, Subscription};
 use crate::config_reload::LiveConfig;
 use crate::security::TransparencyLogger;
 
@@ -68,6 +68,12 @@ impl Services {
                     .is_some_and(|digest| hex::encode(&digest[..6]) == key.principal)
             })
             .is_some_and(|k| k.backends.iter().any(|b| b == "*" || b == backend))
+    }
+
+    /// [`Self::admits`] for a stored subscription. One stored before keys
+    /// were bound to their secret is refused.
+    pub(crate) fn admits_subscription(&self, sub: &Subscription, backend: &str) -> bool {
+        sub.legacy_api_key_name.is_none() && self.admits(sub.api_key.as_ref(), backend)
     }
 
     /// Run the response firewall over `data`, redacting in place.
@@ -324,6 +330,25 @@ mod tests {
         assert!(
             services(Vec::new()).admits(None, "x"),
             "no API key to re-read"
+        );
+    }
+
+    #[test]
+    fn a_subscription_stored_with_a_bare_key_name_is_refused() {
+        let stored = serde_json::json!({
+            "v": 1, "id": "s", "principal": "p", "api_key_name": "alice",
+            "url": "https://h/x", "name": "e", "arguments": {}, "secret": "whsec_x",
+            "previous_secret": null, "previous_until": null,
+            "granted_at": "2026-10-01T00:00:00Z", "expires_at": null, "active": true,
+            "failed_since": null, "last_delivery_at": null, "last_error": null
+        });
+        let sub: Subscription = serde_json::from_value(stored).expect("loads");
+        let live = services(vec![key("alice", "s1", None)]);
+        assert!(!live.admits_subscription(&sub, "x"));
+        let rewritten = serde_json::to_value(&sub).expect("serialises");
+        assert!(
+            rewritten.get("api_key_name").is_none(),
+            "never written back"
         );
     }
 }

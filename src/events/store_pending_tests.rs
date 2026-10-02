@@ -34,6 +34,7 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         id: id.into(),
         principal: "p".into(),
         api_key: None,
+        legacy_api_key_name: None,
         url: format!("https://h/{id}"),
         name: "e".into(),
         arguments: serde_json::json!({}),
@@ -64,6 +65,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         created_at: now,
         state: OutboxState::Pending,
         last_status: None,
+        dead_as: None,
     }
 }
 
@@ -303,4 +305,22 @@ fn a_failed_settlement_leaves_the_record_pending() {
     );
     let due = store.due(retry_at, &HashSet::new()).expect("io");
     assert_eq!(due.ready.len(), 1, "pending again, not stranded in flight");
+    let Claim::Ready(claimed) = store.claim("a", retry_at).expect("io") else {
+        panic!("claimable");
+    };
+    assert_eq!(
+        claimed.record.dead_as,
+        Some(DeadReason::Gone),
+        "buried again, never sent again"
+    );
+    drop(store);
+    let store = Store::open(dir.path(), retry_at, TAIL).expect("reopen");
+    let Claim::Ready(claimed) = store.claim("a", retry_at).expect("io") else {
+        panic!("recovered");
+    };
+    assert_eq!(
+        claimed.record.dead_as,
+        Some(DeadReason::Gone),
+        "the claim wrote the verdict to disk"
+    );
 }

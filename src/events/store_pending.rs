@@ -241,6 +241,9 @@ impl Store {
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
                 left.next_attempt_at = now + SETTLE_RETRY;
+                if let Settle::Dead { reason, .. } = outcome {
+                    left.dead_as = Some(reason);
+                }
             }
         }
         let (delivered, error) = match outcome {
@@ -295,12 +298,13 @@ impl Store {
                 if let Some(status) = status {
                     record.last_status = Some(status.to_owned());
                 }
-                // Buried first: once the dead letter is durable, load drops
+                // Entombed first: once the dead letter is durable, load drops
                 // the outbox file even if the unlink below never happens.
-                let evicted = self.bury(state, record, reason, now, policy)?;
+                // Eviction runs last, so it never removes that marker first.
+                self.entomb(state, record, reason, now)?;
                 state.outbox.remove(&event_id);
                 remove_record(&self.outbox_dir, &file)?;
-                Ok(evicted)
+                self.evict_dead(state, now, policy)
             }
         }
     }
@@ -388,12 +392,25 @@ impl Store {
     fn bury(
         &self,
         state: &mut State,
-        mut record: OutboxRecord,
+        record: OutboxRecord,
         reason: DeadReason,
         now: DateTime<Utc>,
         policy: DeadPolicy,
     ) -> std::io::Result<Vec<Evicted>> {
+        self.entomb(state, record, reason, now)?;
+        self.evict_dead(state, now, policy)
+    }
+
+    /// Write `record` into `dead/`.
+    fn entomb(
+        &self,
+        state: &mut State,
+        mut record: OutboxRecord,
+        reason: DeadReason,
+        now: DateTime<Utc>,
+    ) -> std::io::Result<()> {
         record.state = OutboxState::Pending;
+        record.dead_as = None;
         let dead = DeadLetter {
             record,
             reason: reason.as_str().to_owned(),
@@ -403,8 +420,7 @@ impl Store {
         let placed = write_record(&self.dead_dir, &OutboxRecord::file(&id), &dead)?;
         let size = dead_size(&dead);
         state.dead.insert(id, (dead, size));
-        placed.durable()?;
-        self.evict_dead(state, now, policy)
+        placed.durable()
     }
 
     /// Drop dead letters past retention, then the oldest beyond the count

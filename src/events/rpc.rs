@@ -253,6 +253,7 @@ impl EventsHub {
             id: id.clone(),
             principal,
             api_key: caller.api_key.clone(),
+            legacy_api_key_name: None,
             url: url.as_str().to_owned(),
             name: descriptor.name.clone(),
             arguments,
@@ -338,9 +339,9 @@ impl EventsHub {
         let id = subscription_id(&principal, url.as_str(), name, &arguments);
         let tail = super::tail_policy(&self.config);
         let removed = id.clone();
-        if blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await? {
-            self.settled(&id).await;
-        }
+        blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
+        // A concurrent unsubscribe of the same key waits too.
+        self.settled(&id).await;
         Ok(json!({}))
     }
 

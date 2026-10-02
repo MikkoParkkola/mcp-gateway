@@ -24,6 +24,10 @@ pub(crate) struct Subscription {
     /// The API key the principal presented, if any: every re-check
     /// resolves the key's expiry and backend scope from live config (I2).
     pub api_key: Option<ApiKeyRef>,
+    /// An early record's bare key name, which binds no secret: such a
+    /// subscription fails every re-check and is deleted. Never written.
+    #[serde(default, rename = "api_key_name", skip_serializing)]
+    pub legacy_api_key_name: Option<String>,
     pub url: String,
     pub name: String,
     pub arguments: Value,

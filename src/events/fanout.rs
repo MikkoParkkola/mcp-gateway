@@ -71,7 +71,7 @@ impl EventsHub {
             .filter(|s| source.matches(&s.arguments, event))
             .collect();
         for sub in matching {
-            if !services.admits(sub.api_key.as_ref(), &event.backend) {
+            if !services.admits_subscription(&sub, &event.backend) {
                 self.revoke(&sub.id).await;
                 continue;
             }
@@ -111,6 +111,7 @@ impl EventsHub {
             created_at: now,
             state: OutboxState::Pending,
             last_status: None,
+            dead_as: None,
         };
         let refusal = if scan == Scan::Block {
             Some(DeadReason::FirewallBlocked)
@@ -142,17 +143,17 @@ impl EventsHub {
     }
 
     /// Delete every subscription to an event type a reload removed; their
-    /// pending records go with them (design §9).
-    pub(crate) async fn withdraw(self: &Arc<Self>, names: &[String]) {
-        let ids: Vec<String> = self
-            .store
-            .subscriptions()
-            .into_iter()
-            .filter(|s| names.contains(&s.name))
-            .map(|s| s.id)
-            .collect();
-        for id in ids {
-            self.revoke(&id).await;
+    /// pending records go with them (design §9). Synchronous, inside the
+    /// reload, so a later reload that restores the type cannot interleave.
+    pub(crate) fn withdraw(&self, names: &[String]) {
+        let tail = super::tail_policy(&self.config);
+        let now = Utc::now();
+        for sub in self.store.subscriptions() {
+            if names.contains(&sub.name)
+                && let Err(error) = self.store.remove(&sub.id, now, tail)
+            {
+                tracing::warn!(%error, "events: withdrawn subscription not removed");
+            }
         }
     }
 

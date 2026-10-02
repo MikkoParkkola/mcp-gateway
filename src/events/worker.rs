@@ -134,17 +134,26 @@ impl EventsHub {
             body_sha256: "",
             delivered: false,
         };
-        if !services.admits(sub.api_key.as_ref(), &record.backend) {
+        if !services.admits_subscription(&sub, &record.backend) {
             services.audit_attempt(&refused("access_revoked")).await;
             self.revoke(&sub.id).await;
             return;
         }
         // A record a crash or a long suspension carried past its bounds is
         // dead before it is sent again, never after (§6.5).
-        if self.overdue(&record, now) {
+        if let Some(reason) = record.dead_as {
+            self.settle(services, event_id, quiet_dead(reason)).await;
+            return;
+        }
+        if self.overdue(&record, Utc::now()) {
             services.audit_attempt(&refused("exhausted")).await;
             self.settle(services, event_id, quiet_dead(DeadReason::Exhausted))
                 .await;
+            return;
+        }
+        // An unsubscribe that waited past its bound has removed the
+        // subscription by now: nothing is charged or sent for it.
+        if self.store.get(&sub.id).is_none() {
             return;
         }
         if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {

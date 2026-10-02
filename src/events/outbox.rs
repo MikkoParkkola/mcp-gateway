@@ -44,6 +44,10 @@ pub(crate) struct OutboxRecord {
     /// Category of the last failed attempt; never a body or a header.
     #[serde(default)]
     pub last_status: Option<String>,
+    /// Settled dead, but the disk refused the dead letter: the record is
+    /// buried again, never sent again. Written with the next claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dead_as: Option<DeadReason>,
 }
 
 impl OutboxRecord {
@@ -60,7 +64,8 @@ impl OutboxRecord {
 }
 
 /// Why a delivery was dead-lettered (design §3.8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum DeadReason {
     Gone,
     TooLarge,

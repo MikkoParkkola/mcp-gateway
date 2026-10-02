@@ -27,3 +27,30 @@ fn callback_urls_must_be_absolute_https_with_a_host() {
     assert!(callback_url(Some(&json!("https://h/x"))).is_ok());
     assert!(callback_url(None).is_err());
 }
+
+/// An unsubscribe answers only after an attempt already claimed for the
+/// key has settled, whether or not this call removed the subscription (T23).
+#[tokio::test]
+async fn unsubscribe_waits_out_a_claimed_attempt() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let caller = Caller {
+        principal: Some("p".to_owned()),
+        api_key: None,
+        visible_backends: std::collections::HashSet::new(),
+    };
+    let url = "https://h.example/cb";
+    let id = subscription_id("p", url, "e", &json!({}));
+    hub.runtime.busy.lock().insert(id.clone());
+    let release = std::sync::Arc::clone(&hub);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        release.runtime.busy.lock().remove(&id);
+    });
+    let started = std::time::Instant::now();
+    let params = json!({"name": "e", "arguments": {}, "delivery": {"url": url}});
+    hub.unsubscribe(&caller, Some(&params))
+        .await
+        .expect("answer");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+}
