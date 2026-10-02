@@ -3428,6 +3428,7 @@ no record of what ran, so it is refused, plan or single call, unless it holds no
 
 **Action:** re-run a refused call under a new idempotency key (the old key finds the refused
 row). Nothing for an upgrade from 3.5.x.
+
 ## 121. A task still running when the shutdown drain runs out is cancelled
 
 **Startup:** no notice, a long task is cut off at shutdown instead of running on
