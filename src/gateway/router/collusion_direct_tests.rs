@@ -164,6 +164,7 @@ fn key(secret: &[u8], name: &str) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: Default::default(),
     }
 }
 
