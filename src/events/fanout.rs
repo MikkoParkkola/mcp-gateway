@@ -84,6 +84,8 @@ impl EventsHub {
     async fn offer(self: &Arc<Self>, services: &Services, event: &SourceEvent, sub: &Subscription) {
         let id = event_id(event.kind, &event.upstream_id, &sub.id);
         let mut data = event.data.clone();
+        // Attribution before redaction (MIN.2 row E1): what the source named.
+        let tenants = services.tenants(&data);
         let scan = services.scan(
             &mut data,
             &Subject {
@@ -101,7 +103,7 @@ impl EventsHub {
             subscription_id: sub.id.clone(),
             name: event.name.clone(),
             backend: event.backend.clone(),
-            tenants: services.tenants(&data),
+            tenants,
             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             attempt: 0,
             next_attempt_at: now,

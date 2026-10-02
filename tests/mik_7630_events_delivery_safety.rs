@@ -218,6 +218,7 @@ async fn revoked_access_stops_delivery_at_the_next_attempt() {
 /// §3.7, "each delivery is treated as a read"); MIN.2 records only sensitive
 /// reads, so without that the row cannot go green.
 #[tokio::test]
+#[ignore = "needs MIN.2 ReadHistory; un-ignored by the MIN.2 E1 conversion (MIK-7116 test 2v)"]
 async fn tenant_guard_applies_to_event_payloads() {
     let root = tempfile::tempdir().expect("root");
     let rx = Receiver::start(root.path()).await;
