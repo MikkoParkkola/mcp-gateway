@@ -40,10 +40,25 @@ fn a_secret_reference_in_the_template_still_resolves() {
 }
 
 #[test]
-fn the_typed_and_query_paths_do_not_expand_a_caller_reference_either() {
+fn the_query_path_sends_a_caller_reference_as_text() {
     let (_dir, executor) = executor_holding("MIK7787_TEST_SECRET=gateway-owned\n");
-    let params = json!({ "q": "{env.MIK7787_TEST_SECRET}" });
+    let params = json!({ "q": "see {env.MIK7787_TEST_SECRET}" });
     let template = std::collections::HashMap::from([("q".to_string(), "{q}".to_string())]);
     let pairs = executor.substitute_params(&template, &params).unwrap();
-    assert!(pairs.iter().all(|(_, v)| !v.contains("gateway-owned")));
+    assert_eq!(
+        pairs,
+        [("q".to_string(), "see {env.MIK7787_TEST_SECRET}".to_string())]
+    );
+}
+
+#[test]
+fn the_typed_body_path_sends_a_caller_reference_as_text() {
+    let (_dir, executor) = executor_holding("MIK7787_TEST_SECRET=gateway-owned\n");
+    let params = json!({ "q": "see {env.MIK7787_TEST_SECRET}" });
+    let body = json!({ "query": "{q}", "note": "x {q}" });
+    let out = executor.substitute_value(&body, &params).unwrap();
+    assert_eq!(
+        out,
+        json!({ "query": "see {env.MIK7787_TEST_SECRET}", "note": "x see {env.MIK7787_TEST_SECRET}" })
+    );
 }
