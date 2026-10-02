@@ -53,10 +53,11 @@ impl MetaMcp {
         }
         if stored.targets.is_empty() {
             // A recording gateway's empty list means nothing was dispatched.
-            // An older row's empty list means the provenance is unavailable:
-            // `task.tool()` is the meta tool, and the backend's current list is
-            // no record of what ran, so nothing can prove the caller may read
-            // it. Refused, plan or not (MIK-7686, fail closed).
+            // An older row's empty list means it has no upstream descriptor to
+            // name its call (`CommittedTask::of`): `task.tool()` is the meta
+            // tool, and the backend's current list is no record of what ran, so
+            // nothing can prove the caller may read it. Refused, plan or not
+            // (MIK-7686, fail closed).
             return if stored.targets_recorded {
                 Ok(())
             } else {
