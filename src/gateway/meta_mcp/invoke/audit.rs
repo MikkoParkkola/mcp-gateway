@@ -90,15 +90,28 @@ pub(super) fn note_dispatch_failure(error: &Error) {
 
 /// MIK-7116.MIN.1: note the tenants a raw backend `result` names, and hand it
 /// on unchanged. Called first in the response gates, on both routes.
-pub(super) fn noted_response(meta: &MetaMcp, result: Value) -> Value {
+///
+/// Also returns, inside a MIN.2 read scope, the same reading as a read
+/// attribution: the caller notes it into the scope once the call's gates have
+/// passed, so only a delivered dispatch counts (design §4.4).
+pub(super) fn noted_response(
+    meta: &MetaMcp,
+    result: Value,
+) -> (
+    Value,
+    Option<crate::security::tenant_reads::ReadAttribution>,
+) {
     let tenants = meta.response_tenants(&result);
+    let uninspected = meta.response_uninspected(&result);
+    let read = crate::security::tenant_reads::in_read_scope()
+        .then(|| crate::security::tenant_reads::ReadAttribution::of(tenants.clone(), uninspected));
     if !tenants.is_empty() {
         note(|notes| notes.response_tenants.extend(tenants));
     }
-    if meta.response_uninspected(&result) {
+    if uninspected {
         note(|notes| notes.uninspected = true);
     }
-    result
+    (result, read)
 }
 
 /// MIN.1: this call's response was refused before its tenants could be read

@@ -1348,7 +1348,7 @@ impl MetaMcp {
         mut result: Value,
     ) -> Result<(Value, super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
-        let mut result = audit::noted_response(self, result);
+        let (mut result, raw_read) = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -1399,7 +1399,10 @@ impl MetaMcp {
             }
         }
 
-        Ok(self.apply_context_integrity(server, tool, api_key_name, trace_id, result))
+        let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+        // MIN.2: past every gate, so this dispatch's raw reading counts.
+        crate::security::tenant_reads::note_attribution(raw_read);
+        Ok(delivered)
     }
 
     /// The response contract gate (issue #133, D1), split out of

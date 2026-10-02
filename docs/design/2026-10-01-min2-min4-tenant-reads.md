@@ -826,3 +826,23 @@ Seat-2 improvements are taken in implementation: `SseMeta` and the bound key are
 `OutboundFrame`; compile-fail that the reply types do not implement `IntoResponse`; stdio judged
 before `slot_rpc` under the same late-replacer rule; corpus method and SSE-name rows written as JSON
 the scan attributes.
+
+## 12. Implementation record (PR #2640)
+
+Where the implementation differs from §4, and why. Each item is a test row or
+a stated gap.
+
+| Item | Design | Implemented | Note |
+|---|---|---|---|
+| History | one `Arc<ReadHistory>`, a required `from_config` argument (2ad) | one per process: `Gateway` builds it and `response_firewall` gives it to both firewalls (`with_reads`) | `from_config` keeps two arguments: 63 call sites, all tests but one. The production constructor is the only one and shares it. Row 2b proves the share on the router |
+| Records | responses on meta/stdio in `response_delivery_attempt` | every judged frame writes one `tenant_read` event (§8 open question a, draft decision) | `response_delivery_attempt` keeps its meaning |
+| H1-H4 POST | `OutboundReply` through `mcp_route` | judged after finalization, recorded, written by `outbound::to_http`; the body commits when read (F3) | early returns before dispatch are gateway refusals with no backend content; `mcp_route` and the compile-time guarantee are not built |
+| H5/H6 POST-SSE | notification channel carries frames | judged in `send_or_count` as queued; written by `sse_message` | as designed |
+| H7 GET stream | moved payload | each session's copy judged at enqueue for the session's `caller_key`; a `StreamMark` beside the note carries the ticket | the note stays a `TaggedNotification`; webhook items also judged on the raw body |
+| H8 listen | `OutboundReply::Stream` | each event judged for the listener's caller as written | row 11 |
+| H9 direct | `OutboundHttp` | every answer judged in `audited_call` and written by `to_http` | |
+| S1/S2 stdio | queue of frames | as designed; key `stdio`; batch items judged and committed after the array | rows 3/4 stdio |
+| Bridged stdio requests | refusal to the waiter | judged; a withheld one returns `NoSession` at once, audited first | |
+| Hidden attribution | dispatch notes, caches, tasks | dispatch raw reading noted once its response gates pass (rows 13, 18); capability executor and its cache (F1, F2) | meta response cache, idempotency stores, `StoredDelivery` and task rows not yet (row 14, 15; §4.9 allows task rows later) |
+| Request params | always | only for an answer that delivered a result (row 7) | a refusal charges nothing |
+| H10-H13, clippy tripwire, trybuild rows | | not built | gateway-built bodies with no backend content |

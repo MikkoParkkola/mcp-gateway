@@ -359,6 +359,23 @@ pub(crate) fn note_restored(stored: Option<&ReadAttribution>) {
     });
 }
 
+/// Whether a read scope is collecting on this task, with attribution on.
+#[cfg(feature = "firewall")]
+pub(crate) fn in_read_scope() -> bool {
+    READS
+        .try_with(|cell| cell.borrow().0.tenant_guard().attributes())
+        .unwrap_or(false)
+}
+
+/// Note an attribution already read (a dispatch's raw response, read once
+/// for the invocation record too) into the scope; nothing outside one.
+#[cfg(feature = "firewall")]
+pub(crate) fn note_attribution(read: Option<ReadAttribution>) {
+    if let Some(read) = read {
+        let _ = READS.try_with(|cell| cell.borrow_mut().1.extend(&read));
+    }
+}
+
 /// What the read scope around this task has collected so far: the hidden
 /// attribution of the answer being judged. `None` outside a scope.
 #[cfg(feature = "firewall")]
@@ -371,6 +388,16 @@ pub(crate) fn noted() -> Option<ReadAttribution> {
 pub(crate) fn note_read(_value: &Value) -> Option<ReadAttribution> {
     None
 }
+
+/// Without the firewall there is no read scope.
+#[cfg(not(feature = "firewall"))]
+pub(crate) fn in_read_scope() -> bool {
+    false
+}
+
+/// Without the firewall nothing is attributed.
+#[cfg(not(feature = "firewall"))]
+pub(crate) fn note_attribution(_read: Option<ReadAttribution>) {}
 
 /// Without the firewall nothing is attributed.
 #[cfg(not(feature = "firewall"))]

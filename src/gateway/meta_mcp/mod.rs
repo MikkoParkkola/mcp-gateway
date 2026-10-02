@@ -2720,3 +2720,7 @@ mod session_cleanup_tests;
 #[cfg(test)]
 #[path = "session_inflight_tests.rs"]
 mod session_inflight_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "dispatch_reads_tests.rs"]
+mod dispatch_reads_tests;
