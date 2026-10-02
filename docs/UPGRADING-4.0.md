@@ -3360,7 +3360,7 @@ issuer check only logged a warning; it now refuses.
 
 ## 117. An unchanged grant decision on a polled finished task is written once per window
 
-**Audit:** fewer `identity_grant_decision` records, only for repeated reads of a finished task
+**Startup:** no notice; the audit log holds fewer `identity_grant_decision` records, only for repeated reads of a finished task
 
 A read of a finished task (`tasks/get`, or a repeat of a task-augmented call) re-checks the
 grants of the calls that produced it (item 105). Each read used to write a decision record, so a
@@ -3376,7 +3376,7 @@ client polling once a second wrote about 86,400 identical records a day for one 
 
 ## 118. The audit log keeps a cut or interrupted high-water finding
 
-**Startup and verify:** a new `audit_segment_hwm_missing` finding where a tail was lost below `.hwm`
+**Startup:** no notice; a restart and Live verify report a new `audit_segment_hwm_missing` finding where a tail was lost below `.hwm`
 
 - A restart that finds the newest surviving record below the signed `.hwm` writes
   `audit_segment_hwm_missing`, whether the active file was torn, cut at a line, emptied or
