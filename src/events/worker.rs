@@ -219,7 +219,7 @@ impl EventsHub {
             services.guard(),
             sub.read_key.as_deref(),
             value,
-            record.attribution.as_ref(),
+            record.attribution_under(&services.attribution_keys()),
         ) {
             Admission::Admitted(frame) => {
                 let verdict = frame.verdict();

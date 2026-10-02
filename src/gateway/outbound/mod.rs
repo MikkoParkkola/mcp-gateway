@@ -268,6 +268,20 @@ pub(crate) fn raw_attribution(guard: Option<&Guard>, value: &Value) -> Option<Re
     }
 }
 
+/// The `arg_keys` an attribution was taken under: an outbox record carries
+/// them, and its attribution counts only while they are still the policy.
+pub(crate) fn attribution_keys(guard: Option<&Guard>) -> Vec<String> {
+    #[cfg(feature = "firewall")]
+    {
+        guard.map_or_else(Vec::new, |g| g.tenant_guard().config().arg_keys.clone())
+    }
+    #[cfg(not(feature = "firewall"))]
+    {
+        let _ = guard;
+        Vec::new()
+    }
+}
+
 /// Run `fut` inside a read scope when `guard` judges, so the inner
 /// dispatches note what they read before any transform (§4.4). Returns what
 /// was noted; a judge inside `fut` reads it so far with [`noted_reads`].

@@ -64,6 +64,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attribution: None,
+        attribution_keys: Vec::new(),
         attempt: 0,
         next_attempt_at: now,
         first_attempt_at: None,
@@ -549,4 +550,19 @@ fn a_revocation_decided_on_an_old_row_spares_a_rebound_one() {
     let same = |row: &Subscription| row.credential_principal == refused.credential_principal;
     assert!(!store.remove_where("s1", now, TAIL, same).expect("io"));
     assert!(store.get("s1").is_some(), "the rebound row survives");
+}
+
+/// An attribution counts only while the `arg_keys` it was taken under are
+/// still the policy; after a change the record reads as unattributed.
+#[test]
+fn attribution_counts_only_under_its_own_keys() {
+    let mut r = record("a", "s1", Utc::now());
+    r.attribution = Some(crate::security::tenant_reads::ReadAttribution::default());
+    r.attribution_keys = vec!["repo".to_owned()];
+    assert!(r.attribution_under(&["repo".to_owned()]).is_some());
+    assert!(
+        r.attribution_under(&["repo".to_owned(), "org".to_owned()])
+            .is_none()
+    );
+    assert!(r.attribution_under(&[]).is_none());
 }

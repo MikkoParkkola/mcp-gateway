@@ -229,6 +229,11 @@ impl Services {
         }
     }
 
+    /// The `arg_keys` an attribution is taken under now.
+    pub(crate) fn attribution_keys(&self) -> Vec<String> {
+        crate::gateway::outbound::attribution_keys(self.guard())
+    }
+
     /// What `data` names before the event firewall redacts it (MIN.2 E1);
     /// `None` when the verdict is off.
     pub(crate) fn attribute(

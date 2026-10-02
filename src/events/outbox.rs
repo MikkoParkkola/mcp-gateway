@@ -39,6 +39,11 @@ pub(crate) struct OutboxRecord {
     /// records: they count as unread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<crate::security::tenant_reads::ReadAttribution>,
+    /// The `arg_keys` `attribution` was taken under: after a policy change
+    /// it names tenants the new keys might see differently, so it counts
+    /// only while they match.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribution_keys: Vec<String>,
     /// Attempts started so far.
     pub attempt: u32,
     pub next_attempt_at: DateTime<Utc>,
@@ -61,6 +66,16 @@ impl OutboxRecord {
         base64::engine::general_purpose::STANDARD
             .decode(&self.body_b64)
             .ok()
+    }
+
+    /// The attribution, while the policy it was taken under still holds.
+    pub(crate) fn attribution_under(
+        &self,
+        keys: &[String],
+    ) -> Option<&crate::security::tenant_reads::ReadAttribution> {
+        self.attribution
+            .as_ref()
+            .filter(|_| self.attribution_keys == keys)
     }
 
     pub(crate) fn file(event_id: &str) -> String {

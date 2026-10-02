@@ -186,6 +186,22 @@ fn a_redacted_tenant_field_does_not_name_a_second_tenant() {
     );
 }
 
+/// A configured key at the envelope root names a tenant: excluding `data`
+/// from the scan must not drop the envelope's own member names.
+#[test]
+fn a_tenant_key_at_the_callback_envelope_root_is_scanned() {
+    let block = firewall(CrossTenantReads::Block);
+    let _a = read_a(&block);
+    let envelope = json!({ "customer_id": B, "data": { "note": "x" } });
+    assert!(
+        matches!(
+            callback_frame(Some(&block), Some(KEY), envelope, None),
+            Admission::Blocked(_)
+        ),
+        "an envelope naming B after an A read is withheld"
+    );
+}
+
 fn evidence() -> RejectionEvidence {
     RejectionEvidence {
         caller_key: Some(KEY.to_string()),
