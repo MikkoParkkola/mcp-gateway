@@ -11,10 +11,7 @@
 
 use std::sync::Arc;
 
-// Used only by the 0755-rejection test, which is Unix-only (POSIX mode bits).
-#[cfg(unix)]
-use super::ServiceError;
-use super::{StoreLimits, open_runtime};
+use super::{ServiceError, StoreLimits, open_runtime};
 
 /// Startup recovery of records a previous process left mid-flight.
 mod recovery;
