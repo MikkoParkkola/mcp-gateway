@@ -44,7 +44,7 @@ fn a_journey_record_without_its_owner_is_not_admitted() {
     }
 }
 
-fn is_storage<T>(result: Result<T, JourneyError>) -> bool {
+fn is_storage<T>(result: &Result<T, JourneyError>) -> bool {
     matches!(result, Err(JourneyError::Storage(_)))
 }
 
@@ -107,12 +107,12 @@ fn every_callback_entry_point_refuses_an_oversized_secret_before_the_store() {
         b"{}",
     )
     .expect("plant an unreadable table");
-    assert!(is_storage(store.callback_journey(1_000, &limits, absent)));
+    assert!(is_storage(&store.callback_journey(1_000, &limits, absent)));
     assert!(is_storage(
-        store.admit_callback(1_000, &limits, absent, None)
+        &store.admit_callback(1_000, &limits, absent, None)
     ));
     assert!(is_storage(
-        store.consume_callback(1_000, &limits, absent, None)
+        &store.consume_callback(1_000, &limits, absent, None)
     ));
     let over_str = "s".repeat(CALLBACK_SECRET_MAX + 1);
     assert_eq!(
