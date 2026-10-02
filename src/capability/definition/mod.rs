@@ -186,12 +186,11 @@ where
 
             while let Some(key) = map.next_key::<String>()? {
                 if key == "fallback" {
-                    // A list or a single provider. A malformed entry is an error,
-                    // as it is for a named provider: dropping it would hide the
-                    // declaration from the CAP-011 warning (MIK-7768).
+                    // A list or a single provider. A malformed entry, null included,
+                    // is an error, as it is for a named provider: dropping it would
+                    // hide the declaration from the CAP-011 warning (MIK-7768).
                     let value: serde_json::Value = map.next_value()?;
                     let entries = match value {
-                        serde_json::Value::Null => Vec::new(),
                         serde_json::Value::Array(entries) => entries,
                         single => vec![single],
                     };

@@ -56,9 +56,17 @@ fn no_fallback_means_no_cap011() {
 }
 
 /// A malformed entry used to be dropped, leaving an empty list and no warning.
+/// A null or blank value is malformed too: it names no provider.
 #[test]
 fn a_malformed_fallback_entry_is_a_parse_error() {
-    for fallback in ["\n    - timeout: soon", "\n    timeout: soon"] {
+    for fallback in [
+        "\n    - timeout: soon",
+        "\n    timeout: soon",
+        " null",
+        " ~",
+        "",
+        "\n    - null",
+    ] {
         let yaml = format!("{WITHOUT_FALLBACK}  fallback:{fallback}\n");
         let parsed = serde_yaml::from_str::<CapabilityDefinition>(&yaml);
         assert!(parsed.is_err(), "must not parse: {yaml}");

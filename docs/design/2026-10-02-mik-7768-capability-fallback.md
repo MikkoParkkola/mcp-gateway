@@ -1,6 +1,6 @@
 # MIK-7768: capability `providers.fallback` is parsed and never executed
 
-Status: proposed (2026-10-02). Decides between MIK-FALLBACK.EXEC.1-3 (execute fallbacks) and
+Status: accepted and implemented in #2677 (2026-10-02). Decides between MIK-FALLBACK.EXEC.1-3 (execute fallbacks) and
 MIK-FALLBACK.EXEC.4 (refuse or warn at load, plus docs) for 4.0.0.
 
 ## Facts (base e5ba1a35f)
@@ -52,7 +52,7 @@ hardening.
    Warning, not Error: the primary still works, and the retired-key precedent in
    `config::strict_keys` (`RETIRED_BACKEND_KEYS`) warns for keys that never had an effect.
    An Error would remove a working capability from the catalog.
-2. A malformed fallback entry becomes a parse error, like a malformed named provider, instead of
+2. A malformed fallback entry (null and blank included) becomes a parse error, like a malformed named provider, instead of
    being dropped (fact 2). Otherwise a capability whose only fallback entry is malformed would
    have an empty list and no CAP-011 warning.
 3. Delete the dead nested `fallback:` from `openpencil_design.yaml` and re-pin its `sha256`.
