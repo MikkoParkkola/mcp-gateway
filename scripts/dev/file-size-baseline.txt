@@ -67,7 +67,6 @@
 978 src/gateway/server/support.rs
 970 src/ranking/mod.rs
 964 src/gateway/meta_mcp_tool_defs.rs
-956 src/gateway/ui/backend_ops.rs
 954 src/commands/protocol_import.rs
 944 src/discovery/shadow.rs
 944 src/commands/doctor.rs
