@@ -111,6 +111,8 @@ fn assert_tools_call(response: &Value) {
 // ============================================================================
 
 struct HttpReply {
+    /// MIK-7759: raw body bytes, so a 202 can be held to "no body".
+    body_len: usize,
     status: StatusCode,
     session: Option<String>,
     /// The JSON-RPC message carrying the request's id, from a JSON body or
@@ -162,6 +164,7 @@ async fn http_post(
         )
         .find(|m| want.is_some() && m.get("id") == want.as_ref());
     HttpReply {
+        body_len: bytes.len(),
         status,
         session,
         message,
@@ -204,6 +207,10 @@ async fn http_full_session(version: &str) {
         ack.session.as_deref(),
         sid,
         "notifications/initialized must stay on the session initialize minted"
+    );
+    assert_eq!(
+        ack.body_len, 0,
+        "MIK-7759: an accepted notification is answered 202 with no body"
     );
 
     // 3-5. tools/list, tools/call, ping: on the same session throughout.
