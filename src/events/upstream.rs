@@ -77,18 +77,27 @@ impl Ineligible {
     }
 }
 
+/// Whether the process serves several callers, by the auth posture it is
+/// running: a reload of a restart-only auth field changes nothing until a
+/// restart, here as in the meta route's isolation guard.
+pub(crate) fn multi_user(running: &Config) -> bool {
+    running
+        .auth
+        .implies_multi_user(!running.key_server.oidc.is_empty())
+}
+
 /// Every configured backend that cannot offer the events, with the reason.
 /// Read from config alone, so asking never starts a backend.
-pub(crate) fn ineligible_backends(config: &Config) -> BTreeMap<String, Ineligible> {
+pub(crate) fn ineligible_backends(
+    config: &Config,
+    multi_user: bool,
+) -> BTreeMap<String, Ineligible> {
     // Account references compile into the configuration a backend runs with
     // (a `shared` descriptor drops its reference, an external one becomes
     // identity propagation); judge that, not the raw text. The live config
     // passed validation, so a compile error cannot occur here; the raw
     // config is the fallback all the same.
     let bound = crate::config::account_bindings::compile(config).unwrap_or_default();
-    let multi_user = config
-        .auth
-        .implies_multi_user(!config.key_server.oidc.is_empty());
     config
         .backends
         .iter()
@@ -178,6 +187,48 @@ mod tests {
         assert_eq!(reason(&streamable, true), None);
         assert_eq!(reason(&backend("command: echo"), true), None);
         assert_eq!(reason(&backend("ws_url: ws://h/ws"), true), None);
+    }
+
+    /// Accounts compile before the verdict: a personal or external account
+    /// is identity propagation whatever the auth posture, a shared one is
+    /// the static credential it names.
+    #[test]
+    fn account_bindings_are_judged_as_they_compile() {
+        let yaml = "accounts:\n  schema_version: accounts.v1\n  enabled: true\n  \
+             descriptors:\n    \
+             mine:\n      mode: personal_managed\n      provider: p\n      \
+             resource: https://api.example.invalid/\n      \
+             issuer: https://issuer.example.invalid\n      \
+             authorization_endpoint: https://issuer.example.invalid/authorize\n      \
+             token_endpoint: https://issuer.example.invalid/token\n      \
+             client_id: c\n      redirect_uri: https://gw.example.invalid/cb\n      \
+             scopes: [s]\n      send_resource_parameter: true\n    \
+             theirs:\n      mode: external\n      provider: p\n      \
+             resource: https://external.example.invalid/\n      \
+             issuer: https://issuer.example.invalid\n      \
+             external_strategy:\n        strategy: token_exchange\n        \
+             audience: https://external.example.invalid/\n        \
+             session_mode: stateless\n        required: true\n        \
+             token_exchange_endpoint: https://issuer.example.invalid/exchange\n    \
+             ours:\n      mode: shared\n      provider: p\n\
+             backends:\n  \
+             a:\n    http_url: http://h/mcp\n    streamable_http: true\n    account: mine\n  \
+             b:\n    http_url: http://h/mcp\n    streamable_http: true\n    account: theirs\n  \
+             c:\n    http_url: http://h/mcp\n    streamable_http: true\n    account: ours\n  \
+             off:\n    http_url: http://h/sse\n    enabled: false\n";
+        let config: Config = serde_yaml::from_str(yaml).expect("config");
+        crate::config::account_bindings::compile(&config).expect("the fixture compiles");
+        for multi_user in [false, true] {
+            let refused = ineligible_backends(&config, multi_user);
+            assert_eq!(refused.get("a"), Some(&Ineligible::IdentityPropagation));
+            assert_eq!(refused.get("b"), Some(&Ineligible::IdentityPropagation));
+            assert_eq!(
+                refused.get("c"),
+                None,
+                "shared: the gateway's own credential"
+            );
+            assert_eq!(refused.get("off"), None, "disabled is absent, not refused");
+        }
     }
 
     #[cfg(feature = "a2a")]

@@ -111,7 +111,8 @@ impl EventsHub {
         if !self.config.sources.backend_notifications {
             return std::collections::BTreeMap::new();
         }
-        super::upstream::ineligible_backends(&services.live.get())
+        let multi_user = super::upstream::multi_user(services.live.running());
+        super::upstream::ineligible_backends(&services.live.get(), multi_user)
     }
 }
 
