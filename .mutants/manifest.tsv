@@ -1,0 +1,3 @@
+head_sha	820977b6760e994cac314eb6e9ed87004ef488e0
+# #2678 rerun of R8 after the abandoned-round test fix
+R8	linux	r8.patch	--lib -- abandoned_round_records_nothing
