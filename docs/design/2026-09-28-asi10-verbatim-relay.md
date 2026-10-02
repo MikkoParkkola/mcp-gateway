@@ -445,3 +445,11 @@ is lane policy (operator decision 2026-09-29), not something the workflow enforc
   is refused at load.
 - **Delivery point.** Direct-route recording runs after `finish_direct` (scope clamp, chain
   strip and origin link), on the value the caller receives; replays record the stored value.
+- **Signing before recording.** The direct route signs, then records (`sign_and_record`). A signing
+  failure replaces the result with a refusal, which records nothing.
+- **Text read.** String leaves first, as one contiguous stream, so content split over short
+  fields still matches. Keys come after. Egress reads every key, since a key reaches the backend
+  like a value. A delivery reads only keys of at least k = 48 chars, so short schema keys never
+  make unrelated results look alike. A delivery skips only the top-level `_context_integrity`, the
+  gateway's verdict slot. A nested one is content. A backend that writes its own content into
+  that slot is backend collusion (§9).
