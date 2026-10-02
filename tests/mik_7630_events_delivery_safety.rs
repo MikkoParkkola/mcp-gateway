@@ -205,6 +205,38 @@ async fn revoked_access_stops_delivery_at_the_next_attempt() {
     assert_eq!(error(&refresh)["code"], -32011, "{refresh}");
 }
 
+/// Design F9 (MIK-7769): a subscription made with the static bearer stops at
+/// the next event once the gateway runs with another bearer, and is deleted.
+#[tokio::test]
+async fn a_rotated_static_bearer_stops_delivery() {
+    const OLD: &str = "events-test-static-bearer-old-0123456789";
+    const NEW: &str = "events-test-static-bearer-new-0123456789";
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["auth"]["bearer_token"] = json!(OLD);
+    let mut gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, OLD, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-f9a", "o/r").await;
+    events_at_least(&rx, 1).await;
+
+    let mut rotated = gw.config().clone();
+    rotated["auth"]["bearer_token"] = json!(NEW);
+    gw.rewrite_config(rotated);
+    gw.restart().await;
+    let before = rx.events().len();
+    fire(&gw, "d-f9b", "o/r").await;
+    let root_path = root.path().to_path_buf();
+    let gone = wait_until(DEADLINE, || records(&root_path, "subs").is_empty()).await;
+    assert!(gone, "the old bearer's subscription is deleted");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        rx.events().len(),
+        before,
+        "nothing reaches the old bearer's callback"
+    );
+}
+
 /// T25 (SAFETY.3): each delivery is a read by the subscription principal in
 /// MIN.2's per-principal window. Tenants come from `repo` (`arg_keys`).
 /// Alice receives a tenant `t1` event, then a `t2` event that crosses the

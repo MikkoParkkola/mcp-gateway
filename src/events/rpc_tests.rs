@@ -41,6 +41,7 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
             principal: String::new(),
             api_key: None,
             expires_at: None,
+            binding: None,
         },
         visible_backends: std::collections::HashSet::new(),
     };
@@ -73,6 +74,7 @@ fn credentials_other_than_api_keys_bound_the_grant() {
         principal: "p".to_owned(),
         api_key: None,
         expires_at,
+        binding: None,
     };
     for kind in [
         CredentialKind::KeyServerToken,

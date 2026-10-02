@@ -372,9 +372,22 @@ impl Store {
         now: DateTime<Utc>,
         tail: TailPolicy,
     ) -> std::io::Result<bool> {
+        self.remove_where(id, now, tail, |_| true)
+    }
+
+    /// Delete subscription `id` when `still` holds for the stored row under
+    /// the store lock: a revocation decided on an earlier snapshot never
+    /// deletes a row a concurrent refresh has re-bound to another credential.
+    pub(crate) fn remove_where(
+        &self,
+        id: &str,
+        now: DateTime<Utc>,
+        tail: TailPolicy,
+        still: impl FnOnce(&Subscription) -> bool,
+    ) -> std::io::Result<bool> {
         let mut state = self.state.lock();
         self.sweep(&mut state, now)?;
-        let Some(sub) = state.subs.get(id).cloned() else {
+        let Some(sub) = state.subs.get(id).cloned().filter(|s| still(s)) else {
             self.trim_tails(&mut state, now, tail)?;
             return Ok(false);
         };
