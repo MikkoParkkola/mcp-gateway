@@ -548,3 +548,47 @@ fn released_then_completed_entry_stays_bound_to_its_own_request() {
         "expected the fingerprint-mismatch refusal, got: {message}"
     );
 }
+
+/// MIK-7116.MIN.2 row 14: a replay restores the reading kept in the same
+/// entry as its result; an entry completed without one replays as unread.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_replay_restores_its_entrys_reading() {
+    use crate::security::firewall::tenant_guard::TenantGuardConfig;
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    use crate::security::tenant_reads::{ReadAttribution, with_read_scope};
+
+    let fw = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            tenant_guard: TenantGuardConfig {
+                arg_keys: vec!["customer_id".to_string()],
+                ..TenantGuardConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let cache = Arc::new(IdempotencyCache::new());
+    let reading = ReadAttribution::of([String::from("cust-b")].into(), false);
+    let GuardOutcome::Proceed(mut reservation) = enforce(&cache, "k", "fp").unwrap() else {
+        panic!("a fresh key proceeds");
+    };
+    assert!(reservation.complete_read(&json!({"ok": true}), Some(reading.clone())));
+    let (replay, restored) =
+        with_read_scope(Arc::clone(&fw), async { enforce(&cache, "k", "fp") }).await;
+    assert!(matches!(replay, Ok(GuardOutcome::CachedResult(_))));
+    assert_eq!(
+        restored, reading,
+        "the replay restores its own entry's reading"
+    );
+
+    let GuardOutcome::Proceed(mut bare) = enforce(&cache, "bare", "fp").unwrap() else {
+        panic!("a fresh key proceeds");
+    };
+    assert!(bare.complete(&json!({"ok": true})));
+    let (_, restored) = with_read_scope(fw, async { enforce(&cache, "bare", "fp") }).await;
+    assert!(
+        restored.uninspected,
+        "an entry completed without a reading is unread"
+    );
+}

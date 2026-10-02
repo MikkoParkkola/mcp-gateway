@@ -281,8 +281,12 @@ pub(crate) enum AdmitOutcome {
     Proceed,
     /// Another caller holds a live in-flight entry.
     InFlight,
-    /// A completed entry exists — return the cached result.
-    Completed(Value),
+    /// A completed entry exists — return the cached result, with the
+    /// reading kept beside it (MIK-7116.MIN.2), read under the same lock.
+    Completed(
+        Value,
+        Option<crate::security::tenant_reads::ReadAttribution>,
+    ),
     /// A failed entry exists — return the cached JSON-RPC error object.
     Failed(Value),
     /// The cache is at [`MAX_ENTRIES`] and this key is not tracked yet.
@@ -427,7 +431,7 @@ impl IdempotencyCache {
                         let IdempotencyState::Completed(value, _) = &occupied.get().state else {
                             unreachable!("live completed status must hold a completed value");
                         };
-                        AdmitOutcome::Completed(value.clone())
+                        AdmitOutcome::Completed(value.clone(), occupied.get().read.clone())
                     }
                     CheckPlan::Failed => {
                         let IdempotencyState::Failed(error, _) = &occupied.get().state else {
@@ -522,17 +526,6 @@ impl IdempotencyCache {
         entry.read = read;
         self.entries.insert(key.to_string(), entry);
         true
-    }
-
-    /// The reading kept beside `key`'s completed result (MIN.2).
-    pub(crate) fn completed_read(
-        &self,
-        key: &str,
-    ) -> Option<crate::security::tenant_reads::ReadAttribution> {
-        self.entries.get(key).and_then(|entry| match entry.state {
-            IdempotencyState::Completed(..) => entry.read.clone(),
-            _ => None,
-        })
     }
 
     /// Store `error` as the terminal outcome for `key`, bound to the admitting
@@ -874,7 +867,12 @@ pub fn enforce(
             409,
             format!("Duplicate request in progress for key: {key}"),
         )),
-        AdmitOutcome::Completed(value) => Ok(GuardOutcome::CachedResult(value)),
+        AdmitOutcome::Completed(value, read) => {
+            // MIN.2 row 14: a replay restores the reading stored with this
+            // very result into the caller's read scope (a no-op outside one).
+            crate::security::tenant_reads::note_restored(read.as_ref());
+            Ok(GuardOutcome::CachedResult(value))
+        }
         AdmitOutcome::Failed(error) => Ok(GuardOutcome::CachedError(error)),
         AdmitOutcome::Mismatch => Err(Error::json_rpc(
             409,

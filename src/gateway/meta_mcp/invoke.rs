@@ -1224,18 +1224,22 @@ impl MetaMcp {
                 audit::with_dispatch_scope(traced),
             )
             .await;
-            if result.is_ok() {
-                crate::security::tenant_reads::note_attribution(reading);
-            }
+            let responded = notes.responded();
             // Single delivery boundary: unwrap the guard-sealed result.
             let (result, source, upstream) = match result.map(GuardedValue::into_parts) {
                 Ok((value, source, upstream)) => (Ok(value), source, upstream),
                 Err(error) => (Err(error), crate::protocol::ChainSource::NotEligible, None),
             };
             // One record per call, refusals and failures included (D1-d).
-            let audited =
-                self.audit_invocation(args, session_id, caller, &trace_id_clone, result, notes);
-            audited.await.map(|value| (value, source, upstream))
+            let audited = self
+                .audit_invocation(args, session_id, caller, &trace_id_clone, result, notes)
+                .await;
+            // Only a delivered call counts: its own reading, and the tenants its
+            // arguments name when a backend answered it, with or without a log.
+            if audited.is_ok() {
+                self.note_delivered_reading(args, reading, responded);
+            }
+            audited.map(|value| (value, source, upstream))
         })
         .await
     }
@@ -1785,7 +1789,6 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
-                    cache_reads::restore(idem_cache.completed_read(key).as_ref());
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }

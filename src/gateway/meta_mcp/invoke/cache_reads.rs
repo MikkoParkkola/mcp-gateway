@@ -31,6 +31,27 @@ pub(crate) fn restore(read: Option<&ReadAttribution>) {
 }
 
 impl super::super::MetaMcp {
+    /// A delivered invocation's reading joins the request's: what it read in
+    /// its own scope, and, when a backend answered it, the tenants its own
+    /// arguments name (a playbook step the outer request does not show).
+    pub(super) fn note_delivered_reading(
+        &self,
+        args: &serde_json::Value,
+        reading: Option<ReadAttribution>,
+        responded: bool,
+    ) {
+        if !tenant_reads::in_read_scope() {
+            return;
+        }
+        tenant_reads::note_attribution(reading);
+        if responded {
+            let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
+            let tenants =
+                self.request_tenants(arguments.as_ref().unwrap_or(&serde_json::Value::Null));
+            tenant_reads::note_attribution(Some(ReadAttribution::of(tenants, false)));
+        }
+    }
+
     /// [`reading`] with the tenants `args`' own arguments name.
     pub(super) fn dispatch_reading(&self, args: &serde_json::Value) -> Option<ReadAttribution> {
         reading(|| {

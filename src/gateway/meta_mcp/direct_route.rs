@@ -85,12 +85,7 @@ impl MetaMcp {
         let base = crate::idempotency::derive_key(&format!("{server}:{tool}"), &arguments);
         let discriminator =
             crate::protocol::mrtr::RetryFields::from_params(params).key_discriminator();
-        let outcome = crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}"))?;
-        // MIN.2 row 14: a replay restores what the first execution read.
-        if matches!(outcome, crate::idempotency::GuardOutcome::CachedResult(_)) {
-            super::invoke::cache_reads::restore(cache.completed_read(&key).as_ref());
-        }
-        Ok(Some(outcome))
+        crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}")).map(Some)
     }
 
     /// #1962: arm a direct-route reservation for its backend dispatch, so a
