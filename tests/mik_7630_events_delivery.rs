@@ -161,7 +161,16 @@ async fn every_delivery_attempt_writes_one_attributed_audit_record() {
             "tenant attribution: {text}"
         );
     }
-    // No record of the event, an attempt's or its outcome's, holds the body.
+    // No record of the event, an attempt's or its outcome's, holds the body:
+    // scanned once all three outcomes are on the log.
+    wait_until(DEADLINE, || {
+        audit_mentioning(&root_path, &event_id)
+            .iter()
+            .filter(|r| r.get("outcome_of_attempt").is_some())
+            .count()
+            >= 3
+    })
+    .await;
     for record in audit_mentioning(root.path(), &event_id) {
         assert!(
             !record.to_string().contains("canary"),
