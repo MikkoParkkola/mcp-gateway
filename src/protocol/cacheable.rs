@@ -119,15 +119,21 @@ fn scope_needs_clamp(result: &Value) -> bool {
 /// tool data is never touched; the one slot followed is the result a raw task
 /// envelope retains.
 pub(crate) fn clamp_delivered_scope(result: &mut Value) {
-    if scope_off(result)
-        && let Some(object) = result.as_object_mut()
-    {
-        object.insert("cacheScope".to_owned(), Value::String("private".to_owned()));
-    }
+    clamp_top_level(result);
+    // One slot, never recursively: the retained result's own data is tool data.
     if task_result_slot(result).is_some_and(scope_off)
         && let Some(slot) = result.get_mut("result")
     {
-        clamp_delivered_scope(slot);
+        clamp_top_level(slot);
+    }
+}
+
+/// Rewrite one object's own `cacheScope` to `private` when it is anything else.
+fn clamp_top_level(object: &mut Value) {
+    if scope_off(object)
+        && let Some(object) = object.as_object_mut()
+    {
+        object.insert("cacheScope".to_owned(), Value::String("private".to_owned()));
     }
 }
 

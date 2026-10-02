@@ -164,3 +164,20 @@ fn a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result() {
         "nested tool data is untouched"
     );
 }
+
+/// MIK-7702: the retained slot is followed once. A retained result that itself
+/// looks like an envelope is tool data and keeps its nested scope.
+#[test]
+fn the_retained_slot_is_followed_once_not_recursively() {
+    let mut envelope = json!({
+        "taskId": 7, "status": "completed",
+        "result": {
+            "cacheScope": "public",
+            "taskId": "t2", "status": "completed",
+            "result": {"cacheScope": "public"}
+        }
+    });
+    clamp_delivered_scope(&mut envelope);
+    assert_eq!(envelope["result"]["cacheScope"], "private");
+    assert_eq!(envelope["result"]["result"]["cacheScope"], "public");
+}
