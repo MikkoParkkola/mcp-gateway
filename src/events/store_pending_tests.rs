@@ -416,3 +416,35 @@ fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
         "kept for another settlement, not dropped"
     );
 }
+
+#[test]
+fn a_resubscribe_after_expiry_inherits_no_pending_record() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    let later = now + chrono::Duration::hours(2);
+    store
+        .admit(
+            sub("s1", later),
+            true,
+            CAPS,
+            chrono::Duration::zero(),
+            later,
+            TAIL,
+        )
+        .expect("io")
+        .expect("admitted");
+    assert!(matches!(store.claim("a", later).expect("io"), Claim::Skip));
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("outbox"))
+            .expect("dir")
+            .count(),
+        0,
+        "the expired subscription's retry went with it"
+    );
+}

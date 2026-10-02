@@ -211,6 +211,9 @@ impl Store {
             placed.durable()?;
         }
         for id in expired {
+            // Its pending records go with it: a later subscribe of the same
+            // key re-creates this id, and must not inherit them.
+            self.cancel_pending(state, &id)?;
             remove_record(&self.subs_dir, &format!("{id}.json"))?;
             state.subs.remove(&id);
         }

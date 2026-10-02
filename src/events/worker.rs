@@ -165,10 +165,11 @@ impl EventsHub {
             return;
         }
         // An unsubscribe that waited past its bound has removed the
-        // subscription by now: nothing is charged or sent for it.
-        if self.store.get(&sub.id).is_none() {
+        // subscription by now: nothing is charged or sent for it. Otherwise
+        // the current row signs, so a secret rotated since the claim counts.
+        let Some(current) = self.store.get(&sub.id) else {
             return;
-        }
+        };
         if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
             services.audit_attempt(&refused("budget")).await;
             self.settle(services, event_id, quiet_dead(DeadReason::Budget))
@@ -184,7 +185,7 @@ impl EventsHub {
             use sha2::Digest as _;
             hex::encode(sha2::Sha256::digest(&body))
         };
-        let answer = self.send_event(&url, &sub, event_id, body).await;
+        let answer = self.send_event(&url, &current, event_id, body).await;
         let (outcome, status) = self.judge(&record, &answer);
         let delivered = matches!(outcome, Settle::Delivered);
         services

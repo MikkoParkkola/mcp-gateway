@@ -19,17 +19,23 @@ impl WebhookRegistry {
     }
 
     /// Replace every route with those of `capabilities`, keeping the stats
-    /// of a path that stays. Used by a capability reload while events are
-    /// on; the dynamic dispatcher reads the registry per request.
+    /// and the rate-limit bucket of a path that stays, so a reload never
+    /// hands a sender a fresh quota. Used by a capability reload while events
+    /// are on; the dynamic dispatcher reads the registry per request.
     pub(crate) fn replace_capabilities(&mut self, capabilities: &[CapabilityDefinition]) {
         let old = std::mem::take(&mut self.webhooks);
-        self.limiters.clear();
+        let old_limiters = std::mem::take(&mut self.limiters);
         for cap in capabilities.iter().filter(|c| !c.webhooks.is_empty()) {
             self.register_capability(cap);
         }
         for (path, entry) in &mut self.webhooks {
             if let Some((_, _, _, stats)) = old.get(path) {
                 entry.3 = Arc::clone(stats);
+            }
+        }
+        for (path, limiter) in &mut self.limiters {
+            if let Some(kept) = old_limiters.get(path) {
+                *limiter = Arc::clone(kept);
             }
         }
     }
