@@ -69,6 +69,43 @@ fn metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly() {
     let mut unpinned = descriptor(None);
     unpinned.issuer = None;
     assert!(accept_metadata(&unpinned, &good).is_none());
+
+    // An endpoint the descriptor pins and the document repeats exactly is still
+    // refused when it is not https with a host, or carries userinfo: the pin
+    // proves it was advertised, not that the client may dial it.
+    let refused_endpoint = |why: &str, auth: &str, token: &str, revoke: Option<&str>| {
+        let mut pinned = descriptor(revoke);
+        pinned.authorization_endpoint = Some(auth.to_owned());
+        pinned.token_endpoint = Some(token.to_owned());
+        assert!(
+            accept_metadata(&pinned, &doc(ISSUER, auth, token, revoke)).is_none(),
+            "{why}"
+        );
+    };
+    refused_endpoint(
+        "http token endpoint",
+        AUTH,
+        "http://issuer.fixture.test/token",
+        None,
+    );
+    refused_endpoint(
+        "http authorization endpoint",
+        "http://issuer.fixture.test/authorize",
+        TOKEN,
+        None,
+    );
+    refused_endpoint(
+        "http revocation endpoint",
+        AUTH,
+        TOKEN,
+        Some("http://issuer.fixture.test/revoke"),
+    );
+    for userinfo in ["user@", "user:secret@", ":secret@"] {
+        let with_userinfo = format!("https://{userinfo}issuer.fixture.test/token");
+        refused_endpoint(userinfo, AUTH, &with_userinfo, None);
+        let revoke = format!("https://{userinfo}issuer.fixture.test/revoke");
+        refused_endpoint(userinfo, AUTH, TOKEN, Some(&revoke));
+    }
 }
 
 /// Mutant: a literal is accepted as a secret reference, or an unreadable file
