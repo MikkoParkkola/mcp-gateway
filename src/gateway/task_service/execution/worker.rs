@@ -364,10 +364,12 @@ async fn follow_upstream_job(
                     .recover_task_result(&job.server, &job.tool, None, id, result)
                 {
                     Ok(processed) => {
+                        let processed = backend_output(processed);
                         let target = (job.server.as_str(), job.tool.as_str());
-                        let meta = state.meta_mcp();
-                        meta.stage_upstream_result(relay, target, &processed);
-                        TaskTransition::Complete(backend_output(processed))
+                        state
+                            .meta_mcp()
+                            .stage_upstream_result(relay, target, &processed);
+                        TaskTransition::Complete(processed)
                     }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
                         code: -32603,

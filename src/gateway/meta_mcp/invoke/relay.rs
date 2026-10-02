@@ -93,7 +93,7 @@ impl MetaMcp {
             let fw = self.firewall.as_ref().filter(|fw| fw.relay_active())?;
             let capability = self
                 .get_capabilities()
-                .is_some_and(|cap| server == cap.name);
+                .is_some_and(|cap| server == cap.name && cap.get(tool).is_some());
             // Secret injection overwrites its keys after this check: what the
             // caller put there never leaves, so it is not checked.
             let mut arguments = egress.arguments.clone();
