@@ -340,6 +340,26 @@ mod tests {
         format!("http://{addr}")
     }
 
+    /// A failed discovery fetch names its category, never reqwest's Display,
+    /// which carries the request URL and any credential a redirect put in it.
+    #[tokio::test]
+    async fn a_failed_discovery_fetch_does_not_echo_the_url() {
+        let base = free_addr().await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let server = AuthorizationServerMetadata::discover(&client, &base, IssuerSource::Origin)
+            .await
+            .expect_err("nothing listens");
+        let resource = ProtectedResourceMetadata::discover(&client, &base)
+            .await
+            .expect_err("nothing listens");
+        let authority = base.trim_start_matches("http://");
+        for error in [server, resource] {
+            let text = error.to_string();
+            assert!(!text.contains(authority), "the URL is echoed: {text}");
+            assert!(text.ends_with(": connection failed"), "{text}");
+        }
+    }
+
     #[tokio::test]
     async fn an_advertised_issuer_is_held_to_the_rfc_s_identical() {
         // The resource server advertised this identifier, so every character

@@ -9,6 +9,8 @@
 //! covers the production client.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use serde_json::json;
 
@@ -485,4 +487,147 @@ async fn a_refused_token_refresh_redirect_is_typed_ssrf_blocked() {
         .expect_err("a refused refresh hop must surface");
     assert!(error.to_string().contains("SSRF blocked"), "{error}");
     assert_eq!(error.to_rpc_code(), -32600, "{error}");
+}
+
+/// A client whose discovery is reachable but whose token endpoint redirects
+/// to a refused address, holding an expired token with a refresh token.
+async fn client_with_refused_refresh(dir: &std::path::Path) -> OAuthClient {
+    let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
+    let port = serve(&Advertised {
+        authorization_server: REACHABLE,
+        token: Box::leak(format!("http://127.0.0.1:{refused}/token").into_boxed_str()),
+        registration: "http://localhost:{port}/register",
+    })
+    .await;
+    let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
+    let mut client = OAuthClient::with_destination(
+        DestinationPolicy::Private,
+        super::http_client(DestinationPolicy::Private).unwrap(),
+        "listed-backend".to_string(),
+        format!("http://localhost:{port}/mcp"),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    client.initialize().await.expect("discovery is reachable");
+    *client.client_id.write() = Some("listed-client".to_string());
+    let mut token = crate::oauth::TokenInfo::from_response(
+        "expired".to_string(),
+        None,
+        Some("refresh".to_string()),
+        None,
+        None,
+    );
+    token.expires_at = Some(1);
+    *client.current_token.write() = Some(token);
+    client
+}
+
+/// Count the browser openings `client` attempts.
+fn count_browsers(client: &mut OAuthClient) -> Arc<AtomicUsize> {
+    let opened = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&opened);
+    client.open_browser = Box::new(move |_| {
+        count.fetch_add(1, Ordering::SeqCst);
+        true
+    });
+    opened
+}
+
+/// `get_token` answers a refused refresh with the refusal, rather than
+/// starting an authorization that would meet the same policy.
+#[tokio::test]
+async fn get_token_surfaces_a_refused_refresh_without_authorizing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_with_refused_refresh(dir.path()).await;
+    let opened = count_browsers(&mut client);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), client.get_token()).await;
+    assert_eq!(opened.load(Ordering::SeqCst), 0, "no authorization starts");
+    let error = outcome
+        .expect("answered promptly")
+        .expect_err("a refused refresh must surface");
+    assert_eq!(error.to_rpc_code(), -32600, "{error}");
+}
+
+/// An authorization abandoned at a refused registration releases the
+/// callback listener it had already bound.
+#[tokio::test]
+async fn a_refused_registration_releases_the_callback_listener() {
+    let refused = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
+    let port = serve(&Advertised {
+        authorization_server: REACHABLE,
+        token: "http://localhost:{port}/token",
+        registration: Box::leak(format!("http://127.0.0.1:{refused}/register").into_boxed_str()),
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let mut client = OAuthClient::with_destination(
+        DestinationPolicy::Private,
+        super::http_client(DestinationPolicy::Private).unwrap(),
+        "listed-backend".to_string(),
+        format!("http://localhost:{port}/mcp"),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    client.initialize().await.expect("discovery is reachable");
+    let callback_port = {
+        let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        probe.local_addr().unwrap().port()
+    };
+    client.callback_host = Some("127.0.0.1".to_string());
+    client.callback_port = Some(callback_port);
+    let opened = count_browsers(&mut client);
+
+    let error = tokio::time::timeout(Duration::from_secs(10), client.authorize())
+        .await
+        .expect("refused promptly")
+        .expect_err("a refused registration hop must surface");
+    assert!(error.to_string().contains("SSRF blocked"), "{error}");
+    assert_eq!(opened.load(Ordering::SeqCst), 0, "no browser is opened");
+
+    // The aborted listener drops on its next poll; until then the port is held.
+    let released = async {
+        while tokio::net::TcpListener::bind(("127.0.0.1", callback_port))
+            .await
+            .is_err()
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), released)
+        .await
+        .expect("the callback listener is released");
+}
+
+/// The background task stops at a refused refresh: every later attempt meets
+/// the same policy, and re-authorizing is not the remedy, so the refusal is
+/// what it logs (MIK-7756).
+#[tokio::test]
+async fn background_renewal_stops_at_a_refused_refresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_with_refused_refresh(dir.path()).await;
+    client.token_refresh_buffer_secs = 300;
+    let (guard, buffer) = crate::oauth::callback::tests::capture();
+    let ended = tokio::time::timeout(
+        Duration::from_secs(10),
+        OAuthClient::refresh_loop(
+            Arc::new(tokio::sync::Mutex::new(client)),
+            "listed-backend".to_string(),
+            Duration::from_millis(10),
+        ),
+    )
+    .await;
+    drop(guard);
+    let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+    assert!(
+        ended.is_ok(),
+        "the task kept retrying a refused refresh: {log}"
+    );
+    assert!(log.contains("SSRF blocked"), "the refusal is logged: {log}");
+    assert!(
+        !log.contains("manual re-authorization"),
+        "a refusal is not reported as needing re-authorization: {log}"
+    );
 }
