@@ -73,7 +73,7 @@ mod tests {
         assert!(skipped.is_empty());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("gateway.yaml");
-        std::fs::write(&path, &yaml).unwrap();
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, &yaml).unwrap();
         let config = Config::load(Some(&path)).expect("the starter block loads");
         let mut written: Vec<_> = config.backends.keys().map(String::as_str).collect();
         written.sort_unstable();
