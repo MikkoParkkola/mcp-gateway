@@ -1184,8 +1184,11 @@ fn open_browser(url: &str) -> bool {
 }
 
 /// The error an OAuth request's failed send surfaces as (MIK-7701).
+/// A destination-policy refusal stays `-32600 SSRF blocked`; anything else is
+/// an OAuth failure naming `context` and the error's category.
 pub(super) fn send_error(context: &str, error: &reqwest::Error) -> Error {
-    Error::OAuth(format!("{context}: {}", request_error_category(error)))
+    crate::security::http_diagnostics::ssrf_refusal(error)
+        .unwrap_or_else(|| Error::OAuth(format!("{context}: {}", request_error_category(error))))
 }
 
 #[cfg(test)]

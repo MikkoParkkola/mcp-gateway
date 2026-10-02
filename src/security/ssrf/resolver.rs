@@ -175,6 +175,14 @@ impl std::fmt::Display for SsrfDenied {
 
 impl std::error::Error for SsrfDenied {}
 
+impl SsrfDenied {
+    /// A refusal raised outside the resolver, such as a redirect hop the
+    /// destination policy refuses, so it is typed the same way (MIK-7701).
+    pub(crate) fn new(reason: String) -> Self {
+        Self(reason)
+    }
+}
+
 /// The [`PinningResolver`] refusal somewhere in `error`'s source chain.
 ///
 /// Also looks inside an `io::Error`, whose `source()` skips the error it wraps.
