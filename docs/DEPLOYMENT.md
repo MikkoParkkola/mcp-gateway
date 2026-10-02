@@ -139,8 +139,15 @@ backend that fails at spawn rather than at install.
 `git+ssh://` package specs need more than the client: mount the key and a
 `known_hosts`, or set `GIT_SSH_COMMAND` in that backend's `env:` to name the
 key and disable host-key checking. A spawned backend inherits only `PATH`,
-`HOME` and `TMPDIR` from the gateway, so `SSH_AUTH_SOCK` never reaches it —
-an agent-held key will not be used.
+`HOME`, `TMPDIR` and six npm settings from the gateway, so `SSH_AUTH_SOCK`
+never reaches it — an agent-held key will not be used.
+
+The npm settings are an allowlist: `npm_config_allow_git`, `cafile`,
+`loglevel`, `offline`, `prefer_offline` and `strict_ssl`, in any spelling npm
+reads. Set on the gateway, one of them applies to every backend that does not
+set it in its own `env:`, so forwarding `strict_ssl`, `cafile` or `allow_git`
+sets that policy for all of them. Credentials and registry settings are never
+forwarded: a backend that needs one names it in its own `env:`.
 
 The variant exists because nothing else keeps that toolchain in step with the
 gateway: a hand-written layer is fixed at the moment someone wrote it, and
