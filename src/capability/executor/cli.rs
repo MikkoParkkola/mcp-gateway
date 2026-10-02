@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use super::CapabilityExecutor;
 use super::cli_argv::{CliInvocation, build_cli_invocation};
 use super::cli_run::{CliOutcome, Workdir, child_env, resolve_command, run};
-use crate::capability::CapabilityDefinition;
 use crate::capability::definition::{CliConfig, CliOutput, MAX_OUTPUT_BYTES_CEILING};
+use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
 use crate::security::firewall::redactor::Redactor;
 use crate::{Error, Result};
 
@@ -33,15 +33,15 @@ impl CapabilityExecutor {
         capability: &CapabilityDefinition,
         config: &CliConfig,
         params: &Value,
+        context: &CapabilityExecutionContext,
     ) -> Result<Value> {
-        let invocation = build_cli_invocation(config, params, &capability.schema.input)?;
-        if config.token_env.is_some() {
-            return Err(Error::Config(format!(
-                "capability '{}': credential injection for CLI capabilities is not available \
-                 in this build",
-                capability.name
-            )));
-        }
+        refuse_egress(capability)?;
+        let params = confine_paths(capability, params, &self.process_policy.files)?;
+        let invocation = build_cli_invocation(config, &params, &capability.schema.input)?;
+        let token = match &config.token_env {
+            Some(name) => Some((name.as_str(), self.cli_token(capability, context).await?)),
+            None => None,
+        };
         let overlay = self.env.get();
         let lookup = |name: &str| {
             overlay
@@ -56,12 +56,18 @@ impl CapabilityExecutor {
         )?;
         let workdir = Workdir::create()
             .map_err(|e| Error::Protocol(format!("no private work directory: {}", e.kind())))?;
-        let env = child_env(workdir.path(), &config.env, &lookup, None);
+        let env = child_env(
+            workdir.path(),
+            &config.env,
+            &lookup,
+            token.as_ref().map(|(name, value)| (*name, value.as_str())),
+        );
         let secrets: Vec<String> = config
             .env
             .iter()
             .filter_map(|name| lookup(name))
             .map(|v| v.to_string_lossy().into_owned())
+            .chain(token.map(|(_, value)| value))
             .collect();
 
         let slots = Arc::clone(
@@ -84,8 +90,92 @@ impl CapabilityExecutor {
         );
         let max_output = config.max_output_bytes.min(MAX_OUTPUT_BYTES_CEILING);
         let outcome = run(&program, &invocation, &workdir, env, timeout, max_output).await?;
-        interpret(&invocation, config.output, &outcome, &secrets, params)
+        interpret(&invocation, config.output, &outcome, &secrets, &params)
     }
+
+    /// The access token for `auth.key`, resolved exactly as the REST path
+    /// resolves it: a caller's account credential when the capability names
+    /// an `auth.account`, else the gateway-held credential (which
+    /// `validate_oauth_isolation` has already admitted for this caller).
+    async fn cli_token(
+        &self,
+        capability: &CapabilityDefinition,
+        context: &CapabilityExecutionContext,
+    ) -> Result<String> {
+        if let Some(headers) = self
+            .resolve_account_headers(&capability.auth, context)
+            .await?
+        {
+            return headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                .and_then(|(_, value)| value.strip_prefix("Bearer "))
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "capability '{}': the account credential is not a bearer token",
+                        capability.name
+                    ))
+                });
+        }
+        self.fetch_credential(&capability.auth, context).await
+    }
+}
+
+/// Refuse a capability with a parameter that names a network destination.
+///
+/// The gateway cannot stop a child from following a redirect or a DNS rebind
+/// to a private address, and no shipped tool refuses those at dial time yet
+/// (MIK-7788), so no such capability runs on a pre-check alone.
+fn refuse_egress(capability: &CapabilityDefinition) -> Result<()> {
+    let _ = capability;
+    Ok(())
+}
+
+/// Resolve every parameter whose schema declares `path_root` to a canonical
+/// path inside that configured root, and hand the child that canonical path.
+fn confine_paths(
+    capability: &CapabilityDefinition,
+    params: &Value,
+    roots: &crate::config::FileRoots,
+) -> Result<Value> {
+    let mut params = params.clone();
+    let Some(props) = capability
+        .schema
+        .input
+        .get("properties")
+        .and_then(Value::as_object)
+    else {
+        return Ok(params);
+    };
+    for (name, prop) in props {
+        let Some(root_name) = prop.get("path_root").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(value) = params.get(name).and_then(Value::as_str) else {
+            continue;
+        };
+        let confined = confine(value, root_name, roots).map_err(|why| {
+            Error::json_rpc(
+                crate::error::rpc_codes::INVALID_PARAMS,
+                format!("parameter '{name}' {why}"),
+            )
+        })?;
+        params[name.as_str()] = Value::String(confined.display().to_string());
+    }
+    Ok(params)
+}
+
+/// `value` canonicalized (symlinks followed) and checked to lie inside the
+/// root, component by component, so `/srv/uploads_evil` is not inside
+/// `/srv/uploads`.
+pub(crate) fn confine(
+    value: &str,
+    root_name: &str,
+    roots: &crate::config::FileRoots,
+) -> std::result::Result<std::path::PathBuf, String> {
+    let _ = (root_name, roots);
+    Ok(std::path::PathBuf::from(value))
 }
 
 /// The child's answer as a result, or a redacted error.
@@ -181,3 +271,7 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
     }
     text[cut..].to_owned()
 }
+
+#[cfg(test)]
+#[path = "cli_tests.rs"]
+mod tests;

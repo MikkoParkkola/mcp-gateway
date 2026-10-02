@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::capability::definition::{Integrity, ProcessConfig};
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
-use crate::config::{ProcessCommand, ProcessExecution};
+use crate::config::{FileRoots, ProcessCommand, ProcessExecution};
 use crate::{Error, Result};
 
 use super::CapabilityExecutor;
@@ -21,6 +21,7 @@ use super::CapabilityExecutor;
 pub(crate) struct ProcessPolicy {
     pub(crate) execution: ProcessExecution,
     pub(crate) commands: Vec<ProcessCommand>,
+    pub(crate) files: FileRoots,
 }
 
 impl Default for ProcessPolicy {
@@ -28,6 +29,7 @@ impl Default for ProcessPolicy {
         Self {
             execution: ProcessExecution::Enabled,
             commands: ProcessCommand::shipped(),
+            files: FileRoots::default(),
         }
     }
 }
@@ -41,6 +43,7 @@ impl ProcessPolicy {
                 .process_commands
                 .clone()
                 .unwrap_or_else(ProcessCommand::shipped),
+            files: config.files.clone(),
         }
     }
 }
@@ -85,11 +88,13 @@ impl CapabilityExecutor {
         capability: &CapabilityDefinition,
         process: &ProcessConfig,
         params: &Value,
-        _context: &CapabilityExecutionContext,
+        context: &CapabilityExecutionContext,
     ) -> Result<Value> {
         admit(&self.process_policy, capability, process)?;
         match process {
-            ProcessConfig::Cli(config) => self.execute_cli(capability, config, params).await,
+            ProcessConfig::Cli(config) => {
+                self.execute_cli(capability, config, params, context).await
+            }
             ProcessConfig::Mcp(_) => Err(Error::Config(format!(
                 "capability '{}': calling an MCP capability server is not available in this build",
                 capability.name
