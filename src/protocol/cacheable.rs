@@ -93,9 +93,14 @@ fn scope_off(object: &Value) -> bool {
 }
 
 /// The retained-result slot of a raw task envelope: an object with a string
-/// `taskId` whose `result` is an object. Only this one slot is followed.
+/// `taskId`, or with a `taskId` of any other type beside a `status` (a
+/// malformed backend's envelope, MIK-7702), whose `result` is an object. Only
+/// this one top-level slot is followed; nested tool data is never touched.
 fn task_result_slot(result: &Value) -> Option<&Value> {
-    result.get("taskId")?.as_str()?;
+    let task_id = result.get("taskId")?;
+    if !task_id.is_string() {
+        result.get("status")?;
+    }
     result.get("result").filter(|slot| slot.is_object())
 }
 
@@ -155,6 +160,13 @@ fn clamp_response_envelope(payload: &mut Value) {
         && let Some(result) = payload.get_mut("result")
     {
         clamp_delivered_scope(result);
+    }
+    // Error data is not a cacheable result, but it claims no scope either
+    // (MIK-7702).
+    if payload.get("id").is_some()
+        && let Some(data) = payload.pointer_mut("/error/data")
+    {
+        clamp_delivered_scope(data);
     }
 }
 
