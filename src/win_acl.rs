@@ -70,11 +70,12 @@ impl Sid {
 
     /// A SID from its authority and sub-authorities: well-known SIDs for
     /// value comparison, and synthetic `Inspection` values in tests. A SID has
-    /// at most 15 sub-authorities; the count saturates rather than panics.
+    /// at most 15 sub-authorities (a caller bug above that, so it panics).
     pub(crate) fn from_parts(authority: u8, subs: &[u32]) -> Self {
+        assert!(subs.len() <= 15, "a SID has at most 15 sub-authorities");
         let mut b = vec![
             1,
-            u8::try_from(subs.len()).unwrap_or(u8::MAX),
+            u8::try_from(subs.len()).expect("at most 15"),
             0,
             0,
             0,
