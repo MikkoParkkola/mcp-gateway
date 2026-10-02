@@ -30,7 +30,8 @@ async fn enabling_a_backend_with_an_unset_var_is_refused_and_running_config_kept
         Arc::new(crate::backend::BackendRegistry::new()),
         crate::config::FailsafeConfig::default(),
         Duration::from_secs(60),
-    );
+    )
+    .expect("the registry pairs with the config");
 
     // WHEN: the admin panel's write path enables it
     let result = ctx

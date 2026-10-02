@@ -123,6 +123,25 @@ pub(crate) use redirect::{RedirectDecision, redirect_decision};
 #[allow(unused_imports)]
 pub(crate) use redirect::MAX_REDIRECT_HOPS;
 
+/// How a refusal names a denied address the caller already knows (a literal
+/// it wrote, or one a refusal already names). The cloud metadata services get
+/// their own words (MIK-7633 AC7): a backend listed as private still never
+/// reaches them, so "private/reserved" would mislead. A host name's refusal
+/// does not use this; it names no address, so it answers no DNS.
+pub(crate) fn denied_address(addr: IpAddr) -> String {
+    let v4 = match addr {
+        IpAddr::V4(v4) => Some(v4),
+        IpAddr::V6(v6) => v6.to_ipv4_mapped(),
+    };
+    if v4 == Some(std::net::Ipv4Addr::new(169, 254, 169, 254))
+        || destination::ALWAYS_DENIED.contains(&addr)
+    {
+        format!("cloud metadata address {addr}")
+    } else {
+        format!("private/reserved address {addr}")
+    }
+}
+
 /// A client builder for untrusted destinations: every name is resolved once
 /// and pinned by [`PinningResolver`], and `HTTP(S)_PROXY` from the environment
 /// is ignored, since a proxy would resolve the name instead of the pin.
@@ -193,7 +212,8 @@ pub fn check_host_not_ssrf(host: &str) -> Result<()> {
     if let Ok(addr) = host.parse::<IpAddr>() {
         if is_private_or_reserved(addr) {
             return Err(Error::Protocol(format!(
-                "SSRF blocked: host targets private/reserved address {addr}"
+                "SSRF blocked: host targets {}",
+                denied_address(addr)
             )));
         }
         return Ok(());
@@ -205,7 +225,8 @@ pub fn check_host_not_ssrf(host: &str) -> Result<()> {
         && is_private_or_reserved(addr)
     {
         return Err(Error::Protocol(format!(
-            "SSRF blocked: host targets private/reserved address {addr}"
+            "SSRF blocked: host targets {}",
+            denied_address(addr)
         )));
     }
 

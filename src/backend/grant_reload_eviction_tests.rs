@@ -127,6 +127,7 @@ async fn t9_a_grant_rotation_through_the_reload_trigger_evicts_only_that_subject
         FailsafeConfig::default(),
         Duration::from_secs(300),
     )
+    .expect("the registry pairs with the config")
     .with_identity_grant_sink(Arc::new(crate::config_reload::IdentityGrantSink::new(
         store,
         epoch,
