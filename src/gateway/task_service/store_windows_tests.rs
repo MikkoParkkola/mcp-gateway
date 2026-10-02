@@ -3,8 +3,8 @@
 //! The refusal arms of the Windows custody helpers, driven on real
 //! directories and files with a planted foreign ACE.
 
+use super::super::StoreError;
 use super::{create_private_dir, judge_store_dir, open_new_private, open_record};
-use crate::gateway::task_service::StoreError;
 use crate::private_fs::test_support::icacls;
 
 #[test]
