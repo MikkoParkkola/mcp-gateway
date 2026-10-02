@@ -261,3 +261,32 @@ fn a_skipped_challenge_without_a_usable_opt_in_is_refused() {
         .expect("io")
         .expect("a fresh opt-in commits");
 }
+
+#[test]
+fn one_principals_churn_evicts_its_own_tail_before_anothers() {
+    let dir = tempfile::tempdir().expect("dir");
+    let t0 = Utc::now();
+    let store = Store::open(dir.path(), t0, TAIL).expect("open");
+    let cycle = |principal: &str, url: &str, secs: i64| {
+        let at = t0 + chrono::Duration::seconds(secs);
+        let s = sub(principal, url, at);
+        store
+            .admit(s.clone(), true, CAPS, grace(), at, TAIL)
+            .expect("io")
+            .expect("admitted");
+        store.remove(&s.id, at, TAIL).expect("remove");
+    };
+    cycle("q", "https://h/1", 0);
+    cycle("p", "https://h/22", 1);
+    cycle("p", "https://h/333", 2);
+    cycle("p", "https://h/4444", 3);
+    let now = t0 + chrono::Duration::seconds(10);
+    assert!(
+        store.is_verified("q", "https://h/1", now, TAIL),
+        "q's older tail survives"
+    );
+    assert!(
+        !store.is_verified("p", "https://h/22", now, TAIL),
+        "p's own oldest went"
+    );
+}
