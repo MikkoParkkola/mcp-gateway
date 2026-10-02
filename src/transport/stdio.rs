@@ -15,9 +15,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
+use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -39,7 +40,7 @@ pub use cache::isolated_package_manager_env;
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
     /// Child process
-    child: Mutex<Option<Child>>,
+    child: Mutex<Option<Box<dyn ChildWrapper>>>,
     /// Pending requests waiting for response
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Request ID counter
@@ -143,7 +144,12 @@ impl StdioTransport {
             cmd.current_dir(cwd);
         }
 
-        let mut child = cmd.spawn().map_err(|e| match e.kind() {
+        // The child leads its own process group (Unix) or Job object
+        // (Windows), so stopping the backend ends every process it started:
+        // `npx`/`uvx`-style launchers otherwise leave the real server behind.
+        let mut wrap = CommandWrap::from(cmd);
+        wrap.wrap(KillOnDrop);
+        let mut child = wrap.spawn().map_err(|e| match e.kind() {
             // A command path that does not exist, or a file that is not
             // executable. No amount of waiting fixes either, and warm-start
             // retries transport failures indefinitely -- so before this, a
@@ -156,16 +162,16 @@ impl StdioTransport {
         })?;
 
         let stdin = child
-            .stdin
+            .stdin()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stdin".to_string()))?;
 
         let stdout = child
-            .stdout
+            .stdout()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stdout".to_string()))?;
         let stderr = child
-            .stderr
+            .stderr()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
@@ -191,10 +197,11 @@ impl StdioTransport {
         let transport = Arc::downgrade(self);
         tokio::spawn(async move {
             debug!("Reader task started");
-            let mut reader = BufReader::new(stdout).lines();
+            let mut reader = BufReader::new(stdout);
+            let mut frame = Vec::new();
 
             loop {
-                match reader.next_line().await {
+                match read_frame(&mut reader, &mut frame).await {
                     Ok(Some(line)) => {
                         let line_len = line.len();
                         debug!(line_len, "Received line from stdout");
@@ -211,7 +218,14 @@ impl StdioTransport {
                         break;
                     }
                     Err(e) => {
+                        // Includes a frame over MAX_FRAME_BYTES: the stream
+                        // cannot be resynchronised, so it is treated as gone.
                         error!(error = %e, "Error reading from stdout");
+                        if let Some(transport) = transport.upgrade()
+                            && let Some(child) = transport.child.lock().await.as_mut()
+                        {
+                            let _ = child.start_kill();
+                        }
                         break;
                     }
                 }
@@ -686,11 +700,38 @@ impl Transport for StdioTransport {
 
         // Kill child process
         if let Some(ref mut child) = *self.child.lock().await {
-            let _ = child.kill().await;
+            let _ = Box::into_pin(child.kill()).await;
         }
 
         Ok(())
     }
+}
+
+/// Longest JSON-RPC frame a stdio peer may send (16 MiB). Without a bound, a
+/// peer that never sends a newline grows the gateway's buffer without limit.
+pub(crate) const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read one newline-terminated frame (without its `\n` or `\r\n`).
+/// `Ok(None)` at end of stream; an error for a frame over
+/// [`MAX_FRAME_BYTES`] or one that is not UTF-8.
+async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    frame: &mut Vec<u8>,
+) -> std::io::Result<Option<String>> {
+    frame.clear();
+    let read = reader.read_until(b'\n', frame).await?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if frame.last() == Some(&b'\n') {
+        frame.pop();
+        if frame.last() == Some(&b'\r') {
+            frame.pop();
+        }
+    }
+    String::from_utf8(std::mem::take(frame))
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 #[path = "stdio_early_exit.rs"]
@@ -699,6 +740,10 @@ mod early_exit;
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stdio_frame_tests.rs"]
+mod frame_tests;
 
 // Unix-only: the fake backend is a `sh` script.
 #[cfg(all(test, unix))]
