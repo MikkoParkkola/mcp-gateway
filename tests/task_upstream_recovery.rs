@@ -644,7 +644,7 @@ fn with_relay_block(path: &std::path::Path) {
     let mut yaml: serde_yaml::Value = serde_yaml::from_str(&text).expect("the config parses");
     let key = |secret: &str| {
         json!({ "key_sha256": mcp_gateway::config::api_key_digest_spec(secret.as_bytes()),
-                "name": secret })
+                "name": secret, "backends": [BACKEND] })
     };
     let to_yaml = |value: Value| serde_yaml::to_value(value).expect("JSON maps to YAML");
     yaml["auth"]["enabled"] = serde_yaml::Value::Bool(true);
