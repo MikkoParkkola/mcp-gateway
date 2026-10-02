@@ -233,7 +233,8 @@ async fn mik_3274_ranking_3_baseline() {
         pool.len(),
         corpus.tool_inventory_size,
         "candidate pool size drifted from the corpus's recorded tool_inventory_size \
-         (capabilities/ changed since the corpus was generated -- regenerate it)"
+         (capabilities/ changed): re-measure against the frozen floors, then bump \
+         tool_inventory_size; do not regenerate the held-out queries"
     );
 
     // Fresh ranker, no usage history recorded: isolates pure text-relevance
