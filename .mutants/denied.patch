@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
+index 3f0a9b5d1..557b9d9d9 100644
+--- a/src/oauth/client/destination.rs
++++ b/src/oauth/client/destination.rs
+@@ -43,7 +43,7 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
+             Hop::Stop => attempt.error("too many redirects"),
+             // Typed as the resolver's refusal, so every send site maps it to
+             // `-32600 SSRF blocked` rather than a generic OAuth failure.
+-            Hop::Refuse(reason) => attempt.error(crate::security::ssrf::SsrfDenied::new(reason)),
++            Hop::Refuse(reason) => attempt.error(reason),
+             Hop::Follow => attempt.follow(),
+         }))
+         .build()

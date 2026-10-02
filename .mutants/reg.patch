@@ -1,0 +1,12 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+index d5d2a8ea8..3ad174fc5 100644
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -1060,7 +1060,6 @@ impl OAuthClient {
+                         }
+                     }
+                 }
+-                Err(e) if destination::is_policy_refusal(&e) => return Err(e),
+                 Err(e) => {
+                     debug!(error = %e, "Dynamic registration failed, using generated ID");
+                 }

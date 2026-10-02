@@ -1,0 +1,7 @@
+head_sha	f89d113ef89147b6532e164d81c158f2a861f3f0
+# MIK-7701 PR 2637
+HOPRAW	linux	hopraw.patch	--lib oauth::client::destination::tests::a_refused_protected_resource_redirect_is_not_walked_past -- --exact
+DENIED	linux	denied.patch	--lib oauth::client::destination::tests::a_refused_oauth_redirect_is_typed_ssrf_blocked -- --exact
+SEND	linux	send.patch	--lib oauth::client::destination::tests::a_refused_token_refresh_redirect_is_typed_ssrf_blocked -- --exact
+PRM	linux	prm.patch	--lib oauth::client::destination::tests::a_refused_protected_resource_redirect_is_not_walked_past -- --exact
+REG	linux	reg.patch	--lib oauth::client::destination::tests::a_refused_registration_redirect_is_not_walked_past -- --exact

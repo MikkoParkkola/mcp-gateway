@@ -1,0 +1,12 @@
+diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
+index 3f0a9b5d1..f265e6e48 100644
+--- a/src/oauth/client/destination.rs
++++ b/src/oauth/client/destination.rs
+@@ -70,7 +70,6 @@ pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url:
+         Ok(()) => Hop::Follow,
+         // The bare "SSRF blocked: ..." message, not the error's Display, which
+         // adds a "Protocol error: " prefix the refusal would then carry twice.
+-        Err(Error::Protocol(refused)) => Hop::Refuse(refused),
+         Err(refused) => Hop::Refuse(refused.to_string()),
+     }
+ }

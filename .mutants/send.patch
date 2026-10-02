@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
+index 3f0a9b5d1..a634007a0 100644
+--- a/src/oauth/client/destination.rs
++++ b/src/oauth/client/destination.rs
+@@ -85,7 +85,7 @@ pub(super) fn is_policy_refusal(error: &Error) -> bool {
+ /// A destination-policy refusal stays `-32600 SSRF blocked`; anything else is
+ /// an OAuth failure naming `context` and the error's category.
+ pub(super) fn send_error(context: &str, error: &reqwest::Error) -> Error {
+-    crate::security::http_diagnostics::ssrf_refusal(error).unwrap_or_else(|| {
++    None.unwrap_or_else(|| {
+         Error::OAuth(format!(
+             "{context}: {}",
+             crate::security::request_error_category(error)
