@@ -526,12 +526,18 @@ impl MetaMcp {
         } else {
             self.active_profile(session).describe()
         };
-        json!({
+        let mut representation = json!({
             "route": "meta", "tool": tool_name, "full": full,
             "projection": format!("{:?}", self.projection_mode),
             "profile": profile,
             "arm": crate::projection::projection_key_suffix(self.projection_mode, arm_key),
-        })
+        });
+        // State is session-local. Keep the active-profile binding above, and
+        // additionally prevent one session from replaying another's result.
+        if tool_name == "gateway_set_state" {
+            representation["session"] = json!(super::session_key(session));
+        }
+        representation
     }
 
     /// Validate the six management branches before their first possible effect.
