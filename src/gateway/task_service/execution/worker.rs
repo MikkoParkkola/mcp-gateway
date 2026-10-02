@@ -359,18 +359,15 @@ async fn follow_upstream_job(
     let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
         match answer {
             UpstreamAnswer::Completed(result) => Some(
-                match state.meta_mcp().recover_task_result(
-                    &job.server,
-                    &job.tool,
-                    None,
-                    id,
-                    backend_output(result),
-                ) {
+                match state
+                    .meta_mcp()
+                    .recover_task_result(&job.server, &job.tool, None, id, result)
+                {
                     Ok(processed) => {
                         let target = (job.server.as_str(), job.tool.as_str());
                         let meta = state.meta_mcp();
                         meta.stage_upstream_result(relay, target, &processed);
-                        TaskTransition::Complete(processed)
+                        TaskTransition::Complete(backend_output(processed))
                     }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
                         code: -32603,
