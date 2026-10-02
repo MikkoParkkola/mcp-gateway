@@ -8,6 +8,7 @@ use serde::de::DeserializeSeed;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::ProviderConfig;
+use super::process::ProcessConfig;
 
 /// Provider configurations supporting both named and fallback arrays
 #[derive(Debug, Clone, Default, Serialize)]
@@ -21,6 +22,27 @@ pub struct ProvidersConfig {
     /// misspelling would load silently; the validator reports each (CAP-012).
     #[serde(skip)]
     pub unread_keys: Vec<String>,
+    /// Typed `config` of each provider whose `service` runs a local process
+    /// (`cli`, `mcp`; MIK-7782), keyed like `named` (`fallback[i]` for a
+    /// fallback entry). Filled at load only, so a definition built any other
+    /// way has none and cannot run a process.
+    #[serde(skip)]
+    pub process: HashMap<String, ProcessConfig>,
+    /// Whether the file these providers came from carried a pin that matched.
+    /// Only `parse_capability_file` sets [`Integrity::Verified`]; a process
+    /// provider of an `Unpinned` definition never runs (MIK-7782).
+    #[serde(skip)]
+    pub integrity: Integrity,
+}
+
+/// Pin state of the file a definition was loaded from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Integrity {
+    /// No pin, or not loaded from a file through the pin check.
+    #[default]
+    Unpinned,
+    /// Loaded from a file whose `sha256:` pin matched its content.
+    Verified,
 }
 
 impl ProvidersConfig {
@@ -78,6 +100,7 @@ where
             let mut named = HashMap::new();
             let mut fallback = Vec::new();
             let mut unread_keys = Vec::new();
+            let mut process = HashMap::new();
 
             while let Some(key) = map.next_key::<String>()? {
                 if key == "fallback" {
@@ -91,13 +114,20 @@ where
                     };
                     for (idx, entry) in entries.into_iter().enumerate() {
                         let at = format!("fallback[{idx}]");
-                        let provider = Tracked(&at, &mut unread_keys)
-                            .deserialize(entry)
+                        let (provider, typed) = read_provider(&at, entry, &mut unread_keys)
                             .map_err(M::Error::custom)?;
+                        if let Some(typed) = typed {
+                            process.insert(at, typed);
+                        }
                         fallback.push(provider);
                     }
                 } else {
-                    let provider = map.next_value_seed(Tracked(&key, &mut unread_keys))?;
+                    let value: serde_json::Value = map.next_value()?;
+                    let (provider, typed) =
+                        read_provider(&key, value, &mut unread_keys).map_err(M::Error::custom)?;
+                    if let Some(typed) = typed {
+                        process.insert(key.clone(), typed);
+                    }
                     named.insert(key, provider);
                 }
             }
@@ -106,11 +136,43 @@ where
                 named,
                 fallback,
                 unread_keys,
+                process,
+                integrity: Integrity::Unpinned,
             })
         }
     }
 
     deserializer.deserialize_map(ProvidersVisitor)
+}
+
+/// Read one provider from its buffered value.
+///
+/// A `cli` or `mcp` provider's `config` is taken out and parsed strictly into
+/// its typed form (MIK-7782); the rest of the provider, and every other
+/// service's whole provider, goes through the unread-key tracking below.
+fn read_provider(
+    name: &str,
+    mut value: serde_json::Value,
+    unread: &mut Vec<String>,
+) -> Result<(ProviderConfig, Option<ProcessConfig>), String> {
+    let service = value
+        .get("service")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let typed = if matches!(service.as_str(), "cli" | "mcp") {
+        let config = value
+            .as_object_mut()
+            .and_then(|provider| provider.remove("config"));
+        ProcessConfig::from_provider(&service, config)
+            .map_err(|e| format!("providers.{name}.config: {e}"))?
+    } else {
+        None
+    };
+    let provider = Tracked(name, unread)
+        .deserialize(value)
+        .map_err(|e| format!("providers.{name}: {e}"))?;
+    Ok((provider, typed))
 }
 
 /// Deserialize one provider, recording every key it does not read.

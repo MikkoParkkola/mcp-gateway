@@ -59,6 +59,8 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
         }
         Some(_) => {
             // Pin verified — nothing to log at load time. Loader reports.
+            // The only place a definition becomes `Verified` (MIK-7782).
+            capability.providers.integrity = crate::capability::Integrity::Verified;
         }
         None => {
             debug!(

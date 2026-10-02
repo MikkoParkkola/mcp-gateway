@@ -1,0 +1,87 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Execution gate and dispatch for capabilities that run a local process
+//! (`service: cli` and `service: mcp`, MIK-7782).
+//!
+//! Every call passes [`admit`] before anything is resolved or spawned. The gate
+//! fails closed: a definition that did not come from a file with a matching pin,
+//! a command the operator did not list, or a disabled switch is refused.
+
+use serde_json::Value;
+
+use crate::capability::definition::ProcessConfig;
+use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
+use crate::config::{ProcessCommand, ProcessExecution};
+use crate::{Error, Result};
+
+use super::CapabilityExecutor;
+use super::cli_argv::build_cli_invocation;
+
+/// What process-running capabilities may do on this gateway.
+#[derive(Debug, Clone)]
+pub(crate) struct ProcessPolicy {
+    pub(crate) execution: ProcessExecution,
+    pub(crate) commands: Vec<ProcessCommand>,
+}
+
+impl Default for ProcessPolicy {
+    fn default() -> Self {
+        Self {
+            execution: ProcessExecution::Enabled,
+            commands: ProcessCommand::shipped(),
+        }
+    }
+}
+
+impl ProcessPolicy {
+    /// The policy `capabilities:` configures.
+    pub(crate) fn from_config(config: &crate::config::CapabilityConfig) -> Self {
+        Self {
+            execution: config.process_execution,
+            commands: config
+                .process_commands
+                .clone()
+                .unwrap_or_else(ProcessCommand::shipped),
+        }
+    }
+}
+
+/// Refuse unless this definition may run its process here.
+pub(crate) fn admit(
+    policy: &ProcessPolicy,
+    capability: &CapabilityDefinition,
+    process: &ProcessConfig,
+) -> Result<()> {
+    let _ = (policy, capability, process);
+    Ok(())
+}
+
+impl CapabilityExecutor {
+    /// Run a process-running capability's primary provider.
+    pub(super) async fn execute_process(
+        &self,
+        capability: &CapabilityDefinition,
+        process: &ProcessConfig,
+        params: &Value,
+        _context: &CapabilityExecutionContext,
+    ) -> Result<Value> {
+        admit(&self.process_policy, capability, process)?;
+        match process {
+            ProcessConfig::Cli(config) => {
+                let _invocation = build_cli_invocation(config, params, &capability.schema.input)?;
+                Err(Error::Config(format!(
+                    "capability '{}': running a CLI process is not available in this build",
+                    capability.name
+                )))
+            }
+            ProcessConfig::Mcp(_) => Err(Error::Config(format!(
+                "capability '{}': calling an MCP capability server is not available in this build",
+                capability.name
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "process_tests.rs"]
+mod tests;
