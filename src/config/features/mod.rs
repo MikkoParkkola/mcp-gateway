@@ -11,6 +11,7 @@ mod cache;
 mod capability;
 mod code_mode;
 mod error_budget;
+mod events;
 mod failsafe;
 mod idempotency;
 mod key_server;
@@ -29,6 +30,8 @@ pub use cache::CacheConfig;
 pub use capability::CapabilityConfig;
 pub use code_mode::CodeModeConfig;
 pub use error_budget::{CapabilityErrorBudgetSection, ErrorBudgetSection};
+pub(crate) use events::parse_cidr;
+pub use events::{EventsConfig, EventsRateLimit, EventsSourcesConfig};
 pub use failsafe::{
     CircuitBreakerConfig, FailsafeConfig, HealthCheckConfig, RateLimitConfig, RetryConfig,
 };

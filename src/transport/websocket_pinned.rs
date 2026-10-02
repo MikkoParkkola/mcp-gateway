@@ -16,7 +16,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::handshake::client::{Request, Response};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_tls, connect_async};
 
-use crate::security::ssrf::{DestinationPolicy, HostResolver};
+use crate::security::ssrf::{DestinationPolicy, HostResolver, SSRF_BLOCKED};
 use crate::{Error, Result};
 
 impl super::WebSocketTransport {
@@ -102,7 +102,7 @@ pub(super) async fn connect_pinned(
         // As the HTTP pin: the address is logged, never sent to the caller.
         tracing::warn!(host = %host, address = %denied, "SSRF pin refused a resolved address");
         return Err(Error::Protocol(format!(
-            "SSRF blocked: '{host}' resolves to a private/reserved address"
+            "{SSRF_BLOCKED}: '{host}' resolves to a private/reserved address"
         )));
     }
     let mut last_error = None;

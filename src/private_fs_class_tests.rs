@@ -101,6 +101,16 @@ fn integrity_lets_system_and_administrators_write() {
     }
 }
 
+/// MIK-7710: the SIDs the by-value check holds render as the well-known
+/// strings, so the byte layout matches what Windows returns.
+#[test]
+fn the_trusted_sids_are_the_well_known_ones() {
+    assert_eq!(system().to_sddl(), "S-1-5-18");
+    assert_eq!(admins().to_sddl(), "S-1-5-32-544");
+    assert!(super::is_system_or_admins(&system()) && super::is_system_or_admins(&admins()));
+    assert!(!super::is_system_or_admins(&me()) && !super::is_system_or_admins(&everyone()));
+}
+
 #[test]
 fn integrity_accepts_inheritance_and_a_read_only_user() {
     let mut i = with(vec![allow(everyone(), FILE_GENERIC_READ)]);

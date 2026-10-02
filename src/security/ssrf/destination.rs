@@ -18,6 +18,7 @@
 
 use std::net::{IpAddr, Ipv6Addr};
 
+use super::SSRF_BLOCKED;
 use crate::security::posture::SecurityPosture;
 use crate::{Error, Result};
 
@@ -65,7 +66,7 @@ impl DestinationPolicy {
     ///
     /// # Errors
     ///
-    /// `Error::Protocol("SSRF blocked: ...")` (-32600).
+    /// `Error::Protocol("{SSRF_BLOCKED}: ...")` (-32600).
     pub(crate) fn check_literal(self, url: &url::Url) -> Result<()> {
         let Some(host) = url.host_str() else {
             return Ok(());
@@ -76,7 +77,7 @@ impl DestinationPolicy {
             .parse::<IpAddr>()
         {
             Ok(addr) if self.denies(addr) => Err(Error::Protocol(format!(
-                "SSRF blocked: host targets {}",
+                "{SSRF_BLOCKED}: host targets {}",
                 super::denied_address(addr)
             ))),
             _ => Ok(()),
@@ -93,7 +94,7 @@ impl DestinationPolicy {
     ///
     /// # Errors
     ///
-    /// `Error::Protocol("SSRF blocked: ...")` (-32600), or an invalid URL.
+    /// `Error::Protocol("{SSRF_BLOCKED}: ...")` (-32600), or an invalid URL.
     pub(crate) fn check_configured_url(self, url: &str) -> Result<()> {
         match self {
             Self::Private => {
@@ -112,7 +113,7 @@ impl DestinationPolicy {
 /// What `Private` reaches beyond `Public`: loopback, RFC 1918 and unique-local.
 /// Only an IPv4-mapped address is judged by the IPv4 it embeds; every other
 /// encoding (compatible, NAT64, 6to4, Teredo) stays denied.
-fn private_reachable(addr: IpAddr) -> bool {
+pub(super) fn private_reachable(addr: IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => v4.is_loopback() || v4.is_private(),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {

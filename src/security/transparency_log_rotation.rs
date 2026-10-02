@@ -42,6 +42,9 @@ pub(crate) const EV_TORN: &str = "audit_segment_torn_tail_dropped";
 /// A restart found `.hwm` missing on a log that went through segment
 /// handling: tail loss before this record cannot be ruled out (#2294).
 pub(crate) const EV_HWM_MISSING: &str = "audit_segment_hwm_missing";
+/// Set on an [`EV_TORN`] record whose dropped line the mark already counted:
+/// a committed loss, read as a finding like [`EV_HWM_MISSING`] (MIK-7712).
+pub(crate) const TORN_COMMITTED: &str = "committed";
 /// Carries the earliest [`EV_HWM_MISSING`] counter on every later open
 /// record, so the active segment always holds the finding and no expiry of
 /// an older segment can erase it (#2294).
@@ -215,7 +218,7 @@ pub(super) fn recover(
     let sealed = segments::list_segments(path)?;
     let hw = segments::read_hwm(path, secret, &config.key_id);
     let dropped = if std::fs::metadata(path).is_ok_and(|m| m.len() > 0) {
-        repair_torn_tail(path, config, sealed.last())?
+        repair_torn_tail(path, config, sealed.last(), hw.as_ref())?
     } else {
         None
     };
@@ -223,32 +226,9 @@ pub(super) fn recover(
     // mark was a committed record, not a crash mid-write: its loss is a
     // finding, whatever the line held (#2294).
     let committed_drop = dropped.is_some_and(|d| hw.as_ref().is_some_and(|h| h.counter >= d));
-    let mut state = match read_last_nonempty_line(path) {
-        Ok(Some(line)) => {
-            let (counter, hash, event, v) = record_head(&line)?;
-            if event.as_deref() == Some(EV_SEALED) {
-                // Crash after the seal, before the rename: finish it.
-                let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
-                let sealed = segments::sealed_path(path, seq);
-                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
-                segments::sync_dir(path)?;
-                let sealed = segments::list_segments(path)?;
-                let carry = newest_finding(&sealed, config)?;
-                open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
-            } else {
-                resume_active(path, counter, hash, &sealed, hw.as_ref(), now)?
-            }
-        }
-        Ok(None) => {
-            let carry = newest_finding(&sealed, config)?;
-            open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            let carry = newest_finding(&sealed, config)?;
-            open_after_seal(path, config, &sealed, hw.as_ref(), now, carry)?
-        }
-        Err(e) => return Err(e),
-    };
+    // A tail that ends below the authenticated mark lost committed records
+    // whether the cut was torn or fell on a newline (MIK-7712).
+    let (mut state, below_mark) = reopen_tail(path, config, &sealed, hw.as_ref(), now)?;
     finish_pending_expiry(path)?;
     // The active file holds the finding from its open record or a marker,
     // and the newest sealed segment from its own; either can be edited, so
@@ -265,7 +245,7 @@ pub(super) fn recover(
         tracing::warn!(error = %e, "audit log: disk-full reserve could not be written");
         telemetry_metrics::gauge!("mcp_audit_reserve_present").set(0.0);
     }
-    if (hw.is_none() || committed_drop) && state.counter > 0 {
+    if (hw.is_none() || committed_drop || below_mark) && state.counter > 0 {
         // Re-minting `.hwm` from a cut tail would launder the cut, so a log
         // that went through segment handling first records that the mark
         // was missing (#2294). A pre-D6 log (no open record) and a
@@ -273,7 +253,8 @@ pub(super) fn recover(
         let opened = segments::read_first_line(path)?
             .and_then(|l| record_head(&l).ok())
             .is_some_and(|(_, _, e, _)| e.as_deref() == Some(EV_OPENED));
-        let lost = committed_drop || !sealed.is_empty() || (opened && state.counter > 1);
+        let lost =
+            committed_drop || below_mark || !sealed.is_empty() || (opened && state.counter > 1);
         // A crash between the marker and the mark left the marker last.
         let marked = read_last_nonempty_line(path)?
             .and_then(|l| record_head(&l).ok())
@@ -313,6 +294,75 @@ pub(super) fn recover(
     state.seg.sealed = segments::list_segments(path)?.len();
     segments::sync_dir(path)?;
     Ok(state)
+}
+
+/// Reopen the active segment from whatever its tail holds, and say whether
+/// that tail ends below the authenticated mark `hw` (MIK-7712): the newest
+/// surviving record is the active file's last, or the newest seal when the
+/// active file holds none.
+fn reopen_tail(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    sealed: &[Segment],
+    hw: Option<&HighWater>,
+    now: u64,
+) -> io::Result<(Recovered, bool)> {
+    let below = |tail: u64| hw.is_some_and(|h| tail < h.counter);
+    match read_last_nonempty_line(path) {
+        Ok(Some(line)) => {
+            let (counter, hash, event, v) = record_head(&line)?;
+            if event.as_deref() == Some(EV_SEALED) {
+                // Crash after the seal, before the rename: finish it.
+                let seq = v.get("segment_seq").and_then(Value::as_u64).unwrap_or(0);
+                let sealed = segments::sealed_path(path, seq);
+                std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
+                segments::sync_dir(path)?;
+                let sealed = segments::list_segments(path)?;
+                let carry = lost_from(newest_finding(&sealed, config)?, below(counter), counter);
+                let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
+                Ok((state, below(counter)))
+            } else {
+                let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
+                let below_mark =
+                    hw.is_some_and(|h| h.segment_seq == resumed.seg.seq && counter < h.counter);
+                Ok((resumed, below_mark))
+            }
+        }
+        Ok(None) => reopen_after_seal(path, config, sealed, hw, now),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            reopen_after_seal(path, config, sealed, hw, now)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// No active record: the newest seal (or nothing) is the tail.
+fn reopen_after_seal(
+    path: &Path,
+    config: &TransparencyLogConfig,
+    sealed: &[Segment],
+    hw: Option<&HighWater>,
+    now: u64,
+) -> io::Result<(Recovered, bool)> {
+    let tail = match sealed.last() {
+        Some(segment) => seal_of(segment)?.map_or(0, |(counter, _)| counter),
+        None => 0,
+    };
+    let below_mark = hw.is_some_and(|h| tail < h.counter);
+    let carry = lost_from(newest_finding(sealed, config)?, below_mark, tail);
+    let state = open_after_seal(path, config, sealed, hw, now, carry)?;
+    Ok((state, below_mark))
+}
+
+/// The finding the replacement open record carries. A loss found below the
+/// mark is carried from the first lost counter, so a crash after that record
+/// is synced but before the marker cannot lose it (MIK-7712).
+fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
+    if below_mark {
+        Some(carry.map_or(tail + 1, |at| at.min(tail + 1)))
+    } else {
+        carry
+    }
 }
 
 /// An active file whose last record is an ordinary record.
@@ -416,16 +466,17 @@ pub(super) fn open_after_seal(
         // An unrotated log whose active file was deleted: continue the
         // counter so verify names the missing records.
         let hw = hw.expect("hw_counter > 0");
-        let fields = housekeeping(
-            EV_OPENED,
-            &[
-                ("segment_seq", hw.segment_seq.into()),
-                // Names the link, as every open record does, so the exporter
-                // can resume here; verify still reports the missing counters.
-                ("prev_segment_final_hash", hw.entry_hash.clone().into()),
-                ("segment_opened_at", now.into()),
-            ],
-        );
+        let mut extra: Vec<(&str, Value)> = vec![
+            ("segment_seq", hw.segment_seq.into()),
+            // Names the link, as every open record does, so the exporter
+            // can resume here; verify still reports the missing counters.
+            ("prev_segment_final_hash", hw.entry_hash.clone().into()),
+            ("segment_opened_at", now.into()),
+        ];
+        if let Some(at) = carry {
+            extra.push((HWM_MISSING_AT, at.into()));
+        }
+        let fields = housekeeping(EV_OPENED, &extra);
         let hash = write_synced(
             &mut fresh()?,
             config,
@@ -483,11 +534,14 @@ pub(super) fn open_after_seal(
 /// a record, chain an `audit_segment_torn_tail_dropped` record naming the
 /// dropped length. A complete unparseable line is left for the caller to
 /// refuse, as before D6. Returns the counter the dropped line would have
-/// held, if a line was dropped.
+/// held, if a line was dropped. When `hw` already counts that line, it was a
+/// committed record: the repair record says so itself (`committed: true`), so
+/// a crash before the missing-mark marker cannot lose the finding (MIK-7712).
 fn repair_torn_tail(
     path: &Path,
     config: &TransparencyLogConfig,
     newest_sealed: Option<&Segment>,
+    hw: Option<&HighWater>,
 ) -> io::Result<Option<u64>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = OpenOptions::new()
@@ -536,7 +590,12 @@ fn repair_torn_tail(
             .append(true)
             .open(path)
             .map_err(segments::ctx("open", path))?;
-        let fields = housekeeping(EV_TORN, &[("bytes", dropped.into())]);
+        let committed = hw.is_some_and(|h| h.counter > pred_counter);
+        let mut extra = vec![("bytes", dropped.into())];
+        if committed {
+            extra.push((TORN_COMMITTED, true.into()));
+        }
+        let fields = housekeeping(EV_TORN, &extra);
         write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
     }
     Ok(Some(pred_counter + 1))
