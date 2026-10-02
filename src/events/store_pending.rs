@@ -269,18 +269,26 @@ impl Store {
         if state.outbox.contains_key(event_id) {
             return Ok(Revived::AlreadyPending);
         }
-        match self.enqueue_locked(&mut state, record, caps)? {
-            Enqueued::Written => {}
-            Enqueued::NoSubscription => return Ok(Revived::NoSubscription),
-            Enqueued::DroppedGlobal | Enqueued::DroppedPerSubscription => {
+        let placed = self.enqueue_locked(&mut state, record, caps);
+        match placed {
+            Ok(Enqueued::Written) => {}
+            Ok(Enqueued::NoSubscription) => return Ok(Revived::NoSubscription),
+            Ok(Enqueued::DroppedGlobal | Enqueued::DroppedPerSubscription) => {
                 return Ok(Revived::Full);
             }
+            // Placed but not synced: the record stands and will deliver.
+            Err(error) if state.outbox.contains_key(event_id) => {
+                tracing::warn!(%error, "events store: replay record not synced");
+            }
+            Err(error) => return Err(error),
         }
-        // The dead file must go before the replay counts: a failed unlink
-        // rolls the new record back, so exactly one of the two stands.
-        // ponytail: a failed rollback unlink leaves a stray outbox file; the
-        // next claim of the same id finds it and delivers it once.
-        if let Err(error) = remove_record_durable(&self.dead_dir, &OutboxRecord::file(event_id)) {
+        // The dead file must be unlinked before the replay counts: if it
+        // cannot be, the new record is rolled back so one of the two stands.
+        // A sync failure after the unlink is logged, never undone.
+        // ponytail: a failed rollback unlink leaves a stray outbox file that
+        // delivers once after a restart; stage records outside outbox/ if
+        // double faults ever matter.
+        if let Err(error) = remove_record(&self.dead_dir, &OutboxRecord::file(event_id)) {
             state.outbox.remove(event_id);
             let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
             return Err(error);
