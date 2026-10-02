@@ -150,7 +150,7 @@ backend" and "fails a capability file" first.**
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
-| 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
+| 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, Chrome DevTools, fetch). `init` (local profile) enables memory, sequential-thinking, context7 and time. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3547,13 +3547,13 @@ without it, while `add` printed the key as set. Now `add` writes:
 
 `add` writes the server **disabled**, and prints why, when a `${VAR}` it wrote does not resolve
 (unset or empty in the environment and every `env_files` entry), because an enabled backend with an
-unresolved reference stops the gateway from loading its config. Playwright and fetch are always
-added disabled: they can open any address, and the private-network guard covers REST capabilities
+unresolved reference stops the gateway from loading its config. Playwright, Chrome DevTools and
+fetch are always added disabled: they can open any address, and the private-network guard covers REST capabilities
 only. Turning a backend on from the dashboard is refused, naming the variable, while one of its
 references does not resolve.
 
 `mcp-gateway init` (local profile) now writes the servers that need no account enabled: memory,
-sequential-thinking and context7. A server whose launcher (`npx`, `uvx`) is not on PATH is skipped
+sequential-thinking, context7 and time. A server whose launcher (`npx`, `uvx`) is not on PATH is skipped
 with a message. `mcp-gateway list --available` lists the whole library.
 
 **Action:** none for existing configs. After `add`, set any variable it names, then set
