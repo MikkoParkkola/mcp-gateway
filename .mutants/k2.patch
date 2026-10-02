@@ -1,0 +1,12 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 8b25fbb88..4c7ec0ff6 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -94,7 +94,6 @@ impl EventsHub {
+             return Ok(found);
+         }
+         let refusal = super::upstream::parse_name(name)
+-            .filter(|(backend, _)| caller.sees_backend(self, backend))
+             .and_then(|(backend, _)| self.ineligible_backends().remove(backend))
+             .map(|reason| RpcError::unsupported_backend_events(name, reason.as_str()));
+         Err(refusal.unwrap_or_else(RpcError::not_found))

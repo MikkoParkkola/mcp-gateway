@@ -1,0 +1,10 @@
+head_sha	a2a95bac3910134457d1e388aef370ba2d05bd99
+# batch 1 for #2691
+K1	linux	k1.patch	--test mik_7630_events_refusal
+K2	linux	k2.patch	--test mik_7630_events_refusal
+K3	linux	k3.patch	--test mik_7630_events_refusal
+K4	linux	k4.patch	--test mik_7630_events_refusal
+K5	linux	k5.patch	--lib -- events::upstream
+K6	linux	k6.patch	--lib -- events::upstream
+K7	linux	k7.patch	--lib -- events::upstream
+K8	linux	k8.patch	--test mik_7630_events_refusal

@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream.rs b/src/events/upstream.rs
+index fa6bbed0a..244473595 100644
+--- a/src/events/upstream.rs
++++ b/src/events/upstream.rs
+@@ -42,7 +42,7 @@ pub(crate) fn parse_name(name: &str) -> Option<(&str, Kind)> {
+     let rest = name.strip_prefix("backend.")?;
+     Kind::ALL.into_iter().find_map(|kind| {
+         let backend = rest.strip_suffix(kind.suffix())?.strip_suffix('.')?;
+-        (!backend.is_empty()).then_some((backend, kind))
++        Some((backend, kind))
+     })
+ }
+ 

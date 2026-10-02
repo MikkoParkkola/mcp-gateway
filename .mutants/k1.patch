@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream.rs b/src/events/upstream.rs
+index fa6bbed0a..bff8dd2ea 100644
+--- a/src/events/upstream.rs
++++ b/src/events/upstream.rs
+@@ -103,7 +103,6 @@ pub(crate) fn ineligible_backends(
+         .iter()
+         // A disabled backend is absent, not refused: naming its reason would
+         // tell a caller what is configured but switched off.
+-        .filter(|(_, raw)| raw.enabled)
+         .filter_map(|(name, raw)| {
+             let effective = bound.get(name).map(|b| b.effective(raw));
+             reason(effective.as_ref().unwrap_or(raw), multi_user).map(|r| (name.clone(), r))

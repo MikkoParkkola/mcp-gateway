@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream.rs b/src/events/upstream.rs
+index fa6bbed0a..e5150c444 100644
+--- a/src/events/upstream.rs
++++ b/src/events/upstream.rs
+@@ -117,7 +117,7 @@ fn reason(backend: &BackendConfig, multi_user: bool) -> Option<Ineligible> {
+         TransportConfig::Http {
+             streamable_http: false,
+             ..
+-        } => return Some(Ineligible::SseHandshake),
++        } => {}
+         #[cfg(feature = "a2a")]
+         TransportConfig::A2a { .. } => return Some(Ineligible::A2a),
+         _ => {}

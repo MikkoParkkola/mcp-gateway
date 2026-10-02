@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream.rs b/src/events/upstream.rs
+index fa6bbed0a..3e9a56d26 100644
+--- a/src/events/upstream.rs
++++ b/src/events/upstream.rs
+@@ -130,7 +130,7 @@ fn reason(backend: &BackendConfig, multi_user: bool) -> Option<Ineligible> {
+         .as_ref()
+         .is_some_and(|o| o.enabled && !o.shared_account)
+         || backend.account.is_some();
+-    (multi_user && personal).then_some(Ineligible::PerUserCredential)
++    personal.then_some(Ineligible::PerUserCredential)
+ }
+ 
+ #[cfg(test)]

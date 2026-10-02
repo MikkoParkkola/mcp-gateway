@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream.rs b/src/events/upstream.rs
+index fa6bbed0a..bd87d2cb9 100644
+--- a/src/events/upstream.rs
++++ b/src/events/upstream.rs
+@@ -97,7 +97,7 @@ pub(crate) fn ineligible_backends(
+     // identity propagation); judge that, not the raw text. The live config
+     // passed validation, so a compile error cannot occur here; the raw
+     // config is the fallback all the same.
+-    let bound = crate::config::account_bindings::compile(config).unwrap_or_default();
++    let bound: BTreeMap<String, crate::config::account_bindings::BoundAccountBackend> = BTreeMap::new();
+     config
+         .backends
+         .iter()

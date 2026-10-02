@@ -1,0 +1,13 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 8b25fbb88..2a4e032e9 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -97,7 +97,7 @@ impl EventsHub {
+             .filter(|(backend, _)| caller.sees_backend(self, backend))
+             .and_then(|(backend, _)| self.ineligible_backends().remove(backend))
+             .map(|reason| RpcError::unsupported_backend_events(name, reason.as_str()));
+-        Err(refusal.unwrap_or_else(RpcError::not_found))
++        Err(RpcError::not_found())
+     }
+ 
+     /// The configured backends that cannot offer upstream-notification
