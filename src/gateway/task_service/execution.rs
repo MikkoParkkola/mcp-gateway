@@ -410,6 +410,9 @@ impl TaskExecutor {
     /// Spawn a task worker under the shutdown token. Every worker goes through
     /// here, so none can outlive a shutdown that cancelled the rest.
     fn spawn_worker(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
+        // COLLUDE.1: every worker collects its relay receipts on its own
+        // task; task-locals do not cross `tokio::spawn`.
+        let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
         tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
     }
 

@@ -153,6 +153,8 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
         reservation: &parking_lot::Mutex::new(None),
+        relay: super::relay::RelayKey::unkeyed_for_test("f13"),
+        relay_refused: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     match outcome {
@@ -223,6 +225,8 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
         reservation: &parking_lot::Mutex::new(None),
+        relay: super::relay::RelayKey::unkeyed_for_test("f13"),
+        relay_refused: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     assert!(
@@ -278,6 +282,8 @@ async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
         reservation: &parking_lot::Mutex::new(None),
+        relay: super::relay::RelayKey::unkeyed_for_test("f13"),
+        relay_refused: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     assert!(
@@ -335,6 +341,8 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
         managed: None,
         account_refusal: &parking_lot::Mutex::new(None),
         reservation: &parking_lot::Mutex::new(None),
+        relay: super::relay::RelayKey::unkeyed_for_test("f13"),
+        relay_refused: &parking_lot::Mutex::new(None),
     };
     let outcome = round.invoke(json!({})).await;
     assert!(

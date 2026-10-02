@@ -373,7 +373,7 @@ pub(crate) struct Lease {
     service: Arc<ExecutionAdmission>,
     identity: String,
     generation: u64,
-    dispatched: bool,
+    pub(crate) dispatched: bool,
     settled: bool,
 }
 

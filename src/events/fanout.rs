@@ -46,14 +46,20 @@ pub(crate) fn event_id(kind: SourceKind, upstream_id: &str, subscription_id: &st
     format!("evt_{}", &hex::encode(hasher.finalize())[..32])
 }
 
-/// The delivery body: exactly the protocol fields and the source's data.
-pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value) -> Vec<u8> {
+/// The `_meta` key the gateway's provenance receipt rides under: inside the
+/// signed body, outside `payloadSchema` (design §3.6).
+const PROVENANCE_KEY: &str = "io.github.mikkoparkkola/provenance";
+
+/// The delivery body: exactly the protocol fields, the source's data and
+/// the provenance receipt in `_meta`.
+pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "eventId": event_id,
         "name": event.name,
         "timestamp": event.occurred_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "data": data,
         "cursor": null,
+        "_meta": { PROVENANCE_KEY: receipt },
     }))
     .unwrap_or_default()
 }
@@ -108,7 +114,12 @@ impl EventsHub {
                 name: &event.name,
             },
         );
-        let bytes = body(&id, event, &data);
+        let bytes = body(
+            &id,
+            event,
+            &data,
+            &services.provenance(&event.backend, &event.name),
+        );
         let now = Utc::now();
         let record = OutboxRecord {
             v: 1,

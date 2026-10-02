@@ -77,6 +77,7 @@ impl MetaMcp {
             #[cfg(feature = "firewall")]
             firewall: self.firewall.clone(),
             audit: self.transparency_logger.clone(),
+            provenance: self.provenance_signer.clone(),
             #[cfg(feature = "cost-governance")]
             budget: self.budget_enforcer.clone().zip(self.cost_registry.clone()),
         }
