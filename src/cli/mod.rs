@@ -314,7 +314,6 @@ pub enum Command {
 
     /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
     DashboardLink(dashboard_link::DashboardLinkArgs),
-
     /// Administer MCP Events: list and replay dead-lettered deliveries
     Events(events::EventsArgs),
 
