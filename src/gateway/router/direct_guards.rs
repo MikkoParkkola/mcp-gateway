@@ -4,8 +4,6 @@
 //! §2.2): the per-backend route's one pre- and post-dispatch chain. Each step
 //! composes the shared `MetaMcp` stage methods; none re-implements a control.
 
-use serde_json::Value;
-
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -49,7 +47,6 @@ impl DirectRouteGuards {
     pub(crate) fn after_dispatch(
         state: &AppState,
         (call, challenge): (&BackendCall<'_>, Option<&str>),
-        params: Option<&Value>,
         client: Option<&AuthenticatedClient>,
         warnings: &[String],
         forward: Result<JsonRpcResponse>,
@@ -88,7 +85,7 @@ impl DirectRouteGuards {
                 Err(e) => response = refusal(response.id.clone(), &e),
             }
         }
-        if response_blocked(state, call.server, params, client, &mut response) {
+        if response_blocked(state, call, client, &mut response) {
             response = refusal(response.id.clone(), &Error::ResponseFirewallRefused);
         }
         // Success only on an answered result, as on meta (`handlers.rs`): a
@@ -120,16 +117,15 @@ pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
 #[cfg(feature = "firewall")]
 fn response_blocked(
     state: &AppState,
-    backend_name: &str,
-    params: Option<&Value>,
+    call: &BackendCall<'_>,
     client: Option<&AuthenticatedClient>,
     response: &mut JsonRpcResponse,
 ) -> bool {
     use crate::security::firewall::FirewallAction;
+    // The route refuses a `tools/call` without `params.name` before dispatch,
+    // so `call.tool` is the named tool on every path that reaches here.
+    let (backend_name, tool_name) = (call.server, call.tool);
     let Some(ref fw) = state.firewall else {
-        return false;
-    };
-    let Some(tool_name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
         return false;
     };
     let Some(ref mut result) = response.result else {
@@ -153,8 +149,7 @@ fn response_blocked(
 #[cfg(not(feature = "firewall"))]
 fn response_blocked(
     _state: &AppState,
-    _backend_name: &str,
-    _params: Option<&Value>,
+    _call: &BackendCall<'_>,
     _client: Option<&AuthenticatedClient>,
     _response: &mut JsonRpcResponse,
 ) -> bool {
