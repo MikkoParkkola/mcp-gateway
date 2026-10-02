@@ -577,3 +577,16 @@ fn earlier_plain_copy_does_not_backdate_a_future_sensitive_one() {
     // Positive control: once A's sensitive copy exists, the same send flags.
     assert!(d.check_egress_at(B, U, &s, later).is_some());
 }
+
+/// Two sensitive copies straddle the egress, recorded latest first: the
+/// earlier one is still evidence.
+#[test]
+fn earlier_sensitive_copy_survives_a_later_one_recorded_first() {
+    let d = detector();
+    let earlier = Instant::now();
+    let now = earlier + Duration::from_secs(1);
+    let s = secret();
+    d.record_delivery_at(T, A, true, &s, now + Duration::from_millis(1));
+    d.record_delivery_at(T, A, true, &s, earlier);
+    assert!(d.check_egress_at(B, U, &s, now).is_some());
+}
