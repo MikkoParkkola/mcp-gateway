@@ -341,8 +341,8 @@ impl super::MetaMcp {
     }
 
     /// Dispatch's refusal of a signed call whose nonce was left unadmitted.
-    /// Only a call [`Self::refused_before_dispatch`] predicts refused is left
-    /// so, and the gates answer it first: reaching this means the prediction
+    /// Only a call the signing layer predicts refused (`prepare_signing_for_call`)
+    /// is left so, and the gates answer it first: reaching this means the prediction
     /// and the gates disagree, and nothing may act on an unspent nonce.
     pub(crate) fn refuse_unadmitted(
         &self,
