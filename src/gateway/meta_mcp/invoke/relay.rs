@@ -128,7 +128,9 @@ impl MetaMcp {
 }
 
 impl MetaMcp {
-    /// Relay detection is on, so a delivery owner opens a receipt collector.
+    /// Relay detection is on: a delivery owner opens a receipt collector and
+    /// a result is worth staging only then.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn relay_active(&self) -> bool {
         #[cfg(feature = "firewall")]
         {
@@ -340,7 +342,7 @@ impl MetaMcp {
         let pending = RELAY_RECEIPTS
             .try_with(|receipts| !receipts.borrow().is_empty())
             .unwrap_or(false);
-        (pending && self.relay_on()).then(|| result.clone())
+        (pending && self.relay_active()).then(|| result.clone())
     }
 
     /// A replayed single-target call (`gateway_invoke`, a surfaced tool) is
@@ -393,21 +395,6 @@ impl MetaMcp {
         #[cfg(not(feature = "firewall"))]
         let _ = (who, server, tool, value);
     }
-
-    /// Whether this gateway records relay receipts at all.
-    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
-    fn relay_on(&self) -> bool {
-        #[cfg(feature = "firewall")]
-        {
-            self.firewall
-                .as_ref()
-                .is_some_and(|fw| fw.relay_detection_on())
-        }
-        #[cfg(not(feature = "firewall"))]
-        {
-            false
-        }
-    }
 }
 
 /// Drop every staged receipt: what was staged was never delivered (a
@@ -446,7 +433,7 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
         method: &str,
         params: Option<Value>,
     ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
-        if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_on()) {
+        if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_active()) {
             let (server, tool) = self.target;
             let (classified, _) = self.meta.apply_context_integrity(
                 server,

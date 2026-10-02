@@ -85,6 +85,11 @@ impl<'a> Settling<'a> {
                 DispatchSettlement::Fail(error) => {
                     return self.settle(TaskTransition::Fail(error), false).await;
                 }
+                // The gateway's own sentence: nothing the backend said was delivered.
+                DispatchSettlement::Abandoned => {
+                    let abandoned = TaskTransition::Complete(abandoned_input_round());
+                    return self.settle(abandoned, false).await;
+                }
                 DispatchSettlement::Input(round) => round,
             };
             if !round.requests.is_empty() {
