@@ -1,0 +1,4 @@
+head_sha	1ee61cd935b4420b08fe8855b45e57a6cc4a4234
+# mutants for #25847
+METAHTTPS	linux	METAHTTPS.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
+METAUSERINFO	linux	METAUSERINFO.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
