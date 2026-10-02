@@ -345,73 +345,70 @@ impl TaskExecutor {
             id.to_owned(),
             principal.to_owned(),
         );
-        // COLLUDE.1: a resumed worker collects relay receipts on its own task.
-        tokio::spawn(crate::gateway::meta_mcp::invoke::relay::collecting(
-            async move {
-                let workers = Arc::clone(&executor.workers);
-                let provided = executor
-                    .service
-                    .store
-                    .provide_input(
-                        &digest,
-                        &id,
-                        answers,
-                        move || workers.try_acquire_owned().ok(),
-                        Utc::now(),
+        self.spawn_worker(async move {
+            let workers = Arc::clone(&executor.workers);
+            let provided = executor
+                .service
+                .store
+                .provide_input(
+                    &digest,
+                    &id,
+                    answers,
+                    move || workers.try_acquire_owned().ok(),
+                    Utc::now(),
+                )
+                .await;
+            let outcome = match provided {
+                Ok(ProvideOutcome::Partial(committed)) => {
+                    executor.published(&WriteOutcome::Transitioned(committed), &id);
+                    InputOutcome::Accepted
+                }
+                Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
+                Ok(ProvideOutcome::Closed(closed)) => {
+                    // Settle it now rather than at the next sweep. Either way the
+                    // round is closed to answers: every later one is refused the
+                    // same way, and the sweep retries a close that fails here.
+                    let settled = match executor.service.store.get(&digest, &id) {
+                        Ok(current) => {
+                            executor
+                                .close_round(&digest, &id, current.revision, closed.reason())
+                                .await
+                        }
+                        Err(_) => Err(super::CommitFailure::RevisionConflict),
+                    };
+                    if let Err(super::CommitFailure::Service(error)) = settled {
+                        tracing::warn!(task_id = %id, ?error, "closed input round not settled yet; the sweep retries");
+                    }
+                    InputOutcome::Closed(closed)
+                }
+                Ok(ProvideOutcome::Resumed { task, round, slot }) => {
+                    let revision = task.revision;
+                    executor.published(&WriteOutcome::Transitioned(task), &id);
+                    let _ = tx.send(InputOutcome::Accepted);
+                    resume(
+                        Resume {
+                            handoff,
+                            slot,
+                            owned: caller,
+                            principal,
+                            id,
+                            revision,
+                            round,
+                        },
+                        cancel_rx,
                     )
                     .await;
-                let outcome = match provided {
-                    Ok(ProvideOutcome::Partial(committed)) => {
-                        executor.published(&WriteOutcome::Transitioned(committed), &id);
-                        InputOutcome::Accepted
-                    }
-                    Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
-                    Ok(ProvideOutcome::Closed(closed)) => {
-                        // Settle it now rather than at the next sweep. Either way the
-                        // round is closed to answers: every later one is refused the
-                        // same way, and the sweep retries a close that fails here.
-                        let settled = match executor.service.store.get(&digest, &id) {
-                            Ok(current) => {
-                                executor
-                                    .close_round(&digest, &id, current.revision, closed.reason())
-                                    .await
-                            }
-                            Err(_) => Err(super::CommitFailure::RevisionConflict),
-                        };
-                        if let Err(super::CommitFailure::Service(error)) = settled {
-                            tracing::warn!(task_id = %id, ?error, "closed input round not settled yet; the sweep retries");
-                        }
-                        InputOutcome::Closed(closed)
-                    }
-                    Ok(ProvideOutcome::Resumed { task, round, slot }) => {
-                        let revision = task.revision;
-                        executor.published(&WriteOutcome::Transitioned(task), &id);
-                        let _ = tx.send(InputOutcome::Accepted);
-                        resume(
-                            Resume {
-                                handoff,
-                                slot,
-                                owned: caller,
-                                principal,
-                                id,
-                                revision,
-                                round,
-                            },
-                            cancel_rx,
-                        )
-                        .await;
-                        return;
-                    }
-                    Err(StoreError::InvalidTransition) => InputOutcome::NotOutstanding,
-                    Err(StoreError::Capacity) => InputOutcome::TooLarge,
-                    Err(StoreError::NotFound) => InputOutcome::NotFound,
-                    Err(_) => InputOutcome::Unavailable,
-                };
-                // Not a resume: the handoff and cancel receiver go with this task.
-                drop((handoff, cancel_rx));
-                let _ = tx.send(outcome);
-            },
-        ));
+                    return;
+                }
+                Err(StoreError::InvalidTransition) => InputOutcome::NotOutstanding,
+                Err(StoreError::Capacity) => InputOutcome::TooLarge,
+                Err(StoreError::NotFound) => InputOutcome::NotFound,
+                Err(_) => InputOutcome::Unavailable,
+            };
+            // Not a resume: the handoff and cancel receiver go with this task.
+            drop((handoff, cancel_rx));
+            let _ = tx.send(outcome);
+        });
         rx.await.unwrap_or(InputOutcome::Unavailable)
     }
 }

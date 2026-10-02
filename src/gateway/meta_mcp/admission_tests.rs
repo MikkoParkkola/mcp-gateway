@@ -155,6 +155,58 @@ fn retained_operation(meta: &MetaMcp, caller: &MetaMcpCallerContext<'_>, tool: &
     assert_replay(admit(meta, caller, tool, args, 2), 2);
 }
 
+#[test]
+fn set_state_idempotency_is_bound_to_legacy_session() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let policy = MutablePolicy::new(SECOND);
+    let retry = RetryFields {
+        idempotency_key: Some("state-session-bound".into()),
+        ..RetryFields::default()
+    };
+    let mut caller = context(&policy, &retry);
+    caller.is_modern = false;
+    let args = json!({"state":"triage"});
+
+    let Ok(SyncAdmission::Owned(owner)) = meta.admit_meta_sync(
+        &caller,
+        "gateway_set_state",
+        &args,
+        Some("legacy:first"),
+        &RequestId::Number(1),
+    ) else {
+        panic!("first session must own the idempotency slot");
+    };
+    owner.mark_dispatched();
+    owner.complete_secured(&JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({"secret":SECRET}),
+    ));
+
+    assert_replay(
+        meta.admit_meta_sync(
+            &caller,
+            "gateway_set_state",
+            &args,
+            Some("legacy:first"),
+            &RequestId::Number(2),
+        ),
+        2,
+    );
+
+    let error = refusal(meta.admit_meta_sync(
+        &caller,
+        "gateway_set_state",
+        &args,
+        Some("legacy:second"),
+        &RequestId::Number(3),
+    ));
+    assert_eq!(
+        error.to_rpc_code(),
+        409,
+        "reusing a state key in another session must conflict, not replay"
+    );
+}
+
 fn refusal(result: Result<SyncAdmission>) -> Error {
     let Err(error) = result else {
         panic!("request must refuse before exposing retained output")
