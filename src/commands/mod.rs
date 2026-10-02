@@ -136,7 +136,7 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "#   mcp-gateway setup wizard --configure-client\n",
             "# backends:\n",
             "#   filesystem:\n",
-            "#     command: \"npx -y @anthropic/mcp-server-filesystem /path/to/dir\"\n",
+            "#     command: \"npx -y @modelcontextprotocol/server-filesystem@2026.8.31 /path/to/dir\"\n",
             "#     description: \"File system access\"\n",
         )
     } else {

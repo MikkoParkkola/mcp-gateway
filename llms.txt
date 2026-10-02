@@ -21,7 +21,7 @@ failsafe:
     enabled: true
 backends:
   tavily:
-    command: "npx -y @anthropic/mcp-server-tavily"
+    command: "npx -y tavily-mcp@0.2.22"
     description: "Web search"
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
@@ -64,7 +64,7 @@ These four discovery tools are always present. The minimum operational surface h
 
 ## Backend Types
 
-- stdio: @anthropic/mcp-server-tavily, @modelcontextprotocol/server-filesystem, etc.
+- stdio: tavily-mcp@0.2.22, @modelcontextprotocol/server-filesystem, etc.
 - HTTP: any Streamable HTTP MCP server
 - SSE: Pieces, LangChain, etc.
 - Capability YAML: any REST API without building an MCP server

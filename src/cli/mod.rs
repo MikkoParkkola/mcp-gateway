@@ -395,7 +395,7 @@ pub enum Command {
     /// mcp-gateway add --url https://mcp.sentry.dev/mcp sentry
     ///
     /// # Both styles work:
-    /// mcp-gateway add --command "npx -y @anthropic/mcp-server-tavily" tavily
+    /// mcp-gateway add --command "npx -y tavily-mcp@0.2.22" tavily
     /// ```
     #[command(about = "Add an MCP backend to gateway.yaml")]
     Add {

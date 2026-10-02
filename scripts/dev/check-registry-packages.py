@@ -18,7 +18,11 @@ Anything else, including an unpinned package or an unknown launcher, fails.
 Network: one request per entry, retried; a registry outage fails the job
 rather than passing it.
 
-Usage: check-registry-packages.py [path-to-server_registry.rs]
+Usage: check-registry-packages.py [--offline] [path-to-server_registry.rs]
+
+--offline applies the pin and launcher rules without any network lookup; it
+runs on every pull request. The live lookups run where the registry changes,
+on pushes and daily (.github/workflows/registry-packages.yml).
 """
 
 from __future__ import annotations
@@ -128,7 +132,9 @@ def probe(kind: str, target: str, version: str) -> str | None:
 
 
 def main(argv: list[str]) -> int:
-    path = Path(argv[1]) if len(argv) > 1 else DEFAULT_SOURCE
+    offline = "--offline" in argv
+    args = [a for a in argv[1:] if a != "--offline"]
+    path = Path(args[0]) if args else DEFAULT_SOURCE
     entries = parse_entries(path.read_text())
     if not entries:
         print(f"FAIL: no registry entries parsed from {path}")
@@ -136,12 +142,16 @@ def main(argv: list[str]) -> int:
     failures = []
     for entry in entries:
         plan = classify(entry)
-        reason = plan if isinstance(plan, str) else probe(*plan)
+        if isinstance(plan, str):
+            reason = plan
+        else:
+            reason = None if offline else probe(*plan)
         if reason:
             failures.append(f"{entry['name']}: {reason}")
     for line in failures:
         print(f"FAIL {line}")
-    print(f"{len(entries) - len(failures)}/{len(entries)} registry entries resolve")
+    verb = "are pinned (offline)" if offline else "resolve"
+    print(f"{len(entries) - len(failures)}/{len(entries)} registry entries {verb}")
     return 1 if failures else 0
 
 

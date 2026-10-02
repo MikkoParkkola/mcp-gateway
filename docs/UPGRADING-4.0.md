@@ -147,6 +147,7 @@ backend" and "fails a capability file" first.**
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
+| 123 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3459,6 +3460,37 @@ no provider and loads without a warning.
 
 **Action:** delete the `fallback` block from your capability files, and fix or delete any entry
 that does not parse.
+
+## 123. The built-in server registry points at servers that exist
+
+**Startup:** no notice
+
+`mcp-gateway add <name>` and the dashboard's registry tab read a built-in list of servers. Of its
+45 npm packages, 30 did not exist on npm and 7 were deprecated, and none was pinned to a version.
+Every entry is now a pinned npm or PyPI release or a vendor-hosted URL, and CI looks each one up.
+Backends already in your `gateway.yaml` are not touched; this changes only what `add` writes.
+
+Repointed to the vendor's own package or hosted endpoint: tavily, brave-search, postgres, redis,
+github, gitlab, linear, sentry, asana, aws, cloudflare-workers, slack, fetch, semgrep, playwright,
+notion, airtable, stripe, pinecone, qdrant. Pinned: exa, perplexity, filesystem, mysql, memory,
+sequential-thinking. `jira` is now `atlassian` (Atlassian's hosted Jira and Confluence server).
+
+Removed, because no maintained server exists at a resolvable package:
+
+| Name | Reason |
+|---|---|
+| everything-search | pointed at the MCP protocol test server, not a search tool |
+| sqlite | reference server archived upstream, no release since 2025-04 |
+| surrealdb, discord, wikipedia, 1password, snowflake | no published MCP server package |
+| gcp, bigquery, gmail, google-calendar, google-drive, google-sheets | packages never existed or are deprecated; Google services are covered by the bundled Google capabilities |
+| puppeteer | deprecated upstream; use `playwright` |
+| pieces | package does not exist |
+| openai | package does not exist; the gateway is not a chat-completion gateway |
+| datadog | the hosted endpoint is labelled unstable and its login flow is undocumented |
+| pagerduty | the vendor's server repository is archived |
+
+**Action:** none for existing configs. To keep using a removed server, add it with an explicit
+command or URL: `mcp-gateway add <name> -- <command>` or `mcp-gateway add --url <url> <name>`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

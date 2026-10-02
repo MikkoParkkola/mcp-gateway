@@ -90,7 +90,7 @@ pub struct RegistryEntryJson {
     pub name: &'static str,
     /// Human-readable description.
     pub description: &'static str,
-    /// Launch command (e.g. `"npx -y @anthropic/mcp-server-tavily"`).
+    /// Launch command (e.g. `"npx -y tavily-mcp@0.2.22"`).
     pub command: &'static str,
     /// Environment variables that must be set for this server.
     pub required_env: &'static [&'static str],
