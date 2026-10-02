@@ -72,7 +72,7 @@ impl ShutdownBudget {
     pub(super) fn within(remaining: Duration, timeout: Duration) -> Self {
         let reserve = remaining / 5;
         Self {
-            drain: timeout.min(remaining - reserve),
+            drain: timeout.min(remaining.saturating_sub(reserve)),
             cancel: reserve / 2,
         }
     }
