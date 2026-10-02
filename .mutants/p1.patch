@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index dcf80dd4f..416130998 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -189,7 +189,7 @@ impl Services {
+             chrono::Utc::now().to_rfc3339(),
+         );
+         match &self.provenance {
+-            Some(signer) => serde_json::to_value(receipt.sign(signer)),
++            Some(_) => serde_json::to_value(json!({ "receipt": receipt })),
+             None => serde_json::to_value(json!({ "receipt": receipt })),
+         }
+         .unwrap_or(Value::Null)

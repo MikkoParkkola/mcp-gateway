@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index e7dbea244..0f54e2553 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -57,7 +57,7 @@ pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: V
+         "timestamp": event.occurred_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+         "data": data,
+         "cursor": null,
+-        "_meta": { PROVENANCE_KEY: receipt },
++        "_meta": { "x": receipt },
+     }))
+     .unwrap_or_default()
+ }

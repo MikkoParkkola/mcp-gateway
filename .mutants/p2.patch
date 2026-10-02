@@ -1,0 +1,13 @@
+diff --git a/src/trust/result_provenance.rs b/src/trust/result_provenance.rs
+index 99789e422..3411f9cf3 100644
+--- a/src/trust/result_provenance.rs
++++ b/src/trust/result_provenance.rs
+@@ -90,7 +90,7 @@ impl RuntimeProvenanceReceipt {
+         observed_at: impl Into<String>,
+     ) -> Self {
+         Self {
+-            subject_kind: CbomSubjectKind::Event,
++            subject_kind: CbomSubjectKind::Runtime,
+             ..Self::observed(backend_id, name, observed_at, CacheOutcome::Bypass, true)
+         }
+     }

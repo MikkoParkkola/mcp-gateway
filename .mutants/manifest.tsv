@@ -1,0 +1,5 @@
+head_sha	0d740ca024ead6fb35afa2c7574581f7f51b33c8
+# I3 provenance mutants for #2704
+P1	linux	p1.patch	--lib -- the_receipt_is_signed_only_when_stamping_is_on
+P2	linux	p2.patch	--lib -- an_event_receipt_is_observed_event_evidence_never_cached
+P3	linux	p3.patch	--lib -- body_carries_only_protocol_fields_and_data
