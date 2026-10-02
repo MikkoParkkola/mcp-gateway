@@ -115,35 +115,20 @@ impl EventsHub {
             record,
             subscription: sub,
         } = *claimed;
-        let key = sub.api_key.as_ref().map(|k| k.name.as_str());
         let url = url::Url::parse(&sub.url).ok();
-        let host = url
-            .as_ref()
-            .and_then(url::Url::host_str)
-            .unwrap_or_default()
-            .to_owned();
-        // Every attempt is audited, a refused one too (§3.7).
-        let refused = |status: &'static str| Attempt {
-            subscription_id: &sub.id,
+        let ctx = Ctx {
+            sub: &sub,
+            record: &record,
             event_id,
-            name: &record.name,
-            backend: &record.backend,
-            number: record.attempt,
-            principal: &sub.principal,
-            api_key_name: key,
-            credential_kind: sub
-                .credential_kind
-                .unwrap_or(crate::security::audit::CredentialKind::None),
-            credential_principal: sub.credential_principal.as_deref(),
-            tenants: &record.tenants,
-            callback_host: &host,
-            status,
-            body_sha256: "",
-            delivered: false,
+            host: url
+                .as_ref()
+                .and_then(url::Url::host_str)
+                .unwrap_or_default()
+                .to_owned(),
         };
         if !services.admits_subscription(&sub, &record.backend).await {
             services
-                .audit_attempt(&refused("access_revoked"))
+                .audit_attempt(&ctx.attempt("access_revoked"))
                 .await
                 .ok();
             self.revoke(&sub).await;
@@ -165,7 +150,7 @@ impl EventsHub {
             return;
         }
         if self.overdue(&record, Utc::now()) {
-            services.audit_attempt(&refused("exhausted")).await.ok();
+            services.audit_attempt(&ctx.attempt("exhausted")).await.ok();
             self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
             return;
@@ -181,52 +166,63 @@ impl EventsHub {
                 .await;
             return;
         };
+        self.record_and_send(services, &ctx, &current, &url, body)
+            .await;
+    }
+
+    /// Put the attempt on record, then charge and send it. The record comes
+    /// first: a log that refuses it means no POST, and the record goes back
+    /// to retry (SAFETY.2).
+    async fn record_and_send(
+        self: &Arc<Self>,
+        services: &Services,
+        ctx: &Ctx<'_>,
+        current: &super::records::Subscription,
+        url: &url::Url,
+        body: Vec<u8>,
+    ) {
+        let (sub, record, event_id) = (ctx.sub, ctx.record, ctx.event_id);
         let body_sha256 = {
             use sha2::Digest as _;
             hex::encode(sha2::Sha256::digest(&body))
         };
-        // The attempt is on record before its bytes leave: a log that refuses
-        // the record means no POST, and the record goes back to retry (SAFETY.2).
-        let attempt = Attempt {
+        let ended = |status: &'static str| Attempt {
             body_sha256: &body_sha256,
-            ..refused(SENDING)
+            ..ctx.attempt(status)
         };
-        if services.audit_attempt(&attempt).await.is_err() {
+        if services.audit_attempt(&ended(SENDING)).await.is_err() {
             let next = Utc::now() + REFUSAL_RETRY;
             let retry = Settle::Retry {
                 next,
                 status: "audit_unavailable",
             };
-            self.settle(services, &record, retry).await;
+            self.settle(services, record, retry).await;
             return;
         }
         // Past its bounds after the wait for the record: dead, unsent, and the
         // record just written says how that attempt ended.
-        let ended = |status: &'static str| Attempt {
-            body_sha256: &body_sha256,
-            ..refused(status)
-        };
-        if self.overdue(&record, Utc::now()) {
+        if self.overdue(record, Utc::now()) {
             services.audit_outcome(&ended("exhausted")).await;
-            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
+            self.settle(services, record, quiet_dead(DeadReason::Exhausted))
                 .await;
             return;
         }
         // Charged once the attempt is on record, so a retry after an audit
         // outage is not charged for an attempt that never left.
+        let key = sub.api_key.as_ref().map(|k| k.name.as_str());
         if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
             services.audit_outcome(&ended("budget")).await;
-            self.settle(services, &record, quiet_dead(DeadReason::Budget))
+            self.settle(services, record, quiet_dead(DeadReason::Budget))
                 .await;
             return;
         }
-        let answer = self.send_event(&url, &current, event_id, body).await;
-        let (outcome, status) = self.judge(&record, &answer);
+        let answer = self.send_event(url, current, event_id, body).await;
+        let (outcome, status) = self.judge(record, &answer);
         let delivered = matches!(outcome, Settle::Delivered);
         services
             .audit_outcome(&Attempt {
                 delivered,
-                ..refused(status)
+                ..ended(status)
             })
             .await;
         if self
@@ -238,7 +234,7 @@ impl EventsHub {
             self.blocking(move |store| store.suspend(&id)).await;
             tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
         }
-        self.settle(services, &record, outcome).await;
+        self.settle(services, record, outcome).await;
     }
 
     /// The one path an event's bytes take to a callback: signed with the
@@ -281,6 +277,39 @@ impl EventsHub {
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
         services.audit_evictions(evicted.unwrap_or_default()).await;
+    }
+}
+
+/// What one claimed attempt knows about itself, for its audit records.
+struct Ctx<'a> {
+    sub: &'a super::records::Subscription,
+    record: &'a OutboxRecord,
+    event_id: &'a str,
+    host: String,
+}
+
+impl Ctx<'_> {
+    /// The attempt as a record states it: failed, with no body hash yet.
+    fn attempt(&self, status: &'static str) -> Attempt<'_> {
+        Attempt {
+            subscription_id: &self.sub.id,
+            event_id: self.event_id,
+            name: &self.record.name,
+            backend: &self.record.backend,
+            number: self.record.attempt,
+            principal: &self.sub.principal,
+            api_key_name: self.sub.api_key.as_ref().map(|k| k.name.as_str()),
+            credential_kind: self
+                .sub
+                .credential_kind
+                .unwrap_or(crate::security::audit::CredentialKind::None),
+            credential_principal: self.sub.credential_principal.as_deref(),
+            tenants: &self.record.tenants,
+            callback_host: &self.host,
+            status,
+            body_sha256: "",
+            delivered: false,
+        }
     }
 }
 
