@@ -213,6 +213,33 @@ async fn x3_a_name_blocked_later_leaves_every_cached_catalogue() {
     );
 }
 
+/// X3b: the in-place reader the per-call path uses (mirror headers, output
+/// schema) reads a clean cached tool while nothing is blocked, and answers
+/// `None` once another caller's listing blocks the name (NFR.WORKLOAD.1).
+#[tokio::test]
+async fn x3b_the_in_place_reader_obeys_the_block() {
+    let backend = per_user_backend_serving("Reads a file.", PAYLOAD);
+    backend
+        .get_tools_for_binding(Some("a"), &[])
+        .await
+        .expect("caller a lists");
+    let read = |b: &Backend| b.with_cached_tool_for(Some("a"), POISONED, |t| t.description.clone());
+    assert_eq!(
+        read(&backend),
+        Some(Some("Reads a file.".to_string())),
+        "control: a clean cached tool is read in place"
+    );
+    backend
+        .get_tools_for_binding(Some("b"), &[])
+        .await
+        .expect("caller b lists");
+    assert_eq!(
+        read(&backend),
+        None,
+        "the in-place reader served a blocked name"
+    );
+}
+
 /// X4: a clean copy of the name on another caller's slot does not clear the
 /// block a poisoned copy put on it; the poisoned caller stays refused.
 #[tokio::test]
