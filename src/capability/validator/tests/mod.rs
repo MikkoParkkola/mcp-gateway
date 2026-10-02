@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 mod fallback;
+mod unread_keys;
 mod yaml_roundtrip;
 
 use super::checks::extract_placeholders;
