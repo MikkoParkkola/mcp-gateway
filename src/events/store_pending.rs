@@ -232,18 +232,31 @@ impl Store {
     pub(crate) fn settle(
         &self,
         event_id: &str,
+        created_at: DateTime<Utc>,
         outcome: Settle,
         now: DateTime<Utc>,
         policy: DeadPolicy,
     ) -> std::io::Result<Vec<Evicted>> {
         let mut state = self.state.lock();
-        let Some(record) = state.outbox.get(event_id).cloned() else {
+        // Only the claimed occurrence: a later one under the same id, admitted
+        // after the claim was cancelled, is not settled by the old answer.
+        let Some(record) = state
+            .outbox
+            .get(event_id)
+            .filter(|r| r.created_at == created_at)
+            .cloned()
+        else {
             return Ok(Vec::new());
         };
         let sub_id = record.subscription_id.clone();
         let settled = self.settle_record(&mut state, record, outcome, now, policy);
         if settled.is_err() {
-            if state.dead.contains_key(event_id) {
+            let created_at = state.outbox.get(event_id).map(|r| r.created_at);
+            let buried = state
+                .dead
+                .get(event_id)
+                .is_some_and(|(dead, _)| Some(dead.record.created_at) == created_at);
+            if buried {
                 // The dead letter is in place, if unsynced: never resend.
                 state.outbox.remove(event_id);
             } else if let Some(left) = state.outbox.get_mut(event_id) {
@@ -347,6 +360,22 @@ impl Store {
     pub(crate) fn suspend(&self, id: &str) -> std::io::Result<()> {
         let mut state = self.state.lock();
         self.touch(&mut state, id, |s| s.active = false)
+    }
+
+    /// The subscription row to sign claimed `record` with, read now: `None`
+    /// once the claim was cancelled (unsubscribe, revocation, expiry), even
+    /// if a resubscribe has since re-created the same subscription id.
+    pub(crate) fn signing_row(&self, record: &OutboxRecord) -> Option<Subscription> {
+        let state = self.state.lock();
+        let claimed = state
+            .outbox
+            .get(&record.event_id)
+            .is_some_and(|r| r.state == OutboxState::InFlight && r.created_at == record.created_at);
+        if claimed {
+            state.subs.get(&record.subscription_id).cloned()
+        } else {
+            None
+        }
     }
 
     /// The id of every subscription still live at `now`.
