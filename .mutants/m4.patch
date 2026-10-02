@@ -1,0 +1,15 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index a96e10eaa..f5f62e723 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -357,8 +357,8 @@ impl StdioTransport {
+         // answer selected governs the session, or what was proposed when it
+         // names nothing. Checked before it is written, so a refusal leaves
+         // the stored version as it was.
+-        let selected = checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?
+-            .unwrap_or(proposed);
++        let _ = checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?;
++        let selected = proposed;
+         info!(
+             command = %self.diagnostic_command(),
+             requested = %proposed,

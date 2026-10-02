@@ -1,0 +1,13 @@
+diff --git a/src/transport/websocket.rs b/src/transport/websocket.rs
+index d8bdd7008..b6110de0c 100644
+--- a/src/transport/websocket.rs
++++ b/src/transport/websocket.rs
+@@ -417,7 +417,7 @@ impl WebSocketTransport {
+                 "WebSocket MCP initialize failed".to_string(),
+             ));
+         }
+-        checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?;
++        let _ = checked_selection(response.result.as_ref(), Selectable::LegacyOrModern);
+ 
+         tokio::task::yield_now().await;
+         self.notify("notifications/initialized", None).await?;

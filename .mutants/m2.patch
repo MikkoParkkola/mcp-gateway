@@ -1,0 +1,13 @@
+diff --git a/src/protocol/negotiate.rs b/src/protocol/negotiate.rs
+index 9a5398500..21a6ce81a 100644
+--- a/src/protocol/negotiate.rs
++++ b/src/protocol/negotiate.rs
+@@ -143,7 +143,7 @@ pub(crate) fn checked_selection(
+     else {
+         return Ok(None);
+     };
+-    let modern = selectable == Selectable::LegacyOrModern && MODERN_VERSIONS.contains(&selected);
++    let modern = MODERN_VERSIONS.contains(&selected);
+     if modern || SUPPORTED_VERSIONS.contains(&selected) {
+         return Ok(Some(selected));
+     }

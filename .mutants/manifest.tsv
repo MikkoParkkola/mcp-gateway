@@ -1,0 +1,10 @@
+head_sha	2c98be0e7deccc937b5ce07dbd0e115831916296
+m1	linux	m1.patch	--lib -- protocol::negotiate
+m2	linux	m2.patch	--lib -- protocol::negotiate
+m3	linux	m3.patch	--lib -- protocol::negotiate
+m4	linux	m4.patch	--lib -- transport::stdio::negotiation_tests
+m5	linux	m5.patch	--lib -- transport::stdio::negotiation_tests
+m6	linux	m6.patch	--lib -- transport::websocket::negotiation_tests
+m7	linux	m7.patch	--lib -- transport::websocket::negotiation_tests
+m8	linux	m8.patch	--lib -- transport::stdio::negotiation_tests::peer_methods
+m9	linux	m9.patch	--lib -- transport::stdio::negotiation_tests::peer_methods

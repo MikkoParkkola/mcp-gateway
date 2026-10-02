@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index a96e10eaa..21736450e 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -495,7 +495,7 @@ impl StdioTransport {
+                 destination.deliver(notification);
+             }
+             None => {
+-                debug!("Ignoring peer notification");
++                debug!(method = %notification.method, "Ignoring peer notification");
+             }
+         }
+     }

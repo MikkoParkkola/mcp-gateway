@@ -1,0 +1,15 @@
+diff --git a/src/transport/websocket.rs b/src/transport/websocket.rs
+index d8bdd7008..8ba9e6423 100644
+--- a/src/transport/websocket.rs
++++ b/src/transport/websocket.rs
+@@ -407,9 +407,7 @@ impl WebSocketTransport {
+                 negotiated = %fallback,
+                 "Retrying initialize with negotiated protocol version"
+             );
+-            response = self
+-                .request("initialize", Some(initialize_params(fallback)))
+-                .await?;
++            let _ = fallback;
+         }
+ 
+         if response.error.is_some() {

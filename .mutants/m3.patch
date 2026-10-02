@@ -1,0 +1,13 @@
+diff --git a/src/protocol/negotiate.rs b/src/protocol/negotiate.rs
+index 9a5398500..9763d0043 100644
+--- a/src/protocol/negotiate.rs
++++ b/src/protocol/negotiate.rs
+@@ -153,7 +153,7 @@ pub(crate) fn checked_selection(
+         "a value that is not a protocol version"
+     };
+     let speaks = match selectable {
+-        Selectable::Legacy => SUPPORTED_VERSIONS.join(", "),
++        Selectable::Legacy => [MODERN_VERSIONS, SUPPORTED_VERSIONS].concat().join(", "),
+         Selectable::LegacyOrModern => [MODERN_VERSIONS, SUPPORTED_VERSIONS].concat().join(", "),
+     };
+     Err(Error::Protocol(format!(

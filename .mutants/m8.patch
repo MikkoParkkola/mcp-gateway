@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index a96e10eaa..d56089682 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -531,7 +531,7 @@ impl StdioTransport {
+                 debug!("Found pending request, sending response");
+                 let _ = sender.send(response);
+             } else {
+-                debug!("No pending request found for response");
++                debug!(id = %key, "No pending request found for response");
+             }
+         } else {
+             debug!("Response has no ID (notification?)");
