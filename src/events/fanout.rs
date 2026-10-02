@@ -157,6 +157,31 @@ impl EventsHub {
         }
     }
 
+    /// Once the startup capability scan has registered the webhook routes:
+    /// delete the subscriptions to webhook event types the catalogue no
+    /// longer offers (a route removed while the gateway was down, or webhooks
+    /// turned off), their pending records with them, and let the worker start.
+    /// Before this the catalogue is partial, so nothing is withdrawn and
+    /// nothing is sent (MIK-7772).
+    pub(crate) fn reconcile_catalogue(&self) {
+        let offered: std::collections::HashSet<String> =
+            self.catalogue().into_iter().map(|d| d.name).collect();
+        let gone: Vec<String> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| {
+                name.starts_with(super::webhook_source::NAME_PREFIX) && !offered.contains(name)
+            })
+            .collect();
+        self.withdraw(&gone);
+        self.runtime
+            .reconciled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.runtime.wake.notify_one();
+    }
+
     /// Delete subscription `refused`, the snapshot the access check refused,
     /// with its pending records (F9), unless a refresh has since re-bound it
     /// to another credential.

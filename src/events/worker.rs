@@ -56,6 +56,15 @@ impl EventsHub {
         services: &Arc<Services>,
         slots: &Arc<Semaphore>,
     ) -> Duration {
+        // The catalogue is partial until the startup scan has run: a record
+        // of a route removed while down must not be sent first (MIK-7772).
+        if !self
+            .runtime
+            .reconciled
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return IDLE;
+        }
         let held = self.runtime.busy.lock().clone();
         let Some(due) = self
             .blocking(move |store| store.due(Utc::now(), &held))
