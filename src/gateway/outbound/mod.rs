@@ -191,7 +191,6 @@ pub(crate) async fn audit_rejection(log: &Arc<TransparencyLogger>, evidence: &Re
 /// The rejection audit for sync producers (`send_or_count`): each rejection
 /// is handed to one detached task, admitted by a bounded non-blocking permit
 /// (F4). Saturation is counted as an audit failure.
-#[derive(Debug)]
 pub(crate) struct RejectionAudit {
     log: Option<Arc<TransparencyLogger>>,
     saturated: AtomicU64,
