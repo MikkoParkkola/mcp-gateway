@@ -207,3 +207,30 @@ async fn a_resume_with_no_live_host_settles_interrupted_and_calls_no_backend() {
     );
     std::assert_eq!(mock.calls(), 1, "the resume reached no backend");
 }
+
+/// MIK-7757. Mutant: the provide-input worker is spawned outside the shutdown
+/// token, so answers given after a shutdown cancelled the workers still
+/// resume the task and call the backend.
+#[tokio::test]
+async fn provide_input_after_a_shutdown_cancel_runs_nothing() {
+    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _store) = state_with(&mock).await;
+    let owner = alice();
+    let id = parked(&state, "guards-e").await;
+    state
+        .task_executor
+        .cancel_remaining(std::time::Duration::from_secs(1))
+        .await;
+    let outcome = state
+        .task_executor
+        .provide_input(
+            live(&state, &owner),
+            &owner,
+            &id,
+            answers(&json!({ "confirm": answer() })),
+        )
+        .await;
+    assert!(matches!(outcome, InputOutcome::Unavailable));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    std::assert_eq!(mock.calls(), 1, "nothing resumed after the shutdown");
+}

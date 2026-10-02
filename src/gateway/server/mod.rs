@@ -2201,16 +2201,14 @@ impl Gateway {
             }
         }
 
-        // Before the drain and well before the close: the sweep is joined while
-        // the store is still open, so a deletion already in flight finishes its
-        // own transaction and no new one starts against a store about to give
-        // its lease back. The join returns what the sweep actually met, so a
-        // store it could not delete from is not reported as a clean stop.
+        // Workers drain, and a drain that runs out cancels the rest; then the
+        // expiry sweep is joined while the store is still open, and the store
+        // closes (`task_runtime::shutdown` documents the order).
         task_runtime::shutdown(
             expiry_sweep,
             &task_executor_for_shutdown,
             &task_service_for_shutdown,
-            drain_timeout,
+            task_runtime::ShutdownBudget::within(drain_timeout, drain_timeout),
         )
         .await;
 
