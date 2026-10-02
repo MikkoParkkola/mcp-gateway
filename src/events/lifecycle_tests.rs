@@ -172,7 +172,15 @@ async fn a_test_source_plugs_in_without_core_changes() {
         occurred_at: chrono::Utc::now(),
         data: json!({"x": 1}),
     };
-    hub.fan_out(&services(), &event).await;
+    // Through the runtime's own entry points: start, then the emit queue.
+    hub.start(services());
+    hub.emit(event);
+    for _ in 0..100 {
+        if outbox_files(dir.path()) == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert_eq!(outbox_files(dir.path()), 2, "one record per subscriber");
     unsubscribe(&hub, "p1").await;
     assert_eq!(probe.last.load(Ordering::SeqCst), 0, "one subscriber left");
@@ -189,7 +197,17 @@ async fn a_test_source_plugs_in_without_core_changes() {
     let hub = EventsHub::open(&config, dir.path()).expect("reopened hub");
     let again = Arc::new(Probe::default());
     hub.register_source(again.clone());
-    hub.replay_starts().await;
-    hub.replay_starts().await;
-    assert_eq!(again.first.load(Ordering::SeqCst), 1, "replayed once");
+    hub.start(services());
+    for _ in 0..100 {
+        if again.first.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        again.first.load(Ordering::SeqCst),
+        1,
+        "replayed once by start"
+    );
 }

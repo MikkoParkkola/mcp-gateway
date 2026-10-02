@@ -25,7 +25,7 @@ use super::{EventSource, EventsHub};
 pub(crate) struct Runtime {
     queue: mpsc::Sender<SourceEvent>,
     /// Taken by [`EventsHub::start`]; `None` once the pipeline runs.
-    intake: Mutex<Option<mpsc::Receiver<SourceEvent>>>,
+    pub(super) intake: Mutex<Option<mpsc::Receiver<SourceEvent>>>,
     /// Wakes the worker: a record was written or a subscription reactivated.
     pub wake: Notify,
     pub seen: Seen,

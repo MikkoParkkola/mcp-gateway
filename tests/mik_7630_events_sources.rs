@@ -299,4 +299,16 @@ async fn settled_tasks_become_events_for_their_owner_only() {
     assert_eq!(for_sub(&rx, &bob_all).len(), 1, "bob hears only his own");
     assert_eq!(for_sub(&rx, &alice_all).len(), 1, "alice hears only hers");
     assert_eq!(for_sub(&rx, &alice_one).len(), 1);
+    // A second task of alice's: her all-tasks subscriber hears it, the one
+    // pinned to the first task does not.
+    let task_a2 = start_task(&gw, ALICE, "i4-a2").await;
+    mock.release();
+    assert!(wait_until(DEADLINE, || for_sub(&rx, &alice_all).len() == 2).await);
+    assert_eq!(
+        for_sub(&rx, &alice_all)[1].json()["data"]["taskId"],
+        task_a2
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(for_sub(&rx, &alice_one).len(), 1, "the taskId filter holds");
+    assert_eq!(for_sub(&rx, &bob_all).len(), 1);
 }
