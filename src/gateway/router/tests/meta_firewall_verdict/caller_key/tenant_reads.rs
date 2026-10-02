@@ -365,7 +365,9 @@ async fn delayed_http_body_keeps_reservation() {
             .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
         let (b, _, body) = send(&router, call_with(&who, true, None, 1, &reading(B))).await;
-        let a = axum::body::to_bytes(held.into_body(), usize::MAX).await.unwrap();
+        let a = axum::body::to_bytes(held.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let a = String::from_utf8_lossy(&a).into_owned();
         assert!(a.contains(r#""result""#), "the held A answer: {a}");
         if mode == CrossTenantReads::Off {
