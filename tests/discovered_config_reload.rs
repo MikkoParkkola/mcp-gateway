@@ -88,8 +88,11 @@ fn gateway_command(cwd: &Path, home: &Path) -> Command {
 /// codes stripped (their digits are not part of the port). The last `port`
 /// on the line is the field; the module path before it can contain the word.
 fn reported_port(log: &str) -> Option<u16> {
+    // Only a line already ended by a newline: the child may be mid-write, and
+    // a prefix such as `port=39` would parse as a wrong port.
     let line = log
-        .lines()
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
         .find(|line| line.contains("Listening") && line.contains("port"))?;
     let mut plain = String::new();
     let mut chars = line.chars();
@@ -568,9 +571,11 @@ async fn d7_a_gateway_on_port_zero_serves_on_the_port_it_reports() {
 /// The banner parse survives colour codes and a module path containing "port".
 #[test]
 fn the_reported_port_ignores_colour_codes_and_the_module_path() {
-    let plain = "2026-10-02T10:00:00Z  INFO mcp_gateway::gateway::server::support: Listening host=127.0.0.1 port=39123";
-    let coloured = "\u{1b}[2m2026-10-02T10:00:00Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mmcp_gateway::gateway::server::support\u{1b}[0m: Listening \u{1b}[3mhost\u{1b}[0m\u{1b}[2m=\u{1b}[0m127.0.0.1 \u{1b}[3mport\u{1b}[0m\u{1b}[2m=\u{1b}[0m39123";
+    let plain = "2026-10-02T10:00:00Z  INFO mcp_gateway::gateway::server::support: Listening host=127.0.0.1 port=39123\n";
+    let coloured = "\u{1b}[2m2026-10-02T10:00:00Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mmcp_gateway::gateway::server::support\u{1b}[0m: Listening \u{1b}[3mhost\u{1b}[0m\u{1b}[2m=\u{1b}[0m127.0.0.1 \u{1b}[3mport\u{1b}[0m\u{1b}[2m=\u{1b}[0m39123\n";
     assert_eq!(reported_port(plain), Some(39123));
     assert_eq!(reported_port(coloured), Some(39123));
     assert_eq!(reported_port("Listening on nothing"), None);
+    assert_eq!(reported_port("Listening host=127.0.0.1 port=39"), None);
+    assert_eq!(reported_port("Listening host=127.0.0.1 port=39123\n"), Some(39123));
 }
