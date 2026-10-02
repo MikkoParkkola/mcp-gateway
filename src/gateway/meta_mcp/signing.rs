@@ -436,3 +436,8 @@ mod scope_tests;
 #[cfg(all(test, feature = "metrics"))]
 #[path = "signing_nonce_metrics_tests.rs"]
 mod nonce_metrics_tests;
+
+// MIK-7698: a call refused before the tool acts leaves its nonce unspent.
+#[cfg(test)]
+#[path = "signing_unspent_tests.rs"]
+mod unspent_tests;
