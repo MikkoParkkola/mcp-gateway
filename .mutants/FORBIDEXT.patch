@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/config.rs b/src/personal_accounts/config.rs
+index 565d59c6d..5dd9cd2d7 100644
+--- a/src/personal_accounts/config.rs
++++ b/src/personal_accounts/config.rs
+@@ -628,7 +628,7 @@ fn forbid_external_strategy(
+     account_id: &str,
+     descriptor: &AccountDescriptor,
+ ) -> Result<(), AccountsConfigError> {
+-    if descriptor.external_strategy.is_some() {
++    if false {
+         return Err(AccountsConfigError::Descriptor {
+             account_id: account_id.to_string(),
+             problem: "external_strategy is valid only on mode external",

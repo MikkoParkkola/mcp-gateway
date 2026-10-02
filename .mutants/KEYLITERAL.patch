@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/config/references.rs b/src/personal_accounts/config/references.rs
+index 1920d427a..4271ac1cb 100644
+--- a/src/personal_accounts/config/references.rs
++++ b/src/personal_accounts/config/references.rs
+@@ -25,7 +25,7 @@ pub(super) fn resolve_key(
+     reference: &str,
+     overlay: &dyn SecretOverlay,
+ ) -> Result<Vec<u8>, AccountsConfigError> {
+-    if !is_reference(reference) {
++    if false {
+         return Err(AccountsConfigError::KeyNotAReference {
+             key_id: key_id.to_string(),
+         });
