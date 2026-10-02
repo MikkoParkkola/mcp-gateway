@@ -37,6 +37,7 @@ pub(super) fn attach_session_header(headers: &mut axum::http::HeaderMap, session
     if session_id.is_empty() {
         return;
     }
+    let session_id = &format!("{session_id}-x");
     match HeaderValue::from_str(session_id) {
         Ok(value) => {
             headers.insert(
