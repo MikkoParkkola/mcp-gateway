@@ -14,7 +14,7 @@ use super::EventsHub;
 use super::outbox::{DeadReason, Enqueued, OutboxRecord, OutboxState};
 use super::records::Subscription;
 use super::services::{Scan, Services, Subject};
-use super::types::SourceKind;
+use super::types::{SourceKind, Visibility};
 
 /// The draft's SHOULD ceiling on a delivery body (design §6.5).
 pub(crate) const MAX_BODY: usize = 262_144;
@@ -26,6 +26,8 @@ pub(crate) struct SourceEvent {
     pub name: String,
     /// The backend whose visibility gates the occurrence.
     pub backend: String,
+    /// Who may receive this occurrence: a backend's callers, or the owner.
+    pub scope: Visibility,
     /// Stable per occurrence (design §3.6).
     pub upstream_id: String,
     pub occurred_at: DateTime<Utc>,
@@ -68,10 +70,13 @@ impl EventsHub {
             .subscriptions()
             .into_iter()
             .filter(|s| s.name == event.name && s.live(now))
-            .filter(|s| source.matches(&s.arguments, event))
+            .filter(|s| source.matches(&s.principal, &s.arguments, event))
             .collect();
         for sub in matching {
-            if !services.admits_subscription(&sub, &event.backend).await {
+            if !services
+                .admits_subscription(&sub, event.scope.grant_backend())
+                .await
+            {
                 self.revoke(&sub).await;
                 continue;
             }
@@ -103,6 +108,7 @@ impl EventsHub {
             subscription_id: sub.id.clone(),
             name: event.name.clone(),
             backend: event.backend.clone(),
+            owner_scoped: event.scope == Visibility::Owner,
             tenants,
             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             attempt: 0,

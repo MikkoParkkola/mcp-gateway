@@ -138,7 +138,8 @@ impl EventsHub {
             body_sha256: "",
             delivered: false,
         };
-        if !services.admits_subscription(&sub, &record.backend).await {
+        let grant = (!record.owner_scoped).then_some(record.backend.as_str());
+        if !services.admits_subscription(&sub, grant).await {
             services.audit_attempt(&refused("access_revoked")).await;
             self.revoke(&sub).await;
             // Removed: the record went with it and this settles nothing. Not

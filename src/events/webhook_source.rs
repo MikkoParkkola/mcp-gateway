@@ -23,6 +23,7 @@ pub(crate) struct WebhookSource {
     pub registry: Arc<parking_lot::RwLock<WebhookRegistry>>,
 }
 
+#[async_trait::async_trait]
 impl EventSource for WebhookSource {
     fn kind(&self) -> SourceKind {
         SourceKind::Webhook
@@ -34,7 +35,7 @@ impl EventSource for WebhookSource {
 
     /// `event_type` matches by glob, every other argument by equality on
     /// the projected field of that name.
-    fn matches(&self, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
         let Some(arguments) = arguments.as_object() else {
             return false;
         };
@@ -101,6 +102,7 @@ impl EventsHub {
             upstream_id: format!("{route}:{upstream}"),
             occurred_at: Utc::now(),
             data: json!({ "event_type": inbound.event_type, "fields": inbound.fields }),
+            scope: Visibility::Backend(inbound.backend.to_owned()),
         });
     }
 }

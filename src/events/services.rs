@@ -68,6 +68,12 @@ impl Services {
     /// an API key has no live scope to re-read, so its subscribe-time check
     /// stands.
     pub(crate) fn admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
+        self.admits_grant(key, Some(backend))
+    }
+
+    /// As [`Self::admits`]; `None` asks only that the key be live, for
+    /// owner-scoped events that need no backend grant.
+    fn admits_grant(&self, key: Option<&ApiKeyRef>, backend: Option<&str>) -> bool {
         let Some(key) = key else {
             return true;
         };
@@ -85,7 +91,9 @@ impl Services {
                     .and_then(crate::config::parse_api_key_digest)
                     .is_some_and(|digest| hex::encode(&digest[..6]) == key.principal)
             })
-            .is_some_and(|k| k.backends.iter().any(|b| b == "*" || b == backend))
+            .is_some_and(|k| {
+                backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
+            })
     }
 
     /// Whether stored subscription `sub` may still receive an event of
@@ -94,13 +102,17 @@ impl Services {
     /// live where it was issued (design F9). A row stored before keys were
     /// bound to their secret, or a bound kind without its binding, is
     /// refused.
-    pub(crate) async fn admits_subscription(&self, sub: &Subscription, backend: &str) -> bool {
+    pub(crate) async fn admits_subscription(
+        &self,
+        sub: &Subscription,
+        backend: Option<&str>,
+    ) -> bool {
         use crate::security::audit::CredentialKind as Kind;
         match sub.credential_kind {
             None | Some(Kind::ApiKey) => {
                 sub.legacy_api_key_name.is_none()
                     && sub.api_key.is_some()
-                    && self.admits(sub.api_key.as_ref(), backend)
+                    && self.admits_grant(sub.api_key.as_ref(), backend)
             }
             // No credential was presented: authentication is off.
             Some(Kind::None | Kind::LocalTransport) => true,
@@ -114,7 +126,12 @@ impl Services {
         }
     }
 
-    async fn binding_live(&self, binding: &LiveBinding, sub: &Subscription, backend: &str) -> bool {
+    async fn binding_live(
+        &self,
+        binding: &LiveBinding,
+        sub: &Subscription,
+        backend: Option<&str>,
+    ) -> bool {
         let credentials = &self.credentials;
         match binding {
             LiveBinding::KeyServerToken { jti } => match &credentials.key_server {
@@ -156,7 +173,9 @@ impl Services {
                             &crate::key_server::policy::RequestedScopes::default(),
                         )
                         .is_ok_and(|scopes| {
-                            scopes.backends.iter().any(|b| b == "*" || b == backend)
+                            backend.is_none_or(|backend| {
+                                scopes.backends.iter().any(|b| b == "*" || b == backend)
+                            })
                         })
             }),
             LiveBinding::StaticBearer => credentials
@@ -448,7 +467,7 @@ mod tests {
         });
         let sub: Subscription = serde_json::from_value(stored).expect("loads");
         let live = services(vec![key("alice", "s1", None)]);
-        assert!(!live.admits_subscription(&sub, "x").await);
+        assert!(!live.admits_subscription(&sub, Some("x")).await);
         let rewritten = serde_json::to_value(&sub).expect("serialises");
         assert!(
             rewritten.get("api_key_name").is_none(),
@@ -514,18 +533,18 @@ mod tests {
             bearer_principal: Some(crate::gateway::auth::principal_of("old")),
             ..LiveCredentials::default()
         });
-        assert!(same.admits_subscription(&sub, "x").await);
+        assert!(same.admits_subscription(&sub, Some("x")).await);
         let rotated = with(LiveCredentials {
             bearer_principal: Some(crate::gateway::auth::principal_of("new")),
             ..LiveCredentials::default()
         });
         assert!(
-            !rotated.admits_subscription(&sub, "x").await,
+            !rotated.admits_subscription(&sub, Some("x")).await,
             "rotated bearer"
         );
         let mismatched = bound(Kind::KeyServerToken, Some(LiveBinding::StaticBearer));
         assert!(
-            !same.admits_subscription(&mismatched, "x").await,
+            !same.admits_subscription(&mismatched, Some("x")).await,
             "a binding of another kind is refused"
         );
     }
@@ -568,21 +587,21 @@ mod tests {
             Kind::KeyServerToken,
             Some(LiveBinding::KeyServerToken { jti: "j1".into() }),
         );
-        assert!(live.admits_subscription(&token, "x").await);
+        assert!(live.admits_subscription(&token, Some("x")).await);
         ks.store.revoke_by_jti("j1").await;
         assert!(
-            !live.admits_subscription(&token, "x").await,
+            !live.admits_subscription(&token, Some("x")).await,
             "revoked token"
         );
         assert!(
             !with(LiveCredentials::default())
-                .admits_subscription(&token, "x")
+                .admits_subscription(&token, Some("x"))
                 .await,
             "no key server, nothing to vouch for the token"
         );
 
         let unbound = bound(Kind::KeyServerToken, None);
-        assert!(!live.admits_subscription(&unbound, "x").await);
+        assert!(!live.admits_subscription(&unbound, Some("x")).await);
     }
 
     /// Design F9 (MIK-7769): a delegated bearer is re-checked against the
@@ -618,30 +637,30 @@ mod tests {
         let fresh = oidc(now);
         assert!(
             running(key_server(true))
-                .admits_subscription(&fresh, "x")
+                .admits_subscription(&fresh, Some("x"))
                 .await
         );
         assert!(
             !running(key_server(true))
-                .admits_subscription(&fresh, "y")
+                .admits_subscription(&fresh, Some("y"))
                 .await,
             "no grant"
         );
         assert!(
             !running(key_server(false))
-                .admits_subscription(&fresh, "x")
+                .admits_subscription(&fresh, Some("x"))
                 .await,
             "delegated bearers switched off"
         );
         assert!(
             !running(key_server_with(true, "b", 3600))
-                .admits_subscription(&fresh, "x")
+                .admits_subscription(&fresh, Some("x"))
                 .await,
             "the provider now expects another audience"
         );
         assert!(
             !running(key_server_with(true, "a", 60))
-                .admits_subscription(&oidc(now - 600), "x")
+                .admits_subscription(&oidc(now - 600), Some("x"))
                 .await,
             "older than the running max age"
         );
@@ -664,9 +683,12 @@ mod tests {
             dashboard: Some(Arc::clone(&dashboard)),
             ..LiveCredentials::default()
         });
-        assert!(open.admits_subscription(&session, "x").await);
+        assert!(open.admits_subscription(&session, Some("x")).await);
         let limits = crate::gateway::auth::SessionLimits::default();
         assert!(dashboard.revoke(&handle, crate::gateway::auth::Now::read(), &limits));
-        assert!(!open.admits_subscription(&session, "x").await, "logged out");
+        assert!(
+            !open.admits_subscription(&session, Some("x")).await,
+            "logged out"
+        );
     }
 }

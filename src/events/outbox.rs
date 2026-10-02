@@ -29,6 +29,10 @@ pub(crate) struct OutboxRecord {
     pub name: String,
     /// The backend whose visibility gates the event (audit `server`).
     pub backend: String,
+    /// Owner-scoped (task) event: the attempt re-check needs a live credential,
+    /// not a backend grant.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub owner_scoped: bool,
     /// The exact body bytes, base64.
     pub body_b64: String,
     /// Hashed tenant attribution of `data` (MIN.1), fixed at fan-out.
