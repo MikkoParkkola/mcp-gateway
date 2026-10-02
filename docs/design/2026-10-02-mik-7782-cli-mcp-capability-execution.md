@@ -1,6 +1,6 @@
 # MIK-7782: executing `service: cli` and `service: mcp` capabilities
 
-Status: draft for review (round 2; round 1: gpt and grok SHIP-WITH-FIXES, all findings applied). Operator ruling 2026-10-02 (chat): "build and fix, we need to deliver
+Status: FROZEN after two review rounds (round 1: gpt and grok SHIP-WITH-FIXES; round 2: gpt SHIP, grok SHIP-WITH-FIXES; every finding of both rounds applied). Operator ruling 2026-10-02 (chat): "build and fix, we need to deliver
 our promise". Covers MIK-CAPEXEC.DESIGN.1, CLI.1, MCP.1, SEC.1, CAT.1, ATTACH.1, CLAIM.1.
 
 ## 1. Facts (base 60793344c)
@@ -34,14 +34,14 @@ our promise". Covers MIK-CAPEXEC.DESIGN.1, CLI.1, MCP.1, SEC.1, CAT.1, ATTACH.1,
 | Capability | Real tool | State | Fix |
 |---|---|---|---|
 | 17 `gws_*` | `@googleworkspace/cli` 0.22.5 | 12 match after arg fixes; 5 wrong flags | see §2.1 |
-| `trawl_extract` | `trawl` (Go/cobra, operator repo) | `args_template` is Liquid, never read; no dial-time egress control | structured args, URL after `--`; runnable only after D8 |
-| `metacognition_verify` | `metacognition` 0.7.0 (clap) | positional text reads `@file`, `setup` runs a subcommand | text on **stdin** (`-`), never argv |
+| `trawl_extract` | `trawl` (akdavidsson/trawl v0.1.1, third-party, MIT, Go/cobra) | `args_template` is Liquid, never read; no dial-time egress control | structured args, URL after `--`; runnable only after D8 |
+| `metacognition_verify` | `metacognition` 0.7.0 (clap), private repo, not published | positional text reads `@file`, `setup` runs a subcommand; nobody else can install it, and PyPI `metacognition` is an unrelated package | removed from the public catalogue (operator, §9) |
 | `openpencil_design` | `openpencil-mcp` 0.15.1, 106 tools | 5 of 8 operations name no real tool | operation-to-tool map: `create_node`→`create_shape`, `export_png`→`export_image`, `set_auto_layout`→`set_layout`, `get_design_tokens`→`design_to_tokens`, `list_components`→`get_components` |
 | `pact_contracts` | `pact-mcp` (pact-agents 1.2.0), 7 tools | names differ; every tool takes `project_dir`, which the capability lacks (the server would read its own cwd) | map `verify_contract`/`validate_gate`→`pact_validate`, `list_contracts`→`pact_contracts`, `get_contract`→`pact_contract{component_id}`, `check_budget`→`pact_budget`, `get_retrospective`→`pact_retrospective`, `resume_run`→`pact_resume` (starts a paid run: `read_only: false`); add `project_dir` (limited to a configured root, §6.2) |
 | `pyghidra_reverse` | `pyghidra-mcp` 0.2.7 | tool and argument names differ; needs Ghidra + JDK | map `decompile`→`decompile_function`, `get_xrefs`→`list_xrefs`, `get_call_graph`→`gen_callgraph`, `search_symbols`→`search_symbols_by_name`, `disassemble`, `analyze_binary`→`import_binary`; test double in CI |
-| `cloudflare_manage` | declared `npx @anthropic/cloudflare-mcp`: **package does not exist** | real `@cloudflare/mcp-server-cloudflare` 0.2.0 has zones, workers, R2; **no DNS, WAF or cache-purge tools** | 5 of 12 operations mappable; 7 need a decision (§9) |
-| `cisco_scanner` | `cisco-ai-mcp-scanner` 4.8.5 | **ships no MCP server** (CLI `mcp-scanner` + REST API); no skill scanning | 1 of 5 mappable: `scan_mcp_server` as `service: cli` `mcp-scanner remote --server-url=<url> --raw` (URL egress-checked; the `stdio` subcommand runs a command and is never reachable); 4 need a decision (§9) |
-| `desktop_event_bus` | `axterminator mcp serve` 0.10.2, 62 tools | **no event-bus tools**; subscriptions are a stream, not request/response | not executable; decision (§9) |
+| `cloudflare_manage` | declared `npx @anthropic/cloudflare-mcp`: **package does not exist** | real `@cloudflare/mcp-server-cloudflare` 0.2.0 has zones, workers, R2; **no DNS, WAF or cache-purge tools** | operator decision (§9): replaced by 11 REST files on the Cloudflare API v4 |
+| `cisco_scanner` | `cisco-ai-mcp-scanner` 4.8.5 | **ships no MCP server** (CLI `mcp-scanner` + REST API); no skill scanning | operator decision (§9): 2 operations as `service: cli` (`mcp-scanner` remote with yara only, `skill-scanner scan`); the `stdio`, `config` and `known-configs` subcommands run commands and are never reachable |
+| `desktop_event_bus` | `axterminator mcp serve` 0.10.2, 62 tools | **no event-bus tools**; subscriptions are a stream, not request/response | operator decision (§9): webhook event route fed by Hammerspoon |
 
 ### 2.1 gws argument fixes
 
@@ -91,9 +91,10 @@ providers:
       max_output_bytes: 1048576    # default 1 MiB, ceiling 8 MiB, stdout and stderr each
 ```
 
-The child runs with cwd AND `HOME` set to a fresh empty directory under the gateway's private temp area,
-removed after the call (plus `XDG_CONFIG_HOME`, and on Windows `USERPROFILE`/`APPDATA`/`LOCALAPPDATA`,
-pointed inside it). A tool therefore cannot fall back to the operator's own logins, keyrings or
+The child runs with cwd, `HOME`, `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`XDG_DATA_HOME` and `TMPDIR` (on
+Windows also `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`) inside a fresh empty directory under
+the gateway's private temp area, removed after the call; the gateway's own temp directory is not
+passed. A tool therefore cannot fall back to the operator's own logins, keyrings or
 dotfiles. Neither cwd nor HOME is configurable; a capability that needs state gets it through `env`.
 
 ### 3.2 Substitution rules (typed, never textual)
@@ -108,7 +109,9 @@ dotfiles. Neither cwd nor HOME is configurable; a capability that needs state ge
   never close a string or add a key.
 - String elements take strings as-is and numbers/bools as JSON text; arrays/objects are refused there.
   `each:` takes an array property of strings and emits one `--x={item}` element per item (only the
-  bound `--x=` form is accepted for `each`); nothing ever splits a caller string.
+  bound `--x=` form is accepted for `each`); nothing ever splits a caller string. The property must
+  declare `maxItems` (validator check), and the executor caps expansion at 64 items and total argv at
+  128 KiB regardless.
 - Refused before spawn: any NUL; a value starting with `-` in a standalone element before `--` (cannot
   occur by construction: CAP check refuses such a config); line breaks in an `--x=` value unless the
   property declares `format: multiline` (gws `--body`, `--text`).
@@ -125,7 +128,6 @@ providers:
       command: openpencil-mcp      # stdio: static, pinned, never templated
       args: []                     # static strings only
       env: []                      # allowlisted names, as for cli
-      # instead of command/args:  url: https://host/mcp   (streamable HTTP, egress-checked)
       tool_selector:
         param: operation           # input property that picks the tool
         tools:
@@ -153,7 +155,10 @@ New `src/capability/executor/cli.rs` (`CliExecutor`, a `ProtocolExecutor` like `
    features `tokio1`, `process-group`, `job-object`, `kill-on-drop`), which puts the child in its own
    process group on Unix and a kill-on-close Job object on Windows behind a safe API. Our crate adds no
    `unsafe` (ADR-016 keeps `src/win_acl.rs` the only unsafe module, lead decision D5). Timeout, cap
-   overflow and drop kill the whole tree. This matters: gws's npm entry `run.js` is a node wrapper that
+   overflow and cancellation kill the whole tree: the child lives in a guard whose `Drop` calls the
+   group/Job kill (`start_kill` on the wrapped child, which signals the group, not only the leader;
+   process-wrap's own `KillOnDrop` reaps only the direct child on Unix) and hands reaping to a spawned
+   task, so an aborted invocation future cannot leave a grandchild. This matters: gws's npm entry `run.js` is a node wrapper that
    `spawnSync`s the native gws binary, so killing node alone would orphan it. New transitive crates:
    `nix` (Unix) and `windows` 0.62 (Windows); `cargo deny` and `cargo audit` must pass in the CLI PR.
    Environment: `configure_child_environment` (`stdio.rs:42`, made `pub(crate)`) baseline with HOME and
@@ -180,19 +185,30 @@ from the same dispatch; nothing new.
 
 New `src/capability/executor/mcp.rs` (`McpExecutor`). No new MCP client: each `service: mcp`
 capability gets one `crate::backend::Backend`, built with `Backend::new` from a `BackendConfig`
-(`TransportConfig::Stdio` with `join_command(command, args)`, or the HTTP transport for `url`), with
+(`TransportConfig::Stdio` with `join_command(command, args)`; stdio only: a remote MCP server is
+already served as a configured backend, so `McpConfig` has no `url`), with
 `env` filled from the allowlist, `timeout` from the provider, and:
 
-- **Per-caller children.** The executor's map is keyed by (capability, caller binding), the same
-  opaque binding the invoke path derives for `identity_key`; each key owns its own `Backend`, i.e. its
+- **Per-caller children.** The executor's map is keyed by (capability, caller principal), where the
+  principal is `support::caller_cache_principal` (`invoke.rs:1704`): the dispatch binding, else the
+  verified OIDC subject, else the caller's `GrantSubject`, else the digest of its validated credential.
+  (`cache_binding`/`identity_key` alone is None for every shipped `mcp` capability, since none has
+  identity propagation or an `auth.account`, `invoke.rs:1610-1620`, `:1686-1690`.) The principal is
+  threaded into `CapabilityExecutionContext` as a new field. Each key owns its own `Backend`, i.e. its
   own server process, so user B never sees user A's open documents, projects or pyghidra imports.
   (Backends get per-user slots only through `identity_propagation` (`src/backend/pool.rs:261`), which
   also brings a credential strategy and audience that a local stdio server has no use for, so it is
-  not borrowed for this.) On a multi-user gateway a call with no caller binding is refused; a
-  single-user gateway uses one shared key. At most 16 children per capability; the least recently used
-  is stopped to admit a new one.
-- **cwd** is a private empty directory per capability (never the gateway's working directory, which
-  `StdioTransport` inherits when `cwd` is None, `stdio.rs:187-190`); HOME as in §3.1.
+  not borrowed for this.) On a multi-user gateway an `Anonymous` or `Unresolved` principal is refused;
+  a single-user gateway uses one shared key. At most 16 children per capability; to admit a new one the
+  least recently used child WITH NO CALL IN FLIGHT is stopped (lookup, in-flight count and eviction
+  under one lock); when all 16 are busy the call is refused with a retryable error.
+- **Filesystem namespace per map entry.** One private directory tree per (capability, caller) is
+  created with the child, kept for the child's whole life, and removed when it stops: it is the cwd and
+  holds HOME, `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`/`XDG_DATA_HOME`, `TMPDIR` (and on Windows `USERPROFILE`,
+  `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`). Never the gateway's working directory (never the gateway's working directory, which
+  `StdioTransport` inherits when `cwd` is None, `stdio.rs:187-190`). A restarted child gets a fresh one,
+  so no project state (pyghidra's relative default project path, pact or openpencil files) outlives the
+  child or crosses callers.
 - **Process tree.** The stdio spawn gains an ownership option (enum `ChildTree::DirectChild |
   OwnedTree`, default `DirectChild` so configured backends are unchanged) and capability backends use
   `OwnedTree`, the same `process-wrap` group/Job ownership as the CLI path, so stop, unload and shutdown
@@ -274,9 +290,14 @@ capability gets one `crate::backend::Backend`, built with `Backend::new` from a 
 - **Caller credentials, not the operator's login.** As shipped, every gws file has `auth` with no `key`,
   so gws would run on whatever login sits in the gateway user's `~/.config/gws`, for every caller, and
   `validate_oauth_isolation` (which keys on `oauth:`) would never fire. The gws files get
-  `auth.key: oauth:google` (as the REST Google capabilities have), so the existing token resolution,
-  personal-account and OAuth-isolation checks apply unchanged; the executor passes the resolved
-  access token in `token_env` (`GOOGLE_WORKSPACE_CLI_TOKEN`, gws's highest-priority credential source)
+  `auth.key: oauth:google` (as the REST Google capabilities have), and the CLI executor obtains the
+  token through the SAME path the REST executor uses: `prepare_account_context`
+  (`executor/credentials.rs:101`) resolves a caller-specific account credential when the capability or
+  deployment names an `auth.account` (personal accounts); otherwise the gateway-held `oauth:google`
+  token is used and `validate_oauth_isolation` refuses it on a multi-user gateway unless the operator
+  marked the account shared or the capability is `exposure: personal` for this caller. So gws behaves
+  exactly like the 20 REST capabilities that use `oauth:google`, no new credential model. The executor passes the
+  resolved access token in `token_env` (`GOOGLE_WORKSPACE_CLI_TOKEN`, gws's highest-priority credential source)
   and sets `GOOGLE_WORKSPACE_CLI_CONFIG_DIR` inside the per-call empty HOME, so there is no fallback
   credential. A call whose token does not resolve fails before spawn.
 - Secrets reach a child only through `env`/`token_env`, never argv (argv is visible in `ps`) or stdin.
@@ -313,16 +334,19 @@ response, so the bytes never reach the model or the output firewall as text.
   unset the capability refuses with a message naming the key. The `output_dir` parameter is removed
   (a caller-chosen directory is the traversal hole) and UPGRADING says so.
 - Filename: one path component. Refused: empty, `.`, `..`, `/`, `\`, NUL, control characters, `:`
-  (Windows streams), a trailing dot or space, Windows device names (`CON`, `NUL`, `COM1`..), longer
-  than 255 bytes. No silent sanitizing: a refused name is an error the caller can correct.
+  (Windows streams), a trailing dot or space, any name whose part before the first `.` is a DOS device
+  name, case-insensitive (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, also with
+  superscript digits), so `con.txt` and `COM1.log` are refused too, and longer than 255 bytes. The rule
+  applies on every OS, so a file saved on Linux stays portable. No silent sanitizing: a refused name is an error the caller can correct.
 - Write: `OpenOptions::create_new(true)` on `root.join(name)` (fails on any existing entry, including a
   symlink, so nothing is overwritten and no link is followed), mode 0600 on Unix. On a name clash try
   `name_1.ext`.. `name_99.ext`, then fail. A failed write removes the partial file.
 - Size: refuse when the encoded length implies more than `max_bytes` before decoding; decode with the
   `base64` crate (already a dependency).
-- Aggregate: `capabilities.files.downloads_quota_bytes` (default 1 GiB) bounds the directory. Before a
-  write the executor sums the sizes of the root's regular files (one `read_dir`, no recursion) and
-  refuses when the new file would exceed the quota; nothing partial is left.
+- Aggregate: `capabilities.files.downloads_quota_bytes` (default 1 GiB) bounds the directory. Under one
+  async mutex per root, held from the check through the completed write, the executor sums the sizes
+  of the root's regular files (one `read_dir`, no recursion) and refuses when the new file would exceed
+  the quota; nothing partial is left. (One lock per root: saves are rare and bounded by `max_bytes`.)
 - Residual: a process that swaps `root` for a symlink between canonicalization and open is outside the
   model (the directory is operator-owned); stated in docs.
 
@@ -340,21 +364,25 @@ recorded `tools/list` snapshot and answers `tools/call` with the name and argume
 | T2 | Hostile values through the real spawn path (argv_echo): `--attach=/etc/passwd`, `-a x`, `--draft`, `; rm -rf ~`, `$(id)`, backticks, `%PATH%`, `"`, newline, NUL, `@/etc/passwd`, `setup`, a 1 MiB string, non-ASCII. Assert: each value appears as exactly the bytes of ONE argv element (or stdin), argv length equals the golden length, or the call is refused with a parameter error; never an extra element. Run on BOTH an `--x={p}` element and a standalone positional after `--` (the `--`-insertion mutant's red target: with `--` removed, `--draft` as the positional must be seen as an option by `opt_parse.py`, a double that parses options like clap and reports what it parsed). `@/etc/passwd` and `setup` go through `stdin` for metacognition and must not reach argv | CLI.1 |
 | T3 | JSON args: `"q": "x\", \"userId\": \"evil"` stays one string; numbers stay numbers; absent optional key dropped | CLI.1 |
 | T4 | Env: child sees only the baseline plus allowlisted names and `token_env`; a gateway variable `SECRET_X` absent; HOME, cwd and `GOOGLE_WORKSPACE_CLI_CONFIG_DIR` are the empty per-call dir, which is gone after the call | CLI.1, SEC |
-| T5 | Timeout kills the child and its grandchild (Unix: the grandchild's pid is gone); stdout cap kills and errors; non-zero exit maps to an error with the code; gws-style JSON error message surfaces | CLI.1 |
+| T5 | Timeout kills the child and its grandchild (Unix: the grandchild's pid is gone), also when the invocation task is ABORTED mid-call; stdout cap kills and errors; non-zero exit maps to an error with the code; gws-style JSON error message surfaces | CLI.1 |
 | T6 | Windows (`cfg(windows)` job): a `gws.cmd` double on PATH resolves and the spawned program path ends in `.cmd`; hostile values T2 (incl. `%PATH%`, `^`, `&`, `"`) through the `.cmd` either arrive intact or are refused; a timed-out `.cmd` that started a child leaves no process (Job object); an MCP `.cmd` shim starts | CLI.1 |
 | T7 | Unpinned `cli` and `mcp` definitions refused before spawn (argv_echo leaves a marker file; assert absent), including a definition constructed in code without the parser (default `Unpinned`); tampered pin never loads; `process_commands` mismatches refused: other command, same basename at another path, extra leading arg (`npx --yes -p evil ...`), `mcp-scanner stdio`; `process_execution: disabled` refuses | SEC.1 |
 | T8 | A canary in argv, stdin, an env value and the token never appears in captured tracing output, the audit record or the error text, including when the double echoes all of them to stderr and to a JSON `error.message` on stdout and exits 1 | SEC |
-| T9 | MCP: each shipped `mcp` file run against fake_mcp with its server's recorded snapshot; operation maps to the expected tool name and arguments; unknown operation refused; tool `isError` maps to an error; one child reused across calls by ONE caller, a second caller gets a different child (pid differs), no binding on a multi-user gateway refused; children stopped on unload, idle and shutdown, including a grandchild the fake server spawned; child cwd is the private dir; a newline-free 20 MiB frame kills the child and errors; pyghidra prepare step binds the name the snapshot's `import_binary` returns | MCP.1, CAT.1 |
+| T9 | MCP: each shipped `mcp` file run against fake_mcp with its server's recorded snapshot; operation maps to the expected tool name and arguments; unknown operation refused; tool `isError` maps to an error; one child reused across calls by ONE caller, a second caller gets a different child (pid differs), no binding on a multi-user gateway refused; children stopped on unload, idle and shutdown, including a grandchild the fake server spawned; child cwd, HOME, XDG dirs and TMPDIR are private per (capability, caller) and differ between two `GrantSubject` callers with no identity propagation and no `auth.account`; an anonymous caller on a multi-user gateway is refused; a file one caller's child writes is absent for another caller's child and after a restart; eviction never stops a child with a call in flight and all-busy refuses; a newline-free 20 MiB frame kills the child and errors; pyghidra prepare step binds the name the snapshot's `import_binary` returns | MCP.1, CAT.1 |
 | T10 | Snapshot conformance: every mapped tool exists in the recorded `tools/list` of the pinned server version (`tests/fixtures/cap_exec/snapshots/<server>@<ver>.json`) and the arguments each operation generates (from typical inputs) validate against that tool's full `inputSchema` (required keys, types) | CAT.1 |
-| T11 | save_file: decode base64url with and without padding; saved bytes equal; `..`, `a/b`, `a\b`, `CON`, `x:y`, trailing dot, 256-byte name refused; existing file not overwritten (suffix `_1`); pre-placed symlink at the target name not followed; over-size refused before decode; quota exceeded refused with no partial file; unset `downloads` refuses; `data` absent from the result | ATTACH.1 |
+| T11 | save_file: decode base64url with and without padding; saved bytes equal; `..`, `a/b`, `a\b`, `CON`, `con.txt`, `COM1.log`, `nul.tar.gz`, `x:y`, trailing dot, 256-byte name refused; existing file not overwritten (suffix `_1`); pre-placed symlink at the target name not followed; over-size refused before decode; quota exceeded refused with no partial file; two concurrent saves that each fit but together exceed the quota: exactly one succeeds; unset `downloads` refuses; `data` absent from the result | ATTACH.1 |
 | T12 | calendar_get_attachment projection on a recorded event body | ATTACH.1 |
 | T13 | Catalogue: every shipped `cli`/`mcp` file loads with zero CAP-012 warnings and dispatches to its executor; `public_claims.json` count equals executable capabilities | CAT.1, CLAIM.1 |
+| T15 | gws credentials: two callers with different personal-account bindings get their own token in `GOOGLE_WORKSPACE_CLI_TOKEN` (double echoes a hash of it); on a multi-user gateway an unbound caller with an unshared `oauth:google` account is refused before spawn; no fallback credential file is visible in HOME | SEC |
 | T14 | Egress: `http://169.254.169.254/`, `file:///etc/passwd` and a hostname resolving to 127.0.0.1 (`localhost`) refused before spawn; a capability with an `egress: true` parameter and no connect-time enforcement refused (D8); path roots: `/uploads_evil/x` vs root `/uploads`, `../` escape and a symlink inside the root pointing out are refused | SEC |
 
 Real binaries in CI (a separate job, not a required gate for external contributors):
 - gws: `npm install -g @googleworkspace/cli@0.22.5` (its postinstall downloads the native binary, so
   `--ignore-scripts` cannot be used; pinned version, run in the CI sandbox only), then every T1 argv
-  plus `--dry-run` must exit 0 and print `"dry_run": true`. This proves the flags exist.
+  plus `--dry-run` must exit 0 and print `"dry_run": true`. This proves the flags exist. One real
+  (non-dry-run) call with `GOOGLE_WORKSPACE_CLI_TOKEN=<invalid>` and an empty HOME must fail with
+  Google's 401 (gws exit 2 with an API error), not with gws's "no credentials" message: this proves gws
+  reads the token from that variable and has no other credential to fall back on.
 - pact-mcp (`pact-agents[mcp]==1.2.0`) and openpencil-mcp (`@open-pencil/mcp@0.15.1`): live
   `tools/list` must match the recorded snapshot (catches snapshot drift).
 - pyghidra-mcp (needs Ghidra and a JDK), cloudflare (needs an account), trawl and metacognition (not
@@ -374,12 +402,33 @@ decisions are not counted.
 Until decided, the affected capabilities load, are refused at call time with `not executable: <reason>`,
 and are excluded from the public count. Nothing is removed without operator approval.
 
-- **D1-D3 `desktop_event_bus`, `cloudflare_manage`, `cisco_scanner`** (operator, 2026-10-02: "find out
-  what broken capabilities could be replaced with something working"): a research lane is finding working
-  replacements. Facts for it: axterminator 0.10.2 has no event-bus tools; the declared
-  `@anthropic/cloudflare-mcp` does not exist and the real `@cloudflare/mcp-server-cloudflare@0.2.0`
-  covers 5 of 12 operations (zones, workers, R2; no DNS, WAF or purge); `cisco-ai-mcp-scanner` 4.8.5 has
-  no MCP server and maps 1 of 5 operations. These three are not narrowed, removed or re-described here.
+- **Operator decision 2026-10-02 (chat), replacements** (research in the lead's capability-replacements
+  report; all its recommendations accepted):
+  - `cloudflare_manage` is replaced by REST capabilities against the Cloudflare API v4, one HTTP
+    method per file (`path_selector` selects a path, not a method), 11 of 12 operations: zones list;
+    DNS list, create, update (PATCH), delete; WAF through the rulesets endpoints (zone entrypoint
+    ruleset read, rule create; the `firewall/rules` endpoints are deprecated); workers list; R2 buckets
+    list and objects list; cache purge. `account_id` and `zone_id` are required caller inputs (the REST
+    path substitutes caller parameters only); `Authorization: Bearer {env.CLOUDFLARE_API_TOKEN}`.
+    `deploy_worker` (multipart body, unsupported by the REST executor) is dropped for now; a Linear
+    ticket (not 4.0) tracks multipart support.
+  - `cisco_scanner` narrows to two operations, both `service: cli`: `scan_mcp_server` as
+    `mcp-scanner --analyzers yara remote --server-url=<url> --raw` (yara pinned: the default analyzers
+    `api` and `llm` send tool descriptions off-host) and `scan_skill_file` as `skill-scanner scan
+    -- <dir> --format json` (`cisco-ai-skill-scanner`; input reshaped to a directory under the `projects`
+    root). `scan_all_backends`, `get_vulnerability_report` and `check_compliance` are dropped with an
+    UPGRADING note. `scan_mcp_server` is an egress parameter (§6.2): runnable only once mcp-scanner's
+    connect-time enforcement question is settled like D8; until then refused and not counted.
+  - `desktop_event_bus` is rebuilt as a webhook route with an `event:` block (MCP Events, MIK-7630),
+    fed by a documented Hammerspoon script on the operator's Mac (app launch/activate/terminate, window
+    focus/create, distributed notifications). Before shipping, Hammerspoon's `hs.hash.hmacSHA256` output
+    is checked against the gateway's webhook signature verifier; a mismatch is reported, not shipped.
+    Electron DOM mutation events and the rule operations are out (no tool produces DOM events; rules
+    belong to the subscribing agent), documented in the file.
+  - `metacognition_verify` is removed from the public catalogue (a private tool), with an UPGRADING note.
+  - `pyghidra_reverse`: D4 below; `docs` fixed to `github.com/clearbluejar/pyghidra-mcp`.
+  - gws helpers: flags fixed; raw gws API calls keep `chat_send.threadKey` and the document title
+    (supersedes D7 for those fields), each verified with `--dry-run`.
 - **D4 `pyghidra_reverse`** (lead: ACCEPTED): `binary_path` (root-checked) goes to `import_binary` in a
   prepare step on the caller's own child; the analysis tool gets the program name the import returned.
 - **D5 Windows process-tree kill** (lead: safe crate first; ADR-016 keeps `src/win_acl.rs` the only
@@ -390,20 +439,23 @@ and are excluded from the public count. Nothing is removed without operator appr
   default, unpinned `cli`/`mcp` always refused; default and switch documented in UPGRADING and SECURITY.
 - **D7 Schema changes** (lead: ACCEPTED per field, only where the real CLI cannot do it; each in
   UPGRADING). Checked against gws 0.22.5:
-  - `chat_send.threadKey`: KEPT, via the raw `chat spaces messages create` with
+  - `chat_send.threadKey`: KEPT (operator), via the raw `chat spaces messages create` with
     `thread.threadKey` and `messageReplyOption` (dry-run verified); the file moves off `+send`.
-  - `drive_upload.mimeType`: KEPT, via raw `drive files create --upload=<path>
-    --upload-content-type=<mime>` (metadata `mimeType` also converts to Google formats); off `+upload`.
+  - `drive_upload.mimeType`: DROPPED; raw `drive files create --upload` refuses a path outside its cwd,
+    and the child's cwd is the empty per-call dir, so it stays on `+upload`, which detects the type.
   - `gmail_reply.threadId`: DROPPED; `+reply` derives the thread from `messageId`, so nothing is lost.
-  - `docs_write.title`: DROPPED; a title exists only on `documents.create`, a separate call, and one
-    capability is one call. `documentId` becomes required.
+  - `docs_write.title`: KEPT (operator). A title exists only on `documents.create`, a separate call,
+    and one capability is one call: a new `gws_docs_create` (raw `docs documents create --json
+    {title}`, returns `documentId`) carries it, and `docs_write` appends to a `documentId` via `+write`.
   - `calendar_insert.attendees`: becomes an array emitted as repeated `--attendee=` (§3.2 `each`).
   - `gmail_save_attachment.output_dir`: DROPPED; writes go only to the configured `downloads` root (§7).
-- **D8 `trawl_extract` egress**: the gateway cannot stop a child from following a redirect or a DNS
-  rebind to a private address. trawl (operator repo) needs a dial-time refusal of private/reserved
-  addresses (a `net.Dialer.Control` hook, also for its headless-browser path) behind a flag the
-  capability always passes. Until such a trawl release exists, `trawl_extract` is refused and not
-  counted. Recommend: make the trawl change (small, owned) as a follow-up ticket.
+- **D8 egress tools** (`trawl_extract`, `cisco_scanner.scan_mcp_server`): the gateway cannot stop a
+  child from following a redirect or a DNS rebind to a private address. trawl is third-party
+  (akdavidsson/trawl, MIT) and builds its own `http.Transport` with no dial hook; it would need a
+  dial-time refusal of private/reserved addresses (`net.Dialer.Control`, also on its headless-browser
+  path) behind a flag the capability always passes, contributed upstream (a third-party PR goes through
+  the community lane) or carried in a fork. Until a release with it exists, these are refused and not
+  counted. Needs a lead/operator decision: upstream contribution, fork, or hold.
 
 ## 10. Delivery (WIP 1, each PR: red tests on CI, implementation, two seats, mutants, merge)
 
