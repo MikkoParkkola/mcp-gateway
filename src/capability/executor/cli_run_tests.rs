@@ -236,10 +236,20 @@ fn an_allowlisted_name_cannot_override_the_private_directories() {
     let home: Vec<_> = env.iter().filter(|(k, _)| k == "HOME").collect();
     assert_eq!(home.len(), 1, "{env:?}");
     assert_eq!(home[0].1.as_os_str(), workdir.as_os_str());
-    // PATH is resolved through the same lookup and legitimately carries its
-    // value; every directory the gateway makes private must not.
+    // The platform baseline (PATH, SYSTEMROOT) is resolved through the same
+    // lookup and legitimately carries its value; only the directories the
+    // gateway makes private must not.
     for (key, value) in &env {
-        if key != "PATH" {
+        if [
+            "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_DATA_HOME",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+        ]
+        .contains(&key.to_string_lossy().as_ref())
+        {
             assert_ne!(value, "/operator/home", "{key:?} was overridden: {env:?}");
         }
     }
