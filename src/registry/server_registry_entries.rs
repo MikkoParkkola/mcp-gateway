@@ -3,7 +3,7 @@
 //! The curated entries behind `mcp-gateway add <name>`. Every entry is checked
 //! live by `scripts/dev/check-registry-packages.py` (MIK-7787).
 
-use super::{RegistryEntry, Transport};
+use super::{ARBITRARY_REACH_REASON, Auth, HttpFlavor, Reach, RegistryEntry, Setup, Transport};
 
 pub(super) static REGISTRY: &[RegistryEntry] = &[
     // ── search ──────────────────────────────────────────────────────────────────────
@@ -16,6 +16,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "search",
         homepage: "https://github.com/tavily-ai/tavily-mcp",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "brave-search",
@@ -26,6 +29,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "search",
         homepage: "https://github.com/brave/brave-search-mcp-server",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "exa",
@@ -36,6 +42,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "search",
         homepage: "https://github.com/exa-labs/exa-mcp-server",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "perplexity",
@@ -46,6 +55,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "search",
         homepage: "https://github.com/perplexityai/modelcontextprotocol",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     // ── filesystem ──────────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -57,6 +69,11 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "filesystem",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+        auth: Auth::None,
+        reach: Reach::Bounded,
+        setup: Setup::NeedsArgs {
+            hint: "the directories it may access",
+        },
     },
     // ── database ────────────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -68,6 +85,11 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "database",
         homepage: "https://github.com/crystaldba/postgres-mcp",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::NeedsService {
+            hint: "a PostgreSQL server (DATABASE_URI)",
+        },
     },
     RegistryEntry {
         name: "mysql",
@@ -78,6 +100,11 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "database",
         homepage: "https://github.com/benborla/mcp-server-mysql",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::NeedsService {
+            hint: "a MySQL or MariaDB server",
+        },
     },
     RegistryEntry {
         name: "redis",
@@ -88,19 +115,31 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "database",
         homepage: "https://github.com/redis/mcp-redis",
+        auth: Auth::None,
+        reach: Reach::Bounded,
+        setup: Setup::NeedsService {
+            hint: "a Redis server (REDIS_HOST, default localhost)",
+        },
     },
     // ── dev-tools ───────────────────────────────────────────────────────────────────
     RegistryEntry {
         name: "github",
         description: "GitHub repos, issues, PRs, code search, and Actions (GitHub-hosted)",
         command: "",
-        required_env: &[],
+        required_env: &["GITHUB_TOKEN"],
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://api.githubcopilot.com/mcp/",
+            flavor: HttpFlavor::Streamable,
         },
         category: "dev-tools",
         homepage: "https://github.com/github/github-mcp-server",
+        auth: Auth::Header {
+            name: "Authorization",
+            value: "Bearer ${GITHUB_TOKEN}",
+        },
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "gitlab",
@@ -110,9 +149,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://gitlab.com/api/v4/mcp",
+            flavor: HttpFlavor::Streamable,
         },
         category: "dev-tools",
         homepage: "https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/",
+        auth: Auth::OAuth,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "linear",
@@ -122,9 +165,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://mcp.linear.app/mcp",
+            flavor: HttpFlavor::Streamable,
         },
         category: "dev-tools",
         homepage: "https://linear.app/docs/mcp",
+        auth: Auth::OAuth,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "sentry",
@@ -134,9 +181,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://mcp.sentry.dev/mcp",
+            flavor: HttpFlavor::Streamable,
         },
         category: "dev-tools",
         homepage: "https://github.com/getsentry/sentry-mcp",
+        auth: Auth::OAuth,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "atlassian",
@@ -146,9 +197,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://mcp.atlassian.com/v1/mcp",
+            flavor: HttpFlavor::Streamable,
         },
         category: "dev-tools",
         homepage: "https://github.com/atlassian/atlassian-mcp-server",
+        auth: Auth::OAuth,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "asana",
@@ -158,20 +213,27 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://mcp.asana.com/sse",
+            flavor: HttpFlavor::Sse,
         },
         category: "dev-tools",
         homepage: "https://developers.asana.com/docs/using-asanas-mcp-server",
+        auth: Auth::OAuth,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     // ── cloud ───────────────────────────────────────────────────────────────────────
     RegistryEntry {
         name: "aws",
         description: "AWS resource management through the AWS CLI command surface",
         command: "uvx awslabs.aws-api-mcp-server@1.5.6",
-        required_env: &[],
-        optional_env: &["AWS_PROFILE", "AWS_REGION"],
+        required_env: &["AWS_PROFILE"],
+        optional_env: &["AWS_REGION"],
         transport: Transport::Stdio,
         category: "cloud",
         homepage: "https://github.com/awslabs/mcp/tree/main/src/aws-api-mcp-server",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "cloudflare-workers",
@@ -181,9 +243,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://bindings.mcp.cloudflare.com/mcp",
+            flavor: HttpFlavor::Streamable,
         },
         category: "cloud",
         homepage: "https://github.com/cloudflare/mcp-server-cloudflare",
+        auth: Auth::OAuth,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     // ── memory ──────────────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -195,6 +261,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "memory",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+        auth: Auth::None,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     // ── communication ───────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -206,6 +275,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "communication",
         homepage: "https://github.com/korotovsky/slack-mcp-server",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     // ── knowledge ───────────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -216,9 +288,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://mcp.context7.com/mcp",
+            flavor: HttpFlavor::Streamable,
         },
         category: "knowledge",
         homepage: "https://context7.com",
+        auth: Auth::None,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "fetch",
@@ -229,6 +305,11 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "knowledge",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+        auth: Auth::None,
+        reach: Reach::Arbitrary {
+            reason: ARBITRARY_REACH_REASON,
+        },
+        setup: Setup::Ready,
     },
     // ── code ────────────────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -240,6 +321,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "code",
         homepage: "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+        auth: Auth::None,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "semgrep",
@@ -250,6 +334,11 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "code",
         homepage: "https://github.com/semgrep/mcp",
+        auth: Auth::None,
+        reach: Reach::Bounded,
+        setup: Setup::NeedsService {
+            hint: "the Semgrep engine: first use downloads it (~100 MB)",
+        },
     },
     RegistryEntry {
         name: "playwright",
@@ -260,6 +349,11 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "code",
         homepage: "https://github.com/microsoft/playwright-mcp",
+        auth: Auth::None,
+        reach: Reach::Arbitrary {
+            reason: ARBITRARY_REACH_REASON,
+        },
+        setup: Setup::Ready,
     },
     // ── productivity ────────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -270,9 +364,13 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://mcp.notion.com/mcp",
+            flavor: HttpFlavor::Streamable,
         },
         category: "productivity",
         homepage: "https://developers.notion.com/docs/mcp",
+        auth: Auth::OAuth,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "airtable",
@@ -283,19 +381,29 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "productivity",
         homepage: "https://github.com/domdomegg/airtable-mcp-server",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     // ── finance ─────────────────────────────────────────────────────────────────────
     RegistryEntry {
         name: "stripe",
         description: "Stripe payments, customers, invoices, and subscriptions (Stripe-hosted, restricted API key)",
         command: "",
-        required_env: &[],
+        required_env: &["STRIPE_SECRET_KEY"],
         optional_env: &[],
         transport: Transport::Http {
             default_url: "https://mcp.stripe.com",
+            flavor: HttpFlavor::Streamable,
         },
         category: "finance",
         homepage: "https://docs.stripe.com/mcp",
+        auth: Auth::Header {
+            name: "Authorization",
+            value: "Bearer ${STRIPE_SECRET_KEY}",
+        },
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     // ── vector-db ───────────────────────────────────────────────────────────────────
     RegistryEntry {
@@ -307,6 +415,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "vector-db",
         homepage: "https://github.com/pinecone-io/pinecone-mcp",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
     RegistryEntry {
         name: "qdrant",
@@ -317,5 +428,8 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         transport: Transport::Stdio,
         category: "vector-db",
         homepage: "https://github.com/qdrant/mcp-server-qdrant",
+        auth: Auth::EnvVars,
+        reach: Reach::Bounded,
+        setup: Setup::Ready,
     },
 ];

@@ -94,7 +94,7 @@ fn context7_has_http_transport() {
     // THEN: its transport is Http with a non-empty default URL
     let entry = lookup("context7").expect("context7 must be in registry");
     match entry.transport {
-        Transport::Http { default_url } => assert!(!default_url.is_empty()),
+        Transport::Http { default_url, .. } => assert!(!default_url.is_empty()),
         Transport::Stdio => panic!("expected Http transport for context7"),
     }
 }
@@ -126,4 +126,94 @@ fn registry_names_are_unique() {
             entry.name
         );
     }
+}
+
+// ── MIK-7787: login, reach and setup ────────────────────────────────────────
+
+fn names(filter: impl Fn(&RegistryEntry) -> bool) -> Vec<&'static str> {
+    let mut names: Vec<_> = all().iter().filter(|e| filter(e)).map(|e| e.name).collect();
+    names.sort_unstable();
+    names
+}
+
+/// `${NAME}` references in a header template.
+fn template_vars(value: &str) -> Vec<&str> {
+    value
+        .split("${")
+        .skip(1)
+        .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
+        .collect()
+}
+
+#[test]
+fn each_login_kind_matches_its_transport_and_variables() {
+    for e in all() {
+        let http = matches!(e.transport, Transport::Http { .. });
+        match e.auth {
+            Auth::None => assert!(
+                e.required_env.is_empty(),
+                "{}: no login, no required env",
+                e.name
+            ),
+            Auth::EnvVars => assert!(
+                !http && !e.required_env.is_empty(),
+                "{}: EnvVars is a stdio server with required env",
+                e.name
+            ),
+            Auth::OAuth => assert!(
+                http && e.required_env.is_empty(),
+                "{}: OAuth is a hosted server and needs no env",
+                e.name
+            ),
+            Auth::Header { value, .. } => {
+                assert!(http, "{}: a header goes on an http backend", e.name);
+                let mut vars = template_vars(value);
+                vars.sort_unstable();
+                let mut required = e.required_env.to_vec();
+                required.sort_unstable();
+                assert_eq!(
+                    vars, required,
+                    "{}: header variables are the required env",
+                    e.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_init_starter_set_is_exactly_the_no_login_ready_servers() {
+    // Lead decision 2026-10-02. semgrep is out: warm start would download its
+    // engine at gateway start (src/gateway/server/warmstart.rs).
+    assert_eq!(
+        names(RegistryEntry::default_enabled),
+        ["context7", "memory", "sequential-thinking"]
+    );
+}
+
+#[test]
+fn every_server_that_can_reach_any_address_is_classified_on_purpose() {
+    assert_eq!(
+        names(|e| matches!(e.reach, Reach::Arbitrary { .. })),
+        ["fetch", "playwright"]
+    );
+    assert!(
+        all()
+            .iter()
+            .all(|e| e.reach_allows_on() == matches!(e.reach, Reach::Bounded))
+    );
+}
+
+#[test]
+fn only_asana_speaks_the_legacy_sse_handshake() {
+    assert_eq!(
+        names(|e| matches!(
+            e.transport,
+            Transport::Http {
+                flavor: HttpFlavor::Sse,
+                ..
+            }
+        )),
+        ["asana"]
+    );
 }

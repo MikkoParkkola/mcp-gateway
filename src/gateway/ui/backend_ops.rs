@@ -105,37 +105,24 @@ pub struct BackendUpdate {
 
 // ── Core operations ───────────────────────────────────────────────────────────
 
-/// Add a new backend to the in-memory config.
+/// Add a resolved backend to the in-memory config.
 ///
-/// Returns `Err` if a backend with `name` already exists.
+/// Returns what the caller should tell the user (why it was added disabled),
+/// one line each; empty when there is nothing to say.
 ///
 /// # Errors
 ///
 /// `Err(String)` when `name` already exists in `config.backends`.
-pub fn add_backend<S: std::hash::BuildHasher>(
+pub fn add_backend(
     config: &mut Config,
     name: &str,
-    transport: TransportConfig,
-    description: String,
-    env: HashMap<String, String, S>,
-) -> Result<(), String> {
+    resolved: ResolvedBackend,
+) -> Result<Vec<String>, String> {
     if config.backends.contains_key(name) {
         return Err(format!("Backend '{name}' already exists. Remove it first."));
     }
-
-    // Collect into a standard HashMap so it matches BackendConfig.env's field type.
-    let env: HashMap<String, String> = env.into_iter().collect();
-
-    let backend = BackendConfig {
-        description,
-        enabled: true,
-        transport,
-        env,
-        ..Default::default()
-    };
-
-    config.backends.insert(name.to_string(), backend);
-    Ok(())
+    config.backends.insert(name.to_string(), resolved.backend);
+    Ok(Vec::new())
 }
 
 /// Remove a backend from the in-memory config.
@@ -221,36 +208,57 @@ pub fn get_backend(config: &Config, name: &str) -> Result<BackendInfo, String> {
 
 // ── Transport resolution ──────────────────────────────────────────────────────
 
-/// Determine transport and description from explicit flags or the built-in registry.
+/// A backend ready to insert, and the registry entry it came from, if any.
+#[derive(Clone)]
+pub struct ResolvedBackend {
+    /// The whole backend `add` writes.
+    pub backend: BackendConfig,
+    /// The registry entry it was built from; `None` for `--command`/`--url`.
+    pub entry: Option<&'static server_registry::RegistryEntry>,
+}
+
+/// Build the backend `add` writes, from explicit flags or the built-in registry.
 ///
 /// Priority: explicit `cmd` > explicit `url` > registry lookup by `name`.
+/// `env` holds the user's `KEY=VALUE` pairs.
 ///
 /// # Errors
 ///
-/// Returns `Err` when none of the sources can satisfy the request (unknown name
-/// without an explicit `cmd` or `url`).
-pub fn resolve_transport(
+/// Returns `Err` when none of the sources can satisfy the request (a name the
+/// registry does not know, with no explicit `cmd` or `url`).
+pub fn resolve_backend<S: std::hash::BuildHasher>(
     name: &str,
     cmd: Option<&str>,
     url: Option<&str>,
     desc: Option<&str>,
-) -> Result<(TransportConfig, String), String> {
+    env: HashMap<String, String, S>,
+) -> Result<ResolvedBackend, String> {
+    // Collect into a standard HashMap so it matches BackendConfig.env's field type.
+    let env: HashMap<String, String> = env.into_iter().collect();
+    let plain = |transport, description: &str| ResolvedBackend {
+        backend: BackendConfig {
+            description: description.to_string(),
+            enabled: true,
+            transport,
+            env: env.clone(),
+            ..Default::default()
+        },
+        entry: None,
+    };
+
     // Explicit command takes priority.
     if let Some(command) = cmd {
-        return Ok((
-            TransportConfig::Stdio {
-                command: command.to_string(),
-                cwd: None,
-                protocol_version: None,
-            },
-            desc.unwrap_or("").to_string(),
-        ));
+        let transport = TransportConfig::Stdio {
+            command: command.to_string(),
+            cwd: None,
+            protocol_version: None,
+        };
+        return Ok(plain(transport, desc.unwrap_or("")));
     }
 
     // Explicit URL.
     if let Some(url) = url {
-        let transport = TransportConfig::for_url(url);
-        return Ok((transport, desc.unwrap_or("").to_string()));
+        return Ok(plain(TransportConfig::for_url(url), desc.unwrap_or("")));
     }
 
     // Registry lookup.
@@ -261,18 +269,32 @@ pub fn resolve_transport(
                 cwd: None,
                 protocol_version: None,
             },
-            server_registry::Transport::Http { default_url } => TransportConfig::Http {
+            server_registry::Transport::Http { default_url, .. } => TransportConfig::Http {
                 http_url: default_url.to_string(),
                 streamable_http: false,
                 protocol_version: None,
             },
         };
-        return Ok((transport, desc.unwrap_or(entry.description).to_string()));
+        let mut resolved = plain(transport, desc.unwrap_or(entry.description));
+        resolved.entry = Some(entry);
+        return Ok(resolved);
     }
 
     Err(format!(
         "'{name}' is not in the built-in registry. Provide --command or --url."
     ))
+}
+
+/// Transport and description only, for tests that check routing.
+#[cfg(test)]
+pub(crate) fn resolve_parts(
+    name: &str,
+    cmd: Option<&str>,
+    url: Option<&str>,
+    desc: Option<&str>,
+) -> Result<(TransportConfig, String), String> {
+    resolve_backend(name, cmd, url, desc, HashMap::new())
+        .map(|resolved| (resolved.backend.transport, resolved.backend.description))
 }
 
 // ── Env-var parsing ───────────────────────────────────────────────────────────
@@ -414,3 +436,7 @@ fn sanitize_backend_url(raw: &str) -> String {
 #[cfg(test)]
 #[path = "backend_ops_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "backend_add_tests.rs"]
+mod backend_add_tests;

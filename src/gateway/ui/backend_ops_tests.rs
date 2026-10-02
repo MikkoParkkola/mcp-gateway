@@ -5,6 +5,33 @@
 mod tests {
     use super::super::*;
 
+    /// The pre-MIK-7787 shape of `add_backend`, kept for the CRUD tests below
+    /// that only need a plain backend: an explicit transport, enabled.
+    fn add_backend(
+        cfg: &mut Config,
+        name: &str,
+        transport: TransportConfig,
+        description: String,
+        env: HashMap<String, String>,
+    ) -> Result<(), String> {
+        let backend = BackendConfig {
+            description,
+            enabled: true,
+            transport,
+            env,
+            ..Default::default()
+        };
+        super::super::add_backend(
+            cfg,
+            name,
+            ResolvedBackend {
+                backend,
+                entry: None,
+            },
+        )
+        .map(drop)
+    }
+
     fn empty_config() -> Config {
         Config::default()
     }
@@ -308,7 +335,7 @@ mod tests {
 
     #[test]
     fn resolve_transport_explicit_command_takes_priority() {
-        let (transport, _) = resolve_transport("tavily", Some("my-cmd"), None, None).unwrap();
+        let (transport, _) = resolve_parts("tavily", Some("my-cmd"), None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "my-cmd"),
             other => panic!("expected Stdio, got {other:?}"),
@@ -318,7 +345,7 @@ mod tests {
     #[test]
     fn resolve_transport_explicit_url() {
         let (transport, _) =
-            resolve_transport("custom", None, Some("http://localhost:9000"), None).unwrap();
+            resolve_parts("custom", None, Some("http://localhost:9000"), None).unwrap();
         match transport {
             TransportConfig::Http { http_url, .. } => assert_eq!(http_url, "http://localhost:9000"),
             other => panic!("expected Http, got {other:?}"),
@@ -327,7 +354,7 @@ mod tests {
 
     #[test]
     fn resolve_transport_registry_lookup_for_known_name() {
-        let (transport, description) = resolve_transport("tavily", None, None, None).unwrap();
+        let (transport, description) = resolve_parts("tavily", None, None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => {
                 assert!(command.contains("tavily"));
@@ -339,14 +366,13 @@ mod tests {
 
     #[test]
     fn resolve_transport_unknown_name_without_flags_returns_error() {
-        let result = resolve_transport("totally-unknown-server-xyz", None, None, None);
+        let result = resolve_parts("totally-unknown-server-xyz", None, None, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn resolve_transport_desc_override_applies_for_registry_entry() {
-        let (_, description) =
-            resolve_transport("tavily", None, None, Some("my custom desc")).unwrap();
+        let (_, description) = resolve_parts("tavily", None, None, Some("my custom desc")).unwrap();
         assert_eq!(description, "my custom desc");
     }
 

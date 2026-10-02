@@ -16,9 +16,8 @@ use mcp_gateway::{
     config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
-        remove_backend, resolve_transport, update_backend, write_config,
+        remove_backend, resolve_backend, update_backend, write_config,
     },
-    registry::server_registry,
 };
 
 // ── add ───────────────────────────────────────────────────────────────────────
@@ -41,15 +40,6 @@ pub async fn run_add_command(
     env_vars: &[String],
     config: &Path,
 ) -> ExitCode {
-    // ── Resolve transport ──────────────────────────────────────────────────
-    let (transport, description) = match resolve_transport(name, cmd, url, desc) {
-        Ok(t) => t,
-        Err(msg) => {
-            eprintln!("Error: {msg}");
-            return ExitCode::FAILURE;
-        }
-    };
-
     // ── Build env map ──────────────────────────────────────────────────────
     let env = match parse_env_vars(env_vars) {
         Ok(e) => e,
@@ -58,6 +48,16 @@ pub async fn run_add_command(
             return ExitCode::FAILURE;
         }
     };
+
+    // ── Resolve the whole backend ──────────────────────────────────────────
+    let resolved = match resolve_backend(name, cmd, url, desc, env) {
+        Ok(r) => r,
+        Err(msg) => {
+            eprintln!("Error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let transport = resolved.backend.transport.clone();
 
     // ── Load config ────────────────────────────────────────────────────────
     //
@@ -78,16 +78,13 @@ pub async fn run_add_command(
     };
 
     // ── Insert backend ─────────────────────────────────────────────────────
-    if let Err(msg) = add_backend(
-        &mut gateway_config,
-        name,
-        transport.clone(),
-        description,
-        env.clone(),
-    ) {
-        eprintln!("Error: {msg} (in {})", config.display());
-        return ExitCode::FAILURE;
-    }
+    let notes = match add_backend(&mut gateway_config, name, resolved) {
+        Ok(notes) => notes,
+        Err(msg) => {
+            eprintln!("Error: {msg} (in {})", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     // ── Write config ───────────────────────────────────────────────────────
     if let Err(e) = write_config(config, &gateway_config) {
@@ -104,6 +101,9 @@ pub async fn run_add_command(
         TransportConfig::A2a { .. } => "a2a",
     };
     println!("Added '{name}' ({transport_label}).");
+    for note in &notes {
+        println!("  {note}");
+    }
     if creating_config {
         println!();
         println!(
@@ -116,25 +116,7 @@ pub async fn run_add_command(
         println!("auth.public_paths so tool calls keep working.");
     }
 
-    if let Some(entry) = server_registry::lookup(name) {
-        report_env_status(entry.required_env, &env);
-    }
-
     ExitCode::SUCCESS
-}
-
-/// Print which required env vars are set and which are missing.
-fn report_env_status(required: &[&str], provided_env: &std::collections::HashMap<String, String>) {
-    for key in required {
-        let set_in_env = std::env::var(key).is_ok();
-        let set_in_config = provided_env.contains_key(*key);
-        let status = if set_in_env || set_in_config {
-            "set"
-        } else {
-            "NOT SET"
-        };
-        println!("  Required: {key} {status}");
-    }
 }
 
 // ── remove ────────────────────────────────────────────────────────────────────
