@@ -344,3 +344,7 @@ impl CommittedTask {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "record_legacy_tests.rs"]
+mod legacy_tests;
