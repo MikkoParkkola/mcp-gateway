@@ -107,13 +107,16 @@ pub fn names_task_ids(params: &Value) -> bool {
 pub fn named_task_ids(params: &Value) -> Vec<String> {
     let key = NotificationKind::Tasks.opt_in_field();
     let mut ids: Vec<String> = Vec::new();
+    // A set, not a scan of `ids`: the arrays are client-sized, and a quadratic
+    // dedup over a request body that large would stall a worker.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for list in [
         params.get(key),
         params.get("notifications").and_then(|f| f.get(key)),
     ] {
         for id in list.and_then(Value::as_array).into_iter().flatten() {
             if let Some(id) = id.as_str()
-                && !ids.iter().any(|seen| seen == id)
+                && seen.insert(id)
             {
                 ids.push(id.to_string());
             }
