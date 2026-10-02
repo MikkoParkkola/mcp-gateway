@@ -3431,9 +3431,7 @@ row). Nothing for an upgrade from 3.5.x.
 
 ## 121. Capability fallback providers are warned as not executed
 
-**Startup:** a warn log per capability that declares `providers.fallback` (code CAP-011); the
-capability is still served. A fallback entry that does not parse, null included, fails that
-capability file's load
+**Startup:** no notice, a capability that declares `providers.fallback` logs a CAP-011 warning and is still served; fails a capability file, only when a fallback entry does not parse (null included)
 
 A capability YAML could list `providers.fallback`, and the gateway parsed and validated it, but
 calls were only ever sent to `providers.primary`. That is unchanged in 4.0: a fallback is not
