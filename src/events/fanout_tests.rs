@@ -22,7 +22,9 @@ fn body_carries_only_protocol_fields_and_data() {
         occurred_at: Utc::now(),
         data: json!({"event_type": "t", "fields": {}}),
     };
-    let body: Value = serde_json::from_slice(&body("evt_1", &event, &event.data)).expect("json");
+    let receipt = json!({"receipt": {"subject_kind": "event"}});
+    let body: Value =
+        serde_json::from_slice(&body("evt_1", &event, &event.data, receipt.clone())).expect("json");
     let mut keys: Vec<&str> = body
         .as_object()
         .expect("object")
@@ -30,7 +32,11 @@ fn body_carries_only_protocol_fields_and_data() {
         .map(String::as_str)
         .collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["cursor", "data", "eventId", "name", "timestamp"]);
+    assert_eq!(
+        keys,
+        ["_meta", "cursor", "data", "eventId", "name", "timestamp"]
+    );
+    assert_eq!(body["_meta"], json!({ PROVENANCE_KEY: receipt }));
     assert_eq!(body["cursor"], Value::Null);
 }
 

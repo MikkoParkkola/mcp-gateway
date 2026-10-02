@@ -19,6 +19,8 @@ pub(crate) struct Services {
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<crate::security::firewall::Firewall>>,
     pub audit: Option<Arc<TransparencyLogger>>,
+    /// The provenance signer, when stamping is on.
+    pub provenance: Option<Arc<crate::attestation::BnautAttestationSigner>>,
     #[cfg(feature = "cost-governance")]
     pub budget: Option<(
         Arc<crate::cost_accounting::enforcer::BudgetEnforcer>,
@@ -74,6 +76,21 @@ impl Services {
     /// were bound to their secret is refused.
     pub(crate) fn admits_subscription(&self, sub: &Subscription, backend: &str) -> bool {
         sub.legacy_api_key_name.is_none() && self.admits(sub.api_key.as_ref(), backend)
+    }
+
+    /// The provenance receipt for one occurrence, as `_meta` carries it:
+    /// signed when stamping is on, the bare receipt otherwise (§3.6).
+    pub(crate) fn provenance(&self, backend: &str, name: &str) -> Value {
+        let receipt = crate::trust::RuntimeProvenanceReceipt::event(
+            backend,
+            name,
+            chrono::Utc::now().to_rfc3339(),
+        );
+        match &self.provenance {
+            Some(signer) => serde_json::to_value(receipt.sign(signer)),
+            None => serde_json::to_value(json!({ "receipt": receipt })),
+        }
+        .unwrap_or(Value::Null)
     }
 
     /// Run the response firewall over `data`, redacting in place.
@@ -298,6 +315,7 @@ mod tests {
             #[cfg(feature = "firewall")]
             firewall: None,
             audit: None,
+            provenance: None,
             #[cfg(feature = "cost-governance")]
             budget: None,
         }
