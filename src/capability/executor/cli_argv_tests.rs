@@ -235,3 +235,17 @@ args_template: "{{ url }}"
         "args_template must be refused, not ignored"
     );
 }
+
+#[test]
+fn a_parameter_cannot_name_an_option_or_a_subcommand_before_end_of_options() {
+    for template in ["--{opt}=x", "-{opt}", "get{what}", "{what}x"] {
+        let config = cfg(&format!("command: tool\nargs: ['{template}']\n"));
+        let err =
+            build_cli_invocation(&config, &json!({"opt": "draft", "what": "all"}), &json!({}))
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("outside an option value"), "{template}: {err}");
+    }
+    let after = cfg("command: tool\nargs: ['--', 'get{what}']\n");
+    assert_eq!(argv(&after, &json!({"what": "--x"})), ["--", "get--x"]);
+}

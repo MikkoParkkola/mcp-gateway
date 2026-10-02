@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use super::resolve_command;
 use crate::capability::definition::{CliConfig, ProcessConfig};
 use crate::capability::executor::CapabilityExecutor;
-use crate::capability::{CapabilityDefinition, parse_capability};
+use crate::capability::{CapabilityDefinition, CapabilityExecutionContext, parse_capability};
 
 fn python() -> PathBuf {
     let name = if cfg!(windows) { "python" } else { "python3" };
@@ -48,7 +48,12 @@ fn config(cap: &CapabilityDefinition) -> &CliConfig {
 
 async fn call(cap: &CapabilityDefinition, params: Value) -> crate::Result<Value> {
     CapabilityExecutor::new()
-        .execute_cli(cap, config(cap), &params)
+        .execute_cli(
+            cap,
+            config(cap),
+            &params,
+            &CapabilityExecutionContext::default(),
+        )
         .await
 }
 
@@ -216,4 +221,43 @@ fn redaction_removes_secrets_at_any_length_and_caller_values_from_four_bytes() {
     assert!(!out.contains("abc") && !out.contains("=sk"), "{out}");
     assert!(!out.contains("VALUE1"), "{out}");
     assert!(out.contains("tiny=ab"), "short caller values stay: {out}");
+}
+
+#[test]
+fn an_allowlisted_name_cannot_override_the_private_directories() {
+    let workdir = Path::new("/private-workdir");
+    let lookup = |_: &str| Some(std::ffi::OsString::from("/operator/home"));
+    let allowed = [
+        "HOME".to_owned(),
+        "xdg_config_home".to_owned(),
+        "TmpDir".to_owned(),
+    ];
+    let env = super::child_env(workdir, &allowed, &lookup, Some(("HOME", "x")));
+    let home: Vec<_> = env.iter().filter(|(k, _)| k == "HOME").collect();
+    assert_eq!(home.len(), 1, "{env:?}");
+    assert_eq!(home[0].1.as_os_str(), workdir.as_os_str());
+    assert!(
+        env.iter().all(|(_, v)| v != "/operator/home"),
+        "no allowlisted value replaced a private directory: {env:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_credential_is_the_typed_unauthorized_error() {
+    let cap = capability("unauthorized", "x", "", 30);
+    let err = call(&cap, json!({})).await.unwrap_err();
+    assert!(
+        crate::security::http_diagnostics::is_upstream_unauthorized(&err),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_typed_process_config_survives_serialization() {
+    let cap = capability("echo", "x", "", 30);
+    let out = serde_json::to_value(&cap.providers).unwrap();
+    assert_eq!(
+        out["named"]["primary"]["config"]["command"],
+        python().display().to_string()
+    );
 }

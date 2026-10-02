@@ -147,12 +147,15 @@ fn render_element(
     let Some((start, end, name)) = single_placeholder(template)? else {
         return Ok(template.to_owned());
     };
-    // A value that starts the element could start with '-' and be read as an
-    // option. Only an operand after "--" may begin with a parameter; before it,
-    // a value must be bound inside a literal such as "--to={to}".
-    if start == 0 && !after_end_of_options {
+    // Before "--" a parameter may only be the VALUE of a fixed option, bound
+    // with '=' ("--to={to}"): anywhere else it could start an element and be
+    // read as an option, or choose the option's name ("--{opt}=x") or a
+    // subcommand ("get{what}"). After "--" every element is an operand.
+    let prefix = &template[..start];
+    if !after_end_of_options && !(prefix.starts_with('-') && prefix.contains('=')) {
         return Err(Error::Config(format!(
-            "CLI argument template '{template}' starts with a parameter before \"--\""
+            "CLI argument template '{template}' puts a parameter outside an option value \
+             before \"--\""
         )));
     }
     let value = required_text(params, name)?;

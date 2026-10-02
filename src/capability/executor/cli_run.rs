@@ -102,14 +102,39 @@ pub(crate) fn child_env(
         }
     }
     for name in allowed {
-        if let Some(value) = lookup(name) {
+        if !is_reserved(name)
+            && let Some(value) = lookup(name)
+        {
             env.push((name.into(), value));
         }
     }
-    if let Some((name, value)) = token {
+    if let Some((name, value)) = token
+        && !is_reserved(name)
+    {
         env.push((name.into(), value.into()));
     }
     env
+}
+
+/// Names the gateway sets for the child itself. An allowlist entry or
+/// `token_env` naming one is ignored: it would point the child back at the
+/// operator's home, profile or temp space. Case-insensitive, as on Windows.
+pub(crate) fn is_reserved(name: &str) -> bool {
+    const RESERVED: [&str; 12] = [
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "TMPDIR",
+        "PATH",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "PATHEXT",
+    ];
+    RESERVED.iter().any(|r| r.eq_ignore_ascii_case(name))
 }
 
 /// Resolve `command` to the absolute path that is spawned.
