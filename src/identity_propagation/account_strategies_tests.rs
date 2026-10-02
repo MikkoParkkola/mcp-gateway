@@ -17,6 +17,21 @@ impl IdentityPropagation for NeverMints {
     }
 }
 
+/// The positive control for a mint: a strategy that always hands back a credential.
+struct Mints;
+
+#[async_trait::async_trait]
+impl IdentityPropagation for Mints {
+    async fn propagate(
+        &self,
+        _identity: &crate::key_server::oidc::VerifiedIdentity,
+        _backend: &BackendDescriptor,
+    ) -> std::result::Result<super::super::PropagatedCredential, super::super::PropagationError>
+    {
+        Ok(minted(vec![("Authorization", "Bearer minted")]))
+    }
+}
+
 /// `managed: None` is the EXTERNAL shape: no lease, so the durable custody
 /// half of `revalidate` is skipped and this predicate is the only thing
 /// standing between a stale published expiry and the wire.
@@ -164,10 +179,10 @@ async fn a_failed_mint_audit_refuses_the_credential_without_the_error_text() {
     let Err(Error::Internal(message)) = audited(Some(&logger), true, &good).await else {
         panic!("a stalled audit must refuse the credential");
     };
-    assert!(message.contains("audit unavailable"), "{message}");
-    assert!(
-        !message.contains(&file.path().to_string_lossy().to_string()),
-        "the audit error and its path stay in the server log: {message}"
+    // The whole text, so appending any of the underlying audit error fails it.
+    assert_eq!(
+        message,
+        "identity-propagation audit unavailable for account 'acct'"
     );
     release.release();
 }
@@ -222,33 +237,45 @@ async fn revalidate_refuses_each_way_the_world_moved_since_the_mint() {
     prepared.strategy = Arc::clone(&strategy);
     prepared.actor_id = alice.stable_actor_id();
     let registry = AccountStrategyRegistry::default();
+    // `why` names the refusal that must fire, so a removed guard cannot hide
+    // behind a later one refusing for its own reason.
     let refused = |outcome: Option<String>, why: &str| {
         let text = outcome.unwrap_or_else(|| panic!("{why}: must refuse"));
         assert!(text.contains("no longer validates"), "{why}: {text}");
+        assert!(text.contains(why), "{why}: {text}");
     };
 
     refused(
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
-        "undeclared",
-    );
-    registry.declare("acct", "google", DescriptorMode::Shared);
-    refused(
-        check(&registry, &prepared, CallerProof::Verified(&alice)).await,
-        "shared",
+        "no longer declared",
     );
     registry.declare("acct", "google", DescriptorMode::External);
     refused(
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
-        "not installed",
+        "no account strategy is installed",
     );
-
+    // Now an otherwise-valid world, so only the shared declaration can refuse.
+    registry.install(
+        installed(Arc::clone(&strategy), "google", AUDIENCE),
+        DescriptorMode::External,
+    );
+    assert_eq!(
+        check(&registry, &prepared, CallerProof::Verified(&alice)).await,
+        None,
+        "control: the same world revalidates while declared external"
+    );
+    registry.declare("acct", "google", DescriptorMode::Shared);
+    refused(
+        check(&registry, &prepared, CallerProof::Verified(&alice)).await,
+        "declared shared",
+    );
     registry.install(
         installed(Arc::clone(&strategy), "github", AUDIENCE),
         DescriptorMode::External,
     );
     refused(
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
-        "provider moved",
+        "provider no longer matches",
     );
     registry.install(
         installed(Arc::clone(&strategy), "google", "https://other.invalid/"),
@@ -256,7 +283,7 @@ async fn revalidate_refuses_each_way_the_world_moved_since_the_mint() {
     );
     refused(
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
-        "audience moved",
+        "installed audience changed",
     );
     registry.install(
         installed(Arc::new(NeverMints), "google", AUDIENCE),
@@ -264,7 +291,7 @@ async fn revalidate_refuses_each_way_the_world_moved_since_the_mint() {
     );
     refused(
         check(&registry, &prepared, CallerProof::Verified(&alice)).await,
-        "strategy replaced",
+        "strategy was replaced",
     );
 
     registry.install(
@@ -273,18 +300,18 @@ async fn revalidate_refuses_each_way_the_world_moved_since_the_mint() {
     );
     refused(
         check(&registry, &prepared, CallerProof::Anonymous).await,
-        "no identity",
+        "no verified end-user identity",
     );
     refused(
         check(&registry, &prepared, CallerProof::Verified(&who("mallory"))).await,
-        "other caller",
+        "different caller",
     );
     let mut expired = external(1, 0);
     expired.strategy = Arc::clone(&strategy);
     expired.actor_id = alice.stable_actor_id();
     refused(
         check(&registry, &expired, CallerProof::Verified(&alice)).await,
-        "lifetime ran out",
+        "published lifetime has run out",
     );
 
     // Positive control: the unmoved world revalidates.
@@ -297,7 +324,7 @@ async fn revalidate_refuses_each_way_the_world_moved_since_the_mint() {
 /// Mutant: an external descriptor mints for a caller with no verified identity.
 #[tokio::test]
 async fn an_external_mint_needs_a_verified_caller() {
-    let installed = installed(Arc::new(NeverMints), "google", "https://partner.invalid/");
+    let installed = installed(Arc::new(Mints), "google", "https://partner.invalid/");
     let backend = BackendDescriptor {
         id: "partner".to_owned(),
         audience: "https://partner.invalid/".to_owned(),
@@ -307,4 +334,15 @@ async fn an_external_mint_needs_a_verified_caller() {
     let refused =
         AccountStrategyRegistry::mint(&installed, Principal::SoleOperator, &backend).await;
     assert!(matches!(refused, Err(PropagationError::Refuse(_))));
+
+    // Positive control: a verified caller gets the strategy's credential and
+    // no managed lease, so the refusal above is the identity rule, not a
+    // mint path that refuses everyone.
+    let alice = who("alice");
+    let (credential, lease) =
+        AccountStrategyRegistry::mint(&installed, Principal::Verified(&alice), &backend)
+            .await
+            .expect("a verified caller mints");
+    assert_eq!(credential.headers[0].1, "Bearer minted");
+    assert!(lease.is_none());
 }
