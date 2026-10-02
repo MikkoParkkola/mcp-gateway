@@ -1,0 +1,13 @@
+diff --git a/src/config/features/events.rs b/src/config/features/events.rs
+index b5d97007f..a7ba038f7 100644
+--- a/src/config/features/events.rs
++++ b/src/config/features/events.rs
+@@ -209,7 +209,7 @@ impl EventsConfig {
+         if let Some((name, _)) = timings.iter().find(|(_, d)| d.is_zero()) {
+             return fail(&format!("{name} must be nonzero"));
+         }
+-        if self.retry_window > MAX_RETRY_WINDOW {
++        if self.retry_window >= MAX_RETRY_WINDOW {
+             return fail("retry_window must not exceed 15 minutes");
+         }
+         if self.retry_max_attempts == 0 || self.suspend_min_attempts == 0 {

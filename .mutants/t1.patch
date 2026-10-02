@@ -1,0 +1,13 @@
+diff --git a/src/events/rate.rs b/src/events/rate.rs
+index 6497fc865..efca5b313 100644
+--- a/src/events/rate.rs
++++ b/src/events/rate.rs
+@@ -64,7 +64,7 @@ impl RateLimits {
+     pub(crate) fn empty(&self, id: &str, now: Instant) -> bool {
+         self.buckets.lock().get(id).is_some_and(|b| {
+             let elapsed = now.saturating_duration_since(b.at).as_secs_f64();
+-            b.tokens + elapsed * self.per_second < 1.0
++            b.tokens + elapsed * self.per_second <= 1.0
+         })
+     }
+ }

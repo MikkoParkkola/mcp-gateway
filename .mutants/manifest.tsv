@@ -1,0 +1,10 @@
+head_sha	b12829d81708482a32ea470f7d77da532cae0f5a
+# #2718 batch 1
+R1	linux	r1.patch	--lib -- a_retry_window_over_fifteen_minutes_is_refused_by_name
+R2	linux	r2.patch	--lib -- a_retry_window_over_fifteen_minutes_is_refused_by_name
+A1	linux	a1.patch	--lib -- an_attempt_record_the_log_refuses_is_reported_not_swallowed
+H1	linux	h1.patch	--lib -- has_due_sees_a_pending_record_behind_one_in_flight
+H2	linux	h2.patch	--lib -- has_due_sees_a_pending_record_behind_one_in_flight
+T1	linux	t1.patch	--lib -- burst_then_paced_and_reports_empty
+T2	linux	t2.patch	--lib -- burst_then_paced_and_reports_empty
+C1	linux	c1.patch	--test mik_7630_events_delivery_safety -- a_delivery_is_charged_against_the_key_budget

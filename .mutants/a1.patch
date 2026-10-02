@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index ba33aa177..428ab63ab 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -369,7 +369,7 @@ impl Services {
+         if let Err(error) = &written {
+             tracing::warn!(%error, "events: delivery audit record not written");
+         }
+-        written
++        written.or(Ok(()))
+     }
+ 
+     /// How an attempt already recorded as [`SENDING`] ended. Best effort: the
