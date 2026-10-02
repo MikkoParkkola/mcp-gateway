@@ -520,10 +520,7 @@ async fn meta_mcp_dispatch(
         .cloned();
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
     // MCP Events caps a subscription at the credential's own expiry.
-    let credential_expiry = http_request
-        .extensions()
-        .get::<crate::gateway::auth::live::CredentialExpiry>()
-        .copied();
+    let presented = events::Presented::capture(&http_request);
 
     // === OWASP ASI03: per-agent identity ===
     //
@@ -1156,7 +1153,7 @@ async fn meta_mcp_dispatch(
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
                 principal: events::principal(&owner, state.auth_config.enabled),
-                credential: events::credential(client.as_ref(), credential_expiry, &state),
+                credential: presented.credential(client.as_ref(), &state),
                 visible_backends: hub
                     .scope_backends()
                     .into_iter()

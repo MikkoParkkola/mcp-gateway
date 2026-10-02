@@ -76,6 +76,7 @@ mod input_round_races;
 mod interlock;
 mod lifecycle;
 mod pending_input_policy;
+mod proven_subject_admission;
 mod provide_input_guards;
 /// I5's during-the-wire half: one query per record at a time, worker and
 /// authenticated reader alike.

@@ -103,6 +103,10 @@ pub trait TokenStore: Send + Sync + 'static {
     /// Returns `true` if the token existed and was removed.
     async fn revoke_by_jti(&self, jti: &str) -> bool;
 
+    /// Whether the token with this JTI exists, unrevoked and unexpired: the
+    /// MCP Events delivery re-check (MIK-7769), which never holds the token.
+    async fn live_jti(&self, jti: &str) -> bool;
+
     /// Revoke all tokens for one OIDC identity, `(issuer, subject)` (e.g., on
     /// offboarding). The same `sub` at another issuer is another identity.
     async fn revoke_by_subject(&self, issuer: &str, subject: &str) -> usize;
@@ -187,6 +191,15 @@ impl TokenStore for InMemoryTokenStore {
         }
 
         Some(token)
+    }
+
+    async fn live_jti(&self, jti: &str) -> bool {
+        let Some(bearer) = self.by_jti.get(jti).map(|b| b.value().clone()) else {
+            return false;
+        };
+        self.by_bearer
+            .get(&bearer)
+            .is_some_and(|token| !token.is_expired())
     }
 
     async fn revoke_by_jti(&self, jti: &str) -> bool {
