@@ -18,9 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arm: P0, ref: b36d26230671981eae598183ffe959887a30d684 }
-          - { arm: P1, ref: afd2a5513101c5f5abd68be0c1ee58e69b280112 }
-          - { arm: S1, ref: a2630fc67a7a9ceb1eb540d3d676b7760a60bee9 }
+          - { arm: R1, ref: 27ec95b9c47037ef7103c56bf42b205a406d89de }
+          - { arm: R2, ref: d9d7f0f0b26eca843eaf29a5ef0de9ccb8907902 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
