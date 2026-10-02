@@ -3,8 +3,10 @@
 //! I2 — `notifications/tasks` on a real `subscriptions/listen` stream, and who
 //! is allowed to see one.
 //!
-//! Approved design r3 §6: `ListenRequest` reads `taskIds` from the params
-//! **root** (where `handlers.rs:1034-1046` writes it), `delivers()` matches
+//! Approved design r3 §6, as amended by MIK-7778: `ListenRequest` reads
+//! `taskIds` from the params root and from `notifications.taskIds` (the tasks
+//! extension's placement) as one filter, and the ownership narrowing in
+//! `handlers.rs` rewrites both; `delivers()` matches
 //! `params.taskId` against that list, and the executor emits at the single
 //! `published` tail after a successful durable write. No new authentication
 //! surface, envelope or per-send policy is asked for: the ownership narrowing

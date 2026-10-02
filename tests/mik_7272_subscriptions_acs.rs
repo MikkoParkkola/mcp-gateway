@@ -169,6 +169,15 @@ fn ac_sub_1_a_nested_task_filter_opts_in_and_is_acknowledged() {
         json!({ "taskIds": ["t-1", "t-2"] }),
         "{ack}"
     );
+
+    // Both placements are one filter: merged in request order (root first),
+    // each id once.
+    let both = ListenRequest::from_params(Some(&json!({
+        "taskIds": ["t-2", "t-1"],
+        "notifications": { "taskIds": ["t-1", "t-3", "t-2"] },
+    })))
+    .expect("a valid filter");
+    assert_eq!(both.task_ids(), ["t-2", "t-1", "t-3"]);
 }
 
 /// MIK-7766: a server-ended subscription closes with the listen request's
