@@ -181,6 +181,13 @@ impl crate::transport::Transport for Throttler {
                 "rate limit exceeded",
             ));
         }
+        if method == "throttled/call" {
+            let text = json!([{"type": "text", "text": "rate limit exceeded"}]);
+            return Ok(JsonRpcResponse::success(
+                id,
+                json!({"isError": true, "content": text}),
+            ));
+        }
         Ok(JsonRpcResponse::success(id, json!({})))
     }
 
@@ -214,6 +221,38 @@ async fn half_open_throttled() -> Arc<crate::backend::Backend> {
     // The breaker reads the wall clock, so this sleep is real.
     tokio::time::sleep(Duration::from_millis(300)).await;
     backend
+}
+
+/// NFR.WORKLOAD.1: with its keys built once per slot, a dispatched request
+/// still lands in the series the macros wrote: one answered call counts as
+/// `ok`, one throttled answer as `rate_limited`, and both record a duration,
+/// each labelled with the backend.
+#[test]
+fn a_dispatched_request_lands_in_the_backend_request_series() {
+    let ((), rendered) = metered(false, async {
+        let backend = crate::backend::Backend::new(
+            "f13",
+            BackendConfig::default(),
+            &hair_trigger(Duration::from_secs(3600)),
+            Duration::from_secs(300),
+        );
+        backend.set_transport_for_test(Arc::new(Throttler) as Arc<dyn crate::transport::Transport>);
+        backend.request("ping", None).await.expect("answered");
+        backend
+            .request("throttled/call", None)
+            .await
+            .expect("answered");
+    });
+    assert_eq!(requests(&rendered, "ok"), 1, "{rendered}");
+    assert_eq!(requests(&rendered, "rate_limited"), 1, "{rendered}");
+    let durations = rendered
+        .lines()
+        .find(|l| l.starts_with("mcp_backend_request_duration_seconds_count{backend=\"f13\"}"));
+    assert_eq!(
+        durations.and_then(|l| l.rsplit(' ').next()),
+        Some("2"),
+        "{rendered}"
+    );
 }
 
 /// T5 (amended AC2): a throttle answered to the R2 check-site fill is neither

@@ -100,7 +100,6 @@ impl BackendMetric {
 /// The per-request series of one backend, keyed once per slot.
 #[derive(Clone, Debug)]
 pub(crate) struct BackendMetrics {
-    backend: String,
     /// `mcp_backend_circuit_state{backend}`.
     pub(crate) circuit_state: BackendMetric,
     /// `mcp_backend_requests_total{backend, status="ok"}`.
@@ -117,7 +116,6 @@ impl BackendMetrics {
             BackendMetric::new("mcp_backend_requests_total", backend, &[("status", status)])
         };
         Self {
-            backend: backend.to_owned(),
             circuit_state: BackendMetric::new("mcp_backend_circuit_state", backend, &[]),
             requests_ok: requests("ok"),
             requests_rate_limited: requests("rate_limited"),
@@ -127,10 +125,5 @@ impl BackendMetrics {
                 &[],
             ),
         }
-    }
-
-    /// Whether these keys carry `backend` as their label.
-    pub(crate) fn is_for(&self, backend: &str) -> bool {
-        self.backend == backend
     }
 }

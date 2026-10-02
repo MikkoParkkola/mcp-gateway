@@ -14,7 +14,6 @@ pub use health::{HealthMetrics, HealthTracker};
 pub use rate_limiter::RateLimiter;
 pub use retry::{RetryPolicy, with_retry};
 
-use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::FailsafeConfig;
@@ -47,18 +46,12 @@ impl Failsafe {
         }
     }
 
-    /// This slot's per-request metric keys for `backend`. The keys are built
-    /// once; a caller naming another backend gets fresh keys for that name,
-    /// so the label is always the one passed, exactly as the macros wrote it.
-    pub(crate) fn metrics(&self, backend: &str) -> Cow<'_, crate::metrics::BackendMetrics> {
-        let cached = self
-            .metrics
-            .get_or_init(|| crate::metrics::BackendMetrics::new(backend));
-        if cached.is_for(backend) {
-            Cow::Borrowed(cached)
-        } else {
-            Cow::Owned(crate::metrics::BackendMetrics::new(backend))
-        }
+    /// This slot's per-request metric keys, built on first use. Every caller
+    /// passes the backend name the slot was built for (`PooledEntry::new`),
+    /// so the first name is the slot's name.
+    pub(crate) fn metrics(&self, backend: &str) -> &crate::metrics::BackendMetrics {
+        self.metrics
+            .get_or_init(|| crate::metrics::BackendMetrics::new(backend))
     }
 
     /// Admit a request, or say which guard refused it.
