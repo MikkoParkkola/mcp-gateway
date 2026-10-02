@@ -554,7 +554,10 @@ async fn d7_a_gateway_on_port_zero_serves_on_the_port_it_reports() {
         gateway.port, ANY_PORT,
         "the reported port replaces the configured 0"
     );
-    let probe = reqwest::Client::new()
+    let probe = reqwest::Client::builder()
+        .timeout(PROBE)
+        .build()
+        .expect("probe client")
         .get(format!("http://127.0.0.1:{}/livez", gateway.port))
         .send()
         .await
