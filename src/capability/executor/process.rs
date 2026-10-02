@@ -9,7 +9,7 @@
 
 use serde_json::Value;
 
-use crate::capability::definition::ProcessConfig;
+use crate::capability::definition::{Integrity, ProcessConfig};
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
 use crate::config::{ProcessCommand, ProcessExecution};
 use crate::{Error, Result};
@@ -52,7 +52,30 @@ pub(crate) fn admit(
     capability: &CapabilityDefinition,
     process: &ProcessConfig,
 ) -> Result<()> {
-    let _ = (policy, capability, process);
+    let name = &capability.name;
+    if policy.execution == ProcessExecution::Disabled {
+        return Err(Error::Config(format!(
+            "capability '{name}' runs a local process, and capabilities.process_execution \
+             is disabled"
+        )));
+    }
+    if capability.providers.integrity != Integrity::Verified {
+        return Err(Error::Config(format!(
+            "capability '{name}' must be pinned (mcp-gateway cap pin) to run a local process"
+        )));
+    }
+    let command = process.command();
+    let static_args = process.static_args_prefix();
+    if !policy
+        .commands
+        .iter()
+        .any(|allowed| allowed.admits(command, &static_args))
+    {
+        return Err(Error::Config(format!(
+            "capability '{name}' runs '{command}', which capabilities.process_commands \
+             does not allow"
+        )));
+    }
     Ok(())
 }
 
@@ -68,7 +91,15 @@ impl CapabilityExecutor {
         admit(&self.process_policy, capability, process)?;
         match process {
             ProcessConfig::Cli(config) => {
-                let _invocation = build_cli_invocation(config, params, &capability.schema.input)?;
+                let invocation = build_cli_invocation(config, params, &capability.schema.input)?;
+                // Shape only, never values (CWE-532).
+                tracing::debug!(
+                    capability = %capability.name,
+                    command = %invocation.command,
+                    args = invocation.args.len(),
+                    stdin = invocation.stdin.is_some(),
+                    "built CLI invocation"
+                );
                 Err(Error::Config(format!(
                     "capability '{}': running a CLI process is not available in this build",
                     capability.name
