@@ -281,13 +281,13 @@ pub(crate) struct Attempt<'a> {
 impl Services {
     /// Write one MIN.1 attributed record for `attempt`, on the bounded
     /// blocking pool. Best effort: a down log is logged, not fatal.
-    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) {
+    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) -> std::io::Result<()> {
         use crate::security::audit::{
             AuditEnvelope, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
         };
         use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
         let Some(log) = &self.audit else {
-            return;
+            return Ok(());
         };
         let mut extra = Map::new();
         extra.insert("subscription_id".into(), attempt.subscription_id.into());
@@ -340,9 +340,12 @@ impl Services {
                 )
             })
             .await;
-        if let Err(error) = written {
+        if let Err(error) = &written {
             tracing::warn!(%error, "events: delivery audit record not written");
         }
+        // ponytail: red phase swallows the error; the fix returns it.
+        let _ = written;
+        Ok(())
     }
 
     /// One governance record per evicted dead letter (design §3.8).
@@ -670,3 +673,7 @@ mod tests {
         assert!(!open.admits_subscription(&session, "x").await, "logged out");
     }
 }
+
+#[cfg(test)]
+#[path = "services_audit_tests.rs"]
+mod audit_tests;

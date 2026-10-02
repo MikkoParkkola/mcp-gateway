@@ -293,4 +293,17 @@ mod tests {
             assert!(zero.validate().is_err());
         }
     }
+
+    /// RELIABLE.1: every retry falls within 15 minutes of the first attempt,
+    /// so a longer window is refused at load, naming the field (MIK-7784).
+    #[test]
+    fn a_retry_window_over_fifteen_minutes_is_refused_by_name() {
+        let at = |secs| EventsConfig {
+            retry_window: Duration::from_secs(secs),
+            ..EventsConfig::default()
+        };
+        at(15 * 60).validate().expect("15 minutes is the bound");
+        let error = at(15 * 60 + 1).validate().expect_err("over the bound");
+        assert!(error.to_string().contains("retry_window"), "{error}");
+    }
 }

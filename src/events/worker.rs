@@ -139,7 +139,10 @@ impl EventsHub {
             delivered: false,
         };
         if !services.admits_subscription(&sub, &record.backend).await {
-            services.audit_attempt(&refused("access_revoked")).await;
+            services
+                .audit_attempt(&refused("access_revoked"))
+                .await
+                .ok();
             self.revoke(&sub).await;
             // Removed: the record went with it and this settles nothing. Not
             // removed (a store error, or a refresh re-bound the row): the
@@ -159,7 +162,7 @@ impl EventsHub {
             return;
         }
         if self.overdue(&record, Utc::now()) {
-            services.audit_attempt(&refused("exhausted")).await;
+            services.audit_attempt(&refused("exhausted")).await.ok();
             self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
             return;
@@ -171,7 +174,7 @@ impl EventsHub {
             return;
         };
         if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
-            services.audit_attempt(&refused("budget")).await;
+            services.audit_attempt(&refused("budget")).await.ok();
             self.settle(services, &record, quiet_dead(DeadReason::Budget))
                 .await;
             return;
@@ -194,7 +197,8 @@ impl EventsHub {
                 delivered,
                 ..refused(status)
             })
-            .await;
+            .await
+            .ok();
         if self
             .runtime
             .failures
