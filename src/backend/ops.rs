@@ -440,12 +440,12 @@ impl Backend {
     }
 
     /// Record how long one dispatch took, whatever its outcome.
-    fn record_dispatch_latency(&self, latency: std::time::Duration) {
-        telemetry_metrics::histogram!(
-            "mcp_backend_request_duration_seconds",
-            "backend" => self.name.clone()
-        )
-        .record(latency.as_secs_f64());
+    fn record_dispatch_latency(&self, entry: &super::PooledEntry, latency: std::time::Duration) {
+        let metrics = entry.failsafe.metrics(&self.name);
+        metrics
+            .request_duration
+            .histogram()
+            .record(latency.as_secs_f64());
     }
 
     /// Record the outcome of one dispatch attempt against the slot's failsafe
@@ -481,16 +481,17 @@ impl Backend {
                 } else {
                     super::fill_check::record_request_success(entry, latency);
                 }
-                telemetry_metrics::counter!(
-                    "mcp_backend_requests_total",
-                    "backend" => self.name.clone(),
-                    "status" => if throttled { "rate_limited" } else { "ok" }
-                )
-                .increment(1);
+                let metrics = entry.failsafe.metrics(&self.name);
+                let requests = if throttled {
+                    &metrics.requests_rate_limited
+                } else {
+                    &metrics.requests_ok
+                };
+                requests.counter().increment(1);
             }
             Err(e) => self.record_dispatch_error(entry, latency, e, "Request"),
         }
-        self.record_dispatch_latency(latency);
+        self.record_dispatch_latency(entry, latency);
     }
 
     /// Send a notification to the backend via the canonical shared slot's
@@ -585,16 +586,12 @@ impl Backend {
                     "Notification sent successfully"
                 );
                 entry.failsafe.record_success(latency);
-                telemetry_metrics::counter!(
-                    "mcp_backend_requests_total",
-                    "backend" => self.name.clone(),
-                    "status" => "ok"
-                )
-                .increment(1);
+                let metrics = entry.failsafe.metrics(&self.name);
+                metrics.requests_ok.counter().increment(1);
             }
             Err(e) => self.record_dispatch_error(&entry, latency, e, "Notification"),
         }
-        self.record_dispatch_latency(latency);
+        self.record_dispatch_latency(&entry, latency);
 
         result
     }
