@@ -146,6 +146,7 @@ backend" and "fails a capability file" first.**
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
+| 122 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3444,6 +3445,21 @@ entry with a durable upstream handle stays managed `working`, as after any resta
 `tasks/get` resolves it. This applies to HTTP shutdown and to stdio EOF.
 
 **Action:** none. Raise `server.shutdown_timeout` if long tasks should be allowed to finish.
+
+## 122. A listen stream opens with the acknowledgement notification
+
+**Startup:** no notice
+
+A 4.0 beta answered `subscriptions/listen` with a JSON-RPC response as the first event on the
+stream. The 2026-07-28 specification defines that response as the end of the subscription, so a
+conformant client saw its stream close as it opened. The first event is now a
+`notifications/subscriptions/acknowledged` notification: the subscription id is in
+`params._meta` under `io.modelcontextprotocol/subscriptionId`, and `params.notifications` names
+what the gateway delivers (`toolsListChanged`, and the task ids it accepted under `taskIds`).
+Prompt and resource changes are not delivered, so they are not acknowledged.
+
+**Action:** a client written against the beta that read the subscription id from the response
+`result` reads it from the notification instead.
 
 ## Upgrading from 3.5.x: a walkthrough
 
