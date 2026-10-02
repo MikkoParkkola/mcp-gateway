@@ -54,6 +54,13 @@ pub(crate) fn ssrf_refusal(error: &reqwest::Error) -> Option<Error> {
     crate::security::ssrf::ssrf_denial(error).map(|denied| Error::Protocol(denied.to_string()))
 }
 
+/// An OAuth request's failed send: a destination-policy refusal stays
+/// `-32600 SSRF blocked` (MIK-7701); anything else is an OAuth failure naming
+/// `context` and the error's category, never its Display (that embeds the URL).
+pub(crate) fn oauth_request_error(context: &str, error: &reqwest::Error) -> Error {
+    ssrf_refusal(error).unwrap_or_else(|| Error::OAuth(safe_reqwest_message(context, error)))
+}
+
 /// Whether the caller can prove its request never followed a redirect.
 ///
 /// A bare `bool` here selects behaviour on the one argument whose two values

@@ -11,6 +11,7 @@ use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 
+use super::SSRF_BLOCKED;
 use super::is_private_or_reserved;
 use crate::{Error, Result};
 
@@ -126,7 +127,7 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
                     // and naming it would answer internal DNS for them.
                     tracing::warn!(host = %host, address = %ip, "SSRF pin refused a resolved address");
                     let msg =
-                        format!("SSRF blocked: '{host}' resolves to a private/reserved address");
+                        format!("{SSRF_BLOCKED}: '{host}' resolves to a private/reserved address");
                     return Err(Box::new(SsrfDenied(msg)) as BoxErr);
                 }
             }
@@ -175,6 +176,14 @@ impl std::fmt::Display for SsrfDenied {
 
 impl std::error::Error for SsrfDenied {}
 
+impl SsrfDenied {
+    /// A refusal raised outside the resolver, such as a redirect hop the
+    /// destination policy refuses, so it is typed the same way (MIK-7701).
+    pub(crate) fn new(reason: String) -> Self {
+        Self(reason)
+    }
+}
+
 /// The [`PinningResolver`] refusal somewhere in `error`'s source chain.
 ///
 /// Also looks inside an `io::Error`, whose `source()` skips the error it wraps.
@@ -216,7 +225,7 @@ pub async fn resolve_and_validate_host<R: HostResolver>(
     for ip in &ips {
         if is_private_or_reserved(*ip) {
             return Err(Error::Protocol(format!(
-                "SSRF blocked: '{host}' resolves to a private/reserved address"
+                "{SSRF_BLOCKED}: '{host}' resolves to a private/reserved address"
             )));
         }
     }

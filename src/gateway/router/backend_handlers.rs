@@ -290,13 +290,10 @@ fn normalize_tools_list_response(
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
 
     // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
-    // upstream sibling key or cursor could name a withheld tool (A3).
-    match serde_json::to_value(tools) {
-        Ok(normalized_tools) => *result = json!({ "tools": normalized_tools }),
-        Err(e) => {
-            warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
-        }
-    }
+    // upstream sibling key or cursor could name a withheld tool (A3). The
+    // projected descriptors are already JSON values, so building the result
+    // has no failure arm to fall through to the unjudged original.
+    *result = crate::trust::tools_list_result_with_trust_cards(tools);
 }
 
 /// Stable, collision-safe upstream-session bucket key for a passthrough caller

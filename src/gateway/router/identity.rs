@@ -387,6 +387,10 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 #[path = "identity_header_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "identity_cf_edge_tests.rs"]
+mod cf_edge_tests;
+
 #[cfg(all(test, feature = "firewall"))]
 #[path = "caller_key_tests.rs"]
 mod caller_key_tests;
