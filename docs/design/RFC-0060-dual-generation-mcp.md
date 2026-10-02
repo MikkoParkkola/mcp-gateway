@@ -102,7 +102,9 @@ with zero observations are still evaluated from the gateway's explicit
 earlier `protocol-revision-telemetry` directory, deploy, and then start the
 gateways. The HTTP service never creates the durable file; a stdio-mode gateway
 does, so start one (a config with no backends, stdin closed) on the real data
-directory and take the HTTP scrape in the same second. The new durable file's
+directory and take the HTTP scrape in the same second; if the durable
+`started_at_unix_seconds` differs from the scrape second, move that attempt aside
+and repeat. The new durable file's
 `started_at_unix_seconds` is the stdio baseline;
 take the HTTP baseline scrape after all bounded metric series have been
 registered at zero. Record these fields after deployment:
