@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use super::{CollusionAction, CollusionConfig, RECORD_CAP, RelayCaller, capped, text_of};
+use super::{CollusionAction, CollusionConfig, RECORD_CAP, RelayCaller, Walk, capped, text_of};
 use crate::config::Config;
 use crate::security::firewall::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallConfig, FirewallVerdict, ScanType,
@@ -115,42 +115,32 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
         .expect("nine principals can still be reached before a fingerprint saturates");
 }
 
-/// B3: responses skip the gateway's own `_context_integrity` (top level, with
-/// its `schema_version`) and nothing else: a nested one, or one without the
-/// gateway's shape, is delivered content. Arguments keep a caller-supplied
-/// one. Object keys are text too: a key reaches the backend like a value.
+/// B3: a delivery is read as string leaves, nothing skipped: this route
+/// attaches no metadata of its own, so a backend's `_context_integrity`,
+/// at any depth and in any shape, is delivered content. Egress also reads
+/// object keys, which reach the backend like values.
 #[test]
-fn the_text_walker_skips_only_the_gateways_own_metadata_on_responses() {
+fn the_text_walker_reads_keys_on_egress_and_skips_nothing() {
     let value = json!({
         "content": [{"text": "one"}],
         "_context_integrity": {"schema_version": "v", "note": "two"},
         "structuredContent": {"_context_integrity": {"note": "three"}},
         "key four": 4,
     });
-    let lines = |skip| -> Vec<String> {
-        text_of(&value, skip)
+    let lines = |walk| -> Vec<String> {
+        text_of(&value, walk)
             .split('\n')
             .map(String::from)
             .collect()
     };
-    let response = lines(true);
-    for kept in ["one", "three", "key four", "content", "structuredContent"] {
+    let mut delivered = lines(Walk::Delivery);
+    delivered.sort();
+    assert_eq!(delivered, ["one", "three", "two"]);
+    let egress = lines(Walk::Egress);
+    for kept in ["one", "two", "three", "key four", "_context_integrity"] {
         assert!(
-            response.iter().any(|l| l == kept),
-            "{kept} missing: {response:?}"
-        );
-    }
-    assert!(!response.iter().any(|l| l == "two"), "{response:?}");
-    let forged = json!({"_context_integrity": {"note": "five"}});
-    assert!(
-        text_of(&forged, true).contains("five"),
-        "a backend's own is content"
-    );
-    let request = lines(false);
-    for kept in ["one", "two", "three", "key four"] {
-        assert!(
-            request.iter().any(|l| l == kept),
-            "{kept} missing: {request:?}"
+            egress.iter().any(|l| l == kept),
+            "{kept} missing: {egress:?}"
         );
     }
 }

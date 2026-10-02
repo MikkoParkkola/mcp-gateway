@@ -231,7 +231,7 @@ impl Firewall {
                 .check_egress_at(
                     caller.key(),
                     &target,
-                    &text_of(params, false),
+                    &text_of(params, Walk::Egress),
                     Instant::now(),
                 )
                 .map(|f| {
@@ -281,7 +281,7 @@ impl Firewall {
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
             || context_integrity_sensitive(result);
-        let (text, cut) = capped(text_of(result, true));
+        let (text, cut) = capped(text_of(result, Walk::Delivery));
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
         }
@@ -299,35 +299,44 @@ fn relay_finding(description: String, matched: String) -> Finding {
     }
 }
 
-/// Every string leaf and object key of `value`, newline-joined: a key
-/// reaches the backend like a value. `skip_integrity` leaves out the
-/// gateway's own `_context_integrity`: top level, with its `schema_version`
-/// (responses only: any other one, or one in the arguments, is content).
-pub(super) fn text_of(value: &Value, skip_integrity: bool) -> String {
+/// Which side of a call [`text_of`] reads.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Walk {
+    /// What a backend receives: string leaves and object keys, since a key
+    /// reaches the backend like a value.
+    Egress,
+    /// What a caller is delivered: string leaves only, so shared schema keys
+    /// never make two unrelated payloads look alike. Nothing is skipped:
+    /// this route attaches no metadata of its own, so whatever is there,
+    /// a backend's `_context_integrity` included, was delivered.
+    Delivery,
+}
+
+/// The text of `value` read as `walk`, newline-joined.
+pub(super) fn text_of(value: &Value, walk: Walk) -> String {
     fn push(out: &mut String, s: &str) {
         if !out.is_empty() {
             out.push('\n');
         }
         out.push_str(s);
     }
-    fn walk(value: &Value, skip: bool, out: &mut String) {
+    fn visit(value: &Value, walk: Walk, out: &mut String) {
         match value {
             Value::String(s) => push(out, s),
-            Value::Array(items) => items.iter().for_each(|v| walk(v, false, out)),
+            Value::Array(items) => items.iter().for_each(|v| visit(v, walk, out)),
             Value::Object(map) => {
-                let gateways = |k: &str, v: &Value| {
-                    skip && k == "_context_integrity" && v.get("schema_version").is_some()
-                };
-                for (k, v) in map.iter().filter(|(k, v)| !gateways(k, v)) {
-                    push(out, k);
-                    walk(v, false, out);
+                for (k, v) in map {
+                    if walk == Walk::Egress {
+                        push(out, k);
+                    }
+                    visit(v, walk, out);
                 }
             }
             _ => {}
         }
     }
     let mut out = String::new();
-    walk(value, skip_integrity, &mut out);
+    visit(value, walk, &mut out);
     out
 }
 
