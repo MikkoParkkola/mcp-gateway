@@ -25,7 +25,6 @@ fn finished_task() -> CommittedTask {
     CommittedTask {
         task,
         revision: 1,
-        backend: CAPS.to_owned(),
         targets: vec![Target {
             server: CAPS.to_owned(),
             tool: PERSONAL.to_owned(),

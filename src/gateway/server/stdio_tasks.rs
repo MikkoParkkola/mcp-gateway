@@ -10,7 +10,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde_json::Value;
 use tracing::{info, warn};
@@ -123,8 +122,12 @@ fn degraded(dir: &Path, cause: &str) {
 
 /// HTTP's own task shutdown, through the shared helper: join the expiry
 /// sweep, drain the executor, close the store and release its lease.
-pub(super) async fn shutdown(tasks: &StdioTasks, expiry: ExpirySweep, timeout: Duration) {
-    super::task_runtime::shutdown(expiry, &tasks.executor, &tasks.service, timeout).await;
+pub(super) async fn shutdown(
+    tasks: &StdioTasks,
+    expiry: ExpirySweep,
+    budget: super::task_runtime::ShutdownBudget,
+) {
+    super::task_runtime::shutdown(expiry, &tasks.executor, &tasks.service, budget).await;
 }
 
 /// Remove the Tasks extension from an `initialize` or `server/discover`

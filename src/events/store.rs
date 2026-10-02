@@ -11,10 +11,15 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 
+use super::outbox::{DeadLetter, OutboxRecord};
 use super::records::{
     Placed, Subscription, Verified, create_private_dir, load_records, remove_record, verified_file,
     write_record,
 };
+
+#[path = "store_pending.rs"]
+mod pending;
+pub(crate) use pending::{Claim, Claimed, Settle};
 
 /// Bounds on verification records whose last subscription has ended.
 #[derive(Debug, Clone, Copy)]
@@ -49,6 +54,10 @@ struct State {
     subs: HashMap<String, Subscription>,
     /// Keyed by `verified_file(principal, url)`.
     verified: HashMap<String, Verified>,
+    /// Pending deliveries, keyed by event id.
+    outbox: HashMap<String, OutboxRecord>,
+    /// Dead letters with their file size, keyed by event id.
+    dead: HashMap<String, (DeadLetter, u64)>,
 }
 
 /// Per-pair facts over every subscription, built in one pass so tail
@@ -130,6 +139,8 @@ impl PairIndex {
 pub(crate) struct Store {
     subs_dir: PathBuf,
     verified_dir: PathBuf,
+    outbox_dir: PathBuf,
+    dead_dir: PathBuf,
     state: Mutex<State>,
 }
 
@@ -139,9 +150,12 @@ impl Store {
     pub(crate) fn open(root: &Path, now: DateTime<Utc>, tail: TailPolicy) -> std::io::Result<Self> {
         let subs_dir = root.join("subs");
         let verified_dir = root.join("verified");
+        let outbox_dir = root.join("outbox");
+        let dead_dir = root.join("dead");
         create_private_dir(root)?;
-        create_private_dir(&subs_dir)?;
-        create_private_dir(&verified_dir)?;
+        for dir in [&subs_dir, &verified_dir, &outbox_dir, &dead_dir] {
+            create_private_dir(dir)?;
+        }
         let mut state = State::default();
         for (_, sub) in load_records::<Subscription>(&subs_dir) {
             state.subs.insert(sub.id.clone(), sub);
@@ -151,9 +165,12 @@ impl Store {
                 state.verified.insert(name.to_owned(), record);
             }
         }
+        pending::load(&mut state, &outbox_dir, &dead_dir, now)?;
         let store = Self {
             subs_dir,
             verified_dir,
+            outbox_dir,
+            dead_dir,
             state: Mutex::new(state),
         };
         {
@@ -194,6 +211,9 @@ impl Store {
             placed.durable()?;
         }
         for id in expired {
+            // Its pending records go with it: a later subscribe of the same
+            // key re-creates this id, and must not inherit them.
+            self.cancel_pending(state, &id)?;
             remove_record(&self.subs_dir, &format!("{id}.json"))?;
             state.subs.remove(&id);
         }
@@ -352,12 +372,28 @@ impl Store {
         now: DateTime<Utc>,
         tail: TailPolicy,
     ) -> std::io::Result<bool> {
+        self.remove_where(id, now, tail, |_| true)
+    }
+
+    /// Delete subscription `id` when `still` holds for the stored row under
+    /// the store lock: a revocation decided on an earlier snapshot never
+    /// deletes a row a concurrent refresh has re-bound to another credential.
+    pub(crate) fn remove_where(
+        &self,
+        id: &str,
+        now: DateTime<Utc>,
+        tail: TailPolicy,
+        still: impl FnOnce(&Subscription) -> bool,
+    ) -> std::io::Result<bool> {
         let mut state = self.state.lock();
         self.sweep(&mut state, now)?;
-        let Some(sub) = state.subs.get(id).cloned() else {
+        let Some(sub) = state.subs.get(id).cloned().filter(|s| still(s)) else {
             self.trim_tails(&mut state, now, tail)?;
             return Ok(false);
         };
+        // Cancelled in the same hold of the lock: no attempt can start for
+        // this subscription once the removal returns (design §6.4).
+        self.cancel_pending(&mut state, id)?;
         remove_record(&self.subs_dir, &format!("{id}.json"))?;
         state.subs.remove(id);
         if !state.pair_live(&sub.principal, &sub.url, now) {

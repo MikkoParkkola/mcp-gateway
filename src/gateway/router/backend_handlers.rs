@@ -20,7 +20,9 @@ use super::authorization::{
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
 use super::hardened_identity::hardened_identity_refusal;
-use super::helpers::{build_http_error_response, build_http_response, parse_request};
+use super::helpers::{
+    bodiless_accepted, build_http_error_response, build_http_response, parse_request,
+};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
@@ -51,26 +53,10 @@ struct BackendAuthContext<'a> {
     grant_subject: Option<&'a crate::identity_grants::GrantSubject>,
 }
 
-/// The key the direct route's per-caller firewall controls score on: the
-/// caller's `CallerKey`, as on the meta route, so one caller has one budget on
-/// both. With no key (authentication off) it is the shared per-backend bucket,
-/// never tracked; a keyed caller's reclaim deadline is renewed (CONTROL.4).
 #[cfg(feature = "firewall")]
-fn direct_control_identity(
-    state: &AppState,
-    auth: BackendAuthContext<'_>,
-    per_backend: &str,
-) -> String {
-    let key = super::identity::caller_key(auth.grant_subject, auth.cert_identity, auth.client);
-    if key.is_empty() {
-        return per_backend.to_string();
-    }
-    if let Some(ref lifecycle) = state.session_lifecycle {
-        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
-        lifecycle.track(key.clone(), now_unix() + IDLE_TTL.as_secs());
-    }
-    key
-}
+mod relay;
+#[cfg(feature = "firewall")]
+use relay::{direct_control_identity, record_direct_delivery, relay_refusal};
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
 /// request arriving at the direct backend endpoint.
@@ -161,7 +147,7 @@ async fn apply_backend_tool_call_security(
                 });
             // OWASP ASI10: an anomaly block carries -32002 on every route, as
             // on the meta route, so a caller can tell it from other refusals.
-            if verdict.is_anomaly_block() {
+            if verdict.is_asi10_block() {
                 return Err(backend_security_error_with_status(
                     id,
                     -32002,
@@ -173,6 +159,11 @@ async fn apply_backend_tool_call_security(
                 id,
                 &format!("Firewall blocked: {desc}"),
             ));
+        }
+        let target = (backend_name, tool_name);
+        let audit = (session_id.as_str(), caller_name);
+        if let Some(refusal) = relay_refusal(fw, auth, id, target, params, audit) {
+            return Err(refusal);
         }
     }
 
@@ -290,13 +281,10 @@ fn normalize_tools_list_response(
     let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
 
     // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
-    // upstream sibling key or cursor could name a withheld tool (A3).
-    match serde_json::to_value(tools) {
-        Ok(normalized_tools) => *result = json!({ "tools": normalized_tools }),
-        Err(e) => {
-            warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
-        }
-    }
+    // upstream sibling key or cursor could name a withheld tool (A3). The
+    // projected descriptors are already JSON values, so building the result
+    // has no failure arm to fall through to the unjudged original.
+    *result = crate::trust::tools_list_result_with_trust_cards(tools);
 }
 
 /// Stable, collision-safe upstream-session bucket key for a passthrough caller
@@ -492,15 +480,15 @@ pub(super) async fn backend_handler(
         && log.admit().await.is_err()
     {
         let error = crate::Error::AuditUnavailable;
-        return build_http_error_response(
+        return bodiless_accepted(build_http_error_response(
             None,
             error.to_rpc_code(),
             error.to_string(),
             StatusCode::SERVICE_UNAVAILABLE,
-        );
+        ));
     }
 
-    direct_audit::audited_call(Arc::clone(&state), name, request).await
+    bodiless_accepted(direct_audit::audited_call(Arc::clone(&state), name, request).await)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1051,17 +1039,18 @@ async fn backend_handler_inner(
     // mode (passthrough: true in config — only for fully-trusted internals).
     // #2445: before the idempotency cache below, so a call the gate now
     // refuses is refused on the re-issue too, never answered from the cache.
+    let auth = BackendAuthContext {
+        client: client.as_ref(),
+        oauth_agent_identity: oauth_agent_identity.as_ref(),
+        cert_identity: cert_identity.as_ref(),
+        #[cfg(feature = "firewall")]
+        grant_subject: grant_subject.as_ref(),
+    };
     let sanitized = if method == "tools/call" {
         match apply_backend_tool_call_security(
             &state,
             &name,
-            BackendAuthContext {
-                client: client.as_ref(),
-                oauth_agent_identity: oauth_agent_identity.as_ref(),
-                cert_identity: cert_identity.as_ref(),
-                #[cfg(feature = "firewall")]
-                grant_subject: grant_subject.as_ref(),
-            },
+            auth,
             params.as_ref(),
             &id,
             &backend,
@@ -1075,39 +1064,8 @@ async fn backend_handler_inner(
     } else {
         None
     };
-    // Admitted once, here: after every refusal above, so a refused call
-    // consumes no nonce, and before the cache below, so a replayed result is
-    // signed against the replaying request's own nonce. The store is the one
-    // the meta route admits into.
-    if signs {
-        // The meta route's own derivation (an authenticated key, then an OAuth
-        // agent, then a certificate), so one caller has one bucket on both.
-        let authorizer = super::authorization::RouterAuthorizer {
-            state: state.as_ref(),
-            client: client.as_ref(),
-            oauth_agent_identity: oauth_agent_identity.as_ref(),
-            cert_identity: cert_identity.as_ref(),
-            principal: None,
-        };
-        let principal = crate::gateway::authz::ToolAuthorizer::quota_principal(&authorizer).map_or(
-            "anonymous",
-            crate::gateway::auth::QuotaPrincipal::as_store_key,
-        );
-        if let Err(e) = state
-            .meta_mcp
-            .admit_signing_nonce(signing_nonce.as_deref(), principal)
-        {
-            let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
-            return build_http_error_response(
-                Some(id.clone()),
-                e.to_rpc_code(),
-                message,
-                StatusCode::BAD_REQUEST,
-            );
-        }
-    }
     let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
-    if method == "tools/call" {
+    let guarded = if method == "tools/call" {
         match state.meta_mcp.direct_route_idempotency(
             retry.idempotency_key.as_deref(),
             &name,
@@ -1118,24 +1076,7 @@ async fn backend_handler_inner(
             crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
             params.as_ref(),
         ) {
-            Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
-                crate::gateway::meta_mcp::invoke::audit::note_cached();
-                let mut response = JsonRpcResponse::success(id.clone(), cached);
-                if signs {
-                    let nonce = signing_nonce.as_deref();
-                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
-                }
-                return build_http_response(&response, StatusCode::OK);
-            }
-            Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
-                crate::gateway::meta_mcp::invoke::audit::note_cached();
-                let response = cached_error_response(Some(id.clone()), &error);
-                return build_http_response(&response, StatusCode::OK);
-            }
-            Ok(Some(crate::idempotency::GuardOutcome::Proceed(reservation))) => {
-                idem_reservation = Some(reservation);
-            }
-            Ok(None) => {}
+            Ok(outcome) => outcome,
             Err(e) => {
                 let code = e.to_rpc_code();
                 let status = u16::try_from(code)
@@ -1145,6 +1086,49 @@ async fn backend_handler_inner(
                 return build_http_error_response(Some(id.clone()), code, e.to_string(), status);
             }
         }
+    } else {
+        None
+    };
+    // Admitted once, here: after every refusal above and the idempotency
+    // guard, so a refused call consumes no nonce (MIK-7698), and before a
+    // cached result is delivered, so it is signed against the replaying
+    // request's own nonce. A refused admission releases a fresh reservation.
+    let admitted = if signs {
+        DirectRouteGuards::admit_nonce(
+            &state,
+            (
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            ),
+            signing_nonce.as_deref(),
+        )
+    } else {
+        Ok(())
+    };
+    if let Err(e) = admitted {
+        let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+        let code = e.to_rpc_code();
+        return build_http_error_response(Some(id.clone()), code, message, StatusCode::BAD_REQUEST);
+    }
+    match guarded {
+        Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
+            crate::gateway::meta_mcp::invoke::audit::note_cached();
+            // A replay is a delivery too: it renews this caller's own copy.
+            let mut response = JsonRpcResponse::success(id.clone(), cached);
+            let nonce = signs.then_some(&signing_nonce);
+            sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
+            return build_http_response(&response, StatusCode::OK);
+        }
+        Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
+            crate::gateway::meta_mcp::invoke::audit::note_cached();
+            let response = cached_error_response(Some(id.clone()), &error);
+            return build_http_response(&response, StatusCode::OK);
+        }
+        Some(crate::idempotency::GuardOutcome::Proceed(reservation)) => {
+            idem_reservation = Some(reservation);
+        }
+        None => {}
     }
 
     if let Some(sanitized_params) = sanitized {
@@ -1178,10 +1162,9 @@ async fn backend_handler_inner(
                 settle_direct_idempotency(idem_reservation.as_mut(), &response);
                 let nonce = chain_nonce.as_deref();
                 state.meta_mcp.finish_direct(&mut response, &method, nonce);
-                if signs {
-                    let nonce = signing_nonce.as_deref();
-                    state.meta_mcp.sign_direct_delivery(&mut response, nonce);
-                }
+                // What the caller receives: after every gate and the finish.
+                let nonce = signs.then_some(&signing_nonce);
+                sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
                 build_http_response(&response, StatusCode::OK)
             }
             // Settled as terminal unless raised before dispatch
@@ -1256,9 +1239,9 @@ async fn backend_handler_inner(
             settle_direct_idempotency(idem_reservation.as_mut(), &response);
             let nonce = chain_nonce.as_deref();
             state.meta_mcp.finish_direct(&mut response, &method, nonce);
-            if signs {
-                let nonce = signing_nonce.as_deref();
-                state.meta_mcp.sign_direct_delivery(&mut response, nonce);
+            if method == "tools/call" {
+                let nonce = signs.then_some(&signing_nonce);
+                sign_and_record(&state, auth, (&name, call.tool), &mut response, nonce);
             }
             build_http_response(&response, StatusCode::OK)
         }
@@ -1266,6 +1249,22 @@ async fn backend_handler_inner(
         // lets a retry re-execute a side effect (ADR-012 consequence 1).
         Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
     }
+}
+
+/// Sign when `nonce` is `Some`, then record what is delivered: a refusal records nothing.
+#[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
+fn sign_and_record(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    (server, tool): (&str, &str),
+    response: &mut JsonRpcResponse,
+    nonce: Option<&Option<String>>,
+) {
+    if let Some(nonce) = nonce.map(Option::as_deref) {
+        state.meta_mcp.sign_direct_delivery(response, nonce);
+    }
+    #[cfg(feature = "firewall")]
+    record_direct_delivery(state, auth, server, tool, response.result.as_ref());
 }
 
 /// #1962: run a backend dispatch with the reservation armed, so a caller

@@ -135,3 +135,7 @@ fn same_origin_fetch(config: &Config, headers: &HeaderMap) -> bool {
         && is("sec-fetch-site", "same-origin")
         && is("sec-fetch-mode", "cors")
 }
+
+#[cfg(test)]
+#[path = "connections_tests.rs"]
+mod connections_tests;

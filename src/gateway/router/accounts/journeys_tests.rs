@@ -3,7 +3,7 @@
 //! Unit rows for the journey owner API: the L2 bridge predicate for principals
 //! the router fixture cannot mint (OIDC), and the status view mapping.
 
-use super::{is_bridged, status_body};
+use super::{admissible, is_bridged, status_body};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::{JourneyReason, JourneyStatus, JourneyView};
 
@@ -84,4 +84,42 @@ fn status_body_reports_superseded_as_expired() {
     let pending = status_body(&view(JourneyStatus::Pending, None));
     assert_eq!(pending["status"], "pending");
     assert!(pending["reason"].is_null());
+}
+
+/// Mutant: the body cap, the field caps or the byte-exact return-path match is
+/// removed, so an oversized or unlisted request reaches the store.
+#[test]
+fn a_create_body_is_capped_and_its_return_path_matched_exactly() {
+    let yaml = "accounts:\n  schema_version: accounts.v1\n  deployment: single_process\n  \
+                instance_id: unit\n  store_dir: /unused/store\n  authority_dir: /unused/authority\n  \
+                current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  hosted:\n    \
+                public_origin: https://chat.fixture.test\n    return_paths: [\"/\"]\n";
+    let config: crate::config::Config = serde_yaml::from_str(yaml).expect("config");
+    let body = |value: serde_json::Value| axum::body::Bytes::from(value.to_string());
+    let ok = serde_json::json!({"account_id": "work", "return_path": "/"});
+    assert!(admissible(&config, &body(ok.clone())).is_some(), "control");
+
+    let mut padded = ok.to_string();
+    padded.push_str(&" ".repeat(5000));
+    assert!(
+        admissible(&config, &axum::body::Bytes::from(padded)).is_none(),
+        "over the body cap"
+    );
+    let long_id = serde_json::json!({"account_id": "a".repeat(65), "return_path": "/"});
+    assert!(
+        admissible(&config, &body(long_id)).is_none(),
+        "account id cap"
+    );
+    let long_path =
+        serde_json::json!({"account_id": "work", "return_path": format!("/{}", "p".repeat(256))});
+    assert!(
+        admissible(&config, &body(long_path)).is_none(),
+        "return path cap"
+    );
+    let unlisted = serde_json::json!({"account_id": "work", "return_path": "/other"});
+    assert!(
+        admissible(&config, &body(unlisted)).is_none(),
+        "unlisted path"
+    );
+    assert!(admissible(&config, &axum::body::Bytes::from("not json")).is_none());
 }

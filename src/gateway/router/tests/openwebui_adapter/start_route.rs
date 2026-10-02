@@ -560,3 +560,5 @@ pub(super) fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
 mod callback;
 #[path = "start_route_client.rs"]
 mod client;
+#[path = "start_route_service.rs"]
+mod service;

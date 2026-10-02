@@ -143,7 +143,13 @@ backend" and "fails a capability file" first.**
 | 116 | A key-server OIDC issuer, `jwks_uri` or `discovery_url` that is `http://` to a host off this machine refuses to start; a token naming such an issuer is refused; an https issuer's discovery document may not name a cleartext `jwks_uri`. `http://` to a loopback host is allowed and now works | Use `https://` for every `key_server.oidc` URL, or a loopback host for local testing |
 | 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp, writes no new `identity_grant_decision` record for 10 minutes; a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
-| 119 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
+| 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
+| 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
+| 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
+| 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
+| 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
+| 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
+| 125 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -1450,7 +1456,9 @@ backends:
   works.
 - **Legacy handshake only.** The transport always runs `initialize`. A `protocol_version` of
   `2026-07-28` or later on `ws_url` refuses the load, and a peer that only speaks the stateless
-  revision fails the start with "WebSocket MCP initialize failed".
+  revision fails the start with "WebSocket MCP initialize failed". A peer that rejects the proposed
+  revision and lists the ones it speaks is retried once at the highest revision both sides speak;
+  a peer that selects a revision the gateway does not speak fails the start.
 - **Public roots only.** `wss://` trusts the bundled web PKI roots; a private CA fails at start
   with a TLS error.
 - **Bounded start.** A peer that accepts TCP and stalls the upgrade fails the call after the
@@ -3390,7 +3398,119 @@ client polling once a second wrote about 86,400 identical records a day for one 
 
 **Action:** none for a healthy log. Investigate a new finding as tail loss or an edit.
 
-## 119. A webhook route without a `method` accepts POST
+## 119. stdio and WebSocket backends negotiate the protocol revision like HTTP
+
+**Startup:** no notice, a backend that selects a revision the gateway does not speak fails its start
+
+The client proposes a revision and the backend selects one. HTTP already refused a selection
+outside the revisions the gateway speaks and retried a version rejection at the highest revision
+both sides speak; stdio and WebSocket now do the same.
+
+- stdio: the selection is checked on the first answer and on the retry, and the retry's selection
+  is the revision used, not the one the retry proposed.
+- WebSocket: a rejection that lists the backend's revisions is retried once on the same socket.
+  A rejection that lists none, or none in common, still fails with "WebSocket MCP initialize
+  failed".
+- stdio diagnostics name the backend's error code, no longer its message, and stdio debug logs
+  record line lengths, no longer the backend's lines or the frames sent to it.
+- On stdio and WebSocket an `initialize` answer selecting `2026-07-28` is accepted, and the era
+  probe settles the dialect. HTTP still requires a legacy selection, because its
+  `MCP-Protocol-Version` header follows the selection.
+
+**Action:** a backend that fails to start with "Backend selected protocol version" needs a
+revision from the supported list, or a `protocol_version` pin it accepts.
+
+## 120. A task stored by a 4.0.0 beta is re-checked or refused
+
+**Startup:** no notice, `tasks/get` on such a task may answer -32003
+
+A 4.0.0 beta wrote task records (versions 1 to 4) that do not name the backend tool a result
+came from. A read of a finished task re-checks those tools against current policy (item 105).
+A beta row that went to an upstream task keeps a descriptor naming its one call, and that call
+is checked. Any other beta row has nothing to check, since the backend's current tool list is
+no record of what ran, so it is refused, plan or single call, unless it holds no backend output.
+
+**Action:** re-run a refused call under a new idempotency key (the old key finds the refused
+row). Nothing for an upgrade from 3.5.x.
+
+## 121. A task still running when the shutdown drain runs out is cancelled
+
+**Startup:** no notice, a long task is cut off at shutdown instead of running on
+
+Before, a task whose backend call outlasted `server.shutdown_timeout` kept running after the task
+store closed, and could still call its backend while the backends were stopping. Now the drain
+cancels it, waits a bounded time for it to end, and only then closes the store; on HTTP the drain
+and the cancellation together take at most nine tenths of `server.shutdown_timeout`, so the drain
+itself now gets four fifths of it; on stdio both fit what is left of the EOF teardown window. The record stays `working` until the next start settles it through the
+interrupted-task table (`gateway_restart_after_dispatch`, or `gateway_restart_before_dispatch` when
+the task was cancelled before it reached the backend); a task whose backend is a configured `tasks.recovery_adapters`
+entry with a durable upstream handle stays managed `working`, as after any restart, and an owner
+`tasks/get` resolves it. This applies to HTTP shutdown and to stdio EOF.
+
+**Action:** none. Raise `server.shutdown_timeout` if long tasks should be allowed to finish.
+
+## 122. Capability fallback providers are warned as not executed
+
+**Startup:** no notice, a capability that declares `providers.fallback` logs a CAP-011 warning and is still served; fails a capability file, only when a fallback entry does not parse (null included)
+
+A capability YAML could list `providers.fallback`, and the gateway parsed and validated it, but
+calls were only ever sent to `providers.primary`. That is unchanged in 4.0: a fallback is not
+tried when the primary fails. Loading such a capability now says so instead of accepting the
+block silently. A fallback entry that does not parse as a provider used to be dropped without a
+word; it now fails the load of that capability, like a malformed `primary`. An empty list declares
+no provider and loads without a warning.
+
+**Action:** delete the `fallback` block from your capability files, and fix or delete any entry
+that does not parse.
+
+## 123. Unread capability provider keys are warned, and `cap validate` checks structure
+
+**Startup:** no notice, a capability with a provider key the gateway does not read logs a CAP-012 warning per key and is still served
+
+A key under `providers.<name>` that no provider field reads (a misspelled `methd`, say) used to be
+dropped without a word. It now logs CAP-012 naming its path, for example
+`providers.primary.config.methd`. Keys starting with `_` or `x-` are notes and are not reported.
+Capabilities that declare `command`, `args` or `transport` warn too until this gateway version reads
+those keys.
+
+`mcp-gateway cap validate` used to run only the basic check and print "valid". It now runs the same
+structural checks as the loader: it prints each warning, and exits non-zero on a structural error,
+the same file the loader would skip.
+
+**Action:** fix or delete the keys CAP-012 names. A script that runs `cap validate` should expect a
+failure for a file the loader would refuse.
+## 124. The built-in server registry points at servers that exist
+
+**Startup:** no notice
+
+`mcp-gateway add <name>` and the dashboard's registry tab read a built-in list of servers. Of its
+45 npm packages, 30 did not exist on npm and 7 were deprecated, and none was pinned to a version.
+Every entry is now a pinned npm or PyPI release or a vendor-hosted URL, and CI looks each one up.
+Backends already in your `gateway.yaml` are not touched; this changes only what `add` writes.
+
+Repointed to the vendor's own package or hosted endpoint: tavily, brave-search, postgres, redis,
+github, gitlab, linear, sentry, asana, aws, cloudflare-workers, slack, fetch, semgrep, playwright,
+notion, airtable, stripe, pinecone, qdrant. Pinned: exa, perplexity, filesystem, mysql, memory,
+sequential-thinking. `jira` is now `atlassian` (Atlassian's hosted Jira and Confluence server).
+
+Removed, because no maintained server exists at a resolvable package:
+
+| Name | Reason |
+|---|---|
+| everything-search | pointed at the MCP protocol test server, not a search tool |
+| sqlite | reference server archived upstream, no release since 2025-04 |
+| surrealdb, discord, wikipedia, 1password, snowflake | no published MCP server package |
+| gcp, bigquery, gmail, google-calendar, google-drive, google-sheets | packages never existed or are deprecated; Google services are covered by the bundled Google capabilities |
+| puppeteer | deprecated upstream; use `playwright` |
+| pieces | package does not exist |
+| openai | package does not exist; the gateway is not a chat-completion gateway |
+| datadog | the hosted endpoint is labelled unstable and its login flow is undocumented |
+| pagerduty | the vendor's server repository is archived |
+
+**Action:** none for existing configs. To keep using a removed server, add it with an explicit
+command or URL: `mcp-gateway add <name> -- <command>` or `mcp-gateway add --url <url> <name>`.
+
+## 125. A webhook route without a `method` accepts POST
 
 **Startup:** no notice, decided per capability file
 

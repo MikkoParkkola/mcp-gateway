@@ -583,3 +583,61 @@ async fn listed_private_backend_tool_call_is_served() {
         }
     }
 }
+
+/// MIK-7698: a meta call refused before the tool acts leaves its nonce
+/// unspent, so the same nonce then carries a later call, signed. Two such
+/// refusals: a tool the operator hides, and answers sent to no question.
+#[tokio::test]
+async fn a_refused_meta_call_leaves_its_nonce_unspent() {
+    let stack = stack_with(|config| {
+        config["meta_mcp"] =
+            json!({"exposed_meta_tools": ["gateway_list_servers", "gateway_invoke"]});
+    })
+    .await;
+    let hidden = modern_call(91, "gateway_list_tools", &json!({}), Some("unspent-hidden"));
+    let refused = post(&stack, "/mcp", &hidden).await;
+    assert_eq!(parse(&refused)["error"]["code"], -32601, "{refused}");
+    let later = post(&stack, "/mcp", &meta_call(92, Some("unspent-hidden"))).await;
+    assert_signed(
+        &later,
+        "unspent-hidden",
+        "a call after a hidden-tool refusal",
+    );
+
+    let mut unsolicited = meta_call(93, Some("unspent-unsolicited"));
+    unsolicited["params"]["inputResponses"] = json!({"unasked": true});
+    let refused = post(&stack, "/mcp", &unsolicited).await;
+    assert_eq!(parse(&refused)["error"]["code"], -32602, "{refused}");
+    let later = post(&stack, "/mcp", &meta_call(94, Some("unspent-unsolicited"))).await;
+    assert_signed(
+        &later,
+        "unspent-unsolicited",
+        "a call after an unsolicited answer",
+    );
+}
+
+/// MIK-7698 (direct route): a call the idempotency guard refuses leaves its
+/// nonce unspent; a cache hit is still admitted and signed over its own nonce
+/// (`hardened_direct_cached_result_is_signed`).
+#[tokio::test]
+async fn a_direct_call_refused_by_its_key_leaves_its_nonce_unspent() {
+    let stack = stack().await;
+    let path = format!("/mcp/{INNER}");
+    let keyed = |id: u64, nonce: &str, arguments: Value| {
+        let mut request = modern_call(
+            id,
+            "gateway_invoke",
+            &json!({"server": BACKEND, "tool": TOOL, "arguments": arguments}),
+            Some(nonce),
+        );
+        request["params"]["_meta"][IDEMPOTENCY_KEY_META] = json!("unspent-direct-key");
+        request
+    };
+    let first = post(&stack, &path, &keyed(95, "unspent-first", json!({}))).await;
+    assert_signed(&first, "unspent-first", "the first keyed direct call");
+    let mismatch = keyed(96, "unspent-reused", json!({"other": 1}));
+    let refused = post(&stack, &path, &mismatch).await;
+    assert_refused(&refused, "a key reused for a different request");
+    let later = post(&stack, &path, &direct_call(97, Some("unspent-reused"))).await;
+    assert_signed(&later, "unspent-reused", "a call after a key refusal");
+}

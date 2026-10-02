@@ -276,7 +276,7 @@ fn check_acl(
     path: &Path,
     what: SecretFile,
 ) -> std::result::Result<(), GuardedRead> {
-    use crate::private_fs::{PrivacyRefusal, file_refusals_for, windows_remediation};
+    use crate::private_fs::{file_refusals_for, refusal_detail};
 
     let found = file_refusals_for(file, what.protects());
     if found.is_empty() {
@@ -284,26 +284,7 @@ fn check_acl(
     }
     let shown = path.display().to_string();
     let head = format!("Refusing to load {} {shown}", what.noun());
-    let text = if found
-        .iter()
-        .any(|r| matches!(r, PrivacyRefusal::ReparsePoint | PrivacyRefusal::NotRegular))
-    {
-        format!(
-            "{head} ({found:?}): it is not a regular file. Write the content, then replace the file."
-        )
-    } else {
-        let mut text = format!(
-            "{head}{}",
-            windows_remediation(&shown, &found, what.protects())
-        );
-        if what.protects() == Protects::Integrity {
-            text.push_str(
-                "This file may be read by others, so the repair keeps them as readers; \
-                 an owner-only repair would also lock out legitimate readers.\n",
-            );
-        }
-        text
-    };
+    let text = format!("{head}{}", refusal_detail(&shown, &found, what.protects()));
     Err(GuardedRead::Refused(text))
 }
 

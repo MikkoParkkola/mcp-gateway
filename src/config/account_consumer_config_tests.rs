@@ -491,3 +491,6 @@ mod fail_closed;
 
 #[path = "account_consumer_config_tests/raw_vault.rs"]
 mod raw_vault;
+
+#[path = "account_consumer_config_tests/managed_transport.rs"]
+mod managed_transport;

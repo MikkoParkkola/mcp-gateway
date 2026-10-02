@@ -1117,15 +1117,20 @@ async fn build_error_response_sets_status_session_header_and_rpc_body() {
 }
 
 #[tokio::test]
+/// MIK-7759: Streamable HTTP (2025-06-18, 2025-11-25) — an accepted
+/// notification or client response MUST get 202 with no body.
 async fn build_accepted_response_sets_status_session_header_and_empty_body() {
     let response = build_accepted_response("sess-accepted");
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(response.headers()["mcp-session-id"], "sess-accepted");
+    assert!(
+        response.headers().get("content-type").is_none(),
+        "a bodiless 202 carries no content type"
+    );
 
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json, json!({}));
+    assert!(body.is_empty(), "202 body must be empty, got {body:?}");
 }
 
 #[tokio::test]
@@ -1501,9 +1506,12 @@ async fn backend_handler_notification_uses_notify_and_returns_accepted() {
     let response = router.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(response.headers().get("content-type").is_none());
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json, json!({}));
+    assert!(
+        body.is_empty(),
+        "MIK-7759: 202 body must be empty, got {body:?}"
+    );
     assert!(transport.request_methods.lock().unwrap().is_empty());
     assert_eq!(
         transport.notify_methods.lock().unwrap().as_slice(),

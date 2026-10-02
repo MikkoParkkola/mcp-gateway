@@ -11,6 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tracing::info;
 use url::Url;
 
+use crate::security::safe_reqwest_message;
 use crate::{Error, Result};
 
 /// OAuth Authorization Server Metadata (RFC 8414)
@@ -131,11 +132,12 @@ impl AuthorizationServerMetadata {
         let url = well_known_url(base_url, "oauth-authorization-server")?;
         info!(url = %url, "Discovering OAuth authorization server metadata");
 
-        let response = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::OAuth(format!("Failed to fetch OAuth metadata: {e}")))?;
+        let response = client.get(&url).send().await.map_err(|e| {
+            crate::security::http_diagnostics::oauth_request_error(
+                "Failed to fetch OAuth metadata",
+                &e,
+            )
+        })?;
 
         if !response.status().is_success() {
             return Err(Error::OAuth(format!(
@@ -144,10 +146,9 @@ impl AuthorizationServerMetadata {
             )));
         }
 
-        let metadata: Self = response
-            .json()
-            .await
-            .map_err(|e| Error::OAuth(format!("Failed to parse OAuth metadata: {e}")))?;
+        let metadata: Self = response.json().await.map_err(|e| {
+            Error::OAuth(safe_reqwest_message("Failed to parse OAuth metadata", &e))
+        })?;
 
         // RFC 8414 s3.3: the issuer in the response must match the one the
         // well-known URI was built from. Without this the response body
@@ -203,7 +204,10 @@ impl ProtectedResourceMetadata {
         info!(url = %url, "Discovering OAuth protected resource metadata");
 
         let response = client.get(&url).send().await.map_err(|e| {
-            Error::OAuth(format!("Failed to fetch protected resource metadata: {e}"))
+            crate::security::http_diagnostics::oauth_request_error(
+                "Failed to fetch protected resource metadata",
+                &e,
+            )
         })?;
 
         if !response.status().is_success() {
@@ -214,7 +218,10 @@ impl ProtectedResourceMetadata {
         }
 
         let metadata: Self = response.json().await.map_err(|e| {
-            Error::OAuth(format!("Failed to parse protected resource metadata: {e}"))
+            Error::OAuth(safe_reqwest_message(
+                "Failed to parse protected resource metadata",
+                &e,
+            ))
         })?;
 
         info!(resource = %metadata.resource, "Discovered protected resource");
@@ -337,6 +344,50 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         drop(listener);
         format!("http://{addr}")
+    }
+
+    /// A failed discovery fetch names its category, never reqwest's Display,
+    /// which carries the request URL and any credential a redirect put in it.
+    #[tokio::test]
+    async fn a_failed_discovery_fetch_does_not_echo_the_url() {
+        let base = free_addr().await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let server = AuthorizationServerMetadata::discover(&client, &base, IssuerSource::Origin)
+            .await
+            .expect_err("nothing listens");
+        let resource = ProtectedResourceMetadata::discover(&client, &base)
+            .await
+            .expect_err("nothing listens");
+        let authority = base.trim_start_matches("http://");
+        for error in [server, resource] {
+            let text = error.to_string();
+            assert!(!text.contains(authority), "the URL is echoed: {text}");
+            assert!(text.ends_with(": connection failed"), "{text}");
+        }
+    }
+
+    /// A discovery document that is not JSON names the category too: reqwest
+    /// attaches the request URL to a decode error as well as to a send error.
+    #[tokio::test]
+    async fn an_unparsable_discovery_document_does_not_echo_the_url() {
+        use axum::{Router, routing::get};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let authority = listener.local_addr().unwrap().to_string();
+        let app = Router::new().fallback(get(|| async { "not json" }));
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let base = format!("http://{authority}");
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let server = AuthorizationServerMetadata::discover(&client, &base, IssuerSource::Origin)
+            .await
+            .expect_err("the body is not JSON");
+        let resource = ProtectedResourceMetadata::discover(&client, &base)
+            .await
+            .expect_err("the body is not JSON");
+        for error in [server, resource] {
+            let text = error.to_string();
+            assert!(!text.contains(&authority), "the URL is echoed: {text}");
+            assert!(text.ends_with(": response parse failed"), "{text}");
+        }
     }
 
     #[tokio::test]

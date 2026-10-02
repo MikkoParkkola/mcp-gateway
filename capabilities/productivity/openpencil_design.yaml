@@ -1,4 +1,4 @@
-sha256: 7948342ae14973331f9c12a34504c5b77557c8095ff517595d95758a7fd5b4e0
+sha256: e22c85b857e2a7c759fcb05cd6aea6d402f75427180d1b577bb6e4bf06d752a2
 fulcrum: "1.0"
 name: openpencil_design
 description: >
@@ -67,10 +67,6 @@ providers:
     config:
       command: openpencil-mcp
       transport: stdio
-      fallback:
-        base_url: http://localhost:3100
-        transport: http
-        path: /mcp
 
 auth:
   required: false

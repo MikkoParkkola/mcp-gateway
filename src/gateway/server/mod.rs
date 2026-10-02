@@ -11,10 +11,14 @@ mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
 mod cleartext;
+#[cfg(all(test, feature = "firewall"))]
+mod collusion_share_tests;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
 mod events_wiring;
+mod provenance_signer;
+use provenance_signer::{provenance_key, resolve_provenance_signer};
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
@@ -394,53 +398,6 @@ struct BuiltMetaMcp {
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
 }
 
-/// The provenance signing key and its key id.
-///
-/// Read through the env overlay rather than `std::env`: env files load into an
-/// in-memory overlay, so a key an env file assigns never reaches the process
-/// environment and a `std::env` read would leave the signer uninstalled.
-fn provenance_key(env: &crate::config::EnvOverlay) -> (String, String) {
-    (
-        env.resolve(crate::attestation::ATTESTATION_SIGNING_KEY_ENV)
-            .unwrap_or_default(),
-        env.resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
-            .unwrap_or_else(|| "gateway".to_string()),
-    )
-}
-
-/// Decide whether to install a provenance-receipt signer for runtime
-/// stamping (MIK-6905) — the unit-testable core of the bootstrap decision in
-/// [`Gateway::build_meta_mcp`], which performs no process-environment reads
-/// itself.
-///
-/// Fails closed: a key that is empty, or empty after trimming whitespace,
-/// returns `None` (no signer installed, stamping stays disabled and output
-/// is byte-identical to stamping-off) rather than installing a signer whose
-/// signatures are trivially forgeable — an empty or whitespace-only HMAC key
-/// is a known/low-entropy key, so anyone can compute a signature that a
-/// validator sharing the same key would accept (MIK-6909 item 1).
-///
-/// The returned signer's key material is the HKDF-SHA256 receipt-domain
-/// subkey ([`crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO`]) derived
-/// from `signing_key`, not `signing_key` itself — domain-separated from
-/// inbound attestation-token verification so a leak in one channel cannot
-/// forge the other (MIK-6909 item 2).
-#[must_use]
-fn resolve_provenance_signer(
-    signing_key: &str,
-    key_id: &str,
-) -> Option<crate::attestation::BnautAttestationSigner> {
-    if signing_key.trim().is_empty() {
-        None
-    } else {
-        let base = crate::attestation::BnautAttestationSigner::new(
-            signing_key.as_bytes().to_vec(),
-            key_id.to_string(),
-        );
-        Some(base.derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO))
-    }
-}
-
 /// Copy only the fields backend target mapping routes on.
 ///
 /// `gateway_invoke` routes on `server` and `tool`, `gateway_execute` on
@@ -506,23 +463,22 @@ fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json:
 }
 
 impl Gateway {
-    /// A firewall with its own transition tracker. Both transports build theirs
-    /// here, so each leaves the continuations `meta_mcp` minted unredacted
-    /// (#2210).
+    /// A firewall with its own transition tracker, sharing `meta_mcp`'s relay
+    /// detector (COLLUDE.1). Both transports build theirs here, so each leaves
+    /// the continuations `meta_mcp` minted unredacted (#2210).
     #[cfg(feature = "firewall")]
     fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
         let fw_cfg = self.config.security.firewall.clone();
         let fw_enabled = fw_cfg.enabled;
-        let tt = if fw_cfg.anomaly_detection {
-            Some(Arc::new(TransitionTracker::new()))
-        } else {
-            None
-        };
+        let tt = fw_cfg
+            .anomaly_detection
+            .then(|| Arc::new(TransitionTracker::new()));
         let fw = Arc::new(
             Firewall::from_config(fw_cfg, tt)
                 .with_env(Arc::clone(&self.env))
                 .with_continuations(meta_mcp.continuation())
-                .with_posture(self.config.security.posture),
+                .with_posture(self.config.security.posture)
+                .sharing_relay_with(meta_mcp.firewall.as_deref()),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");
@@ -1558,9 +1514,6 @@ impl Gateway {
             self.env.startup(),
         )?);
 
-        // Webhook registry into MetaMcp (gateway_webhook_status), and events.
-        events_wiring::install(&self.config, &meta_mcp, &webhook_registry)?;
-
         // Live config handle: shared by the hot-reload watcher (which swaps it
         // on every applied reload) and AppState (which reads control-plane role
         // mapping through it, so a reload takes effect without restart —
@@ -1841,6 +1794,23 @@ impl Gateway {
         // The registry re-validates every listener against the same credential
         // stores the request middleware reads, so the two cannot disagree.
         let dashboard_bootstrap = Arc::new(crate::gateway::auth::DashboardBootstrap::new());
+        // Webhook registry into MetaMcp (gateway_webhook_status), and events,
+        // which re-check credentials against the same authorities as requests.
+        let credentials = crate::events::LiveCredentials {
+            key_server: key_server.clone(),
+            bearer_principal: auth_config
+                .bearer_token
+                .as_deref()
+                .map(crate::gateway::auth::principal_of),
+            dashboard: Some(Arc::clone(&dashboard_bootstrap)),
+        };
+        events_wiring::install(
+            &self.config,
+            &meta_mcp,
+            &webhook_registry,
+            &live_config,
+            credentials,
+        )?;
         let subscriptions = Arc::new(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
                 crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
@@ -2200,16 +2170,14 @@ impl Gateway {
             }
         }
 
-        // Before the drain and well before the close: the sweep is joined while
-        // the store is still open, so a deletion already in flight finishes its
-        // own transaction and no new one starts against a store about to give
-        // its lease back. The join returns what the sweep actually met, so a
-        // store it could not delete from is not reported as a clean stop.
+        // Workers drain, and a drain that runs out cancels the rest; then the
+        // expiry sweep is joined while the store is still open, and the store
+        // closes (`task_runtime::shutdown` documents the order).
         task_runtime::shutdown(
             expiry_sweep,
             &task_executor_for_shutdown,
             &task_service_for_shutdown,
-            drain_timeout,
+            task_runtime::ShutdownBudget::within(drain_timeout, drain_timeout),
         )
         .await;
 
@@ -3329,8 +3297,9 @@ impl Gateway {
                 client,
             );
             if let Some(context) = signing_context.as_mut()
-                && let Err(error) = meta_mcp.prepare_signing_invocation(
+                && let Err(error) = meta_mcp.prepare_signing_for_call(
                     context,
+                    &tool_name,
                     arguments.as_ref(),
                     Some(session_id),
                     &caller,
@@ -3358,7 +3327,7 @@ impl Gateway {
                 }
             }
             // A task is admitted durably by its handoff, as on HTTP.
-            let admission = if caller.task.is_some() {
+            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
             } else {
                 meta_mcp.admit_meta_sync(

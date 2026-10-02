@@ -33,6 +33,7 @@ src/gateway/router/accounts/bridge.rs	identity	1	critical	a	OwuiSessionBridge::i
 src/gateway/router/accounts/bridge.rs	principal	1	critical	a,b	OwuiSessionBridge::principal	Turns the Open WebUI session cookie into an authenticated (authority, subject) principal.
 src/gateway/router/accounts/bridge.rs	session_user	1	critical	b	OwuiSessionBridge::session_user	Checks the session token with the upstream, caps the body size, rejects expired sessions.
 src/gateway/router/accounts/bridge.rs	sole_cookie	1	critical	b,d	sole_cookie	Refuses a session cookie that is missing, empty or duplicated.
+src/gateway/router/accounts/bridge.rs	presents_session	1	critical	a	presents_session	Classifies a request as carrying a browser session credential, so it is refused as one and not as no credential.
 src/gateway/router/accounts/bridge.rs	new	1	standard	borderline	OwuiSessionBridge::new	Client with no redirects and no proxy; a default client could leak the bearer.
 src/gateway/router/accounts/complete.rs	complete	1	critical	a	complete	Answers 403 unless the bridged browser session proves an identity.
 src/gateway/router/accounts/complete.rs	connections	1	critical	c	connections	Lists account connection state keyed to the caller's own identity only.
@@ -66,7 +67,7 @@ src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	
 src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
 src/gateway/router/backend_handlers.rs	cached_error_response	1	standard	borderline	cached_error_response	Keeps a cached firewall refusal a refusal on idempotent replay.
 src/gateway/router/backend_handlers.rs	charged_binding	1	standard	borderline	charged_binding	Charges each slot binding to the caller's principal (per-principal slot budget).
-src/gateway/router/backend_handlers.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
+src/gateway/router/backend_handlers/relay.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
 src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard	borderline	direct_route_attestation_scope	Sets the scope an attestation token must grant per method.
 src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
 src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
@@ -88,7 +89,7 @@ src/gateway/router/handlers.rs	meta_mcp_dispatch	1	critical	a,b,c,d	meta_mcp_dis
 src/gateway/router/handlers.rs	metrics_handler	1	critical	a,b	metrics_handler	Constant-time bearer comparison against metrics_token; 401 otherwise.
 src/gateway/router/handlers.rs	get_era_refusal	1	standard	d	get_era_refusal	Refuses the removed GET /mcp (405) or an unsupported 2026 version.
 src/gateway/router/handlers.rs	reaches_tasks_extension	1	standard	borderline	reaches_tasks_extension	Hand-maintained list that gates the tasks extension; a missing arm is unguarded.
-src/gateway/router/handlers.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
+src/gateway/router/handlers/tasks.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
 src/gateway/router/handlers/owner.rs	request_session_owner	1	critical	a,c	request_session_owner	Resolves the grant subject, refuses bad identity headers, applies the hardened refusal.
 src/gateway/router/handlers/owner.rs	owner_of	1	standard	borderline	owner_of	Session owner rule (subject plus held-credential digest) used by both routes.
 src/gateway/router/handlers/owner.rs	session_owner	1	standard	borderline	session_owner	Owner from the validated principal, not the display name.
