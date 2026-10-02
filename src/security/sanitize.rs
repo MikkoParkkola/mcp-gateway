@@ -93,7 +93,7 @@ const REJECTED_BYTE: u8 = 0x00;
 
 /// Control characters to strip (C0 range excluding common whitespace).
 /// We preserve: `\t` (0x09), `\n` (0x0A), `\r` (0x0D).
-fn is_unsafe_control(c: char) -> bool {
+pub(crate) fn is_unsafe_control(c: char) -> bool {
     let code = c as u32;
     // C0 control characters (0x00-0x1F) minus tab, newline, carriage return
     (code <= 0x1F && code != 0x09 && code != 0x0A && code != 0x0D)

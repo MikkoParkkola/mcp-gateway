@@ -40,3 +40,83 @@ fn wt7_lexical_drive_paths_pass() {
         );
     }
 }
+
+// R1/R2 custody rows: the refusal and error arms of `private_directory` and
+// `create_directory`, on real directories.
+mod custody {
+    use super::super::{create_directory, private_directory};
+    use crate::personal_accounts::AccountError;
+    use crate::private_fs::test_support::{assert_owner_only, deny_user, icacls, remove_deny};
+
+    #[test]
+    fn create_directory_makes_each_missing_level_private() {
+        let root = tempfile::tempdir().unwrap();
+        let leaf = root.path().join("a").join("b");
+        assert_eq!(create_directory(&leaf), Ok(()));
+        assert_owner_only("R2/leaf", &leaf, true);
+        assert_owner_only("R2/parent", leaf.parent().unwrap(), true);
+        // A second call finds the directory and changes nothing.
+        assert_eq!(create_directory(&leaf), Ok(()));
+    }
+
+    #[test]
+    fn create_directory_refuses_a_file_in_the_way() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("file");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(
+            create_directory(&file),
+            Err(AccountError::InvalidConfiguration)
+        );
+        assert_eq!(
+            create_directory(&file.join("child")),
+            Err(AccountError::InvalidConfiguration)
+        );
+    }
+
+    #[test]
+    fn create_directory_reports_a_parent_that_refuses_creation() {
+        let root = tempfile::tempdir().unwrap();
+        let parent = root.path().join("locked");
+        std::fs::create_dir(&parent).unwrap();
+        deny_user("R2/deny", &parent, "WD,AD");
+        let result = create_directory(&parent.join("child"));
+        remove_deny("R2/deny", &parent);
+        assert_eq!(result, Err(AccountError::StorageUnavailable));
+    }
+
+    #[test]
+    fn create_directory_reports_a_name_the_filesystem_rejects() {
+        // `<` is not a valid file-name character: the lookup fails with an
+        // error that is not "not found", so nothing is created.
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            create_directory(&root.path().join("bad<name")),
+            Err(AccountError::StorageUnavailable)
+        );
+    }
+
+    #[test]
+    fn private_directory_refuses_an_absent_path_a_file_and_a_shared_directory() {
+        let root = tempfile::tempdir().unwrap();
+        assert_eq!(
+            private_directory(&root.path().join("absent")).err(),
+            Some(AccountError::StorageUnavailable)
+        );
+
+        let file = root.path().join("file");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(
+            private_directory(&file).err(),
+            Some(AccountError::InvalidConfiguration)
+        );
+
+        let shared = root.path().join("shared");
+        create_directory(&shared).unwrap();
+        icacls("R1/shared", &shared, &["/grant", "*S-1-1-0:R"]);
+        assert_eq!(
+            private_directory(&shared).err(),
+            Some(AccountError::InvalidConfiguration)
+        );
+    }
+}

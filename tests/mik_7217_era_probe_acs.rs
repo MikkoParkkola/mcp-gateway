@@ -15,8 +15,6 @@
 //! value itself, because no accessor for it exists on `Backend`; see the header of each test for
 //! what it does and does not pin.
 
-#![allow(unsafe_code)] // `set_var` is unsafe in edition 2024; see `widen_probe_cap`
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -54,25 +52,9 @@ struct Fixture {
     command: String,
 }
 
-/// Debug builds read this to widen the era probe's 2 s cap (`src/backend/era.rs`).
-/// The peers here are shell scripts that fork per request; on a stalled runner
-/// one answer can take longer than 2 s, and the probe would read that as silence.
-const PROBE_CAP_ENV: &str = "MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS";
-
-/// Widen the probe cap for every peer in this binary that is meant to answer.
-/// A silent peer then waits out the whole cap, so it is set once, high enough to
-/// absorb a stalled runner and low enough to keep that one wait short.
-fn widen_probe_cap() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| {
-        // SAFETY: tests run in parallel threads, so other backends may already
-        // be probing. std serialises `set_var` against its own env reads
-        // (`std::env::var`) and against `Command::spawn`, which holds the env
-        // read lock. The peers are stdio children with no DNS, so no foreign
-        // `getenv` runs in this test binary.
-        unsafe { std::env::set_var(PROBE_CAP_ENV, "20000") };
-    });
-}
+#[path = "common/era_probe_cap.rs"]
+mod era_probe_cap;
+use era_probe_cap::widen_probe_cap;
 
 impl Fixture {
     /// `discover` and `tools` are the JSON-RPC payload that follows the echoed `id` — either
