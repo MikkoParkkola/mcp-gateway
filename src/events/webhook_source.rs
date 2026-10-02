@@ -82,9 +82,9 @@ impl EventsHub {
         let route = format!("{}.{}", inbound.capability, inbound.route);
         let key = dedupe_key(&inbound);
         if let Some(key) = &key {
-            let (hub, route, key) = (Arc::clone(self), route.clone(), key.clone());
+            let (hub, at, seen_key) = (Arc::clone(self), route.clone(), key.clone());
             let first = tokio::task::spawn_blocking(move || {
-                hub.runtime.seen.first_sighting(&route, &key, Utc::now())
+                hub.runtime.seen.first_sighting(&at, &seen_key, Utc::now())
             })
             .await
             .unwrap_or(true);

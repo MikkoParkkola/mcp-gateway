@@ -66,6 +66,13 @@ pub(crate) trait EventSource: Send + Sync {
 /// idle ones; past it, after shedding, a new host is refused.
 const MAX_TRACKED_HOSTS: usize = 10_000;
 
+impl std::fmt::Debug for EventsHub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Opaque on purpose: the store and client hold subscriber secrets.
+        f.debug_struct("EventsHub").finish_non_exhaustive()
+    }
+}
+
 impl EventsHub {
     /// Open the hub on `store_dir` (already `~`-expanded).
     ///
