@@ -3,8 +3,8 @@
 //! The callback's admission guards that run before or beside the store: the
 //! oversize cap on the secrets it carries, and a record with no owner.
 
-use super::{CALLBACK_SECRET_MAX, JourneyError, JourneyRefusal, admitted, within_cap};
 use super::super::tests::{fresh, limits, maximal_record, refused};
+use super::{CALLBACK_SECRET_MAX, JourneyError, JourneyRefusal, admitted, within_cap};
 
 /// Mutant: an oversized state or binding reaches the store, or either side of
 /// the cap is off by one.
