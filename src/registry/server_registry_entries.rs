@@ -519,13 +519,6 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Bounded,
         setup: Setup::Ready,
     },
-
-        category: "database",
-        homepage: "https://supabase.com/docs/guides/getting-started/mcp",
-        auth: Auth::OAuth,
-        reach: Reach::Bounded,
-        setup: Setup::Ready,
-    },
     RegistryEntry {
         name: "hubspot",
         description: "HubSpot CRM contacts, companies, and deals (use a private app scoped read-only)",
