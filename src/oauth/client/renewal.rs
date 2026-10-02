@@ -100,8 +100,8 @@ impl OAuthClient {
         loop {
             tokio::time::sleep(period).await;
 
-            // Use a weak reference pattern: if the Arc has been dropped
-            // (HttpTransport gone), stop the loop.
+            // The task holds a strong `Arc`: dropping the transport does not
+            // end it. Only a refusal or `abort()` on the handle does.
             let needs_refresh = {
                 let guard = client.lock().await;
                 guard.needs_proactive_refresh()

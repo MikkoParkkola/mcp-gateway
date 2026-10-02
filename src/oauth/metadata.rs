@@ -11,6 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tracing::info;
 use url::Url;
 
+use crate::security::safe_reqwest_message;
 use crate::{Error, Result};
 
 /// OAuth Authorization Server Metadata (RFC 8414)
@@ -145,10 +146,9 @@ impl AuthorizationServerMetadata {
             )));
         }
 
-        let metadata: Self = response
-            .json()
-            .await
-            .map_err(|e| Error::OAuth(format!("Failed to parse OAuth metadata: {e}")))?;
+        let metadata: Self = response.json().await.map_err(|e| {
+            Error::OAuth(safe_reqwest_message("Failed to parse OAuth metadata", &e))
+        })?;
 
         // RFC 8414 s3.3: the issuer in the response must match the one the
         // well-known URI was built from. Without this the response body
@@ -218,7 +218,10 @@ impl ProtectedResourceMetadata {
         }
 
         let metadata: Self = response.json().await.map_err(|e| {
-            Error::OAuth(format!("Failed to parse protected resource metadata: {e}"))
+            Error::OAuth(safe_reqwest_message(
+                "Failed to parse protected resource metadata",
+                &e,
+            ))
         })?;
 
         info!(resource = %metadata.resource, "Discovered protected resource");
