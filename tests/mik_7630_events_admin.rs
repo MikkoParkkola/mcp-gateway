@@ -533,3 +533,26 @@ async fn an_exhausted_dead_letter_replays_with_a_fresh_attempt_count() {
     events_at_least(&rx, tried + 1).await;
     assert!(wait_until(DEADLINE, || dead_letters(root.path()).is_empty()).await);
 }
+
+/// Section 17: an oversize dead letter is refused on replay (`too_large`),
+/// never POSTed, and stays listed.
+#[tokio::test]
+async fn an_oversize_dead_letter_is_refused_on_replay() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, json!({})).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-big", &"x".repeat(300_000)).await;
+    let id = dead_with_reason(root.path(), "too_large").await[0]["event_id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let (status, body) = gw
+        .admin(Some(ADMIN), "POST", &format!("{LIST}/{id}/replay"))
+        .await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["reason"], "too_large");
+    tokio::time::sleep(SETTLE).await;
+    assert!(rx.events().is_empty(), "an oversize body is never POSTed");
+    assert_eq!(dead_letters(root.path()).len(), 1);
+}
