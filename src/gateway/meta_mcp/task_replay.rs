@@ -10,7 +10,6 @@ use serde_json::json;
 
 use super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
 use crate::gateway::task_service::CommittedTask;
-use crate::protocol::tasks::TaskStatus;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
@@ -29,10 +28,7 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<JsonRpcResponse> {
-        if !matches!(
-            stored.task.status(),
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::InputRequired
-        ) {
+        if !stored.serves_backend_output() {
             return None;
         }
         self.authorize_stored(stored, attestation, session, caller)
@@ -47,10 +43,6 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
-        if stored.output_free {
-            // Only the gateway's own bounded error: no backend output to judge.
-            return Ok(());
-        }
         if stored.targets.is_empty() {
             // A recording gateway's empty list means nothing was dispatched.
             // An older row's empty list means it has no upstream descriptor to

@@ -123,9 +123,9 @@ impl TaskRoute<'_> {
         match self.lookup(task_id) {
             Ok(current) => refuse(&current).unwrap_or_else(|| {
                 // MIK-7116.MIN.2 (design §4.9): a stored task row keeps no
-                // reading of its result yet, so serving one counts as unread.
-                // A row with no stored output (still working) serves nothing.
-                if current.task.result().is_some() || current.task.error().is_some() {
+                // reading of its output yet, so serving one counts as unread.
+                // A working row serves no backend output and reads nothing.
+                if current.serves_backend_output() {
                     crate::security::tenant_reads::note_restored(None);
                 }
                 JsonRpcResponse::success(id, task_envelope(&current.task, "complete"))

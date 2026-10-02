@@ -334,6 +334,19 @@ pub(crate) struct CommittedTask {
 }
 
 impl CommittedTask {
+    /// Whether serving this row hands the caller backend output: a result,
+    /// a backend error or a backend's input requests. A working or
+    /// cancelled row, or one holding only the gateway's own bounded
+    /// failure, serves none. Delivery checks and read attribution both
+    /// key on it, so they cannot disagree on a status.
+    pub(crate) fn serves_backend_output(&self) -> bool {
+        !self.output_free
+            && matches!(
+                self.task.status(),
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::InputRequired
+            )
+    }
+
     /// The committed view of `record`, read in one piece so a caller that
     /// authorizes delivery checks the snapshot it returns.
     pub(super) fn of(task: Task, record: &Record) -> Self {

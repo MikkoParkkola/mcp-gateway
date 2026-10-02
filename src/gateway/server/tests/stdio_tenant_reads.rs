@@ -17,11 +17,19 @@ const TOOL: &str = "rows";
 
 /// An HTTP MCP backend whose one tool answers a tenant-free "ok".
 async fn spawn_backend() -> String {
-    spawn_backend_after(Duration::ZERO).await
+    spawn_backend_answering(Answer::Now).await
 }
 
-/// [`spawn_backend`] whose tool answers only after `delay`.
-async fn spawn_backend_after(delay: Duration) -> String {
+/// When the fixture tool answers.
+#[derive(Clone, Copy)]
+enum Answer {
+    Now,
+    /// Never: the call stays in flight, so its task stays working.
+    Never,
+}
+
+/// [`spawn_backend`] whose tool answers per `answer`.
+async fn spawn_backend_answering(answer: Answer) -> String {
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(move |axum::Json(request): axum::Json<Value>| async move {
@@ -38,7 +46,9 @@ async fn spawn_backend_after(delay: Duration) -> String {
                     "inputSchema": {"type": "object"},
                 }]}),
                 "tools/call" => {
-                    tokio::time::sleep(delay).await;
+                    if matches!(answer, Answer::Never) {
+                        std::future::pending::<()>().await;
+                    }
                     json!({
                         "content": [{"type": "text", "text": "ok"}],
                         "isError": false,
@@ -152,7 +162,7 @@ impl Drop for Session {
 /// second, unknown tenant.
 #[tokio::test]
 async fn stdio_polls_of_a_working_task_are_not_refused() {
-    let backend_url = spawn_backend_after(Duration::from_secs(30)).await;
+    let backend_url = spawn_backend_answering(Answer::Never).await;
     let mut session = Session::open(&backend_url, "block").await;
     let meta = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
