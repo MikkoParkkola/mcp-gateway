@@ -743,3 +743,7 @@ pub(super) fn retained_record(
     let version = entry_version(entry).ok()?;
     connected_record(config, authority, entry, &version, digest, account).ok()
 }
+
+#[cfg(all(test, unix))]
+#[path = "storage_guard_tests.rs"]
+mod storage_guard_tests;

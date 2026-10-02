@@ -350,7 +350,7 @@ fn t_ct_state_binding_and_owner_comparisons_are_constant_time() {
     }
 }
 
-fn maximal_record() -> JourneyRecord {
+pub(super) fn maximal_record() -> JourneyRecord {
     let hex = |n: usize| "f".repeat(n);
     JourneyRecord {
         owner_digest: hex(64),
