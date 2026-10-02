@@ -151,7 +151,8 @@ backend" and "fails a capability file" first.**
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 | 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
-| 127 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
+| 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
+| 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3530,7 +3531,7 @@ updates, so its stream just closes, with no response.
 
 **Action:** a client written against the beta that read the subscription id from the response
 `result` reads it from the notification instead.
-## 127. Backend upstream events are refused where the gateway cannot listen
+## 128. Backend upstream events are refused where the gateway cannot listen
 
 **Startup:** no notice, a subscription to such an event answers -32014
 
@@ -3586,6 +3587,27 @@ with a message. `mcp-gateway list --available` lists the whole library.
 
 **Action:** none for existing configs. After `add`, set any variable it names, then set
 `enabled: true` on the server.
+
+## 127. CLI capabilities run local processes
+
+**Startup:** no notice, a capability that declares `service: cli` is served and runs its command when called
+
+Through 3.x a capability with `service: cli` loaded but never ran its command: the gateway treated it as
+REST with an empty URL. It now runs the command, under these rules:
+
+- Only a pinned capability (`sha256:` matching the file) runs a process. An unpinned one is refused.
+- The command and its leading fixed arguments must match an entry of `capabilities.process_commands`
+  exactly. The default list holds the commands of the shipped catalogue; setting the key replaces it.
+- No shell is involved. Each call runs in a fresh private directory that is also its `HOME` and temp
+  area, with a cleared environment plus the names the capability lists, and is killed with every
+  process it started when it times out or its output passes the cap.
+- A parameter that names a file must resolve inside the configured `capabilities.files.<root>`; no root
+  is configured by default. A parameter that names a network destination makes the capability refuse
+  to run, because the gateway cannot confine where a child process connects.
+
+**Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
+capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
+`capabilities.process_commands` (the list then replaces the default).
 
 ## Upgrading from 3.5.x: a walkthrough
 

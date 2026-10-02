@@ -340,7 +340,8 @@ impl EventsHub {
                 Ok(()) => {
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
-                    let throttled = self.runtime.rates.throttled(&id);
+                    let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
+                        && self.store.has_due(&id, Utc::now());
                     return Ok(subscribe_answer(
                         &id,
                         expires_at,
