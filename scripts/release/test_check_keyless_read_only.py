@@ -96,6 +96,11 @@ class KeylessReadOnly(unittest.TestCase):
                 self.assertEqual(mod.env_override({"env_files": [str(d / "a.env")]}, [d / "b.env"]), "required")
                 self.assertEqual(mod.env_override({}, [d / "a.env"]), "required")
                 self.assertEqual(mod.env_override({}, []), "optional")
+                (d / "empty.env").write_text("MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=\n")
+                # An empty assignment still overrides, and then fails as a mode.
+                self.assertEqual(mod.env_override({"env_files": [str(d / "a.env"), str(d / "empty.env")]}, []), "")
+                with self.assertRaises(ValueError):
+                    mod.problems(config(), CATALOG, "declared", "")
                 # Later config env file wins.
                 self.assertEqual(mod.env_override({"env_files": [str(d / "a.env"), str(d / "b.env")]}, []),
                                  "optional")

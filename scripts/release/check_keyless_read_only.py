@@ -75,10 +75,12 @@ def env_override(config: dict, launcher_files: list[Path]) -> str | None:
     """
     process = os.environ.get(ENV_KEY)
     for path in launcher_files:
-        process = env_value(path) or process
+        if (value := env_value(path)) is not None:
+            process = value
     overlay = None
     for entry in config.get("env_files") or []:
-        overlay = env_value(Path(os.path.expanduser(str(entry)))) or overlay
+        if (value := env_value(Path(os.path.expanduser(str(entry))))) is not None:
+            overlay = value
     return overlay if overlay is not None else process
 
 
@@ -122,6 +124,16 @@ def problems(config: dict, catalog: dict[str, list[dict]], mode: str,
     return out, stats
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect is an error: it would carry the bearer key to another origin."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirect)
+
+
 class Session:
     """Minimal streamable-HTTP MCP client: initialize, then tools/call."""
 
@@ -140,7 +152,7 @@ class Session:
             headers["Mcp-Session-Id"] = self.sid
             headers["MCP-Protocol-Version"] = REVISION
         req = urllib.request.Request(self.url, json.dumps(body).encode(), headers)
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with OPENER.open(req, timeout=120) as resp:
             self.sid = resp.headers.get("Mcp-Session-Id") or self.sid
             text = resp.read().decode()
         if "id" not in body or not text.strip():
