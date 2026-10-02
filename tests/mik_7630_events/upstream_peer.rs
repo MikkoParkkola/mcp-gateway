@@ -28,7 +28,7 @@ pub enum Era {
 /// One thing the peer saw, in arrival order.
 #[derive(Debug, Clone)]
 pub enum Seen {
-    /// A POSTed JSON-RPC frame.
+    /// A posted JSON-RPC frame.
     Frame(Value),
     /// A `subscriptions/listen` stream opened (its id and filter).
     ListenOpen { id: Value, filter: Value },
@@ -109,7 +109,7 @@ impl HttpPeer {
         self.state.seen.lock().expect("peer log").clone()
     }
 
-    /// POSTed frames whose method is `method`.
+    /// Posted frames whose method is `method`.
     pub fn frames(&self, method: &str) -> Vec<Value> {
         self.seen()
             .into_iter()
@@ -150,6 +150,10 @@ impl HttpPeer {
     /// Send `method` as the backend would: on every open listen that asked
     /// for it (tagged), or on every open GET (legacy; resource updates only
     /// for subscribed URIs).
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "call sites build the value inline with json!"
+    )]
     pub fn push(&self, method: &str, params: Value) {
         let subscribed = self.subscribed();
         for s in self.state.streams.lock().expect("peer streams").iter() {
@@ -241,6 +245,10 @@ fn capabilities() -> Value {
     })
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "call sites build the value inline with json!"
+)]
 fn reply(id: &Value, result: Value) -> Response {
     axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
 }
@@ -250,6 +258,10 @@ fn refuse(id: &Value, code: i64) -> Response {
         .into_response()
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "axum hands the frame over by value"
+)]
 fn answer(state: &State, frame: Value) -> Response {
     log(state, Seen::Frame(frame.clone()));
     let id = frame.get("id").cloned().unwrap_or(Value::Null);
@@ -268,7 +280,6 @@ fn answer(state: &State, frame: Value) -> Response {
                 "serverInfo": {"name": "peer", "version": "0"},
             }),
         ),
-        "server/discover" => refuse(&id, -32601),
         "initialize" => {
             let mut response = reply(
                 &id,
@@ -477,6 +488,10 @@ impl StdioPeer {
     }
 
     /// Ask the peer to send `method` with `params`.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "call sites build the value inline with json!"
+    )]
     pub fn push(&self, method: &str, params: Value) {
         let n = self
             .pushes
@@ -508,8 +523,8 @@ impl WsPeer {
             .expect("bind ws peer");
         let url = format!("ws://{}/mcp", listener.local_addr().expect("ws address"));
         let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
-        let (pushes, _) = tokio::sync::broadcast::channel::<(String, Value)>(64);
-        let (log, push_tx) = (Arc::clone(&seen), pushes.clone());
+        let (sender, _) = tokio::sync::broadcast::channel::<(String, Value)>(64);
+        let (log, push_tx) = (Arc::clone(&seen), sender.clone());
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 let (log, mut pushed) = (Arc::clone(&log), push_tx.subscribe());
@@ -569,7 +584,11 @@ impl WsPeer {
                 });
             }
         });
-        Self { url, seen, pushes }
+        Self {
+            url,
+            seen,
+            pushes: sender,
+        }
     }
 
     /// Frames the peer read whose method is `method`.
@@ -585,6 +604,10 @@ impl WsPeer {
 
     /// Send `method` as the backend would (resource updates only for
     /// subscribed URIs).
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "call sites build the value inline with json!"
+    )]
     pub fn push(&self, method: &str, params: Value) {
         let _ = self.pushes.send((method.to_owned(), params));
     }
