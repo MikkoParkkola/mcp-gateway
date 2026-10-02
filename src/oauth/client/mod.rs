@@ -5,7 +5,6 @@
 //! Main OAuth client implementation with PKCE support.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use parking_lot::RwLock;
@@ -13,14 +12,15 @@ use rand::RngExt;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tokio::sync::Mutex as TokioMutex;
 use tracing::{debug, error, info, warn};
 use url::Url;
 
 use super::callback;
 use super::metadata::{self, AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
 use super::storage::{TokenInfo, TokenStorage};
-use crate::security::{request_error_category, safe_oauth_http_error, safe_reqwest_message};
+use crate::security::http_diagnostics::oauth_request_error;
+use crate::security::ssrf::is_ssrf_refusal;
+use crate::security::{safe_oauth_http_error, safe_reqwest_message};
 use crate::{Error, Result};
 
 /// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
@@ -342,6 +342,9 @@ impl OAuthClient {
 
                 self.resource_metadata = Some(meta);
             }
+            // A policy refusal is an answer, not a missing document: falling
+            // back would walk past it (MIK-7701).
+            Err(e) if is_ssrf_refusal(&e) => return Err(e),
             Err(e) => {
                 debug!(error = %e, "No protected resource metadata, using base URL");
                 self.oauth_base_url = Some(base_url.clone());
@@ -464,10 +467,14 @@ impl OAuthClient {
             token.as_ref().and_then(|t| t.refresh_token.clone())
         };
 
-        if let Some(refresh_token) = refresh_token_opt
-            && let Ok(new_token) = self.refresh_token(&refresh_token).await
-        {
-            return Ok(new_token);
+        if let Some(refresh_token) = refresh_token_opt {
+            match self.refresh_token(&refresh_token).await {
+                Ok(new_token) => return Ok(new_token),
+                // A policy refusal is not an expired grant: re-authorizing
+                // would only walk past it (MIK-7701).
+                Err(e) if is_ssrf_refusal(&e) => return Err(e),
+                Err(_) => {}
+            }
         }
 
         // Need to authorize from scratch
@@ -550,12 +557,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Client credentials request failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| oauth_request_error("Client credentials request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -592,87 +594,6 @@ impl OAuthClient {
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
         Ok(token.access_token)
-    }
-
-    /// Try all headless renewal strategies (`refresh_token` → `client_credentials`).
-    ///
-    /// Returns `Ok(true)` on success, `Ok(false)` when all automatic methods
-    /// are unavailable and manual re-authorization is required.
-    async fn attempt_background_renewal(&self) -> bool {
-        // Strategy 1: refresh_token grant
-        let refresh_token_opt = {
-            let token = self.current_token.read();
-            token.as_ref().and_then(|t| t.refresh_token.clone())
-        };
-
-        if let Some(refresh_token) = refresh_token_opt {
-            match self.refresh_token(&refresh_token).await {
-                Ok(_) => return true,
-                Err(e) => {
-                    debug!(
-                        backend = %self.backend_name,
-                        error = %e,
-                        "Token refresh failed, trying client_credentials"
-                    );
-                }
-            }
-        }
-
-        // Strategy 2: client_credentials grant (headless, for Beeper-style tokens)
-        match self.try_client_credentials().await {
-            Ok(_) => return true,
-            Err(e) => {
-                debug!(
-                    backend = %self.backend_name,
-                    error = %e,
-                    "client_credentials renewal failed"
-                );
-            }
-        }
-
-        false
-    }
-
-    /// Spawn a background task that proactively refreshes the token before it
-    /// expires.  The task runs for the lifetime of the provided `Arc`; it
-    /// stops automatically when the last strong reference is dropped.
-    ///
-    /// The returned `JoinHandle` can be aborted to cancel the task.
-    ///
-    /// # Panics
-    ///
-    /// Does not panic.
-    pub fn spawn_refresh_task(
-        client: Arc<TokioMutex<Self>>,
-        backend_name: String,
-    ) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-
-                // Use a weak reference pattern: if the Arc has been dropped
-                // (HttpTransport gone), stop the loop.
-                let needs_refresh = {
-                    let guard = client.lock().await;
-                    guard.needs_proactive_refresh()
-                };
-
-                if needs_refresh {
-                    let success = {
-                        let guard = client.lock().await;
-                        guard.attempt_background_renewal().await
-                    };
-
-                    if !success {
-                        warn!(
-                            backend = %backend_name,
-                            "All automatic token renewal strategies failed — \
-                             manual re-authorization required"
-                        );
-                    }
-                }
-            }
-        })
     }
 
     /// RFC 8707 resource indicator for this backend.
@@ -823,7 +744,13 @@ impl OAuthClient {
         let callback_url = callback_server.callback_url.clone();
 
         // Now ensure we have a client ID, passing the actual callback URL for registration
-        let client_id = self.ensure_client_id_with_redirect(&callback_url).await?;
+        let client_id = match self.ensure_client_id_with_redirect(&callback_url).await {
+            Ok(client_id) => client_id,
+            Err(e) => {
+                callback_server.stop();
+                return Err(e);
+            }
+        };
 
         // Build authorization URL with the ACTUAL callback URL
         let auth_url = self.build_authorize_url(
@@ -895,12 +822,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Token request failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| oauth_request_error("Token request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -963,12 +885,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Token refresh failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| oauth_request_error("Token refresh failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1056,6 +973,7 @@ impl OAuthClient {
                         }
                     }
                 }
+                Err(e) if is_ssrf_refusal(&e) => return Err(e),
                 Err(e) => {
                     debug!(error = %e, "Dynamic registration failed, using generated ID");
                 }
@@ -1125,12 +1043,7 @@ impl OAuthClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Client registration failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| oauth_request_error("Client registration failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1206,6 +1119,7 @@ fn open_browser(url: &str) -> bool {
 #[cfg(test)]
 mod authorize_tests;
 pub(crate) mod destination;
+mod renewal;
 #[cfg(test)]
 mod tests;
 
