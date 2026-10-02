@@ -1320,7 +1320,7 @@
       "stage": "graded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. On 2026-09-30, docs/design/RFC-0060-dual-generation-mcp.md:3 read DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only. U5 ANSWERED 2026-10-01: the header contract (docs/design/RFC-0060-dual-generation-mcp.md:199-203) closes it without a prototype, and RFC-0061 Decision 1 (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:110-122) records the outcome, the gateway stays hand-rolled; the RFC-0060 open-questions table now says so. U5 met. Pending on U1 only. U1 window: started 2026-10-02 13:16:03 CEST (baseline scraped_at_unix_seconds 1790939763), ends 2026-10-09 13:16:03 CEST (604,800 s), on the live gateway 4.0.0-a87d8f28, built from release-line commit a87d8f284 (PID 31766, started 2026-10-02 13:15:49 CEST). Baseline: a read-only /metrics scrape at the start, authenticated with server.metrics_token, kept maintainer-local as u1-baseline-20261002T111602Z.prom (20948 bytes, sha256 8ab2e4ec1f5b8f7bde48c7bc95946ad577d2d1720a1e8b57c32d0867d670b6ad). Two earlier windows did not survive. The first started 2026-10-02 01:22:04 CEST on 4.0.0-e2c34b78 (PID 6352, baseline sha256 87133a1c...) and ended no later than the machine reboot at 10:34:24 CEST; its PID watch stops at 03:12. The second started 12:18:19 CEST on the same build (PID 2011, started 10:46:57) and ended with the planned redeploy onto a87d8f284 for MIK-7752, begun at 13:13:25 CEST. The stdio half is not re-baselined: the durable window ~/.mcp-gateway/protocol-revision-telemetry/window.json reads started_at_unix_seconds 1788602574 (2026-09-05 12:02:54 CEST), last updated 2026-09-23 00:57:13 CEST. RFC-0060's procedure (archive that directory before deploying) was not run for any of these windows, so production_retirement_decision, which requires the HTTP baseline to equal the durable start, would answer WindowMisaligned. As recorded, this window can grade the HTTP half only; a full U1 grade needs the directory archived and a fresh, aligned start, which is a lead decision. The 2026-10-01 13:12 CEST window never existed: that process was restarted at 2026-10-01 18:05:34 CEST, cause not recorded. Restart guard: the PID is recorded every 10 minutes; a change invalidates the window. U1 is graded from the scrape at the window's end."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. On 2026-09-30, docs/design/RFC-0060-dual-generation-mcp.md:3 read DRAFT, unreviewed, and :101 'Production window: not started'; telemetry exists in src/protocol_revision_telemetry.rs. The U2 conjunct (hebb de-fork spike MIK-7219) moved to MIK-7628 by operator ruling 2026-09-30 (question tool, about 01:12, relayed by the release coordinator), decision portfolio_halves_outside_4_0; this row now requires U1 and U5 only. U5 ANSWERED 2026-10-01: the header contract (docs/design/RFC-0060-dual-generation-mcp.md:204-208) closes it without a prototype, and RFC-0061 Decision 1 (docs/design/RFC-0061-protocol-2026-07-28-release-scope.md:110-122) records the outcome, the gateway stays hand-rolled; the RFC-0060 open-questions table now says so. U5 met. Pending on U1 only. U1 window: started 2026-10-02 18:49:39 CEST (unix 1790959779), ends 2026-10-09 18:49:39 CEST (unix 1791564579, 604,800 s), on the live gateway 4.0.0-a87d8f28, built from release-line commit a87d8f284 (PID 53431, started 18:46:45). Aligned per RFC-0060: the stdio durable window ~/.mcp-gateway/protocol-revision-telemetry/window.json reads started_at_unix_seconds 1790959779, the same second as the HTTP baseline scrape, so the pair passes production_retirement_decision's alignment check (retirement itself is graded at the window's end). The HTTP service never creates the durable file (only a stdio-mode gateway does, src/gateway/server/mod.rs run_stdio_on), so one stdio gateway with no backends was started on the real data directory and exited, and the scrape was taken in the same second (lead decision, no restart). HTTP baseline: a read-only, token-authenticated /metrics scrape kept maintainer-local as u1-baseline-20261002T164939Z.prom (21072 bytes, sha256 1cc7a0c0f5d337d9033139d25b9a47d87cce9918078936c00d5a069640a868ff). Stdio half: no stdio client was running at the start; if none runs during the window, the stdio aggregate stays empty and production_retirement_decision answers NoObservations (src/protocol_revision_telemetry.rs:691), so nothing can be retired. Gate day reads that as: U1 answered for HTTP only, no revision retired, and the compatibility window keeps every revision; NoObservations is not a pass for retirement. Earlier windows that day did not survive: 01:22:04 (PID 6352) ended no later than the 10:34:24 reboot; 12:18:19 (PID 2011) with the planned redeploy for MIK-7752 begun at 13:13:25; 13:16:03 (PID 31766) was HTTP-only, since the durable window was never archived, and ended with the lead-authorised aligned restart at 18:03:24; 18:03:50 (PID 96175, aligned) ended with the second restart at 18:46:45, made to apply the operator-approved disable of four backends that could not start (codex, ponytail, netdata, pencil). The 18:47:10 scrape after the second restart had no durable window to align with and is superseded. The 2026-10-01 13:12 CEST window never existed: that process was restarted at 2026-10-01 18:05:34 CEST, cause not recorded. Restart guard: the PID is recorded every 10 minutes; a change invalidates the window. U1 is graded from the scrape at the window's end."
     },
     {
       "id": "MIK-7211.PARENT.5",
@@ -1328,7 +1328,7 @@
       "stage": "graded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Pending on U1: the compatibility-window decision cites U1's measured data, available at the window's end. U1 window: started 2026-10-02 13:16:03 CEST (baseline scraped_at_unix_seconds 1790939763), ends 2026-10-09 13:16:03 CEST (604,800 s), on the live gateway 4.0.0-a87d8f28, built from release-line commit a87d8f284 (PID 31766, started 2026-10-02 13:15:49 CEST). Baseline: a read-only /metrics scrape at the start, authenticated with server.metrics_token, kept maintainer-local as u1-baseline-20261002T111602Z.prom (20948 bytes, sha256 8ab2e4ec1f5b8f7bde48c7bc95946ad577d2d1720a1e8b57c32d0867d670b6ad). Two earlier windows did not survive. The first started 2026-10-02 01:22:04 CEST on 4.0.0-e2c34b78 (PID 6352, baseline sha256 87133a1c...) and ended no later than the machine reboot at 10:34:24 CEST; its PID watch stops at 03:12. The second started 12:18:19 CEST on the same build (PID 2011, started 10:46:57) and ended with the planned redeploy onto a87d8f284 for MIK-7752, begun at 13:13:25 CEST. The stdio half is not re-baselined: the durable window ~/.mcp-gateway/protocol-revision-telemetry/window.json reads started_at_unix_seconds 1788602574 (2026-09-05 12:02:54 CEST), last updated 2026-09-23 00:57:13 CEST. RFC-0060's procedure (archive that directory before deploying) was not run for any of these windows, so production_retirement_decision, which requires the HTTP baseline to equal the durable start, would answer WindowMisaligned. As recorded, this window can grade the HTTP half only; a full U1 grade needs the directory archived and a fresh, aligned start, which is a lead decision. The 2026-10-01 13:12 CEST window never existed: that process was restarted at 2026-10-01 18:05:34 CEST, cause not recorded. Restart guard: the PID is recorded every 10 minutes; a change invalidates the window. U1 is graded from the scrape at the window's end."
+      "note": "Added 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). UNTRACKED before this row. Pending on U1: the compatibility-window decision cites U1's measured data, available at the window's end. U1 window: started 2026-10-02 18:49:39 CEST (unix 1790959779), ends 2026-10-09 18:49:39 CEST (unix 1791564579, 604,800 s), on the live gateway 4.0.0-a87d8f28, built from release-line commit a87d8f284 (PID 53431, started 18:46:45). Aligned per RFC-0060: the stdio durable window ~/.mcp-gateway/protocol-revision-telemetry/window.json reads started_at_unix_seconds 1790959779, the same second as the HTTP baseline scrape, so the pair passes production_retirement_decision's alignment check (retirement itself is graded at the window's end). The HTTP service never creates the durable file (only a stdio-mode gateway does, src/gateway/server/mod.rs run_stdio_on), so one stdio gateway with no backends was started on the real data directory and exited, and the scrape was taken in the same second (lead decision, no restart). HTTP baseline: a read-only, token-authenticated /metrics scrape kept maintainer-local as u1-baseline-20261002T164939Z.prom (21072 bytes, sha256 1cc7a0c0f5d337d9033139d25b9a47d87cce9918078936c00d5a069640a868ff). Stdio half: no stdio client was running at the start; if none runs during the window, the stdio aggregate stays empty and production_retirement_decision answers NoObservations (src/protocol_revision_telemetry.rs:691), so nothing can be retired. Gate day reads that as: U1 answered for HTTP only, no revision retired, and the compatibility window keeps every revision; NoObservations is not a pass for retirement. Earlier windows that day did not survive: 01:22:04 (PID 6352) ended no later than the 10:34:24 reboot; 12:18:19 (PID 2011) with the planned redeploy for MIK-7752 begun at 13:13:25; 13:16:03 (PID 31766) was HTTP-only, since the durable window was never archived, and ended with the lead-authorised aligned restart at 18:03:24; 18:03:50 (PID 96175, aligned) ended with the second restart at 18:46:45, made to apply the operator-approved disable of four backends that could not start (codex, ponytail, netdata, pencil). The 18:47:10 scrape after the second restart had no durable window to align with and is superseded. The 2026-10-01 13:12 CEST window never existed: that process was restarted at 2026-10-01 18:05:34 CEST, cause not recorded. Restart guard: the PID is recorded every 10 minutes; a change invalidates the window. U1 is graded from the scrape at the window's end."
     },
     {
       "id": "MIK-7211.PARENT.6",
@@ -1630,15 +1630,21 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T22's TTL clause requests 1000 ms against a 1 s floor, so the upward clamp to min_ttl is not exercised; stays pending under MIK-7783."
     },
     {
       "id": "MIK-7630.EVENTS.5",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_delivery_safety.rs",
+        "tests/mik_7630_events_delivery.rs",
+        "tests/mik_7630_events_delivery_lifecycle.rs",
+        "src/events/worker_tests.rs"
+      ],
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T13 private callback addresses refused before any connection; T14 the address checked per connection; T15 a redirect is never followed; T16 the receiver's answer surfaces only as a status category; T17 one webhook-id, identical bytes and a fresh signature per attempt; T31 410 and 413 tried once and a body over 262 144 bytes never sent; T47 sustained failure suspends the subscription."
     },
     {
       "id": "MIK-7630.EVENTS.6",
@@ -1650,11 +1656,16 @@
     },
     {
       "id": "MIK-7630.EVENTS.7",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_subscribe.rs",
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_delivery_lifecycle.rs",
+        "src/events/rpc_tests.rs"
+      ],
+      "note": "Graded 2026-10-02 at 7317d4c94 (PR #2651, I2). Red first: CI run 37005789852 on tests-only head b1413236c failed the I2 rows at their own assertions (no delivery, no dead letter, cap and reload assertions). Green: CI run 37041949507 at head b2e86421b (Tests, Clippy, Windows, macOS); feature combinations 37036000927 green; 26 distinct hand-written mutants in four batches, all killed (C2 survived once and was killed after its test was strengthened). T11 authorisation, T23 idempotent and caller-scoped with the pending retry cancelled, T55 nothing sent after the unsubscribe answer; unit unsubscribe_waits_out_a_claimed_attempt."
     },
     {
       "id": "MIK-7630.EVENTS.8",
@@ -1694,7 +1705,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but replay re-scanning lands with I6 (T35); stays pending."
     },
     {
       "id": "MIK-7630.SAFETY.2",
@@ -1702,7 +1713,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending."
     },
     {
       "id": "MIK-7630.SAFETY.3",
@@ -1726,7 +1737,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T28 substitutes a 0.01 budget for 0 and does not assert the budget-ledger charge attempt; stays pending under MIK-7783."
     },
     {
       "id": "MIK-7630.SAFETY.6",
@@ -1742,7 +1753,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but retry_window is not capped at 15 minutes (MIK-7784); stays pending."
     },
     {
       "id": "MIK-7630.RELIABLE.2",

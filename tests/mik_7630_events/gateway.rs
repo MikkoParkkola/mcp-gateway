@@ -28,6 +28,7 @@ providers: {}
 webhooks:
   push:
     path: /github/push
+    method: POST
     transform:
       event_type: "github.{action}"
       data: { repo: "{repository.full_name}", ref: "{ref}" }
@@ -195,6 +196,57 @@ impl Gateway {
             let _ = child.kill().await;
         }
         self.spawn().await;
+    }
+
+    /// The directory the child runs in (store, logs, `audit.jsonl`).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// The config the child was started with.
+    pub fn config(&self) -> &Value {
+        &self.config
+    }
+
+    /// Rewrite `gateway.yaml` in place, for the live config watcher to pick
+    /// up; the next `restart` also uses it.
+    pub fn rewrite_config(&mut self, config: Value) {
+        self.config = config;
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            self.root.join("gateway.yaml"),
+            serde_yaml::to_string(&self.config).expect("config YAML"),
+        )
+        .expect("rewrite gateway config");
+    }
+
+    /// POST `body` to the inbound webhook route `/webhooks/github/push` with
+    /// `X-GitHub-Delivery: delivery_id`; the HTTP status.
+    pub async fn webhook(&self, delivery_id: &str, body: &Value) -> u16 {
+        self.webhook_at(
+            "/webhooks/github/push",
+            Some(delivery_id),
+            &body.to_string(),
+        )
+        .await
+    }
+
+    /// POST the raw `body` bytes to any inbound webhook `path`, optionally
+    /// with a delivery id.
+    pub async fn webhook_at(&self, path: &str, delivery_id: Option<&str>, body: &str) -> u16 {
+        let mut request = self
+            .client
+            .post(format!("{}{path}", self.url))
+            .header("content-type", "application/json")
+            .body(body.to_owned());
+        if let Some(id) = delivery_id {
+            request = request.header("X-GitHub-Delivery", id);
+        }
+        request
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("POST {path}: {e}; logs={}", self.logs()))
+            .status()
+            .as_u16()
     }
 
     /// A modern `/mcp` request as `api_key` (none = no credential).

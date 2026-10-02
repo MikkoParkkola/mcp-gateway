@@ -903,6 +903,8 @@ jobs:
         run: python3 scripts/release/test_botreview_sweep.py
       - name: Test the keyless read-only admission check (MIK-7752)
         run: python3 scripts/release/test_check_keyless_read_only.py
+      - name: The published C6 mutation sample still reproduces
+        run: python3 scripts/release/test_c6_mutation_sample.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the
@@ -1057,6 +1059,22 @@ jobs:
       # OWASP self-assessment may cite only paths and tests that still exist.
       - name: Check the OWASP self-assessment cites the current tree
         run: python3 scripts/dev/test_check_owasp_citations.py
+
+  registry-packages:
+    name: Built-in server registry is pinned (MIK-7787)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # `mcp-gateway add <name>` writes what src/registry/server_registry.rs
+    # says. 30 of its 45 npm packages were 404 and nothing failed. Offline
+    # half: every entry is a pinned npm or PyPI release or a hosted URL. The
+    # live lookups run in registry-packages.yml (registry changes, pushes,
+    # daily), so an upstream deprecation never turns an unrelated PR red.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/dev/test_check_registry_packages.py
+      - name: Check every registry entry is pinned
+        run: python3 scripts/dev/check-registry-packages.py --offline
 
   docker-build:
     name: Docker (${{ matrix.arch }})

@@ -265,16 +265,16 @@ impl<'a> MetaMcpCallerContext<'a> {
 
     /// The principal text that keys this caller's retained results (MIK-7272.OWNER.3).
     ///
-    /// The stdio transport's mark, not its principal text, names the local
-    /// operator: a context the transport built keys under
-    /// [`LOCAL_OPERATOR_PRINCIPAL`], and text from any other source can never
-    /// spell it, because text carrying the reserved prefix is dropped here.
+    /// The stdio mark names the local operator ([`LOCAL_OPERATOR_PRINCIPAL`]); other
+    /// text can never spell it, since text with the reserved prefix is dropped.
+    /// With no credential, a proven agent or certificate subject (MIK-7688).
     pub(crate) fn owner_principal(&self) -> Option<&'a str> {
         if self.stdio_nonce.is_some() {
             return Some(LOCAL_OPERATOR_PRINCIPAL);
         }
         self.credential_principal
-            .filter(|text| !text.starts_with(LOCAL_OPERATOR_PREFIX))
+            .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX))
+            .or_else(|| support::proven_subject_owner(self))
     }
 
     /// How this caller was established. The stdio transport's mark decides
@@ -2185,8 +2185,7 @@ impl MetaMcp {
         }
 
         // Admin gate for the meta-tools that change the gateway for every
-        // session. Enforced HERE, at the dispatcher, and not only at the HTTP
-        // router that also checks it.
+        // session, enforced HERE at the dispatcher.
         //
         // The router checks this too, and stdio marks its caller admin because
         // the client that spawned the process already holds whatever the
@@ -2195,13 +2194,9 @@ impl MetaMcp {
         // silently absent for the next one added, which is the shape that hid
         // the playbook defect. Placing it at the point of dispatch costs a
         // redundant comparison on the router path and removes the possibility.
-        //
-        // It also caught a live one immediately. Moving it here refused stdio,
-        // because that path passed a default context whose `is_admin` is false
-        // and nothing had ever checked it.
-        // The same predicate `tools/list` filters its answer with
-        // (`meta_tools_for`), so a caller is never shown a tool this gate
-        // would then refuse.
+        // Moving it here caught stdio passing a default non-admin context.
+        // The same predicate `tools/list` filters with (`meta_tools_for`) and
+        // the signing layer reads (`refused_before_dispatch`).
         if !CallerStanding::of_admin_flag(caller.is_admin).permits(tool_name) {
             return JsonRpcResponse::error(
                 Some(id),
@@ -2219,6 +2214,10 @@ impl MetaMcp {
                 GateOutcome::ProceedConfirmed => true,
             };
 
+        // MIK-7698: nothing acts on a nonce the signing layer left unadmitted.
+        if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
+            return refusal;
+        }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
             if let Err(error) = self.refuse_chained_task(tool_name, &arguments) {

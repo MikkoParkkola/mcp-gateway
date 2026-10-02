@@ -184,6 +184,43 @@ impl ListenRequest {
         &self.task_ids
     }
 
+    /// The `notifications/subscriptions/acknowledged` notification that opens
+    /// this subscription's stream: tagged with its id, and naming the filter
+    /// this gateway honours. A notification, never a response — a response
+    /// to the listen request is how a subscription ENDS (MIK-7766).
+    #[must_use]
+    pub fn acknowledgement(&self, subscription: &SubscriptionId) -> Value {
+        subscription.tag(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/subscriptions/acknowledged",
+            "params": { "notifications": self.honoured() },
+        }))
+    }
+
+    /// The subset of the filter this gateway delivers, as the specification
+    /// asks: the tool list (`announce_tools_changed`) and task status
+    /// (`notifications/tasks`, under `taskIds` as the tasks extension names
+    /// it). Prompt and resource changes are never published, so they are
+    /// omitted rather than promised.
+    fn honoured(&self) -> Value {
+        let mut filter = serde_json::Map::new();
+        if self.wants(NotificationKind::ToolsListChanged) {
+            filter.insert(
+                NotificationKind::ToolsListChanged
+                    .opt_in_field()
+                    .to_string(),
+                Value::Bool(true),
+            );
+        }
+        if !self.task_ids.is_empty() {
+            filter.insert(
+                NotificationKind::Tasks.opt_in_field().to_string(),
+                Value::from(self.task_ids.clone()),
+            );
+        }
+        Value::Object(filter)
+    }
+
     /// Whether the client asked for nothing at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -216,6 +253,21 @@ impl SubscriptionId {
             RequestId::String(s) => Value::String(s.clone()),
             RequestId::Number(n) => Value::Number((*n).into()),
         }
+    }
+
+    /// The listen request's own response, which ends the subscription
+    /// gracefully: the specification's signal that the server closed it, as
+    /// opposed to a transport drop, which carries no response.
+    #[must_use]
+    pub fn graceful_end(&self) -> Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": self.as_value(),
+            "result": {
+                "resultType": "complete",
+                "_meta": { "io.modelcontextprotocol/subscriptionId": self.as_value() },
+            },
+        })
     }
 
     /// Tag a notification as belonging to this subscription.

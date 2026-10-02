@@ -6,8 +6,10 @@
 
 use serde_json::Value;
 
-use crate::events::{Caller, EventsHub, RpcError};
+use crate::events::{Caller, EventsHub, LiveBinding, RpcError};
+use crate::gateway::auth::live::CredentialFacts;
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::audit::CredentialKind;
 
 /// The events principal: the task owner key (`route_task_owner`), the one
 /// stable caller identity both eras share, so a task-settled event can be
@@ -15,6 +17,97 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 /// caller presented no credential: webhook mode needs a principal.
 pub(super) fn principal(owner: &str, auth_enabled: bool) -> Option<String> {
     (auth_enabled && !owner.is_empty()).then(|| owner.to_owned())
+}
+
+/// What a request presented beyond its client, captured before the body is
+/// read: the key-server facts, the verified identity and the dashboard
+/// session's digest (MIK-7769). Never a secret.
+pub(super) struct Presented {
+    facts: Option<CredentialFacts>,
+    identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    session_sha256: Option<String>,
+}
+
+impl Presented {
+    pub(super) fn capture(request: &axum::http::Request<axum::body::Body>) -> Self {
+        let extensions = request.extensions();
+        Self {
+            facts: extensions.get::<CredentialFacts>().cloned(),
+            identity: extensions.get().cloned(),
+            session_sha256: crate::gateway::auth::session_cookie_value(request.headers())
+                .map(|handle| crate::hashing::sha256_hex(handle.as_bytes())),
+        }
+    }
+
+    /// The credential `client` presented, as events keep it. A key-server or
+    /// delegated-bearer credential ends at its own expiry; a dashboard
+    /// session at most one idle timeout from now, since activity alone
+    /// extends it. Each kind but an API key carries the binding every
+    /// delivery attempt re-checks (design F9).
+    pub(super) fn credential(
+        &self,
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        state: &super::super::AppState,
+    ) -> crate::events::Credential {
+        let kind = CredentialKind::of(client);
+        let facts = self.facts.clone().unwrap_or(CredentialFacts {
+            expires_at: None,
+            jti: None,
+            issued_at: None,
+            provider_sha256: None,
+        });
+        let expires_at = match kind {
+            CredentialKind::DashboardSession => {
+                let config = state.live_config.get();
+                let idle = config.auth.dashboard_session.idle_timeout_secs;
+                let idle = chrono::Duration::seconds(i64::try_from(idle).unwrap_or(i64::MAX));
+                chrono::Utc::now().checked_add_signed(idle)
+            }
+            _ => facts.expires_at,
+        };
+        let binding = match kind {
+            CredentialKind::KeyServerToken => {
+                facts.jti.map(|jti| LiveBinding::KeyServerToken { jti })
+            }
+            CredentialKind::OidcBearer => {
+                self.identity.as_ref().map(|id| LiveBinding::OidcBearer {
+                    issuer: id.issuer.clone(),
+                    subject: id.subject.clone(),
+                    email: id.email.clone(),
+                    groups: id.groups.clone(),
+                    issued_at: facts.issued_at,
+                    provider_sha256: facts.provider_sha256.clone(),
+                })
+            }
+            CredentialKind::StaticBearer => Some(LiveBinding::StaticBearer),
+            CredentialKind::DashboardSession => self
+                .session_sha256
+                .clone()
+                .map(|session_sha256| LiveBinding::DashboardSession { session_sha256 }),
+            CredentialKind::None | CredentialKind::LocalTransport | CredentialKind::ApiKey => None,
+        };
+        crate::events::Credential {
+            kind,
+            principal: client.map(|c| c.principal.clone()).unwrap_or_default(),
+            api_key: api_key(client),
+            expires_at,
+            binding,
+        }
+    }
+}
+
+/// The API key `client` presented, if it presented one. Key-server tokens,
+/// the static bearer and the other credentials have no `api_keys` entry for
+/// the live re-check to read (design §3.7).
+fn api_key(
+    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+) -> Option<crate::events::ApiKeyRef> {
+    client
+        .filter(|c| c.authenticated && c.credential_kind == CredentialKind::ApiKey)
+        .map(|c| crate::events::ApiKeyRef {
+            name: c.name.clone(),
+            principal: c.principal.clone(),
+        })
 }
 
 /// Answer one `events/*` request.
@@ -39,5 +132,44 @@ pub(super) async fn answer(
             data: Some(data),
         }) => JsonRpcResponse::error_with_data(Some(id), code, message, data),
         Err(RpcError { code, message, .. }) => JsonRpcResponse::error(Some(id), code, message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gateway::auth::AuthenticatedClient;
+
+    fn client(kind: CredentialKind, authenticated: bool) -> AuthenticatedClient {
+        AuthenticatedClient {
+            name: "alice".to_owned(),
+            rate_limit: 0,
+            backends: vec!["*".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            principal: crate::gateway::auth::principal_of("secret"),
+            quota_principal: None,
+            authenticated,
+            credential_kind: kind,
+        }
+    }
+
+    /// Only a configured API key has an `api_keys` entry to re-check
+    /// against; a key-server token or the static bearer carries none.
+    #[test]
+    fn only_an_authenticated_api_key_is_kept_for_the_live_re_check() {
+        let key = api_key(Some(&client(CredentialKind::ApiKey, true))).expect("an API key");
+        assert_eq!(key.name, "alice");
+        assert_eq!(key.principal, crate::gateway::auth::principal_of("secret"));
+        for kind in [
+            CredentialKind::KeyServerToken,
+            CredentialKind::OidcBearer,
+            CredentialKind::StaticBearer,
+        ] {
+            assert_eq!(api_key(Some(&client(kind, true))), None, "{kind:?}");
+        }
+        assert_eq!(api_key(Some(&client(CredentialKind::ApiKey, false))), None);
+        assert_eq!(api_key(None), None);
     }
 }

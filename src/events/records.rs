@@ -21,9 +21,24 @@ pub(crate) struct Subscription {
     pub v: u32,
     pub id: String,
     pub principal: String,
-    /// The API key the principal presented, if any: the fan-out re-check
-    /// resolves the key's backend scope from live config (I2).
-    pub api_key_name: Option<String>,
+    /// The API key the principal presented, if any: every re-check
+    /// resolves the key's expiry and backend scope from live config (I2).
+    pub api_key: Option<ApiKeyRef>,
+    /// How the subscriber's credential was presented, for the audit
+    /// record's `who`. Absent on records written before it was kept.
+    #[serde(default)]
+    pub credential_kind: Option<crate::security::audit::CredentialKind>,
+    /// The audit principal of that credential (a digest, never the secret).
+    #[serde(default)]
+    pub credential_principal: Option<String>,
+    /// What every attempt re-checks for a credential that is not an API key
+    /// (design F9, MIK-7769). A bound kind without one is refused.
+    #[serde(default)]
+    pub binding: Option<LiveBinding>,
+    /// An early record's bare key name, which binds no secret: such a
+    /// subscription fails every re-check and is deleted. Never written.
+    #[serde(default, rename = "api_key_name", skip_serializing)]
+    pub legacy_api_key_name: Option<String>,
     pub url: String,
     pub name: String,
     pub arguments: Value,
@@ -36,6 +51,97 @@ pub(crate) struct Subscription {
     pub failed_since: Option<DateTime<Utc>>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+/// The credential a caller presented, as events keep it: never the secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Credential {
+    pub kind: crate::security::audit::CredentialKind,
+    /// The audit principal: the validated credential's digest.
+    pub principal: String,
+    /// Set only for a configured API key: the one credential whose live
+    /// scope the re-check can read.
+    // ci-allow-secret-debug: a key's name and digest-derived principal, never the secret.
+    pub api_key: Option<ApiKeyRef>,
+    /// When the credential itself stops being valid, if it says.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// What a delivery attempt re-checks for a credential that is not an
+    /// API key.
+    pub binding: Option<LiveBinding>,
+}
+
+/// The live fact a non-API-key credential is re-checked against before
+/// every delivery attempt (design F9, MIK-7769). Never a secret: a
+/// temporary token's `jti`, a verified identity, or a session handle's
+/// digest.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum LiveBinding {
+    /// A key-server temporary token, by its `jti`.
+    KeyServerToken { jti: String },
+    /// A delegated OIDC bearer: the identity the key-server policy reads.
+    OidcBearer {
+        issuer: String,
+        subject: String,
+        email: String,
+        groups: Vec<String>,
+        /// The bearer's `iat`: the running max token age still bounds it.
+        #[serde(default)]
+        issued_at: Option<u64>,
+        /// The verifying provider's configuration digest at subscribe time.
+        #[serde(default)]
+        provider_sha256: Option<String>,
+    },
+    /// The static bearer; its principal is the credential principal.
+    StaticBearer,
+    /// A dashboard session, by the SHA-256 of its handle.
+    DashboardSession { session_sha256: String },
+}
+
+impl LiveBinding {
+    /// The credential kind this binding re-checks.
+    pub(crate) const fn kind(&self) -> crate::security::audit::CredentialKind {
+        use crate::security::audit::CredentialKind as Kind;
+        match self {
+            Self::KeyServerToken { .. } => Kind::KeyServerToken,
+            Self::OidcBearer { .. } => Kind::OidcBearer,
+            Self::StaticBearer => Kind::StaticBearer,
+            Self::DashboardSession { .. } => Kind::DashboardSession,
+        }
+    }
+}
+
+impl std::fmt::Debug for LiveBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The variant only: an email is personal data.
+        f.write_str(match self {
+            Self::KeyServerToken { .. } => "KeyServerToken",
+            Self::OidcBearer { .. } => "OidcBearer",
+            Self::StaticBearer => "StaticBearer",
+            Self::DashboardSession { .. } => "DashboardSession",
+        })
+    }
+}
+
+impl Credential {
+    /// Whether delivery may outlive this credential only up to a bound: every
+    /// kind but an API key, whose expiry and grant every attempt re-reads.
+    pub(crate) const fn bounded(&self) -> bool {
+        !matches!(
+            self.kind,
+            crate::security::audit::CredentialKind::ApiKey
+                | crate::security::audit::CredentialKind::None
+        )
+    }
+}
+
+/// An API key as a caller presented it: its configured name and the
+/// principal derived from its secret's digest. A key replaced under the same
+/// name derives another principal, so it no longer matches (I2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ApiKeyRef {
+    pub name: String,
+    pub principal: String,
 }
 
 impl std::fmt::Debug for Subscription {
@@ -170,6 +276,14 @@ pub(crate) fn write_record<T: Serialize>(
         Ok(()) => Placed::Durable,
         Err(error) => Placed::NotSynced(error),
     })
+}
+
+/// Remove `dir/name` and sync `dir`; `Err` unless the removal is durable.
+pub(crate) fn remove_record_durable(dir: &Path, name: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(name)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => sync_dir(dir),
+    }
 }
 
 /// Remove `dir/name`; a missing file is already removed.

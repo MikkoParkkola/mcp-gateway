@@ -6,7 +6,7 @@ server:
 
 backends:
   tavily:
-    command: "npx -y @anthropic/mcp-server-tavily"
+    command: "npx -y tavily-mcp@0.2.22"
     description: "Web search"
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"

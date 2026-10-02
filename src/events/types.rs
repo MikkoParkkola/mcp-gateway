@@ -119,6 +119,20 @@ pub(crate) enum SourceKind {
     Schedule,
 }
 
+impl SourceKind {
+    /// The stable name mixed into event ids; never changes for a kind.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Webhook => "webhook",
+            Self::BackendNotification => "backend_notification",
+            Self::TaskSettled => "task_settled",
+            Self::RestWatch => "rest_watch",
+            Self::GatewayOperational => "gateway_operational",
+            Self::Schedule => "schedule",
+        }
+    }
+}
+
 /// Who may see an event type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code, reason = "Owner and Operator scopes land with I4 and 4.0.1")]

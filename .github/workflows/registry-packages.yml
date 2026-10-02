@@ -1,0 +1,66 @@
+name: Registry packages
+
+# MIK-7787: `mcp-gateway add <name>` writes what src/registry/server_registry.rs
+# says, and 30 of its 45 npm packages had become 404 with nothing failing.
+# This workflow looks every entry up live (npm, PyPI, or an HTTP probe of the
+# hosted URL). It runs only where the answer can change because of this repo
+# (a pull request touching the registry or the check) and on a daily schedule
+# for changes upstream, so a third-party deprecation never turns an unrelated
+# pull request red. GitHub fires `schedule` from the default branch's copy of
+# this file. No workflow holds Linear credentials, so a scheduled failure is
+# reported by this run failing, not by filing an issue.
+# The offline half (pin and launcher rules, no network) runs on every pull
+# request in ci.yml, job registry-packages.
+
+on:
+  pull_request:
+    paths:
+      - "src/registry/**"
+      - "scripts/dev/check-registry-packages.py"
+      - "scripts/dev/test_check_registry_packages.py"
+      - "scripts/dev/testdata/registry-dead.rs"
+      - ".github/workflows/registry-packages.yml"
+  push:
+    branches: [main, docs/ranking-1-release-line]
+    paths:
+      - "src/registry/**"
+      - "scripts/dev/check-registry-packages.py"
+      - ".github/workflows/registry-packages.yml"
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Every registry entry resolves (live)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # A lookup that cannot fail checks nothing: these entries are known dead
+      # (404 package, deprecated version, missing release, 404 URL, an open
+      # header endpoint, OAuth without registration) and must be refused, live,
+      # before the real list is trusted.
+      - name: Check the live lookup refuses known-dead entries
+        run: |
+          set +e
+          out="$(python3 scripts/dev/check-registry-packages.py scripts/dev/testdata/registry-dead.rs)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          # Each must be refused for its own reason, not one outage.
+          [ "$rc" -eq 1 ] || { echo "expected exit 1, got $rc"; exit 1; }
+          grep -qx '0/6 registry entries resolve' <<<"$out"
+          grep -q '^FAIL missing-npm: .*HTTP 404' <<<"$out"
+          grep -q '^FAIL deprecated-npm: .*is deprecated' <<<"$out"
+          grep -q '^FAIL missing-pypi: .*HTTP 404' <<<"$out"
+          grep -q '^FAIL missing-url: .*HTTP 404' <<<"$out"
+          grep -q '^FAIL open-header: .*without a credential' <<<"$out"
+          grep -q '^FAIL oauth-without-dcr: .*no dynamic client registration' <<<"$out"
+      - name: Check every registry entry resolves
+        run: python3 scripts/dev/check-registry-packages.py

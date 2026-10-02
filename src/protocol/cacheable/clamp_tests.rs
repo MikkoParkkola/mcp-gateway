@@ -116,3 +116,128 @@ fn a_raw_task_envelope_clamps_its_retained_result_only() {
     clamp_delivered_scope(&mut not_a_task);
     assert_eq!(not_a_task["result"]["cacheScope"], "public");
 }
+
+/// MIK-7702: error data claims no scope either. It is not a cacheable result,
+/// but a malformed backend's `cacheScope` there is delivered as `private`.
+#[test]
+fn error_data_is_delivered_private() {
+    let mut response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "failed");
+    response.error.as_mut().expect("an error").data =
+        Some(json!({"cacheScope": "public", "inner": {"cacheScope": "public"}}));
+    let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert_eq!(wire["error"]["data"]["cacheScope"], "private", "{wire}");
+    assert_eq!(
+        wire["error"]["data"]["inner"]["cacheScope"], "public",
+        "{wire}"
+    );
+
+    // The SSE path clamps a raw payload, not a serialized response.
+    let mut raw = wire;
+    raw["error"]["data"]["cacheScope"] = json!("public");
+    let data: Value = serde_json::from_str(&message_event_data(&raw)).expect("JSON");
+    assert_eq!(data["error"]["data"]["cacheScope"], "private", "{data}");
+}
+
+/// MIK-7702: a task envelope whose `taskId` is not a string still has its
+/// retained result followed, while tool data that merely nests the same keys
+/// is untouched.
+#[test]
+fn a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result() {
+    for task_id in [json!(7), Value::Null, json!({"id": "t1"})] {
+        let mut envelope = json!({
+            "taskId": task_id.clone(), "status": "completed",
+            "result": {"cacheScope": "public"}
+        });
+        clamp_delivered_scope(&mut envelope);
+        assert_eq!(
+            envelope["result"]["cacheScope"], "private",
+            "taskId {task_id}"
+        );
+    }
+
+    for not_a_status in [
+        None,
+        Some(Value::Null),
+        Some(json!({"state": "done"})),
+        Some(json!("shipped")),
+        Some(json!("inputRequired")),
+        Some(json!({"completed": null})),
+    ] {
+        let mut odd = json!({"taskId": 7, "result": {"cacheScope": "public"}});
+        if let Some(status) = not_a_status.clone() {
+            odd["status"] = status;
+        }
+        clamp_delivered_scope(&mut odd);
+        assert_eq!(
+            odd["result"]["cacheScope"], "public",
+            "a non-string taskId without a task status is not an envelope: {not_a_status:?}"
+        );
+    }
+
+    for status in [
+        "working",
+        "input_required",
+        "completed",
+        "failed",
+        "cancelled",
+    ] {
+        let mut envelope = json!({
+            "taskId": 7, "status": status, "result": {"cacheScope": "public"}
+        });
+        clamp_delivered_scope(&mut envelope);
+        assert_eq!(
+            envelope["result"]["cacheScope"], "private",
+            "status {status}"
+        );
+    }
+
+    let mut tool = json!({"structuredContent": {
+        "taskId": 7, "status": "completed", "result": {"cacheScope": "public"}
+    }});
+    clamp_delivered_scope(&mut tool);
+    assert_eq!(
+        tool["structuredContent"]["result"]["cacheScope"], "public",
+        "nested tool data is untouched"
+    );
+}
+
+/// MIK-7702: the retained slot is followed once. A retained result that itself
+/// looks like an envelope is tool data and keeps its nested scope.
+#[test]
+fn the_retained_slot_is_followed_once_not_recursively() {
+    let mut envelope = json!({
+        "taskId": 7, "status": "completed",
+        "result": {
+            "cacheScope": "public",
+            "taskId": "t2", "status": "completed",
+            "result": {"cacheScope": "public"}
+        }
+    });
+    clamp_delivered_scope(&mut envelope);
+    assert_eq!(envelope["result"]["cacheScope"], "private");
+    assert_eq!(envelope["result"]["result"]["cacheScope"], "public");
+}
+
+/// MIK-7702: error data is diagnostic data. Only its own top-level scope is
+/// clamped; a task-shaped object inside it is left as sent, on the serialized
+/// response and on the SSE path alike.
+#[test]
+fn error_data_is_clamped_at_its_top_level_only() {
+    let mut response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "failed");
+    response.error.as_mut().expect("an error").data = Some(json!({
+        "cacheScope": "public",
+        "taskId": 7, "status": "completed", "result": {"cacheScope": "public"}
+    }));
+    let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert_eq!(wire["error"]["data"]["cacheScope"], "private", "{wire}");
+    assert_eq!(
+        wire["error"]["data"]["result"]["cacheScope"], "public",
+        "{wire}"
+    );
+    let data: Value = serde_json::from_str(&message_event_data(&wire)).expect("JSON");
+    assert_eq!(data["error"]["data"]["cacheScope"], "private", "{data}");
+    assert_eq!(
+        data["error"]["data"]["result"]["cacheScope"], "public",
+        "{data}"
+    );
+}

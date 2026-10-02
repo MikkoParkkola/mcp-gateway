@@ -146,6 +146,11 @@ backend" and "fails a capability file" first.**
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
 | 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
+| 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
+| 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
+| 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
+| 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
+| 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3444,6 +3449,115 @@ entry with a durable upstream handle stays managed `working`, as after any resta
 `tasks/get` resolves it. This applies to HTTP shutdown and to stdio EOF.
 
 **Action:** none. Raise `server.shutdown_timeout` if long tasks should be allowed to finish.
+
+## 122. Capability fallback providers are warned as not executed
+
+**Startup:** no notice, a capability that declares `providers.fallback` logs a CAP-011 warning and is still served; fails a capability file, only when a fallback entry does not parse (null included)
+
+A capability YAML could list `providers.fallback`, and the gateway parsed and validated it, but
+calls were only ever sent to `providers.primary`. That is unchanged in 4.0: a fallback is not
+tried when the primary fails. Loading such a capability now says so instead of accepting the
+block silently. A fallback entry that does not parse as a provider used to be dropped without a
+word; it now fails the load of that capability, like a malformed `primary`. An empty list declares
+no provider and loads without a warning.
+
+**Action:** delete the `fallback` block from your capability files, and fix or delete any entry
+that does not parse.
+
+## 123. Unread capability provider keys are warned, and `cap validate` checks structure
+
+**Startup:** no notice, a capability with a provider key the gateway does not read logs a CAP-012 warning per key and is still served
+
+A key under `providers.<name>` that no provider field reads (a misspelled `methd`, say) used to be
+dropped without a word. It now logs CAP-012 naming its path, for example
+`providers.primary.config.methd`. Keys starting with `_` or `x-` are notes and are not reported.
+Capabilities that declare `command`, `args` or `transport` warn too until this gateway version reads
+those keys.
+
+`mcp-gateway cap validate` used to run only the basic check and print "valid". It now runs the same
+structural checks as the loader: it prints each warning, and exits non-zero on a structural error,
+the same file the loader would skip.
+
+**Action:** fix or delete the keys CAP-012 names. A script that runs `cap validate` should expect a
+failure for a file the loader would refuse.
+## 124. The built-in server registry points at servers that exist
+
+**Startup:** no notice
+
+`mcp-gateway add <name>` and the dashboard's registry tab read a built-in list of servers. Of its
+45 npm packages, 30 did not exist on npm and 7 were deprecated, and none was pinned to a version.
+Every entry is now a pinned npm or PyPI release or a vendor-hosted URL, and CI looks each one up.
+Backends already in your `gateway.yaml` are not touched; this changes only what `add` writes.
+
+Repointed to the vendor's own package or hosted endpoint: tavily, brave-search, postgres, redis,
+github, gitlab, linear, sentry, asana, aws, cloudflare-workers, slack, fetch, semgrep, playwright,
+notion, airtable, stripe, pinecone, qdrant. Pinned: exa, perplexity, filesystem, mysql, memory,
+sequential-thinking. `jira` is now `atlassian` (Atlassian's hosted Jira and Confluence server).
+
+Removed, because no maintained server exists at a resolvable package:
+
+| Name | Reason |
+|---|---|
+| everything-search | pointed at the MCP protocol test server, not a search tool |
+| sqlite | reference server archived upstream, no release since 2025-04 |
+| surrealdb, discord, wikipedia, 1password, snowflake | no published MCP server package |
+| gcp, bigquery, gmail, google-calendar, google-drive, google-sheets | packages never existed or are deprecated; Google services are covered by the bundled Google capabilities |
+| puppeteer | deprecated upstream; use `playwright` |
+| pieces | package does not exist |
+| openai | package does not exist; the gateway is not a chat-completion gateway |
+| datadog | the hosted endpoint is labelled unstable and its login flow is undocumented |
+| pagerduty | the vendor's server repository is archived |
+
+**Action:** none for existing configs. To keep using a removed server, add it with an explicit
+command or URL: `mcp-gateway add <name> -- <command>` or `mcp-gateway add --url <url> <name>`.
+
+## 125. A listen stream opens with the acknowledgement notification
+
+**Startup:** no notice
+
+A 4.0 beta answered `subscriptions/listen` with a JSON-RPC response as the first event on the
+stream. The 2026-07-28 specification defines that response as the end of the subscription, so a
+conformant client saw its stream close as it opened. The first event is now a
+`notifications/subscriptions/acknowledged` notification: the subscription id is in
+`params._meta` under `io.modelcontextprotocol/subscriptionId`, and `params.notifications` names
+what the gateway delivers (`toolsListChanged`, and the task ids it accepted under `taskIds`).
+Prompt and resource changes are not delivered, so they are not acknowledged.
+When the gateway itself ends a subscription (for example, its credential stops
+authenticating), the last event is the listen request's own response, a `complete` result,
+which the specification defines as a graceful end. A reader that falls too far behind has lost
+updates, so its stream just closes, with no response.
+
+**Action:** a client written against the beta that read the subscription id from the response
+`result` reads it from the notification instead.
+
+## 126. `add` writes the whole server, and leaves it off when it cannot start
+
+**Startup:** no notice
+
+`mcp-gateway add <name>` for a built-in server used to write only its command or URL. The gateway
+starts a stdio server with a cleared environment, so a server that needed `TAVILY_API_KEY` started
+without it, while `add` printed the key as set. Now `add` writes:
+
+- for a stdio server, `env: { NAME: "${NAME}" }` for each variable it needs (or the value you gave
+  with `-e NAME=...`);
+- for a hosted server that logs in with OAuth, `oauth: {}`, so the first use opens the login in a
+  browser; for one that takes a token in a header, the header with a `${VAR}` reference (or the
+  value from `-e`);
+- `streamable_http` as the endpoint speaks it.
+
+`add` writes the server **disabled**, and prints why, when a `${VAR}` it wrote does not resolve
+(unset or empty in the environment and every `env_files` entry), because an enabled backend with an
+unresolved reference stops the gateway from loading its config. Playwright and fetch are always
+added disabled: they can open any address, and the private-network guard covers REST capabilities
+only. Turning a backend on from the dashboard is refused, naming the variable, while one of its
+references does not resolve.
+
+`mcp-gateway init` (local profile) now writes the servers that need no account enabled: memory,
+sequential-thinking and context7. A server whose launcher (`npx`, `uvx`) is not on PATH is skipped
+with a message. `mcp-gateway list --available` lists the whole library.
+
+**Action:** none for existing configs. After `add`, set any variable it names, then set
+`enabled: true` on the server.
 
 ## Upgrading from 3.5.x: a walkthrough
 

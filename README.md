@@ -160,14 +160,30 @@ Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex, and running
 
 #### Option B: add servers from the built-in registry
 
-48 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
+28 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
 
 ```bash
-mcp-gateway add tavily                                       # known server, fills env vars
+mcp-gateway list --available                                 # browse the library: login, on/off
+mcp-gateway add tavily                                       # known server, writes ${TAVILY_API_KEY}
+mcp-gateway add notion                                       # hosted server, logs in with OAuth
 mcp-gateway add my-server -- npx -y @some/mcp-server --flag  # arbitrary stdio command
-mcp-gateway add --url https://mcp.sentry.dev/mcp sentry      # HTTP server
+mcp-gateway add --url https://mcp.example.com/mcp my-server  # HTTP server
 mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
 ```
+
+The registry is a library. `mcp-gateway init` turns on the servers that need no account (memory,
+sequential-thinking, context7); every other server is off until you `add` it:
+
+- A server that needs a key gets `${VAR}` references in `gateway.yaml`. If a variable is not set (in
+  the environment or an `env_files` entry), `add` writes the server disabled and names the variable;
+  set it, then set `enabled: true`.
+- A vendor-hosted server that logs in with OAuth (Notion, Atlassian, Linear, Sentry, ...) opens the
+  login in your browser the first time it is used. A server that takes a token in a header (GitHub,
+  Stripe) gets the header with a `${VAR}` reference.
+- Playwright and fetch are added **disabled**. They can open any address they are given, so a prompt
+  injection in a page or a tool result can steer them to your local network or a cloud metadata
+  address, and the gateway's private-network guard covers REST capabilities only, not these
+  servers. Set `enabled: true` on one if you accept that.
 
 `mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one.
 
@@ -187,7 +203,7 @@ backends:
     # `command` is parsed with host-platform rules: POSIX shlex on unix,
     # CommandLineToArgvW on Windows (so `C:\Windows\py.exe …` keeps its
     # backslashes; quote paths that contain spaces).
-    command: "npx -y @anthropic/mcp-server-tavily"
+    command: "npx -y tavily-mcp@0.2.22"
     description: "Web search"
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
@@ -415,7 +431,7 @@ Any MCP-compliant server works. All three transport types are supported:
 
 | Transport | Examples |
 |-----------|---------|
-| **stdio** | `@anthropic/mcp-server-tavily`, `@modelcontextprotocol/server-filesystem`, `@modelcontextprotocol/server-github` |
+| **stdio** | `tavily-mcp@0.2.22`, `@modelcontextprotocol/server-filesystem`, `@playwright/mcp` |
 | **HTTP** | Any Streamable HTTP server |
 | **SSE** | Pieces, LangChain, [GitMCP](https://gitmcp.io) (free remote docs and code search for any GitHub repo) |
 
@@ -543,7 +559,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 ## Troubleshooting
 
-**Backend will not connect?** Test the command directly (`npx -y @anthropic/mcp-server-tavily`), then check gateway logs with `--log-level debug`.
+**Backend will not connect?** Test the command directly (`npx -y tavily-mcp@0.2.22`), then check gateway logs with `--log-level debug`.
 
 **Circuit breaker open?** Ask your MCP client for `gateway_list_servers`: it
 reports `circuit_breaker` per backend and works on the shipped config. The HTTP

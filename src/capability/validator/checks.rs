@@ -141,6 +141,8 @@ pub(super) fn check_schema_output(output: &serde_json::Value, issues: &mut Vec<I
 /// CAP-006: All `{param}` placeholders in URL/path must exist in `schema.input.properties`.
 /// CAP-007: `static_params` keys must not overlap with `params` keys.
 /// CAP-008: `base_url` must be a valid URL; `path` must start with `'/'`.
+/// CAP-011: a declared `providers.fallback` is never executed.
+/// CAP-012: a key under a provider that nothing reads.
 pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue>) {
     if cap.providers.is_empty() && cap.webhooks.is_empty() {
         issues.push(
@@ -161,6 +163,32 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
             &schema_props,
             &cap.schema.input,
             issues,
+        );
+    }
+
+    // CAP-011: the executor serves from `providers.primary` only, so a declared
+    // fallback is never tried. Warn rather than refuse: the primary still works.
+    if !cap.providers.fallback.is_empty() {
+        issues.push(
+            Issue::warning(
+                "CAP-011",
+                "providers.fallback is not executed; only providers.primary serves calls. \
+                 Remove the block.",
+            )
+            .with_field("providers.fallback"),
+        );
+    }
+
+    // CAP-012: a key under a provider that no field reads. Serde drops it, so a
+    // misspelling would load silently. Executor-aware by construction: a key
+    // becomes read, and stops warning, when a provider field for it exists.
+    for key in &cap.providers.unread_keys {
+        issues.push(
+            Issue::warning(
+                "CAP-012",
+                format!("{key} is not read by this gateway version and is ignored"),
+            )
+            .with_field("providers"),
         );
     }
 

@@ -290,7 +290,7 @@ backends:
   #   # `command` is parsed with host-platform rules (POSIX shlex on unix;
   #   # CommandLineToArgvW on Windows). Backslash paths are fine on Windows;
   #   # quote any path that contains spaces.
-  #   command: "npx -y @anthropic/mcp-server-tavily"
+  #   command: "npx -y tavily-mcp@0.2.22"
   #   description: "Web search via Tavily"
   #   enabled: true
   #   timeout: 30s
