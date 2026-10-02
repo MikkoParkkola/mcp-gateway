@@ -525,15 +525,31 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         .await;
     assert!(response.error.is_none(), "{response:?}");
     assert!(
+        response
+            .result
+            .as_ref()
+            .is_some_and(|r| r.to_string().contains("answered")),
+        "the retry reached the backend and completed: {response:?}"
+    );
+    assert!(
         !response.discovery_inspected,
         "a retry routed to its origin backend is never marked inspected"
     );
+    assert_eq!(
+        firewall.response_inspection_counts().inspections,
+        before,
+        "dispatch itself inspects nothing; the delivery pass does"
+    );
+    let targets = [crate::security::response_policy::ResponsePolicyTarget {
+        server: "asks".to_owned(),
+        tool: "gateway_list_tools".to_owned(),
+    }];
     let delivered = m
         .finalize_response_for_delivery(
             response,
             &ResponseDeliveryContext {
                 method: "tools/call",
-                targets: &[],
+                targets: &targets,
                 correlation: ResponseCorrelation {
                     session_id: "session-1",
                     caller: "known-caller",
