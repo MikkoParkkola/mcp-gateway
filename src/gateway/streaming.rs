@@ -411,7 +411,10 @@ impl NotificationMultiplexer {
         session
     }
 
-    /// Create or resume a session for `owner`, holding the credential it presented.
+    /// Create or resume a session for `owner`, holding the credential it
+    /// presented, and subscribe to it (tests; the GET handler binds the
+    /// stream's caller before it subscribes).
+    #[cfg(test)]
     pub(crate) fn get_or_create_session_scoped(
         &self,
         session_id: Option<&str>,
@@ -726,21 +729,30 @@ pub(crate) fn subscription_stream(
     mut listener: crate::gateway::subscription_registry::Listener,
     filter: crate::protocol::subscriptions::ListenRequest,
     subscription: crate::protocol::subscriptions::SubscriptionId,
-    acknowledgement: &crate::protocol::JsonRpcResponse,
+    acknowledgement: OutboundFrame,
     keep_alive_interval: Duration,
     judge: StreamJudge,
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;
 
-    let ack = serde_json::to_string(acknowledgement).unwrap_or_default();
+    // MIN.2: the acknowledgement is judged as the listen request's answer
+    // (its params can name a tenant); a refused one ends the stream.
+    let opened = acknowledgement
+        .response()
+        .is_some_and(|ack| ack.error.is_none());
 
     let stream = stream! {
         // The acknowledgement rides the stream it opens, so a client has one
         // thing to read rather than a body and then a stream.
         // Annotated because this function erases the stream into a
         // `Response`, so nothing else pins the error type.
-        yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
+        if let Some(ack) = sse_data(&judge.record(acknowledgement).await) {
+            yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
+        }
 
+        if !opened {
+            return;
+        }
         loop {
             match listener.recv().await {
                 Ok(published) => {
@@ -923,6 +935,7 @@ where
         biased;
         Some(notification) = rx.recv() => notification,
         response = &mut dispatch => {
+            let response = judge.emit(response).await;
             // Nothing was published; the sender is gone, so try_recv only
             // confirms that. Hand the finished response to the buffered arm.
             let mut drained = Vec::new();
@@ -954,7 +967,7 @@ where
                             yield Ok(event);
                         }
                     }
-                    yield Ok(terminal_frame(response).await);
+                    yield Ok(terminal_frame(judge.emit(response).await).await);
                     break;
                 }
             }

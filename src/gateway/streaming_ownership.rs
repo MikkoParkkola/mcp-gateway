@@ -5,9 +5,12 @@
 
 use std::sync::Arc;
 
+#[cfg(test)]
 use tokio::sync::broadcast;
 
-use super::{ClientSession, NotificationMultiplexer, SessionFrame};
+#[cfg(test)]
+use super::SessionFrame;
+use super::{ClientSession, NotificationMultiplexer};
 use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::SessionOwner;
 
@@ -26,6 +29,7 @@ impl NotificationMultiplexer {
     /// Resume `owner`'s live session named `session_id`, holding the
     /// credential it presented; `None` when there is no such session. Never
     /// opens one: under `hardened` only a declaring `initialize` may.
+    #[cfg(test)]
     pub(crate) fn resume_session_scoped(
         &self,
         session_id: Option<&str>,

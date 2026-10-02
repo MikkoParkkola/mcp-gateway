@@ -703,47 +703,6 @@ fn bench_continuation(c: &mut Criterion) {
     group.finish();
 }
 
-// ── Outbound judge (MIK-7116.MIN.2 cost gate) ───────────────────────────────
-//
-// `judge_frame/off/*` prices the default-config sink: the typed payload
-// serialized to the bytes a client reads. MIN.2 must add nothing here (a
-// move of the payload, no walk, no lock). Until the judge lands this
-// measures today's path, which is the baseline the gate compares against.
-
-/// A `tools/call` result whose text block is about `bytes` long, carrying
-/// JSON that names one tenant.
-fn tenant_result(bytes: usize) -> Value {
-    let rows: Vec<Value> = (0..bytes / 64)
-        .map(|i| json!({"customer_id": "cust-a", "row": i, "note": "benchmark row"}))
-        .collect();
-    let text = json!({ "rows": rows }).to_string();
-    json!({ "content": [{ "type": "text", "text": text }], "isError": false })
-}
-
-fn bench_judge_frame(c: &mut Criterion) {
-    use mcp_gateway::protocol::{JsonRpcNotification, JsonRpcResponse, RequestId};
-
-    let small = JsonRpcResponse::success(RequestId::Number(1), tenant_result(2 * 1024));
-    let large = JsonRpcResponse::success(RequestId::Number(1), tenant_result(64 * 1024));
-    let note = JsonRpcNotification {
-        jsonrpc: "2.0".to_string(),
-        method: "notifications/resources/updated".to_string(),
-        params: Some(json!({ "uri": "rows://latest", "customer_id": "cust-b" })),
-    };
-
-    let mut group = c.benchmark_group("judge_frame");
-    group.bench_function("off/result_2kb", |b| {
-        b.iter(|| serde_json::to_vec(std::hint::black_box(&small)).unwrap());
-    });
-    group.bench_function("off/result_64kb_json_in_text", |b| {
-        b.iter(|| serde_json::to_vec(std::hint::black_box(&large)).unwrap());
-    });
-    group.bench_function("off/notification", |b| {
-        b.iter(|| serde_json::to_vec(std::hint::black_box(&note)).unwrap());
-    });
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_tool_registry,
@@ -756,6 +715,5 @@ criterion_group!(
     bench_semantic_search,
     bench_modern_request_path,
     bench_continuation,
-    bench_judge_frame,
 );
 criterion_main!(benches);

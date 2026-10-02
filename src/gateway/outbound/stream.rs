@@ -50,6 +50,15 @@ impl StreamJudge {
         super::recorded(frame, self.log.as_ref()).await
     }
 
+    /// Write the stream's final answer's pending read record (after every
+    /// late replacer), or replace the answer when it fails closed.
+    pub(crate) async fn emit(
+        &self,
+        response: axum::response::Response,
+    ) -> axum::response::Response {
+        super::emit_http(response, self.log.as_ref()).await
+    }
+
     /// Whether this stream judges at all; the default config does not.
     pub(crate) fn judges(&self) -> bool {
         judges(self.guard.as_deref())

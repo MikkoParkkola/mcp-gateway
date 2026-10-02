@@ -29,13 +29,58 @@ impl OutboundFrame {
     }
 }
 
+/// The `tenant_read` record an answer still owes: written by [`emit_http`]
+/// once every late replacer ran, so it describes the frame actually sent
+/// (design §4.6).
+#[derive(Debug, Clone)]
+struct PendingRecord(serde_json::Map<String, serde_json::Value>);
+
+/// Write `response`'s pending `tenant_read` record, after the late replacers
+/// (`slot_http`). Under `FailClosed` a failed write replaces the answer with
+/// the audit-unavailable refusal; its body is dropped unread, so its
+/// reservation commits nothing.
+pub(crate) async fn emit_http(
+    mut response: axum::response::Response,
+    log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+) -> axum::response::Response {
+    let Some(PendingRecord(fields)) = response.extensions_mut().remove::<PendingRecord>() else {
+        return response;
+    };
+    if super::audit::record_fields(fields, log).await {
+        return response;
+    }
+    let id = response
+        .extensions()
+        .get::<HeldAnswerId>()
+        .and_then(|held| held.0.clone());
+    let refusal = id.map_or_else(
+        || {
+            let error = crate::Error::AuditUnavailable;
+            JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string())
+        },
+        |id| {
+            crate::gateway::meta_mcp::error_response_preserving_status(
+                id,
+                &crate::Error::AuditUnavailable,
+            )
+        },
+    );
+    (StatusCode::SERVICE_UNAVAILABLE, axum::Json(refusal)).into_response()
+}
+
 /// Write an answer frame as the HTTP response, with the session header when
-/// `session_id` is not empty.
+/// `session_id` is not empty. Its `tenant_read` record is left pending for
+/// [`emit_http`].
 pub(crate) fn to_http(
     frame: OutboundFrame,
     status: StatusCode,
     session_id: &str,
 ) -> axum::response::Response {
+    let pending = frame
+        .assessment()
+        .map(|a| a.record_fields(frame.key.as_deref()))
+        .filter(|fields| !fields.is_empty());
+    let held_id = pending.as_ref().map(|_| frame.answer_id());
     let mut response = match frame.ticket {
         None => match frame.payload {
             Payload::Response(answer) => axum::Json(answer).into_response(),
@@ -47,6 +92,12 @@ pub(crate) fn to_http(
     };
     *response.status_mut() = status;
     crate::gateway::router::helpers::attach_session_header(response.headers_mut(), session_id);
+    if let Some(fields) = pending {
+        response.extensions_mut().insert(PendingRecord(fields));
+        if let Some(id) = held_id {
+            response.extensions_mut().insert(HeldAnswerId(id));
+        }
+    }
     response
 }
 

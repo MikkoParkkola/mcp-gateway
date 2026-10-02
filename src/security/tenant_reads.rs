@@ -130,19 +130,24 @@ impl Principal {
             && self.overflow_until.is_none()
     }
 
+    /// Distinct tenant hashes held, committed and pending counted once.
+    fn distinct(&self) -> usize {
+        let pending_only = self
+            .pending
+            .keys()
+            .filter(|h| !self.committed.contains_key(*h))
+            .count();
+        self.committed.len() + pending_only
+    }
+
     fn holds(&self, hash: &str) -> bool {
         self.committed.contains_key(hash) || self.pending.contains_key(hash)
     }
 
     /// Distinct tenants live now: committed, pending, and overflow as one.
     fn live(&self) -> usize {
-        let pending_only = self
-            .pending
-            .keys()
-            .filter(|h| !self.committed.contains_key(*h))
-            .count();
         let overflow = self.pending_overflow > 0 || self.overflow_until.is_some();
-        self.committed.len() + pending_only + usize::from(overflow)
+        self.distinct() + usize::from(overflow)
     }
 }
 
@@ -207,7 +212,7 @@ impl ReadHistory {
         let mut reserved = Vec::with_capacity(hashes.len());
         let mut overflow = 0;
         for hash in hashes {
-            let distinct = principal.committed.len() + principal.pending.len();
+            let distinct = principal.distinct();
             if let Some(count) = principal.pending.get_mut(&hash) {
                 *count += 1;
             } else if principal.committed.contains_key(&hash)

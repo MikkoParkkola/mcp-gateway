@@ -152,3 +152,25 @@ fn expiry_from_the_last_write() {
     let b = history.reserve(KEY, &tenant("b"), window, false).unwrap();
     assert!(!b.over, "A expired");
 }
+
+/// Row 17 (review): the bound counts a tenant held both committed and
+/// pending once, so 200 such tenants leave room under 256.
+#[test]
+fn a_tenant_committed_and_pending_counts_once() {
+    let history = ReadHistory::shared();
+    let mut held = Vec::new();
+    for n in 0..200 {
+        let t = reserve(&history, &tenant(&format!("t{n}"))).ticket.unwrap();
+        t.emitted();
+        held.push(t);
+        held.push(reserve(&history, &tenant(&format!("t{n}"))).ticket.unwrap());
+    }
+    let next = reserve(&history, &tenant("t200")).ticket.unwrap();
+    next.emitted();
+    drop(held);
+    let (committed, _) = history.tenants_held(KEY);
+    assert_eq!(
+        committed, 201,
+        "the 201st tenant was pushed to overflow by a double count"
+    );
+}

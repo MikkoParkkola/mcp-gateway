@@ -156,8 +156,8 @@ pub(super) async fn audited_call(
         reads.params.as_ref(),
         hidden.as_ref(),
     );
-    let frame = crate::gateway::outbound::recorded(frame, state.transparency_log.as_ref()).await;
-    crate::gateway::outbound::to_http(frame, status, "")
+    let response = crate::gateway::outbound::to_http(frame, status, "");
+    crate::gateway::outbound::emit_http(response, state.transparency_log.as_ref()).await
 }
 
 /// Write the record for `call` and hand `answer` on, or withhold it when the

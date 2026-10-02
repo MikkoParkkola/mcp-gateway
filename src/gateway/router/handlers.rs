@@ -266,20 +266,23 @@ pub(super) async fn mcp_sse_handler(
         .map(String::from);
 
     let held = crate::gateway::auth::live::held_credential(&headers);
-    let (session_id, _rx) = if super::hardened_elicitation::is_hardened(&state) {
+    let session_id = if super::hardened_elicitation::is_hardened(&state) {
         // Hardened (row 10): a stream only resumes a session a declaring
         // `initialize` opened; it never opens one.
-        match state
-            .multiplexer
-            .resume_session_scoped(existing_session_id.as_deref(), &owner, held)
-        {
+        match state.multiplexer.resume_session_id_scoped(
+            existing_session_id.as_deref(),
+            &owner,
+            held,
+        ) {
             Some(resumed) => resumed,
             None => return super::hardened_elicitation::refusal().into_response(),
         }
     } else {
-        state
-            .multiplexer
-            .get_or_create_session_scoped(existing_session_id.as_deref(), &owner, held)
+        state.multiplexer.get_or_create_session_id_scoped(
+            existing_session_id.as_deref(),
+            &owner,
+            held,
+        )
     };
 
     if let Some(key) = read_key {
@@ -506,7 +509,8 @@ pub(super) async fn meta_mcp_handler(
         // backend's notifications count against that depth.
         let (response, _notifications) =
             crate::transport::notification_sink::collect(dispatch).await;
-        response
+        // The answer's read record, written after every late replacer.
+        crate::gateway::outbound::emit_http(response, logger.as_ref()).await
     }
 }
 
@@ -1139,15 +1143,15 @@ async fn meta_mcp_dispatch(
                 "subscriptions/listen opened"
             );
 
-            // MIN.2 (H8): every event is judged for this caller as it is written.
-            let judge = state
-                .meta_mcp
-                .stream_judge(read_guard.clone(), read_key.clone());
+            let (judge, ack) =
+                state
+                    .meta_mcp
+                    .listen_judge(read_guard, read_key, acknowledgement, params.as_ref());
             return crate::gateway::streaming::subscription_stream(
                 listener,
                 request,
                 subscription,
-                &acknowledgement,
+                ack,
                 state.streaming_config.keep_alive_interval,
                 judge,
             );
@@ -1918,7 +1922,6 @@ async fn meta_mcp_dispatch(
         request.get("params"),
         hidden.as_ref(),
     );
-    let frame = crate::gateway::outbound::recorded(frame, state.meta_mcp.transparency_log()).await;
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");

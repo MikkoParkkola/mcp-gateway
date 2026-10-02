@@ -50,10 +50,21 @@ impl Assessment {
 /// `false` only when the write failed under `FailClosed`: the frame must
 /// not be written then.
 pub(super) async fn record(frame: &OutboundFrame, log: Option<&Arc<TransparencyLogger>>) -> bool {
-    let (Some(log), Some(assessment)) = (log, frame.assessment()) else {
+    let Some(assessment) = frame.assessment() else {
         return true;
     };
-    let fields = assessment.record_fields(frame.key.as_deref());
+    record_fields(assessment.record_fields(frame.key.as_deref()), log).await
+}
+
+/// Write one `tenant_read` event of `fields`; `false` only when it failed
+/// under `FailClosed`. Nothing to write is success.
+pub(super) async fn record_fields(
+    fields: Map<String, Value>,
+    log: Option<&Arc<TransparencyLogger>>,
+) -> bool {
+    let Some(log) = log else {
+        return true;
+    };
     if fields.is_empty() {
         return true;
     }

@@ -232,10 +232,16 @@ async fn webhook_and_event_scan_root() {
 /// A modern `subscriptions/listen` stream under the fixture key, past its
 /// acknowledgement.
 async fn open_listen(router: &axum::Router) -> Stream {
+    open_listen_naming(router, None).await
+}
+
+/// [`open_listen`] whose request params also name `tenant`.
+async fn open_listen_naming(router: &axum::Router, tenant: Option<&str>) -> Stream {
     let body = json!({
         "jsonrpc": "2.0", "id": 9, "method": "subscriptions/listen",
         "params": {
             "notifications": { "toolsListChanged": true },
+            "customer_id": tenant,
             "_meta": {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientCapabilities": {},
@@ -295,6 +301,34 @@ async fn listen_keyed_on_caller_key() {
             assert!(
                 !mentions(&got, B),
                 "a listen event naming B reached an A reader: {got:?}"
+            );
+        }
+    }
+}
+
+/// Review (H8): a listen request whose own params name A reads A, so a B
+/// event on that stream is withheld in block mode, with no other read.
+#[tokio::test]
+async fn listen_request_params_are_a_read() {
+    for mode in [CrossTenantReads::Off, CrossTenantReads::Block] {
+        let (state, _store) = split_state(mode, 3600).await;
+        let router = create_router(Arc::clone(&state));
+        let mut listen = open_listen_naming(&router, Some(A)).await;
+        state.subscriptions.publish(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": { "customer_id": B },
+        }));
+        let got = listen.drain(QUIET).await;
+        if mode == CrossTenantReads::Off {
+            assert!(
+                mentions(&got, B),
+                "control: off delivers the event: {got:?}"
+            );
+        } else {
+            assert!(
+                !mentions(&got, B),
+                "a B event reached a listener whose request named A: {got:?}"
             );
         }
     }
