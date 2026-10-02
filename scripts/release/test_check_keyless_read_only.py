@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Tests for check_keyless_read_only.py (MIK-7752 AC3): a read-only tool the
+installed config would refuse without an idempotency key must fail the check,
+and so must a catalog that did not enumerate every enabled backend."""
+
+import contextlib
+import importlib.util
+import io
+import json
+import pathlib
+import tempfile
+import unittest
+from unittest import mock
+
+spec = importlib.util.spec_from_file_location(
+    "check_keyless_read_only", pathlib.Path(__file__).with_name("check_keyless_read_only.py")
+)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+READ = {"name": "search", "annotations": {"readOnlyHint": True}}
+WRITE = {"name": "write", "annotations": {"readOnlyHint": False}}
+CATALOG = {"vault": [READ, WRITE]}
+
+
+def config(mode=None, listed=(), backends=("vault",), disabled=()):
+    cfg = {"backends": {b: {"command": "x"} for b in backends}}
+    for b in disabled:
+        cfg["backends"][b] = {"command": "x", "enabled": False}
+    if mode:
+        cfg["server"] = {"idempotency_key": mode}
+    if listed:
+        cfg["idempotency"] = {"read_only_tools": [{"server": s, "tool": t} for s, t in listed]}
+    return cfg
+
+
+def found(cfg, catalog=CATALOG, mode="declared"):
+    return mod.problems(cfg, catalog, mode)[0]
+
+
+# The env layer is an input under test: no ambient value may reach a case.
+@mock.patch.dict("os.environ", {}, clear=True)
+class KeylessReadOnly(unittest.TestCase):
+    def test_optional_mode_admits_every_tool(self):  # T1: today's installed config
+        self.assertEqual(found(config()), [])
+        self.assertEqual(found(config("optional")), [])
+
+    def test_required_refuses_an_unlisted_read_only_tool(self):  # T2: the MIK-7752 defect
+        self.assertEqual(found(config("required")),
+                         ["vault:search: read-only tool refused without a key (required)"])
+
+    def test_required_admits_a_listed_read_only_tool(self):  # T3
+        self.assertEqual(found(config("required", listed=[("vault", "search")])), [])
+
+    def test_listing_is_exact_server_and_tool(self):  # T4: no cross-server match
+        self.assertEqual(len(found(config("required", listed=[("other", "search")]))), 1)
+
+    def test_forced_required_grades_an_optional_config(self):  # T5: the required-mode case
+        self.assertEqual(len(found(config(), mode="required")), 1)
+        self.assertEqual(found(config(listed=[("vault", "search")]), mode="required"), [])
+
+    def test_a_write_tool_refused_keyless_is_not_a_finding(self):  # T6: MIK-7216 stays
+        self.assertEqual(found(config("required", listed=[("vault", "search")]),
+                               {"vault": [READ, WRITE, {"name": "bare"}]}), [])
+
+    def test_an_enabled_backend_missing_from_the_catalog_fails(self):  # T7
+        self.assertEqual(found(config(backends=("vault", "linear"))),
+                         ["linear: enabled backend not enumerated (listing failed or absent)"])
+        # Listed with no tools (a prompt-only backend) is enumerated.
+        self.assertEqual(found(config(backends=("vault", "linear")),
+                               {"vault": [READ], "linear": []}), [])
+
+    def test_a_disabled_backend_need_not_be_enumerated(self):  # T8
+        self.assertEqual(found(config(disabled=("surreal",))), [])
+
+    def test_an_empty_catalog_fails(self):  # T9: cannot pass by enumerating nothing
+        self.assertIn("catalog has no tools: nothing was enumerated", found(config(backends=()), {}))
+
+    def test_an_env_override_sets_the_declared_mode(self):  # T11
+        with tempfile.TemporaryDirectory() as tmp:
+            env = pathlib.Path(tmp) / "secrets.env"
+            env.write_text("OTHER=1\nexport MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY='required'\n")
+            override = mod.env_override({"env_files": [str(env)]}, [])
+            self.assertEqual(override, "required")
+            self.assertEqual(len(mod.problems(config("optional"), CATALOG, "declared", override)[0]), 1)
+            self.assertEqual(mod.env_override({}, [env]), "required")
+        self.assertIsNone(mod.env_override({"env_files": ["/nonexistent"]}, []))
+
+    def test_cli_exit_codes(self):  # T10
+        with tempfile.TemporaryDirectory() as tmp:
+            d = pathlib.Path(tmp)
+            (d / "cat.json").write_text(json.dumps(CATALOG))
+            for mode, cfg, want in (("declared", "server: {idempotency_key: optional}\nbackends: {vault: {}}\n", 0),
+                                    ("required", "backends: {vault: {}}\n", 1),
+                                    ("declared", "server: {idempotency_key: sometimes}\n", 2)):
+                (d / "c.yaml").write_text(cfg)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    rc = mod.main(["check", "--config", str(d / "c.yaml"),
+                                   "--catalog", str(d / "cat.json"), "--mode", mode])
+                self.assertEqual(rc, want, (mode, cfg))
+
+
+if __name__ == "__main__":
+    unittest.main()
