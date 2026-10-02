@@ -1,0 +1,12 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index bb7640c6c..8ecf5b10f 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -472,7 +472,6 @@ impl Store {
+             // a failed unlink from being sent again: that copy goes first,
+             // unless the outbox holds a later occurrence under the same id.
+             if !state.outbox.contains_key(&id) {
+-                remove_record_durable(&self.outbox_dir, &OutboxRecord::file(&id))?;
+             }
+             remove_record(&self.dead_dir, &OutboxRecord::file(&id))?;
+             if let Some((dead, _)) = state.dead.remove(&id) {

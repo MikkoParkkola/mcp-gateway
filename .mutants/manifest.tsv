@@ -1,0 +1,7 @@
+head_sha	e965a08edc7df042778cbdd614bff65eec998b84
+# batch 2 for #2651 (rows changed after batch 1)
+B1	linux	b1.patch	--lib -- evicting_a_dead_letter_takes_a_leftover_outbox_copy_first
+B2	linux	b2.patch	--lib -- a_later_occurrence_under_a_dead_id_is_kept
+B3	linux	b3.patch	--lib -- a_later_occurrence_under_a_dead_id_is_kept
+B4	linux	b4.patch	--lib -- a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id
+B5	linux	b5.patch	--lib -- a_failed_settlement_leaves_the_record_pending

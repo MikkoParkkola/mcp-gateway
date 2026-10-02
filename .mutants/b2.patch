@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index bb7640c6c..f6ee10829 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -77,7 +77,7 @@ pub(super) fn load(
+         let settled = state
+             .dead
+             .get(&record.event_id)
+-            .is_some_and(|(dead, _)| dead.record.created_at == record.created_at);
++            .is_some();
+         if settled {
+             remove_record(outbox_dir, &OutboxRecord::file(&record.event_id))?;
+             continue;

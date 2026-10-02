@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index bb7640c6c..976892d6e 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -247,7 +247,7 @@ impl Store {
+             let buried = state
+                 .dead
+                 .get(event_id)
+-                .is_some_and(|(dead, _)| Some(dead.record.created_at) == created_at);
++                .is_some();
+             if buried {
+                 // The dead letter is in place, if unsynced: never resend.
+                 state.outbox.remove(event_id);
