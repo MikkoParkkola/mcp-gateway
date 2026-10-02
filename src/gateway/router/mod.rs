@@ -109,6 +109,8 @@ mod identity_parity_tests;
 #[cfg(test)]
 mod log_level_admin_tests;
 #[cfg(test)]
+mod meta_dispatch_edge_tests;
+#[cfg(test)]
 mod probe_tests;
 #[cfg(test)]
 mod r2_identity_keys_tests;

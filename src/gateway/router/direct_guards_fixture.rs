@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::create_router;
-use super::tests::test_router_app_state_with_auth;
+use super::tests::{test_router_app_state_with_auth, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
@@ -68,7 +68,10 @@ impl Transport for CountingBackend {
         if method == "tools/list" {
             return Ok(JsonRpcResponse::success(
                 id,
-                json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}),
+                json!({"tools": [{"name": "read", "inputSchema": {
+                    "type": "object",
+                    "properties": {"cmd": {"type": "string"}}
+                }}]}),
             ));
         }
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
@@ -142,6 +145,13 @@ pub(crate) struct Fx {
 }
 
 fn key(name: &str) -> ApiKeyConfig {
+    // `hardened` refuses a request with no per-caller identity, so its keys
+    // are personal ones.
+    let kind = if HARDENED.with(std::cell::Cell::get) {
+        crate::config::ApiKeyKind::Personal
+    } else {
+        crate::config::ApiKeyKind::Shared
+    };
     ApiKeyConfig {
         key: None,
         key_sha256: Some(crate::config::api_key_digest_spec(name.as_bytes())),
@@ -152,7 +162,7 @@ fn key(name: &str) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
-        kind: crate::config::ApiKeyKind::Shared,
+        kind,
     }
 }
 
@@ -197,21 +207,58 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
+const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
+
+/// The fixture under `security.posture: hardened` (personal keys) with message
+/// signing armed, so the direct route signs every `tools/call` it serves.
+pub(crate) async fn fixture_hardened_signed(answer: Answer, require_nonce: bool) -> Fx {
+    HARDENED.with(|h| h.set(true));
+    let fx = fixture_inner(answer, false, |mut meta| {
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                SIGNING_KEY.as_bytes().to_vec(),
+                None,
+                "hardened".into(),
+            ),
+            Duration::from_secs(300),
+            require_nonce,
+        );
+        meta
+    })
+    .await;
+    HARDENED.with(|h| h.set(false));
+    fx
+}
+
+/// [`fixture_firewalled`] with sequence-anomaly blocking armed: `read` was only
+/// ever followed by `other`, so a second `read` in one session scores as a
+/// never-seen transition and is blocked.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
+    ANOMALY.with(|a| a.set(true));
+    let fx = fixture_inner(answer, true, |meta| meta).await;
+    ANOMALY.with(|a| a.set(false));
+    fx
+}
+
 // Per-thread knobs `fixture_firewalled_with` sets around one `fixture_inner`
 // call, so the plain fixtures keep their signatures.
+thread_local! {
+    static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 #[cfg(feature = "firewall")]
 thread_local! {
     static FIREWALL_RULE: std::cell::Cell<Option<crate::security::firewall::FirewallAction>> =
         const { std::cell::Cell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-async fn fixture_inner(
-    answer: Answer,
-    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    let auth = AuthConfig {
+/// The auth the fixture serves: four keys, plus a client breaker when asked.
+fn fixture_auth() -> AuthConfig {
+    #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
+    let mut auth = AuthConfig {
         enabled: true,
         api_keys: vec![
             key("k-std"),
@@ -228,19 +275,29 @@ async fn fixture_inner(
         ..Default::default()
     };
     #[cfg(feature = "firewall")]
-    let auth = if CLIENT_BREAKER.with(std::cell::Cell::get) {
-        AuthConfig {
-            client_circuit_breaker: Some(crate::config::CircuitBreakerConfig {
-                enabled: true,
-                failure_threshold: 1,
-                ..crate::config::CircuitBreakerConfig::default()
-            }),
-            ..auth
-        }
+    if CLIENT_BREAKER.with(std::cell::Cell::get) {
+        auth.client_circuit_breaker = Some(crate::config::CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 1,
+            ..crate::config::CircuitBreakerConfig::default()
+        });
+    }
+    auth
+}
+
+async fn fixture_inner(
+    answer: Answer,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    let auth = fixture_auth();
+    let (mut state, store) = if HARDENED.with(std::cell::Cell::get) {
+        let mut config = crate::config::Config::default();
+        config.security.posture = crate::security::SecurityPosture::Hardened;
+        test_router_app_state_with_auth_and_config(&auth, config).await
     } else {
-        auth
+        test_router_app_state_with_auth(&auth).await
     };
-    let (mut state, store) = test_router_app_state_with_auth(&auth).await;
     let calls = Arc::new(AtomicUsize::new(0));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
@@ -278,16 +335,32 @@ async fn fixture_inner(
                     scan: Vec::new(),
                 }]
             });
+        let anomaly = ANOMALY.with(std::cell::Cell::get);
+        let tracker = anomaly.then(|| {
+            let tracker = Arc::new(crate::transition::TransitionTracker::new());
+            for _ in 0..10 {
+                tracker.record_transition("train", "alpha:read");
+                tracker.record_transition("train", "alpha:other");
+            }
+            tracker
+        });
         let config = FirewallConfig {
             enabled: true,
             scan_requests: true,
             scan_responses: true,
             credential_redaction: true,
             rules,
+            anomaly_detection: anomaly,
+            anomaly_threshold: 0.7,
+            anomaly_block_threshold: anomaly.then_some(0.9),
+            anomaly_min_observations: 1,
             ..FirewallConfig::default()
         };
-        state_mut.firewall = Some(Arc::new(Firewall::from_config(config.clone(), None)));
-        meta.set_firewall(Some(Arc::new(Firewall::from_config(config, None))));
+        state_mut.firewall = Some(Arc::new(Firewall::from_config(
+            config.clone(),
+            tracker.clone(),
+        )));
+        meta.set_firewall(Some(Arc::new(Firewall::from_config(config, tracker))));
     }
     state_mut.meta_mcp = Arc::new(build(meta));
     let router = create_router(Arc::clone(&state));
@@ -395,7 +468,7 @@ pub(crate) async fn post_meta_invoke_nonce(
     send(fx, "/mcp", key, "tools/call", params, None).await
 }
 
-async fn send(
+pub(crate) async fn send(
     fx: &Fx,
     uri: &str,
     key: &str,
@@ -403,11 +476,27 @@ async fn send(
     params: Value,
     session: Option<&str>,
 ) -> (StatusCode, Value) {
+    send_with_headers(fx, uri, key, method, params, session, &[]).await
+}
+
+/// [`send`] plus extra request headers, such as the modern era's mirrors.
+pub(crate) async fn send_with_headers(
+    fx: &Fx,
+    uri: &str,
+    key: &str,
+    method: &str,
+    params: Value,
+    session: Option<&str>,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Value) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
         .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
     if let Some(session_id) = session {
         builder = builder.header("mcp-session-id", session_id);
     }

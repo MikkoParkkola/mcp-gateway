@@ -41,7 +41,9 @@ pub(crate) fn http_client(destination: DestinationPolicy) -> Result<Client> {
         ) {
             // As reqwest's default policy: too many redirects is an error.
             Hop::Stop => attempt.error("too many redirects"),
-            Hop::Refuse(reason) => attempt.error(reason),
+            // Typed as the resolver's refusal, so every send site maps it to
+            // `-32600 SSRF blocked` rather than a generic OAuth failure.
+            Hop::Refuse(reason) => attempt.error(crate::security::ssrf::SsrfDenied::new(reason)),
             Hop::Follow => attempt.follow(),
         }))
         .build()
@@ -66,6 +68,9 @@ pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url:
     }
     match destination.check_literal(target) {
         Ok(()) => Hop::Follow,
+        // The bare "SSRF blocked: ..." message, not the error's Display, which
+        // adds a "Protocol error: " prefix the refusal would then carry twice.
+        Err(Error::Protocol(refused)) => Hop::Refuse(refused),
         Err(refused) => Hop::Refuse(refused.to_string()),
     }
 }
