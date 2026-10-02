@@ -53,10 +53,19 @@ impl MetaMcp {
         }
         if stored.targets.is_empty() {
             // A recording gateway's empty list means nothing was dispatched.
+            // An older row's empty list means it has no upstream descriptor to
+            // name its call (`CommittedTask::of`): `task.tool()` is the meta
+            // tool, and the backend's current list is no record of what ran, so
+            // nothing can prove the caller may read it. Refused, plan or not
+            // (MIK-7686, fail closed).
             return if stored.targets_recorded {
                 Ok(())
             } else {
-                self.authorize_legacy_row(stored, session, caller)
+                Err(Error::Forbidden {
+                    code: -32003,
+                    status: 403,
+                    message: "stored task result has no recorded provenance".to_owned(),
+                })
             };
         }
         // MIK-7692: a poll that meets the same decision again is not written
@@ -81,43 +90,5 @@ impl MetaMcp {
             }
             Ok(())
         })
-    }
-
-    /// A row written before targets were recorded. A plan (by the task's own
-    /// tool name, never the backend label) has no provenance and is refused;
-    /// anything else faces the backend-level checks. Capability auto-disable is
-    /// keyed by (backend, tool), so it cannot be applied backend-wide.
-    fn authorize_legacy_row(
-        &self,
-        stored: &CommittedTask,
-        session: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
-    ) -> Result<()> {
-        let refuse = |message: &str| Error::Forbidden {
-            code: -32003,
-            status: 403,
-            message: message.to_owned(),
-        };
-        if matches!(
-            stored.task.tool(),
-            "gateway_execute" | "gateway_run_playbook"
-        ) {
-            return Err(refuse("stored plan result has no recorded provenance"));
-        }
-        let server = stored.backend.as_str();
-        if !caller.authorizer.admits_backend(server) {
-            return Err(refuse("stored task result is outside this caller's scope"));
-        }
-        if !self.active_profile(session).backend_allowed(server) {
-            return Err(refuse("stored task result is outside the active profile"));
-        }
-        let saturated = self
-            .backends
-            .get(server)
-            .is_some_and(|backend| backend.gate_saturated());
-        if self.kill_switch.is_killed(server) || saturated {
-            return Err(refuse("the backend that produced this result is disabled"));
-        }
-        Ok(())
     }
 }

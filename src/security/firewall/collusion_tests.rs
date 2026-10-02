@@ -98,6 +98,28 @@ fn embedded_excerpt_detected() {
     assert!(d.check_egress_at(B, U, &payload, now).is_some());
 }
 
+/// Input sanitization strips control and zero-width characters before a
+/// backend sees the arguments, so a copy interleaved with them is the same
+/// copy and must match (sanitize bypass).
+#[test]
+fn copy_interleaved_with_stripped_characters_detected() {
+    let now = Instant::now();
+    let s = secret();
+    for sep in ['\u{200B}', '\u{2028}', '\u{1}'] {
+        let d = detector();
+        d.record_delivery_at(T, A, true, &s, now);
+        let evasive: String = s
+            .chars()
+            .enumerate()
+            .flat_map(|(i, c)| std::iter::once(c).chain((i % 20 == 19).then_some(sep)))
+            .collect();
+        assert!(
+            d.check_egress_at(B, U, &evasive, now).is_some(),
+            "a copy interleaved with {sep:?} must match"
+        );
+    }
+}
+
 /// The winnowing guarantee itself: every 63-char span of a document shares a
 /// fingerprint with it. A fixed stride or a global bottom-N sample leaves
 /// spans with none.
