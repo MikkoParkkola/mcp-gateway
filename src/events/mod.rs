@@ -9,6 +9,7 @@
 //! only: webhook mode needs an authenticated principal, which a stdio
 //! session does not carry.
 
+mod backend_source;
 mod client;
 mod dedupe;
 mod fanout;
@@ -22,6 +23,7 @@ mod rpc;
 mod runtime;
 mod services;
 mod store;
+mod task_source;
 mod types;
 mod webhook_source;
 mod worker;
@@ -53,6 +55,7 @@ pub(crate) struct EventsHub {
     runtime: runtime::Runtime,
     /// Sources' started lifecycle keys; see [`lifecycle`].
     lifecycle: lifecycle::Started,
+    debounce: backend_source::Debounce,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -148,6 +151,7 @@ impl EventsHub {
             sources: RwLock::new(Vec::new()),
             runtime: runtime::Runtime::new(config, store_dir),
             lifecycle: lifecycle::Started::default(),
+            debounce: backend_source::Debounce::default(),
         }))
     }
 
@@ -210,3 +214,7 @@ fn tail_policy(config: &EventsConfig) -> store::TailPolicy {
 #[cfg(test)]
 #[path = "lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "sources_tests.rs"]
+mod sources_tests;

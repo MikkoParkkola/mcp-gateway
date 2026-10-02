@@ -40,6 +40,8 @@ impl EventsHub {
                 let held = self.store.live_subscription_ids(Utc::now());
                 self.runtime.rates.retain(&held);
                 self.runtime.failures.retain(&held);
+                // Expiry removes subscriptions without a call of its own.
+                self.reconcile_stops().await;
             }
             let wait = self.dispatch(services, &slots).await;
             tokio::select! {

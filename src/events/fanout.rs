@@ -80,6 +80,14 @@ impl EventsHub {
                 self.revoke(&sub).await;
                 continue;
             }
+            if source
+                .authorize(&sub.principal, &sub.name, &sub.arguments)
+                .await
+                .is_err()
+            {
+                tracing::debug!(subscription = %sub.id, "events: source no longer authorizes this subscription");
+                continue;
+            }
             self.offer(services, event, &sub).await;
         }
         self.runtime.wake.notify_one();
@@ -151,7 +159,7 @@ impl EventsHub {
     /// Delete every subscription to an event type a reload removed; their
     /// pending records go with them (design §9). Synchronous, inside the
     /// reload, so a later reload that restores the type cannot interleave.
-    pub(crate) fn withdraw(&self, names: &[String]) {
+    pub(crate) fn withdraw(self: &Arc<Self>, names: &[String]) {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
         for sub in self.store.subscriptions() {
@@ -161,6 +169,7 @@ impl EventsHub {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
             }
         }
+        self.reconcile_stops_in_background();
     }
 
     /// Delete subscription `refused`, the snapshot the access check refused,
@@ -180,6 +189,7 @@ impl EventsHub {
             .await;
         if removed == Some(true) {
             tracing::info!("events: subscription revoked, access no longer granted");
+            self.reconcile_stops().await;
         }
     }
 }

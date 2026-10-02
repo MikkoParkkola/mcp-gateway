@@ -15,6 +15,18 @@ impl MetaMcp {
         let _ = self.events.set(hub);
     }
 
+    /// The backend registry, for the events backend source's catalogue.
+    pub(crate) fn events_backend_registry(&self) -> Arc<crate::backend::BackendRegistry> {
+        Arc::clone(&self.backends)
+    }
+
+    /// Backend `backend`'s tool set changed: an event, when events are on.
+    pub(crate) fn events_tools_changed(&self, backend: &str) {
+        if let Some(hub) = self.events() {
+            hub.backend_tools_changed(backend);
+        }
+    }
+
     /// The events hub, when events are on for this transport.
     pub(crate) fn events(&self) -> Option<&Arc<EventsHub>> {
         self.events.get()

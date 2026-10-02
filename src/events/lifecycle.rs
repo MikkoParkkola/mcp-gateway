@@ -12,11 +12,6 @@
 //! that needed it, so a stop triggered by another key cannot land between
 //! them, and never across the verification POST.
 
-#![allow(
-    dead_code,
-    reason = "scaffold: the hooks are wired by the implementation commit"
-)]
-
 use std::collections::HashSet;
 use std::sync::Arc;
 

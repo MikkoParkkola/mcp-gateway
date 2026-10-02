@@ -37,6 +37,18 @@ pub(super) fn install(
         hub.set_webhook_registry(Arc::clone(webhooks));
         webhooks.write().set_events(Arc::clone(&hub));
     }
+    if config.events.sources.backend_notifications {
+        let registry = meta_mcp.events_backend_registry();
+        let capability = config
+            .capabilities
+            .enabled
+            .then(|| config.capabilities.name.clone());
+        hub.install_backend_source(Arc::new(move || {
+            let mut names: Vec<String> = registry.all().iter().map(|b| b.name.clone()).collect();
+            names.extend(capability.clone());
+            names
+        }));
+    }
     hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
     meta_mcp.set_events(hub);
     Ok(())

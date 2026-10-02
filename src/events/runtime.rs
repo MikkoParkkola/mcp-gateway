@@ -94,6 +94,9 @@ impl EventsHub {
         });
         let hub = Arc::clone(self);
         tokio::spawn(async move { hub.deliver_forever(&services).await });
+        // After a restart the upstream state is rebuilt from the store.
+        let hub = Arc::clone(self);
+        tokio::spawn(async move { hub.replay_starts().await });
     }
 
     /// Whether a caller holding API key `key` may still see `backend` under
