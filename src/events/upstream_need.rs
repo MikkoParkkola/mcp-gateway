@@ -151,6 +151,41 @@ impl Coalescer {
     }
 }
 
+/// What a backend's catalogue snapshot says about one URI (§7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    /// Listed in a successfully read snapshot.
+    Deliver,
+    /// No good snapshot yet, or the URI is absent from a truncated read:
+    /// skip this occurrence, keep the subscription (an error is not absence).
+    Skip,
+    /// Absent from a complete snapshot: revoke (parent F9).
+    Revoke,
+}
+
+/// The backend's last successfully read resource URIs. A failed read never
+/// replaces a good snapshot, so a transient failure deletes nothing.
+#[derive(Debug, Default)]
+pub(crate) struct Snapshot {
+    good: Option<(std::collections::HashSet<String>, bool)>,
+}
+
+impl Snapshot {
+    /// Record a successful read; `complete` is false when the page cap cut it.
+    pub(crate) fn read(&mut self, uris: std::collections::HashSet<String>, complete: bool) {
+        self.good = Some((uris, complete));
+    }
+
+    pub(crate) fn verdict(&self, uri: &str) -> Verdict {
+        match &self.good {
+            None => Verdict::Skip,
+            Some((uris, _)) if uris.contains(uri) => Verdict::Deliver,
+            Some((_, true)) => Verdict::Revoke,
+            Some((_, false)) => Verdict::Skip,
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "upstream_need_tests.rs"]
 mod tests;

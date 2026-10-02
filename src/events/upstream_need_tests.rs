@@ -109,3 +109,19 @@ fn a_burst_is_one_event_after_the_window() {
         "a new window after the last"
     );
 }
+
+#[test]
+fn the_snapshot_keeps_on_error_and_revokes_only_on_complete_absence() {
+    let mut snap = Snapshot::default();
+    assert_eq!(snap.verdict("a"), Verdict::Skip, "no snapshot yet");
+    snap.read(["a".to_owned()].into(), false);
+    assert_eq!(snap.verdict("a"), Verdict::Deliver);
+    assert_eq!(
+        snap.verdict("b"),
+        Verdict::Skip,
+        "a truncated read proves nothing"
+    );
+    snap.read(["a".to_owned()].into(), true);
+    assert_eq!(snap.verdict("b"), Verdict::Revoke);
+    assert_eq!(snap.verdict("a"), Verdict::Deliver);
+}
