@@ -459,7 +459,10 @@ pub(super) async fn meta_mcp_handler(
     let logger = state.meta_mcp.transparency_logger.clone();
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
         logger,
-        Box::pin(meta_mcp_dispatch(state, http_request)),
+        // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
+        Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting(
+            meta_mcp_dispatch(state, http_request),
+        )),
     );
 
     if offers_event_stream {
@@ -1852,6 +1855,7 @@ async fn meta_mcp_dispatch(
     response = (state.meta_mcp)
         .finalize_response_after_inspection(response, &delivery, delivery_inspection)
         .await;
+    state.meta_mcp.commit_relay_receipts(&response);
     if let Some(execution) = execution {
         execution.complete_delivery(&response, signing_context.as_ref());
     }

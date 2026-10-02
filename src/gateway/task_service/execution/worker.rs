@@ -254,6 +254,7 @@ async fn run_dispatched(
         .await;
     } else {
         let response = inspect_settled(&state, &call, &id, response);
+        state.meta_mcp().commit_relay_receipts(&response);
         Settling::new(
             &executor,
             &state,
