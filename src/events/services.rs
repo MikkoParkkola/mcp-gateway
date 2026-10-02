@@ -386,7 +386,14 @@ impl Services {
         fields.insert("outcome_of_attempt".into(), attempt.number.into());
         fields.insert("status".into(), attempt.status.into());
         fields.insert("delivered".into(), attempt.delivered.into());
-        let envelope = crate::security::audit::AuditEnvelope::gateway();
+        let envelope = crate::security::audit::AuditEnvelope {
+            outcome: if attempt.delivered {
+                crate::security::audit::AuditOutcome::Ok
+            } else {
+                crate::security::audit::AuditOutcome::Error(-32015)
+            },
+            ..crate::security::audit::AuditEnvelope::gateway()
+        };
         let written = log
             .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
             .await;

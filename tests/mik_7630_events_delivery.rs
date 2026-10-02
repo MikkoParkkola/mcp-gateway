@@ -227,14 +227,17 @@ async fn every_delivery_attempt_writes_one_attributed_audit_record() {
     }
     // No record of the event, an attempt's or its outcome's, holds the body:
     // scanned once all three outcomes are on the log.
-    wait_until(DEADLINE, || {
-        audit_mentioning(&root_path, &event_id)
-            .iter()
-            .filter(|r| r.get("outcome_of_attempt").is_some())
-            .count()
-            >= 3
-    })
-    .await;
+    assert!(
+        wait_until(DEADLINE, || {
+            audit_mentioning(&root_path, &event_id)
+                .iter()
+                .filter(|r| r.get("outcome_of_attempt").is_some())
+                .count()
+                >= 3
+        })
+        .await,
+        "all three outcomes reach the log"
+    );
     for record in audit_mentioning(root.path(), &event_id) {
         assert!(
             !record.to_string().contains("canary"),

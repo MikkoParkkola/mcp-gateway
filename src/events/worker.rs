@@ -158,16 +158,15 @@ impl EventsHub {
         // An unsubscribe that waited past its bound has removed the
         // subscription by now: nothing is charged or sent for it. Otherwise
         // the current row signs, so a secret rotated since the claim counts.
-        let Some(current) = self.store.signing_row(&record) else {
+        if self.store.signing_row(&record).is_none() {
             return;
-        };
+        }
         let (Some(body), Some(url)) = (record.body(), url) else {
             self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
             return;
         };
-        self.record_and_send(services, &ctx, &current, &url, body)
-            .await;
+        self.record_and_send(services, &ctx, &url, body).await;
     }
 
     /// Put the attempt on record, then charge and send it. The record comes
@@ -177,7 +176,6 @@ impl EventsHub {
         self: &Arc<Self>,
         services: &Services,
         ctx: &Ctx<'_>,
-        current: &super::records::Subscription,
         url: &url::Url,
         body: Vec<u8>,
     ) {
@@ -199,6 +197,12 @@ impl EventsHub {
             self.settle(services, record, retry).await;
             return;
         }
+        // The wait for the record can span a rotation or an unsubscribe: the
+        // row that signs is read after it, never before.
+        let Some(current) = self.store.signing_row(record) else {
+            services.audit_outcome(&ended("cancelled")).await;
+            return;
+        };
         // Past its bounds after the wait for the record: dead, unsent, and the
         // record just written says how that attempt ended.
         if self.overdue(record, Utc::now()) {
@@ -216,7 +220,7 @@ impl EventsHub {
                 .await;
             return;
         }
-        let answer = self.send_event(url, current, event_id, body).await;
+        let answer = self.send_event(url, &current, event_id, body).await;
         let (outcome, status) = self.judge(record, &answer);
         let delivered = matches!(outcome, Settle::Delivered);
         services
