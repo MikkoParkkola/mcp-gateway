@@ -794,3 +794,15 @@ fn beeper() -> crate::backend::Backend {
         std::time::Duration::from_secs(60),
     )
 }
+
+#[path = "normalize_edge_tests.rs"]
+mod normalize_edge_tests;
+
+#[path = "direct_refusal_edge_tests.rs"]
+mod direct_refusal_edge_tests;
+
+#[path = "direct_firewall_edge_tests.rs"]
+mod direct_firewall_edge_tests;
+
+#[path = "direct_signing_edge_tests.rs"]
+mod direct_signing_edge_tests;
