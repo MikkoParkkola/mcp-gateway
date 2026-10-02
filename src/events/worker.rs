@@ -173,12 +173,6 @@ impl EventsHub {
         let Some(current) = self.store.signing_row(&record) else {
             return;
         };
-        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
-            services.audit_attempt(&refused("budget")).await.ok();
-            self.settle(services, &record, quiet_dead(DeadReason::Budget))
-                .await;
-            return;
-        }
         let (Some(body), Some(url)) = (record.body(), url) else {
             self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
                 .await;
@@ -201,6 +195,26 @@ impl EventsHub {
                 status: "audit_unavailable",
             };
             self.settle(services, &record, retry).await;
+            return;
+        }
+        // Past its bounds after the wait for the record: dead, unsent, and the
+        // record just written says how that attempt ended.
+        let ended = |status: &'static str| Attempt {
+            body_sha256: &body_sha256,
+            ..refused(status)
+        };
+        if self.overdue(&record, Utc::now()) {
+            services.audit_outcome(&ended("exhausted")).await;
+            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
+                .await;
+            return;
+        }
+        // Charged once the attempt is on record, so a retry after an audit
+        // outage is not charged for an attempt that never left.
+        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
+            services.audit_outcome(&ended("budget")).await;
+            self.settle(services, &record, quiet_dead(DeadReason::Budget))
+                .await;
             return;
         }
         let answer = self.send_event(&url, &current, event_id, body).await;
