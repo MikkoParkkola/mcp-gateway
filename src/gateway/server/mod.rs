@@ -11,6 +11,8 @@ mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
 mod cleartext;
+#[cfg(all(test, feature = "firewall"))]
+mod collusion_share_tests;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
@@ -506,23 +508,22 @@ fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json:
 }
 
 impl Gateway {
-    /// A firewall with its own transition tracker. Both transports build theirs
-    /// here, so each leaves the continuations `meta_mcp` minted unredacted
-    /// (#2210).
+    /// A firewall with its own transition tracker, sharing `meta_mcp`'s relay
+    /// detector (COLLUDE.1). Both transports build theirs here, so each leaves
+    /// the continuations `meta_mcp` minted unredacted (#2210).
     #[cfg(feature = "firewall")]
     fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
         let fw_cfg = self.config.security.firewall.clone();
         let fw_enabled = fw_cfg.enabled;
-        let tt = if fw_cfg.anomaly_detection {
-            Some(Arc::new(TransitionTracker::new()))
-        } else {
-            None
-        };
+        let tt = fw_cfg
+            .anomaly_detection
+            .then(|| Arc::new(TransitionTracker::new()));
         let fw = Arc::new(
             Firewall::from_config(fw_cfg, tt)
                 .with_env(Arc::clone(&self.env))
                 .with_continuations(meta_mcp.continuation())
-                .with_posture(self.config.security.posture),
+                .with_posture(self.config.security.posture)
+                .sharing_relay_with(meta_mcp.firewall.as_deref()),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");
@@ -2200,16 +2201,14 @@ impl Gateway {
             }
         }
 
-        // Before the drain and well before the close: the sweep is joined while
-        // the store is still open, so a deletion already in flight finishes its
-        // own transaction and no new one starts against a store about to give
-        // its lease back. The join returns what the sweep actually met, so a
-        // store it could not delete from is not reported as a clean stop.
+        // Workers drain, and a drain that runs out cancels the rest; then the
+        // expiry sweep is joined while the store is still open, and the store
+        // closes (`task_runtime::shutdown` documents the order).
         task_runtime::shutdown(
             expiry_sweep,
             &task_executor_for_shutdown,
             &task_service_for_shutdown,
-            drain_timeout,
+            task_runtime::ShutdownBudget::within(drain_timeout, drain_timeout),
         )
         .await;
 

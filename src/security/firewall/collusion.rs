@@ -22,13 +22,16 @@ use icu_normalizer::ComposingNormalizerBorrowed;
 use parking_lot::Mutex;
 
 /// What the detector does. Mirrors the operator-facing `collusion.action`;
-/// `block` arrives with the request-path wiring that can refuse a call.
+/// the detector keeps the same state under both on-states, and the firewall
+/// decides whether a finding refuses the call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelayAction {
     /// No state is kept.
     Off,
     /// Findings are reported, calls proceed.
     Observe,
+    /// Findings are reported and the call is refused.
+    Block,
 }
 
 /// Detector tuning. Defaults are the design's documented values.
@@ -66,12 +69,15 @@ pub(crate) struct RelayFinding {
 }
 
 /// Characters per k-gram. Nothing shorter than this can ever match.
-const K: usize = 48;
+pub(super) const K: usize = 48;
 /// Hashes per winnowing window: a shared run of `K + W - 1` chars yields at
 /// least one common fingerprint.
 const W: usize = 16;
 /// Tuples one fingerprint may hold before it is `Saturated`.
 const MAX_TUPLES: usize = 8;
+/// The most distinct principals one tracked fingerprint can reach: a 9th
+/// tuple saturates it, so a larger `common_principals` is never met.
+pub(super) const MAX_COMMON_PRINCIPALS: usize = MAX_TUPLES + 1;
 /// Fingerprints kept per delivered result; the rest are counted, not stored.
 const MAX_SOURCE_FINGERPRINTS: usize = 1_024;
 
@@ -201,7 +207,9 @@ impl CollusionDetector {
 
     /// Winnowed fingerprints of `text`, distinct, in position order.
     ///
-    /// NFC-normalized and whitespace-collapsed first; then every `K`-char
+    /// Characters input sanitization strips are dropped first, so text
+    /// interleaved with them matches what a backend receives; then
+    /// NFC-normalized and whitespace-collapsed; then every `K`-char
     /// k-gram is hashed and the rightmost minimum of each `W`-hash window is
     /// kept. Offset-independent: a shifted copy selects the same minima.
     ///
@@ -212,7 +220,11 @@ impl CollusionDetector {
         reason = "the key is per process; a method keeps callers from hashing with any other"
     )]
     pub(crate) fn fingerprints(&self, text: &str) -> Vec<u64> {
-        let nfc = ComposingNormalizerBorrowed::new_nfc().normalize(text);
+        let visible: String = text
+            .chars()
+            .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
+            .collect();
+        let nfc = ComposingNormalizerBorrowed::new_nfc().normalize(&visible);
         let norm = nfc.split_whitespace().collect::<Vec<_>>().join(" ");
         let bounds: Vec<usize> = norm
             .char_indices()

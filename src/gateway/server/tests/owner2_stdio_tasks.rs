@@ -21,7 +21,7 @@ use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
 use crate::security::{ToolPolicy, ToolPolicyConfig};
 
-const BACKEND: &str = "fixture";
+pub(super) const BACKEND: &str = "fixture";
 const TOOL: &str = "echo";
 const DENIED: &str = "forbidden";
 
@@ -63,18 +63,26 @@ async fn backend() -> (String, Arc<AtomicUsize>) {
 }
 
 /// A stdio task store over a production-built `MetaMcp`, under `policy`.
-struct Fixture {
-    tasks: Arc<StdioTasks>,
+pub(super) struct Fixture {
+    pub(super) tasks: Arc<StdioTasks>,
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     policy: Arc<ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     rounds: Arc<AtomicUsize>,
-    store: tempfile::TempDir,
+    pub(super) store: tempfile::TempDir,
+    pub(super) expiry: Option<crate::gateway::task_service::execution::ExpirySweep>,
     _data: tempfile::TempDir,
 }
 
 async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
-    let (url, rounds) = backend().await;
+    fixture_on(backend().await, policy).await
+}
+
+/// [`fixture`] over the backend at `url`.
+pub(super) async fn fixture_on(
+    (url, rounds): (String, Arc<AtomicUsize>),
+    policy: Option<ToolPolicy>,
+) -> Fixture {
     let store = tempfile::tempdir().expect("store root");
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
@@ -99,7 +107,7 @@ async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
         .await
         .expect("the production builder accepts this configuration");
     let tool_policy = policy.map_or(built.tool_policy, Arc::new);
-    let (tasks, _expiry) = stdio_tasks::open(
+    let (tasks, expiry) = stdio_tasks::open(
         &config,
         &crate::config::EnvOverlay::default(),
         &built.meta_mcp,
@@ -114,6 +122,7 @@ async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
         mtls: built.mtls_policy,
         rounds,
         store,
+        expiry: Some(expiry),
         _data: data,
     }
 }
@@ -200,7 +209,13 @@ async fn a_stdio_worker_outliving_its_session_settles_before_dispatch() {
     let fixture = fixture(None).await;
     let retry = keyed("u4");
     let intent = intent(&fixture.tasks, TOOL, &retry);
-    let Fixture { tasks, store, .. } = fixture;
+    let Fixture {
+        tasks,
+        store,
+        expiry,
+        ..
+    } = fixture;
+    drop(expiry);
     drop(tasks);
     assert!(
         intent.owned.host().upgrade().is_none(),
@@ -210,7 +225,7 @@ async fn a_stdio_worker_outliving_its_session_settles_before_dispatch() {
 }
 
 /// A modern `gateway_invoke` of `tool`, keyed `key`, task-augmented when `task`.
-fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
+pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
     let mut params = json!({
         "name": "gateway_invoke",
         "arguments": {"server": BACKEND, "tool": tool, "arguments": {}},
@@ -229,7 +244,7 @@ fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 }
 
 /// One request through the stdio dispatcher, with this fixture's store.
-async fn dispatch(fixture: &Fixture, request: Value) -> Value {
+pub(super) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     Gateway::dispatch_single_with_sink(
         &fixture.meta,
         &fixture.policy,
@@ -465,7 +480,7 @@ async fn a_legacy_task_member_is_answered_synchronously() {
 }
 
 /// Open the stdio store `config` names, as the next process would.
-async fn reopen(
+pub(super) async fn reopen(
     config: &Config,
 ) -> Result<
     (
@@ -501,7 +516,7 @@ async fn reopen(
 
 /// A backend whose `held` tool reports arrival, then answers only once the
 /// test opens the barrier.
-async fn held_backend() -> (
+pub(super) async fn held_backend() -> (
     String,
     tokio::sync::watch::Receiver<usize>,
     tokio::sync::watch::Sender<bool>,
