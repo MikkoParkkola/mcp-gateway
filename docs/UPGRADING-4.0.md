@@ -3530,7 +3530,7 @@ updates, so its stream just closes, with no response.
 **Action:** a client written against the beta that read the subscription id from the response
 `result` reads it from the notification instead.
 
-## 124. CLI capabilities run local processes
+## 126. CLI capabilities run local processes
 
 **Startup:** no notice, a capability that declares `service: cli` is served and runs its command when called
 
