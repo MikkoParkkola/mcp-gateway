@@ -342,6 +342,9 @@ impl OAuthClient {
 
                 self.resource_metadata = Some(meta);
             }
+            // A policy refusal is an answer, not a missing document: falling
+            // back would walk past it (MIK-7701).
+            Err(e) if is_policy_refusal(&e) => return Err(e),
             Err(e) => {
                 debug!(error = %e, "No protected resource metadata, using base URL");
                 self.oauth_base_url = Some(base_url.clone());
@@ -1041,6 +1044,7 @@ impl OAuthClient {
                         }
                     }
                 }
+                Err(e) if is_policy_refusal(&e) => return Err(e),
                 Err(e) => {
                     debug!(error = %e, "Dynamic registration failed, using generated ID");
                 }
@@ -1181,6 +1185,12 @@ fn open_browser(url: &str) -> bool {
     let result = std::process::Command::new(cmd).arg(url).spawn();
 
     result.is_ok()
+}
+
+/// Whether `error` is a destination-policy refusal, which no fallback may
+/// absorb.
+fn is_policy_refusal(error: &Error) -> bool {
+    matches!(error, Error::Protocol(message) if message.starts_with("SSRF blocked"))
 }
 
 /// The error an OAuth request's failed send surfaces as (MIK-7701).
