@@ -840,7 +840,7 @@ a stated gap.
 | H1-H4 POST | `OutboundReply` through `mcp_route` | judged after finalization, recorded, written by `outbound::to_http`; the body commits when read (F3) | early returns before dispatch are gateway refusals with no backend content; `mcp_route` and the compile-time guarantee are not built |
 | H5/H6 POST-SSE | notification channel carries frames | judged in `send_or_count` as queued; written by `sse_message` | as designed |
 | H7 GET stream | moved payload | each session's copy judged at enqueue for the session's `caller_key`; a `StreamMark` beside the note carries the ticket | the note stays a `TaggedNotification`; webhook items also judged on the raw body |
-| H8 listen | `OutboundReply::Stream` | the acknowledgement judged as the listen request's answer (with its params), each event judged for the listener's caller as written | rows 11, 2k |
+| H8 listen | `OutboundReply::Stream` | the acknowledgement document judged with the listen request's params as a read, each event judged for the listener's caller as written | rows 11, 2k |
 | H9 direct | `OutboundHttp` | every answer judged in `audited_call` and written by `to_http` | |
 | S1/S2 stdio | queue of frames | as designed; key `stdio`; batch items judged and committed after the array | rows 3/4 stdio |
 | Bridged stdio requests | refusal to the waiter | judged; a withheld one returns `NoSession` at once, audited first | |
