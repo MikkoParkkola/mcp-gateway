@@ -1,0 +1,11 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -198,7 +198,6 @@
+     if payload.get("id").is_some()
+         && let Some(data) = payload.pointer_mut("/error/data")
+     {
+-        clamp_top_level(data);
+     }
+ }
+ 

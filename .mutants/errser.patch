@@ -1,0 +1,15 @@
+diff --git a/src/protocol/messages.rs b/src/protocol/messages.rs
+--- a/src/protocol/messages.rs
++++ b/src/protocol/messages.rs
+@@ -191,10 +191,7 @@
+     /// Error message
+     pub message: String,
+     /// Optional error data; its own `cacheScope` is clamped (MIK-7702)
+-    #[serde(
+-        skip_serializing_if = "Option::is_none",
+-        serialize_with = "crate::protocol::cacheable::serialize_delivered_error_data"
+-    )]
++    #[serde(skip_serializing_if = "Option::is_none")]
+     pub data: Option<Value>,
+ }
+ 

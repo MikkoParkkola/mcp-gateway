@@ -1,0 +1,12 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -177,7 +177,7 @@
+     match data {
+         Some(value) if scope_off(value) => {
+             let mut clamped = value.clone();
+-            clamp_top_level(&mut clamped);
++            clamp_delivered_scope(&mut clamped);
+             clamped.serialize(serializer)
+         }
+         Some(value) => value.serialize(serializer),

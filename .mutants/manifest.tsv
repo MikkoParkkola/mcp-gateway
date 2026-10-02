@@ -1,0 +1,10 @@
+head_sha	d9f9256088c1a0ffb30ad28804427a4e1ace8997
+# MIK-7702 PR 2702
+ERRSER0	linux	errser.patch	--lib protocol::cacheable::clamp_tests::error_data_is_delivered_private -- --exact
+ERRNEST0	linux	errnest.patch	--lib protocol::cacheable::clamp_tests::error_data_is_clamped_at_its_top_level_only -- --exact
+SSEDROP0	linux	ssedrop.patch	--lib protocol::cacheable::clamp_tests::error_data_is_delivered_private -- --exact
+SSENEST0	linux	ssenest.patch	--lib protocol::cacheable::clamp_tests::error_data_is_clamped_at_its_top_level_only -- --exact
+NONSTR0	linux	nonstr.patch	--lib protocol::cacheable::clamp_tests::a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result -- --exact
+STATUS0	linux	status.patch	--lib protocol::cacheable::clamp_tests::a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result -- --exact
+STATUSOBJ0	linux	statusobj.patch	--lib protocol::cacheable::clamp_tests::a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result -- --exact
+ONCE0	linux	once.patch	--lib protocol::cacheable::clamp_tests::the_retained_slot_is_followed_once_not_recursively -- --exact

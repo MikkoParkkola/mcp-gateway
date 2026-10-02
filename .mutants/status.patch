@@ -1,0 +1,13 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -101,8 +101,7 @@
+     if !task_id.is_string() {
+         // Only a status the typed task wire accepts makes it an envelope.
+         // A string only: serde also reads a unit variant from `{"completed": null}`.
+-        let status = result.get("status")?.as_str()?;
+-        serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status.into()).ok()?;
++        result.get("status")?;
+     }
+     result.get("result").filter(|slot| slot.is_object())
+ }

@@ -1,0 +1,12 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -127,7 +127,7 @@
+     if task_result_slot(result).is_some_and(scope_off)
+         && let Some(slot) = result.get_mut("result")
+     {
+-        clamp_top_level(slot);
++        clamp_delivered_scope(slot);
+     }
+ }
+ 
