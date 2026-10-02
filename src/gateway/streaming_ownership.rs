@@ -3,9 +3,11 @@
 //! Session ownership, for routes that act under a presented session without
 //! creating one.
 
+use std::sync::Arc;
+
 use tokio::sync::broadcast;
 
-use super::{NotificationMultiplexer, SessionFrame};
+use super::{ClientSession, NotificationMultiplexer, SessionFrame};
 use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::SessionOwner;
 
@@ -30,15 +32,34 @@ impl NotificationMultiplexer {
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
     ) -> Option<(String, broadcast::Receiver<SessionFrame>)> {
+        let session = self.resume_owned(session_id, owner, credential)?;
+        Some((session.id.expose_secret().to_string(), session.subscribe()))
+    }
+
+    /// As [`Self::resume_session_scoped`], for a caller that only needs the
+    /// id: it opens no notification channel (NFR.WORKLOAD.1).
+    pub(crate) fn resume_session_id_scoped(
+        &self,
+        session_id: Option<&str>,
+        owner: &SessionOwner,
+        credential: Option<HeldCredential>,
+    ) -> Option<String> {
+        let session = self.resume_owned(session_id, owner, credential)?;
+        Some(session.id.expose_secret().to_string())
+    }
+
+    fn resume_owned(
+        &self,
+        session_id: Option<&str>,
+        owner: &SessionOwner,
+        credential: Option<HeldCredential>,
+    ) -> Option<Arc<ClientSession>> {
         let sessions = self.sessions.read();
         let session = sessions
             .get(session_id?)
             .filter(|session| session.owner == *owner)?;
         *session.credential.write() = credential;
         *session.last_active.write() = std::time::Instant::now();
-        Some((
-            session.id.expose_secret().to_string(),
-            session.tx.subscribe(),
-        ))
+        Some(Arc::clone(session))
     }
 }

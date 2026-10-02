@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_stream::stream;
@@ -81,8 +81,13 @@ impl SessionFrame {
 struct ClientSession {
     /// Session ID; prints as its fingerprint.
     id: SessionId,
-    /// Notification sender
-    tx: broadcast::Sender<SessionFrame>,
+    /// Notification sender, opened on first subscribe or fan-out. A POST-only
+    /// session never holds a receiver, and a broadcast send with no receiver
+    /// delivers nothing, so it never needs the channel's buffer
+    /// (NFR.WORKLOAD.1).
+    tx: OnceLock<broadcast::Sender<SessionFrame>>,
+    /// Capacity the sender opens with.
+    capacity: usize,
     /// The `caller_key` this session's stream writes to, bound when the
     /// stream opens (MIK-7116.MIN.2); every queued copy is judged for it.
     read_key: RwLock<Option<String>>,
@@ -108,6 +113,33 @@ struct ClientSession {
     /// revoked or expired token.
     // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
     credential: RwLock<Option<HeldCredential>>,
+}
+
+impl ClientSession {
+    /// The sender, opened now if nothing has needed it yet.
+    fn sender(&self) -> &broadcast::Sender<SessionFrame> {
+        self.tx.get_or_init(|| broadcast::channel(self.capacity).0)
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<SessionFrame> {
+        self.sender().subscribe()
+    }
+
+    fn receiver_count(&self) -> usize {
+        self.tx.get().map_or(0, broadcast::Sender::receiver_count)
+    }
+
+    /// Send as `broadcast::Sender::send` does; an unopened sender has no
+    /// receiver, so it refuses exactly as an open one with none would.
+    fn send(
+        &self,
+        notification: SessionFrame,
+    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+        match self.tx.get() {
+            Some(tx) => tx.send(notification),
+            None => Err(broadcast::error::SendError(notification)),
+        }
+    }
 }
 
 /// Notification Multiplexer
@@ -186,29 +218,41 @@ impl NotificationMultiplexer {
         }
     }
 
-    /// Queue one copy of `notification` on `tx`, judged for `key`. `false`
-    /// when it is withheld or nobody is listening.
+    /// Queue one copy of `notification` on `session`'s stream, judged for
+    /// the session's caller. `false` when it is withheld or nobody is
+    /// listening; a session with no open stream is not judged at all.
     fn enqueue(
         &self,
-        tx: &broadcast::Sender<SessionFrame>,
-        key: Option<&str>,
+        session: &ClientSession,
         notification: TaggedNotification,
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
-    ) -> bool {
+    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+        if session.tx.get().is_none_or(|tx| tx.receiver_count() == 0) {
+            return session.send(SessionFrame {
+                note: notification,
+                mark: None,
+            });
+        }
+        let key = session.read_key.read().clone();
+        let key = key.as_deref();
         let mark = match self.reads.get() {
             None => None,
             Some(judge) => {
                 match judge.judge(key, &notification.data, &notification.event_type, hidden) {
                     Ok(mark) => mark.map(Box::new),
-                    Err(()) => return false,
+                    Err(()) => {
+                        return Err(broadcast::error::SendError(SessionFrame {
+                            note: notification,
+                            mark: None,
+                        }));
+                    }
                 }
             }
         };
-        tx.send(SessionFrame {
+        session.send(SessionFrame {
             note: notification,
             mark,
         })
-        .is_ok()
     }
 
     /// Install the authorizer that scoped delivery re-validates sessions against.
@@ -274,7 +318,7 @@ impl NotificationMultiplexer {
         let mut reaped_ids = Vec::new();
         sessions.retain(|id, session| {
             let expired = now.duration_since(*session.last_active.read()) >= ttl;
-            let abandoned = session.tx.receiver_count() == 0;
+            let abandoned = session.receiver_count() == 0;
 
             if expired && abandoned {
                 info!(session_id = %id, "Reaping expired streaming session (no active receivers)");
@@ -317,20 +361,28 @@ impl NotificationMultiplexer {
         session_id: Option<&str>,
         owner: &SessionOwner,
     ) -> (String, broadcast::Receiver<SessionFrame>) {
+        let session = self.open_session_for(session_id, owner);
+        (session.id.expose_secret().to_string(), session.subscribe())
+    }
+
+    /// Resume or open as [`Self::get_or_create_session_for`] does, without
+    /// subscribing.
+    fn open_session_for(
+        &self,
+        session_id: Option<&str>,
+        owner: &SessionOwner,
+    ) -> Arc<ClientSession> {
         let mut sessions = self.sessions.write();
         if let Some(session) = session_id.and_then(|id| sessions.get(id))
             && session.owner == *owner
         {
             *session.last_active.write() = Instant::now();
-            return (
-                session.id.expose_secret().to_string(),
-                session.tx.subscribe(),
-            );
+            return Arc::clone(session);
         }
         let id = format!("gw-{}", Uuid::new_v4());
-        let rx = self.insert_session(&mut sessions, &id, owner.clone());
+        let session = self.insert_session(&mut sessions, &id, owner.clone());
         info!(session_id = %session_fp(&id), "Created new streaming session");
-        (id, rx)
+        session
     }
 
     /// The one place a session enters the store.
@@ -339,21 +391,21 @@ impl NotificationMultiplexer {
         sessions: &mut HashMap<SessionId, Arc<ClientSession>>,
         id: &str,
         owner: SessionOwner,
-    ) -> broadcast::Receiver<SessionFrame> {
-        let (tx, rx) = broadcast::channel(self.config.buffer_size);
+    ) -> Arc<ClientSession> {
         let id = SessionId::new(id);
-        let session = ClientSession {
+        let session = Arc::new(ClientSession {
             id: id.clone(),
-            tx,
+            tx: OnceLock::new(),
+            capacity: self.config.buffer_size,
             read_key: RwLock::new(None),
             last_event_id: RwLock::new(None),
             subscribed_backends: RwLock::new(Vec::new()),
             last_active: RwLock::new(Instant::now()),
             owner,
             credential: RwLock::new(None),
-        };
-        sessions.insert(id, Arc::new(session));
-        rx
+        });
+        sessions.insert(id, Arc::clone(&session));
+        session
     }
 
     /// Create or resume a session for `owner`, holding the credential it presented.
@@ -363,11 +415,31 @@ impl NotificationMultiplexer {
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
     ) -> (String, broadcast::Receiver<SessionFrame>) {
-        let (id, rx) = self.get_or_create_session_for(session_id, owner);
-        if let Some(session) = self.sessions.read().get(id.as_str()) {
-            *session.credential.write() = credential;
-        }
-        (id, rx)
+        let session = self.open_session_scoped(session_id, owner, credential);
+        (session.id.expose_secret().to_string(), session.subscribe())
+    }
+
+    /// As [`Self::get_or_create_session_scoped`], for a caller that only needs
+    /// the id: it opens no notification channel (NFR.WORKLOAD.1).
+    pub(crate) fn get_or_create_session_id_scoped(
+        &self,
+        session_id: Option<&str>,
+        owner: &SessionOwner,
+        credential: Option<HeldCredential>,
+    ) -> String {
+        let session = self.open_session_scoped(session_id, owner, credential);
+        session.id.expose_secret().to_string()
+    }
+
+    fn open_session_scoped(
+        &self,
+        session_id: Option<&str>,
+        owner: &SessionOwner,
+        credential: Option<HeldCredential>,
+    ) -> Arc<ClientSession> {
+        let session = self.open_session_for(session_id, owner);
+        *session.credential.write() = credential;
+        session
     }
 
     /// Test seam: an anonymous session under a chosen id, which production
@@ -375,6 +447,7 @@ impl NotificationMultiplexer {
     #[cfg(test)]
     pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<SessionFrame> {
         self.insert_session(&mut self.sessions.write(), id, SessionOwner::Anonymous)
+            .subscribe()
     }
 
     /// Deliver to every session whose caller may access `backend` now; returns the count.
@@ -403,25 +476,23 @@ impl NotificationMultiplexer {
         let Some(authorizer) = self.authorizer.read().clone() else {
             return 0;
         };
-        // Copied out so no lock is held across the re-validation awaits.
+        // Copied out so no lock is held across the re-validation awaits. The
+        // session itself is held, not its sender, so an unopened one stays
+        // unopened and a stream that subscribes meanwhile is still reached.
         let targets: Vec<_> = self
             .sessions
             .read()
             .values()
-            .map(|s| {
-                (
-                    s.tx.clone(),
-                    s.credential.read().clone(),
-                    s.read_key.read().clone(),
-                )
-            })
+            .map(|s| (Arc::clone(s), s.credential.read().clone()))
             .collect();
         let mut reached = 0;
-        for (tx, credential, key) in targets {
+        for (session, credential) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
             if verdict == Delivery::Deliver
-                && self.enqueue(&tx, key.as_deref(), notification.clone(), hidden.as_ref())
+                && self
+                    .enqueue(&session, notification.clone(), hidden.as_ref())
+                    .is_ok()
             {
                 reached += 1;
             }
@@ -486,12 +557,13 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            let key = session.read_key.read().clone();
-            let sent = self.enqueue(&session.tx, key.as_deref(), notification, None);
-            if !sent {
-                debug!(session_id = %session_fp(session_id), "Failed to send notification");
+            match self.enqueue(session, notification, None) {
+                Ok(_) => true,
+                Err(e) => {
+                    debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
+                    false
+                }
             }
-            sent
         } else {
             false
         }
@@ -502,8 +574,7 @@ impl NotificationMultiplexer {
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let key = session.read_key.read().clone();
-            self.enqueue(&session.tx, key.as_deref(), notification.clone(), None);
+            let _ = self.enqueue(session, notification.clone(), None);
         }
     }
 
@@ -580,7 +651,7 @@ pub fn create_sse_response(
         *session.last_event_id.write() = Some(id.clone());
     }
 
-    let mut rx = session.tx.subscribe();
+    let mut rx = session.subscribe();
     let session_id_owned = session_id;
     drop(sessions);
 
@@ -719,101 +790,8 @@ pub(crate) fn subscription_stream(
 }
 
 #[cfg(test)]
-mod session_ownership_tests {
-    use super::*;
-    use crate::config::StreamingConfig;
-
-    fn cred(principal: &str) -> SessionOwner {
-        SessionOwner::Credential(principal.to_string())
-    }
-
-    fn mux() -> NotificationMultiplexer {
-        NotificationMultiplexer::new(
-            Arc::new(crate::backend::BackendRegistry::new()),
-            StreamingConfig::default(),
-        )
-    }
-
-    #[test]
-    fn a_request_reaches_only_its_own_session() {
-        // Sampling and elicitation went to every connected session, so one
-        // client saw another's prompt and could answer on their behalf. The
-        // destructive-action confirmation runs through this path.
-        let m = mux();
-        let (alice, mut alice_rx) = m.get_or_create_session_for(None, &cred("alice"));
-        let (_bob, mut bob_rx) = m.get_or_create_session_for(None, &cred("bob"));
-
-        let note = TaggedNotification {
-            source: "gw".to_string(),
-            event_type: "sampling/createMessage".to_string(),
-            data: serde_json::json!({"jsonrpc": "2.0"}),
-            event_id: None,
-        };
-        assert!(m.send_to_session(&alice, note));
-
-        assert!(
-            alice_rx.try_recv().is_ok(),
-            "the originating session receives it"
-        );
-        assert!(
-            bob_rx.try_recv().is_err(),
-            "another session must not see another client's prompt"
-        );
-
-        // An unknown session is a refusal, not a broadcast.
-        let note2 = TaggedNotification {
-            source: "gw".to_string(),
-            event_type: "sampling/createMessage".to_string(),
-            data: serde_json::json!({"jsonrpc": "2.0"}),
-            event_id: None,
-        };
-        assert!(!m.send_to_session("gw-not-a-session", note2));
-    }
-
-    #[test]
-    fn a_caller_cannot_join_another_identity_session() {
-        // A session id travels in a header the caller controls. Without
-        // ownership, a per-session check compares one caller-supplied value
-        // against another, and one client can name another's session.
-        let m = mux();
-        let (alice_id, _rx) = m.get_or_create_session_for(None, &cred("alice"));
-
-        let (given, _rx2) = m.get_or_create_session_for(Some(&alice_id), &cred("mallory"));
-        assert_ne!(
-            given, alice_id,
-            "presenting another identity's session id must not join it"
-        );
-    }
-
-    #[test]
-    fn two_keys_sharing_a_display_name_are_different_owners() {
-        // `name` is operator-chosen and not unique. Keying ownership on it let
-        // one API key attach to another's session.
-        let m = mux();
-        let (a, _rx) = m.get_or_create_session_for(None, &cred("aaa111"));
-        let (given, _rx2) = m.get_or_create_session_for(Some(&a), &cred("bbb222"));
-        assert_ne!(given, a, "a different credential is a different owner");
-    }
-
-    #[test]
-    fn the_owner_resumes_the_same_session() {
-        // Resumption after a dropped stream is a real flow and must keep working.
-        let m = mux();
-        let (id, _rx) = m.get_or_create_session_for(None, &cred("alice"));
-        let (again, _rx2) = m.get_or_create_session_for(Some(&id), &cred("alice"));
-        assert_eq!(again, id, "the owner must resume its own session");
-    }
-
-    #[test]
-    fn an_anonymous_holder_resumes_by_its_minted_id() {
-        // F9-T8. With authentication off the minted id is the only credential:
-        // its holder resumes by presenting it.
-        let m = mux();
-        let (id, _rx) = m.get_or_create_session(None);
-        let (again, _rx2) = m.get_or_create_session(Some(&id));
-        assert_eq!(again, id);
-    }
-}
+#[path = "streaming_session_ownership_tests.rs"]
+mod session_ownership_tests;
 
 /// Re-frame an already-built JSON-RPC response as an event stream carrying the
 /// notifications the backend raised during that same call, ahead of the result.
