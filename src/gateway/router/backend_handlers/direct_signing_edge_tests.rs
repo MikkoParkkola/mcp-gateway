@@ -83,16 +83,17 @@ async fn a_retained_result_is_signed_over_the_new_nonce() {
     for backend in BACKENDS {
         let fx = fixture_hardened_signed(Answer::Ok, true).await;
         let meta = |nonce: &str| json!({ NONCE_META: nonce, IDEMPOTENCY_KEY_META: "k-signed" });
-        let (_, first) = call(&fx, backend, meta(&format!("{backend}-n1"))).await;
-        let (status, again) = call(&fx, backend, meta(&format!("{backend}-n2"))).await;
+        let (n1, n2) = (format!("{backend}-n1"), format!("{backend}-n2"));
+        let (_, first) = call(&fx, backend, meta(&n1)).await;
+        let (status, again) = call(&fx, backend, meta(&n2)).await;
         assert_eq!(status, StatusCode::OK, "{backend}: {again}");
-        assert!(
-            first["result"].get("_signature").is_some(),
-            "{backend}: {first}"
-        );
-        assert!(
-            again["result"].get("_signature").is_some(),
-            "{backend}: {again}"
+        // Each answer is signed over the nonce of its own request, so the
+        // retained result carries a fresh signature, not the first one.
+        assert_eq!(first["result"]["_signature"]["nonce"], n1, "{first}");
+        assert_eq!(again["result"]["_signature"]["nonce"], n2, "{again}");
+        assert_ne!(
+            first["result"]["_signature"]["sig"], again["result"]["_signature"]["sig"],
+            "{backend}: stale signature replayed"
         );
         assert_eq!(
             fx.calls.load(Ordering::SeqCst),

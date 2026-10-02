@@ -42,18 +42,18 @@ async fn call(
     )
 }
 
-async fn admin_state() -> Arc<crate::gateway::router::AppState> {
+/// The state plus the temp directory backing its stores; keep both alive.
+async fn admin_state() -> (Arc<crate::gateway::router::AppState>, tempfile::TempDir) {
     test_router_app_state_with_auth_and_config(
         &scoped_auth_config(true),
         crate::config::Config::default(),
     )
     .await
-    .0
 }
 
 #[tokio::test]
 async fn a_key_or_session_with_no_spend_answers_no_data() {
-    let state = admin_state().await;
+    let (state, _store) = admin_state().await;
     let (status, body) = call(&state, "/api/costs?key=nobody", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["error"], "No data for key 'nobody'");
@@ -66,19 +66,23 @@ async fn a_key_or_session_with_no_spend_answers_no_data() {
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_recorded_key_and_the_aggregate_carry_the_spend() {
-    let state = admin_state().await;
+    let (state, _store) = admin_state().await;
     state
         .meta_mcp
         .cost_tracker()
-        .record("sess-1", Some("ops"), "srv", "tool", 0, 1.0);
+        .record("sess-1", Some("ops"), "srv", "tool", 2_000_000, 3.0);
 
     let (status, by_key) = call(&state, "/api/costs?key=ops", None).await;
     assert_eq!(status, StatusCode::OK, "{by_key}");
-    assert!(by_key.get("error").is_none(), "{by_key}");
+    assert_eq!(by_key["api_key_name"], "ops", "{by_key}");
+    assert_eq!(by_key["window_24h"]["tokens"], 2_000_000, "{by_key}");
+    let cost = by_key["window_24h"]["cost_usd"].as_f64().unwrap();
+    assert!((cost - 6.0).abs() < 1e-9, "{by_key}");
 
     let (status, all) = call(&state, "/api/costs", None).await;
     assert_eq!(status, StatusCode::OK, "{all}");
-    for part in ["aggregate", "sessions", "keys"] {
-        assert!(all.get(part).is_some(), "{part} missing: {all}");
-    }
+    assert_eq!(all["aggregate"]["total_calls"], 1, "{all}");
+    assert_eq!(all["aggregate"]["total_tokens"], 2_000_000, "{all}");
+    assert_eq!(all["sessions"].as_array().map(Vec::len), Some(1), "{all}");
+    assert_eq!(all["keys"].as_array().map(Vec::len), Some(1), "{all}");
 }
