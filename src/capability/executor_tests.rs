@@ -961,7 +961,7 @@ async fn redact_url_strips_a_credential_bearing_backend_url() {
         raw.to_string().contains("SECRET-QUERY-VALUE"),
         "reqwest no longer embeds the URL; redact_url may be obsolete: {raw}"
     );
-    let redacted = super::redact_url(raw);
+    let redacted = super::client::redact_url(raw);
     assert!(
         !redacted.to_string().contains("SECRET-QUERY-VALUE"),
         "credential survived redaction: {redacted}"

@@ -83,7 +83,7 @@ pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
 /// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
 /// Backend URLs here are operator-configured and a query-string API key is a
 /// common shape, so the raw error must never reach a log sink or a client.
-fn redact_url(e: reqwest::Error) -> reqwest::Error {
+pub(super) fn redact_url(e: reqwest::Error) -> reqwest::Error {
     e.without_url()
 }
 
