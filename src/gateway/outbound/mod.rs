@@ -30,10 +30,11 @@ use serde_json::Value;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 
-pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, recorded};
+pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, audit_rejection, recorded};
+pub(crate) use callback::{CallbackSend, callback_frame, send_callback};
 pub(crate) use http::{HeldAnswerId, carry_record, emit_http, to_http};
 #[cfg(all(test, feature = "firewall"))]
-pub(crate) use judge::{admit, attribute, callback_frame, delivered};
+pub(crate) use judge::{admit, attribute, delivered};
 pub(crate) use stdio::StdioReads;
 pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_data, sse_message};
 
@@ -67,13 +68,6 @@ pub(crate) enum Payload {
     )]
     Event(Value),
     /// A MIK-7630 event body for an HTTPS callback.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
-        )
-    )]
     Callback(Value),
     /// A stdio JSON-RPC batch answer: items judged one by one, written as
     /// one array, each committed after the array is written (S1).
@@ -118,8 +112,7 @@ impl OutboundFrame {
         }
     }
 
-    /// The verdict, for tests; `None` when unassessed or within the rule.
-    #[cfg(test)]
+    /// The verdict; `None` when unassessed or within the rule.
     pub(crate) fn verdict(&self) -> Option<ReadVerdict> {
         self.assessment.as_ref().and_then(|a| a.verdict)
     }
@@ -131,13 +124,6 @@ impl OutboundFrame {
 
     /// Whether a sink bound to `destination` may write this frame. An
     /// unjudged frame carries no key and binds nowhere.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
-        )
-    )]
     fn bound_to(&self, destination: &str) -> bool {
         self.key.as_deref().is_none_or(|key| key == destination)
     }

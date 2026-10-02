@@ -11,7 +11,6 @@
 
 use serde_json::{Value, json};
 
-use super::callback::{CallbackSend, send_callback};
 use super::*;
 use crate::protocol::RequestId;
 use crate::security::firewall::Firewall;
@@ -148,7 +147,7 @@ fn scan_root_covers_a_redacted_callback_body() {
     let carried = attribute(&off, &raw);
     assert!(
         matches!(
-            callback_frame(&off, KEY, redacted.clone(), Some(&carried)),
+            callback_frame(Some(&off), Some(KEY), redacted.clone(), Some(&carried)),
             Admission::Admitted(_)
         ),
         "control: off delivers the event"
@@ -163,7 +162,7 @@ fn scan_root_covers_a_redacted_callback_body() {
     let _a = read_a(&block);
     assert!(
         matches!(
-            callback_frame(&block, KEY, redacted, Some(&carried)),
+            callback_frame(Some(&block), Some(KEY), redacted, Some(&carried)),
             Admission::Blocked(_)
         ),
         "an event naming B before redaction, after an A read, must dead-letter"
@@ -262,7 +261,12 @@ fn a_refusal_keeps_no_hidden_reading() {
 /// A callback frame naming A for `KEY`, admitted under observe.
 fn callback_a(fw: &Firewall) -> OutboundFrame {
     let read = attribute(fw, &json!({ "customer_id": A }));
-    match callback_frame(fw, KEY, json!({ "data": { "note": "x" } }), Some(&read)) {
+    match callback_frame(
+        Some(fw),
+        Some(KEY),
+        json!({ "data": { "note": "x" } }),
+        Some(&read),
+    ) {
         Admission::Admitted(frame) => frame,
         Admission::Blocked(e) => panic!("a first read is never blocked: {e:?}"),
     }

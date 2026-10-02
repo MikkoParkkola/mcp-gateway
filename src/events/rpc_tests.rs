@@ -36,6 +36,7 @@ async fn unsubscribe_waits_out_a_claimed_attempt() {
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     let caller = Caller {
         principal: Some("p".to_owned()),
+        read_key: None,
         credential: Credential {
             kind: crate::security::audit::CredentialKind::None,
             principal: String::new(),

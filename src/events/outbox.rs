@@ -34,6 +34,11 @@ pub(crate) struct OutboxRecord {
     /// Hashed tenant attribution of `data` (MIN.1), fixed at fan-out.
     #[serde(default)]
     pub tenants: Vec<String>,
+    /// What `data` named before the event firewall redacted it (MIN.2 E1),
+    /// fixed at fan-out for the read verdict at delivery. Absent on older
+    /// records: they count as unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<crate::security::tenant_reads::ReadAttribution>,
     /// Attempts started so far.
     pub attempt: u32,
     pub next_attempt_at: DateTime<Utc>,
@@ -72,6 +77,8 @@ pub(crate) enum DeadReason {
     Exhausted,
     FirewallBlocked,
     Budget,
+    /// The cross-tenant read verdict withheld it (MIN.2 E1).
+    Tenant,
 }
 
 impl DeadReason {
@@ -82,6 +89,7 @@ impl DeadReason {
             Self::Exhausted => "exhausted",
             Self::FirewallBlocked => "firewall_blocked",
             Self::Budget => "budget",
+            Self::Tenant => "tenant",
         }
     }
 }

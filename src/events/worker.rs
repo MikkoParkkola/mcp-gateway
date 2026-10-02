@@ -17,6 +17,8 @@ use super::outbox::{DeadReason, OutboxRecord};
 use super::services::{Attempt, Services};
 use super::store::{Claim, Claimed, Settle};
 use super::types::CallbackFailure;
+use crate::gateway::outbound::{self, Admission, CallbackSend, OutboundFrame};
+use crate::security::tenant_reads::ReadVerdict;
 
 /// How often dead-letter retention runs while the gateway is up.
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
@@ -137,6 +139,7 @@ impl EventsHub {
             status,
             body_sha256: "",
             delivered: false,
+            cross_tenant_read: None,
         };
         if !services.admits_subscription(&sub, &record.backend).await {
             services.audit_attempt(&refused("access_revoked")).await;
@@ -155,13 +158,12 @@ impl EventsHub {
         // A record a crash or a long suspension carried past its bounds is
         // dead before it is sent again, never after (§6.5).
         if let Some(reason) = record.dead_as {
-            self.settle(services, &record, quiet_dead(reason)).await;
+            self.bury(services, &record, reason).await;
             return;
         }
         if self.overdue(&record, Utc::now()) {
             services.audit_attempt(&refused("exhausted")).await;
-            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
-                .await;
+            self.bury(services, &record, DeadReason::Exhausted).await;
             return;
         }
         // An unsubscribe that waited past its bound has removed the
@@ -172,39 +174,72 @@ impl EventsHub {
         };
         if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
             services.audit_attempt(&refused("budget")).await;
-            self.settle(services, &record, quiet_dead(DeadReason::Budget))
-                .await;
+            self.bury(services, &record, DeadReason::Budget).await;
             return;
         }
-        let (Some(body), Some(url)) = (record.body(), url) else {
-            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
-                .await;
+        let (Some((value, body_sha256)), Some(url)) = (wire_body(&record), url) else {
+            self.bury(services, &record, DeadReason::Exhausted).await;
             return;
         };
-        let body_sha256 = {
-            use sha2::Digest as _;
-            hex::encode(sha2::Sha256::digest(&body))
+        let Some((frame, verdict)) = self
+            .admit_delivery(services, &sub, &record, value, refused("tenant"))
+            .await
+        else {
+            return;
         };
-        let answer = self.send_event(&url, &current, event_id, body).await;
+        let answer = self
+            .send_event(&url, &current, event_id, frame, sub.read_key.as_deref())
+            .await;
         let (outcome, status) = self.judge(&record, &answer);
         let delivered = matches!(outcome, Settle::Delivered);
         services
             .audit_attempt(&Attempt {
                 body_sha256: &body_sha256,
                 delivered,
+                cross_tenant_read: verdict,
                 ..refused(status)
             })
             .await;
-        if self
-            .runtime
-            .failures
-            .record(&sub.id, delivered, Instant::now())
-        {
-            let id = sub.id.clone();
-            self.blocking(move |store| store.suspend(&id)).await;
-            tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
-        }
+        self.track_failures(&sub, delivered).await;
         self.settle(services, &record, outcome).await;
+    }
+
+    /// MIN.2 E1: the delivery is a read by the subscription's caller, on the
+    /// history its answers share. A blocked one is audited and dead-lettered
+    /// `tenant` here; `None` then.
+    async fn admit_delivery(
+        &self,
+        services: &Services,
+        sub: &super::records::Subscription,
+        record: &OutboxRecord,
+        value: serde_json::Value,
+        blocked: Attempt<'_>,
+    ) -> Option<(OutboundFrame, Option<ReadVerdict>)> {
+        let evidence = match outbound::callback_frame(
+            services.guard(),
+            sub.read_key.as_deref(),
+            value,
+            record.attribution.as_ref(),
+        ) {
+            Admission::Admitted(frame) => {
+                let verdict = frame.verdict();
+                let frame = outbound::recorded(frame, services.audit.as_ref()).await;
+                return Some((frame, verdict));
+            }
+            Admission::Blocked(evidence) => evidence,
+        };
+        if let Some(log) = &services.audit {
+            outbound::audit_rejection(log, &evidence).await;
+        }
+        services
+            .audit_attempt(&Attempt {
+                cross_tenant_read: Some(evidence.verdict),
+                ..blocked
+            })
+            .await;
+        self.settle(services, record, quiet_dead(DeadReason::Tenant))
+            .await;
+        None
     }
 
     /// The one path an event's bytes take to a callback: signed with the
@@ -215,7 +250,8 @@ impl EventsHub {
         url: &url::Url,
         sub: &super::records::Subscription,
         event_id: &str,
-        body: Vec<u8>,
+        frame: OutboundFrame,
+        key: Option<&str>,
     ) -> Result<super::client::Answer, CallbackFailure> {
         let now = Utc::now();
         let current = super::client::decode_whsec(&sub.secret);
@@ -229,10 +265,38 @@ impl EventsHub {
             .chain(previous.iter())
             .map(Vec::as_slice)
             .collect();
-        // Owner: MIN.2 design row E1 converts this send to outbound::callback_frame.
-        self.client
-            .post(url, &sub.id, event_id, &keys, body, ReadBody::Discard)
-            .await
+        outbound::send_callback(frame, key.unwrap_or_default(), |body| async move {
+            // A literal the deny list covers never leaves the process, so
+            // the frame's reservation is released; any other failure may
+            // follow a written byte, and the frame commits.
+            if let Err(refused) = self.client.check_literal(url) {
+                return CallbackSend::NotSent(refused);
+            }
+            CallbackSend::Sent(
+                self.client
+                    .post(url, &sub.id, event_id, &keys, body, ReadBody::Discard)
+                    .await,
+            )
+        })
+        .await
+    }
+
+    /// Suspend a subscription whose deliveries keep failing.
+    async fn track_failures(&self, sub: &super::records::Subscription, delivered: bool) {
+        if self
+            .runtime
+            .failures
+            .record(&sub.id, delivered, Instant::now())
+        {
+            let id = sub.id.clone();
+            self.blocking(move |store| store.suspend(&id)).await;
+            tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
+        }
+    }
+
+    /// Dead-letter the claimed occurrence without a status.
+    async fn bury(&self, services: &Services, record: &OutboxRecord, reason: DeadReason) {
+        self.settle(services, record, quiet_dead(reason)).await;
     }
 
     /// Settle the claimed occurrence `record`; a later occurrence that has
@@ -362,6 +426,15 @@ fn overdue(
 }
 
 /// Dead without a new HTTP status: the subscription's last error stands.
+/// The stored body as a JSON value, with the SHA-256 of what goes on the
+/// wire: the frame's own serialisation, which is what the audit hashes.
+fn wire_body(record: &OutboxRecord) -> Option<(serde_json::Value, String)> {
+    use sha2::Digest as _;
+    let value: serde_json::Value = serde_json::from_slice(&record.body()?).ok()?;
+    let sent = serde_json::to_vec(&value).ok()?;
+    Some((value, hex::encode(sha2::Sha256::digest(sent))))
+}
+
 const fn quiet_dead(reason: DeadReason) -> Settle {
     Settle::Dead {
         reason,

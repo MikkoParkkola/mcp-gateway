@@ -18,6 +18,9 @@ pub(crate) struct Caller {
     /// The canonical principal; `None` when the call is not authenticated
     /// (or authentication is off).
     pub principal: Option<String>,
+    /// The caller key the read verdict judges this caller's frames under;
+    /// `None` when the verdict is off or the caller has no identity.
+    pub read_key: Option<String>,
     /// The credential the caller presented.
     pub credential: Credential,
     /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
@@ -275,6 +278,7 @@ impl EventsHub {
             api_key: caller.credential.api_key.clone(),
             credential_kind: Some(caller.credential.kind),
             credential_principal: Some(caller.credential.principal.clone()),
+            read_key: caller.read_key.clone(),
             binding: caller.credential.binding.clone(),
             legacy_api_key_name: None,
             url: url.as_str().to_owned(),

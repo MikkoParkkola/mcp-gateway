@@ -7,18 +7,35 @@
 
 use std::future::Future;
 
-use super::{OutboundFrame, Payload};
+use serde_json::Value;
+
+use super::{Admission, Guard, OutboundFrame, Payload, admission};
 use crate::events::CallbackFailure;
+use crate::security::tenant_reads::ReadAttribution;
+
+/// Judge a MIK-7630 event delivery for the subscription's `key`.
+/// `attribution` is what the outbox record carries from before the event
+/// firewall's redaction; a record without it counts as unread.
+pub(crate) fn callback_frame(
+    guard: Option<&Guard>,
+    key: Option<&str>,
+    body: Value,
+    attribution: Option<&ReadAttribution>,
+) -> Admission {
+    let unread = ReadAttribution {
+        uninspected: true,
+        ..ReadAttribution::default()
+    };
+    admission(
+        guard,
+        key,
+        Payload::Callback(body),
+        Some(attribution.unwrap_or(&unread)),
+    )
+}
 
 /// What the callback sender reports back to [`send_callback`].
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
-    )
-)]
 pub(crate) enum CallbackSend<T> {
     /// Nothing left the process (a refused literal, DNS or connect failure
     /// before any byte): the frame's reservation is released.
@@ -35,13 +52,6 @@ pub(crate) enum CallbackSend<T> {
 /// # Errors
 /// The sender's failure, or `ConnectionRefused` for a frame that is not a
 /// callback body or is bound to another principal.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the MIK-7630 event sender converts to it (design row E1, #2651)"
-    )
-)]
 pub(crate) async fn send_callback<T, F, Fut>(
     frame: OutboundFrame,
     principal: &str,
