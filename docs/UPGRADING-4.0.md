@@ -3414,6 +3414,7 @@ both sides speak; stdio and WebSocket now do the same.
 
 **Action:** a backend that fails to start with "Backend selected protocol version" needs a
 revision from the supported list, or a `protocol_version` pin it accepts.
+
 ## 120. A task stored by a 4.0.0 beta is re-checked or refused
 
 **Startup:** no notice, `tasks/get` on such a task may answer -32003
