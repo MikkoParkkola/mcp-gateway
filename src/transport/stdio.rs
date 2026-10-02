@@ -549,7 +549,16 @@ impl StdioTransport {
     /// answer that caller with a frame carrying neither `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
         debug!(line = %line, "Parsing response");
-        let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
+        // Responses are nearly every line, so parse one straight into its type.
+        // A response refuses any frame carrying `method`, which every request
+        // and notification needs, so this classifies exactly as the untagged
+        // enum does; only the rest pays the enum's buffer-and-retry parse
+        // (NFR.WORKLOAD.1).
+        let message = match serde_json::from_str::<JsonRpcResponse>(line) {
+            Ok(response) => JsonRpcMessage::Response(response),
+            Err(_) => serde_json::from_str::<JsonRpcMessage>(line)?,
+        };
+        let response = match message {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
                 self.capture_notification(notification);
