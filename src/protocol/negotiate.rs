@@ -107,29 +107,44 @@ pub(crate) fn initialize_params(version: &str) -> Value {
     })
 }
 
+/// Which revisions an `initialize` selection may name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Selectable {
+    /// [`SUPPORTED_VERSIONS`] only. HTTP: its `MCP-Protocol-Version` header
+    /// follows the selection, and a modern header on legacy-shaped bodies
+    /// would contradict the era its probe settled.
+    Legacy,
+    /// [`SUPPORTED_VERSIONS`] or [`MODERN_VERSIONS`]. stdio and WebSocket: no
+    /// header follows the selection, and on stdio the era probe settles the
+    /// dialect of a backend whose handshake named `2026-07-28`.
+    LegacyOrModern,
+}
+
 /// The revision a backend selected in its `initialize` result, or `None` when
 /// the result names none.
 ///
 /// The client proposes and the server selects, so the selection is what
 /// governs the session -- which is why it must be a revision this gateway
-/// speaks: a legacy one, or a modern one, whose dialect the era probe then
-/// settles (a backend may answer `initialize` naming `2026-07-28`).
+/// speaks on that transport.
 ///
 /// # Errors
 ///
-/// [`Error::Protocol`] when the selection is in neither [`SUPPORTED_VERSIONS`]
-/// nor [`MODERN_VERSIONS`].
+/// [`Error::Protocol`] when the selection is not [`Selectable`].
 /// The selection is backend-controlled text, so the diagnostic names it only
 /// when it is shaped like a version: a backend must not be able to echo a
 /// credential the gateway sent it into an error.
-pub(crate) fn checked_selection(result: Option<&Value>) -> Result<Option<&str>> {
+pub(crate) fn checked_selection(
+    result: Option<&Value>,
+    selectable: Selectable,
+) -> Result<Option<&str>> {
     let Some(selected) = result
         .and_then(|result| result.get("protocolVersion"))
         .and_then(Value::as_str)
     else {
         return Ok(None);
     };
-    if SUPPORTED_VERSIONS.contains(&selected) || MODERN_VERSIONS.contains(&selected) {
+    let modern = selectable == Selectable::LegacyOrModern && MODERN_VERSIONS.contains(&selected);
+    if modern || SUPPORTED_VERSIONS.contains(&selected) {
         return Ok(Some(selected));
     }
     let named = if is_version_token(selected) {
@@ -138,8 +153,7 @@ pub(crate) fn checked_selection(result: Option<&Value>) -> Result<Option<&str>> 
         "a value that is not a protocol version"
     };
     Err(Error::Protocol(format!(
-        "Backend selected protocol version {named}, which this gateway does not speak; it speaks: {}, {}",
-        MODERN_VERSIONS.join(", "),
+        "Backend selected protocol version {named}, which this gateway does not speak; it speaks: {}",
         SUPPORTED_VERSIONS.join(", ")
     )))
 }

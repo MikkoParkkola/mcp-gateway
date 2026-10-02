@@ -27,7 +27,7 @@ use crate::transport::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, checked_selection, initialize_params, is_version_mismatch_error,
+    RequestId, Selectable, checked_selection, initialize_params, is_version_mismatch_error,
     negotiate_best_version, parse_supported_versions_from_error,
 };
 use crate::{Error, Result};
@@ -357,7 +357,8 @@ impl StdioTransport {
         // answer selected governs the session, or what was proposed when it
         // names nothing. Checked before it is written, so a refusal leaves
         // the stored version as it was.
-        let selected = checked_selection(response.result.as_ref())?.unwrap_or(proposed);
+        let selected = checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?
+            .unwrap_or(proposed);
         info!(
             command = %self.diagnostic_command(),
             requested = %proposed,
@@ -485,17 +486,16 @@ impl StdioTransport {
             })
             .flatten();
 
-        let method = &notification.method;
         match token.and_then(|t| self.progress_destinations.get(&t)) {
             Some(destination) => {
-                debug!(method = %method, "Delivering peer notification to its caller");
+                debug!("Delivering peer notification to its caller");
                 // Sent, not queued, and from the reader task: `deliver` uses
                 // `try_send`, because a blocking send here would park the only
                 // reader of this backend's stdout.
                 destination.deliver(notification);
             }
             None => {
-                debug!(method = %method, "Ignoring peer notification");
+                debug!("Ignoring peer notification");
             }
         }
     }
@@ -514,23 +514,24 @@ impl StdioTransport {
                 self.capture_notification(notification);
                 return Ok(());
             }
-            JsonRpcMessage::Request(request) => {
-                return Err(Error::Protocol(format!(
-                    "Peer sent request '{}' on the response stream",
-                    request.method
-                )));
+            JsonRpcMessage::Request(_) => {
+                // The method is peer text, so it is not repeated: the error
+                // reaches the log.
+                return Err(Error::Protocol(
+                    "Peer sent a request on the response stream".to_string(),
+                ));
             }
         };
 
         if let Some(ref id) = response.id {
             let key = id.to_string();
             let pending_count = self.pending.len();
-            debug!(id = %key, pending_count, "Looking for pending request");
+            debug!(pending_count, "Looking for pending request");
             if let Some((_, sender)) = self.pending.remove(&key) {
-                debug!(id = %key, "Found pending request, sending response");
+                debug!("Found pending request, sending response");
                 let _ = sender.send(response);
             } else {
-                debug!(id = %key, "No pending request found for response");
+                debug!("No pending request found for response");
             }
         } else {
             debug!("Response has no ID (notification?)");

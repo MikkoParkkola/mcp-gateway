@@ -31,7 +31,7 @@ use crate::protocol::era::Era;
 use crate::protocol::extensions::Extension;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
     checked_selection, is_version_mismatch_error, negotiate_best_version,
     parse_supported_versions_from_error,
 };
@@ -954,7 +954,7 @@ impl HttpTransport {
         // the gateway kept announcing its own latest to a backend that had
         // already told it otherwise, which is the gateway violating the
         // negotiation it opened.
-        if let Some(selected) = checked_selection(response.result.as_ref())? {
+        if let Some(selected) = checked_selection(response.result.as_ref(), Selectable::Legacy)? {
             *self.protocol_version.write() = Some(selected.to_string());
         }
 

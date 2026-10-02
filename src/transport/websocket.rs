@@ -41,7 +41,7 @@ use uuid::Uuid;
 use super::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
     checked_selection, initialize_params, is_version_mismatch_error, negotiate_best_version,
     parse_supported_versions_from_error,
 };
@@ -417,7 +417,7 @@ impl WebSocketTransport {
                 "WebSocket MCP initialize failed".to_string(),
             ));
         }
-        checked_selection(response.result.as_ref())?;
+        checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?;
 
         tokio::task::yield_now().await;
         self.notify("notifications/initialized", None).await?;
