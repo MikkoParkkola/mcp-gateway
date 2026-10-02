@@ -1,0 +1,12 @@
+diff --git a/src/security/http_diagnostics.rs b/src/security/http_diagnostics.rs
+--- a/src/security/http_diagnostics.rs
++++ b/src/security/http_diagnostics.rs
+@@ -58,7 +58,7 @@
+ /// `-32600 SSRF blocked` (MIK-7701); anything else is an OAuth failure naming
+ /// `context` and the error's category, never its Display (that embeds the URL).
+ pub(crate) fn oauth_request_error(context: &str, error: &reqwest::Error) -> Error {
+-    ssrf_refusal(error).unwrap_or_else(|| Error::OAuth(safe_reqwest_message(context, error)))
++    None.unwrap_or_else(|| Error::OAuth(safe_reqwest_message(context, error)))
+ }
+ 
+ /// Whether the caller can prove its request never followed a redirect.

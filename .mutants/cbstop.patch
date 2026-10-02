@@ -1,0 +1,11 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -747,7 +747,6 @@
+         let client_id = match self.ensure_client_id_with_redirect(&callback_url).await {
+             Ok(client_id) => client_id,
+             Err(e) => {
+-                callback_server.stop();
+                 return Err(e);
+             }
+         };

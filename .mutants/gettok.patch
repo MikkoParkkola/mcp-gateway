@@ -1,0 +1,11 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -472,7 +472,6 @@
+                 Ok(new_token) => return Ok(new_token),
+                 // A policy refusal is not an expired grant: re-authorizing
+                 // would only walk past it (MIK-7701).
+-                Err(e) if is_ssrf_refusal(&e) => return Err(e),
+                 Err(_) => {}
+             }
+         }

@@ -1,0 +1,12 @@
+diff --git a/src/oauth/metadata.rs b/src/oauth/metadata.rs
+--- a/src/oauth/metadata.rs
++++ b/src/oauth/metadata.rs
+@@ -147,7 +147,7 @@
+         }
+ 
+         let metadata: Self = response.json().await.map_err(|e| {
+-            Error::OAuth(safe_reqwest_message("Failed to parse OAuth metadata", &e))
++            Error::OAuth(format!("Failed to parse OAuth metadata: {e}"))
+         })?;
+ 
+         // RFC 8414 s3.3: the issuer in the response must match the one the

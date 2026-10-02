@@ -1,0 +1,11 @@
+diff --git a/src/oauth/client/renewal.rs b/src/oauth/client/renewal.rs
+--- a/src/oauth/client/renewal.rs
++++ b/src/oauth/client/renewal.rs
+@@ -50,7 +50,6 @@
+         // Headless, for Beeper-style tokens.
+         match self.try_client_credentials().await {
+             Ok(_) => Renewal::Renewed,
+-            Err(e) if is_ssrf_refusal(&e) => self.refused(&e),
+             Err(e) => {
+                 debug!(
+                     backend = %self.backend_name,

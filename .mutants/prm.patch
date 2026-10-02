@@ -1,0 +1,11 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -344,7 +344,6 @@
+             }
+             // A policy refusal is an answer, not a missing document: falling
+             // back would walk past it (MIK-7701).
+-            Err(e) if is_ssrf_refusal(&e) => return Err(e),
+             Err(e) => {
+                 debug!(error = %e, "No protected resource metadata, using base URL");
+                 self.oauth_base_url = Some(base_url.clone());

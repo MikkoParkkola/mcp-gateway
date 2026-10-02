@@ -1,0 +1,16 @@
+head_sha	27f5fc2e81d71fe9b04ca77fedc2895cb4812b01
+# MIK-7701 PR 2637
+HOPRAW	linux	hopraw.patch	--lib oauth::client::destination::tests::a_refused_protected_resource_redirect_is_not_walked_past -- --exact
+DENIED	linux	denied.patch	--lib oauth::client::destination::tests::a_refused_oauth_redirect_is_typed_ssrf_blocked -- --exact
+SEND	linux	send.patch	--lib oauth::client::destination::tests::a_refused_token_refresh_redirect_is_typed_ssrf_blocked -- --exact
+PRM	linux	prm.patch	--lib oauth::client::destination::tests::a_refused_protected_resource_redirect_is_not_walked_past -- --exact
+GETTOK	linux	gettok.patch	--lib oauth::client::destination::tests::get_token_surfaces_a_refused_refresh_without_authorizing -- --exact
+REG	linux	reg.patch	--lib oauth::client::destination::tests::a_refused_registration_redirect_is_not_walked_past -- --exact
+CBSTOP	linux	cbstop.patch	--lib oauth::client::destination::tests::a_refused_registration_releases_the_callback_listener -- --exact
+RENREF	linux	renref.patch	--lib oauth::client::destination::tests::background_renewal_stops_at_a_refused_refresh -- --exact
+RENCC	linux	rencc.patch	--lib oauth::client::destination::tests::background_renewal_stops_at_a_refused_client_credentials_grant -- --exact
+LOOP	linux	loop.patch	--lib oauth::client::destination::tests::background_renewal_stops_at_a_refused_refresh -- --exact
+METAREQ	linux	metareq.patch	--lib oauth::metadata::tests::a_failed_discovery_fetch_does_not_echo_the_url -- --exact
+PRMREQ	linux	prmreq.patch	--lib oauth::metadata::tests::a_failed_discovery_fetch_does_not_echo_the_url -- --exact
+METADEC	linux	metadec.patch	--lib oauth::metadata::tests::an_unparsable_discovery_document_does_not_echo_the_url -- --exact
+PRMDEC	linux	prmdec.patch	--lib oauth::metadata::tests::an_unparsable_discovery_document_does_not_echo_the_url -- --exact

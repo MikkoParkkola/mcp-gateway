@@ -1,0 +1,11 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -973,7 +973,6 @@
+                         }
+                     }
+                 }
+-                Err(e) if is_ssrf_refusal(&e) => return Err(e),
+                 Err(e) => {
+                     debug!(error = %e, "Dynamic registration failed, using generated ID");
+                 }

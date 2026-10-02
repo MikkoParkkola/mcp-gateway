@@ -1,0 +1,12 @@
+diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
+--- a/src/oauth/client/destination.rs
++++ b/src/oauth/client/destination.rs
+@@ -43,7 +43,7 @@
+             Hop::Stop => attempt.error("too many redirects"),
+             // Typed as the resolver's refusal, so every send site maps it to
+             // `-32600 SSRF blocked` rather than a generic OAuth failure.
+-            Hop::Refuse(reason) => attempt.error(crate::security::ssrf::SsrfDenied::new(reason)),
++            Hop::Refuse(reason) => attempt.error(reason),
+             Hop::Follow => attempt.follow(),
+         }))
+         .build()

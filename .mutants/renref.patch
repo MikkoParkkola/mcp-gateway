@@ -1,0 +1,11 @@
+diff --git a/src/oauth/client/renewal.rs b/src/oauth/client/renewal.rs
+--- a/src/oauth/client/renewal.rs
++++ b/src/oauth/client/renewal.rs
+@@ -36,7 +36,6 @@
+         if let Some(refresh_token) = refresh_token_opt {
+             match self.refresh_token(&refresh_token).await {
+                 Ok(_) => return Renewal::Renewed,
+-                Err(e) if is_ssrf_refusal(&e) => return self.refused(&e),
+                 Err(e) => {
+                     debug!(
+                         backend = %self.backend_name,

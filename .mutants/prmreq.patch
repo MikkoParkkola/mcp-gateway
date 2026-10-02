@@ -1,0 +1,15 @@
+diff --git a/src/oauth/metadata.rs b/src/oauth/metadata.rs
+--- a/src/oauth/metadata.rs
++++ b/src/oauth/metadata.rs
+@@ -204,10 +204,7 @@
+         info!(url = %url, "Discovering OAuth protected resource metadata");
+ 
+         let response = client.get(&url).send().await.map_err(|e| {
+-            crate::security::http_diagnostics::oauth_request_error(
+-                "Failed to fetch protected resource metadata",
+-                &e,
+-            )
++            Error::OAuth(format!("Failed to fetch protected resource metadata: {e}"))
+         })?;
+ 
+         if !response.status().is_success() {

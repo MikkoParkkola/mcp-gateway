@@ -1,0 +1,12 @@
+diff --git a/src/oauth/client/renewal.rs b/src/oauth/client/renewal.rs
+--- a/src/oauth/client/renewal.rs
++++ b/src/oauth/client/renewal.rs
+@@ -115,7 +115,7 @@
+ 
+                 match renewal {
+                     Renewal::Renewed => {}
+-                    Renewal::Refused => return,
++                    Renewal::Refused => {}
+                     Renewal::Exhausted => warn!(
+                         backend = %backend_name,
+                         "All automatic token renewal strategies failed — \
