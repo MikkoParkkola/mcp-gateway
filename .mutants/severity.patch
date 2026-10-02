@@ -1,0 +1,13 @@
+diff --git a/src/capability/validator/checks.rs b/src/capability/validator/checks.rs
+index 765e5d5ed..9259b158c 100644
+--- a/src/capability/validator/checks.rs
++++ b/src/capability/validator/checks.rs
+@@ -169,7 +169,7 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
+     // fallback is never tried. Warn rather than refuse: the primary still works.
+     if !cap.providers.fallback.is_empty() {
+         issues.push(
+-            Issue::warning(
++            Issue::error(
+                 "CAP-011",
+                 "providers.fallback is not executed; only providers.primary serves calls. \
+                  Remove the block.",

@@ -1,0 +1,5 @@
+head_sha	e7f91a9617d38df861f72f0a127b983d8222742b
+# MIK-7768 CAP-011 and fallback parse
+NOWARN	linux	nowarn.patch	--lib capability::validator::tests::fallback::a_declared_fallback_is_warned_as_not_executed -- --exact
+SEVERITY	linux	severity.patch	--lib capability::validator::tests::fallback::
+DROP	linux	drop.patch	--lib capability::validator::tests::fallback::a_malformed_fallback_entry_is_a_parse_error -- --exact

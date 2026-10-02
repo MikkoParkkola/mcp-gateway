@@ -1,0 +1,15 @@
+diff --git a/src/capability/definition/mod.rs b/src/capability/definition/mod.rs
+index 2c07b50c5..f41d34c60 100644
+--- a/src/capability/definition/mod.rs
++++ b/src/capability/definition/mod.rs
+@@ -195,7 +195,9 @@ where
+                         single => vec![single],
+                     };
+                     for entry in entries {
+-                        fallback.push(serde_json::from_value(entry).map_err(M::Error::custom)?);
++                        if let Ok(p) = serde_json::from_value(entry) {
++                            fallback.push(p);
++                        }
+                     }
+                 } else {
+                     let provider: ProviderConfig = map.next_value()?;
