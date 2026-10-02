@@ -17,7 +17,9 @@
 //! - `file:/path/to/file.json:field` - JSON file with dot-path field extraction
 //! - `{env.VAR}` - Template format for environment variables
 
+mod cli;
 mod cli_argv;
+mod cli_run;
 mod client;
 mod credentials;
 pub mod graphql;
@@ -86,6 +88,8 @@ pub struct CapabilityExecutor {
         Option<Arc<crate::identity_propagation::AccountStrategyRegistry>>,
     /// What `service: cli`/`mcp` capabilities may run (MIK-7782).
     pub(super) process_policy: process::ProcessPolicy,
+    /// Per-capability bound on simultaneous CLI children.
+    pub(super) process_slots: DashMap<String, Arc<tokio::sync::Semaphore>>,
 }
 
 impl CapabilityExecutor {
@@ -108,6 +112,7 @@ impl CapabilityExecutor {
             policy_epoch: None,
             account_strategies: None,
             process_policy: process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
         }
     }
 
@@ -227,6 +232,7 @@ impl CapabilityExecutor {
             policy_epoch: None,
             account_strategies: None,
             process_policy: process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
         }
     }
 

@@ -15,7 +15,6 @@ use crate::config::{ProcessCommand, ProcessExecution};
 use crate::{Error, Result};
 
 use super::CapabilityExecutor;
-use super::cli_argv::build_cli_invocation;
 
 /// What process-running capabilities may do on this gateway.
 #[derive(Debug, Clone)]
@@ -90,21 +89,7 @@ impl CapabilityExecutor {
     ) -> Result<Value> {
         admit(&self.process_policy, capability, process)?;
         match process {
-            ProcessConfig::Cli(config) => {
-                let invocation = build_cli_invocation(config, params, &capability.schema.input)?;
-                // Shape only, never values (CWE-532).
-                tracing::debug!(
-                    capability = %capability.name,
-                    command = %invocation.command,
-                    args = invocation.args.len(),
-                    stdin = invocation.stdin.is_some(),
-                    "built CLI invocation"
-                );
-                Err(Error::Config(format!(
-                    "capability '{}': running a CLI process is not available in this build",
-                    capability.name
-                )))
-            }
+            ProcessConfig::Cli(config) => self.execute_cli(capability, config, params).await,
             ProcessConfig::Mcp(_) => Err(Error::Config(format!(
                 "capability '{}': calling an MCP capability server is not available in this build",
                 capability.name

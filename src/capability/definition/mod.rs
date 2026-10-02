@@ -15,8 +15,9 @@ mod process;
 mod providers;
 mod webhook;
 pub use process::{
-    CliArg, CliConfig, CliOutput, ConditionalArg, EachArg, JsonArg, McpConfig, McpTransport,
-    PrepareCall, ProcessConfig, ToolCall, ToolSelector,
+    CliArg, CliConfig, CliOutput, ConditionalArg, DEFAULT_MAX_OUTPUT_BYTES, EachArg, JsonArg,
+    MAX_OUTPUT_BYTES_CEILING, McpConfig, McpTransport, PrepareCall, ProcessConfig, ToolCall,
+    ToolSelector,
 };
 pub use providers::{Integrity, ProvidersConfig};
 pub use webhook::WebhookEvent;
