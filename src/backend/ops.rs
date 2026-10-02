@@ -329,16 +329,13 @@ impl Backend {
 
         // Execute with retry
         let name = self.name.clone();
-        // Own the identity key so the retry closure (Fn, invoked once per
-        // attempt) can hand a borrow to each attempt's future without tying the
-        // closure to the caller's borrow lifetime (MIK-6784).
+        // Own the identity key so each send can hand a borrow to its future
+        // without tying the closure to the caller's borrow lifetime (MIK-6784).
         let identity_key = identity_key.map(str::to_string);
         let (perm, policy) = Self::resend_decision(&entry, method, params.as_ref());
-        let attempt = || {
+        let send = |params: Option<Value>, extra_headers: Vec<(String, String)>| {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
-            let params = params.clone();
-            let extra_headers = extra_headers.clone();
             let identity_key = identity_key.clone();
             async move {
                 match attempts {
@@ -366,9 +363,16 @@ impl Backend {
                 }
             }
         };
-        let result = match attempts {
-            Attempts::WithRetry => with_retry(&policy, &name, attempt).await,
-            Attempts::TaskCapabilityOnce => attempt().await,
+        // A call sent at most once moves its payload into its one send; only a
+        // resend copies it per attempt (NFR.WORKLOAD.1). `with_retry` under a
+        // disabled policy is exactly one call, so both arms send the same way.
+        let result = if matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled {
+            send(params, extra_headers).await
+        } else {
+            with_retry(&policy, &name, || {
+                send(params.clone(), extra_headers.clone())
+            })
+            .await
         };
 
         // Calculate latency
