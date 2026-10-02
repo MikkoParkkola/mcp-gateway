@@ -2384,6 +2384,10 @@ impl MetaMcp {
                 .route_direct_backend_call(id.clone(), tool_name, &arguments, session_id, caller)
                 .await
         {
+            // MUTANT MIK-7707: marker set on the direct-name route
+            let mut response = response;
+            response.discovery_inspected =
+                self.marks_discovery(tool_name, response.error.is_none());
             return response;
         }
 
