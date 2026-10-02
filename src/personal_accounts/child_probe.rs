@@ -79,9 +79,11 @@ impl Drop for Probe {
 
 /// Reap `child`. One that has answered is exiting and writing its coverage
 /// profile, and a kill mid-write leaves a corrupt profile (#2573), so it gets a
-/// bounded grace; one still blocked is killed after it.
+/// bounded grace; one still blocked is killed after it. A blocked child writes
+/// no profile, and only a failing test leaves one blocked, so the grace is
+/// generous: it costs time only on a run that is already red.
 pub(super) fn reap(child: &mut Child) {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
