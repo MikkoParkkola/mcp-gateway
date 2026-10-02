@@ -93,9 +93,17 @@ fn scope_off(object: &Value) -> bool {
 }
 
 /// The retained-result slot of a raw task envelope: an object with a string
-/// `taskId` whose `result` is an object. Only this one slot is followed.
+/// `taskId`, or with a `taskId` of any other type beside a `status` (a
+/// malformed backend's envelope, MIK-7702), whose `result` is an object. Only
+/// this one top-level slot is followed; nested tool data is never touched.
 fn task_result_slot(result: &Value) -> Option<&Value> {
-    result.get("taskId")?.as_str()?;
+    let task_id = result.get("taskId")?;
+    if !task_id.is_string() {
+        // Only a status the typed task wire accepts makes it an envelope.
+        // A string only: serde also reads a unit variant from `{"completed": null}`.
+        let status = result.get("status")?.as_str()?;
+        serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status.into()).ok()?;
+    }
     result.get("result").filter(|slot| slot.is_object())
 }
 
@@ -114,15 +122,21 @@ fn scope_needs_clamp(result: &Value) -> bool {
 /// tool data is never touched; the one slot followed is the result a raw task
 /// envelope retains.
 pub(crate) fn clamp_delivered_scope(result: &mut Value) {
-    if scope_off(result)
-        && let Some(object) = result.as_object_mut()
-    {
-        object.insert("cacheScope".to_owned(), Value::String("private".to_owned()));
-    }
+    clamp_top_level(result);
+    // One slot, never recursively: the retained result's own data is tool data.
     if task_result_slot(result).is_some_and(scope_off)
         && let Some(slot) = result.get_mut("result")
     {
-        clamp_delivered_scope(slot);
+        clamp_top_level(slot);
+    }
+}
+
+/// Rewrite one object's own `cacheScope` to `private` when it is anything else.
+fn clamp_top_level(object: &mut Value) {
+    if scope_off(object)
+        && let Some(object) = object.as_object_mut()
+    {
+        object.insert("cacheScope".to_owned(), Value::String("private".to_owned()));
     }
 }
 
@@ -148,19 +162,49 @@ pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
     }
 }
 
-/// Clamp the `result` of one JSON-RPC response; requests and notifications
-/// (no `id`) pass unchanged.
+/// `serialize_with` for `JsonRpcError.data`: diagnostic data, not a result, so
+/// only its own top-level `cacheScope` is clamped; nothing it nests is
+/// followed, task-shaped or not (MIK-7702).
+#[expect(
+    clippy::ref_option,
+    reason = "serde's serialize_with passes the field as &Option<Value>"
+)]
+pub(crate) fn serialize_delivered_error_data<S: serde::Serializer>(
+    data: &Option<Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    match data {
+        Some(value) if scope_off(value) => {
+            let mut clamped = value.clone();
+            clamp_top_level(&mut clamped);
+            clamped.serialize(serializer)
+        }
+        Some(value) => value.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Clamp the `result` and `error.data` of one JSON-RPC response; requests and
+/// notifications (no `id`) pass unchanged.
 fn clamp_response_envelope(payload: &mut Value) {
     if payload.get("id").is_some()
         && let Some(result) = payload.get_mut("result")
     {
         clamp_delivered_scope(result);
     }
+    // Error data is not a cacheable result, but it claims no scope either
+    // (MIK-7702).
+    if payload.get("id").is_some()
+        && let Some(data) = payload.pointer_mut("/error/data")
+    {
+        clamp_top_level(data);
+    }
 }
 
 /// The SSE `data` of a `message` event: the payload as text, with the `result`
-/// of a JSON-RPC response, or of each response in a batch, clamped by
-/// [`clamp_delivered_scope`].
+/// and `error.data` of a JSON-RPC response, or of each response in a batch,
+/// clamped by [`clamp_delivered_scope`].
 pub(crate) fn message_event_data(payload: &Value) -> String {
     let mut clamped = payload.clone();
     match &mut clamped {
