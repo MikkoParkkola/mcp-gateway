@@ -393,6 +393,25 @@ async fn a_relay_in_an_argument_key_is_refused() {
     );
 }
 
+/// A3c: a copy split mid-word over fields shorter than one fingerprint is
+/// still the copy the backend can reassemble, so it is checked whole.
+#[tokio::test]
+async fn a_relay_split_mid_word_over_short_fields_is_refused() {
+    let fx = fixture(Setup::default()).await;
+    fx.read(Some("a")).await;
+    let chars: Vec<char> = PROSE.chars().collect();
+    let fields = chars
+        .chunks(20)
+        .enumerate()
+        .map(|(i, chunk)| (format!("p{i:03}"), Value::String(chunk.iter().collect())));
+    let args = Value::Object(fields.collect());
+    assert_refused(
+        &fx,
+        &fx.call(Some("b"), &call("send", &args, None, None)).await,
+        0,
+    );
+}
+
 /// A4: a caller-supplied `_context_integrity` in the arguments is content.
 #[tokio::test]
 async fn a_relay_in_argument_context_integrity_is_refused() {
