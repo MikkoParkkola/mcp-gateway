@@ -112,6 +112,36 @@ async fn t_c05c_invalid_grants_are_refused_and_revoked() {
     assert_eq!(gw.fixture.exchanges().len(), 3);
 }
 
+/// The code exchange itself refused: `invalid_grant` is the provider's
+/// verdict, anything else is an outage. Neither commits a grant, and with no
+/// tokens issued there is nothing to revoke.
+#[tokio::test(flavor = "multi_thread")]
+async fn t_exchange_refusal_maps_to_a_closed_reason_and_commits_nothing() {
+    // GIVEN
+    let (_owui, gw) = journey_gateway(RevocationEndpoint::Configured).await;
+    let cases = [
+        (400, json!({"error": "invalid_grant"}), "provider_error"),
+        (
+            503,
+            json!({"error": "temporarily_unavailable"}),
+            "provider_unavailable",
+        ),
+    ];
+    for (code, body, reason) in cases {
+        let flow = begin(&gw, ALICE, ALICE_TOKEN, WORK).await;
+        gw.fixture.token.queue(code, body);
+        // WHEN
+        let outcome = complete(&gw, &flow).await;
+        // THEN
+        assert_outcome(&outcome, reason);
+        let status = journey_status(&gw, ALICE, &flow.id).await;
+        assert_eq!(status["status"], "failed", "{reason}");
+        assert_eq!(status["reason"], reason);
+        assert_eq!(gw.fixture.state(&key_of(&gw, ALICE, WORK)).await, "absent");
+    }
+    assert!(gw.fixture.received().is_empty(), "no token was ever issued");
+}
+
 /// T-ABORT (store and audit arms, revocation outcomes): a failed pre-commit
 /// audit write and a failed commit abort like any other; a 503 at `/revoke`
 /// is reported as failed.

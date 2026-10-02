@@ -198,7 +198,7 @@ fn handle_response_invalid_json_returns_error() {
 
 #[test]
 fn build_init_params_contains_version() {
-    let params = StdioTransport::build_init_params("2025-06-18");
+    let params = initialize_params("2025-06-18");
     assert_eq!(params["protocolVersion"], "2025-06-18");
     assert_eq!(params["clientInfo"]["name"], "mcp-gateway");
 }

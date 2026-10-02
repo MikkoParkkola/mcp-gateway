@@ -171,3 +171,84 @@ async fn a_settlement_that_overflows_beside_parked_targets_still_ends_failed() {
     );
     store.close().await.unwrap();
 }
+
+/// Mutant: any one of the owner, revision or terminal-status refusals in
+/// `add_targets`, or its readiness check, removed.
+#[tokio::test]
+async fn add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_closed_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (moved, settled, live) = (task(), task(), task());
+    for (identity, task) in [(1, &moved), (2, &settled), (3, &live)] {
+        store
+            .create(PreparedTask::for_test(task, OWNER, identity))
+            .await
+            .unwrap();
+    }
+    store
+        .transition(
+            OWNER,
+            moved.id(),
+            1,
+            TaskTransition::StatusMessage(Some("working".into())),
+            at(1),
+        )
+        .await
+        .unwrap();
+    store
+        .transition(OWNER, settled.id(), 1, TaskTransition::Cancel, at(2))
+        .await
+        .unwrap();
+    let before = files(&path);
+
+    for (why, owner, id, revision, expected) in [
+        ("foreign owner", OTHER, live.id(), 1, StoreError::NotFound),
+        (
+            "moved revision",
+            OWNER,
+            moved.id(),
+            1,
+            StoreError::RevisionConflict,
+        ),
+        (
+            "settled row",
+            OWNER,
+            settled.id(),
+            2,
+            StoreError::InvalidTransition,
+        ),
+    ] {
+        assert_eq!(
+            store
+                .add_targets(owner, id, revision, vec![target()])
+                .await
+                .unwrap_err(),
+            expected,
+            "{why}"
+        );
+        assert_eq!(files(&path), before, "{why}: a refusal writes nothing");
+    }
+
+    // Positive control: the owner's live row at its revision takes the target.
+    store
+        .add_targets(OWNER, live.id(), 1, vec![target()])
+        .await
+        .unwrap();
+    let file = path.join(format!("{}.json", live.id()));
+    let value: Value = serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
+    assert_eq!(
+        value["targets"],
+        json!([{"server": "mock", "tool": "echo"}])
+    );
+
+    let reader = store.clone();
+    store.close().await.unwrap();
+    assert_eq!(
+        reader
+            .add_targets(OWNER, live.id(), 1, vec![target()])
+            .await
+            .unwrap_err(),
+        StoreError::Unavailable
+    );
+}

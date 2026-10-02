@@ -260,14 +260,15 @@ fn drain_events(events: Vec<SseEvent>) -> Result<Option<JsonRpcResponse>> {
         match message {
             JsonRpcMessage::Response(response) => return Ok(Some(response)),
             JsonRpcMessage::Notification(notification) => {
-                tracing::debug!(method = %notification.method, "Notification on response stream");
+                tracing::debug!("Notification on response stream");
                 crate::transport::notification_sink::publish(vec![notification]);
             }
-            JsonRpcMessage::Request(request) => {
-                return Err(Error::Transport(format!(
-                    "Peer sent request '{}' on the response stream",
-                    request.method
-                )));
+            // The method is peer text, so it is not repeated: the error
+            // reaches the log.
+            JsonRpcMessage::Request(_) => {
+                return Err(Error::Transport(
+                    "Peer sent a request on the response stream".to_string(),
+                ));
             }
         }
     }

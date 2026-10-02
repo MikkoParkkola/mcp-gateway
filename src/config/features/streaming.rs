@@ -29,7 +29,8 @@ pub struct StreamingConfig {
     /// Backends to auto-subscribe for notifications.
     #[serde(default)]
     pub auto_subscribe: Vec<String>,
-    /// Maximum session lifetime before reaping (default: 30 min).
+    /// How long a session may sit idle, with no request and no open stream,
+    /// before it is reaped (default: 30 min). Measured from its last request.
     #[serde(with = "crate::config::humantime_serde")]
     pub session_ttl: Duration,
     /// How often the session reaper runs (default: 60 s).

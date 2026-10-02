@@ -46,6 +46,9 @@ pub(crate) struct OwnedCallerContext {
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<String>,
+    /// The creating or resuming request's caller key, which the A/B arm and the
+    /// hints key on (G4). Derived from that live request, never from a record.
+    caller_key: Option<String>,
     /// Classifier revision captured at admission. Borrowed into the rebuilt
     /// caller at dispatch. Not persisted on the durable task record.
     protocol_revision: Option<String>,
@@ -97,6 +100,7 @@ impl OwnedCallerContext {
             is_admin,
             input_capabilities,
             session_id,
+            caller_key: None,
             protocol_revision,
             retry: RetryFields {
                 attestation,
@@ -104,6 +108,14 @@ impl OwnedCallerContext {
             },
             dispatch_log: std::sync::Arc::default(),
         }
+    }
+
+    /// The request's caller key; `None` (stdio, no identity) falls back to the
+    /// session id the context carries.
+    #[must_use]
+    pub(crate) fn with_caller_key(mut self, caller_key: Option<String>) -> Self {
+        self.caller_key = caller_key.filter(|key| !key.is_empty());
+        self
     }
 
     pub(crate) fn dispatch_log(&self) -> &std::sync::Arc<DispatchLog> {
@@ -203,6 +215,7 @@ impl OwnedCallerContext {
             // principal and `LocalTransport` provenance survive the rebuild
             // (D6 rev 5 item 2). An HTTP host has none.
             stdio_nonce: host.stdio_nonce(),
+            caller_key: self.caller_key.as_deref(),
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,

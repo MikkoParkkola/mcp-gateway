@@ -13,6 +13,9 @@ mod modern_startup;
 /// #2292: per-caller headers on a notification.
 mod notify_headers;
 
+/// MIK-7324.COV.3: the legacy SSE handshake, session capture, OAuth bearer.
+mod handshake_and_session;
+
 /// Helper: create an `HttpTransport` for testing (streamable HTTP mode, no OAuth)
 fn make_transport(url: &str) -> Arc<HttpTransport> {
     HttpTransport::new(url, HashMap::new(), Duration::from_secs(30), true).unwrap()

@@ -30,7 +30,6 @@ use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::session_id::session_fp;
-#[cfg(feature = "firewall")]
 use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -42,6 +41,7 @@ use crate::security::{
     extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
 };
 
+mod events;
 mod owner;
 pub(super) mod request_checks;
 mod tasks;
@@ -269,7 +269,9 @@ pub(super) async fn mcp_sse_handler(
             .get_or_create_session_scoped(existing_session_id.as_deref(), &owner, held)
     };
 
-    info!(session_id = %session_fp(&session_id), "Client connected to SSE stream");
+    // Computed before the macro so its count is graded (MIK-7725).
+    let session = session_fp(&session_id);
+    info!(session_id = %session, "Client connected to SSE stream");
 
     // Auto-subscribe to configured backends
     let multiplexer = Arc::clone(&state.multiplexer);
@@ -334,11 +336,17 @@ pub(super) async fn mcp_delete_handler(
 
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
-            info!(session_id = %session_fp(id), "Session terminated by client");
+            let session = session_fp(id);
+            info!(session_id = %session, "Session terminated by client");
+            // The id is dead from here; what was keyed by it goes too.
+            if let Some(ref lifecycle) = state.session_lifecycle {
+                lifecycle.on_disconnect(id);
+            }
             StatusCode::NO_CONTENT
         }
         Some(id) => {
-            debug!(session_id = %session_fp(id), "No owned session for DELETE");
+            let session = session_fp(id);
+            debug!(session_id = %session, "No owned session for DELETE");
             StatusCode::NOT_FOUND
         }
         None => StatusCode::BAD_REQUEST,
@@ -688,6 +696,18 @@ async fn meta_mcp_dispatch(
             StatusCode::BAD_REQUEST,
         );
     }
+    if let Some(error) = signing_context
+        .as_ref()
+        .and_then(|context| context.refuse_malformed_nonce().err())
+    {
+        return build_error_response(
+            raw_id,
+            error.to_rpc_code(),
+            crate::gateway::meta_mcp::signing::wire_error_message(&error),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        );
+    }
 
     // Detect client POST-back responses (has "result" or "error" but no "method").
     // These are replies to server-to-client requests such as `sampling/createMessage`.
@@ -811,7 +831,8 @@ async fn meta_mcp_dispatch(
     // still declared what it declared.
     crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
-    debug!(method = %method, session_id = %session_fp(&session_id), "Meta-MCP request");
+    let session = session_fp(&session_id);
+    debug!(method = %method, session_id = %session, "Meta-MCP request");
 
     if let Some((rpc, status)) = request_checks::request_check_refusal(
         &state,
@@ -1078,6 +1099,27 @@ async fn meta_mcp_dispatch(
                 &acknowledgement,
                 state.streaming_config.keep_alive_interval,
             );
+        }
+        // MIK-7630. Answered here, never proxied; with events off the guard
+        // fails and the method falls through to `-32601`.
+        "events/list" | "events/subscribe" | "events/unsubscribe"
+            if state.meta_mcp.events().is_some() =>
+        {
+            let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));
+            let session = Some(session_id.as_str());
+            let caller = crate::events::Caller {
+                principal: events::principal(&owner, state.auth_config.enabled),
+                api_key_name: client
+                    .as_ref()
+                    .filter(|c| c.authenticated)
+                    .map(|c| c.name.clone()),
+                visible_backends: hub
+                    .scope_backends()
+                    .into_iter()
+                    .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
+                    .collect(),
+            };
+            events::answer(&hub, id, &method, params.as_ref(), &caller).await
         }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.
@@ -1478,6 +1520,22 @@ async fn meta_mcp_dispatch(
             // One request owns admission through dispatch and secured delivery.
             // A route change may conflict on representation, never create a
             // second owner for the same verified principal and explicit key.
+            // The A/B arm and the prefetch hints key on the caller (G4). Its
+            // reclaim deadline is renewed here, in every build, because those
+            // entries have no session end to reclaim them.
+            let caller_key = super::identity::caller_key(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+            );
+            if let Some(ref lifecycle) = state.session_lifecycle
+                && !caller_key.is_empty()
+            {
+                lifecycle.track(
+                    caller_key.clone(),
+                    session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
+                );
+            }
             let mut caller = MetaMcpCallerContext {
                 // Built above, after every gate that can still refuse, and only
                 // carried here: the dispatch chokepoint is what hands it over.
@@ -1495,6 +1553,7 @@ async fn meta_mcp_dispatch(
                 agent_declared,
                 grant_subject,
                 stdio_nonce: None,
+                caller_key: Some(caller_key.as_str()).filter(|key| !key.is_empty()),
                 verified_identity: verified_identity.as_ref(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
                 input_capabilities: declared_capabilities,

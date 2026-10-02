@@ -16,7 +16,7 @@ use tracing::{debug, error, warn};
 
 use super::AppState;
 use super::authorization::{
-    ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
+    ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level, slot_principal,
 };
 use super::direct_guards::{DirectRouteGuards, refusal};
 use super::hardened_identity::hardened_identity_refusal;
@@ -519,6 +519,11 @@ async fn backend_handler_inner(
         oauth_agent_identity.as_ref(),
         cert_identity.as_ref(),
     );
+    let slot = slot_principal(
+        client.as_ref(),
+        oauth_agent_identity.as_ref(),
+        cert_identity.as_ref(),
+    );
     // End-user identity for propagation (MIK-6704): the auth middleware may
     // attach a VerifiedIdentity for temporary/delegated OIDC tokens. Extracted
     // before the body is consumed so the direct route can propagate it too.
@@ -674,7 +679,7 @@ async fn backend_handler_inner(
     let session_id = inbound_headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
-        .filter(|id| state.multiplexer.is_owned_by(id, &owner));
+        .filter(|id| state.multiplexer.touch_if_owned(id, &owner));
     crate::protocol_revision_telemetry::observe_inbound_request(
         &json_request,
         params.as_ref(),
@@ -683,8 +688,8 @@ async fn backend_handler_inner(
         session_id,
         crate::protocol_revision_telemetry::Transport::Http,
     );
-
-    debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
+    let client_name = client.as_ref().map(|c| &c.name);
+    debug!(backend = %name, method = %method, client = ?client_name, "Backend request");
 
     // One backend's level is still shared by every user of that backend, so
     // this route applies the meta route's admin gate before anything forwards.
@@ -879,8 +884,7 @@ async fn backend_handler_inner(
                     // credential, so distinct callers never share a stateful
                     // upstream's session-bound data. `None` on the no-credential
                     // path keeps the shared default bucket (behavior unchanged).
-                    identity_key =
-                        charged_binding(&state, &name, caller, proven.as_deref(), binding);
+                    identity_key = charged_binding(&state, &name, caller, slot.as_deref(), binding);
                     Ok(headers)
                 }
                 Err(e) => Err(e),
@@ -1165,8 +1169,7 @@ async fn backend_handler_inner(
         .await;
         let (params, client) = (params.as_ref(), client.as_ref());
         let seen = (&call, challenge.as_deref());
-        let forward =
-            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward);
+        let forward = DirectRouteGuards::after_dispatch(&state, seen, client, &warnings, forward);
         return match forward {
             Ok(mut response) => {
                 // Restore the caller's ID over the transport's own.
@@ -1191,9 +1194,9 @@ async fn backend_handler_inner(
     // so it can be filtered per caller and answered without a cursor (A3).
     let forward = if method == "tools/list" {
         let (headers, key) = (&propagated_headers, identity_key.as_deref());
-        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name)
-            .await
-            .inspect(|_| record_client_success(&state, client.as_ref()))
+        // Success is recorded after the firewall pass below: a listing it
+        // refuses is not a client success (MIK-7708).
+        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name).await
     } else {
         let warnings = if method == "tools/call" {
             match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
@@ -1216,9 +1219,8 @@ async fn backend_handler_inner(
         );
         let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
         if method == "tools/call" {
-            let (params, client) = (params.as_ref(), client.as_ref());
             let seen = (&call, challenge.as_deref());
-            DirectRouteGuards::after_dispatch(&state, seen, params, client, &warnings, forward)
+            DirectRouteGuards::after_dispatch(&state, seen, client.as_ref(), &warnings, forward)
         } else {
             forward.inspect(|_| record_client_success(&state, client.as_ref()))
         }
@@ -1234,6 +1236,9 @@ async fn backend_handler_inner(
                 // computed before it can say `within` about a document the
                 // client never receives.
                 scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
+                if response.error.is_none() {
+                    record_client_success(&state, client.as_ref());
+                }
                 normalize_tools_list_response(&backend, &mut response);
                 // List = invoke: only what this route's `tools/call` admits.
                 let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());

@@ -149,3 +149,36 @@ async fn meta_replay_record_carries_delivered_tenants() {
     );
     assert!(replay.get("data_classes").is_none(), "{replay}");
 }
+
+/// MIK-7718 (#2521): the first call's invocation record cannot be written
+/// under fail-closed, so its value is withheld. A replay of the same key must
+/// not record that never-delivered value as delivered `ok` with its hash.
+#[tokio::test]
+async fn meta_replay_after_a_failed_record_is_not_ok() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    fx.log.fail_next_append_for_test();
+    let (_, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+    assert!(
+        first.contains("-32005"),
+        "the first value must be withheld: {first}"
+    );
+    let (_, second) = post_modern(&fx, &keyed_invoke(2).0).await;
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "the second call must be a replay: {second}"
+    );
+    let delivered_ok: Vec<Value> = invocations(&fx)
+        .into_iter()
+        .filter(|record| record["outcome"] == "ok" && record.get("response_hash").is_some())
+        .collect();
+    assert!(
+        delivered_ok.is_empty(),
+        "a never-delivered value was recorded as delivered: {delivered_ok:?}"
+    );
+}

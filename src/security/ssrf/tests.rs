@@ -533,8 +533,8 @@ async fn pinning_loopback_rebinding_blocked() {
         .unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("127.0.0.1"),
-        "error must name the blocked IP: {msg}"
+        !msg.contains("127.0.0.1"),
+        "a host name's refusal must not name what it resolves to: {msg}"
     );
     assert!(
         msg.contains("SSRF blocked"),
@@ -546,13 +546,34 @@ async fn pinning_loopback_rebinding_blocked() {
 #[tokio::test]
 async fn pinning_metadata_rebinding_blocked() {
     let resolver = MockResolver::returning(vec!["169.254.169.254".parse().unwrap()]);
-    let err = resolve_and_validate_host("metadata.test.invalid", &resolver)
+    let err = resolve_and_validate_host("rebind.test.invalid", &resolver)
         .await
         .unwrap_err();
     let msg = err.to_string();
+    // A name's refusal names neither what it resolved to nor its kind: that
+    // would answer internal DNS for whoever sees the error.
     assert!(
-        msg.contains("169.254.169.254"),
-        "error must name the metadata IP: {msg}"
+        msg.contains("SSRF blocked") && !msg.contains("169.254") && !msg.contains("metadata"),
+        "a host name's refusal must not name what it resolves to: {msg}"
+    );
+}
+
+/// MIK-7633 AC7: the standard literal check names a cloud metadata address
+/// as one; any other private literal keeps the generic text.
+#[test]
+fn metadata_host_refusal_names_the_metadata_service() {
+    for host in [
+        "169.254.169.254",
+        "[fd00:ec2::254]",
+        "::ffff:169.254.169.254",
+    ] {
+        let msg = check_host_not_ssrf(host).unwrap_err().to_string();
+        assert!(msg.contains("cloud metadata address"), "{host}: {msg}");
+    }
+    let msg = check_host_not_ssrf("10.0.0.1").unwrap_err().to_string();
+    assert!(
+        msg.contains("private/reserved address 10.0.0.1") && !msg.contains("metadata"),
+        "{msg}"
     );
 }
 

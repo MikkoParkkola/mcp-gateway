@@ -10,12 +10,15 @@ use crate::gateway::auth::live::HeldCredential;
 use crate::gateway::session_id::SessionOwner;
 
 impl NotificationMultiplexer {
-    /// Whether `session_id` names a live session `owner` holds.
-    pub(crate) fn is_owned_by(&self, session_id: &str, owner: &SessionOwner) -> bool {
-        self.sessions
-            .read()
-            .get(session_id)
-            .is_some_and(|session| session.owner == *owner)
+    /// Whether `session_id` names a live session `owner` holds. A request that
+    /// acts under it counts as activity, so the reaper leaves it alone.
+    pub(crate) fn touch_if_owned(&self, session_id: &str, owner: &SessionOwner) -> bool {
+        let sessions = self.sessions.read();
+        let Some(session) = sessions.get(session_id).filter(|s| s.owner == *owner) else {
+            return false;
+        };
+        *session.last_active.write() = std::time::Instant::now();
+        true
     }
 
     /// Resume `owner`'s live session named `session_id`, holding the
@@ -32,6 +35,7 @@ impl NotificationMultiplexer {
             .get(session_id?)
             .filter(|session| session.owner == *owner)?;
         *session.credential.write() = credential;
+        *session.last_active.write() = std::time::Instant::now();
         Some((
             session.id.expose_secret().to_string(),
             session.tx.subscribe(),

@@ -35,6 +35,13 @@ pub(crate) enum Behaviour {
     CloseFirstCall,
     /// Answer `initialize`, then never answer anything.
     SilentRequests,
+    /// Reject an `initialize` proposing anything outside `speaks` with a
+    /// version-mismatch error that lists `speaks`; answer one inside it by
+    /// selecting `selects`, whatever was proposed.
+    Negotiates {
+        speaks: &'static [&'static str],
+        selects: &'static str,
+    },
 }
 
 /// What the peer observed.
@@ -171,6 +178,22 @@ fn answer(frame: &Value, behaviour: Behaviour, seen: &Seen) -> Option<Vec<Value>
                 Behaviour::RejectInitialize => {
                     let error = json!({ "code": -32600, "message": "no legacy handshake" });
                     return Some(vec![json!({ "jsonrpc": "2.0", "id": id, "error": error })]);
+                }
+                Behaviour::Negotiates { speaks, selects } => {
+                    let proposed = frame["params"]["protocolVersion"].as_str().unwrap_or("");
+                    if !speaks.contains(&proposed) {
+                        let message = format!(
+                            "Unsupported protocol version. Supported versions: {}",
+                            speaks.join(", ")
+                        );
+                        let error = json!({ "code": -32000, "message": message });
+                        return Some(vec![json!({ "jsonrpc": "2.0", "id": id, "error": error })]);
+                    }
+                    json!({
+                        "protocolVersion": selects,
+                        "capabilities": { "tools": {} },
+                        "serverInfo": { "name": "ws-peer", "version": "0" }
+                    })
                 }
                 _ => json!({
                     "protocolVersion": frame["params"]["protocolVersion"],
