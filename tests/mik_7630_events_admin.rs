@@ -386,6 +386,11 @@ async fn gateway_search_finds_visible_events() {
             .and_then(|m| m.iter().find(|e| e["kind"] == "event"))
             .unwrap_or_else(|| panic!("{tool}: no event entry in {found}"));
         assert_eq!(entry["name"], gateway::EVENT);
+        let shown = found["matches"].as_array().map_or(0, Vec::len) as u64;
+        assert!(
+            found["total_available"].as_u64().unwrap_or(0) >= shown,
+            "{tool}: total_available counts the event entries: {found}"
+        );
         assert_eq!(entry["inputSchema"], schema, "{tool}");
         let miss = gw
             .tool_call(ALICE, tool, json!({"query": "no-such-event-name"}))
