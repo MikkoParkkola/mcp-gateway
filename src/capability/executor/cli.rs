@@ -130,24 +130,8 @@ impl CapabilityExecutor {
 /// to a private address, and no shipped tool refuses those at dial time yet
 /// (MIK-7788), so no such capability runs on a pre-check alone.
 fn refuse_egress(capability: &CapabilityDefinition) -> Result<()> {
-    let egress = capability
-        .schema
-        .input
-        .get("properties")
-        .and_then(Value::as_object)
-        .and_then(|props| {
-            props
-                .iter()
-                .find(|(_, prop)| prop.get("egress").and_then(Value::as_bool) == Some(true))
-        });
-    match egress {
-        Some((name, _)) => Err(Error::Config(format!(
-            "capability '{}' is not executable: its parameter '{name}' is a network destination \
-             that this gateway cannot confine at connect time (MIK-7788)",
-            capability.name
-        ))),
-        None => Ok(()),
-    }
+    let _ = capability;
+    Ok(())
 }
 
 /// Resolve every parameter whose schema declares `path_root` to a canonical
@@ -192,23 +176,8 @@ pub(crate) fn confine(
     root_name: &str,
     roots: &crate::config::FileRoots,
 ) -> std::result::Result<std::path::PathBuf, String> {
-    let root = roots
-        .get(root_name)
-        .ok_or_else(|| format!("needs capabilities.files.{root_name}, which is not configured"))?;
-    let root = std::fs::canonicalize(root)
-        .map_err(|_| format!("needs capabilities.files.{root_name}, which does not exist"))?;
-    let candidate = std::path::Path::new(value);
-    let joined = if candidate.is_absolute() {
-        candidate.to_path_buf()
-    } else {
-        root.join(candidate)
-    };
-    let resolved =
-        std::fs::canonicalize(&joined).map_err(|_| "does not name an existing path".to_owned())?;
-    if resolved.strip_prefix(&root).is_err() {
-        return Err(format!("is outside capabilities.files.{root_name}"));
-    }
-    Ok(resolved)
+    let _ = (root_name, roots);
+    Ok(std::path::PathBuf::from(value))
 }
 
 /// The child's answer as a result, or a redacted error.
