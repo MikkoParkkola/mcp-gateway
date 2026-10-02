@@ -105,8 +105,9 @@ pub enum OidcError {
 
     /// The provider's issuer is a cleartext URL off this machine, so its
     /// discovery document and keys cannot be trusted (MIK-7704).
-    #[error("OIDC issuer is non-HTTPS and off this machine: {0}")]
-    InsecureIssuer(String),
+    /// The issuer is not echoed: it may carry userinfo, a path or a query.
+    #[error("OIDC issuer is non-HTTPS and off this machine")]
+    InsecureIssuer,
 
     /// A discovery or JWKS fetch named a cleartext URL off this machine. The
     /// URL is not echoed: an operator-written one may carry a query.
@@ -482,7 +483,7 @@ impl OidcVerifier {
         // Refused here as well as at load: a verifier built without config
         // validation must not trust keys fetched over cleartext.
         if is_cleartext_url(&provider.issuer) {
-            return Err(OidcError::InsecureIssuer(provider.issuer.clone()));
+            return Err(OidcError::InsecureIssuer);
         }
 
         // Replay protection: check token age against the caller's cap. The

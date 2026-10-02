@@ -200,6 +200,27 @@ async fn oversize_response_record_says_uninspected() {
     assert!(record.get("tenants").is_none(), "{record}");
 }
 
+/// MIN.1 gap 3. A reply whose JSON is nested past the parse depth limit,
+/// though far under 1 MiB, is recorded uninspected, not as naming no tenant.
+#[tokio::test]
+async fn deep_nested_response_record_says_uninspected() {
+    let dir = tempfile::tempdir().unwrap();
+    let deep = format!(
+        "{}{{\"customer_id\":\"cust-9\"}}{}",
+        "[".repeat(200),
+        "]".repeat(200)
+    );
+    let reply = json!({"content": [{"type": "text", "text": deep}], "isError": false});
+    let meta = attributing(meta(Ok(reply), &dir));
+    let who = api_key_caller();
+    meta.invoke_tool(&args_for(None), None, &context(&AllowAll, &who))
+        .await
+        .expect("allowed call");
+    let record = only_record(&dir);
+    assert_eq!(record["attribution"], json!("uninspected"), "{record}");
+    assert!(record.get("tenants").is_none(), "{record}");
+}
+
 /// MIN.1 gap 2. A cache hit of that response says both: no gate ran, and
 /// the value was too large to inspect.
 #[tokio::test]

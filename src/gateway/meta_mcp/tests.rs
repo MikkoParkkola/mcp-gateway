@@ -1410,13 +1410,16 @@ async fn gateway_reload_config_surfaces_restart_required_fields() {
 
     let registry = Arc::new(BackendRegistry::new());
     let live_config = Arc::new(LiveConfig::new(old_config.clone()));
-    let reload_ctx = Arc::new(ReloadContext::new(
-        config_path,
-        Arc::clone(&live_config),
-        Arc::clone(&registry),
-        old_config.failsafe.clone(),
-        old_config.meta_mcp.cache_ttl,
-    ));
+    let reload_ctx = Arc::new(
+        ReloadContext::new(
+            config_path,
+            Arc::clone(&live_config),
+            Arc::clone(&registry),
+            old_config.failsafe.clone(),
+            old_config.meta_mcp.cache_ttl,
+        )
+        .expect("the registry pairs with the config"),
+    );
 
     let mm = MetaMcp::new(Arc::clone(&registry));
     mm.set_reload_context(reload_ctx);

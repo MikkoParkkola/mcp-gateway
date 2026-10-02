@@ -46,16 +46,24 @@ mod source_checks {
         }
     }
 
-    /// The production part of `path`: nothing after the first `#[cfg(test)]`,
-    /// and no test-only files.
-    fn production_lines(path: &Path) -> Vec<String> {
-        let name = path.to_string_lossy();
-        if name.contains("tests") || name.ends_with("_tests.rs") || name.contains("/tests/") {
-            return Vec::new();
-        }
-        let text = std::fs::read_to_string(path).expect("source reads");
-        let production = text.split("#[cfg(test)]").next().unwrap_or_default();
-        production.lines().map(str::to_owned).collect()
+    /// Whether `text` names the key outside a line comment. Nothing is
+    /// stripped: test code counts too, so a file is excused only by name.
+    fn writes_the_key(text: &str) -> bool {
+        text.lines()
+            .any(|l| !l.trim_start().starts_with("//") && l.contains("\"cacheScope\""))
+    }
+
+    /// Cutting a file at its first `#[cfg(test)]` hid every production writer
+    /// after a test-gated item. The check reads whole files now.
+    #[test]
+    fn a_writer_after_a_test_gated_item_is_still_seen() {
+        let text = concat!(
+            "#[cfg(test)]\n",
+            "mod t {}\n",
+            "fn b() { let _ = \"cacheScope\"; }\n",
+        );
+        assert!(writes_the_key(text));
+        assert!(!writes_the_key("// \"cacheScope\" in a comment\n"));
     }
 
     /// Test 7 (b). A drift check, and labelled as one: `"cacheScope"` is
@@ -67,20 +75,33 @@ mod source_checks {
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
             &mut files,
         );
+        // The two production writers, then every test file that names the key.
+        // Fails closed: a new file naming it fails here until it is reviewed
+        // and listed. Not caught: a new writer inside a listed file, or a key
+        // built without the literal; the wire tests below cover delivery.
         let allowed = [
             "src/gateway/router/handlers.rs",
             "src/protocol/cacheable.rs",
+            "src/gateway/meta_mcp/chain_emission_tests.rs",
+            "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
+            "src/gateway/meta_mcp/signing_delivery_scope_tests.rs",
+            "src/gateway/router/handlers/tasks/scope_tests.rs",
+            "src/gateway/server/tests/stdio_cache_scope.rs",
+            "src/gateway/task_service/execution/scope_tests.rs",
+            "src/gateway/webhooks/message_clamp_tests.rs",
+            "src/protocol/cacheable/clamp_tests.rs",
+            "src/protocol/tasks/scope_clamp_tests.rs",
         ];
         let mut offenders = Vec::new();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for path in files {
-            let shown = path.to_string_lossy().replace('\\', "/");
-            if allowed.iter().any(|a| shown.ends_with(a)) {
+            let relative = path.strip_prefix(root).expect("under the crate root");
+            let shown = relative.to_string_lossy().replace('\\', "/");
+            if allowed.contains(&shown.as_str()) {
                 continue;
             }
-            let hit = production_lines(&path)
-                .iter()
-                .any(|l| !l.trim_start().starts_with("//") && l.contains("\"cacheScope\""));
-            if hit {
+            let text = std::fs::read_to_string(&path).expect("source reads");
+            if writes_the_key(&text) {
                 offenders.push(shown);
             }
         }

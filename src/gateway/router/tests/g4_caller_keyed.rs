@@ -301,11 +301,13 @@ async fn guard_a_legacy_session_keeps_its_hints_without_a_caller_key() {
 // ── row 16: projection A/B arm ───────────────────────────────────────────────
 
 /// The capability backend the arm rows call.
-const PROJ_CAPS: &str = "proj_caps";
+pub(in crate::gateway::router::tests) const PROJ_CAPS: &str = "proj_caps";
 /// A public capability with a projection spec, served by a loopback endpoint.
-const PROJ_DAY: &str = "proj_day";
+pub(in crate::gateway::router::tests) const PROJ_DAY: &str = "proj_day";
 
-fn projected_capability(port: u16) -> Arc<crate::capability::CapabilityBackend> {
+pub(in crate::gateway::router::tests) fn projected_capability(
+    port: u16,
+) -> Arc<crate::capability::CapabilityBackend> {
     let definition = crate::capability::parse_capability(&format!(
         "name: {PROJ_DAY}\n\
          description: Read one day\n\

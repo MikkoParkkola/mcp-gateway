@@ -82,13 +82,16 @@ fn meta_tool_count(meta_mcp: &MetaMcp) -> usize {
 }
 
 fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
-    Arc::new(ReloadContext::new(
-        repo_file("examples/gateway-full.yaml"),
-        Arc::new(LiveConfig::new(Config::default())),
-        backends,
-        FailsafeConfig::default(),
-        Duration::from_secs(300),
-    ))
+    Arc::new(
+        ReloadContext::new(
+            repo_file("examples/gateway-full.yaml"),
+            Arc::new(LiveConfig::new(Config::default())),
+            backends,
+            FailsafeConfig::default(),
+            Duration::from_secs(300),
+        )
+        .expect("the registry pairs with the config"),
+    )
 }
 
 fn operational_meta_mcp() -> MetaMcp {

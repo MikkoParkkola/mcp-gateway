@@ -38,13 +38,16 @@ fn decode_tools_list(response: JsonRpcResponse) -> ToolsListResult {
 }
 
 fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
-    Arc::new(ReloadContext::new(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/gateway-full.yaml"),
-        Arc::new(LiveConfig::new(Config::default())),
-        backends,
-        FailsafeConfig::default(),
-        Duration::from_secs(300),
-    ))
+    Arc::new(
+        ReloadContext::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/gateway-full.yaml"),
+            Arc::new(LiveConfig::new(Config::default())),
+            backends,
+            FailsafeConfig::default(),
+            Duration::from_secs(300),
+        )
+        .expect("the registry pairs with the config"),
+    )
 }
 
 /// A one-step playbook, enough to make the engine non-empty.
