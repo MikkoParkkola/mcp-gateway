@@ -30,6 +30,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "capability YAML; public definitions",
     ),
     (
+        "src/capability/executor/save_file.rs",
+        "writes a fetched attachment, create-new at 0600 under the downloads root; reads none",
+    ),
+    (
         "src/chains/checkpoint.rs",
         "chain checkpoints; no secret, not a trust decision",
     ),

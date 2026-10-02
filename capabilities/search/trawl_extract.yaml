@@ -1,7 +1,7 @@
-sha256: dacd9daca3e157794c013dc045200522abbbb51e799192968a6d145adb43f14f
+sha256: 19a4be0064483629a6d2e52bf24a7cb38f0aee4d1f8657dade8af520fd0e910f
 fulcrum: "1.0"
 name: trawl_extract
-description: (Held: not executable until trawl refuses private addresses at connect time, MIK-7788.) Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign.
+description: Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign. Not executable yet - held until trawl refuses private addresses at connect time (MIK-7788).
 
 schema:
   input:
