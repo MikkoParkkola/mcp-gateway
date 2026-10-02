@@ -129,7 +129,7 @@ in that shape is the acknowledgement only and does not end the stream. This
 keeps a gateway behind a gateway working without a reconnect loop.
 
 **Request shape (modern).** The listen request carries the modern
-`_meta` envelope (`protocolVersion`, `clientInfo`, `clientCapabilities`) the
+`_meta` envelope (`protocolVersion`, `clientCapabilities`; `clientInfo` is deliberately omitted, `http/mod.rs:422`) the
 transport already adds to every 2026 request (`with_modern_meta`,
 `http/mod.rs:430`); the mock peers refuse a listen without it.
 
@@ -161,8 +161,24 @@ async fn listen(&self, filter: Value) -> Result<FrameStream> { Err(Error::Protoc
 async fn unsolicited(&self) -> Result<FrameStream> { Err(Error::Protocol("not supported by this transport".into())) }
 ```
 
-`FrameStream` is a bounded `tokio::sync::mpsc::Receiver<JsonRpcMessage>`
-(capacity 64) plus a drop guard that performs the cancel of §3.
+`FrameStream` is a bounded `tokio::sync::mpsc::Receiver<UpstreamNote>`
+(capacity 64) plus a drop guard that performs the cancel of §3. The channel
+never carries a backend frame; the producer classifies and projects first:
+
+```rust
+enum UpstreamNote {
+    /// The acknowledgement, already intersected with what this listen asked
+    /// for, so its size is bounded by the gateway's own URI budget.
+    Ack { kinds: KindSet, uris: Vec<String> },
+    /// One of the three §1 notifications; `uri` only for `resource_updated`.
+    Notice { kind: Kind, uri: Option<String> },
+    /// A validated terminal response to this listen (graceful end).
+    End,
+}
+```
+
+The subscription id is checked by the producer against the locally minted
+listen id and not carried; a legacy frame never has one.
 
 - **HTTP.** Both methods clone the transport's own `reqwest::Client`, so the
   backend's destination pinning and redirect policy apply unchanged, and run
@@ -181,11 +197,9 @@ async fn unsolicited(&self) -> Result<FrameStream> { Err(Error::Protocol("not su
   ordinary reconnect with a gap of one round trip, inside the emit-only
   contract. The session's subscriptions are server-side, so nothing is re-sent
   unless the session expired.
-- **What crosses a channel.** Never a whole backend frame. The producing side
-  (HTTP body task or reader loop) projects each accepted frame to a small
-  `UpstreamNote { kind, uri: Option<String>, subscription_id: Option<Value> }`
-  and drops (and counts) a frame whose `uri` exceeds 2 048 bytes, so 64 queued
-  notes are a few hundred KiB at most whatever the backend sends.
+- **What crosses a channel.** Only `UpstreamNote`. A `Notice` whose `uri`
+  exceeds 2 048 bytes is dropped and counted, so 64 queued notes stay small
+  whatever the backend sends.
 - **stdio / WebSocket.** The reader loop gains one routing step before the
   "Ignoring" arm: a frame tagged with a registered listen id goes to that
   listen's sender; otherwise one of the three §1 methods goes to the
@@ -196,7 +210,9 @@ async fn unsolicited(&self) -> Result<FrameStream> { Err(Error::Protocol("not su
   `Closed` when the process exits or the socket drops. `listen` writes the
   request with a minted id from the transport's own id counter and does **not**
   register it as a pending request, so no request timeout fires on it; a
-  response with that id is routed to the listen sender as the graceful end.
+  response with that id ends the listen: the reader `try_send`s `End` and then
+  removes the listen's sender whether or not `End` fit, so a full channel
+  still reports the end as `Closed`.
 
 These are the only changes to `src/transport/`. Progress routing, the
 request-scoped sink and every existing request path are unchanged.
@@ -316,9 +332,12 @@ Subscribe-time `authorize` reads the catalogue, filling it if needed (it runs
 on the subscribe request, bounded by the fill budget). If the catalogue cannot
 be read (the backend is down), the subscribe is admitted, as the parent's
 offline rule requires (§3.3); if it is read and lacks the URI, `-32012`. The
-listener emits nothing for a backend until it holds a good snapshot, so a URI
+listener emits no `resource_updated` for a backend until it holds a good
+snapshot, so a URI
 admitted while the backend was down is checked before any event is sent, and
-revoked then if absent. The fan-out re-check never does: a fill
+revoked then if absent: on its first complete snapshot the listener revokes
+every live `resource_updated` key whose URI is absent, which frees `Need` and the
+URI budget at once instead of at the next occurrence. The fan-out re-check never does: a fill
 can start the backend and wait on `resources/list`, and fan-out is one task for
 every source, so a slow backend would stall webhook and task events too.
 Instead the listener keeps the backend's last successfully read URI set (read
@@ -328,15 +347,23 @@ fan-out reads only that snapshot:
 - URI in a successfully read snapshot → deliver;
 - no snapshot yet, or the last read failed → skip this occurrence, keep the
   subscription (an error is not absence);
-- a successfully read snapshot that lacks the URI → revoke (parent F9).
+- a successfully read **complete** snapshot that lacks the URI → revoke
+  (parent F9). A read cut short by the page cap (`drain_list_pages` reports
+  truncation; `LIST_MAX_PAGES = 32`) proves nothing about absence: an absent
+  URI is skipped and its subscription kept.
 
-A transient catalogue failure therefore never deletes subscriptions.
+A transient catalogue failure therefore never deletes subscriptions. The
+snapshot gates `resource_updated` only; `resources_changed` and
+`prompts_changed` carry no URI and are emitted whether or not the catalogue
+can be read.
 
 **Keeping the snapshot current.** Whenever a backend has any `resource_updated`
 interest the listener asks upstream for `resources/list_changed` too, whether
 or not anyone subscribed to `resources_changed` (that event is emitted only
 when someone did), re-reads the catalogue on each one, and also re-reads it
-every catalogue cache TTL. A failed re-read is retried with the listener's
+every catalogue cache TTL. A re-read after a list change first invalidates the
+shared slot's resource cache (`invalidate_if`, `cached_metadata.rs:162`), so
+it reaches the backend instead of returning the still-fresh old list. A failed re-read is retried with the listener's
 backoff and keeps the previous snapshot, so a removal takes effect at the next
 successful read.
 
@@ -346,7 +373,9 @@ I2's worker checks backend admission only, because `authorize` arrives with
 I4. I5 requires the attempt path to call `authorize` (I4 wiring, coordinated
 with L8), and b2's `authorize` reads the same snapshot synchronously: URI
 absent from a good snapshot cancels the subscription's pending records; no
-good snapshot defers the attempt, as a missing rate token does.
+good snapshot defers the attempt, as a missing rate token does, and the check
+sits in the worker's dispatch **before** the record is claimed, beside the rate
+token, so a deferred record is never left `in_flight` (`worker.rs:102-118`).
 
 **Kept out of `SubscriptionRegistry`.** b2 notifications go only to
 `EventsHub::emit`; nothing in I5 calls `publish` or `publish_for_backend`, so
@@ -417,7 +446,7 @@ emitted event: upstream notifications carry no stable id.
 | Backend not running / start fails / circuit open | attempt fails; backoff |
 | Stream ends without a listen response, transport error, frame over cap | reconnect after backoff |
 | Graceful listen response (modern) | reconnect after backoff |
-| No acknowledgement within 10 s | close; backoff |
+| No acknowledgement within 10 s | sole stream: close; backoff. Replacement listen during a filter change: drop only the replacement, keep reading the old stream, retry the replacement with backoff |
 | `-32601` / 405 / omitted in acknowledgement | mark unsupported (§3); no fast retry |
 | Backend restarted (new process or session) | old stream closes; reconnect re-sends the whole `Need` (the spec: the server keeps no subscription state across reconnects) |
 | Backend removed from config | the core deletes its subscriptions (parent F10) → `on_last_subscriber` → task stops |
@@ -487,7 +516,7 @@ only after the same row has seen the event subscriber receive the push.
 
 **Unit rows (in `src/`, not red-first, landing with the code):** refcount
 algebra of `Need` (two keys sharing a URI, last-unsubscribe order); key
-re-parse round trip; coalescer window; the tag filter; the overlap rule (both streams accepted until the old one ends); the projection to `UpstreamNote` and its 2 048-byte URI drop; the transport-generation check (a replaced slot transport ends the stream while the old `Arc` is still held elsewhere); a full tap does not delay an ordinary request's response or a progress notification on the same transport; the acknowledgement
+re-parse round trip; coalescer window; the tag filter; the overlap rule (both streams accepted until the old one ends); the projection to `UpstreamNote` and its 2 048-byte URI drop; the acknowledgement intersected with the request; `End` on a full stdio channel still closes it; a truncated catalogue never revokes; a list change invalidates the resource cache before the re-read; the transport-generation check (a replaced slot transport ends the stream while the old `Arc` is still held elsewhere); a full tap does not delay an ordinary request's response or a progress notification on the same transport; the acknowledgement
 check including the response-as-ack compatibility rule and its exact shape; `force_restart` reaching strong count one while a listener holds its lease and an open `FrameStream`; key parse for a dotted backend name; the tap's `try_send`
 never blocking a full channel; the snapshot rule of §7 (error keeps, read-and-
 absent revokes); and the idle lease, driven in-crate rather than through the
@@ -516,7 +545,7 @@ last unsubscribe.
 (`src/gateway/router/handlers.rs:1081-1087`, sent first by
 `src/gateway/streaming.rs:549-555`). The spec makes the first message the
 `notifications/subscriptions/acknowledged` notification and a response the
-graceful end. A conformant client therefore reads the gateway's
+graceful end (filed as MIK-7766). A conformant client therefore reads the gateway's
 acknowledgement as "closed". I5 tolerates it upstream (§3); fixing the
 downstream side is a separate ticket.
 
@@ -541,4 +570,10 @@ on are I4's, and the source it extends is I4's.
 | Round | Seat | Verdict | Disposition |
 |---|---|---|---|
 | 1 | gpt-review | SHIP-WITH-FIXES | 9 findings, all accepted: snapshot kept current through an internal `resources/list_changed` plus TTL re-read; per-attempt `authorize` (I4 wiring); eligibility reads identity config explicitly; transport-generation check for restarts; URI budget in bytes under the frame cap; overlap accepts both streams (duplicate allowed, no gap); legacy keeps one GET, recycle has a stated gap; sessionless legacy GET; `UpstreamNote` projection bounds the taps. Improvements taken: modern `_meta` on listen (mocks refuse without it), tap-full regression row, exact response-as-ack shape |
+| 2 | gpt-review | SHIP-WITH-FIXES | 6 findings, all accepted: `UpstreamNote` is an enum (ack intersected with the request, notice, end) and carries no backend subscription id; complete-read rule against page truncation; `End` closes a full stdio channel; list change invalidates the resource cache before the re-read; snapshot gates `resource_updated` only. Improvement (mutable-catalogue and partial-ack fixtures) taken into the implementation PR's unit rows |
+| 2 | grok-review | SHIP-WITH-FIXES | 1 finding, accepted: a slow replacement listen no longer closes the old stream. Improvements taken: typed `FrameStream`, revoke absent URIs at the first complete snapshot, `clientInfo` struck, deferral before claim |
 | 1 | grok-review | SHIP-WITH-FIXES | 6 findings, all accepted, verified at source: eligibility is `streamable_http: true` (any other `http_url` takes the handshake path, `http/mod.rs:765`); offline subscribe admits and the listener checks before first emit; control RPCs re-acquire the transport; new `HeaderMode::SessionStream` (`Sse` omits the session, `http/mod.rs:1078`); first-frame ack does not end the stream; T39a(4) no longer asserts "once". Improvements taken: `close()` cancels listen body tasks, T39c untagged clause, dotted-name key parse, `force_restart` strong-count unit row |
+
+Frozen after round 2 (two rounds, per the lane rule). Both round-2 verdicts were
+SHIP-WITH-FIXES with every finding local to a stated mechanism; all are applied
+above and none changed the design's scope. No third round.
