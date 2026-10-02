@@ -118,6 +118,7 @@ mod tests {
             providers: ProvidersConfig {
                 named,
                 fallback: vec![],
+                unread_keys: Vec::new(),
             },
             auth: AuthConfig::default(),
             cache: CacheConfig::default(),

@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use serde::de::DeserializeSeed;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::ProviderConfig;
@@ -15,6 +16,11 @@ pub struct ProvidersConfig {
     pub named: HashMap<String, ProviderConfig>,
     /// Fallback providers (ordered list)
     pub fallback: Vec<ProviderConfig>,
+    /// Keys under a provider that no field reads, as dotted paths from
+    /// `providers` (`providers.primary.config.methd`). Serde ignores them, so a
+    /// misspelling would load silently; the validator reports each (CAP-012).
+    #[serde(skip)]
+    pub unread_keys: Vec<String>,
 }
 
 impl ProvidersConfig {
@@ -71,6 +77,7 @@ where
         {
             let mut named = HashMap::new();
             let mut fallback = Vec::new();
+            let mut unread_keys = Vec::new();
 
             while let Some(key) = map.next_key::<String>()? {
                 if key == "fallback" {
@@ -82,18 +89,50 @@ where
                         serde_json::Value::Array(entries) => entries,
                         single => vec![single],
                     };
-                    for entry in entries {
-                        fallback.push(serde_json::from_value(entry).map_err(M::Error::custom)?);
+                    for (idx, entry) in entries.into_iter().enumerate() {
+                        let at = format!("fallback[{idx}]");
+                        let provider = Tracked(&at, &mut unread_keys)
+                            .deserialize(entry)
+                            .map_err(M::Error::custom)?;
+                        fallback.push(provider);
                     }
                 } else {
-                    let provider: ProviderConfig = map.next_value()?;
+                    let provider = map.next_value_seed(Tracked(&key, &mut unread_keys))?;
                     named.insert(key, provider);
                 }
             }
 
-            Ok(ProvidersConfig { named, fallback })
+            Ok(ProvidersConfig {
+                named,
+                fallback,
+                unread_keys,
+            })
         }
     }
 
     deserializer.deserialize_map(ProvidersVisitor)
+}
+
+/// Deserialize one provider, recording every key it does not read.
+///
+/// Annotation keys (`_` or `x-` first, as in the gateway config) are the
+/// author's own notes and are not recorded.
+struct Tracked<'a>(&'a str, &'a mut Vec<String>);
+
+impl<'de> DeserializeSeed<'de> for Tracked<'_> {
+    type Value = ProviderConfig;
+
+    fn deserialize<D: Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> Result<ProviderConfig, D::Error> {
+        let Tracked(name, unread) = self;
+        serde_ignored::deserialize(deserializer, |path| {
+            let path = path.to_string();
+            let leaf = path.rsplit('.').next().unwrap_or(&path);
+            if !leaf.starts_with('_') && !leaf.starts_with("x-") {
+                unread.push(format!("providers.{name}.{path}"));
+            }
+        })
+    }
 }

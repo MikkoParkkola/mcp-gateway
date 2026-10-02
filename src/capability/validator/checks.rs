@@ -142,6 +142,7 @@ pub(super) fn check_schema_output(output: &serde_json::Value, issues: &mut Vec<I
 /// CAP-007: `static_params` keys must not overlap with `params` keys.
 /// CAP-008: `base_url` must be a valid URL; `path` must start with `'/'`.
 /// CAP-011: a declared `providers.fallback` is never executed.
+/// CAP-012: a key under a provider that nothing reads.
 pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue>) {
     if cap.providers.is_empty() && cap.webhooks.is_empty() {
         issues.push(
@@ -175,6 +176,18 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
                  Remove the block.",
             )
             .with_field("providers.fallback"),
+        );
+    }
+
+    // CAP-012: a key under a provider that no field reads. Serde drops it, so a
+    // misspelled `methd` or a `command` no executor runs would load silently.
+    for key in &cap.providers.unread_keys {
+        issues.push(
+            Issue::warning(
+                "CAP-012",
+                format!("{key} is not a recognised provider key and is ignored"),
+            )
+            .with_field("providers"),
         );
     }
 
