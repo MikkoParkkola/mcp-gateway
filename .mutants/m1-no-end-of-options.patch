@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_argv.rs b/src/capability/executor/cli_argv.rs
+index 01422a06b..f5128b62f 100644
+--- a/src/capability/executor/cli_argv.rs
++++ b/src/capability/executor/cli_argv.rs
+@@ -60,7 +60,7 @@ pub(crate) fn build_cli_invocation(
+                     input_schema,
+                     after_end_of_options,
+                 )?);
+-                if template == "--" {
++                if template == "--!" {
+                     after_end_of_options = true;
+                 }
+             }

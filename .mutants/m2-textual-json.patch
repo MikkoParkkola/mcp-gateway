@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_argv.rs b/src/capability/executor/cli_argv.rs
+index 01422a06b..6b4f951de 100644
+--- a/src/capability/executor/cli_argv.rs
++++ b/src/capability/executor/cli_argv.rs
+@@ -237,7 +237,7 @@ fn render_json(template: &Value, params: &Value) -> Result<Option<Value>> {
+     Ok(match template {
+         Value::String(s) => match single_placeholder(s)? {
+             Some((0, end, name)) if end == s.len() => {
+-                params.get(name).filter(|v| !v.is_null()).cloned()
++                params.get(name).filter(|v| !v.is_null()).map(|v| Value::String(v.to_string()))
+             }
+             Some((start, end, name)) => match params.get(name).filter(|v| !v.is_null()) {
+                 Some(value) => Some(Value::String(format!(

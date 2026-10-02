@@ -1,0 +1,6 @@
+head_sha	a6d161967625a6a8302488cac30dcb2eb9d99e00
+m1-no-end-of-options	linux	m1-no-end-of-options.patch	--lib -- capability::executor::cli_argv::tests
+m2-textual-json	linux	m2-textual-json.patch	--lib -- capability::executor::cli_argv::tests
+m3-skip-pin-gate	linux	m3-skip-pin-gate.patch	--lib -- capability::executor::process::tests
+m4-inherit-env	linux	m4-inherit-env.patch	--lib -- capability::executor::cli_run::tests
+m5-string-prefix-root	linux	m5-string-prefix-root.patch	--lib -- capability::executor::cli::tests
