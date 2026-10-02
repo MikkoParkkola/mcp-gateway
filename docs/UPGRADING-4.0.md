@@ -3394,7 +3394,7 @@ client polling once a second wrote about 86,400 identical records a day for one 
 
 **Startup:** no notice, `tasks/get` on such a task answers -32003
 
-A 4.0.0 beta wrote task records (version 3) that do not name the backend tool a result came
+A 4.0.0 beta wrote task records (versions 1 to 4) that do not name the backend tool a result came
 from. A read of a finished task re-checks those tools against current policy (item 105), and
 for a beta row there is nothing to check: the backend's current tool list is no record of what
 ran. Such a row is now refused, plan or single call, unless it holds no backend output.

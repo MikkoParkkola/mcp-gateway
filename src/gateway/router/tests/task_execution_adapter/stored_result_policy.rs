@@ -355,21 +355,7 @@ async fn a_result_over_the_record_budget_settles_failed_without_output() {
     );
 }
 
-/// MIK-7686: a legacy row is refused on `tasks/get` and on a repeated keyed
-/// call alike.
-#[tokio::test]
-async fn a_legacy_row_is_refused_on_get_when_its_tool_is_withheld() {
-    let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
-    let id = finished_invoke(&state, "b-legacy-withheld").await;
-    strip_targets(&state, &id);
-    withhold(&state, TOOL);
-    assert_refused(
-        &get_task(&state, "key-a", &id).await,
-        "no recorded provenance",
-    );
-}
-
+/// MIK-7686: a repeated keyed call is refused the same way as `tasks/get`.
 /// Nothing withheld: a withheld tool would refuse the repeat at its own
 /// admission check, before the stored row is ever read.
 #[tokio::test]
@@ -406,6 +392,15 @@ async fn a_legacy_row_is_refused_when_its_disabled_tool_is_no_longer_listed() {
     let admitted =
         json!({"name": "other", "description": "Reads.", "inputSchema": {"type": "object"}});
     let _ = backend.remember_listed_tools(None, false, &[admitted]);
+    let listed = backend.get_cached_tools_snapshot();
+    assert!(
+        listed.iter().any(|tool| tool.name == "other"),
+        "the admitted tool is listed"
+    );
+    assert!(
+        listed.iter().all(|tool| tool.name != TOOL),
+        "the disabled tool is no longer listed"
+    );
     assert_refused(
         &get_task(&state, "key-a", &id).await,
         "no recorded provenance",
