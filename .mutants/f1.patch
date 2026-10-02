@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index 1f75ca6c5..56dc73b8b 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -2819,7 +2819,7 @@ impl Gateway {
+         {
+             warn!(error = %e, "Personal account custody shutdown failed");
+         }
+-        bounded_step(shutdown_deadline, "backend stop", self.backends.stop_all()).await;
++        self.backends.stop_all().await;
+         Ok(())
+     }
+ 

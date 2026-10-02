@@ -1,0 +1,3 @@
+head_sha	af693584cf30f5f7e548e189dc135e97e62553d8
+# backend stop awaited without the teardown deadline
+f1-stop	linux	f1.patch	--lib stdio_eof_returns_within_the_bound_when_a_backend_never_stops
