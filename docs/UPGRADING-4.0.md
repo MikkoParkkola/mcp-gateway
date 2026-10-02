@@ -150,7 +150,8 @@ backend" and "fails a capability file" first.**
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
-| 126 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
+| 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
+| 127 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3529,7 +3530,7 @@ updates, so its stream just closes, with no response.
 
 **Action:** a client written against the beta that read the subscription id from the response
 `result` reads it from the notification instead.
-## 126. Backend upstream events are refused where the gateway cannot listen
+## 127. Backend upstream events are refused where the gateway cannot listen
 
 **Startup:** no notice, a subscription to such an event answers -32014
 
@@ -3556,6 +3557,35 @@ absent and also answers `-32011`.
 
 **Action:** set `streamable_http: true` on an HTTP backend that speaks streamable HTTP. For the
 others, poll `resources/list` or `prompts/list` instead.
+
+## 126. `add` writes the whole server, and leaves it off when it cannot start
+
+**Startup:** no notice
+
+`mcp-gateway add <name>` for a built-in server used to write only its command or URL. The gateway
+starts a stdio server with a cleared environment, so a server that needed `TAVILY_API_KEY` started
+without it, while `add` printed the key as set. Now `add` writes:
+
+- for a stdio server, `env: { NAME: "${NAME}" }` for each variable it needs (or the value you gave
+  with `-e NAME=...`);
+- for a hosted server that logs in with OAuth, `oauth: {}`, so the first use opens the login in a
+  browser; for one that takes a token in a header, the header with a `${VAR}` reference (or the
+  value from `-e`);
+- `streamable_http` as the endpoint speaks it.
+
+`add` writes the server **disabled**, and prints why, when a `${VAR}` it wrote does not resolve
+(unset or empty in the environment and every `env_files` entry), because an enabled backend with an
+unresolved reference stops the gateway from loading its config. Playwright and fetch are always
+added disabled: they can open any address, and the private-network guard covers REST capabilities
+only. Turning a backend on from the dashboard is refused, naming the variable, while one of its
+references does not resolve.
+
+`mcp-gateway init` (local profile) now writes the servers that need no account enabled: memory,
+sequential-thinking and context7. A server whose launcher (`npx`, `uvx`) is not on PATH is skipped
+with a message. `mcp-gateway list --available` lists the whole library.
+
+**Action:** none for existing configs. After `add`, set any variable it names, then set
+`enabled: true` on the server.
 
 ## Upgrading from 3.5.x: a walkthrough
 
