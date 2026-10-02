@@ -52,6 +52,19 @@ def test_an_unparseable_summary_fails_closed():
     assert problems, "a missing summary must not pass"
 
 
+def test_a_malformed_count_fails_closed():
+    for bad in ("193-192", "193.5"):
+        broken = TRACKER.replace("| 193 (`NFR.PERF.1`", f"| {bad} (`NFR.PERF.1`")
+        problems = check.mismatches(check.tracker_counts(broken), measured())
+        assert any("core_ok" in p for p in problems), (bad, problems)
+
+
+def test_conflicting_duplicate_rows_fail_closed():
+    doubled = TRACKER + TRACKER.replace("| 134 |", "| 135 |")
+    problems = check.mismatches(check.tracker_counts(doubled), measured())
+    assert problems, "two disagreeing summary rows must not pass"
+
+
 if __name__ == "__main__":
     # CI runs this file as a script; without this it would assert nothing.
     failed = []

@@ -4,7 +4,7 @@
 """Fail when the burndown tracker's summary disagrees with the two ledger checks.
 
 The tracker's top table restates the counts `count-release-criteria.py --check`
-and `check_scope_acceptance.py --release` print. It drifted after every
+and `check_scope_acceptance.py --check` print. It drifted after every
 criteria change because nothing compared them (MIK-7730). This compares them.
 
 Usage:
@@ -21,7 +21,7 @@ TRACKER = ROOT / "docs/internal/release/v4.0.0-burndown-tracker.md"
 
 
 CORE_ROW = re.compile(
-    r"^\| Core release criteria \|[^|]*\| (\d+) rows over (\d+) criteria \| (\d+)\b[^|]*\| \*\*(\d+)\*\* blocking",
+    r"^\| Core release criteria \|[^|]*\| (\d+) rows over (\d+) criteria \| (\d+)(?= \(| \|)[^|]*\| \*\*(\d+)\*\* blocking",
     re.MULTILINE,
 )
 SCOPE_ROW = re.compile(
@@ -37,6 +37,10 @@ KEYS = ("core_criteria", "core_rows", "core_ok", "core_blocking",
 def tracker_counts(text: str) -> dict:
     """The counts the tracker's summary table states; empty keys if a row is missing."""
     counts = {}
+    cores, scopes = CORE_ROW.findall(text), SCOPE_ROW.findall(text)
+    if len(cores) > 1 or len(scopes) > 1:
+        counts["duplicate_rows"] = f"{len(cores)} core and {len(scopes)} scope summary rows"
+        return counts
     if core := CORE_ROW.search(text):
         rows, criteria, ok, blocking = map(int, core.groups())
         counts.update(core_criteria=criteria, core_rows=rows, core_ok=ok, core_blocking=blocking)
@@ -55,7 +59,7 @@ def core_counts(output: str) -> dict:
 
 
 def scope_counts(output: str) -> dict:
-    """The counts in check_scope_acceptance.py --release output."""
+    """The counts in check_scope_acceptance.py --check output."""
     m = SCOPE_LINE.search(output)
     return dict(zip(KEYS[4:], map(int, m.groups()))) if m else {}
 
@@ -66,6 +70,8 @@ def mismatches(stated: dict, measured: dict) -> list[str]:
     Fails closed: a count missing on either side is a mismatch.
     """
     problems = []
+    if "duplicate_rows" in stated:
+        problems.append(f"tracker has more than one summary row: {stated['duplicate_rows']}")
     if "scope_inconsistent" in stated:
         problems.append(f"tracker scope row does not add up: {stated['scope_inconsistent']}")
     for key in KEYS:
@@ -78,17 +84,22 @@ def mismatches(stated: dict, measured: dict) -> list[str]:
     return problems
 
 
-def run(script: str, *args: str) -> str:
+def run(script: str, *args: str) -> tuple[str, int]:
     done = subprocess.run([sys.executable, str(ROOT / "scripts/release" / script), *args],
                           capture_output=True, text=True, cwd=ROOT)
-    return done.stdout + done.stderr
+    return done.stdout + done.stderr, done.returncode
 
 
 def main() -> int:
     stated = tracker_counts(TRACKER.read_text(encoding="utf-8"))
-    measured = {**core_counts(run("count-release-criteria.py", "--check")),
-                **scope_counts(run("check_scope_acceptance.py", "--release"))}
+    core_out, core_rc = run("count-release-criteria.py", "--check")
+    scope_out, scope_rc = run("check_scope_acceptance.py", "--check")
+    measured = {**core_counts(core_out), **scope_counts(scope_out)}
     problems = mismatches(stated, measured)
+    for name, rc in (("count-release-criteria.py --check", core_rc),
+                     ("check_scope_acceptance.py --check", scope_rc)):
+        if rc != 0:
+            problems.append(f"{name} exited {rc}; its counts are not trusted")
     for problem in problems:
         print(f"{TRACKER.relative_to(ROOT)}: {problem}")
     if problems:
