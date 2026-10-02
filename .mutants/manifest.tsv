@@ -1,0 +1,3 @@
+head_sha	14f1dc50ab205a95e7b53378330d4bcd59143e5d
+# MIK-7690 PR 2631
+NOGRANT	linux	nograntview.patch	--lib gateway::meta_mcp::account_resolver_fixture::tool_discovery_required_tests::list_servers_does_not_count_a_required_backend_for_an_operator_without_a_grant -- --exact

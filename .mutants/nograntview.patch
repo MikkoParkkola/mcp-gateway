@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/discovery_fetch.rs b/src/gateway/meta_mcp/discovery_fetch.rs
+index 4600ec9f6..0676193df 100644
+--- a/src/gateway/meta_mcp/discovery_fetch.rs
++++ b/src/gateway/meta_mcp/discovery_fetch.rs
+@@ -107,7 +107,7 @@ impl MetaMcp {
+                 self.meta_route_isolation_refused_for_caller(backend, Some(&binding))
+                     || !backend.fetch_carries_caller_identity(Some(&binding))
+             }
+-            None => true,
++            None => false,
+         }
+     }
+ 
