@@ -81,8 +81,8 @@ fn assert_unspent(meta: &MetaMcp, refused: (&str, Value), caller: &MetaMcpCaller
     );
 }
 
-#[test]
-fn an_admin_refusal_leaves_the_nonce_unspent() {
+#[tokio::test]
+async fn an_admin_refusal_leaves_the_nonce_unspent() {
     let caller = ctx(&AllowAll);
     assert!(!caller.is_admin);
     assert_unspent(
@@ -94,8 +94,8 @@ fn an_admin_refusal_leaves_the_nonce_unspent() {
 
 /// An admin caller with no way to be asked (stdio and task contexts): the
 /// destructive gate refuses without an exchange.
-#[test]
-fn an_unconfirmable_destructive_call_leaves_the_nonce_unspent() {
+#[tokio::test]
+async fn an_unconfirmable_destructive_call_leaves_the_nonce_unspent() {
     let mut caller = ctx(&AllowAll);
     caller.is_admin = true;
     assert_unspent(
@@ -107,8 +107,8 @@ fn an_unconfirmable_destructive_call_leaves_the_nonce_unspent() {
 
 /// Exposure applies to `gateway_invoke` too: a hidden one is refused before
 /// its policy or its nonce is read.
-#[test]
-fn a_hidden_gateway_invoke_leaves_the_nonce_unspent() {
+#[tokio::test]
+async fn a_hidden_gateway_invoke_leaves_the_nonce_unspent() {
     let meta = meta().with_exposed_meta_tools(&["gateway_list_servers".to_string()]);
     assert_unspent(
         &meta,
@@ -118,4 +118,26 @@ fn a_hidden_gateway_invoke_leaves_the_nonce_unspent() {
         ),
         &ctx(&AllowAll),
     );
+}
+
+/// The fail-safe: a signed call left unadmitted that the gates let through is
+/// refused before it acts, never served on an unspent nonce.
+#[tokio::test]
+async fn dispatch_refuses_a_signed_call_left_unadmitted() {
+    let meta = meta();
+    let (context, arguments) = captured("gateway_list_servers", json!({}), "never-admitted");
+    let mut caller = ctx(&AllowAll);
+    caller.signing = Some(&context);
+    let response = meta
+        .handle_tools_call(
+            crate::protocol::RequestId::Number(7),
+            "gateway_list_servers",
+            arguments,
+            None,
+            caller,
+        )
+        .await;
+    let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert_eq!(wire["error"]["code"], -32603, "{wire}");
+    assert!(wire.get("result").is_none(), "{wire}");
 }
