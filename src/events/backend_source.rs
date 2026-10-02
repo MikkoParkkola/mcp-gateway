@@ -67,6 +67,9 @@ impl EventSource for BackendSource {
 #[derive(Default)]
 pub(super) struct Debounce {
     latest: Mutex<HashMap<String, u64>>,
+    /// Hub-wide, so an entry removed and re-inserted never reuses a pending
+    /// timer's generation.
+    next: std::sync::atomic::AtomicU64,
 }
 
 impl EventsHub {
@@ -95,9 +98,12 @@ impl EventsHub {
             // ponytail: an entry leaves the map when its report fires, so only
             // a backend that keeps changing stays in it.
             let mut latest = self.debounce.latest.lock();
-            let entry = latest.entry(backend.to_owned()).or_insert(0);
-            *entry += 1;
-            *entry
+            let generation = self
+                .debounce
+                .next
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            latest.insert(backend.to_owned(), generation);
+            generation
         };
         let (hub, backend) = (Arc::clone(self), backend.to_owned());
         runtime.spawn(async move {

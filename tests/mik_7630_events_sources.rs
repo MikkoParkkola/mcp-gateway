@@ -266,13 +266,18 @@ async fn settled_tasks_become_events_for_their_owner_only() {
         issuer.mint("events-subject-b", EMAIL_B),
     );
     let mut cfg = config_with_mock(root.path(), &mock);
+    let policies: Vec<Value> = [EMAIL_A, EMAIL_B]
+        .iter()
+        .map(|email| {
+            json!({"match": {"email": email, "issuer": issuer.url},
+                "scopes": {"backends": ["mock"], "tools": ["*"], "rate_limit": 0}})
+        })
+        .collect();
     cfg["key_server"] = json!({
         "enabled": true, "delegated_bearer": true, "max_oidc_token_age_secs": 3600,
         "oidc": [{"issuer": issuer.url, "auto_discover": true,
             "audiences": [issuer::AUDIENCE]}],
-        "policies": [EMAIL_A, EMAIL_B].map(|email| json!({
-            "match": {"email": email, "issuer": issuer.url},
-            "scopes": {"backends": ["mock"], "tools": ["*"], "rate_limit": 0}})),
+        "policies": policies,
     });
     // One trust file for both TLS peers the child talks to.
     let bundle = root.path().join("ca-bundle.pem");
