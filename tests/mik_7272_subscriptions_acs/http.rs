@@ -249,6 +249,31 @@ async fn ac_sub_1_the_gateway_serves_subscriptions_listen() {
     );
 }
 
+/// MIK-7766: a listener that fell behind lost updates, so its stream closes
+/// without the success response that would call the subscription complete.
+#[tokio::test]
+async fn ac_sub_1_a_lagged_listener_is_closed_without_a_graceful_end() {
+    let (state, _store_dir) = state(true).await;
+    let (status, _, mut stream) = open_listen(
+        &state,
+        json!({ "notifications": { "toolsListChanged": true } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    next_data(&mut stream)
+        .await
+        .expect("the ack opens the stream");
+    // More than the registry's channel holds, published while unread.
+    for _ in 0..300 {
+        state.announce_tools_changed("any").await;
+    }
+    assert_eq!(
+        next_data(&mut stream).await,
+        None,
+        "a lagged stream closes with no response"
+    );
+}
+
 /// MIK-7766: the honoured filter names only what the gateway delivers, and
 /// drops what it does not recognise.
 #[tokio::test]
