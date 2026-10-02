@@ -36,6 +36,10 @@ pub(crate) enum Scan {
 }
 
 /// Who an event is for and what it is, for the firewall's audit labels.
+#[cfg_attr(
+    not(feature = "firewall"),
+    allow(dead_code, reason = "only the firewall reads the labels")
+)]
 pub(crate) struct Subject<'a> {
     pub event_id: &'a str,
     pub principal: &'a str,
