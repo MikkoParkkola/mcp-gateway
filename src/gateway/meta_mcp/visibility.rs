@@ -214,6 +214,7 @@ impl MetaMcp {
         on_backend
             || self.get_capabilities().is_some_and(|cap| {
                 cap.has_capability(name)
+                    && cap.is_listed(name)
                     && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
             })
     }
