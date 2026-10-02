@@ -128,14 +128,35 @@ impl<'de> DeserializeSeed<'de> for Tracked<'_> {
     ) -> Result<ProviderConfig, D::Error> {
         let Tracked(name, unread) = self;
         serde_ignored::deserialize(deserializer, |path| {
-            // `serde_ignored` writes `?` for the inside of an `Option`
-            // (`path_selector.?.typo`); an author never typed it.
-            let path = path.to_string();
-            let segments: Vec<&str> = path.split('.').filter(|s| *s != "?").collect();
-            let leaf = segments.last().copied().unwrap_or_default();
-            if !leaf.starts_with('_') && !leaf.starts_with("x-") {
+            let mut segments = Vec::new();
+            let leaf = key_segments(&path, &mut segments);
+            if !leaf.is_some_and(|k| k.starts_with('_') || k.starts_with("x-")) {
                 unread.push(format!("providers.{name}.{}", segments.join(".")));
             }
         })
+    }
+}
+
+/// Collect `path`'s segments as an author wrote them, and return its last
+/// mapping key. Structured rather than parsed from the `Display` string: a key
+/// may itself contain `.`, and `serde_ignored` renders the inside of an
+/// `Option` as `?`, a segment no author typed.
+fn key_segments(path: &serde_ignored::Path<'_>, out: &mut Vec<String>) -> Option<String> {
+    use serde_ignored::Path;
+    match path {
+        Path::Root => None,
+        Path::Seq { parent, index } => {
+            key_segments(parent, out);
+            out.push(index.to_string());
+            None
+        }
+        Path::Map { parent, key } => {
+            key_segments(parent, out);
+            out.push(key.clone());
+            Some(key.clone())
+        }
+        Path::Some { parent }
+        | Path::NewtypeStruct { parent }
+        | Path::NewtypeVariant { parent } => key_segments(parent, out),
     }
 }

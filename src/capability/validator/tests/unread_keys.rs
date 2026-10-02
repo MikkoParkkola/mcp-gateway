@@ -72,6 +72,14 @@ fn an_annotation_key_is_not_reported() {
     assert!(cap012(&format!("{HEAD}      _note: why\n      x-owner: me\n")).is_empty());
 }
 
+/// The annotation test reads the real mapping key, not the rendered path: a
+/// key named `http.x-method` is not an annotation.
+#[test]
+fn a_dotted_key_ending_like_an_annotation_is_still_reported() {
+    let issues = cap012(&format!("{HEAD}      \"http.x-method\": POST\n"));
+    assert_eq!(issues.len(), 1, "{issues:?}");
+}
+
 #[test]
 fn a_key_inside_path_selector_is_named_without_option_markers() {
     let yaml = format!(
