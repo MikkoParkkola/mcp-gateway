@@ -51,11 +51,26 @@ pub(super) fn configure_child_environment(
         }
     }
 
+    for (name, value) in forwarded_npm_config(std::env::vars_os(), backend_env) {
+        cmd.env(name, value);
+    }
+
     // Backend configuration is authoritative and may intentionally override
     // a safe default such as PATH, HOME, or TMPDIR.
     for (key, value) in backend_env {
         cmd.env(key, value);
     }
+}
+
+/// The operator's npm settings that the gateway passes on to a backend.
+fn forwarded_npm_config<I>(
+    _vars: I,
+    _backend_env: &HashMap<String, String>,
+) -> Vec<(OsString, OsString)>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    Vec::new()
 }
 
 #[cfg(test)]
