@@ -71,7 +71,7 @@ impl EventsHub {
             .filter(|s| source.matches(&s.arguments, event))
             .collect();
         for sub in matching {
-            if !services.admits_subscription(&sub, &event.backend) {
+            if !services.admits_subscription(&sub, &event.backend).await {
                 self.revoke(&sub.id).await;
                 continue;
             }

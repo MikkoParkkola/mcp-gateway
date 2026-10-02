@@ -31,6 +31,10 @@ pub(crate) struct Subscription {
     /// The audit principal of that credential (a digest, never the secret).
     #[serde(default)]
     pub credential_principal: Option<String>,
+    /// What every attempt re-checks for a credential that is not an API key
+    /// (design F9, MIK-7769). A bound kind without one is refused.
+    #[serde(default)]
+    pub binding: Option<LiveBinding>,
     /// An early record's bare key name, which binds no secret: such a
     /// subscription fails every re-check and is deleted. Never written.
     #[serde(default, rename = "api_key_name", skip_serializing)]
@@ -61,6 +65,43 @@ pub(crate) struct Credential {
     pub api_key: Option<ApiKeyRef>,
     /// When the credential itself stops being valid, if it says.
     pub expires_at: Option<DateTime<Utc>>,
+    /// What a delivery attempt re-checks for a credential that is not an
+    /// API key.
+    pub binding: Option<LiveBinding>,
+}
+
+/// The live fact a non-API-key credential is re-checked against before
+/// every delivery attempt (design F9, MIK-7769). Never a secret: a
+/// temporary token's `jti`, a verified identity, or a session handle's
+/// digest.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum LiveBinding {
+    /// A key-server temporary token, by its `jti`.
+    KeyServerToken { jti: String },
+    /// A delegated OIDC bearer: the identity the key-server policy reads.
+    OidcBearer {
+        issuer: String,
+        subject: String,
+        email: String,
+        groups: Vec<String>,
+    },
+    /// The static bearer; its principal is the credential principal.
+    StaticBearer,
+    /// A dashboard session, by the SHA-256 of its handle.
+    DashboardSession { session_sha256: String },
+}
+
+impl std::fmt::Debug for LiveBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The variant only: an email is personal data.
+        f.write_str(match self {
+            Self::KeyServerToken { .. } => "KeyServerToken",
+            Self::OidcBearer { .. } => "OidcBearer",
+            Self::StaticBearer => "StaticBearer",
+            Self::DashboardSession { .. } => "DashboardSession",
+        })
+    }
 }
 
 impl Credential {
