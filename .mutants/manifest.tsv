@@ -1,0 +1,5 @@
+head_sha	d2525576cd585057fd85e7ed8351cb7682a674d1
+# #2678 final-head rerun: R8 (abandoned round), R10 (bridged prompt), R14 (parked task prompt read)
+R8	linux	r8.patch	--lib -- abandoned_round_records_nothing
+R10	linux	r10.patch	--lib -- meta_bridged_prompt_recorded
+R14	linux	r14.patch	--lib -- parked_task_prompt_read_is_recorded

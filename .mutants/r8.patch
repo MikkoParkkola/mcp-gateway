@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 313ee5906..aa420c878 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -88,7 +88,7 @@ impl<'a> Settling<'a> {
+                 // The gateway's own sentence: nothing the backend said was delivered.
+                 DispatchSettlement::Abandoned => {
+                     let abandoned = TaskTransition::Complete(abandoned_input_round());
+-                    return self.settle(abandoned, false).await;
++                    return self.settle(abandoned, true).await;
+                 }
+                 DispatchSettlement::Input(round) => round,
+             };

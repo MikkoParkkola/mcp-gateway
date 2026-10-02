@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -464,7 +464,7 @@
+         method: &str,
+         params: Option<Value>,
+     ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
+-        if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_active()) {
++        if let Some(prompt) = params.as_ref().filter(|_| false) {
+             let recorded =
+                 self.meta
+                     .recorded_prompt(self.target, self.api_key_name, self.trace_id, prompt);
