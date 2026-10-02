@@ -143,10 +143,8 @@ async fn stdio_a_then_b_block_refuses() {
     );
 }
 
-/// S1 (review finding 5): a stdio batch answering A then B is judged item by
-/// item with each item's own reading: block refuses only the B item.
-#[tokio::test]
-async fn stdio_batch_items_judged() {
+/// The answers to one stdio batch `[A as id_a, B as id_b]` under block.
+async fn batch_a_then_b(id_a: i64, id_b: i64) -> Vec<Value> {
     let backend_url = spawn_backend().await;
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
@@ -179,9 +177,7 @@ async fn stdio_batch_items_judged() {
         .await
         .expect("stdin");
     let _ = answer(&mut lines, 1).await;
-    let batch: Value =
-        serde_json::from_str(&format!("[{},{}]", call(2, "cust-a"), call(3, "cust-b")))
-            .expect("batch");
+    let batch = format!("[{},{}]", call(id_a, "cust-a"), call(id_b, "cust-b"));
     client
         .write_all(format!("{batch}\n").as_bytes())
         .await
@@ -191,22 +187,26 @@ async fn stdio_batch_items_judged() {
         .expect("the batch answer within the bound")
         .expect("stdout readable")
         .expect("stdout open");
-    let answers: Vec<Value> = serde_json::from_str(&line).expect("one JSON array");
     drop(client);
     task.abort();
-    let by_id = |id: i64| {
-        answers
-            .iter()
-            .find(|a| a.get("id").and_then(Value::as_i64) == Some(id))
-            .cloned()
-            .unwrap_or_else(|| panic!("no answer for {id}: {answers:?}"))
-    };
-    assert!(
-        by_id(2).get("result").is_some(),
-        "the A item is delivered: {answers:?}"
-    );
-    assert!(
-        by_id(3).get("error").is_some(),
-        "the B item after A in one batch is refused: {answers:?}"
-    );
+    serde_json::from_str(&line).expect("one JSON array")
+}
+
+/// S1 (review findings 5 and round 2): a stdio batch answering A then B is
+/// judged item by item, each with its own params and reading: block refuses
+/// only the B item, also when the two items share an id.
+#[tokio::test]
+async fn stdio_batch_items_judged() {
+    for (id_a, id_b) in [(2, 3), (2, 2)] {
+        let answers = batch_a_then_b(id_a, id_b).await;
+        assert_eq!(answers.len(), 2, "{answers:?}");
+        assert!(
+            answers[0].get("result").is_some(),
+            "ids {id_a}/{id_b}: the A item is delivered: {answers:?}"
+        );
+        assert!(
+            answers[1].get("error").is_some(),
+            "ids {id_a}/{id_b}: the B item after A in one batch is refused: {answers:?}"
+        );
+    }
 }

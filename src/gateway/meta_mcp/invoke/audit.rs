@@ -59,6 +59,9 @@ pub(crate) struct DispatchNotes {
     /// MIN.1: the response held text over the attribution parse bound, so its
     /// tenants were not read.
     uninspected: bool,
+    /// MIN.2: a backend answered this call (its raw response reached the
+    /// response gates); a gateway refusal returned as a result did not.
+    responded: bool,
     /// MIN.1 gap 1: the gateway task whose raw upstream handle this dispatch
     /// captured. The submission record carries it as the join key to the
     /// task's settlement record.
@@ -104,6 +107,7 @@ pub(super) fn noted_response(
     let (tenants, uninspected) = meta.response_reading(&result);
     let read = crate::security::tenant_reads::in_read_scope()
         .then(|| crate::security::tenant_reads::ReadAttribution::of(tenants.clone(), uninspected));
+    note(|notes| notes.responded = true);
     if !tenants.is_empty() {
         note(|notes| notes.response_tenants.extend(tenants));
     }
@@ -365,7 +369,7 @@ impl MetaMcp {
         // MIK-7116.MIN.2: a delivered inner invocation read the tenants its own
         // arguments name (a playbook step the outer request does not show),
         // with or without a logger (design §4.4, row 18).
-        if result.is_ok() && crate::security::tenant_reads::in_read_scope() {
+        if result.is_ok() && notes.responded && crate::security::tenant_reads::in_read_scope() {
             let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
             let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
             crate::security::tenant_reads::note_attribution(Some(

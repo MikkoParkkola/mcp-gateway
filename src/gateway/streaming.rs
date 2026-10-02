@@ -227,11 +227,14 @@ impl NotificationMultiplexer {
         notification: TaggedNotification,
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
     ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+        // No open stream: nothing to deliver, so nothing to judge, and nothing
+        // is sent either, so a stream that subscribes meanwhile cannot get an
+        // unjudged copy (a send with no receiver delivers nothing anyway).
         if session.tx.get().is_none_or(|tx| tx.receiver_count() == 0) {
-            return session.send(SessionFrame {
+            return Err(broadcast::error::SendError(SessionFrame {
                 note: notification,
                 mark: None,
-            });
+            }));
         }
         let key = session.read_key.read().clone();
         let key = key.as_deref();

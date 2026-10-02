@@ -2561,7 +2561,6 @@ impl Gateway {
                 // Boxed: the dispatch future is tens of kilobytes and this one
                 // lives across the `select!` in the helper, so leaving it inline
                 // would put the whole thing on the reader loop's stack frame.
-                let requests = reads.judges().then(|| request.clone());
                 let (responses, _) = Self::dispatch_streaming_notifications(
                     Box::pin(Self::dispatch_batch_read(
                         &meta_mcp,
@@ -2578,7 +2577,7 @@ impl Gateway {
                 .await;
                 Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    let frame = reads.batch(responses, requests.as_ref());
+                    let frame = reads.batch(responses);
                     drop(writer.send(frame.await).await);
                 }
                 continue;

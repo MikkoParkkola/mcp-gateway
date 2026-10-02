@@ -12,6 +12,13 @@ use super::Gateway;
 use crate::gateway::outbound::{OutboundFrame, StdioReads};
 use crate::security::tenant_reads::ReadAttribution;
 
+/// One batch answer, the reading of its own dispatch, and its request's params.
+pub(super) type BatchAnswer = (
+    serde_json::Value,
+    Option<ReadAttribution>,
+    Option<serde_json::Value>,
+);
+
 impl Gateway {
     /// Run `fut` inside a notification scope, writing each notification the
     /// backend publishes as it arrives.
@@ -79,11 +86,12 @@ impl Gateway {
         session_id: &str,
         protocol_telemetry_sink: &super::StdioTelemetry,
         guard: Option<std::sync::Arc<crate::gateway::outbound::Guard>>,
-    ) -> Vec<(serde_json::Value, Option<ReadAttribution>)> {
+    ) -> Vec<BatchAnswer> {
         let serde_json::Value::Array(requests) = batch else {
             return vec![(
                 crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
                     .to_value_lossy(),
+                None,
                 None,
             )];
         };
@@ -93,11 +101,15 @@ impl Gateway {
                 crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
                     .to_value_lossy(),
                 None,
+                None,
             )];
         }
 
         let mut responses = Vec::new();
+        let judging = crate::gateway::outbound::judges(guard.as_deref());
         for req in requests {
+            // Each answer keeps its own request's params: ids may repeat.
+            let params = judging.then(|| req.get("params").cloned()).flatten();
             let (resp, read) = crate::gateway::outbound::read_scoped(
                 guard.clone(),
                 Box::pin(Self::dispatch_single_with_sink(
@@ -123,7 +135,7 @@ impl Gateway {
             )
             .await;
             if let Some(resp) = resp {
-                responses.push((resp, read));
+                responses.push((resp, read, params));
             }
         }
         responses
@@ -150,7 +162,7 @@ impl Gateway {
         )
         .await
         .into_iter()
-        .map(|(answer, _)| answer)
+        .map(|(answer, ..)| answer)
         .collect()
     }
 }

@@ -112,24 +112,15 @@ impl StdioReads {
         recorded(frame, self.log.as_ref()).await
     }
 
-    /// Judge a batch's answers one by one, each with the params of the
-    /// request it answers (matched by id in `requests`) and what its own
-    /// dispatch read, into one frame.
+    /// Judge a batch's answers one by one, each with its own request's
+    /// params and what its own dispatch read, into one frame.
     pub(crate) async fn batch(
         &self,
-        answers: Vec<(Value, Option<ReadAttribution>)>,
-        requests: Option<&Value>,
+        answers: Vec<(Value, Option<ReadAttribution>, Option<Value>)>,
     ) -> OutboundFrame {
         let mut items = Vec::with_capacity(answers.len());
-        for (answer, hidden) in answers {
-            let params = requests
-                .and_then(Value::as_array)
-                .and_then(|all| {
-                    all.iter()
-                        .find(|r| r.get("id").is_some() && r.get("id") == answer.get("id"))
-                })
-                .and_then(|r| r.get("params"));
-            items.push(self.answer(answer, params, hidden.as_ref()).await);
+        for (answer, hidden, params) in answers {
+            items.push(self.answer(answer, params.as_ref(), hidden.as_ref()).await);
         }
         OutboundFrame::unjudged(Payload::Batch(items))
     }

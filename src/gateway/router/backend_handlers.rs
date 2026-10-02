@@ -1075,6 +1075,7 @@ async fn backend_handler_inner(
         ) {
             Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
                 crate::gateway::meta_mcp::invoke::audit::note_cached();
+                let cached = crate::gateway::meta_mcp::invoke::cache_reads::restored(cached);
                 let mut response = JsonRpcResponse::success(id.clone(), cached);
                 if signs {
                     let nonce = signing_nonce.as_deref();
@@ -1257,7 +1258,16 @@ fn settle_direct_idempotency(
         return;
     }
     if let Some(result) = response.result.as_ref() {
-        reservation.complete(result);
+        // MIN.2 row 14: the direct route is one dispatch per read scope, so
+        // all the scope noted is this call's reading.
+        let none = crate::security::tenant_reads::ReadAttribution::default();
+        let empty = std::collections::BTreeSet::new;
+        let stamped = crate::gateway::meta_mcp::invoke::cache_reads::stamped(
+            result,
+            crate::security::tenant_reads::in_read_scope().then_some(&none),
+            empty,
+        );
+        reservation.complete(&stamped);
     }
 }
 
