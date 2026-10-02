@@ -151,7 +151,7 @@ fn oauth_redirect_hop_policy() {
     let public = target("https://auth.example.com/next");
     assert!(matches!(
         hop(DestinationPolicy::Public, 0, &private),
-        Hop::Refuse(reason) if reason.contains("SSRF blocked")
+        Hop::Refuse(reason) if reason.starts_with("SSRF blocked")
     ));
     assert_eq!(hop(DestinationPolicy::Public, 0, &public), Hop::Follow);
     assert_eq!(hop(DestinationPolicy::Public, 9, &public), Hop::Follow);

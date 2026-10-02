@@ -66,13 +66,11 @@ pub(super) fn hop(destination: DestinationPolicy, previous: usize, target: &url:
     if previous >= MAX_HOPS {
         return Hop::Stop;
     }
-    match destination.check_literal(target) {
-        Ok(()) => Hop::Follow,
-        // The bare "SSRF blocked: ..." message, not the error's Display, which
-        // adds a "Protocol error: " prefix the refusal would then carry twice.
-        Err(Error::Protocol(refused)) => Hop::Refuse(refused),
-        Err(refused) => Hop::Refuse(refused.to_string()),
-    }
+    // The bare "SSRF blocked: ..." message, not the error's Display, which
+    // adds a "Protocol error: " prefix the refusal would then carry twice.
+    destination
+        .literal_refusal(target)
+        .map_or(Hop::Follow, Hop::Refuse)
 }
 
 impl OAuthClient {

@@ -483,10 +483,7 @@ async fn meta_mcp_dispatch(
         .cloned();
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
     // MCP Events caps a subscription at the credential's own expiry.
-    let credential_expiry = http_request
-        .extensions()
-        .get::<crate::gateway::auth::live::CredentialExpiry>()
-        .copied();
+    let presented = events::Presented::capture(&http_request);
 
     // === OWASP ASI03: per-agent identity ===
     //
@@ -1066,16 +1063,8 @@ async fn meta_mcp_dispatch(
             // subscription id as the JSON-RPC id of the listen request, and it
             // is how a client correlates a notification with the subscription
             // that asked for it.
-            let subscription =
-                crate::protocol::subscriptions::SubscriptionId::of_request(id.clone());
-            let acknowledgement = crate::protocol::JsonRpcResponse::success(
-                id,
-                serde_json::json!({
-                    "_meta": {
-                        "io.modelcontextprotocol/subscriptionId": subscription.as_value(),
-                    },
-                }),
-            );
+            let subscription = crate::protocol::subscriptions::SubscriptionId::of_request(id);
+            let acknowledgement = request.acknowledgement(&subscription);
             debug!(
                 empty = request.is_empty(),
                 resources = request.resource_uris().len(),
@@ -1099,7 +1088,7 @@ async fn meta_mcp_dispatch(
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
                 principal: events::principal(&owner, state.auth_config.enabled),
-                credential: events::credential(client.as_ref(), credential_expiry, &state),
+                credential: presented.credential(client.as_ref(), &state),
                 visible_backends: hub
                     .scope_backends()
                     .into_iter()

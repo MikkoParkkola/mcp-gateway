@@ -36,6 +36,7 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         api_key: None,
         credential_kind: None,
         credential_principal: None,
+        binding: None,
         legacy_api_key_name: None,
         url: format!("https://h/{id}"),
         name: "e".into(),
@@ -528,4 +529,22 @@ fn an_old_answer_does_not_settle_a_later_occurrence() {
         matches!(store.claim("a", later).expect("io"), Claim::Ready(_)),
         "the later occurrence is still pending"
     );
+}
+
+#[test]
+fn a_revocation_decided_on_an_old_row_spares_a_rebound_one() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let refused = store.get("s1").expect("stored");
+    // A refresh re-binds the same id to another credential.
+    let mut rebound = sub("s1", now);
+    rebound.credential_principal = Some("another".into());
+    store
+        .admit(rebound, true, CAPS, chrono::Duration::zero(), now, TAIL)
+        .expect("io")
+        .expect("admitted");
+    let same = |row: &Subscription| row.credential_principal == refused.credential_principal;
+    assert!(!store.remove_where("s1", now, TAIL, same).expect("io"));
+    assert!(store.get("s1").is_some(), "the rebound row survives");
 }
