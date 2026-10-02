@@ -148,6 +148,7 @@ backend" and "fails a capability file" first.**
 | 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
 | 122 | A capability that declares `providers.fallback` logs a CAP-011 warning at load; the fallback was never executed and still is not. A malformed fallback entry now fails that capability's load instead of being dropped | Remove the `fallback` block; fix or remove a malformed entry |
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
+| 124 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3477,6 +3478,27 @@ the same file the loader would skip.
 
 **Action:** fix or delete the keys CAP-012 names. A script that runs `cap validate` should expect a
 failure for a file the loader would refuse.
+
+## 124. CLI capabilities run local processes
+
+**Startup:** no notice, a capability that declares `service: cli` is served and runs its command when called
+
+Through 3.x a capability with `service: cli` loaded but never ran its command: the gateway treated it as
+REST with an empty URL. It now runs the command, under these rules:
+
+- Only a pinned capability (`sha256:` matching the file) runs a process. An unpinned one is refused.
+- The command and its leading fixed arguments must match an entry of `capabilities.process_commands`
+  exactly. The default list holds the commands of the shipped catalogue; setting the key replaces it.
+- No shell is involved. Each call runs in a fresh private directory that is also its `HOME` and temp
+  area, with a cleared environment plus the names the capability lists, and is killed with every
+  process it started when it times out or its output passes the cap.
+- A parameter that names a file must resolve inside the configured `capabilities.files.<root>`; no root
+  is configured by default. A parameter that names a network destination makes the capability refuse
+  to run, because the gateway cannot confine where a child process connects.
+
+**Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
+capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
+`capabilities.process_commands` (the list then replaces the default).
 
 ## Upgrading from 3.5.x: a walkthrough
 
