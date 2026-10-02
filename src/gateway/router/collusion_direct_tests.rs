@@ -399,12 +399,24 @@ async fn a_relay_in_an_argument_key_is_refused() {
 async fn a_relay_split_mid_word_over_short_fields_is_refused() {
     let fx = fixture(Setup::default()).await;
     fx.read(Some("a")).await;
-    let chars: Vec<char> = PROSE.chars().collect();
-    let fields = chars
-        .chunks(20)
-        .enumerate()
-        .map(|(i, chunk)| (format!("p{i:03}"), Value::String(chunk.iter().collect())));
-    let args = Value::Object(fields.collect());
+    // Every cut falls inside a word, so every k-gram of the joined fields
+    // crosses an inserted separator.
+    let mut fields = vec![String::new()];
+    let mut prev = ' ';
+    for c in PROSE.chars() {
+        let len = fields.last().map_or(0, |f| f.chars().count());
+        if len >= 20 && !c.is_whitespace() && !prev.is_whitespace() {
+            fields.push(String::new());
+        }
+        fields.last_mut().expect("one field").push(c);
+        prev = c;
+    }
+    let fields = fields.into_iter().enumerate();
+    let args = Value::Object(
+        fields
+            .map(|(i, f)| (format!("p{i:03}"), Value::String(f)))
+            .collect(),
+    );
     assert_refused(
         &fx,
         &fx.call(Some("b"), &call("send", &args, None, None)).await,
