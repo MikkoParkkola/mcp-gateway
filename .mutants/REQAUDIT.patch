@@ -1,0 +1,13 @@
+diff --git a/src/identity_propagation/account_strategies.rs b/src/identity_propagation/account_strategies.rs
+index fb9d93518..8975cb2ad 100644
+--- a/src/identity_propagation/account_strategies.rs
++++ b/src/identity_propagation/account_strategies.rs
+@@ -320,7 +320,7 @@ impl AccountStrategyRegistry {
+         // disabled transparency log as a no-op, which on a required account
+         // would let a minted per-user credential go on the wire with NO durable
+         // record. Same rule the Meta-MCP mint path applies.
+-        if required && logger.is_none() {
++        if false {
+             return Err(Error::Internal(format!(
+                 "account '{descriptor_id}' is required for this capability but no transparency \
+                  log is configured; refusing to mint a per-user credential without a durable \

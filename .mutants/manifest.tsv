@@ -1,0 +1,15 @@
+head_sha	9a430d95a4c859872df27b115c5c64f1a0afbcd0
+# mutants for #25792
+EMPTYHDR	linux	EMPTYHDR.patch	--lib identity_propagation::account_strategies::lifetime_tests::a_minted_credential_is_validated_and_audited_before_it_is_used -- --exact
+BADHDR	linux	BADHDR.patch	--lib identity_propagation::account_strategies::lifetime_tests::a_minted_credential_is_validated_and_audited_before_it_is_used -- --exact
+REQAUDIT	linux	REQAUDIT.patch	--lib identity_propagation::account_strategies::lifetime_tests::a_minted_credential_is_validated_and_audited_before_it_is_used -- --exact
+AUDITLEAK	linux	AUDITLEAK.patch	--lib identity_propagation::account_strategies::lifetime_tests::a_failed_mint_audit_refuses_the_credential_without_the_error_text -- --exact
+EXTNOID	linux	EXTNOID.patch	--lib identity_propagation::account_strategies::lifetime_tests::an_external_mint_needs_a_verified_caller -- --exact
+UNDECLARED	linux	UNDECLARED.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact
+PROVIDER	linux	PROVIDER.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact
+NOTINSTALLED	linux	NOTINSTALLED.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact
+AUDIENCE	linux	AUDIENCE.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact
+STRATEGY	linux	STRATEGY.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact
+NOIDENTITY	linux	NOIDENTITY.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact
+ACTOR	linux	ACTOR.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact
+LIFETIME	linux	LIFETIME.patch	--lib identity_propagation::account_strategies::lifetime_tests::revalidate_refuses_each_way_the_world_moved_since_the_mint -- --exact

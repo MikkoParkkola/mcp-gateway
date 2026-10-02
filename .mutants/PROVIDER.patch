@@ -1,0 +1,13 @@
+diff --git a/src/identity_propagation/account_strategies.rs b/src/identity_propagation/account_strategies.rs
+index fb9d93518..4fc70d2a2 100644
+--- a/src/identity_propagation/account_strategies.rs
++++ b/src/identity_propagation/account_strategies.rs
+@@ -587,7 +587,7 @@ impl AccountStrategyRegistry {
+                            minted for it is no longer the configured behaviour",
+             );
+         }
+-        if prepared.auth_key != Self::expected_auth_key(&declared.provider) {
++        if false {
+             return refuse("the descriptor's provider no longer matches the capability auth key");
+         }
+         let Some(installed) = self.installed(descriptor_id) else {
