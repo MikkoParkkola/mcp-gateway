@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/connections.rs b/src/gateway/router/accounts/connections.rs
+index 92b958c5a..a7ceaef07 100644
+--- a/src/gateway/router/accounts/connections.rs
++++ b/src/gateway/router/accounts/connections.rs
+@@ -101,7 +101,7 @@ async fn dispatch(
+                 return refusal(StatusCode::FORBIDDEN, "forbidden", None);
+             }
+             let Some(identity) = bridge.identity(&session, headers).await else {
+-                return refusal(StatusCode::UNAUTHORIZED, "unauthenticated", None);
++                return refusal(StatusCode::FORBIDDEN, "forbidden", None);
+             };
+             let Caller {
+                 state,

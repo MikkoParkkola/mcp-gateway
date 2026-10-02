@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/complete.rs b/src/gateway/router/accounts/complete.rs
+index 768a3466b..f46afdb37 100644
+--- a/src/gateway/router/accounts/complete.rs
++++ b/src/gateway/router/accounts/complete.rs
+@@ -57,7 +57,7 @@ async fn complete(
+ ) -> Response {
+     let config = state.live_config.get();
+     let Some(session) = session_of(&config) else {
+-        return page(StatusCode::FORBIDDEN, SIGN_IN);
++        return page(StatusCode::OK, SIGN_IN);
+     };
+     let Some(identity) = bridge.identity(&session, &headers).await else {
+         return page(StatusCode::FORBIDDEN, SIGN_IN);
