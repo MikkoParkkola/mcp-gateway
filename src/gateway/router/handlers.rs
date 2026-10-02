@@ -634,9 +634,9 @@ async fn meta_mcp_dispatch(
             // Hardened: only a declaring `initialize` opens a legacy session.
             match state
                 .multiplexer
-                .resume_session_scoped(existing, &caller_owner, held)
+                .resume_session_id_scoped(existing, &caller_owner, held)
             {
-                Some((id, _subscription)) => id,
+                Some(id) => id,
                 None => return super::hardened_elicitation::refusal().into_response(),
             }
         }

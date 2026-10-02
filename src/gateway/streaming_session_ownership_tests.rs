@@ -115,6 +115,15 @@ fn an_id_only_session_opens_its_channel_on_first_subscribe() {
         "a send with no receiver reported delivery"
     );
     assert!(session.tx.get().is_none(), "a refused send built a channel");
+    assert_eq!(
+        m.resume_session_id_scoped(Some(&id), &cred("alice"), None),
+        Some(id.clone()),
+        "the owner resumes by id"
+    );
+    assert!(
+        session.tx.get().is_none(),
+        "an id-only resume built a channel"
+    );
 
     let (again, mut rx) = m.get_or_create_session_for(Some(&id), &cred("alice"));
     assert_eq!(again, id, "the owner resumes the id-only session");
@@ -132,4 +141,20 @@ fn note() -> TaggedNotification {
         data: serde_json::json!({}),
         event_id: None,
     }
+}
+
+/// An unopened session past its TTL is abandoned: the reaper removes it as it
+/// removed a session whose only receiver was dropped.
+#[test]
+fn the_reaper_removes_an_unopened_session() {
+    let m = mux();
+    let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+    assert_eq!(
+        m.reap_expired_sessions(std::time::Duration::ZERO),
+        vec![id.clone()]
+    );
+    assert!(
+        m.sessions.read().get(id.as_str()).is_none(),
+        "an unopened session outlived its TTL"
+    );
 }

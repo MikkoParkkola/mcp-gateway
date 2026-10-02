@@ -370,18 +370,20 @@ impl NotificationMultiplexer {
         let Some(authorizer) = self.authorizer.read().clone() else {
             return 0;
         };
-        // Copied out so no lock is held across the re-validation awaits.
+        // Copied out so no lock is held across the re-validation awaits. The
+        // session itself is held, not its sender, so an unopened one stays
+        // unopened and a stream that subscribes meanwhile is still reached.
         let targets: Vec<_> = self
             .sessions
             .read()
             .values()
-            .map(|s| (s.sender().clone(), s.credential.read().clone()))
+            .map(|s| (Arc::clone(s), s.credential.read().clone()))
             .collect();
         let mut reached = 0;
-        for (tx, credential) in targets {
+        for (session, credential) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
-            if verdict == Delivery::Deliver && tx.send(notification.clone()).is_ok() {
+            if verdict == Delivery::Deliver && session.send(notification.clone()).is_ok() {
                 reached += 1;
             }
         }
