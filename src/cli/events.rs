@@ -7,6 +7,7 @@ use super::dashboard_link::DashboardLinkTls;
 /// Arguments of `mcp-gateway events`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct EventsArgs {
+    /// What to administer.
     #[command(subcommand)]
     pub command: EventsCommand,
 }
