@@ -85,6 +85,7 @@ fn services() -> Services {
         #[cfg(feature = "firewall")]
         firewall: None,
         audit: None,
+        provenance: None,
         #[cfg(feature = "cost-governance")]
         budget: None,
         credentials: LiveCredentials::default(),
