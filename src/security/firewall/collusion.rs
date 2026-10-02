@@ -69,7 +69,7 @@ pub(crate) struct RelayFinding {
 }
 
 /// Characters per k-gram. Nothing shorter than this can ever match.
-const K: usize = 48;
+pub(super) const K: usize = 48;
 /// Hashes per winnowing window: a shared run of `K + W - 1` chars yields at
 /// least one common fingerprint.
 const W: usize = 16;

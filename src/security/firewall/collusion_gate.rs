@@ -302,17 +302,18 @@ fn relay_finding(description: String, matched: String) -> Finding {
 /// Which side of a call [`text_of`] reads.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Walk {
-    /// What a backend receives: string leaves and object keys, since a key
-    /// reaches the backend like a value.
+    /// What a backend receives: every object key too, since a key reaches
+    /// the backend like a value.
     Egress,
-    /// What a caller is delivered: string leaves only, so shared schema keys
-    /// never make two unrelated payloads look alike. Nothing is skipped:
-    /// this route attaches no metadata of its own, so whatever is there,
-    /// a backend's `_context_integrity` included, was delivered.
+    /// What a caller is delivered: only keys long enough to fingerprint
+    /// alone, so short schema keys never make unrelated payloads alike.
     Delivery,
 }
 
-/// The text of `value` read as `walk`, newline-joined.
+/// The text of `value` read as `walk`: every string leaf, contiguous and
+/// newline-joined (so content split over short fields still matches), then
+/// the keys `walk` reads. Nothing is skipped: the direct route attaches no
+/// metadata of its own, so a backend's `_context_integrity` was delivered.
 pub(super) fn text_of(value: &Value, walk: Walk) -> String {
     fn push(out: &mut String, s: &str) {
         if !out.is_empty() {
@@ -320,23 +321,24 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
         }
         out.push_str(s);
     }
-    fn visit(value: &Value, walk: Walk, out: &mut String) {
+    fn visit<'v>(value: &'v Value, out: &mut String, keys: &mut Vec<&'v str>) {
         match value {
             Value::String(s) => push(out, s),
-            Value::Array(items) => items.iter().for_each(|v| visit(v, walk, out)),
-            Value::Object(map) => {
-                for (k, v) in map {
-                    if walk == Walk::Egress {
-                        push(out, k);
-                    }
-                    visit(v, walk, out);
-                }
-            }
+            Value::Array(items) => items.iter().for_each(|v| visit(v, out, keys)),
+            Value::Object(map) => map.iter().for_each(|(k, v)| {
+                keys.push(k);
+                visit(v, out, keys);
+            }),
             _ => {}
         }
     }
-    let mut out = String::new();
-    visit(value, walk, &mut out);
+    let (mut out, mut keys) = (String::new(), Vec::new());
+    visit(value, &mut out, &mut keys);
+    for key in keys {
+        if walk == Walk::Egress || key.chars().count() >= super::collusion::K {
+            push(&mut out, key);
+        }
+    }
     out
 }
 
