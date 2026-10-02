@@ -175,10 +175,13 @@ impl CapabilityExecutor {
 
     /// Substitute `{param}` references in a string template.
     ///
-    /// After placeholder substitution, `{keychain.X}` and `{env.VAR}` secrets
-    /// are resolved via [`SecretResolver`](crate::secrets::SecretResolver).
+    /// `{keychain.X}` and `{env.VAR}` secrets are resolved via
+    /// [`SecretResolver`](crate::secrets::SecretResolver) in the TEMPLATE,
+    /// before any caller value goes in: a caller's argument is data, so a value
+    /// such as `{env.NAME}` reaches the provider as that text, never as the
+    /// gateway's own secret.
     pub(super) fn substitute_string(&self, template: &str, params: &Value) -> Result<String> {
-        let mut result = template.to_string();
+        let mut result = self.secret_resolver.resolve(template)?;
 
         if let Value::Object(map) = params {
             for (key, value) in map {
@@ -196,7 +199,6 @@ impl CapabilityExecutor {
             }
         }
 
-        result = self.secret_resolver.resolve(&result)?;
         Ok(result)
     }
 
