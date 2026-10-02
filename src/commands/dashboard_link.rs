@@ -266,6 +266,27 @@ pub(crate) fn dead_letters_request(
     }
 }
 
+/// `mcp-gateway dashboard-link`: resolve the gateway, then ask it for a link.
+pub async fn run_dashboard_link_args(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+) -> ExitCode {
+    let flags = LinkTlsFlags {
+        client_cert: args.tls.client_cert,
+        client_key: args.tls.client_key,
+        ca_cert: args.tls.ca_cert,
+    };
+    match dashboard_link_base(args.url, flags, load, port_override, host_override) {
+        Ok((base, tls)) => run_dashboard_link_command(&base, &tls).await,
+        Err(message) => {
+            eprintln!("dashboard-link: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `mcp-gateway events ...`: resolve the gateway like `dashboard-link`, then
 /// run the subcommand.
 pub async fn run_events_command(

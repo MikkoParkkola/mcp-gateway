@@ -101,26 +101,9 @@ async fn run() -> ExitCode {
         }
         #[cfg(feature = "webui")]
         Some(Command::DashboardLink(args)) => {
-            let (url, tls) = (args.url, args.tls);
-            let flags = commands::LinkTlsFlags {
-                client_cert: tls.client_cert,
-                client_key: tls.client_key,
-                ca_cert: tls.ca_cert,
-            };
-            let target = commands::dashboard_link_base(
-                url,
-                flags,
-                || Config::load(config_path.as_deref()).map_err(|e| e.to_string()),
-                port_override,
-                host_override.as_deref(),
-            );
-            match target {
-                Ok((base, tls)) => commands::run_dashboard_link_command(&base, &tls).await,
-                Err(message) => {
-                    eprintln!("dashboard-link: {message}");
-                    ExitCode::FAILURE
-                }
-            }
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_dashboard_link_args(args, load, port_override, host_override.as_deref())
+                .await
         }
         // The endpoint it calls exists only with the web UI; say so rather
         // than let the command fail with a bare 404.
