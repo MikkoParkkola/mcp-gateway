@@ -1,0 +1,3 @@
+head_sha	2e1a34cdcf9e81a08995701b270a0cba8dc3d6f9
+# batch 2 for #2717 (I3 again after the revoke test)
+I3	linux	i3.patch	--lib -- a_revoke_after_the_mint_refuses
