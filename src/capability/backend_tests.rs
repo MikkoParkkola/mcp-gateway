@@ -635,7 +635,7 @@ mod login_gate {
     }
 
     fn names(tools: Vec<Tool>) -> Vec<String> {
-        let mut names: Vec<String> = tools.into_iter().map(|t| t.name.clone()).collect();
+        let mut names: Vec<String> = tools.into_iter().map(|t| String::clone(&t.name)).collect();
         names.sort();
         names
     }
