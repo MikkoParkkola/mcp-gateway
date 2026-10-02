@@ -97,7 +97,8 @@ keep sharing it. For a registry entry it fills:
   supplied a value. This fixes the scrubbed-environment bug above with the existing expansion.
 - HTTP entries: `Transport::Http { default_url, flavor: HttpFlavor }` with `enum HttpFlavor { Streamable, Sse }`
   is stored on the entry (Asana is `Sse`, every other hosted entry `Streamable`), not inferred from the
-  URL. `Sse` means the legacy SSE handshake (`src/transport/http/mod.rs`).
+  URL. The seed sets `streamable_http` from it explicitly: the serde default for a hand-written backend is
+  `false`. `Sse` means the legacy SSE handshake (`src/transport/http/mod.rs`).
 - `enabled`: `true`, except (a) `Reach::Arbitrary` -> `false`, printed with its reason and the switch
   (`enabled: true` in gateway.yaml, or the UI toggle); (b) any `${VAR}` left in the written
   `headers`/`env` that the loader would refuse -> `false`, printed with the variable name. Readiness
@@ -115,9 +116,9 @@ Explicit `--command`/`--url` keep today's behaviour (enabled, no auth fields). `
 seed `BackendConfig` and inserts it as is, instead of rebuilding it from transport and env and forcing
 `enabled: true`.
 
-Turning a backend on later (UI `PATCH` with `enabled: true`, `update_backend`) runs the same
-temporary-load guard and refuses, naming the variable, while a `${VAR}` in that backend is unresolved,
-instead of writing a config the next reload rejects.
+Any later update (UI `PATCH`: enable, env change; `update_backend`) is applied to a copy and refused,
+naming the variable, when it would leave the backend enabled with an unresolved `${VAR}`; the closure
+returns the error before `mutate_config_and_reload` writes, so no unloadable file reaches disk.
 
 ### D3 Browsing the library
 
@@ -148,7 +149,9 @@ before; the lead accepted the server reading below.
   the lookup uses the same live `EnvOverlay` the executor resolves with. The gate is evaluated when
   tools are listed, searched or invoked, not cached at file load, so adding or removing a credential in
   the process env or an env_file takes effect on the same schedule the executor already sees it.
-  `keychain:`, `file:` and `oauth:` keys are not decided by the gate (R2); CAP-EXEC adds the
+  An `oauth:<provider>` key is gated on a stored token for that provider in the existing token storage
+  (presence only, no refresh and no prompt), which is the "off until login" rule. `keychain:` and `file:`
+  keys are not decided by the gate (R2); CAP-EXEC adds the
   "binary present" requirement for `cli` capabilities through the same predicate. An unmet capability is
   listed by `mcp-gateway cap list` as `off: needs <X>` and is not exposed to clients. The user turns it
   on by providing the credential. Keyless capabilities stay on. An upgrade sees no change for any
