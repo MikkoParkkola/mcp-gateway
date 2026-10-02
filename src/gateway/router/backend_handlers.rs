@@ -145,7 +145,7 @@ async fn apply_backend_tool_call_security(
                 });
             // OWASP ASI10: an anomaly block carries -32002 on every route, as
             // on the meta route, so a caller can tell it from other refusals.
-            if verdict.is_anomaly_block() {
+            if verdict.is_asi10_block() {
                 return Err(backend_security_error_with_status(
                     id,
                     -32002,

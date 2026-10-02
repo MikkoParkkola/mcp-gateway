@@ -1356,7 +1356,7 @@ async fn meta_mcp_dispatch(
                     if !verdict.allowed {
                         // OWASP ASI10 (Rogue Agents): anomaly blocks use -32002;
                         // all other firewall blocks use -32600 (invalid request).
-                        let (code, reason) = if verdict.is_anomaly_block() {
+                        let (code, reason) = if verdict.is_asi10_block() {
                             let desc = verdict.findings.first().map_or(
                                 "Anomaly detection triggered: unusual tool sequence blocked",
                                 |f| f.description.as_str(),

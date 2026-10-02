@@ -721,18 +721,29 @@ impl FirewallVerdict {
         }
     }
 
-    /// Returns `true` when the block was triggered solely by OWASP ASI10
-    /// controls (Rogue Agents, Multi-Agent Collusion): every finding is a
-    /// `SequenceAnomaly` at `Severity::High` or a `CollusionRelay`.
+    /// Returns `true` when the block was triggered solely by anomaly detection
+    /// (OWASP ASI10 — Rogue Agents), i.e. every blocking finding is a
+    /// `SequenceAnomaly` at `Severity::High`.
     ///
     /// Callers should use JSON-RPC error code `-32002` for anomaly blocks to
     /// distinguish them from generic security blocks (`-32600`).
     pub fn is_anomaly_block(&self) -> bool {
+        self.blocked_only_by(|_| false)
+    }
+
+    /// [`Self::is_anomaly_block`] widened to relay findings (OWASP ASI10,
+    /// COLLUDE.1): every finding is a high `SequenceAnomaly` or a
+    /// `CollusionRelay`. Crate-internal so the public meaning stays put.
+    pub(crate) fn is_asi10_block(&self) -> bool {
+        self.blocked_only_by(|f| f.scan_type == ScanType::CollusionRelay)
+    }
+
+    fn blocked_only_by(&self, also: impl Fn(&Finding) -> bool) -> bool {
         !self.allowed
             && !self.findings.is_empty()
             && self.findings.iter().all(|f| {
                 (f.scan_type == ScanType::SequenceAnomaly && f.severity == Severity::High)
-                    || f.scan_type == ScanType::CollusionRelay
+                    || also(f)
             })
     }
 

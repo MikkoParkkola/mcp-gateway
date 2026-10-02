@@ -36,20 +36,23 @@ fn blocked(findings: Vec<Finding>) -> FirewallVerdict {
 fn a_relay_block_is_an_anomaly_block_and_a_mixed_one_is_not() {
     let relay = || finding(ScanType::CollusionRelay, Severity::Medium);
     let anomaly = |s| finding(ScanType::SequenceAnomaly, s);
-    assert!(blocked(vec![relay()]).is_anomaly_block());
-    assert!(blocked(vec![anomaly(Severity::High), relay()]).is_anomaly_block());
+    assert!(blocked(vec![relay()]).is_asi10_block());
+    assert!(blocked(vec![anomaly(Severity::High), relay()]).is_asi10_block());
     assert!(
         !blocked(vec![
             relay(),
             finding(ScanType::Credentials, Severity::High)
         ])
-        .is_anomaly_block()
+        .is_asi10_block()
     );
-    assert!(!blocked(vec![anomaly(Severity::Medium)]).is_anomaly_block());
-    assert!(!blocked(Vec::new()).is_anomaly_block());
+    assert!(!blocked(vec![anomaly(Severity::Medium)]).is_asi10_block());
+    assert!(!blocked(Vec::new()).is_asi10_block());
     let mut allowed = blocked(vec![relay()]);
     allowed.allowed = true;
-    assert!(!allowed.is_anomaly_block());
+    assert!(!allowed.is_asi10_block());
+    // The public check keeps its pre-relay meaning.
+    assert!(!blocked(vec![relay()]).is_anomaly_block());
+    assert!(blocked(vec![anomaly(Severity::High)]).is_anomaly_block());
 }
 
 fn load(firewall: &str) -> crate::Result<()> {
