@@ -53,7 +53,7 @@ fn is_storage<T>(result: &Result<T, JourneyError>) -> bool {
 /// `UnknownState`; an oversized one must be refused as `InvalidRequest`.
 #[test]
 fn every_callback_entry_point_refuses_an_oversized_secret_before_the_store() {
-    let (_root, config, store) = fresh();
+    let (_root, _config, store) = fresh();
     let limits = limits();
     let over = "s".repeat(CALLBACK_SECRET_MAX + 1);
     let absent = "absent";
@@ -100,8 +100,10 @@ fn every_callback_entry_point_refuses_an_oversized_secret_before_the_store() {
     );
 
     // The cap runs before the table is read, not merely before it is judged:
-    // with a table that cannot be read, a short state meets the storage fault
-    // and an oversized one is still refused as InvalidRequest.
+    // on a store whose table cannot be read (a fresh one, so no slot is cached
+    // yet), a short state meets the storage fault and an oversized one is still
+    // refused as InvalidRequest.
+    let (_root_faulted, config, store) = fresh();
     std::fs::write(
         config.authority_dir.join(super::super::JOURNEYS_FILE),
         b"{}",
