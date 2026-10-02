@@ -1,0 +1,3 @@
+head_sha	c137cf2a4736b533d589a1e5cafad86afa7bd801
+# #2718 batch 2 (C1 re-made on the final worker.rs)
+C1	linux	c1.patch	--test mik_7630_events_delivery_safety -- a_delivery_is_charged_against_the_key_budget
