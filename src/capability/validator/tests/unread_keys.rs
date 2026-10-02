@@ -105,6 +105,9 @@ fn a_key_inside_path_selector_is_named_without_option_markers() {
 /// `body` or `static_params` reported here would warn on every REST capability.
 #[test]
 fn the_shipped_catalog_reports_only_keys_no_field_reads() {
+    // Shipped cli/mcp files in a shape the strict parser refuses (MIK-7782).
+    // Empty: every shipped file parses; a file added in the old shape fails.
+    const UNMIGRATED: &[&str] = &[];
     const NOT_YET_READ: &[&str] = &[
         "command",
         "args",
@@ -116,9 +119,6 @@ fn the_shipped_catalog_reports_only_keys_no_field_reads() {
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     let mut stack = vec![root];
-    // Shipped cli/mcp files in a shape the strict parser refuses; each leaves
-    // this list when the catalogue migrates it (MIK-7782).
-    const UNMIGRATED: &[&str] = &["cloudflare_manage", "metacognition_verify", "trawl_extract"];
     let mut refused = Vec::new();
     let mut checked = 0;
     while let Some(dir) = stack.pop() {

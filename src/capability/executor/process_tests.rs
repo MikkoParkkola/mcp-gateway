@@ -95,8 +95,7 @@ async fn only_an_exact_allowed_invocation_runs() {
     for (command, args) in refused {
         let cap = pinned(command, args).await;
         let err = admit(&ProcessPolicy::default(), &cap, process(&cap))
-            .map(|()| "admitted".to_string())
-            .unwrap_or_else(|e| e.to_string());
+            .map_or_else(|e| e.to_string(), |()| "admitted".to_string());
         assert!(
             err.contains("process_commands"),
             "{command} {args} must be refused by the allowlist: {err}"
