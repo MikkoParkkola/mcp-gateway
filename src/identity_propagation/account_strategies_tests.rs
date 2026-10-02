@@ -44,7 +44,8 @@ fn external(expires_at: i64, minted_at: i64) -> PreparedAccountCredential {
         cache_binding: "binding".to_string(),
         expires_at,
         minted_at,
-        minter: Minter::External(Arc::new(NeverMints)),
+        strategy: Arc::new(NeverMints),
+        managed: None,
         headers: vec![("Authorization".to_string(), "Bearer x".to_string())],
     }
 }
