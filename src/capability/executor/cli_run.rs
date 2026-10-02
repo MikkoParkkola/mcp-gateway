@@ -11,8 +11,15 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::ExitStatus;
+use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
+
+#[cfg(windows)]
+use process_wrap::tokio::JobObject;
+#[cfg(unix)]
+use process_wrap::tokio::ProcessGroup;
+use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use super::cli_argv::CliInvocation;
 use crate::{Error, Result};
@@ -166,6 +173,33 @@ pub(crate) struct CliOutcome {
     pub stderr: Vec<u8>,
 }
 
+/// Owns the spawned tree. Dropping it, on any path (success, error, timeout
+/// or a cancelled call), kills the whole group or Job, then reaps off-thread.
+struct TreeGuard(Option<Box<dyn ChildWrapper>>);
+
+impl TreeGuard {
+    fn child(&mut self) -> &mut Box<dyn ChildWrapper> {
+        self.0.as_mut().expect("child present until drop")
+    }
+}
+
+impl Drop for TreeGuard {
+    fn drop(&mut self) {
+        let Some(mut child) = self.0.take() else {
+            return;
+        };
+        // On Unix this signals the whole process group (killpg), not only the
+        // leader; on Windows it terminates the Job. A group already gone is
+        // fine.
+        let _ = child.start_kill();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = child.wait().await;
+            });
+        }
+    }
+}
+
 /// Spawn `program` with `invocation`'s argv in `workdir`, feed stdin, collect
 /// capped output, and wait at most `timeout`.
 pub(crate) async fn run(
@@ -176,11 +210,93 @@ pub(crate) async fn run(
     timeout: Duration,
     max_output: usize,
 ) -> Result<CliOutcome> {
-    let _ = (program, workdir, env, timeout, max_output);
-    Err(Error::Protocol(format!(
-        "running '{}' is not implemented yet",
-        invocation.command
-    )))
+    let timeout = timeout.min(MAX_TIMEOUT);
+    let mut wrap = CommandWrap::with_new(program, |cmd| {
+        cmd.args(&invocation.args)
+            .env_clear()
+            .envs(env)
+            .current_dir(workdir.path())
+            .stdin(if invocation.stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+    });
+    #[cfg(unix)]
+    wrap.wrap(ProcessGroup::leader());
+    #[cfg(windows)]
+    wrap.wrap(JobObject);
+    wrap.wrap(KillOnDrop);
+    let child = wrap.spawn().map_err(|e| {
+        Error::Protocol(format!(
+            "could not start '{}': {}",
+            invocation.command,
+            e.kind()
+        ))
+    })?;
+    let mut guard = TreeGuard(Some(child));
+
+    if let Some(bytes) = invocation.stdin.clone()
+        && let Some(mut stdin) = guard.child().stdin().take()
+    {
+        // Written off the read path and then closed, so a child that never
+        // reads stdin cannot stall the call.
+        tokio::spawn(async move {
+            let _ = stdin.write_all(bytes.as_bytes()).await;
+        });
+    }
+    let stdout = guard.child().stdout().take();
+    let stderr = guard.child().stderr().take();
+
+    let collected = tokio::time::timeout(timeout, async {
+        // try_join: an overflow on one stream ends the call at once rather
+        // than waiting on the other until the timeout.
+        let (out, err) = tokio::try_join!(
+            read_capped(stdout, max_output),
+            read_capped(stderr, max_output)
+        )?;
+        let status =
+            guard.child().wait().await.map_err(|e| {
+                Error::Protocol(format!("waiting for the child failed: {}", e.kind()))
+            })?;
+        Ok::<_, Error>(CliOutcome {
+            status,
+            stdout: out,
+            stderr: err,
+        })
+    })
+    .await;
+    // `guard` drops here on every path and takes the tree with it.
+    match collected {
+        Ok(outcome) => outcome,
+        Err(_) => Err(Error::BackendTimeout(format!(
+            "'{}' did not finish within {}s",
+            invocation.command,
+            timeout.as_secs()
+        ))),
+    }
+}
+
+/// Read a stream to its end, failing once it passes `max` bytes.
+async fn read_capped<R: AsyncRead + Unpin>(stream: Option<R>, max: usize) -> Result<Vec<u8>> {
+    let Some(stream) = stream else {
+        return Ok(Vec::new());
+    };
+    let mut buf = Vec::new();
+    let limit = u64::try_from(max).unwrap_or(u64::MAX).saturating_add(1);
+    stream
+        .take(limit)
+        .read_to_end(&mut buf)
+        .await
+        .map_err(|e| Error::Protocol(format!("reading child output failed: {}", e.kind())))?;
+    if buf.len() > max {
+        return Err(Error::Protocol(format!(
+            "child output passed the {max}-byte limit"
+        )));
+    }
+    Ok(buf)
 }
 
 #[cfg(test)]
