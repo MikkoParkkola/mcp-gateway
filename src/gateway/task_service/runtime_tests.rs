@@ -213,7 +213,10 @@ mod expiry;
 /// a fallback (`tasks.rs`), which is why a read-only root filesystem with no
 /// writable `HOME` kept every chart pod from starting. The control proves the
 /// same path opens once the parent is writable, so the refusal is about the
-/// parent and nothing else.
+/// parent and nothing else. The refusal must be the store's own
+/// (`Unavailable`) with nothing created under the home, so an unrelated
+/// failure cannot pass it, and the premise is probed for both files and
+/// directories so a deny that holds for only one fails loudly (MIK-7749).
 #[tokio::test]
 async fn task_store_under_readonly_home_is_fatal() {
     use std::fs;
@@ -231,8 +234,12 @@ async fn task_store_under_readonly_home_is_fatal() {
     crate::private_fs::test_support::deny_user("readonly-home", &home, "WD,AD");
     let store_dir = home.join(".mcp-gateway").join("tasks");
 
-    // Root ignores the mode bits, so the premise cannot be observed there.
-    if fs::write(home.join("probe"), b"").is_ok() {
+    // Root ignores the mode bits, so the premise cannot be observed there. Both
+    // a file and a directory are probed: the store creates directories, and a
+    // deny that stops only files would leave its path open.
+    let premise_holds = fs::write(home.join("probe"), b"").is_err()
+        && fs::create_dir(home.join("probe-dir")).is_err();
+    if !premise_holds {
         make_writable(&home);
         // A skip in CI would make this pin pass without testing anything, so
         // CI must run it unprivileged; only a local root shell may skip.
@@ -245,15 +252,16 @@ async fn task_store_under_readonly_home_is_fatal() {
     }
 
     let refused = open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions()).await;
-    // MIK-7749 evidence run: what this refusal actually is on each platform.
-    eprintln!(
-        "MIK-7749 refusal seen: {:?}; store dir exists afterwards: {}",
-        refused.as_ref().err(),
-        store_dir.exists()
+    // The refusal is the store's own (unavailable), and nothing was created
+    // under the home: an unrelated failure after creation would leave the
+    // store's directory behind.
+    assert!(
+        matches!(refused, Err(ServiceError::Unavailable)),
+        "a store under an unwritable home must refuse to open as unavailable"
     );
     assert!(
-        refused.is_err(),
-        "a store under an unwritable home must refuse to open"
+        !home.join(".mcp-gateway").exists(),
+        "nothing may be created under the unwritable home"
     );
 
     make_writable(&home);
