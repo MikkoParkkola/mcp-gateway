@@ -1,6 +1,7 @@
 # Throwaway: MIK-7635.GH2573.1 acceptance probe. Lives only on a throwaway
 # branch; never merged. Runs the contract command exactly as
 # docs/release/v4.0.0-critical-path-coverage.md "The command" writes it, with
+# --ignore-run-fail removed (the grade needs a clean run), with
 # the pinned Python task SDK and Redis installed (a run without them is not
 # clean), then fails on any corrupt profile, any profile the report step
 # dropped or warned about, or a missing report.
@@ -46,9 +47,12 @@ jobs:
         run: |
           cargo llvm-cov clean --workspace
           set +e
-          cargo llvm-cov --all-features --tests --ignore-run-fail --summary-only --json --output-path cov.json > run.log 2>&1
+          cargo llvm-cov --all-features --tests --summary-only --json --output-path cov.json > run.log 2>&1
           echo "contract-exit=$?" | tee contract-exit.txt
           grep -E '^test result|FAILED|panicked' run.log || true
+          cargo llvm-cov report --lcov --output-path linux.lcov > report.log 2>&1
+          echo "report-exit=$?" | tee -a contract-exit.txt
+          cat report.log
       - name: Grade profiles and report
         run: |
           tool="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata"
@@ -59,12 +63,17 @@ jobs:
             if ! "$tool" show "$f" > /dev/null 2>&1; then bad=$((bad+1)); echo "CORRUPT $(stat -c %s "$f") $f"; fi
           done
           echo "profiles: $total, corrupt profiles: $bad"
-          warn=$(grep -ciE 'profdata|corrupt|dropp|no profile|invalid instrumentation' run.log || true)
-          grep -iE 'profdata|corrupt|dropp|no profile|invalid instrumentation' run.log || true
+          # Passing test names such as "..._dropped_..." are not report warnings.
+          cat run.log report.log | grep -vE '^test .* \.\.\. (ok|ignored)$' > warn-scope.log || true
+          warn=$(grep -ciE 'profdata|corrupt|dropp|no profile|invalid instrumentation' warn-scope.log || true)
+          grep -iE 'profdata|corrupt|dropp|no profile|invalid instrumentation' warn-scope.log || true
           failed=$(grep -cE '^test .* FAILED$' run.log || true)
           echo "report warnings: $warn, failed tests: $failed"
           cat contract-exit.txt
           grep -q '^contract-exit=0$' contract-exit.txt
+          grep -q '^report-exit=0$' contract-exit.txt
+          test -s linux.lcov
+          test "$failed" -eq 0
           test -s cov.json
           test "$total" -gt 0
           test "$bad" -eq 0
@@ -75,4 +84,6 @@ jobs:
           name: coverage-ac1
           path: |
             run.log
+            report.log
             cov.json
+            linux.lcov
