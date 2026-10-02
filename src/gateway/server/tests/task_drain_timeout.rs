@@ -227,4 +227,13 @@ fn the_stdio_budget_fits_inside_the_teardown_window() {
     );
     let roomy = ShutdownBudget::within(Duration::from_secs(40), Duration::from_secs(1));
     assert_eq!(roomy.drain, Duration::from_secs(1), "a short drain is kept");
+    let http = ShutdownBudget::within(Duration::from_secs(30), Duration::from_secs(30));
+    assert_eq!(
+        http,
+        ShutdownBudget {
+            drain: Duration::from_secs(24),
+            cancel: Duration::from_secs(3),
+        },
+        "HTTP: drain and cancel stay within nine tenths of one timeout"
+    );
 }
