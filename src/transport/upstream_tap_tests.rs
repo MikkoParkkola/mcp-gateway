@@ -175,3 +175,82 @@ fn the_filter_names_what_is_needed() {
         json!(["file:///a"])
     );
 }
+
+#[test]
+fn a_tagged_frame_goes_to_its_listen_only() {
+    let taps = Taps::default();
+    let id = json!(7);
+    let mut rx = taps.listen(&id, requested());
+    let mut legacy = taps.unsolicited();
+    let ack = tag(
+        &id,
+        json!({"notifications": {"resourcesListChanged": true}}),
+    );
+    assert!(taps.notification(ACKNOWLEDGED, Some(&ack)));
+    assert!(matches!(rx.try_recv(), Ok(UpstreamNote::Ack { .. })));
+    let p = tag(&id, json!({}));
+    assert!(taps.notification(RESOURCES_CHANGED, Some(&p)));
+    assert!(rx.try_recv().is_ok());
+    assert!(
+        legacy.try_recv().is_err(),
+        "a tagged frame never reaches the legacy tap"
+    );
+    assert!(taps.notification(PROMPTS_CHANGED, None));
+    assert!(legacy.try_recv().is_ok(), "untagged goes to the legacy tap");
+    assert!(
+        !taps.notification("notifications/progress", None),
+        "other methods keep their existing route"
+    );
+}
+
+#[test]
+fn without_a_tap_nothing_is_consumed() {
+    let taps = Taps::default();
+    assert!(!taps.notification(RESOURCES_CHANGED, None));
+    assert!(!taps.response(&json!(1), None));
+}
+
+#[test]
+fn a_full_tap_drops_and_counts_without_blocking() {
+    let taps = Taps::default();
+    let _legacy = taps.unsolicited();
+    for _ in 0..TAP_CAPACITY + 3 {
+        assert!(taps.notification(RESOURCES_CHANGED, None));
+    }
+    assert_eq!(taps.drops.load(std::sync::atomic::Ordering::Relaxed), 3);
+}
+
+#[test]
+fn an_end_on_a_full_channel_still_closes_it() {
+    let taps = Taps::default();
+    let id = json!(9);
+    let mut rx = taps.listen(&id, requested());
+    let p = tag(&id, json!({}));
+    for _ in 0..TAP_CAPACITY {
+        taps.notification(RESOURCES_CHANGED, Some(&p));
+    }
+    assert!(taps.response(&id, Some(&json!({"resultType": "complete"}))));
+    for _ in 0..TAP_CAPACITY {
+        assert!(rx.try_recv().is_ok());
+    }
+    assert_eq!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Disconnected),
+        "the end is reported as Closed"
+    );
+    assert!(!taps.response(&id, None), "the listen is gone");
+}
+
+#[test]
+fn the_first_frame_compatible_response_acks_and_keeps_the_listen() {
+    let taps = Taps::default();
+    let id = json!(3);
+    let r = requested();
+    let mut rx = taps.listen(&id, r.clone());
+    let shape = json!({"_meta": { SUBSCRIPTION_ID: 3 }});
+    assert!(taps.response(&id, Some(&shape)));
+    assert_eq!(rx.try_recv(), Ok(r.as_full_ack()));
+    assert!(taps.response(&id, Some(&shape)), "a later one is the end");
+    assert_eq!(rx.try_recv(), Ok(UpstreamNote::End));
+    assert!(rx.try_recv().is_err());
+}

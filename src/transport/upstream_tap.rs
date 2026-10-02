@@ -190,6 +190,121 @@ pub(crate) fn classify_response(
     }
 }
 
+/// One registered listen on a line-oriented transport (stdio, WebSocket).
+struct Listen {
+    tx: tokio::sync::mpsc::Sender<UpstreamNote>,
+    requested: Requested,
+    /// No frame of this listen has been routed yet.
+    first: bool,
+}
+
+/// The reader loop's routing table for upstream notes (design §4). Every
+/// send is `try_send`: the reader is the only reader of the peer's output
+/// and must never park; a full channel drops and counts.
+#[derive(Default)]
+pub(crate) struct Taps {
+    /// Listens by the canonical text of their JSON-RPC id.
+    listens: parking_lot::Mutex<std::collections::HashMap<String, Listen>>,
+    unsolicited: parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<UpstreamNote>>>,
+    /// Frames dropped: full tap, untagged, or oversize.
+    pub drops: std::sync::atomic::AtomicU64,
+}
+
+impl Taps {
+    /// Register listen `id`; its notes arrive on the returned receiver.
+    pub(crate) fn listen(
+        &self,
+        id: &Value,
+        requested: Requested,
+    ) -> tokio::sync::mpsc::Receiver<UpstreamNote> {
+        let (tx, rx) = tokio::sync::mpsc::channel(TAP_CAPACITY);
+        self.listens.lock().insert(
+            id.to_string(),
+            Listen {
+                tx,
+                requested,
+                first: true,
+            },
+        );
+        rx
+    }
+
+    /// Stop routing to listen `id` (its receiver then sees `Closed`).
+    pub(crate) fn forget(&self, id: &Value) {
+        self.listens.lock().remove(&id.to_string());
+    }
+
+    /// Route the legacy peer's out-of-request notifications to a receiver.
+    pub(crate) fn unsolicited(&self) -> tokio::sync::mpsc::Receiver<UpstreamNote> {
+        let (tx, rx) = tokio::sync::mpsc::channel(TAP_CAPACITY);
+        *self.unsolicited.lock() = Some(tx);
+        rx
+    }
+
+    fn drop_one(&self) {
+        self.drops
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Offer a peer notification. `true` when a tap consumed it (routed or
+    /// dropped on its behalf); `false` leaves it to the existing routes.
+    pub(crate) fn notification(&self, method: &str, params: Option<&Value>) -> bool {
+        let tag = params
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get(SUBSCRIPTION_ID));
+        if let Some(tag) = tag {
+            let mut listens = self.listens.lock();
+            if let Some(listen) = listens.get_mut(&tag.to_string()) {
+                listen.first = false;
+                match project(method, params, Some((tag, &listen.requested))) {
+                    Ok(note) if listen.tx.try_send(note).is_ok() => {}
+                    _ => self.drop_one(),
+                }
+                return true;
+            }
+        }
+        let guard = self.unsolicited.lock();
+        let Some(tx) = guard.as_ref() else {
+            return false;
+        };
+        match project(method, params, None) {
+            Ok(note) => {
+                if tx.try_send(note).is_err() {
+                    self.drop_one();
+                }
+                true
+            }
+            Err(Dropped::Other) => false,
+            Err(_) => {
+                self.drop_one();
+                true
+            }
+        }
+    }
+
+    /// Offer a response. `true` when its id is a registered listen: the
+    /// compatible first-frame acknowledgement is routed, anything else ends
+    /// the listen, whose sender is removed whether or not `End` fit, so a
+    /// full channel still reports the end as `Closed`.
+    pub(crate) fn response(&self, id: &Value, result: Option<&Value>) -> bool {
+        let key = id.to_string();
+        let mut listens = self.listens.lock();
+        let Some(listen) = listens.get_mut(&key) else {
+            return false;
+        };
+        let note = classify_response(listen.first, id, result, &listen.requested);
+        listen.first = false;
+        let end = note == UpstreamNote::End;
+        if listen.tx.try_send(note).is_err() {
+            self.drop_one();
+        }
+        if end {
+            listens.remove(&key);
+        }
+        true
+    }
+}
+
 #[cfg(test)]
 #[path = "upstream_tap_tests.rs"]
 mod tests;
