@@ -79,6 +79,14 @@ pub struct CallbackServer {
 }
 
 impl CallbackServer {
+    /// Stop listening without waiting for a callback, for an authorization
+    /// abandoned before the browser was sent anywhere.
+    pub(crate) fn stop(self) {
+        for handle in self.server_handles {
+            handle.abort();
+        }
+    }
+
     /// Wait for the callback to be received
     pub async fn wait_for_callback(self) -> Result<(String, CallbackResult)> {
         let result = self
