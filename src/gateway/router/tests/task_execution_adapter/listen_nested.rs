@@ -67,6 +67,15 @@ async fn a_nested_task_filter_is_narrowed_like_the_root_one() {
     )
     .await;
 
+    // The reverse split: a foreign root id beside an owned nested one.
+    let mut reverse = open_listen(
+        &state,
+        "key-a",
+        7415,
+        json!({ "taskIds": [&id_b], "notifications": { "taskIds": [&id_a] } }),
+    )
+    .await;
+
     gate.0.release_all();
     assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id_a).await);
     assert_carries_the_backend_result(&poll_until_terminal(&state, "key-b", &id_b).await);
@@ -85,6 +94,11 @@ async fn a_nested_task_filter_is_narrowed_like_the_root_one() {
     assert_receives_nothing(
         &mut split,
         "an owned root id does not launder a foreign nested id",
+    )
+    .await;
+    assert_receives_nothing(
+        &mut reverse,
+        "a foreign root id beside an owned nested one is narrowed to the empty list",
     )
     .await;
 }
