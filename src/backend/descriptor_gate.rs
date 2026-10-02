@@ -294,12 +294,7 @@ impl Backend {
         _identity_key: Option<&str>,
         tool: &str,
     ) -> Option<String> {
-        if self
-            .descriptor_gate
-            .blocked
-            .read()
-            .contains_key(&name_key(tool))
-        {
+        if self.is_withheld_name(tool) {
             return Some(format!(
                 "tool `{tool}` is withheld: its description failed the tool-poisoning \
                  check (AX-010); the gateway log names the finding"
@@ -362,12 +357,15 @@ impl Backend {
 
     /// Whether a served list may carry `tool`.
     pub(crate) fn is_blocked_tool(&self, tool: &str) -> bool {
-        self.gate_saturated()
-            || self
-                .descriptor_gate
-                .blocked
-                .read()
-                .contains_key(&name_key(tool))
+        self.gate_saturated() || self.is_withheld_name(tool)
+    }
+
+    /// Whether `tool` is in the blocked-name map. The map is keyed by digest;
+    /// an empty map (the usual state) answers without hashing the name, which
+    /// every `tools/call` asks several times (NFR.WORKLOAD.1).
+    fn is_withheld_name(&self, tool: &str) -> bool {
+        let blocked = self.descriptor_gate.blocked.read();
+        !blocked.is_empty() && blocked.contains_key(&name_key(tool))
     }
 
     /// Bytes held in the gate's keys (test support for the memory bound).

@@ -321,10 +321,9 @@ pub(super) struct InterruptedTask {
 pub(crate) struct CommittedTask {
     pub(crate) task: Task,
     pub(crate) revision: u64,
-    /// The backend label the task was admitted under: an aggregate label for
-    /// a plan, so never proof of what a plan called.
-    pub(crate) backend: String,
-    /// The calls that produced this snapshot's result; empty on a legacy row.
+    /// The calls that produced this snapshot's result. A legacy row recorded
+    /// none; its one call is recovered from its upstream descriptor when it has
+    /// a consistent one, and is otherwise not known (empty).
     pub(crate) targets: Vec<Target>,
     /// Whether the row was written by a gateway that records targets. An empty
     /// list on such a row means nothing was dispatched; on an older row it
@@ -339,12 +338,39 @@ impl CommittedTask {
     /// authorizes delivery checks the snapshot it returns.
     pub(super) fn of(task: Task, record: &Record) -> Self {
         Self {
+            targets: if record.version >= TARGET_VERSION {
+                record.targets.clone()
+            } else {
+                legacy_targets(&task, record)
+            },
             task,
             revision: record.revision,
-            backend: record.backend.clone(),
-            targets: record.targets.clone(),
             targets_recorded: record.version >= TARGET_VERSION,
             output_free: record.output_free,
         }
     }
 }
+
+/// The one call a legacy row (before [`TARGET_VERSION`]) made, read from its
+/// own upstream descriptor: the backend tool the trusted dispatch path
+/// captured, bound to this row by its operation digest (MIK-7686). A plan's
+/// descriptor never speaks for the plan, and a row without a consistent one
+/// has no recoverable provenance.
+fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
+    if matches!(task.tool(), "gateway_execute" | "gateway_run_playbook") {
+        return Vec::new();
+    }
+    record
+        .upstream
+        .iter()
+        .filter(|upstream| upstream.consistent_with(&record.admission))
+        .map(|upstream| Target {
+            server: upstream.backend.clone(),
+            tool: upstream.tool.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "record_legacy_tests.rs"]
+mod legacy_tests;

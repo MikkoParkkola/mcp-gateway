@@ -13,7 +13,6 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
     let stored = CommittedTask {
         task,
         revision: 3,
-        backend: "probe".to_owned(),
         targets: Vec::new(),
         targets_recorded: true,
         output_free: false,
