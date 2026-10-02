@@ -243,6 +243,8 @@ impl Store {
                 left.next_attempt_at = now + SETTLE_RETRY;
                 if let Settle::Dead { reason, .. } = outcome {
                     left.dead_as = Some(reason);
+                    // Best effort now; the next claim writes it in any case.
+                    let _ = write_record(&self.outbox_dir, &OutboxRecord::file(event_id), &*left);
                 }
             }
         }
