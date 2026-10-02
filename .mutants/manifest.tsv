@@ -1,0 +1,18 @@
+head_sha	fe324b5ed98de8a56080c88a1bc6e164644fc3e8
+M1	linux	m1.patch	--lib -- delayed_sse_body_keeps_reservation
+M2	linux	m2.patch	--lib -- a_refusal_keeps_no_hidden_reading
+M3	linux	m3.patch	--lib -- inner_invocation_arguments_are_a_read
+M4	linux	m4.patch	--lib -- a_replay_restores_the_stored_reading
+M5	linux	m5.patch	--lib -- a_replay_restores_its_entrys_reading
+M6	linux	m6.patch	--lib -- gateway_refusal_charges_nothing
+M7	linux	m7.patch	--lib -- listen_keyed_on_caller_key
+M8	linux	m8.patch	--lib -- stdio_a_then_b_block_refuses
+M9	linux	m9.patch	--lib -- hidden_attribution_without_logger
+M10	linux	m10.patch	--lib -- cache_hit_restores_pre_transform
+M11	linux	m11.patch	--lib -- delayed_subscriber_copy_fails_closed
+M12	linux	m12.patch	--lib -- stdio_polls_of_a_working_task_are_not_refused
+M13	linux	m13.patch	--lib -- a_row_serves_backend_output_by_status
+M14	linux	m14.patch	--lib -- direct_list_reads_before_normalising
+M15	linux	m15.patch	--lib -- attribution_counts_only_under_its_own_keys
+M16	linux	m16.patch	--lib -- a_redacted_tenant_field_does_not_name_a_second_tenant
+M17	linux	m17.patch	--lib -- failures_before_a_byte_is_written_are_reported_unsent

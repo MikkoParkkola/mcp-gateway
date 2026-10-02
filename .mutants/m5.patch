@@ -1,0 +1,13 @@
+diff --git a/src/idempotency.rs b/src/idempotency.rs
+index cf592ba76..0466b623c 100644
+--- a/src/idempotency.rs
++++ b/src/idempotency.rs
+@@ -870,7 +870,7 @@ pub fn enforce(
+         AdmitOutcome::Completed(value, read) => {
+             // MIN.2 row 14: a replay restores the reading stored with this
+             // very result into the caller's read scope (a no-op outside one).
+-            crate::security::tenant_reads::note_restored(read.as_ref());
++            let _ = read;
+             Ok(GuardOutcome::CachedResult(value))
+         }
+         AdmitOutcome::Failed(error) => Ok(GuardOutcome::CachedError(error)),

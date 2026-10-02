@@ -1,0 +1,13 @@
+diff --git a/src/events/client.rs b/src/events/client.rs
+index 00d7c83f3..e158b6e6f 100644
+--- a/src/events/client.rs
++++ b/src/events/client.rs
+@@ -161,7 +161,7 @@ impl CallbackClient {
+             .body(body)
+             .send()
+             .await
+-            .map_err(|e| (classify(&e), e.is_connect()))?;
++            .map_err(|e| (classify(&e), false))?;
+         let status = response.status();
+         let retry_after = response
+             .headers()
