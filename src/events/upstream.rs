@@ -195,6 +195,9 @@ mod tests {
     #[test]
     fn account_bindings_are_judged_as_they_compile() {
         let yaml = "accounts:\n  schema_version: accounts.v1\n  enabled: true\n  \
+             deployment: single_process\n  instance_id: gw\n  store_dir: /nonexistent/s\n  \
+             authority_dir: /nonexistent/a\n  current_key_id: current\n  \
+             keys:\n    current: env:UNUSED\n  \
              descriptors:\n    \
              mine:\n      mode: personal_managed\n      provider: p\n      \
              resource: https://api.example.invalid/\n      \
