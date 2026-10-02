@@ -36,17 +36,27 @@ pub(super) async fn bounded_step<F: Future>(
     finished
 }
 
-/// Run a synchronous step (disk I/O) on the blocking pool under `deadline`.
-/// `false` when it did not finish in time; its thread is not waited for.
+/// Run a synchronous step (disk I/O) under `deadline`, on its own detached
+/// thread rather than the blocking pool: the runtime's drop waits for every
+/// blocking-pool task, so a stuck write there would still hold the process
+/// open after `run_stdio_on` returned. A detached thread ends with the process.
 pub(super) async fn bounded_blocking(
     deadline: Instant,
     step: &str,
     work: impl FnOnce() + Send + 'static,
-) -> bool {
-    matches!(
-        bounded_step(deadline, step, tokio::task::spawn_blocking(work)).await,
-        Some(Ok(()))
-    )
+) {
+    let (done, finished) = tokio::sync::oneshot::channel();
+    let spawned = std::thread::Builder::new()
+        .name(format!("stdio-shutdown: {step}"))
+        .spawn(move || {
+            work();
+            let _ = done.send(());
+        });
+    if let Err(error) = spawned {
+        warn!(step, %error, "stdio: shutdown step could not start a thread; skipped");
+        return;
+    }
+    bounded_step(deadline, step, finished).await;
 }
 
 /// The final cost snapshot, after the drain so the last calls' spend is in
