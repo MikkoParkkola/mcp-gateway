@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage.rs b/src/personal_accounts/storage.rs
+index 68fb5af87..b6c182da5 100644
+--- a/src/personal_accounts/storage.rs
++++ b/src/personal_accounts/storage.rs
+@@ -311,7 +311,7 @@ fn create_directory(path: &Path) -> Result<(), AccountError> {
+     use std::os::unix::fs::DirBuilderExt as _;
+     match fs::symlink_metadata(path) {
+         Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => return Ok(()),
+-        Ok(_) => return Err(AccountError::InvalidConfiguration),
++        Ok(_) => return Ok(()),
+         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+         Err(_) => return Err(AccountError::StorageUnavailable),
+     }

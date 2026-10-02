@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage.rs b/src/personal_accounts/storage.rs
+index 68fb5af87..266c88d87 100644
+--- a/src/personal_accounts/storage.rs
++++ b/src/personal_accounts/storage.rs
+@@ -317,7 +317,7 @@ fn create_directory(path: &Path) -> Result<(), AccountError> {
+     }
+     let parent = path.parent().ok_or(AccountError::InvalidConfiguration)?;
+     create_directory(parent)?;
+-    let result = fs::DirBuilder::new().mode(0o700).create(path);
++    let result = fs::DirBuilder::new().mode(0o777).create(path);
+     if let Err(error) = result
+         && error.kind() != std::io::ErrorKind::AlreadyExists
+     {

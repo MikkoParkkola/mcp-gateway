@@ -1,0 +1,12 @@
+diff --git a/src/personal_accounts/journey/callback.rs b/src/personal_accounts/journey/callback.rs
+index fe8992827..b76cc17e0 100644
+--- a/src/personal_accounts/journey/callback.rs
++++ b/src/personal_accounts/journey/callback.rs
+@@ -172,7 +172,6 @@ impl PersonalAccountStore {
+         limits: &JourneyLimits,
+         state: &str,
+     ) -> Result<JourneyId, JourneyError> {
+-        within_cap(state, None)?;
+         self.journey_transition(now, limits, |tx| {
+             locate(&self.config, tx.table, state).ok_or(JourneyRefusal::UnknownState)
+         })
