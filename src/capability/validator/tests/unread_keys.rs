@@ -77,9 +77,60 @@ fn a_key_inside_path_selector_is_named_without_option_markers() {
     let yaml = format!(
         "{HEAD}      path_selector:\n        parameter: kind\n        default: a\n        paths:\n          a: /a\n        dflt: b\n"
     );
-    let text = format!("{:?}", cap012(&yaml));
-    assert!(
-        text.contains("providers.primary.config.path_selector.dflt"),
-        "{text}"
+    let issues = cap012(&yaml);
+    assert_eq!(
+        issues.len(),
+        1,
+        "only the typo, not `paths` entries: {issues:?}"
     );
+    assert!(
+        issues[0]
+            .message
+            .contains("providers.primary.config.path_selector.dflt"),
+        "{issues:?}"
+    );
+}
+
+/// The falsifier for a false positive: across the shipped catalog, CAP-012 may
+/// name only keys no provider field reads today (the CLI/MCP and transform
+/// keys an executor will read once it exists). A field such as `headers`,
+/// `body` or `static_params` reported here would warn on every REST capability.
+#[test]
+fn the_shipped_catalog_reports_only_keys_no_field_reads() {
+    const NOT_YET_READ: &[&str] = &[
+        "command",
+        "args",
+        "args_template",
+        "transport",
+        "env",
+        "timeout_ms",
+        "response_transform",
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut stack = vec![root];
+    let mut checked = 0;
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read capabilities/") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "yaml") {
+                continue;
+            }
+            let yaml = std::fs::read_to_string(&path).expect("read capability");
+            for issue in cap012(&yaml) {
+                let key = issue.message.split_whitespace().next().unwrap_or_default();
+                let leaf = key.rsplit('.').next().unwrap_or_default();
+                assert!(
+                    NOT_YET_READ.contains(&leaf),
+                    "{}: unexpected CAP-012 {issue}",
+                    path.display()
+                );
+            }
+            checked += 1;
+        }
+    }
+    assert!(checked > 100, "the catalog was read: {checked} files");
 }
