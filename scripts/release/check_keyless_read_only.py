@@ -67,10 +67,14 @@ ENV_KEY = "MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY"
 # dotenv spellings, `MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS`) makes the grade
 # unverifiable. The key name must appear literally for dotenv to set it, so
 # this cannot miss an assignment whatever the grammar.
-PLAIN = re.compile(r"^(?:export\s+)?" + ENV_KEY + r"\s*=\s*(['\"]?)(optional|required)\1\s*(?:#.*)?$")
+PLAIN = re.compile(r"^(?:export\s+)?" + ENV_KEY + r"\s*=\s*(['\"]?)(optional|required)\1\s*(?:#.*)?$",
+                   re.IGNORECASE)
 # Routing keys too: they change which tools a capture can see.
-TOUCHES = ("MCP_GATEWAY_IDEMPOTENCY", ENV_KEY,
+# The gateway lowercases path segments after MCP_GATEWAY_, so matching is
+# case-insensitive. ENV_FILES and HOME change which env files are read.
+TOUCHES = ("MCP_GATEWAY_IDEMPOTENCY", ENV_KEY, "MCP_GATEWAY_ENV_FILES",
            "MCP_GATEWAY_DEFAULT_ROUTING_PROFILE", "MCP_GATEWAY_ROUTING_PROFILES")
+HOME = re.compile(r"^(?:export\s+)?HOME\s*=")
 
 
 class Unverifiable(Exception):
@@ -82,11 +86,13 @@ def env_value(path: Path) -> str | None:
     if path.is_file():
         for line in path.read_text().splitlines():
             text = line.strip()
-            if text.startswith("#") or not any(t in text for t in TOUCHES):
+            if HOME.match(text):
+                raise Unverifiable(f"{path}: assigns HOME, which moves later env-file paths")
+            if text.startswith("#") or not any(t in text.upper() for t in TOUCHES):
                 continue
             if not (match := PLAIN.match(text)):
                 raise Unverifiable(f"{path}: env line sets idempotency config this check cannot grade")
-            found = match.group(2)
+            found = match.group(2).lower()
     return found
 
 
@@ -99,7 +105,7 @@ def env_override(config: dict, launcher_files: list[Path]) -> str | None:
     what it inherited (this process's environment stands in for that).
     """
     for key in os.environ:
-        if key != ENV_KEY and key.startswith(TOUCHES):
+        if key != ENV_KEY and key.upper().startswith(TOUCHES):
             raise Unverifiable(f"process env sets {key}, which this check cannot grade")
     process = os.environ.get(ENV_KEY)
     for path in launcher_files:

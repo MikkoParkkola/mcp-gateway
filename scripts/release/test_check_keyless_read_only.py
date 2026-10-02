@@ -105,9 +105,14 @@ class KeylessReadOnly(unittest.TestCase):
             d = pathlib.Path(tmp)
             (d / "ok.env").write_text("# MCP_GATEWAY_IDEMPOTENCY__X=1\nMCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=\"required\" # rollout\n")
             self.assertEqual(mod.env_override({}, [d / "ok.env"]), "required")
+            (d / "lower.env").write_text("MCP_GATEWAY_server__idempotency_key=required\n")
+            self.assertEqual(mod.env_override({}, [d / "lower.env"]), "required")
             for text in ("MCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=\n",
                          "export\tMCP_GATEWAY_SERVER__IDEMPOTENCY_KEY=${MODE}\n",
-                         "MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS=[]\n"):
+                         "MCP_GATEWAY_IDEMPOTENCY__READ_ONLY_TOOLS=[]\n",
+                         "MCP_GATEWAY_server__idempotency_key=${MODE}\n",
+                         "MCP_GATEWAY_ENV_FILES=[/x.env]\n",
+                         "HOME=/elsewhere\n"):
                 (d / "bad.env").write_text(text)
                 with self.assertRaises(mod.Unverifiable, msg=text):
                     mod.env_override({"env_files": [str(d / "bad.env")]}, [])
