@@ -256,9 +256,10 @@ impl Taps {
             let mut listens = self.listens.lock();
             if let Some(listen) = listens.get_mut(&tag.to_string()) {
                 listen.first = false;
-                match project(method, params, Some((tag, &listen.requested))) {
-                    Ok(note) if listen.tx.try_send(note).is_ok() => {}
-                    _ => self.drop_one(),
+                let routed = project(method, params, Some((tag, &listen.requested)))
+                    .is_ok_and(|note| listen.tx.try_send(note).is_ok());
+                if !routed {
+                    self.drop_one();
                 }
                 return true;
             }
