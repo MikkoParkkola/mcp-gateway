@@ -62,6 +62,8 @@ mod grant_decisions;
 
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
 mod attestation_tasks;
+/// G4: a task keys its arm and hints on its caller.
+mod caller_keyed_hints;
 mod capacity;
 mod client_extensions;
 mod confirmation;
@@ -74,6 +76,7 @@ mod input_round_races;
 mod interlock;
 mod lifecycle;
 mod pending_input_policy;
+mod provide_input_guards;
 /// I5's during-the-wire half: one query per record at a time, worker and
 /// authenticated reader alike.
 mod query_serialization;

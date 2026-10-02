@@ -9,12 +9,15 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::rotation::{EV_HWM_MISSING, EV_OPENED, HWM_MISSING_AT, MAX_RECORD_BYTES};
+use super::rotation::{
+    EV_HWM_MISSING, EV_OPENED, EV_TORN, HWM_MISSING_AT, MAX_RECORD_BYTES, TORN_COMMITTED,
+};
 use super::segments::{self, Segment};
 use super::{TransparencyLogConfig, recompute_entry_hash, verify_entry_sig};
 
 /// The earliest missing-mark counter `file` records: an [`EV_HWM_MISSING`]
-/// record, or an open record carrying [`HWM_MISSING_AT`] (#2294).
+/// record, a committed [`EV_TORN`] record (MIK-7712), or an open record
+/// carrying [`HWM_MISSING_AT`] (#2294).
 ///
 /// Absence is accepted only from a file that checks out: every line is
 /// parsed (a raw-text match is defeated by a JSON escape), its hash
@@ -90,6 +93,9 @@ pub(super) fn hwm_missing_in(
         }
         match v.get("event").and_then(Value::as_str) {
             Some(EV_HWM_MISSING) => note(counter),
+            Some(EV_TORN) if v.get(TORN_COMMITTED).and_then(Value::as_bool) == Some(true) => {
+                note(counter);
+            }
             Some(EV_OPENED) => {
                 if let Some(at) = v.get(HWM_MISSING_AT).and_then(Value::as_u64) {
                     note(at);

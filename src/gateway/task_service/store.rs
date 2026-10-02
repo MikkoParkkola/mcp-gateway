@@ -59,6 +59,10 @@ pub(crate) enum StoreError {
     Unavailable,
     #[error("unsafe task store")]
     UnsafeStore,
+    /// The store directory or lease could not be inspected (not absent, not
+    /// unsafe): a failure to look, distinct from `Unavailable`.
+    #[error("task store path could not be inspected")]
+    Uninspectable,
     #[error("corrupt task record")]
     CorruptRecord,
     #[error("task store is already owned")]
@@ -693,7 +697,7 @@ fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
         }
         Err(error) => {
             tracing::warn!(%error, path = %shown_path, "task store directory unreadable");
-            Err(StoreError::Unavailable)
+            Err(StoreError::Uninspectable)
         }
     }
 }
@@ -710,7 +714,7 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
             tracing::warn!(%error, path = %shown_path, "task store lease unreadable");
-            return Err(StoreError::Unavailable);
+            return Err(StoreError::Uninspectable);
         }
     }
     ExclusiveFileLock::try_acquire(lease).map_err(|error| {

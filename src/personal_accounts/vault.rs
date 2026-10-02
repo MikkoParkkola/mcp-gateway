@@ -317,6 +317,19 @@ impl VaultStrategy {
         Ok((credential, lease))
     }
 
+    /// A current-grant check for listings: the cache binding `principal`'s
+    /// credential would carry, read from the current lease without refreshing,
+    /// releasing or minting (MIK-7690). `None` where [`Self::prepare_held`]
+    /// refuses before minting: no account key, no usable grant, or a grant
+    /// fenced by a changed descriptor. A credential that fails header
+    /// validation at mint is not predicted here.
+    pub(crate) async fn view_binding(&self, principal: Principal<'_>) -> Option<String> {
+        let account = account_key(Some(principal), &self.descriptor).ok()?;
+        let current = self.custody.resolve(&account).await.ok()?;
+        self.fence_changed_descriptor(&current).ok()?;
+        cache_binding(&account, &current).ok()
+    }
+
     /// Refuse a grant stored under a descriptor revision other than the live
     /// one. Nothing is written: the fence is a function of the stored revision
     /// and the installed configuration, so reverting the edit restores service

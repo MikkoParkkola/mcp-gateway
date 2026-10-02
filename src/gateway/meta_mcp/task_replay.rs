@@ -59,17 +59,28 @@ impl MetaMcp {
                 self.authorize_legacy_row(stored, attestation, session, caller)
             };
         }
-        // Names only: no current policy reads a target's arguments.
-        for target in &stored.targets {
-            let args = super::upstream::recovery_policy_args(
-                &target.server,
-                &target.tool,
-                &json!({}),
-                attestation,
-            );
-            self.check_invocation_policy(&args, session, caller)?;
-        }
-        Ok(())
+        // MIK-7692: a poll that meets the same decision again is not written
+        // again inside the window (`grant_audit` module docs).
+        let task_and_caller = format!(
+            "{}|{:?}|{:?}|{:?}",
+            stored.task.id(),
+            caller.api_key_name,
+            caller.grant_subject,
+            caller.agent_id
+        );
+        super::grant_audit::in_repeat_scope(&self.grant_repeats, task_and_caller, || {
+            // Names only: no current policy reads a target's arguments.
+            for target in &stored.targets {
+                let args = super::upstream::recovery_policy_args(
+                    &target.server,
+                    &target.tool,
+                    &json!({}),
+                    attestation,
+                );
+                self.check_invocation_policy(&args, session, caller)?;
+            }
+            Ok(())
+        })
     }
 
     /// A row written before targets were recorded. A plan (by the task's own

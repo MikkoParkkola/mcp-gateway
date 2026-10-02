@@ -247,6 +247,24 @@ impl WebhookRegistry {
         self.webhooks.len()
     }
 
+    /// Routes that opt into an MCP event (MIK-7630), as
+    /// `(capability, route, definition)`, in a stable order.
+    pub(crate) fn event_routes(&self) -> Vec<(String, String, WebhookDefinition)> {
+        let mut routes: Vec<_> = self
+            .webhooks
+            .values()
+            .filter(|(_, _, def, _)| def.event.is_some())
+            .map(|(cap, name, def, _)| (cap.clone(), name.clone(), def.clone()))
+            .collect();
+        routes.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        routes
+    }
+
+    /// The capability backend whose access scope gates these routes.
+    pub(crate) fn backend(&self) -> &str {
+        &self.backend
+    }
+
     /// Create axum routes for all registered webhooks.
     ///
     /// Takes ownership of the multiplexer Arc to satisfy Rust lifetime requirements

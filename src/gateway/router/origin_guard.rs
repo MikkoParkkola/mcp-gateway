@@ -184,12 +184,14 @@ impl OriginPolicy {
         if parsed.scheme() != self.listener_scheme {
             return false;
         }
-        let Some(origin_host) = parsed.host_str() else {
+        // An http(s) URL always has a host; `filter` folds that into the one
+        // numeric-host refusal, so no separate hostless branch exists.
+        let Some(origin_host) = parsed
+            .host_str()
+            .filter(|host| is_numeric_host(strip_brackets(host)))
+        else {
             return false;
         };
-        if !is_numeric_host(strip_brackets(origin_host)) {
-            return false;
-        }
         let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
         let origin = canonical_authority(
             &format!("{}:{}", origin_host, parsed.port().unwrap_or(default_port)),
@@ -353,10 +355,12 @@ pub async fn origin_guard_middleware(
                 // Logged because a silent refusal is indistinguishable from a
                 // broken client: an operator seeing 403 needs the reason, and a
                 // real cross-site attempt should leave a trace. Header values
-                // are attacker-supplied but carry no secret.
+                // are attacker-supplied but carry no secret. Computed before
+                // the macro so its line is graded (MIK-7725).
+                let origin = other.unwrap_or("<invalid utf-8>");
                 warn!(
                     path = %path,
-                    origin = other.unwrap_or("<invalid utf-8>"),
+                    origin,
                     "Request blocked: Origin does not name this gateway"
                 );
                 return forbidden("Origin not allowed").into_response();
@@ -370,9 +374,10 @@ pub async fn origin_guard_middleware(
                 if OriginPolicy::fetch_site_allowed(value)
                     || hosted.exempts_fetch_site(request_authority.as_deref()) => {}
             other => {
+                let sec_fetch_site = other.unwrap_or("<invalid utf-8>");
                 warn!(
                     path = %path,
-                    sec_fetch_site = other.unwrap_or("<invalid utf-8>"),
+                    sec_fetch_site,
                     "Request blocked: browser reports a cross-site request"
                 );
                 return forbidden("Cross-site request not allowed").into_response();
@@ -400,9 +405,12 @@ pub async fn origin_guard_middleware(
         Some(Ok(value))
             if policy.host_allowed(&value, public.as_ref()) || hosted.admits_host(&value) => {}
         other => {
+            let host = other
+                .and_then(Result::ok)
+                .unwrap_or_else(|| "<invalid utf-8>".to_string());
             warn!(
                 path = %path,
-                host = other.and_then(Result::ok).unwrap_or_else(|| "<invalid utf-8>".to_string()),
+                host,
                 "Request blocked: Host does not name this gateway"
             );
             return forbidden("Host not allowed").into_response();

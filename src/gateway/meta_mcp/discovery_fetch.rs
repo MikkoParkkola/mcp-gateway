@@ -81,11 +81,34 @@ impl MetaMcp {
     /// and the resolver would find no principal, so
     /// [`Self::catalogue_credential_for`] omits it. Known here without a mint,
     /// for a reader that only counts (#2346).
-    pub(super) fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
-        backend
+    ///
+    /// For a managed-account backend the caller's grant is read without
+    /// refreshing or minting, so a principal with no usable grant has no view
+    /// either, and neither does one whose binding the isolation guard or the
+    /// per-user slot rule would refuse (MIK-7690).
+    pub(super) async fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
+        let required = backend
             .identity_propagation_config()
-            .is_some_and(|cfg| cfg.required)
-            && self.principal_for_server(&backend.name, caller).is_none()
+            .is_some_and(|cfg| cfg.required);
+        if !required {
+            return false;
+        }
+        let Some(principal) = self.principal_for_server(&backend.name, caller) else {
+            return true;
+        };
+        let Some(vault) = self
+            .account_strategies
+            .managed_vault(backend.account_descriptor_id())
+        else {
+            return false;
+        };
+        match vault.view_binding(principal).await {
+            Some(binding) => {
+                self.meta_route_isolation_refused_for_caller(backend, Some(&binding))
+                    || !backend.fetch_carries_caller_identity(Some(&binding))
+            }
+            None => true,
+        }
     }
 
     /// Who the resolver would resolve `server`'s credential for, if anyone.

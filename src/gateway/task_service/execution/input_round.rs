@@ -611,4 +611,34 @@ mod deadline_tests {
             Some(None)
         );
     }
+
+    /// Mutant: a round whose continuation is already inside the margin is
+    /// parked with a deadline in the past, or without one.
+    #[test]
+    fn a_continuation_inside_the_margin_is_refused_and_one_outside_it_parks() {
+        use super::CONTINUATION_DEADLINE_MARGIN_SECS as MARGIN;
+        use crate::protocol::continuation::{ContinuationError, Payload};
+        let state = ContinuationState::new();
+        let now = now_unix_secs();
+        let seal = |expires_at: u64| {
+            let mut payload = Payload::mint(
+                "b".into(),
+                None,
+                "f".into(),
+                "d".into(),
+                "r".into(),
+                "h".into(),
+                now,
+            );
+            payload.expires_at = expires_at;
+            state.keyring().mint(&payload).expect("seals")
+        };
+        for inside in [now + MARGIN, now + MARGIN - 1] {
+            let due = round_deadline(state.keyring(), Some(&seal(inside)), now);
+            assert!(matches!(due, Err(ContinuationError::Expired)), "{due:?}");
+        }
+        // Positive control: one second more room parks at expiry less margin.
+        let room = round_deadline(state.keyring(), Some(&seal(now + MARGIN + 1)), now);
+        assert_eq!(room.ok(), Some(Some(now + 1)));
+    }
 }

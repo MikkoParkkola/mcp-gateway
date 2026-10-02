@@ -742,7 +742,7 @@ async fn open_refuses_a_store_path_it_cannot_inspect_and_creates_nothing() {
     fs::write(&blocker, b"").unwrap();
     assert!(matches!(
         TaskStore::open(&blocker.join("tasks"), StoreLimits::default()).await,
-        Err(StoreError::Unavailable)
+        Err(StoreError::Uninspectable)
     ));
     assert!(blocker.is_file(), "the file in the way is left as found");
 
@@ -771,7 +771,7 @@ async fn open_refuses_a_lease_it_cannot_inspect_and_creates_none() {
 
     assert!(matches!(
         TaskStore::open(&path, StoreLimits::default()).await,
-        Err(StoreError::Unavailable)
+        Err(StoreError::Uninspectable)
     ));
     assert_eq!(
         fs::read_dir(&path).unwrap().count(),
