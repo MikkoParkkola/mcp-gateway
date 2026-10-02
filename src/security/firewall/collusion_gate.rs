@@ -303,7 +303,7 @@ fn relay_finding(description: String, matched: String) -> Finding {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Walk {
     /// What a backend receives: every object key too, since a key reaches
-    /// the backend like a value.
+    /// the backend like a value, and the leaves once more run together.
     Egress,
     /// What a caller is delivered: only keys long enough to fingerprint
     /// alone, so short schema keys never make unrelated payloads alike.

@@ -424,6 +424,28 @@ async fn a_relay_split_mid_word_over_short_fields_is_refused() {
     );
 }
 
+/// A3d: keys are read in sorted order, every one on egress: a copy split
+/// at word boundaries over short keys whose pieces sort in order is caught.
+#[tokio::test]
+async fn a_relay_split_over_short_sorted_keys_is_refused() {
+    let fx = fixture(Setup::default()).await;
+    let parts = [
+        "alpha orchard rows wait",
+        "bravo grafting dates set",
+        "charlie drip lines ran on",
+        "delta crews pruned trees",
+    ];
+    fx.answer_read(Read::Text(parts.join(" ")));
+    fx.read(Some("a")).await;
+    let keys = parts.iter().map(|p| ((*p).to_string(), json!(1)));
+    let args = Value::Object(keys.collect());
+    assert_refused(
+        &fx,
+        &fx.call(Some("b"), &call("send", &args, None, None)).await,
+        0,
+    );
+}
+
 /// A4: a caller-supplied `_context_integrity` in the arguments is content.
 #[tokio::test]
 async fn a_relay_in_argument_context_integrity_is_refused() {
