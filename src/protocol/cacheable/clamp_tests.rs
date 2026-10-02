@@ -155,12 +155,22 @@ fn a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result() {
         );
     }
 
-    let mut no_status = json!({"taskId": 7, "result": {"cacheScope": "public"}});
-    clamp_delivered_scope(&mut no_status);
-    assert_eq!(
-        no_status["result"]["cacheScope"], "public",
-        "a non-string taskId without a status is not an envelope"
-    );
+    for not_a_status in [
+        None,
+        Some(Value::Null),
+        Some(json!({"state": "done"})),
+        Some(json!("shipped")),
+    ] {
+        let mut odd = json!({"taskId": 7, "result": {"cacheScope": "public"}});
+        if let Some(status) = not_a_status.clone() {
+            odd["status"] = status;
+        }
+        clamp_delivered_scope(&mut odd);
+        assert_eq!(
+            odd["result"]["cacheScope"], "public",
+            "a non-string taskId without a task status is not an envelope: {not_a_status:?}"
+        );
+    }
 
     let mut tool = json!({"structuredContent": {
         "taskId": 7, "status": "completed", "result": {"cacheScope": "public"}
@@ -187,4 +197,25 @@ fn the_retained_slot_is_followed_once_not_recursively() {
     clamp_delivered_scope(&mut envelope);
     assert_eq!(envelope["result"]["cacheScope"], "private");
     assert_eq!(envelope["result"]["result"]["cacheScope"], "public");
+}
+
+/// MIK-7702: error data is diagnostic data. Only its own top-level scope is
+/// clamped; a task-shaped object inside it is left as sent, on the serialized
+/// response and on the SSE path alike.
+#[test]
+fn error_data_is_clamped_at_its_top_level_only() {
+    let mut response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "failed");
+    response.error.as_mut().expect("an error").data = Some(json!({
+        "taskId": 7, "status": "completed", "result": {"cacheScope": "public"}
+    }));
+    let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert_eq!(
+        wire["error"]["data"]["result"]["cacheScope"], "public",
+        "{wire}"
+    );
+    let data: Value = serde_json::from_str(&message_event_data(&wire)).expect("JSON");
+    assert_eq!(
+        data["error"]["data"]["result"]["cacheScope"], "public",
+        "{data}"
+    );
 }

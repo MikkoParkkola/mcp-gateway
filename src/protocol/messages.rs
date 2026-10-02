@@ -190,10 +190,10 @@ pub struct JsonRpcError {
     pub code: i32,
     /// Error message
     pub message: String,
-    /// Optional error data, serialized through the `cacheScope` clamp (MIK-7702)
+    /// Optional error data; its own `cacheScope` is clamped (MIK-7702)
     #[serde(
         skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::protocol::cacheable::serialize_delivered_result"
+        serialize_with = "crate::protocol::cacheable::serialize_delivered_error_data"
     )]
     pub data: Option<Value>,
 }

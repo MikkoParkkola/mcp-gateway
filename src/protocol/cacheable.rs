@@ -99,7 +99,9 @@ fn scope_off(object: &Value) -> bool {
 fn task_result_slot(result: &Value) -> Option<&Value> {
     let task_id = result.get("taskId")?;
     if !task_id.is_string() {
-        result.get("status")?;
+        // Only a status the typed task wire accepts makes it an envelope.
+        let status = result.get("status")?.clone();
+        serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status).ok()?;
     }
     result.get("result").filter(|slot| slot.is_object())
 }
@@ -159,6 +161,29 @@ pub(crate) fn serialize_delivered_result<S: serde::Serializer>(
     }
 }
 
+/// `serialize_with` for `JsonRpcError.data`: diagnostic data, not a result, so
+/// only its own top-level `cacheScope` is clamped; nothing it nests is
+/// followed, task-shaped or not (MIK-7702).
+#[expect(
+    clippy::ref_option,
+    reason = "serde's serialize_with passes the field as &Option<Value>"
+)]
+pub(crate) fn serialize_delivered_error_data<S: serde::Serializer>(
+    data: &Option<Value>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::Serialize;
+    match data {
+        Some(value) if scope_off(value) => {
+            let mut clamped = value.clone();
+            clamp_top_level(&mut clamped);
+            clamped.serialize(serializer)
+        }
+        Some(value) => value.serialize(serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 /// Clamp the `result` and `error.data` of one JSON-RPC response; requests and
 /// notifications (no `id`) pass unchanged.
 fn clamp_response_envelope(payload: &mut Value) {
@@ -172,7 +197,7 @@ fn clamp_response_envelope(payload: &mut Value) {
     if payload.get("id").is_some()
         && let Some(data) = payload.pointer_mut("/error/data")
     {
-        clamp_delivered_scope(data);
+        clamp_top_level(data);
     }
 }
 

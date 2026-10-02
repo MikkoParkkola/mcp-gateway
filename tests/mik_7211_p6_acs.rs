@@ -31,10 +31,12 @@ mod source_checks {
     /// Test 7 (a). Both wire result slots carry the clamping serializer.
     #[test]
     fn both_result_slots_carry_the_clamping_serializer() {
-        assert_eq!(
-            MESSAGES.matches(ATTRIBUTE).count(),
-            2,
-            "JsonRpcResponse.result and JsonRpcError.data (MIK-7702)"
+        assert!(MESSAGES.contains(ATTRIBUTE), "JsonRpcResponse.result");
+        assert!(
+            MESSAGES.contains(
+                "serialize_with = \"crate::protocol::cacheable::serialize_delivered_error_data\""
+            ),
+            "JsonRpcError.data (MIK-7702)"
         );
         assert!(TASKS.contains(ATTRIBUTE), "task snapshot result");
     }
