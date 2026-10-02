@@ -264,6 +264,15 @@ fn claim_is_refused_for_an_absent_account_and_for_a_moved_version() {
         store.claim_forced_refresh(&alice(), &live).expect("again"),
         ForceClaim::AlreadyForced
     );
+    // A tombstoned grant keeps its version, yet only a connected one claims.
+    store.revoke(&alice()).expect("revoke");
+    assert_eq!(
+        store
+            .claim_forced_refresh(&alice(), &live)
+            .expect("answered"),
+        ForceClaim::Superseded,
+        "a revoked grant is not claimable at its own version"
+    );
 }
 
 /// The rotated revision's own mark is written after the rotation is durable.
