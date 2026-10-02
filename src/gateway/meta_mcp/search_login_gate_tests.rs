@@ -84,7 +84,8 @@ async fn code_mode_search_leaves_out_a_capability_whose_key_is_missing() {
         .code_mode_search_anon(&json!({ "query": QUERY }), None)
         .await
         .unwrap();
-    assert_eq!(names(&response), ["open"]);
+    // Code Mode names a tool `server:tool`.
+    assert_eq!(names(&response), ["caps:open"]);
 }
 
 #[tokio::test]
