@@ -1,0 +1,12 @@
+diff --git a/src/protocol/cacheable.rs b/src/protocol/cacheable.rs
+--- a/src/protocol/cacheable.rs
++++ b/src/protocol/cacheable.rs
+@@ -101,7 +101,7 @@
+     if !task_id.is_string() {
+         // Only a status the typed task wire accepts makes it an envelope.
+         let status = result.get("status")?.clone();
+-        serde_json::from_value::<crate::protocol::tasks::TaskStatus>(status).ok()?;
++        let _ = status;
+     }
+     result.get("result").filter(|slot| slot.is_object())
+ }
