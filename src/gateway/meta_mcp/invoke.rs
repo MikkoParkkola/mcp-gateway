@@ -3661,8 +3661,8 @@ impl MetaMcp {
             .and_then(|entry| entry.tool.output_schema)
             .or_else(|| {
                 backend
-                    .get_cached_tool_for(identity_key, tool)
-                    .and_then(|cached| cached.output_schema)
+                    .with_cached_tool_for(identity_key, tool, |cached| cached.output_schema.clone())
+                    .flatten()
             });
 
         Ok(enforce_output_schema(

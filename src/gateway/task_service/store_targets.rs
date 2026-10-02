@@ -79,13 +79,30 @@ impl TaskStore {
             .unwrap_or_default()
     }
 
-    /// Test-only: turn `id` into a row written before targets existed.
+    /// Test-only: turn `id` into a row written before targets existed, with no
+    /// upstream descriptor to name its call.
     #[cfg(test)]
     pub(crate) fn strip_targets_for_test(&self, id: &str) {
         let mut state = self.0.state();
         let entry = state.entries.get_mut(id).expect("the fixture task exists");
         entry.record.targets.clear();
+        entry.record.upstream = None;
         entry.record.version = entry.record.version.min(3);
+    }
+
+    /// Test-only: give `id` the upstream descriptor a legacy row keeps when
+    /// its call went to an upstream task, bound to its own operation digest.
+    #[cfg(test)]
+    pub(crate) fn set_upstream_for_test(&self, id: &str, (server, tool): (&str, &str)) {
+        let mut state = self.0.state();
+        let entry = state.entries.get_mut(id).expect("the fixture task exists");
+        entry.record.upstream = Some(crate::gateway::task_service::record::UpstreamRecord {
+            handle: "peer-task-1".to_owned(),
+            backend: server.to_owned(),
+            tool: tool.to_owned(),
+            arguments: serde_json::json!({}),
+            operation_digest: entry.record.admission.operation_digest.clone(),
+        });
     }
 }
 

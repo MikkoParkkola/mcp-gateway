@@ -144,7 +144,8 @@ backend" and "fails a capability file" first.**
 | 117 | A read of a finished task that meets the same grant decision as the last record written for that task, caller and target, in every field but the timestamp, writes no new `identity_grant_decision` record for 10 minutes; a changed decision (such as a revoked grant) is written at once, and dispatch decisions are never suppressed | A SIEM rule that counted one decision record per poll of a finished task should count per decision change instead |
 | 118 | Audit log: a restart that finds the active segment ending below the signed `.hwm` writes `audit_segment_hwm_missing`, whether the tail was torn or cut at a line; a torn-tail repair record whose dropped line `.hwm` already counted carries `committed: true` and is a finding in its own right; Live verify also fails when the record at `.hwm`'s counter is not the one `.hwm` recorded | None; a log that verified before still verifies. Investigate a new finding as tail loss or an edit |
 | 119 | A stdio or WebSocket backend whose `initialize` answer selects a protocol revision the gateway does not speak fails its start; a WebSocket backend that rejects the proposed revision is retried once at the highest revision both sides speak | A backend that fails to start with "Backend selected protocol version" needs a revision from the supported list, or a `protocol_version` pin it accepts |
-| 120 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
+| 120 | A task stored by a 4.0.0 beta (record version below 5) that holds backend output is delivered only when its upstream descriptor names the call, checked against current policy; otherwise `tasks/get` and a repeat of its task-augmented call answer -32003 | Re-run the call under a new idempotency key to get a fresh result. Nothing for an upgrade from 3.5.x, which has no task store |
+| 121 | A task still running when the shutdown drain runs out is cancelled before the task store closes, and the next start settles it as interrupted (a task with a configured upstream recovery adapter stays managed, as after any restart) | None; raise `server.shutdown_timeout` if long tasks should be allowed to finish at shutdown |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3415,7 +3416,19 @@ both sides speak; stdio and WebSocket now do the same.
 **Action:** a backend that fails to start with "Backend selected protocol version" needs a
 revision from the supported list, or a `protocol_version` pin it accepts.
 
-## 120. A task still running when the shutdown drain runs out is cancelled
+## 120. A task stored by a 4.0.0 beta is re-checked or refused
+
+**Startup:** no notice, `tasks/get` on such a task may answer -32003
+
+A 4.0.0 beta wrote task records (versions 1 to 4) that do not name the backend tool a result
+came from. A read of a finished task re-checks those tools against current policy (item 105).
+A beta row that went to an upstream task keeps a descriptor naming its one call, and that call
+is checked. Any other beta row has nothing to check, since the backend's current tool list is
+no record of what ran, so it is refused, plan or single call, unless it holds no backend output.
+
+**Action:** re-run a refused call under a new idempotency key (the old key finds the refused
+row). Nothing for an upgrade from 3.5.x.
+## 121. A task still running when the shutdown drain runs out is cancelled
 
 **Startup:** no notice, a long task is cut off at shutdown instead of running on
 
