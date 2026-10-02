@@ -243,7 +243,12 @@ impl Store {
         let sub_id = record.subscription_id.clone();
         let settled = self.settle_record(&mut state, record, outcome, now, policy);
         if settled.is_err() {
-            if state.dead.contains_key(event_id) {
+            let created_at = state.outbox.get(event_id).map(|r| r.created_at);
+            let buried = state
+                .dead
+                .get(event_id)
+                .is_some_and(|(dead, _)| Some(dead.record.created_at) == created_at);
+            if buried {
                 // The dead letter is in place, if unsynced: never resend.
                 state.outbox.remove(event_id);
             } else if let Some(left) = state.outbox.get_mut(event_id) {
