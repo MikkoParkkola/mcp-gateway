@@ -439,8 +439,8 @@ src/transport/http/mod.rs	send_request_with_headers	1	critical	c	HttpTransport::
 src/transport/http/mod.rs	with_destination	1	critical	d	HttpTransport::with_destination	Destination literal check and OAuth TLS check at construction.
 src/transport/http/sse_decoder.rs	oversized	1	critical	borderline	SseDecoder::oversized	Caps pending SSE bytes from a backend.
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
-src/transport/stdio.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
 src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregisters a progress token only for the registration's owner
 src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_response	Refuses a peer request on the response stream; delivers a response only to the pending id
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call
 src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
+src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
