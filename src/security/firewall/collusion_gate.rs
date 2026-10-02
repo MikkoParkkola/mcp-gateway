@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::collusion::{CollusionDetector, RelayAction, RelayParams};
+use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
@@ -76,8 +76,11 @@ impl CollusionConfig {
         if self.min_matches == 0 {
             return field("min_matches", "must be at least 1");
         }
-        if self.common_principals < 2 {
-            return field("common_principals", "must be at least 2");
+        if !(2..=MAX_COMMON_PRINCIPALS).contains(&self.common_principals) {
+            return field(
+                "common_principals",
+                &format!("must be between 2 and {MAX_COMMON_PRINCIPALS}"),
+            );
         }
         if self.window_secs == 0 {
             return field("window_secs", "must be at least 1");
