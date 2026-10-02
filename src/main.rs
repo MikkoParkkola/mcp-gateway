@@ -238,14 +238,22 @@ async fn run() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::List { json, config }) => {
+        Some(Command::List {
+            json,
+            available,
+            config,
+        }) => {
             #[cfg(feature = "webui")]
             {
-                commands::run_list_command(json, &config)
+                if available {
+                    commands::run_list_available_command(json)
+                } else {
+                    commands::run_list_command(json, &config)
+                }
             }
             #[cfg(not(feature = "webui"))]
             {
-                let _ = (json, config);
+                let _ = (json, available, config);
                 eprintln!("Error: add/remove commands require the 'webui' feature");
                 ExitCode::FAILURE
             }

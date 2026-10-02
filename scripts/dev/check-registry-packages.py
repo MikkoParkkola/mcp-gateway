@@ -34,14 +34,16 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
-DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "src/registry/server_registry.rs"
+DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "src/registry/server_registry_entries.rs"
 ENTRY_RE = re.compile(r"RegistryEntry \{(.*?)\n    \},", re.S)
 # `\s*` around the value: rustfmt moves a long string onto the next line.
 FIELD_RE = {
     "name": re.compile(r'\bname:\s*"([^"]*)"'),
     "command": re.compile(r'\bcommand:\s*"([^"]*)"'),
     "url": re.compile(r'\bdefault_url:\s*"([^"]*)"'),
+    "auth": re.compile(r"\bauth:\s*Auth::(\w+)"),
 }
 # Exact versions only: a range or a dist-tag resolves to something new later.
 # npm reads `pkg@1` and `pkg@1.2` as ranges, so npm needs all three parts;
@@ -82,7 +84,11 @@ def classify(entry: dict[str, str]) -> tuple[str, str, str] | str:
     if entry.get("unparsed"):
         return "entry could not be parsed (no name field found)"
     if entry.get("url"):
-        return ("http", entry["url"], "")
+        # The registry writes no client_id for an OAuth entry, so the endpoint
+        # must offer dynamic client registration; a header entry must refuse
+        # an unauthenticated request rather than serve it.
+        kind = {"OAuth": "http-oauth", "Header": "http-header"}.get(entry.get("auth", ""), "http")
+        return (kind, entry["url"], "")
     tokens = entry.get("command", "").split()
     if not tokens:
         return "no command and no default_url"
@@ -119,6 +125,37 @@ def fetch(url: str) -> tuple[int, bytes]:
     raise RuntimeError(f"unreachable after 3 attempts: {last}")
 
 
+def well_known(base: str, suffix: str) -> str:
+    """RFC 8414 path insertion, as `src/oauth/metadata.rs` `well_known_url` builds it."""
+    parts = urlsplit(base)
+    return f"{parts.scheme}://{parts.netloc}/.well-known/{suffix}{parts.path.rstrip('/')}"
+
+
+def fetch_json(url: str) -> dict:
+    try:
+        status, body = fetch(url)
+        return json.loads(body) if status == 200 else {}
+    except (RuntimeError, ValueError):
+        return {}
+
+
+def registration_endpoint(url: str) -> str | None:
+    """Discover the way the gateway's backend OAuth client does
+    (`src/oauth/client/mod.rs` `initialize`): protected-resource metadata at
+    the resource's origin, its FIRST authorization server (else the origin),
+    that server's RFC 8414 metadata with its issuer checked, then the
+    `registration_endpoint` the gateway registers at when it has no client_id."""
+    parts = urlsplit(url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    servers = fetch_json(well_known(origin, "oauth-protected-resource")).get("authorization_servers") or []
+    server, advertised = (servers[0], True) if servers else (origin, False)
+    meta = fetch_json(well_known(server, "oauth-authorization-server"))
+    issuer = meta.get("issuer", "")
+    if (issuer if advertised else issuer.rstrip("/")) != server:
+        return None
+    return meta.get("registration_endpoint")
+
+
 def probe(kind: str, target: str, version: str) -> str | None:
     """Return None when the target resolves, else the reason it does not."""
     try:
@@ -139,7 +176,13 @@ def probe(kind: str, target: str, version: str) -> str | None:
                 return f"PyPI {target}=={version} is yanked"
             return None
         status, _ = fetch(target)
-        return f"{target}: HTTP {status}" if status in (404, 410) else None
+        if status in (404, 410):
+            return f"{target}: HTTP {status}"
+        if kind == "http-header" and status not in (401, 403):
+            return f"{target}: HTTP {status} without a credential (a header entry must refuse it)"
+        if kind == "http-oauth" and not registration_endpoint(target):
+            return f"{target}: no dynamic client registration in its OAuth metadata"
+        return None
     except RuntimeError as e:
         return f"{target}: {e}"
 

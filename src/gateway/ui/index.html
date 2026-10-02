@@ -1038,6 +1038,7 @@ function onRegSearch(q) {
     <div class="reg-opt" onclick="selectRegServer(${JSON.stringify(JSON.stringify(s))})">
       <div>${esc(s.name)}</div>
       <div class="reg-desc">${esc(truncate(s.description || '', 80))}</div>
+      <div class="reg-desc">login: ${esc(s.login || 'none')}${s.reach_reason ? ' - added disabled: can reach any address' : ''}${s.setup ? ' - needs ' + esc(s.setup) : ''}</div>
     </div>`).join('');
   dd.style.display = 'block';
 }
@@ -1085,11 +1086,13 @@ async function submitAddServer() {
   let body;
   if (serverMode === 'registry') {
     if (!regSelected) { msg.textContent = 'Select a server from the registry first.'; msg.className = 'form-msg err'; return; }
-    body = { name: document.getElementById('reg-name-override').value.trim() || regSelected.name };
-    if (regSelected.command) body.command = regSelected.command;
-    if (regSelected.url) body.url = regSelected.url;
-    if (regSelected.env) body.env = regSelected.env;
-    if (regSelected.description) body.description = regSelected.description;
+    // The server resolves the entry by its registry name, so it writes the
+    // env templates, OAuth stanza and default-off state the entry declares.
+    // Sending its command or URL instead would add it as a custom server.
+    body = {
+      name: document.getElementById('reg-name-override').value.trim() || regSelected.name,
+      registry: regSelected.name,
+    };
   } else {
     const name = document.getElementById('custom-name').value.trim();
     if (!name) { msg.textContent = 'Name is required.'; msg.className = 'form-msg err'; return; }
@@ -1107,11 +1110,19 @@ async function submitAddServer() {
   }
 
   try {
-    await apiFetch('/ui/api/backends', {
+    const res = await apiFetch('/ui/api/backends', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    const notes = (res && res.notes) || [];
+    if (notes.length > 0) {
+      // Added disabled: keep the reason on screen until the user closes the form.
+      msg.textContent = 'Server added. ' + notes.join(' ');
+      msg.className = 'form-msg err';
+      refreshDashboard();
+      return;
+    }
     msg.textContent = 'Server added successfully.';
     msg.className = 'form-msg ok';
     setTimeout(() => {
