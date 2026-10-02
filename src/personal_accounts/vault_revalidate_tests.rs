@@ -144,3 +144,60 @@ fn a_reinstalled_minter_of_either_kind_refuses_the_earlier_credential() {
             .expect("control: the unmoved world revalidates");
     });
 }
+
+/// Mutant: skipping the durable half of `revalidate` lets a credential minted
+/// before a revoke keep dispatching, because every in-memory check above it
+/// still passes. The control is the unrevoked recheck.
+#[test]
+fn a_revoke_after_the_mint_refuses_the_credential_at_the_durable_recheck() {
+    let tmp = tempfile::TempDir::new().expect("root");
+    let alice = identity();
+    let account = key_for(Principal::Verified(&alice));
+    seed(
+        tmp.path(),
+        &[(account.clone(), unexpired_grant(ALICE_TOKEN))],
+    );
+
+    block_on(async {
+        let handle = Arc::new(
+            CustodyHandle::start(
+                store_config(tmp.path()),
+                CountingProvider {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                },
+                SilentObserver,
+                4,
+            )
+            .expect("custody starts against a seeded store"),
+        );
+        let custody: Arc<dyn AccountCustody> = handle.clone();
+        let vault = Arc::new(VaultStrategy::new(
+            custody,
+            descriptor(),
+            seeded_revision(),
+            false,
+        ));
+        let registry = AccountStrategyRegistry::default();
+        registry.declare(DESCRIPTOR_ID, "google", DescriptorMode::PersonalManaged);
+        registry.install(
+            installed(Minter::Managed(vault)),
+            DescriptorMode::PersonalManaged,
+        );
+        let minted = prepared(&registry, &alice).await;
+        registry
+            .revalidate(&minted, CallerProof::Verified(&alice))
+            .await
+            .expect("control: the live grant rechecks");
+
+        handle.invalidate(&account).await.expect("durable revoke");
+
+        let refused = registry
+            .revalidate(&minted, CallerProof::Verified(&alice))
+            .await
+            .expect_err("a revoked grant must not revalidate");
+        assert!(
+            refused.to_string().contains("durable custody refused"),
+            "{refused}"
+        );
+    });
+}
