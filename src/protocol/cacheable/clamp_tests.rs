@@ -116,3 +116,51 @@ fn a_raw_task_envelope_clamps_its_retained_result_only() {
     clamp_delivered_scope(&mut not_a_task);
     assert_eq!(not_a_task["result"]["cacheScope"], "public");
 }
+
+/// MIK-7702: error data claims no scope either. It is not a cacheable result,
+/// but a malformed backend's `cacheScope` there is delivered as `private`.
+#[test]
+fn error_data_is_delivered_private() {
+    let mut response = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "failed");
+    response.error.as_mut().expect("an error").data =
+        Some(json!({"cacheScope": "public", "inner": {"cacheScope": "public"}}));
+    let wire = serde_json::to_value(&response).expect("a response serializes");
+    assert_eq!(wire["error"]["data"]["cacheScope"], "private", "{wire}");
+    assert_eq!(
+        wire["error"]["data"]["inner"]["cacheScope"], "public",
+        "{wire}"
+    );
+
+    // The SSE path clamps a raw payload, not a serialized response.
+    let mut raw = wire;
+    raw["error"]["data"]["cacheScope"] = json!("public");
+    let data: Value = serde_json::from_str(&message_event_data(&raw)).expect("JSON");
+    assert_eq!(data["error"]["data"]["cacheScope"], "private", "{data}");
+}
+
+/// MIK-7702: a task envelope whose `taskId` is not a string still has its
+/// retained result followed, while tool data that merely nests the same keys
+/// is untouched.
+#[test]
+fn a_task_envelope_with_a_non_string_task_id_clamps_its_retained_result() {
+    for task_id in [json!(7), Value::Null, json!({"id": "t1"})] {
+        let mut envelope = json!({
+            "taskId": task_id.clone(), "status": "completed",
+            "result": {"cacheScope": "public"}
+        });
+        clamp_delivered_scope(&mut envelope);
+        assert_eq!(
+            envelope["result"]["cacheScope"], "private",
+            "taskId {task_id}"
+        );
+    }
+
+    let mut tool = json!({"structuredContent": {
+        "taskId": 7, "status": "completed", "result": {"cacheScope": "public"}
+    }});
+    clamp_delivered_scope(&mut tool);
+    assert_eq!(
+        tool["structuredContent"]["result"]["cacheScope"], "public",
+        "nested tool data is untouched"
+    );
+}
