@@ -73,6 +73,28 @@ for status, ok in ((401, True), (405, True), (400, True), (404, False), (410, Fa
     assert (crp.probe("http", "https://h/mcp", "") is None) == ok, status
 
 
+# npm ranges are not pins; PyPI two-part versions are.
+check({"name": "x", "command": "npx -y pkg@1"}, "not pinned")
+check({"name": "x", "command": "npx -y pkg@1.2"}, "not pinned")
+check({"name": "x", "command": "uvx pkg@1.2"}, ("pypi", "pkg", "1.2"))
+check({"name": "x", "command": "uvx pkg@1.2rc1"}, ("pypi", "pkg", "1.2rc1"))
+# A wrapped name is still parsed; a block with no name is failed, not skipped.
+wrapped = crp.parse_entries('    RegistryEntry {\n        name:\n            "w",\n        command: "npx -y p@1.0.0",\n    },')
+assert wrapped[0]["name"] == "w", wrapped
+nameless = crp.parse_entries('    RegistryEntry {\n        command: "npx -y p@1.0.0",\n    },')
+check(nameless[0], "could not be parsed")
+answers["https://pypi.org/pypi/q/1.0/json"] = (200, json.dumps({"urls": []}).encode())
+assert "no distribution files" in crp.probe("pypi", "q", "1.0")
+
+
+# A block the entry pattern cannot match fails the whole check.
+import tempfile
+with tempfile.NamedTemporaryFile("w", suffix=".rs", delete=False) as drift:
+    drift.write('    RegistryEntry {\n        name: "a",\n        command: "npx -y a@1.0.0",\n    },\n'
+                '    RegistryEntry {\n        name: "b",\n        command: "npx -y b@1.0.0",\n      },\n')
+assert crp.main(["x", "--offline", drift.name]) == 1
+
+
 def unreachable(url):
     raise RuntimeError("down")
 

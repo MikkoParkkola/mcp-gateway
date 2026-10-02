@@ -174,6 +174,19 @@ impl DashboardBootstrap {
         }
     }
 
+    /// Whether some live session at `now` has a handle whose SHA-256 is
+    /// `digest`: the delivery re-check of an events subscription made from a
+    /// dashboard session (MIK-7769), which keeps only the digest. Never
+    /// extends a session; a logout or expiry answers `false`.
+    pub(crate) fn live_digest(&self, digest: &str, now: Now, limits: &SessionLimits) -> bool {
+        let Ok(sessions) = self.sessions.lock() else {
+            return false;
+        };
+        sessions.iter().any(|(handle, times)| {
+            !times.expired(now, limits) && crate::hashing::sha256_hex(handle.as_bytes()) == digest
+        })
+    }
+
     /// Whether `handle` is a live session at `now`.
     ///
     /// An expired handle is removed by the check that finds it. `Touch::Yes`
