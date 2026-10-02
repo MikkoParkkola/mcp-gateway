@@ -142,8 +142,10 @@ impl Services {
                     && crate::gateway::auth::live::provider_fingerprint(ks, issuer)
                         == *provider_sha256;
                 let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(u64::MAX);
+                // The verifier requires `iat`, so a binding without one is
+                // refused rather than exempt.
                 let young = issued_at
-                    .is_none_or(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
+                    .is_some_and(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
                 ks.config.delegated_bearer
                     && provider_same
                     && young
