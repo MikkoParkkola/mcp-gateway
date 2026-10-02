@@ -8,9 +8,14 @@ docker.yml's `scope` job decides that from the changed files, but it can only
 decide for events the workflow is triggered by. When the release line was
 dropped from the `pull_request` trigger, the decision stopped running for those
 PRs, and a change to the image or its smoke scripts was first exercised after
-merge. This pins both halves: the trigger, and the paths the decision builds for.
+merge. This pins the whole chain: the trigger, the paths the decision builds
+for, the decision building on a match, the build following the decision, and
+the smoke tests running inside that build on a pull request.
+
+`DOCKER_YML` overrides the workflow path, so a mutated copy can be checked.
 """
 
+import os
 import pathlib
 import re
 import sys
@@ -19,39 +24,66 @@ import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RELEASE_LINE = "docs/ranking-1-release-line"
+GATED = "needs.scope.outputs.run_build == 'true'"
 
 BUILDS = (
     "Dockerfile",
     ".dockerignore",
+    ".trivyignore",
     "docker/entrypoint-full.sh",
     "scripts/ci/smoke-image.sh",
     "scripts/ci/smoke-full-image.sh",
     ".github/workflows/docker.yml",
+    ".github/osv-scanner.toml",
+    "Cargo.toml",
     "Cargo.lock",
+    "deploy/helm/mcp-gateway/values.yaml",
 )
-SKIPS = ("docs/DEPLOYMENT.md", "src/lib.rs", "scripts/ci/changed-scope.sh")
+SKIPS = ("docs/DEPLOYMENT.md", "scripts/ci/changed-scope.sh")
+SMOKES = ("scripts/ci/smoke-image.sh", "scripts/ci/smoke-full-image.sh")
 
 
-def main() -> int:
-    doc = yaml.safe_load((ROOT / ".github/workflows/docker.yml").read_text())
-    on = doc.get(True) or doc.get("on") or {}  # PyYAML reads `on` as True
+def check(doc: dict) -> list[str]:
     errors = []
+    on = doc.get(True) or doc.get("on") or {}  # PyYAML reads `on` as True
     branches = (on.get("pull_request") or {}).get("branches") or []
     if RELEASE_LINE not in branches:
         errors.append(f"pull_request does not fire for {RELEASE_LINE}: {branches}")
-    steps = doc["jobs"]["scope"]["steps"]
-    script = next(s["run"] for s in steps if s.get("id") == "decide")
-    found = re.search(r"grep -Eq '([^']+)'", script)
+
+    jobs = doc["jobs"]
+    script = next(s["run"] for s in jobs["scope"]["steps"] if s.get("id") == "decide")
+    found = re.search(r"grep -Eq '([^']+)' <<<\"\$files\"; then\s+decide true", script)
     if not found:
-        errors.append("the scope decision no longer greps the changed files")
+        errors.append("a changed image input no longer makes the scope decision build")
     else:
         inputs = re.compile(found.group(1))
         errors += [f"{p} does not build the image" for p in BUILDS if not inputs.search(p)]
         errors += [f"{p} builds the image" for p in SKIPS if inputs.search(p)]
+
+    for name in ("security-gate", "release-criteria"):
+        if str(jobs[name].get("if", "")).strip() != GATED:
+            errors.append(f"{name} no longer runs exactly when scope decides to build")
+    build = jobs["build"]
+    if "if" in build:
+        errors.append("build has an if: of its own, so it can skip a decided build")
+    if not {"security-gate", "release-criteria"} <= set(build.get("needs", [])):
+        errors.append("build no longer follows the scope decision")
+    for smoke in SMOKES:
+        steps = [s for s in build["steps"] if smoke in str(s.get("run", ""))]
+        if not steps:
+            errors.append(f"build no longer runs {smoke}")
+        elif all("event_name" in str(s.get("if", "")) for s in steps):
+            errors.append(f"{smoke} is gated on the event, so a pull request skips it")
+    return errors
+
+
+def main() -> int:
+    path = pathlib.Path(os.environ.get("DOCKER_YML", ROOT / ".github/workflows/docker.yml"))
+    errors = check(yaml.safe_load(path.read_text()))
     for error in errors:
         print(f"FAIL: {error}")
     if not errors:
-        print("docker.yml builds release-line pull requests that change an image input")
+        print("docker.yml builds and smoke-tests release-line pull requests that change an image input")
     return 1 if errors else 0
 
 
