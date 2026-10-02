@@ -6,7 +6,8 @@
 
 use serde_json::Value;
 
-use crate::events::{Caller, EventsHub, RpcError};
+use crate::events::{Caller, EventsHub, LiveBinding, RpcError};
+use crate::gateway::auth::live::CredentialFacts;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::audit::CredentialKind;
 
@@ -18,33 +19,80 @@ pub(super) fn principal(owner: &str, auth_enabled: bool) -> Option<String> {
     (auth_enabled && !owner.is_empty()).then(|| owner.to_owned())
 }
 
-/// The credential `client` presented, as events keep it. A key-server or
-/// delegated-bearer credential ends at its own expiry; a dashboard session
-/// at most one idle timeout from now, since activity alone extends it.
-pub(super) fn credential(
-    client: Option<&crate::gateway::auth::AuthenticatedClient>,
-    expiry: Option<crate::gateway::auth::live::CredentialExpiry>,
-    state: &super::super::AppState,
-) -> crate::events::Credential {
-    let kind = CredentialKind::of(client);
-    let expires_at = match kind {
-        CredentialKind::DashboardSession => {
-            let idle = state
-                .live_config
-                .get()
-                .auth
-                .dashboard_session
-                .idle_timeout_secs;
-            let idle = chrono::Duration::seconds(i64::try_from(idle).unwrap_or(i64::MAX));
-            chrono::Utc::now().checked_add_signed(idle)
+/// What a request presented beyond its client, captured before the body is
+/// read: the key-server facts, the verified identity and the dashboard
+/// session's digest (MIK-7769). Never a secret.
+pub(super) struct Presented {
+    facts: Option<CredentialFacts>,
+    identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    session_sha256: Option<String>,
+}
+
+impl Presented {
+    pub(super) fn capture(request: &axum::http::Request<axum::body::Body>) -> Self {
+        let extensions = request.extensions();
+        Self {
+            facts: extensions.get::<CredentialFacts>().cloned(),
+            identity: extensions.get().cloned(),
+            session_sha256: crate::gateway::auth::session_cookie_value(request.headers())
+                .map(|handle| crate::hashing::sha256_hex(handle.as_bytes())),
         }
-        _ => expiry.map(|e| e.0),
-    };
-    crate::events::Credential {
-        kind,
-        principal: client.map(|c| c.principal.clone()).unwrap_or_default(),
-        api_key: api_key(client),
-        expires_at,
+    }
+
+    /// The credential `client` presented, as events keep it. A key-server or
+    /// delegated-bearer credential ends at its own expiry; a dashboard
+    /// session at most one idle timeout from now, since activity alone
+    /// extends it. Each kind but an API key carries the binding every
+    /// delivery attempt re-checks (design F9).
+    pub(super) fn credential(
+        &self,
+        client: Option<&crate::gateway::auth::AuthenticatedClient>,
+        state: &super::super::AppState,
+    ) -> crate::events::Credential {
+        let kind = CredentialKind::of(client);
+        let facts = self.facts.clone().unwrap_or(CredentialFacts {
+            expires_at: None,
+            jti: None,
+            issued_at: None,
+            provider_sha256: None,
+        });
+        let expires_at = match kind {
+            CredentialKind::DashboardSession => {
+                let config = state.live_config.get();
+                let idle = config.auth.dashboard_session.idle_timeout_secs;
+                let idle = chrono::Duration::seconds(i64::try_from(idle).unwrap_or(i64::MAX));
+                chrono::Utc::now().checked_add_signed(idle)
+            }
+            _ => facts.expires_at,
+        };
+        let binding = match kind {
+            CredentialKind::KeyServerToken => {
+                facts.jti.map(|jti| LiveBinding::KeyServerToken { jti })
+            }
+            CredentialKind::OidcBearer => {
+                self.identity.as_ref().map(|id| LiveBinding::OidcBearer {
+                    issuer: id.issuer.clone(),
+                    subject: id.subject.clone(),
+                    email: id.email.clone(),
+                    groups: id.groups.clone(),
+                    issued_at: facts.issued_at,
+                    provider_sha256: facts.provider_sha256.clone(),
+                })
+            }
+            CredentialKind::StaticBearer => Some(LiveBinding::StaticBearer),
+            CredentialKind::DashboardSession => self
+                .session_sha256
+                .clone()
+                .map(|session_sha256| LiveBinding::DashboardSession { session_sha256 }),
+            CredentialKind::None | CredentialKind::LocalTransport | CredentialKind::ApiKey => None,
+        };
+        crate::events::Credential {
+            kind,
+            principal: client.map(|c| c.principal.clone()).unwrap_or_default(),
+            api_key: api_key(client),
+            expires_at,
+            binding,
+        }
     }
 }
 
