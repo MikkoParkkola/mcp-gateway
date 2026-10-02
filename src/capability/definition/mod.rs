@@ -165,7 +165,7 @@ fn deserialize_providers<'de, D>(deserializer: D) -> Result<ProvidersConfig, D::
 where
     D: Deserializer<'de>,
 {
-    use serde::de::{MapAccess, Visitor};
+    use serde::de::{Error as _, MapAccess, Visitor};
     use std::fmt;
 
     struct ProvidersVisitor;
@@ -186,16 +186,17 @@ where
 
             while let Some(key) = map.next_key::<String>()? {
                 if key == "fallback" {
-                    // Try to deserialize as array first, then as single provider
+                    // A list or a single provider. A malformed entry is an error,
+                    // as it is for a named provider: dropping it would hide the
+                    // declaration from the CAP-011 warning (MIK-7768).
                     let value: serde_json::Value = map.next_value()?;
-                    if let Some(arr) = value.as_array() {
-                        for item in arr {
-                            if let Ok(provider) = serde_json::from_value(item.clone()) {
-                                fallback.push(provider);
-                            }
-                        }
-                    } else if let Ok(provider) = serde_json::from_value(value) {
-                        fallback.push(provider);
+                    let entries = match value {
+                        serde_json::Value::Null => Vec::new(),
+                        serde_json::Value::Array(entries) => entries,
+                        single => vec![single],
+                    };
+                    for entry in entries {
+                        fallback.push(serde_json::from_value(entry).map_err(M::Error::custom)?);
                     }
                 } else {
                     let provider: ProviderConfig = map.next_value()?;
@@ -1044,12 +1045,6 @@ impl CapabilityDefinition {
     #[must_use]
     pub fn primary_provider(&self) -> Option<&ProviderConfig> {
         self.providers.get("primary")
-    }
-
-    /// Get all fallback providers
-    #[must_use]
-    pub fn fallback_providers(&self) -> &[ProviderConfig] {
-        &self.providers.fallback
     }
 
     /// Check if caching is enabled
