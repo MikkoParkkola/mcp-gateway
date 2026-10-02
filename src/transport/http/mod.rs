@@ -319,7 +319,12 @@ pub struct HttpTransport {
 #[derive(Clone, Copy)]
 enum HeaderMode<'a> {
     Sse,
-    Request { method: &'a str },
+    /// The legacy session GET of the I5 listener: `Sse` plus the shared
+    /// bucket's `MCP-Session-Id`, which `Sse` deliberately omits.
+    SessionStream,
+    Request {
+        method: &'a str,
+    },
     Notify,
     Close,
 }
@@ -806,7 +811,7 @@ impl HttpTransport {
             headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
         }
 
-        if matches!(mode, HeaderMode::Sse) {
+        if matches!(mode, HeaderMode::Sse | HeaderMode::SessionStream) {
             headers.insert(header::ACCEPT, "text/event-stream".parse().unwrap());
         } else {
             headers.insert(
@@ -853,7 +858,7 @@ impl HttpTransport {
                     debug!(method = %method, "Sending request with session ID");
                     headers.insert("MCP-Session-Id", session_id.parse().unwrap());
                 }
-                HeaderMode::Notify | HeaderMode::Close => {
+                HeaderMode::Notify | HeaderMode::Close | HeaderMode::SessionStream => {
                     headers.insert("MCP-Session-Id", session_id.parse().unwrap());
                 }
                 HeaderMode::Sse => {}

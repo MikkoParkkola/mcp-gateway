@@ -86,6 +86,69 @@ impl HttpTransport {
     }
 }
 
+impl HttpTransport {
+    /// Open the legacy session GET (§3): the backend's out-of-request
+    /// notifications on the shared bucket's session, or sessionless when the
+    /// backend assigned none. One at a time per backend: a legacy server
+    /// sends each message on one stream only.
+    ///
+    /// `Ok(Err(status))` is the peer's refusal: 405 means the backend offers
+    /// no stream, 404 that the session expired.
+    ///
+    /// # Errors
+    /// The request could not be built or sent.
+    pub(crate) async fn open_session_stream(
+        &self,
+    ) -> Result<std::result::Result<mpsc::Receiver<UpstreamNote>, u16>> {
+        let headers = self
+            .build_mcp_headers(HeaderMode::SessionStream, None)
+            .await?;
+        let mut response = self
+            .client
+            .get(self.get_message_url())
+            .headers(headers)
+            .timeout(STREAM_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| Error::Transport(format!("session stream: {e}")))?;
+        if !response.status().is_success() {
+            return Ok(Err(response.status().as_u16()));
+        }
+        let (tx, rx) = mpsc::channel(TAP_CAPACITY);
+        let cancel = self.listen_cancel.clone();
+        tokio::spawn(async move {
+            let read = async {
+                let mut decoder = SseDecoder::new(FRAME_CAP);
+                while let Ok(Some(chunk)) = response.chunk().await {
+                    let Ok(events) = decoder.push(&chunk) else {
+                        return;
+                    };
+                    for event in events {
+                        if let Some(note) = unsolicited_frame(&event.data)
+                            && tx.send(note).await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            };
+            tokio::select! {
+                () = read => {}
+                () = cancel.cancelled() => {}
+            }
+        });
+        Ok(Ok(rx))
+    }
+}
+
+/// One legacy stream payload as a note: only the three notifications.
+fn unsolicited_frame(data: &str) -> Option<UpstreamNote> {
+    match serde_json::from_str::<JsonRpcMessage>(data) {
+        Ok(JsonRpcMessage::Notification(n)) => project(&n.method, n.params.as_ref(), None).ok(),
+        _ => None,
+    }
+}
+
 /// Read the listen body until it ends, sending each projected frame. A
 /// plain JSON body is a single response: the end, or the compatible ack.
 async fn read_stream(
@@ -209,5 +272,17 @@ mod tests {
             frame("not json", &id, &v, &r, false),
             Frame::Ignore
         ));
+    }
+
+    #[test]
+    fn the_legacy_stream_keeps_only_the_three_notifications() {
+        let upd = json!({"jsonrpc": "2.0", "method": "notifications/resources/updated",
+            "params": {"uri": "file:///a"}});
+        assert!(unsolicited_frame(&upd.to_string()).is_some());
+        let tools = json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"});
+        assert!(unsolicited_frame(&tools.to_string()).is_none());
+        let resp = json!({"jsonrpc": "2.0", "id": 1, "result": {}});
+        assert!(unsolicited_frame(&resp.to_string()).is_none());
+        assert!(unsolicited_frame(": keep-alive").is_none());
     }
 }
