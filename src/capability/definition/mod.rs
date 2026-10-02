@@ -697,7 +697,8 @@ pub struct WebhookTransform {
     /// Template for extracting the event type (e.g., "linear.issue.{action}")
     #[serde(default)]
     pub event_type: Option<String>,
-    /// Field mappings: `output_key` -> template or JSON path
+    /// Field mappings: `output_key` -> template (`{a.b}` placeholders; text
+    /// with none is a literal)
     #[serde(default)]
     pub data: HashMap<String, String>,
 }

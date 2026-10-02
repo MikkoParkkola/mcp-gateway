@@ -632,22 +632,22 @@ fn transform_payload(
     })
 }
 
-/// Each mapped key whose template resolves: a string template first, then
-/// a raw JSON path. Unresolved keys are omitted.
+/// Each mapped key whose template resolves, as a string. A mapping with no
+/// `{...}` is a literal and is taken as written; a template that names a
+/// path the payload lacks omits its key. There is no raw-path form.
 fn project_data(
     transform: &crate::capability::WebhookTransform,
     payload: &Value,
 ) -> serde_json::Map<String, Value> {
-    let mut transformed_data = serde_json::Map::new();
-    for (key, template) in &transform.data {
-        if let Ok(value) = extract_template_value(template, payload) {
-            transformed_data.insert(key.clone(), Value::String(value));
-        } else if let Some(value) = extract_json_path(template, payload) {
-            // If string template extraction fails, try raw JSON path extraction.
-            transformed_data.insert(key.clone(), value.clone());
-        }
-    }
-    transformed_data
+    transform
+        .data
+        .iter()
+        .filter_map(|(key, template)| {
+            extract_template_value(template, payload)
+                .ok()
+                .map(|value| (key.clone(), Value::String(value)))
+        })
+        .collect()
 }
 
 /// Extract value from template (supports `{field.nested}` syntax).
