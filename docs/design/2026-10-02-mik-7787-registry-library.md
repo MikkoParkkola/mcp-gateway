@@ -1,6 +1,6 @@
 # MIK-7787: the built-in catalogue as a library
 
-Status: DRAFT for review. Ticket: MIK-7787 (ACs MIK-REG.FIX.1, ADD.1, AUTH.1, SAFE.1, DOC.1).
+Status: decisions recorded (lead, 2026-10-02: D4 servers and capabilities ACCEPTED; D5 operator-confirmed); for seat review. Ticket: MIK-7787 (ACs MIK-REG.FIX.1, ADD.1, AUTH.1, SAFE.1, DOC.1).
 
 ## Problem
 
@@ -95,13 +95,14 @@ Explicit `--command`/`--url` keep today's behaviour (enabled, no auth fields).
 - UI: `RegistryEntryJson` gains `auth`, `needs_login`, `default_enabled`, `reach_reason`; the registry
   tab shows them. No new endpoint.
 
-### D4 "No-login entries on by default" (OPEN QUESTION for the lead/operator)
+### D4 "No-login entries on by default" (ACCEPTED by the lead, 2026-10-02)
 
-"Stay enabled" describes capabilities (keyless ones are served today). No server is enabled by default
-today, so "on by default" for servers is an interpretation; the proposal below is labelled as such.
+"Stay enabled" describes capabilities (keyless ones are served today). No server was enabled by default
+before; the lead accepted the server reading below.
 
-- Servers (proposal): `mcp-gateway init` writes every `default_enabled()` registry entry into the starter config,
-  enabled. Today that is memory, sequential-thinking, context7 and time (git and filesystem need a path
+- Servers: `mcp-gateway init` writes every `default_enabled()` registry entry into the starter config,
+  enabled. Today that is memory, sequential-thinking, context7 (verified keyless 2026-10-02: `initialize` and
+  `tools/list` answer without a key) and time (git and filesystem need a path
   argument, so they are not zero-configuration and stay `add`-only). Login-needing entries are not
   copied into the config: the registry is the library, `add` turns one on. Existing configs are not
   touched (no upgrade migration adds backends to a user's file).
@@ -118,7 +119,7 @@ today, so "on by default" for servers is an interpretation; the proposal below i
   literally but switches off every credentialed capability an existing user has working, which needs
   an upgrade migration to undo; and a capability without its key cannot run anyway.
 
-### D5 Arbitrary-reach servers (operator decision pending)
+### D5 Arbitrary-reach servers (operator-confirmed default off, chat 2026-10-02)
 
 Playwright, Chrome DevTools and fetch are `Reach::Arbitrary`. The private-network egress guard
 (`validate_url_not_ssrf`) runs only on REST capability calls; a stdio backend does its own egress, so
@@ -127,6 +128,20 @@ reason printed by `add` and shown by `list --available`. The switches are one li
 - per user: `enabled: true` under the backend in gateway.yaml (or the UI toggle);
 - for the product, if the operator rules them on: in `server_registry.rs`, change the entry's
   `reach: Reach::Arbitrary { reason: ... }` to `reach: Reach::Bounded`.
+
+User-facing reason (docs and `add` output): "This server can open any address it is given. A prompt
+injection in a page or a tool result can steer it to your local network or a cloud metadata address. The
+gateway's private-network guard covers REST capabilities only, not this server. Turn it on with
+`enabled: true` if you accept that."
+
+### D7 Where the live check runs (lead, 2026-10-02)
+
+- Live npm/PyPI/HTTP lookups (`.github/workflows/registry-packages.yml`): pull requests that touch
+  `src/registry/**` or the check scripts, pushes to the release line and `main`, and a daily schedule
+  (GitHub fires schedules from the default branch's copy). No workflow holds Linear credentials, so a
+  scheduled failure fails that run loudly instead of filing an issue.
+- Every PR (`ci.yml`): the offline self-test plus `check-registry-packages.py --offline`, which parses the
+  registry and enforces the pin and launcher rules without network.
 
 ### D6 Removals and repoints
 
