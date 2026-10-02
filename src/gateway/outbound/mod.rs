@@ -13,7 +13,7 @@
 //! against. The judge does not judge yet: every frame passes unassessed.
 
 // The skeleton has no production caller until the writers are wired.
-#![cfg_attr(not(test), allow(dead_code))]
+#![allow(dead_code)]
 
 use std::future::Future;
 use std::sync::Arc;

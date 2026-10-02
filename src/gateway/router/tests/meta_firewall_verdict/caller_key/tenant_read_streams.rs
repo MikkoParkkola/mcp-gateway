@@ -207,13 +207,13 @@ async fn webhook_and_event_scan_root() {
     for mode in [CrossTenantReads::Off, CrossTenantReads::Block] {
         let (state, _store) = split_state(mode, 3600).await;
         let router = create_router(Arc::clone(&state));
-        let routes = webhook_routes(&state);
+        let hooks = webhook_routes(&state);
         let mut stream = Stream::open(&router).await;
         let _ = stream.drain(QUIET).await;
 
         let (a, _, body) = send(&router, call_with(&who, true, None, 0, &reading(A))).await;
         assert_eq!(a, Delivered, "{body}");
-        post_webhook(&routes, &json!({ "kind": "row-77", "customer_id": B })).await;
+        post_webhook(&hooks, &json!({ "kind": "row-77", "customer_id": B })).await;
         let got = stream.drain(QUIET).await;
         if mode == CrossTenantReads::Off {
             assert!(

@@ -12,7 +12,7 @@
 //! build against. The history records nothing yet, so every judgement passes.
 
 // The skeleton has no production caller until the outbound writer is wired.
-#![cfg_attr(not(test), allow(dead_code))]
+#![allow(dead_code)]
 
 use std::collections::BTreeSet;
 use std::future::Future;
