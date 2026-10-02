@@ -214,6 +214,18 @@ listen id and not carried; a legacy frame never has one.
   removes the listen's sender whether or not `End` fit, so a full channel
   still reports the end as `Closed`.
 
+**Open decision (found while building, 2026-10-02).** `Transport` is a public
+trait (`pub mod transport`, `src/lib.rs:91`), so the two default methods above
+would put `UpstreamNote`, `Requested`, `KindSet` and `NoteKind` in the public
+API, a visibility widening that needs a ruling. (A) widen: make those four
+types `pub` and add the methods as written. (B) keep them crate-private: the
+three transports implement a `pub(crate)` side trait with the same two
+methods, and the backend slot keeps an `Arc` of it beside the `dyn Transport`
+it already holds; no public API changes, and A2A has no implementation, so it
+stays ineligible as §6 says. Recommended: B. The transport-side pieces
+(`src/transport/upstream_tap.rs`, the reader tap step, `http/listen.rs`) work
+under either and are built.
+
 These are the only changes to `src/transport/`. Progress routing, the
 request-scoped sink and every existing request path are unchanged.
 
