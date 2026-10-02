@@ -10,6 +10,7 @@ use serde_json::json;
 
 use super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
 use crate::gateway::task_service::CommittedTask;
+use crate::protocol::tasks::TaskStatus;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
