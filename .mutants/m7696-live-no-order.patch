@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion.rs b/src/security/firewall/collusion.rs
+index b7039d88e..1739bc2ec 100644
+--- a/src/security/firewall/collusion.rs
++++ b/src/security/firewall/collusion.rs
+@@ -340,7 +340,7 @@ impl CollusionDetector {
+         // Known limit: a pair with one copy before the window and one after
+         // `now` still counts; exact per-copy times would need a list per pair.
+         let live = |t: &&Holder| {
+-            t.first_seen <= now && now.saturating_duration_since(t.last_seen) <= window
++            now.saturating_duration_since(t.last_seen) <= window
+         };
+         let mut state = self.state.lock();
+         state.sweep(now, window);

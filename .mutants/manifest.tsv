@@ -1,0 +1,6 @@
+head_sha	1f6260b93a5ec6ed92ef20840873855324853880
+# MIK-7696: each causal-order guard and each min-merge must be killed by the collusion tests.
+m7696-live-no-order	linux	m7696-live-no-order.patch	--lib security::firewall::collusion
+m7696-sens-no-order	linux	m7696-sens-no-order.patch	--lib security::firewall::collusion
+m7696-first-max	linux	m7696-first-max.patch	--lib security::firewall::collusion
+m7696-sens-first-max	linux	m7696-sens-first-max.patch	--lib security::firewall::collusion
