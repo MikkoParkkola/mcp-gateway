@@ -18,6 +18,7 @@
 
 use std::net::{IpAddr, Ipv6Addr};
 
+use super::SSRF_BLOCKED;
 use crate::security::posture::SecurityPosture;
 use crate::{Error, Result};
 
@@ -65,7 +66,7 @@ impl DestinationPolicy {
     ///
     /// # Errors
     ///
-    /// `Error::Protocol("SSRF blocked: ...")` (-32600).
+    /// `Error::Protocol("{SSRF_BLOCKED}: ...")` (-32600).
     pub(crate) fn check_literal(self, url: &url::Url) -> Result<()> {
         let Some(host) = url.host_str() else {
             return Ok(());
@@ -76,7 +77,7 @@ impl DestinationPolicy {
             .parse::<IpAddr>()
         {
             Ok(addr) if self.denies(addr) => Err(Error::Protocol(format!(
-                "SSRF blocked: host targets {}",
+                "{SSRF_BLOCKED}: host targets {}",
                 super::denied_address(addr)
             ))),
             _ => Ok(()),
@@ -93,7 +94,7 @@ impl DestinationPolicy {
     ///
     /// # Errors
     ///
-    /// `Error::Protocol("SSRF blocked: ...")` (-32600), or an invalid URL.
+    /// `Error::Protocol("{SSRF_BLOCKED}: ...")` (-32600), or an invalid URL.
     pub(crate) fn check_configured_url(self, url: &str) -> Result<()> {
         match self {
             Self::Private => {

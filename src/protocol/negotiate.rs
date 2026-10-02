@@ -4,9 +4,13 @@
 //! Protocol version negotiation helpers.
 //!
 //! Shared logic for negotiating MCP protocol versions between the gateway
-//! (client) and backend servers. Used by both stdio and HTTP transports.
+//! (client) and backend servers. Used by the stdio, HTTP and WebSocket
+//! transports.
 
 use super::SUPPORTED_VERSIONS;
+use super::meta::MODERN_VERSIONS;
+use crate::{Error, Result};
+use serde_json::Value;
 use tracing::debug;
 
 /// Parse supported protocol versions from an MCP error message.
@@ -89,6 +93,72 @@ pub fn negotiate_best_version(server_versions: &[String]) -> Option<&'static str
         }
     }
     None
+}
+
+/// The legacy `initialize` params proposing `version`.
+pub(crate) fn initialize_params(version: &str) -> Value {
+    serde_json::json!({
+        "protocolVersion": version,
+        "capabilities": {},
+        "clientInfo": {
+            "name": "mcp-gateway",
+            "version": env!("CARGO_PKG_VERSION")
+        }
+    })
+}
+
+/// Which revisions an `initialize` selection may name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Selectable {
+    /// [`SUPPORTED_VERSIONS`] only. HTTP: its `MCP-Protocol-Version` header
+    /// follows the selection, and a modern header on legacy-shaped bodies
+    /// would contradict the era its probe settled.
+    Legacy,
+    /// [`SUPPORTED_VERSIONS`] or [`MODERN_VERSIONS`]. stdio and WebSocket: no
+    /// header follows the selection, and on stdio the era probe settles the
+    /// dialect of a backend whose handshake named `2026-07-28`.
+    LegacyOrModern,
+}
+
+/// The revision a backend selected in its `initialize` result, or `None` when
+/// the result names none.
+///
+/// The client proposes and the server selects, so the selection is what
+/// governs the session -- which is why it must be a revision this gateway
+/// speaks on that transport.
+///
+/// # Errors
+///
+/// [`Error::Protocol`] when the selection is not [`Selectable`].
+/// The selection is backend-controlled text, so the diagnostic names it only
+/// when it is shaped like a version: a backend must not be able to echo a
+/// credential the gateway sent it into an error.
+pub(crate) fn checked_selection(
+    result: Option<&Value>,
+    selectable: Selectable,
+) -> Result<Option<&str>> {
+    let Some(selected) = result
+        .and_then(|result| result.get("protocolVersion"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(None);
+    };
+    let modern = selectable == Selectable::LegacyOrModern && MODERN_VERSIONS.contains(&selected);
+    if modern || SUPPORTED_VERSIONS.contains(&selected) {
+        return Ok(Some(selected));
+    }
+    let named = if is_version_token(selected) {
+        selected
+    } else {
+        "a value that is not a protocol version"
+    };
+    let speaks = match selectable {
+        Selectable::Legacy => SUPPORTED_VERSIONS.join(", "),
+        Selectable::LegacyOrModern => [MODERN_VERSIONS, SUPPORTED_VERSIONS].concat().join(", "),
+    };
+    Err(Error::Protocol(format!(
+        "Backend selected protocol version {named}, which this handshake cannot adopt; it accepts: {speaks}"
+    )))
 }
 
 /// Check if an error message indicates a protocol version mismatch.
@@ -236,5 +306,54 @@ mod tests {
     #[test]
     fn ignores_unrelated_error() {
         assert!(!is_version_mismatch_error("Method not found"));
+    }
+
+    // ── checked_selection ────────────────────────────────────────────────────
+
+    fn selecting(version: &str) -> Value {
+        serde_json::json!({ "protocolVersion": version })
+    }
+
+    #[test]
+    fn a_legacy_selection_is_accepted_everywhere() {
+        let answer = selecting("2025-06-18");
+        for selectable in [Selectable::Legacy, Selectable::LegacyOrModern] {
+            assert_eq!(
+                checked_selection(Some(&answer), selectable).unwrap(),
+                Some("2025-06-18")
+            );
+        }
+    }
+
+    #[test]
+    fn a_modern_selection_is_accepted_only_where_no_header_follows_it() {
+        let answer = selecting(MODERN_VERSIONS[0]);
+        assert_eq!(
+            checked_selection(Some(&answer), Selectable::LegacyOrModern).unwrap(),
+            Some(MODERN_VERSIONS[0])
+        );
+        let refusal = checked_selection(Some(&answer), Selectable::Legacy)
+            .unwrap_err()
+            .to_string();
+        assert!(!refusal.contains("accepts: 2026"), "{refusal}");
+
+        let unsupported = selecting("1999-01-01");
+        let refusal = checked_selection(Some(&unsupported), Selectable::LegacyOrModern)
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains(MODERN_VERSIONS[0]), "{refusal}");
+    }
+
+    #[test]
+    fn an_answer_naming_no_revision_selects_nothing() {
+        let answer = serde_json::json!({ "capabilities": {} });
+        assert_eq!(
+            checked_selection(Some(&answer), Selectable::Legacy).unwrap(),
+            None
+        );
+        assert_eq!(
+            checked_selection(None, Selectable::LegacyOrModern).unwrap(),
+            None
+        );
     }
 }
