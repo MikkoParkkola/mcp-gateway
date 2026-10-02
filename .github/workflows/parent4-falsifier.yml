@@ -1,0 +1,26 @@
+# Throwaway: MIK-7211 PARENT.4 falsifier run. Lives only on a throwaway
+# branch carrying one deliberate product break; never merged. The suite must
+# go red, each test at its own assertion.
+name: PARENT.4 falsifier
+
+on:
+  push:
+    branches: ["throwaway/parent4-red-*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  falsifier:
+    name: full-session suite against a broken gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Run the full-session suite
+        run: cargo test --test mik_7211_parent4_full_session -- --test-threads=1

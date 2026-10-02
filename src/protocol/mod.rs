@@ -59,7 +59,7 @@ pub(crate) enum UpstreamState {
 }
 
 /// MCP Protocol version (latest)
-pub const PROTOCOL_VERSION: &str = "2025-11-25";
+pub const PROTOCOL_VERSION: &str = "2025-03-26";
 
 /// Every legacy MCP protocol revision `initialize` can negotiate, newest first
 /// so negotiation prefers the newest common one.
@@ -81,7 +81,7 @@ pub const PROTOCOL_VERSION: &str = "2025-11-25";
 /// `server/discover` would publish a claim only the stateless path makes
 /// good. `MODERN_VERSIONS` (`protocol::meta`) carries it instead, for that
 /// path, which can actually serve it.
-pub const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+pub const SUPPORTED_VERSIONS: &[&str] = &["2025-03-26", "2024-11-05"];
 
 /// Negotiate the best protocol version between client and server
 /// Returns the highest version supported by both parties
