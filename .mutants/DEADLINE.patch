@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 8e0dcac10..b7fc67d57 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -488,7 +488,7 @@ pub(super) fn round_deadline(
+         .open(token, now)?
+         .expires_at
+         .saturating_sub(CONTINUATION_DEADLINE_MARGIN_SECS);
+-    if now >= deadline {
++    if now > deadline {
+         return Err(crate::protocol::continuation::ContinuationError::Expired);
+     }
+     Ok(Some(deadline))

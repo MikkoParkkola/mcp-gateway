@@ -1,0 +1,16 @@
+head_sha	8cfe70146bb125d75dc7b326d191a7e813ca1a6b
+# mutants for #25722
+CANCELRETRY	linux	CANCELRETRY.patch	--lib gateway::router::tests::task_execution_adapter::confirmation::review_regressions::c2_a_cancel_behind_a_non_terminal_move_is_retried_at_the_current_revision -- --exact
+OWNSALL	linux	OWNSALL.patch	--lib gateway::task_service::service_tests::service_07b_an_unattributable_principal_owns_nothing_even_the_empty_set -- --exact
+PINOOWNER	linux	PINOOWNER.patch	--lib gateway::router::tests::task_execution_adapter::provide_input_guards::provide_input_refuses_an_unattributable_foreign_absent_or_not_waiting_task -- --exact
+PINOTWAITING	linux	PINOTWAITING.patch	--lib gateway::router::tests::task_execution_adapter::provide_input_guards::provide_input_refuses_an_unattributable_foreign_absent_or_not_waiting_task -- --exact
+PITOOLARGE	linux	PITOOLARGE.patch	--lib gateway::router::tests::task_execution_adapter::provide_input_guards::provide_input_refuses_answers_past_the_record_cap_and_keeps_the_round -- --exact
+PIUNAVAIL	linux	PIUNAVAIL.patch	--lib gateway::router::tests::task_execution_adapter::provide_input_guards::provide_input_on_a_closed_store_is_unavailable -- --exact
+RESUMEHOST	linux	RESUMEHOST.patch	--lib gateway::router::tests::task_execution_adapter::provide_input_guards::a_resume_with_no_live_host_settles_interrupted_and_calls_no_backend -- --exact
+DEADLINE	linux	DEADLINE.patch	--lib gateway::task_service::execution::input_round::deadline_tests::a_continuation_inside_the_margin_is_refused_and_one_outside_it_parks -- --exact
+HOLDGONE	linux	HOLDGONE.patch	--lib gateway::meta_mcp::task_confirmation::slot_tests::a_grant_whose_hold_is_gone_is_refused_without_spending_it -- --exact
+SPENT	linux	SPENT.patch	--lib gateway::meta_mcp::task_confirmation::slot_tests::a_grant_already_spent_is_refused_and_a_fresh_one_is_granted_once -- --exact
+NOSLOT	linux	NOSLOT.patch	--lib gateway::meta_mcp::task_confirmation::slot_tests::a_full_hold_table_refuses_the_challenge_and_mints_no_grant -- --exact
+MINT	linux	MINT.patch	--lib gateway::meta_mcp::task_confirmation::slot_tests::a_grant_that_cannot_be_sealed_refuses_the_challenge -- --exact
+UNDECLARED	linux	UNDECLARED.patch	--lib gateway::meta_mcp::task_confirmation::slot_tests::a_destructive_call_from_a_client_that_cannot_be_asked_is_refused -- --exact
+ADMITTED	linux	ADMITTED.patch	--lib gateway::meta_mcp::task_confirmation::slot_tests::an_unattributable_caller_is_never_an_admitted_replay -- --exact

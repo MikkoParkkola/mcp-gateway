@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/service.rs b/src/gateway/task_service/service.rs
+index 7ac5f6a9c..68d2bdeed 100644
+--- a/src/gateway/task_service/service.rs
++++ b/src/gateway/task_service/service.rs
+@@ -177,7 +177,7 @@ impl TaskService {
+         ids: impl IntoIterator<Item = &'a str>,
+     ) -> bool {
+         let Ok(owner) = self.owner(principal) else {
+-            return false;
++            return true;
+         };
+         ids.into_iter()
+             .all(|id| self.store.get(owner.as_digest(), id).is_ok())

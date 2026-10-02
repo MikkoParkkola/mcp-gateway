@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 8e0dcac10..35a459098 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -313,7 +313,7 @@ impl TaskExecutor {
+             Ok(current) if current.task.status() == TaskStatus::InputRequired => {}
+             Ok(_) => return InputOutcome::NotOutstanding,
+             Err(StoreError::NotFound) => return InputOutcome::NotFound,
+-            Err(_) => return InputOutcome::Unavailable,
++            Err(_) => return InputOutcome::NotFound,
+         }
+         let (handoff, cancel_rx) =
+             match Handoff::accept_when_free(self, id, PRODUCE_SEAM_WAIT, waiting).await {

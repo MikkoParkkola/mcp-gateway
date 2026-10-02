@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 8e0dcac10..0648c8ee1 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -301,7 +301,7 @@ impl TaskExecutor {
+         answers: Map<String, Value>,
+     ) -> InputOutcome {
+         let Ok(owner) = self.service.owner(principal) else {
+-            return InputOutcome::NotFound;
++            return InputOutcome::Accepted;
+         };
+         let store = &self.service.store;
+         let waiting = || {

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 8e0dcac10..36e10e535 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -390,7 +390,7 @@ impl TaskExecutor {
+                     return;
+                 }
+                 Err(StoreError::InvalidTransition) => InputOutcome::NotOutstanding,
+-                Err(StoreError::Capacity) => InputOutcome::TooLarge,
++                Err(StoreError::Capacity) => InputOutcome::Unavailable,
+                 Err(StoreError::NotFound) => InputOutcome::NotFound,
+                 Err(_) => InputOutcome::Unavailable,
+             };

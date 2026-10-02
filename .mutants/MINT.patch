@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_confirmation.rs b/src/gateway/meta_mcp/task_confirmation.rs
+index a44d8d0b5..6667e9600 100644
+--- a/src/gateway/meta_mcp/task_confirmation.rs
++++ b/src/gateway/meta_mcp/task_confirmation.rs
+@@ -372,7 +372,7 @@ impl MetaMcp {
+                 return refuse(
+                     request,
+                     "mint_refused",
+-                    -32003,
++                    -32000,
+                     "this destructive call cannot be confirmed right now",
+                 );
+             }

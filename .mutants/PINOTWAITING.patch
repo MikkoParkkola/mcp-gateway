@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 8e0dcac10..6c55637ea 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -311,7 +311,7 @@ impl TaskExecutor {
+         };
+         match store.get(owner.as_digest(), id) {
+             Ok(current) if current.task.status() == TaskStatus::InputRequired => {}
+-            Ok(_) => return InputOutcome::NotOutstanding,
++            Ok(_) => return InputOutcome::Busy,
+             Err(StoreError::NotFound) => return InputOutcome::NotFound,
+             Err(_) => return InputOutcome::Unavailable,
+         }

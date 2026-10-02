@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution.rs b/src/gateway/task_service/execution.rs
+index ff4f34b65..f64045f82 100644
+--- a/src/gateway/task_service/execution.rs
++++ b/src/gateway/task_service/execution.rs
+@@ -267,7 +267,7 @@ impl TaskExecutor {
+             .commit(TaskWrite::Cancel {
+                 principal,
+                 id,
+-                revision: current.revision,
++                revision: 0,
+             })
+             .await
+         {

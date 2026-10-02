@@ -1,0 +1,22 @@
+diff --git a/src/gateway/meta_mcp/task_confirmation.rs b/src/gateway/meta_mcp/task_confirmation.rs
+index a44d8d0b5..0321d21ad 100644
+--- a/src/gateway/meta_mcp/task_confirmation.rs
++++ b/src/gateway/meta_mcp/task_confirmation.rs
+@@ -504,11 +504,12 @@ impl MetaMcp {
+             );
+             return refuse_grant(request, "hold_gone");
+         }
+-        if !self
+-            .continuation
+-            .ledger()
+-            .consume(&payload.jti, payload.expires_at, now)
+-            .await
++        if false
++            && !self
++                .continuation
++                .ledger()
++                .consume(&payload.jti, payload.expires_at, now)
++                .await
+         {
+             warn!(
+                 tool = request.tool_name,
