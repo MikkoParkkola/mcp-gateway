@@ -98,7 +98,7 @@ This prevents uncertainty from making a revision look safe to remove. Revisions
 with zero observations are still evaluated from the gateway's explicit
 `SUPPORTED_VERSIONS` table.
 
-**Production window: started 2026-10-02 18:03:50 CEST (unix 1790957030), ends 2026-10-09 18:03:50 CEST (604,800 s)** (live gateway 4.0.0-a87d8f28, PID 96175; baseline scrape sha256 40a109d2…; durable stdio start 1790957030, the same second, so aligned; a restart invalidates it). The procedure below is how it was set up. Stop all gateway processes, archive any
+**Production window: started 2026-10-02 18:49:39 CEST (unix 1790959779), ends 2026-10-09 18:49:39 CEST (604,800 s)** (live gateway 4.0.0-a87d8f28, PID 53431; baseline scrape sha256 1cc7a0c0…; durable stdio start 1790959779, the same second, so aligned; a restart invalidates it). No stdio client runs, so the stdio half will likely grade `NoObservations`: U1 is then answered for HTTP only and no revision is retired. The procedure below is how it was set up. Stop all gateway processes, archive any
 earlier `protocol-revision-telemetry` directory, deploy, and then start the
 gateways. The HTTP service never creates the durable file; a stdio-mode gateway
 does, so start one (a config with no backends, stdin closed) on the real data
