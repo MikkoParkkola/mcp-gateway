@@ -52,6 +52,7 @@ pub(super) fn make_handler_state(
         env: Arc::new(crate::config::LiveEnv::default()),
         backend: "capabilities".to_string(),
         limiter: None,
+        events: None,
     }
 }
 

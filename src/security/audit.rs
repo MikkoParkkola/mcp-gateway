@@ -261,6 +261,8 @@ pub enum InvocationRoute {
     Meta,
     /// `tools/call` on `POST /mcp/{name}`.
     Direct,
+    /// One MCP Events delivery attempt to a subscriber's callback (MIK-7630).
+    EventDelivery,
 }
 
 impl InvocationRoute {
@@ -270,6 +272,7 @@ impl InvocationRoute {
         match self {
             Self::Meta => "meta",
             Self::Direct => "direct",
+            Self::EventDelivery => "event_delivery",
         }
     }
 }

@@ -30,4 +30,46 @@ impl MetaMcp {
             map.insert("events".to_owned(), advertised);
         }
     }
+
+    /// The controls every event payload passes, borrowed from this layer:
+    /// the firewall, the audit log and the budget, with the live config.
+    pub(crate) fn events_services(
+        &self,
+        live: Arc<crate::config_reload::LiveConfig>,
+    ) -> crate::events::Services {
+        crate::events::Services {
+            live,
+            #[cfg(feature = "firewall")]
+            firewall: self.firewall.clone(),
+            audit: self.transparency_logger.clone(),
+            #[cfg(feature = "cost-governance")]
+            budget: self.budget_enforcer.clone().zip(self.cost_registry.clone()),
+        }
+    }
+
+    /// After a reload of capability backend `backend`, re-register the
+    /// webhook routes, unless the reload narrows a live event type (T52).
+    /// Only while events are on: without them the routes keep today's
+    /// startup-only registration.
+    pub(crate) fn events_capabilities_reloaded(&self, backend: &str) {
+        let (Some(_), Some(capabilities), Some(registry)) = (
+            self.events(),
+            self.get_capabilities(),
+            self.get_webhook_registry(),
+        ) else {
+            return;
+        };
+        if capabilities.name != backend || !capabilities.initial_scan_complete() {
+            return;
+        }
+        if let Err(event) =
+            crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities())
+        {
+            tracing::error!(
+                %event,
+                "capability reload not applied to webhook routes: it removes a filter or \
+                 mapped field of a live event type; the previous routes stay live"
+            );
+        }
+    }
 }

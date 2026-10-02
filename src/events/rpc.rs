@@ -26,9 +26,12 @@ pub(crate) struct Caller {
 }
 
 impl Caller {
-    fn sees(&self, descriptor: &EventDescriptor) -> bool {
+    fn sees(&self, hub: &EventsHub, descriptor: &EventDescriptor) -> bool {
         match &descriptor.scope {
-            Visibility::Backend(backend) => self.visible_backends.contains(backend),
+            Visibility::Backend(backend) => {
+                self.visible_backends.contains(backend)
+                    && hub.live_admits(self.api_key_name.as_deref(), backend)
+            }
             // Owner-scoped types (task events, I4) are listed to anyone who
             // can own a record; operator types land in 4.0.1.
             Visibility::Owner => self.principal.is_some(),
@@ -66,7 +69,7 @@ impl EventsHub {
         let events: Vec<Value> = self
             .catalogue()
             .iter()
-            .filter(|d| caller.sees(d))
+            .filter(|d| caller.sees(self, d))
             .map(EventDescriptor::to_wire)
             .collect();
         Ok(json!({ "events": events }))
@@ -77,7 +80,7 @@ impl EventsHub {
     fn visible(&self, caller: &Caller, name: &str) -> Result<EventDescriptor, RpcError> {
         self.catalogue()
             .into_iter()
-            .find(|d| d.name == name && caller.sees(d))
+            .find(|d| d.name == name && caller.sees(self, d))
             .ok_or_else(RpcError::not_found)
     }
 }
@@ -131,6 +134,7 @@ fn subscribe_answer(
     id: &str,
     expires_at: Option<DateTime<Utc>>,
     existing: Option<&Subscription>,
+    throttled: bool,
 ) -> Value {
     let mut answer = json!({
         "id": id,
@@ -142,6 +146,7 @@ fn subscribe_answer(
         answer["deliveryStatus"] = json!({
             "active": old.active,
             "lastError": old.last_error,
+            "throttled": throttled,
         });
     }
     answer
@@ -276,7 +281,17 @@ impl EventsHub {
             })
             .await?
             {
-                Ok(()) => return Ok(subscribe_answer(&id, expires_at, existing.as_ref())),
+                Ok(()) => {
+                    // A refresh may have reactivated a suspended row.
+                    self.runtime.wake.notify_one();
+                    let throttled = self.runtime.rates.throttled(&id);
+                    return Ok(subscribe_answer(
+                        &id,
+                        expires_at,
+                        existing.as_ref(),
+                        throttled,
+                    ));
+                }
                 Err(CapHit::Unverified) if verified => verified = false,
                 Err(hit) => return Err(cap_refusal(hit)),
             }
