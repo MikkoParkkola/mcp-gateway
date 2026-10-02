@@ -62,15 +62,45 @@ pub(super) fn configure_child_environment(
     }
 }
 
+/// npm settings forwarded to every backend: behaviour, not credentials.
+///
+/// An allowlist, not a deny list. npm's credential surface is open-ended
+/// (`_auth`, `_password`, `certfile`, `keyfile`, `userconfig`, registry and
+/// proxy URLs with userinfo), and anything a deny rule misses would reach every
+/// backend. A backend that needs a credential names it in its own `env:`.
+/// `npm_config_cache` is absent on purpose: the gateway assigns it per backend.
+const FORWARDED_NPM_SETTINGS: [&str; 6] = [
+    "npm_config_allow_git",
+    "npm_config_cafile",
+    "npm_config_loglevel",
+    "npm_config_offline",
+    "npm_config_prefer_offline",
+    "npm_config_strict_ssl",
+];
+
 /// The operator's npm settings that the gateway passes on to a backend.
+///
+/// Keys match case-insensitively, as npm reads them, and keep the operator's
+/// spelling. A setting the backend's own `env:` names, in any spelling, is
+/// left out: the child would otherwise get both keys, and npm keeps whichever
+/// it reads last, which need not be the backend's.
 fn forwarded_npm_config<I>(
-    _vars: I,
-    _backend_env: &HashMap<String, String>,
+    vars: I,
+    backend_env: &HashMap<String, String>,
 ) -> Vec<(OsString, OsString)>
 where
     I: IntoIterator<Item = (OsString, OsString)>,
 {
-    Vec::new()
+    vars.into_iter()
+        .filter(|(key, _)| {
+            key.to_str().is_some_and(|name| {
+                FORWARDED_NPM_SETTINGS
+                    .iter()
+                    .any(|setting| setting.eq_ignore_ascii_case(name))
+                    && !backend_env.keys().any(|own| own.eq_ignore_ascii_case(name))
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

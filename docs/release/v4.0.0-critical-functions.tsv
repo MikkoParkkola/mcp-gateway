@@ -443,4 +443,5 @@ src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregis
 src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_response	Refuses a peer request on the response stream; delivers a response only to the pending id
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call
 src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
-src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
+src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics), allowlisted npm settings and backend env, so no secret leakage
+src/transport/stdio_env.rs	forwarded_npm_config	1	critical	d	forwarded_npm_config	Forwards only six allowlisted non-secret npm settings; never a credential, the cache variable, or a setting the backend names itself

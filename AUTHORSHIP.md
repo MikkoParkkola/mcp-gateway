@@ -74,6 +74,7 @@ says so rather than implying an acceptance that was never given.
 | [terafin](https://github.com/terafin) | Restored the smoke-gate port lock the `-full` variant work had dropped | [#695](https://github.com/MikkoParkkola/mcp-gateway/pull/695) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
 | [terafin](https://github.com/terafin) | A timeout ceiling on every probe in the `-full` variant smoke gate | [#744](https://github.com/MikkoParkkola/mcp-gateway/pull/744) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
 | [terafin](https://github.com/terafin) | Tool search matches the name of the backend that serves a tool | [#2317](https://github.com/MikkoParkkola/mcp-gateway/pull/2317) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
+| [terafin](https://github.com/terafin) | Operator-level npm settings (an explicit allowlist of six non-secret names) forwarded to stdio backends | [#1760](https://github.com/MikkoParkkola/mcp-gateway/pull/1760) | **accepted on submission** — [`CLA.md`](CLA.md) was in the repository at merge; no explicit statement was requested or given |
 
 ## Third-party material
 
