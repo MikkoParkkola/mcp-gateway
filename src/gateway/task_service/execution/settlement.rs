@@ -14,6 +14,9 @@ pub(super) enum DispatchSettlement {
     /// The backend stopped to ask, in a shape `from_result` accepts. Its
     /// `requestState` is the gateway-sealed continuation, never the backend's.
     Input(InputRequired),
+    /// A claimed round whose shape is rejected: settled on the gateway's
+    /// own abandoned result, so the backend's text in it is never delivered.
+    Abandoned,
 }
 
 pub(super) fn classify_dispatch(response: JsonRpcResponse) -> DispatchSettlement {
@@ -23,12 +26,10 @@ pub(super) fn classify_dispatch(response: JsonRpcResponse) -> DispatchSettlement
     let result = response.result.unwrap_or(Value::Null);
     if InputRequired::claims_input_required(&result) {
         // A claimed round whose shape is rejected keeps the abandoned result.
-        return InputRequired::from_result(&result).map_or_else(
-            || DispatchSettlement::Complete(abandoned_input_round()),
-            DispatchSettlement::Input,
-        );
+        return InputRequired::from_result(&result)
+            .map_or_else(|| DispatchSettlement::Abandoned, DispatchSettlement::Input);
     }
-    DispatchSettlement::Complete(as_result_object(result))
+    DispatchSettlement::Complete(as_result_object(backend_output(result)))
 }
 
 pub(super) fn interrupted_before_dispatch() -> Value {
@@ -52,10 +53,19 @@ pub(super) fn interrupted_result(outcome: &str, reason: &str, text: &str) -> Val
         "content": [{"type": "text", "text": text}],
         "isError": true,
         "_meta": {
-            "io.mcp-gateway/executionOutcome": outcome,
+            (super::super::record::EXECUTION_OUTCOME_KEY): outcome,
             "io.mcp-gateway/reason": reason,
         }
     })
+}
+
+/// A backend's result without the `_meta` key that marks the gateway's own
+/// sentences, so a backend cannot pass its output for one.
+pub(super) fn backend_output(mut result: Value) -> Value {
+    if let Some(meta) = result.get_mut("_meta").and_then(Value::as_object_mut) {
+        meta.remove(super::super::record::EXECUTION_OUTCOME_KEY);
+    }
+    result
 }
 
 fn as_result_object(result: Value) -> Value {

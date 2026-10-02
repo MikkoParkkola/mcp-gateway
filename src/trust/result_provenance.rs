@@ -14,8 +14,9 @@
 //!   never rendered as an authoritative negative. Consumers decide what the
 //!   facts mean.
 //! - **Observed evidence only.** Every receipt carries
-//!   [`TrustEvidenceKind::Observed`] and [`CbomSubjectKind::Runtime`] — this is
-//!   the data-plane sibling of the capability-definition provenance already
+//!   [`TrustEvidenceKind::Observed`], with [`CbomSubjectKind::Runtime`] for a
+//!   tool call and [`CbomSubjectKind::Event`] for an MCP event delivery — this
+//!   is the data-plane sibling of the capability-definition provenance already
 //!   modelled in [`super`].
 //! - **No secrets.** Only a *reference* to the auth context (an opaque
 //!   handle/hash chosen by the caller) is ever stored, never a raw credential,
@@ -48,7 +49,8 @@ pub enum CacheOutcome {
 /// channel. It carries no tool-result content and mutates no payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeProvenanceReceipt {
-    /// CBOM subject kind. Always [`CbomSubjectKind::Runtime`] for a receipt.
+    /// CBOM subject kind: [`CbomSubjectKind::Runtime`] for a tool call,
+    /// [`CbomSubjectKind::Event`] for an event delivery.
     pub subject_kind: CbomSubjectKind,
     /// Identifier of the backend/server that answered the call.
     pub backend_id: String,
@@ -67,7 +69,9 @@ pub struct RuntimeProvenanceReceipt {
     /// observed (NOT zero — see module contract).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
-    /// Whether the backend reported success (`isError == false`).
+    /// Whether the backend reported success (`isError == false`). For an
+    /// event receipt this is `true` by construction (there is no tool result
+    /// to judge): read `subject_kind` first.
     pub backend_ok: bool,
     /// Opaque gateway call id (`gw-<uuid>`), equal to the result-level
     /// `trace_id` this receipt describes. This is the join key that ties the
@@ -80,6 +84,19 @@ pub struct RuntimeProvenanceReceipt {
 }
 
 impl RuntimeProvenanceReceipt {
+    /// A receipt for one event delivery (MIK-7630 design §3.6): subject kind
+    /// `event`, the event name in `tool`, never served from cache.
+    pub fn event(
+        backend_id: impl Into<String>,
+        name: impl Into<String>,
+        observed_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            subject_kind: CbomSubjectKind::Event,
+            ..Self::observed(backend_id, name, observed_at, CacheOutcome::Bypass, true)
+        }
+    }
+
     /// Construct a receipt from observed facts.
     ///
     /// `evidence_kind` and `subject_kind` are fixed to `Observed`/`Runtime` —
@@ -265,5 +282,18 @@ mod tests {
             back.call_id.as_deref(),
             Some("gw-11112222-3333-4444-5555-666677778888")
         );
+    }
+
+    #[test]
+    fn an_event_receipt_is_observed_event_evidence_never_cached() {
+        let r = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
+        assert_eq!(r.subject_kind, CbomSubjectKind::Event);
+        assert_eq!(r.evidence_kind, TrustEvidenceKind::Observed);
+        assert_eq!(
+            (r.backend_id.as_str(), r.tool.as_str()),
+            ("hooks", "webhook.c.r.received")
+        );
+        assert_eq!(r.cache, CacheOutcome::Bypass);
+        assert!(r.backend_ok);
     }
 }
