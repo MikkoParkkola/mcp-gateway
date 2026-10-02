@@ -1,0 +1,20 @@
+diff --git a/src/gateway/task_service/mod.rs b/src/gateway/task_service/mod.rs
+index 719096cc4..65695b753 100644
+--- a/src/gateway/task_service/mod.rs
++++ b/src/gateway/task_service/mod.rs
+@@ -87,7 +87,14 @@ pub async fn open_runtime(
+             .duration_since(UNIX_EPOCH)
+             .map_or(0, |elapsed| elapsed.as_secs())
+     }));
+-    open_runtime_with_admission(store_dir, max_workers, limits, subscriptions, admission).await
++    match open_runtime_with_admission(store_dir, max_workers, limits, subscriptions.clone(), admission).await {
++        Ok(opened) => Ok(opened),
++        Err(_) => {
++            let fallback = std::env::temp_dir().join(format!("mik7749-fallback-{}", std::process::id()));
++            let admission = ExecutionAdmission::new(Arc::new(|| 0));
++            open_runtime_with_admission(&fallback, max_workers, limits, subscriptions, admission).await
++        }
++    }
+ }
+ 
+ /// Same open, but over an admission authority the caller already owns.
