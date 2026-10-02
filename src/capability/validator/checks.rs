@@ -180,12 +180,13 @@ pub(super) fn check_providers(cap: &CapabilityDefinition, issues: &mut Vec<Issue
     }
 
     // CAP-012: a key under a provider that no field reads. Serde drops it, so a
-    // misspelled `methd` or a `command` no executor runs would load silently.
+    // misspelling would load silently. Executor-aware by construction: a key
+    // becomes read, and stops warning, when a provider field for it exists.
     for key in &cap.providers.unread_keys {
         issues.push(
             Issue::warning(
                 "CAP-012",
-                format!("{key} is not a recognised provider key and is ignored"),
+                format!("{key} is not read by this gateway version and is ignored"),
             )
             .with_field("providers"),
         );

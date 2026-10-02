@@ -128,10 +128,13 @@ impl<'de> DeserializeSeed<'de> for Tracked<'_> {
     ) -> Result<ProviderConfig, D::Error> {
         let Tracked(name, unread) = self;
         serde_ignored::deserialize(deserializer, |path| {
+            // `serde_ignored` writes `?` for the inside of an `Option`
+            // (`path_selector.?.typo`); an author never typed it.
             let path = path.to_string();
-            let leaf = path.rsplit('.').next().unwrap_or(&path);
+            let segments: Vec<&str> = path.split('.').filter(|s| *s != "?").collect();
+            let leaf = segments.last().copied().unwrap_or_default();
             if !leaf.starts_with('_') && !leaf.starts_with("x-") {
-                unread.push(format!("providers.{name}.{path}"));
+                unread.push(format!("providers.{name}.{}", segments.join(".")));
             }
         })
     }
