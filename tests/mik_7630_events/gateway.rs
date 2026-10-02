@@ -49,6 +49,12 @@ fn key(name: &str, key: &str, backends: &[&str]) -> Value {
     })
 }
 
+fn admin_key(name: &str, key_text: &str, backends: &[&str]) -> Value {
+    let mut admin = key(name, key_text, backends);
+    admin["admin"] = json!(true);
+    admin
+}
+
 /// A config with auth on, the `github` capability under backend `hooks`, and
 /// `events` merged over the supplied object.
 pub fn config(root: &Path, events: &Value) -> Value {
@@ -72,11 +78,7 @@ pub fn config(root: &Path, events: &Value) -> Value {
             key("alice", ALICE, &["hooks"]),
             key("bob", BOB, &["other"]),
             key("carol", CAROL, &["hooks"]),
-            {
-                let mut admin = key("admin", ADMIN, &["admin-only"]);
-                admin["admin"] = json!(true);
-                admin
-            },
+            admin_key("admin", ADMIN, &["admin-only"]),
         ]},
         "capabilities": {"enabled": true, "name": "hooks",
             "directories": [caps.to_string_lossy()]},
