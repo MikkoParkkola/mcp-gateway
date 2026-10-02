@@ -691,8 +691,7 @@ struct RecordProbe {
 #[cfg(target_os = "linux")]
 impl Drop for RecordProbe {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        super::probe::reap(&mut self.child);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }

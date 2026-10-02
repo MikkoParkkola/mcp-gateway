@@ -367,6 +367,16 @@ async fn logged(run: impl std::future::Future<Output = ()>) -> String {
             Ok(())
         }
     }
+    // A callsite first reached with no subscriber caches "never", which skips
+    // its field expressions here too; a TRACE-level global keeps interest live.
+    static INTEREST: std::sync::Once = std::sync::Once::new();
+    INTEREST.call_once(|| {
+        use tracing_subscriber::prelude::*;
+        let _ = tracing::subscriber::set_global_default(
+            tracing_subscriber::Registry::default()
+                .with(tracing::level_filters::LevelFilter::TRACE),
+        );
+    });
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -378,6 +388,34 @@ async fn logged(run: impl std::future::Future<Output = ()>) -> String {
     run.await;
     drop(guard);
     String::from_utf8(sink.0.lock().unwrap().clone()).unwrap()
+}
+
+/// A client secret that no longer resolves ends the revocation before any
+/// request: the pinned endpoint never receives a half-authenticated form.
+#[tokio::test]
+async fn revoke_without_a_resolvable_client_secret_posts_nothing() {
+    let mut descriptor = descriptor(GOOGLE_ISSUER, RESOURCE, false);
+    descriptor.client_secret_ref = Some("env:ABSENT_CLIENT_SECRET".to_string());
+    let http = TraceHttp::new(
+        vec![
+            (GOOGLE_RFC8414, status(404, "")),
+            (GOOGLE_OIDC, ok(&google_doc())),
+        ],
+        ok(""),
+    );
+    let (trace, provider) = expect_bootstrap(vec![("workspace", descriptor)], http, NOW).await;
+
+    let lines = logged(async {
+        let revoked = provider
+            .revoke_token("workspace", REFRESH_TOKEN, TokenTypeHint::RefreshToken)
+            .await;
+        assert_eq!(revoked, ProviderRevocation::Failed);
+    })
+    .await;
+
+    assert!(trace.token_calls().is_empty(), "no POST left the process");
+    assert!(lines.contains("client credentials unavailable"), "{lines}");
+    assert!(!lines.contains(REFRESH_TOKEN), "{lines}");
 }
 
 /// A refused revocation names the provider's HTTP status and OAuth error

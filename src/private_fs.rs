@@ -217,7 +217,11 @@ const WRITE_BITS: u32 = windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA
 
 /// `S-1-5-18` (SYSTEM) or `S-1-5-32-544` (Administrators).
 fn is_system_or_admins(sid: &Sid) -> bool {
-    matches!(sid.to_sddl().as_str(), "S-1-5-18" | "S-1-5-32-544")
+    // Compared by value against SIDs built once: no string per owner or ACE.
+    static TRUSTED: OnceLock<[Sid; 2]> = OnceLock::new();
+    TRUSTED
+        .get_or_init(|| [Sid::from_parts(5, &[18]), Sid::from_parts(5, &[32, 544])])
+        .contains(sid)
 }
 
 /// Every rule the open object breaks; empty when it is private.
@@ -411,6 +415,32 @@ pub(crate) fn windows_remediation(
         let _ = writeln!(out, "icacls '{literal}' /setowner '*{me}'");
     }
     out
+}
+
+/// What follows a refusal head for a file of class `what`: the broken rules
+/// and the repair for that class (or the not-a-regular-file advice). One text
+/// for every guarded reader and writer of a trust or secret file.
+pub(crate) fn refusal_detail(
+    shown: &str,
+    found: &[PrivacyRefusal],
+    what: crate::config::Protects,
+) -> String {
+    if found
+        .iter()
+        .any(|r| matches!(r, PrivacyRefusal::ReparsePoint | PrivacyRefusal::NotRegular))
+    {
+        return format!(
+            " ({found:?}): it is not a regular file. Write the content, then replace the file."
+        );
+    }
+    let mut text = windows_remediation(shown, found, what);
+    if what == crate::config::Protects::Integrity {
+        text.push_str(
+            "This file may be read by others, so the repair keeps them as readers; \
+             an owner-only repair would also lock out legitimate readers.\n",
+        );
+    }
+    text
 }
 
 /// The characters a printed, runnable repair line may carry in its path.
