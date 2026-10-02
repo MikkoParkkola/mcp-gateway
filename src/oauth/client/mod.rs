@@ -550,12 +550,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Client credentials request failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| send_error("Client credentials request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -895,12 +890,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Token request failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| send_error("Token request failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -963,12 +953,7 @@ impl OAuthClient {
             .form(&params)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Token refresh failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| send_error("Token refresh failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1125,12 +1110,7 @@ impl OAuthClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| {
-                Error::OAuth(format!(
-                    "Client registration failed: {}",
-                    request_error_category(&e)
-                ))
-            })?;
+            .map_err(|e| send_error("Client registration failed", &e))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -1201,6 +1181,11 @@ fn open_browser(url: &str) -> bool {
     let result = std::process::Command::new(cmd).arg(url).spawn();
 
     result.is_ok()
+}
+
+/// The error an OAuth request's failed send surfaces as (MIK-7701).
+pub(super) fn send_error(context: &str, error: &reqwest::Error) -> Error {
+    Error::OAuth(format!("{context}: {}", request_error_category(error)))
 }
 
 #[cfg(test)]

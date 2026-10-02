@@ -322,3 +322,43 @@ async fn listed_private_backend_oauth_policy() {
         .expect_err("the metadata hop is refused");
     assert!(error.is_redirect(), "{error:?}");
 }
+
+/// MIK-7701: a redirect hop the destination policy refuses is a policy
+/// answer, typed `-32600 SSRF blocked`, not a generic OAuth failure, both
+/// from `initialize` (discovery) and from a token or registration request.
+#[tokio::test]
+async fn a_refused_oauth_redirect_is_typed_ssrf_blocked() {
+    let origin = redirecting_listener("http://169.254.169.254/latest".to_string()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let storage = Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let mut client = OAuthClient::with_destination(
+        DestinationPolicy::Private,
+        super::http_client(DestinationPolicy::Private).unwrap(),
+        "listed-backend".to_string(),
+        format!("http://127.0.0.1:{origin}/mcp"),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    let error = client.initialize().await.expect_err("the hop is refused");
+    assert!(
+        error.to_string().contains("SSRF blocked"),
+        "initialize: {error}"
+    );
+    assert_eq!(error.to_rpc_code(), -32600, "initialize: {error}");
+
+    let sent = super::http_client(DestinationPolicy::Private)
+        .unwrap()
+        .post(format!("http://127.0.0.1:{origin}/token"))
+        .send()
+        .await
+        .expect_err("the hop is refused");
+    for context in ["Token request failed", "Client registration failed"] {
+        let error = super::super::send_error(context, &sent);
+        assert!(
+            error.to_string().contains("SSRF blocked"),
+            "{context}: {error}"
+        );
+        assert_eq!(error.to_rpc_code(), -32600, "{context}: {error}");
+    }
+}
