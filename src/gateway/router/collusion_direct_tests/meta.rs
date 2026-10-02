@@ -220,7 +220,11 @@ async fn meta_cache_hit_recorded() {
     let reads = fx.reads();
     meta_read(&fx, Some("a")).await;
     assert_eq!(fx.reads(), reads, "base: the re-read must be a cache hit");
-    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+    // Not B's first call again: that one is in B's own response cache, served
+    // without a backend call and so without an egress to check. The added
+    // space changes the cache key and leaves the fingerprints alone.
+    let relay = format!("{PROSE} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }
 
 /// M10: an unkeyed meta egress is refused under `block`.
