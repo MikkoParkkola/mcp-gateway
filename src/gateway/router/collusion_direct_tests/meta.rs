@@ -288,3 +288,28 @@ async fn meta_is_error_result_recorded() {
     );
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 0);
 }
+
+/// r3 #3: an outer replay of a single-target call renews the caller's
+/// receipt after the first expired.
+#[tokio::test]
+async fn meta_replay_renews_the_receipt() {
+    let setup = Setup {
+        window_secs: 1,
+        ..Setup::default()
+    };
+    let fx = meta_fixture(setup, None).await;
+    let read = invoke("read", &json!({}));
+    let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-r3")).await;
+    assert!(first.contains("orchard ledger"), "base: {first}");
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+    let reads = fx.reads();
+    let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-r3")).await;
+    assert!(replay.contains("orchard ledger"), "base: {replay}");
+    assert_eq!(
+        fx.reads(),
+        reads,
+        "base: the re-issue must be a replay: {replay}"
+    );
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+}
