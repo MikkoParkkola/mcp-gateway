@@ -47,10 +47,15 @@ client at the revision it asked for. Tests:
   `src/protocol/negotiate.rs`), retries once, and uses the revision the
   backend selected for every later request.
 - **stdio.** Always runs `initialize`. On a version rejection it retries once
-  at the highest shared revision, as above, but it does not re-check the
-  revision the backend selects on that retry.
+  at the highest shared revision, as above, and uses the revision the backend
+  selects; a selection outside the revisions the gateway speaks fails the start.
 - **WebSocket.** Always runs `initialize`, at 2025-11-25 or the pinned
-  revision, and does not retry on a rejection.
+  revision. On a version rejection it retries once on the same socket at the
+  highest shared revision, and a selection outside the revisions the gateway
+  speaks fails the start. Nothing after the handshake states a revision.
+
+All three transports check the selection with `checked_selection`
+(`src/protocol/negotiate.rs`).
 
 Each backend keeps its own revision. Tests:
 `tests/mik_7217_era_probe_acs.rs::discover_4_a_peer_that_rejects_the_probe_is_classified_legacy`,
@@ -60,10 +65,17 @@ Each backend keeps its own revision. Tests:
 `tests/gh517_neg_acs.rs::a_selection_made_on_the_negotiation_retry_governs_later_requests`
 (all HTTP), and
 `src/protocol/negotiate.rs::tests::the_body_reported_in_gh_517_negotiates`.
+stdio (Unix only; the fake backend is a shell script) and WebSocket:
+`src/transport/stdio_negotiation_tests.rs::the_retry_selection_is_the_revision_adopted`,
+`src/transport/stdio_negotiation_tests.rs::a_retry_that_selects_an_unsupported_revision_is_refused`,
+`src/transport/websocket_negotiation_tests.rs::a_version_rejection_is_retried_at_the_highest_shared_revision`,
+`src/transport/websocket_negotiation_tests.rs::a_retry_that_selects_an_unsupported_revision_is_refused`.
 
-Over HTTP, a backend that selects a revision the gateway does not speak fails
-with a protocol error that names that revision
-(`tests/gh517_neg_acs.rs::unsupported_server_selection_fails_the_backend`).
+On every transport, a backend that selects a revision the gateway does not
+speak fails with a protocol error that names that revision
+(`tests/gh517_neg_acs.rs::unsupported_server_selection_fails_the_backend`,
+`src/transport/stdio_negotiation_tests.rs::a_first_answer_that_selects_an_unsupported_revision_is_refused`,
+`src/transport/websocket_negotiation_tests.rs::a_first_answer_that_selects_an_unsupported_revision_is_refused`).
 
 ## Client × backend
 

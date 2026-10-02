@@ -27,8 +27,8 @@ use crate::transport::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, is_version_mismatch_error, negotiate_best_version,
-    parse_supported_versions_from_error,
+    RequestId, checked_selection, initialize_params, is_version_mismatch_error,
+    negotiate_best_version, parse_supported_versions_from_error,
 };
 use crate::{Error, Result};
 
@@ -291,25 +291,13 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Build the JSON-RPC initialize params for a given protocol version.
-    fn build_init_params(version: &str) -> Value {
-        serde_json::json!({
-            "protocolVersion": version,
-            "capabilities": {},
-            "clientInfo": {
-                "name": "mcp-gateway",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        })
-    }
-
     /// Initialize the MCP connection with automatic version negotiation.
     ///
     /// 1. Sends `initialize` with the configured or latest protocol version.
-    /// 2. On success, checks if the server responded with a different version
-    ///    (spec-compliant negotiation) and records it.
-    /// 3. On error containing version info, parses supported versions and
-    ///    retries with the highest mutually supported version.
+    /// 2. On an error carrying the backend's supported versions, retries once
+    ///    with the highest version both sides speak.
+    /// 3. Adopts the version the backend selected on the handshake that
+    ///    succeeded, refusing one this gateway does not speak.
     async fn initialize(&self) -> Result<()> {
         let version = self
             .protocol_version
@@ -323,89 +311,60 @@ impl StdioTransport {
             "Sending MCP initialize"
         );
 
-        let response = self.init_request(Self::build_init_params(&version)).await?;
+        let mut response = self.init_request(initialize_params(&version)).await?;
+        let mut proposed = version.as_str();
 
         if let Some(ref error) = response.error {
-            let error_msg = &error.message;
-
-            // Protocol version mismatch — attempt negotiation
-            if is_version_mismatch_error(error_msg) {
-                return self.negotiate_and_retry(&version, error_msg).await;
+            // Code only, here and below: the message is the backend's own
+            // text and may quote back a credential the gateway passed it.
+            if !is_version_mismatch_error(&error.message) {
+                return Err(Error::Protocol(format!(
+                    "Initialize failed for '{}': backend error code {}",
+                    self.diagnostic_command(),
+                    error.code
+                )));
             }
-
-            return Err(Error::Protocol(format!(
-                "Initialize failed for '{}': {error_msg}",
-                self.diagnostic_command()
-            )));
-        }
-
-        // Success — check if server negotiated a different version
-        if let Some(ref result) = response.result
-            && let Some(server_version) = result.get("protocolVersion").and_then(Value::as_str)
-        {
-            if server_version == version {
-                debug!(
-                    command = %self.diagnostic_command(),
-                    version = %server_version,
-                    "Protocol version accepted"
-                );
-            } else {
-                info!(
-                    command = %self.diagnostic_command(),
-                    requested = %version,
-                    negotiated = %server_version,
-                    "Server negotiated different protocol version"
-                );
-                *self.protocol_version.write() = Some(server_version.to_string());
+            let Some(negotiated) = parse_supported_versions_from_error(&error.message)
+                .as_deref()
+                .and_then(negotiate_best_version)
+            else {
+                return Err(Error::Protocol(format!(
+                    "Protocol version negotiation failed for '{}': server rejected {version}, \
+                     no compatible version found (backend error code {})",
+                    self.diagnostic_command(),
+                    error.code
+                )));
+            };
+            warn!(
+                command = %self.diagnostic_command(),
+                rejected = %version,
+                negotiated = %negotiated,
+                "Retrying initialize with negotiated protocol version"
+            );
+            response = self.init_request(initialize_params(negotiated)).await?;
+            if let Some(ref error) = response.error {
+                return Err(Error::Protocol(format!(
+                    "Initialize failed for '{}' even with negotiated version {negotiated}: \
+                     backend error code {}",
+                    self.diagnostic_command(),
+                    error.code
+                )));
             }
+            proposed = negotiated;
         }
 
-        self.finish_initialization().await
-    }
-
-    /// Parse the error for supported versions, find a match, and retry.
-    async fn negotiate_and_retry(&self, rejected_version: &str, error_msg: &str) -> Result<()> {
-        let server_versions = parse_supported_versions_from_error(error_msg);
-
-        let negotiated = server_versions
-            .as_deref()
-            .and_then(|sv| negotiate_best_version(sv));
-
-        let Some(negotiated) = negotiated else {
-            return Err(Error::Protocol(format!(
-                "Protocol version negotiation failed for '{}': server rejected {rejected_version}, \
-                 no compatible version found (server said: {error_msg})",
-                self.diagnostic_command()
-            )));
-        };
-
-        warn!(
-            command = %self.diagnostic_command(),
-            rejected = %rejected_version,
-            negotiated = %negotiated,
-            "Retrying initialize with negotiated protocol version"
-        );
-
-        // Retry with negotiated version
-        let retry_response = self
-            .init_request(Self::build_init_params(negotiated))
-            .await?;
-
-        if let Some(ref error) = retry_response.error {
-            return Err(Error::Protocol(format!(
-                "Initialize failed for '{}' even with negotiated version {negotiated}: {}",
-                self.diagnostic_command(),
-                error.message
-            )));
-        }
-
-        *self.protocol_version.write() = Some(negotiated.to_string());
-
+        // The client proposes and the server selects: what this handshake's
+        // answer selected governs the session, or what was proposed when it
+        // names nothing. Checked before it is written, so a refusal leaves
+        // the stored version as it was.
+        let selected = checked_selection(response.result.as_ref())?.unwrap_or(proposed);
         info!(
             command = %self.diagnostic_command(),
-            version = %negotiated,
-            "Successfully negotiated protocol version"
+            requested = %proposed,
+            negotiated = %selected,
+            "Protocol version agreed"
         );
+        *self.protocol_version.write() = Some(selected.to_string());
 
         self.finish_initialization().await
     }

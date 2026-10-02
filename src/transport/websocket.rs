@@ -42,6 +42,8 @@ use super::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    checked_selection, initialize_params, is_version_mismatch_error, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
 use crate::security::ssrf::{DestinationPolicy, SystemResolver};
 use crate::{Error, Result};
@@ -381,26 +383,41 @@ impl WebSocketTransport {
     }
 
     /// Perform the MCP `initialize` / `notifications/initialized` handshake.
+    ///
+    /// A version rejection is retried once, on this socket, at the highest
+    /// revision both sides speak (GH #517, as on HTTP and stdio), and the
+    /// revision the backend selects must be one this gateway speaks. Nothing
+    /// after the handshake states a revision, so the selection is not kept.
     async fn initialize(&self) -> Result<()> {
-        let response = self
-            .request(
-                "initialize",
-                Some(serde_json::json!({
-                    "protocolVersion": self.protocol_version.as_deref().unwrap_or(PROTOCOL_VERSION),
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "mcp-gateway",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                })),
-            )
+        let proposed = self.protocol_version.as_deref().unwrap_or(PROTOCOL_VERSION);
+        let mut response = self
+            .request("initialize", Some(initialize_params(proposed)))
             .await?;
+        if let Some(fallback) = response
+            .error
+            .as_ref()
+            .filter(|error| is_version_mismatch_error(&error.message))
+            .and_then(|error| parse_supported_versions_from_error(&error.message))
+            .as_deref()
+            .and_then(negotiate_best_version)
+        {
+            warn!(
+                url = %sanitize_url_for_diagnostics(&self.url),
+                rejected = %proposed,
+                negotiated = %fallback,
+                "Retrying initialize with negotiated protocol version"
+            );
+            response = self
+                .request("initialize", Some(initialize_params(fallback)))
+                .await?;
+        }
 
         if response.error.is_some() {
             return Err(Error::Protocol(
                 "WebSocket MCP initialize failed".to_string(),
             ));
         }
+        checked_selection(response.result.as_ref())?;
 
         tokio::task::yield_now().await;
         self.notify("notifications/initialized", None).await?;
