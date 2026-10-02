@@ -155,3 +155,26 @@ async fn task_get_renews_the_receipt() {
     let answer = relay(&state, 3).await;
     assert_eq!(answer["error"]["code"], -32002, "not renewed: {answer}");
 }
+
+/// A malformed `input_required` round settles as the gateway's own abandoned
+/// result: the backend text in it was never delivered, so it records nothing.
+#[tokio::test]
+async fn abandoned_round_records_nothing() {
+    let malformed = json!({"resultType": "input_required", "inputRequests": "surprise",
+                           "content": [{"type": "text", "text": PROSE}]});
+    let mock = MockBackend::answering(Answer::Sequence(vec![malformed, text("ok")]));
+    let (state, _store) = relay_state(&mock, 600).await;
+    // The settled result is the gateway's sentence, so reading it renews nothing.
+    let settled = run_task(&state, 1, "relay-abandoned").await;
+    assert_eq!(status_of(&settled), "completed", "base: {settled}");
+    assert!(
+        !settled.to_string().contains("orchard"),
+        "base: abandoned: {settled}"
+    );
+    let answer = relay(&state, 2).await;
+    assert!(
+        answer.get("error").is_none(),
+        "undelivered text recorded: {answer}"
+    );
+    assert_eq!(mock.calls(), 2, "{answer}");
+}
