@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index f37d9f7c0..ca38158be 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -433,7 +433,7 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
+         method: &str,
+         params: Option<Value>,
+     ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
+-        if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_active()) {
++        if let Some(prompt) = params.as_ref().filter(|_| false) {
+             let (server, tool) = self.target;
+             let (classified, _) = self.meta.apply_context_integrity(
+                 server,

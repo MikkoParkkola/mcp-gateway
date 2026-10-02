@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index f51f3b4bf..18c5ccf40 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -541,7 +541,6 @@ impl MetaMcp {
+         replay: JsonRpcResponse,
+         audit: Option<super::super::admission::ReplayAudit>,
+     ) -> JsonRpcResponse {
+-        self.stage_replay(tool_name, arguments, session_id, caller, &replay);
+         let Some(log) = self.transparency_logger.as_ref() else {
+             return replay;
+         };

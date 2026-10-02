@@ -1,0 +1,15 @@
+head_sha	c9caab9e4f576f037b2c95e0985f32a86e3be4e0
+# COLLUDE.1 meta route (#2678)
+R1	linux	r1.patch	--lib -- meta_invoke_relay_refused
+R2	linux	r2.patch	--lib -- meta_relay_in_outbound_meta_refused
+R3	linux	r3.patch	--lib -- meta_retry_round_relay_refused
+R4	linux	r4.patch	--lib -- meta_refused_delivery_not_recorded
+R5	linux	r5.patch	--lib -- meta_cache_hit_recorded
+R6	linux	r6.patch	--lib -- stdio_operator_is_one_principal
+R7	linux	r7.patch	--lib -- task_settlement_records
+R8	linux	r8.patch	--lib -- abandoned_round_records_nothing
+R9	linux	r9.patch	--test task_upstream_recovery -- meta_upstream_task_result_recorded
+R10	linux	r10.patch	--lib -- meta_bridged_prompt_recorded
+R11	linux	r11.patch	--lib -- meta_replay_renews_the_receipt
+R12	linux	r12.patch	--lib -- meta_is_error_result_recorded
+R13	linux	r13.patch	--lib -- meta_chain_attribution_per_step

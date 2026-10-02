@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index f37d9f7c0..cc13f04e5 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -38,7 +38,7 @@ impl MetaMcpCallerContext<'_> {
+         }
+         if self.stdio_nonce.is_some() {
+             let key = LOCAL_OPERATOR_PRINCIPAL;
+-            return RelayKey { key, keyed: true };
++            return RelayKey { key, keyed: false };
+         }
+         let key = session_id.unwrap_or("meta:unkeyed");
+         RelayKey { key, keyed: false }

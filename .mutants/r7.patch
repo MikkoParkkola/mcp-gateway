@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/input_round.rs b/src/gateway/task_service/execution/input_round.rs
+index 313ee5906..f1f2850b1 100644
+--- a/src/gateway/task_service/execution/input_round.rs
++++ b/src/gateway/task_service/execution/input_round.rs
+@@ -146,7 +146,7 @@ impl<'a> Settling<'a> {
+             .await;
+         self.state
+             .meta_mcp()
+-            .commit_staged_relay(dispatched && stored);
++            .commit_staged_relay(false && dispatched && stored);
+     }
+ 
+     /// Record a parked plan's calls so far; the resume's log starts empty.

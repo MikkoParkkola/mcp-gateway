@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index bcdffc9ea..6f2773519 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -886,7 +886,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
+                 .map(str::to_owned),
+             input_responses: retry_params.get("inputResponses").cloned(),
+         };
+-        self.refuse_relaying_round(&outbound)?;
++        let _ = self.refuse_relaying_round(&outbound);
+         // #1962: armed for the dispatch, so a dropped exchange settles the key.
+         arm(self.reservation, true);
+         let dispatched = self

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index bcdffc9ea..1c2a01a9b 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2028,7 +2028,7 @@ impl MetaMcp {
+             retry: &outbound_retry,
+         };
+         let reservation = idem_reservation.as_mut();
+-        self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
++        let _ = self.refuse_relay(caller, session_id, (server, tool), &egress, reservation);
+         if let Some(execution) = caller.execution {
+             execution.mark_dispatched();
+         }

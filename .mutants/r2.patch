@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index f37d9f7c0..6786ceae8 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -94,7 +94,7 @@ impl MetaMcp {
+             let capability = self
+                 .get_capabilities()
+                 .is_some_and(|cap| server == cap.name);
+-            let params = if capability {
++            let params = if capability || true {
+                 egress.arguments.clone()
+             } else {
+                 let arguments = egress.arguments.clone();

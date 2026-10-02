@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index bcdffc9ea..101835ee3 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -1894,7 +1894,6 @@ impl MetaMcp {
+             && let Some(cached) = cache.get(&cache_key)
+         {
+             debug!(server, tool, trace_id, "Cache hit");
+-            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &cached);
+             if let Some(ref stats) = self.stats {
+                 stats.record_cache_hit();
+             }

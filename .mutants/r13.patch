@@ -1,0 +1,21 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index f37d9f7c0..d528786f8 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -251,7 +251,15 @@ impl MetaMcp {
+         value: &Value,
+     ) {
+         if let Some(receipt) = self.receipt(who, target, value) {
+-            let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().push(receipt));
++            let _ = RELAY_RECEIPTS.try_with(|receipts| {
++                let mut receipts = receipts.borrow_mut();
++                let mut receipt = receipt;
++                if let Some(first) = receipts.first() {
++                    receipt.server.clone_from(&first.server);
++                    receipt.tool.clone_from(&first.tool);
++                }
++                receipts.push(receipt);
++            });
+         }
+     }
+ 

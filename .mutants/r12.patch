@@ -1,0 +1,15 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index bcdffc9ea..82480eb47 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -2496,7 +2496,9 @@ impl MetaMcp {
+         };
+         let (gated, effect) = self.gate_payload(&call, result)?;
+         result = gated;
+-        self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
++        if result.get("isError") != Some(&json!(true)) {
++            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
++        }
+         // A chained backend is eligible only with a checked upstream outcome.
+         let (source, upstream) = super::response_security::chain_after_gates(
+             effect,
