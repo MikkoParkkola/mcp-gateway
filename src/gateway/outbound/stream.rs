@@ -7,9 +7,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use super::{Admission, Guard, OutboundFrame, Payload, RejectionAudit, admission, judges};
+use super::{
+    Admission, Guard, OutboundFrame, Payload, RejectionAudit, admission, judges, raw_attribution,
+};
 use crate::protocol::JsonRpcNotification;
 use crate::security::TransparencyLogger;
+use crate::security::tenant_reads::ReadAttribution;
 
 /// The judge of one POST stream's notifications: the firewall known when the
 /// stream opens, the `caller_key` bound once the dispatch has resolved who is
@@ -76,9 +79,29 @@ impl StreamJudge {
         self.admit(Payload::Request(document))
     }
 
+    /// Judge the acknowledgement that opens a `subscriptions/listen` stream.
+    /// The listen request's own params are a read by this caller too (they
+    /// can name a tenant), though the acknowledgement does not echo them.
+    pub(crate) fn judge_acknowledgement(
+        &self,
+        document: serde_json::Value,
+        request_params: Option<&serde_json::Value>,
+    ) -> Option<OutboundFrame> {
+        let hidden = request_params.and_then(|p| raw_attribution(self.guard.as_deref(), p));
+        self.admit_hiding(Payload::Request(document), hidden.as_ref())
+    }
+
     fn admit(&self, payload: Payload) -> Option<OutboundFrame> {
+        self.admit_hiding(payload, None)
+    }
+
+    fn admit_hiding(
+        &self,
+        payload: Payload,
+        hidden: Option<&ReadAttribution>,
+    ) -> Option<OutboundFrame> {
         let key = self.key.get().map(String::as_str);
-        match admission(self.guard.as_deref(), key, payload, None) {
+        match admission(self.guard.as_deref(), key, payload, hidden) {
             Admission::Admitted(frame) => Some(frame),
             Admission::Blocked(evidence) => {
                 self.audit.submit(evidence);

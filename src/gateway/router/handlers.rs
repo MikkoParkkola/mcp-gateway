@@ -1131,6 +1131,7 @@ async fn meta_mcp_dispatch(
                 acknowledgement,
                 state.streaming_config.keep_alive_interval,
                 judge,
+                params.clone(),
             );
         }
         // MIK-7630. Answered here, never proxied; with events off the guard

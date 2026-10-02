@@ -732,6 +732,7 @@ pub(crate) fn subscription_stream(
     acknowledgement: Value,
     keep_alive_interval: Duration,
     judge: StreamJudge,
+    request_params: Option<Value>,
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;
 
@@ -743,7 +744,7 @@ pub(crate) fn subscription_stream(
         // MIN.2: the acknowledgement is a document the stream writes like any
         // other, so it is judged and recorded first; one withheld, or one its
         // record replaced, ends the stream before it opens.
-        let Some(frame) = judge.judge_document(acknowledgement) else {
+        let Some(frame) = judge.judge_acknowledgement(acknowledgement, request_params.as_ref()) else {
             return;
         };
         let Some(ack) = sse_data(&judge.record(frame).await) else {
