@@ -12,6 +12,12 @@ mod delivery;
 #[path = "mik_7630_events/gateway.rs"]
 #[allow(dead_code, reason = "shared harness; each binary uses a subset")]
 mod gateway;
+#[path = "task_upstream_recovery_sdk/issuer.rs"]
+#[allow(dead_code, reason = "shared issuer; this target mints two tokens")]
+mod issuer;
+#[path = "task_upstream_recovery_sdk/pins.rs"]
+#[allow(dead_code, reason = "the issuer reads only its bounds")]
+mod pins;
 #[path = "mik_7630_events/receiver.rs"]
 #[allow(dead_code, reason = "shared receiver; each binary uses a subset")]
 mod receiver;
@@ -25,6 +31,8 @@ use receiver::{Received, Receiver, whsec};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
+const EMAIL_A: &str = "events-a@events.test";
+const EMAIL_B: &str = "events-b@events.test";
 const MARKER: &str = "i4-task-backend-answered";
 const TASKS_EXT: &str = "io.modelcontextprotocol/tasks";
 const IDEMPOTENCY_META: &str = "io.mcp-gateway/idempotency-key";
@@ -248,23 +256,57 @@ async fn start_task(gw: &Gateway, key: &str, idem: &str) -> String {
 #[tokio::test]
 async fn settled_tasks_become_events_for_their_owner_only() {
     let root = tempfile::tempdir().expect("root");
+    // With auth on, task creation needs a verified caller identity, which an
+    // API key does not carry: the owners are two delegated OIDC bearers.
+    let issuer = issuer::Issuer::start(root.path()).await;
     let rx = Receiver::start(root.path()).await;
     let mock = Mock::start().await;
-    let gw = start(root.path(), &rx, config_with_mock(root.path(), &mock)).await;
-    let task_a = start_task(&gw, ALICE, "i4-a").await;
-    let alice_all = sub_id(&subscribe(&gw, ALICE, "task.settled", &rx.url, json!({})).await);
+    let (alice, bob) = (
+        issuer.mint("events-subject-a", EMAIL_A),
+        issuer.mint("events-subject-b", EMAIL_B),
+    );
+    let mut cfg = config_with_mock(root.path(), &mock);
+    cfg["key_server"] = json!({
+        "enabled": true, "delegated_bearer": true, "max_oidc_token_age_secs": 3600,
+        "oidc": [{"issuer": issuer.url, "auto_discover": true,
+            "audiences": [issuer::AUDIENCE]}],
+        "policies": [EMAIL_A, EMAIL_B].map(|email| json!({
+            "match": {"email": email, "issuer": issuer.url},
+            "scopes": {"backends": ["mock"], "tools": ["*"], "rate_limit": 0}})),
+    });
+    // One trust file for both TLS peers the child talks to.
+    let bundle = root.path().join("ca-bundle.pem");
+    let pem = |p: &std::path::Path| std::fs::read_to_string(p).expect("CA pem");
+    std::fs::write(
+        &bundle,
+        format!("{}\n{}", pem(&rx.ca_file), pem(&issuer.ca_file)),
+    )
+    .expect("bundle");
+    let bundle_path = bundle.to_string_lossy().into_owned();
+    let gw = Gateway::start_with_env(root.path(), cfg, &[("SSL_CERT_FILE", &bundle_path)]).await;
+    gw.event_names(Some(ALICE), Some("task.settled")).await;
+    let (a_tok, b_tok) = (alice.as_str(), bob.as_str());
+    let task_a = start_task(&gw, a_tok, "i4-a").await;
+    let alice_all = sub_id(&subscribe(&gw, a_tok, "task.settled", &rx.url, json!({})).await);
     let alice_one = sub_id(
         &subscribe(
             &gw,
-            ALICE,
+            a_tok,
             "task.settled",
             &format!("{}2", rx.url),
             json!({"taskId": task_a}),
         )
         .await,
     );
-    let bob_all = sub_id(&subscribe(&gw, BOB, "task.settled", &rx.url, json!({})).await);
-    let foreign = subscribe(&gw, BOB, "task.settled", &rx.url, json!({"taskId": task_a})).await;
+    let bob_all = sub_id(&subscribe(&gw, b_tok, "task.settled", &rx.url, json!({})).await);
+    let foreign = subscribe(
+        &gw,
+        b_tok,
+        "task.settled",
+        &rx.url,
+        json!({"taskId": task_a}),
+    )
+    .await;
     assert_eq!(
         error(&foreign)["code"],
         -32012,
@@ -291,7 +333,7 @@ async fn settled_tasks_become_events_for_their_owner_only() {
         !body.to_string().contains(MARKER),
         "no result content: {body}"
     );
-    let task_b = start_task(&gw, BOB, "i4-b").await;
+    let task_b = start_task(&gw, b_tok, "i4-b").await;
     mock.release();
     assert!(wait_until(DEADLINE, || !for_sub(&rx, &bob_all).is_empty()).await);
     assert_eq!(for_sub(&rx, &bob_all)[0].json()["data"]["taskId"], task_b);
@@ -301,7 +343,7 @@ async fn settled_tasks_become_events_for_their_owner_only() {
     assert_eq!(for_sub(&rx, &alice_one).len(), 1);
     // A second task of alice's: her all-tasks subscriber hears it, the one
     // pinned to the first task does not.
-    let task_a2 = start_task(&gw, ALICE, "i4-a2").await;
+    let task_a2 = start_task(&gw, a_tok, "i4-a2").await;
     mock.release();
     assert!(wait_until(DEADLINE, || for_sub(&rx, &alice_all).len() == 2).await);
     assert_eq!(
