@@ -66,6 +66,24 @@ fn handle_response_no_matching_pending() {
     t.handle_response(json).unwrap();
 }
 
+/// A peer's uncorrelated answer (`"id": null`, as a parse-error reply carries)
+/// is a response with no id: it completes no pending caller.
+#[test]
+fn handle_response_null_id_completes_no_pending_caller() {
+    let t = make_transport("echo");
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    t.pending.insert("1".to_string(), tx);
+
+    let json = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#;
+    t.handle_response(json).unwrap();
+
+    assert!(
+        rx.try_recv().is_err(),
+        "an id-less response must not answer a caller"
+    );
+    assert!(t.pending.contains_key("1"), "the caller stays pending");
+}
+
 #[test]
 fn handle_response_no_id_notification() {
     let t = make_transport("echo");
