@@ -565,6 +565,9 @@ beyond rows 1-6 of the red-test order (§6.1).
 - If either threshold fails, implementation stops at the red tests and the
   lane reports to the lead.
 
+
+**Acceptance gate (lead, 2026-10-02): the per-call CPU price harness.** The criterion benches stay the fast gate during development. Acceptance is one paired run of the performance lane's price harness (`price2`, the corrected run). It runs on Spark at `~/perf-workload/l7/` (`l7_price.sh <reps> <calls>`; a local copy is in the repository's `.git/l7-scratch/`). It measures gateway CPU per successful sequential `tools/call`, in interleaved cells with a seeded order, paired against v3.5.1, and voids a run with more than 0.1% refused calls. Baseline: today's release tip costs 80.8 µs per call against v3.5.1's 61.8 µs. The judge's cost is reported as its delta against 80.8 µs, in two cells: the default config (`arg_keys` empty), where the pass threshold is zero added CPU within the run's noise; and with `arg_keys` set, where the delta is stated and goes to the lead before merge.
+
 ### 4.9 Increment split
 
 The task-row fields (§4.4) can ship later without a bypass, because their
