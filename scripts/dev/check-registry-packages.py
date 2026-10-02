@@ -35,7 +35,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "src/registry/server_registry.rs"
+DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "src/registry/server_registry_entries.rs"
 ENTRY_RE = re.compile(r"RegistryEntry \{(.*?)\n    \},", re.S)
 FIELD_RE = {
     "name": re.compile(r'\bname: "([^"]*)"'),
