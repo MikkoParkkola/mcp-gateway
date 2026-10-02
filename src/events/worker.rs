@@ -198,6 +198,7 @@ impl EventsHub {
             .chain(previous.iter())
             .map(Vec::as_slice)
             .collect();
+        // Owner: MIN.2 design row E1 converts this send to outbound::callback_frame.
         self.client
             .post(url, &sub.id, event_id, &keys, body, ReadBody::Discard)
             .await
