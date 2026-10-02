@@ -1,0 +1,32 @@
+name: flaky-7774 loop
+on:
+  push:
+    branches: [throwaway/flaky-7774]
+permissions:
+  contents: read
+jobs:
+  loop:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - run: cargo test --all-features --test nfr_obs_3_era_observability --no-run
+      # Mechanism: a probe cap shorter than the peer's answer time reproduces
+      # the failure signature (two hit=false records).
+      - name: Reproduce with a 1 ms probe cap
+        shell: bash
+        run: |
+          set +e
+          MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS=1 cargo test --all-features --test nfr_obs_3_era_observability \
+            -- --exact the_era_cache_record_reports_a_miss_then_a_hit 2>&1 | tee repro.txt
+          grep -q 'must hit the cache' repro.txt && echo "REPRO: failure signature seen" || echo "REPRO: not seen"
+      - name: 30 consecutive runs
+        shell: bash
+        run: |
+          for i in $(seq 1 30); do
+            cargo test --all-features --test nfr_obs_3_era_observability \
+              -- --exact the_era_cache_record_reports_a_miss_then_a_hit > run.txt 2>&1 \
+              || { cat run.txt; echo "FAILED on run $i"; exit 1; }
+            echo "run $i ok"
+          done
