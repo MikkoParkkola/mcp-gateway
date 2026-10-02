@@ -803,8 +803,11 @@ pub(crate) fn subscription_stream(
         // The server ended the subscription (a client that hangs up drops the
         // stream and never gets here). A lagged stream just closes: the
         // abrupt end is the specification's non-graceful signal.
-        if graceful {
-            yield Ok(Event::default().event("message").data(subscription.graceful_end().to_string()));
+        if graceful
+            && let Some(frame) = judge.judge_document(subscription.graceful_end())
+            && let Some(end) = sse_data(&judge.record(frame).await)
+        {
+            yield Ok(Event::default().event("message").data(end));
         }
     };
 
