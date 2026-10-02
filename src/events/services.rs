@@ -432,6 +432,21 @@ mod tests {
     }
 
     #[test]
+    fn the_receipt_is_signed_only_when_stamping_is_on() {
+        let bare = services(Vec::new()).provenance("hooks", "webhook.c.r.received");
+        assert_eq!(bare["receipt"]["subject_kind"], "event");
+        assert!(bare.get("signature").is_none());
+        let signer = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id");
+        let stamped = Services {
+            provenance: Some(Arc::new(signer)),
+            ..services(Vec::new())
+        }
+        .provenance("hooks", "webhook.c.r.received");
+        assert_eq!(stamped["receipt"]["backend_id"], "hooks");
+        assert!(stamped["signature"].as_str().is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
     fn the_live_key_must_match_by_secret_be_unexpired_and_grant_the_backend() {
         let alice = presented("alice", "s1");
         assert!(services(vec![key("alice", "s1", None)]).admits(Some(&alice), "x"));

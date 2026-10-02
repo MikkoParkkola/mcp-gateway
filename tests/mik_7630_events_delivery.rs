@@ -107,6 +107,13 @@ async fn delivered_body_contains_only_protocol_fields_and_source_data() {
         .keys()
         .collect();
     assert_eq!(meta, [PROVENANCE], "_meta holds only the receipt");
+    let stamped = &body["_meta"][PROVENANCE];
+    assert_eq!(stamped["receipt"]["subject_kind"], "event");
+    assert_eq!(stamped["receipt"]["tool"], EVENT);
+    assert!(
+        stamped.get("signature").is_none(),
+        "stamping is off: the bare receipt, unsigned"
+    );
     assert_eq!(body["name"], EVENT);
     assert_eq!(body["cursor"], Value::Null);
     assert_eq!(

@@ -14,8 +14,9 @@
 //!   never rendered as an authoritative negative. Consumers decide what the
 //!   facts mean.
 //! - **Observed evidence only.** Every receipt carries
-//!   [`TrustEvidenceKind::Observed`] and [`CbomSubjectKind::Runtime`] — this is
-//!   the data-plane sibling of the capability-definition provenance already
+//!   [`TrustEvidenceKind::Observed`], with [`CbomSubjectKind::Runtime`] for a
+//!   tool call and [`CbomSubjectKind::Event`] for an MCP event delivery — this
+//!   is the data-plane sibling of the capability-definition provenance already
 //!   modelled in [`super`].
 //! - **No secrets.** Only a *reference* to the auth context (an opaque
 //!   handle/hash chosen by the caller) is ever stored, never a raw credential,
