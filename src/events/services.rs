@@ -473,12 +473,11 @@ mod tests {
         Arc::new(crate::key_server::KeyServer::new(config))
     }
 
-    /// Design F9 (MIK-7769): each credential kind that is not an API key is
-    /// re-checked where it was issued; a missing binding is refused.
+    /// Design F9 (MIK-7769): the running static bearer must be the one the
+    /// subscription was made with.
     #[tokio::test]
-    async fn each_non_api_key_credential_is_rechecked_where_it_was_issued() {
+    async fn a_static_bearer_subscription_needs_the_same_running_bearer() {
         use crate::security::audit::CredentialKind as Kind;
-        // Static bearer: the running bearer must be the one subscribed with.
         let sub = bound(Kind::StaticBearer, Some(LiveBinding::StaticBearer));
         let same = with(LiveCredentials {
             bearer_principal: Some(crate::gateway::auth::principal_of("old")),
@@ -493,8 +492,14 @@ mod tests {
             !rotated.admits_subscription(&sub, "x").await,
             "rotated bearer"
         );
+    }
 
-        // Key-server token: live until revoked.
+    /// Design F9 (MIK-7769): key-server tokens live until revoked; delegated
+    /// bearers while the live policy grants the backend; a bound kind
+    /// without its binding is refused.
+    #[tokio::test]
+    async fn key_server_credentials_are_rechecked_where_they_were_issued() {
+        use crate::security::audit::CredentialKind as Kind;
         let ks = key_server(false);
         let identity = crate::key_server::oidc::VerifiedIdentity {
             subject: "u".into(),
@@ -570,8 +575,15 @@ mod tests {
             !disabled.admits_subscription(&oidc, "x").await,
             "delegated bearers switched off"
         );
+        let unbound = bound(Kind::KeyServerToken, None);
+        assert!(!live.admits_subscription(&unbound, "x").await);
+    }
 
-        // Dashboard session: live until logged out.
+    /// Design F9 (MIK-7769): a dashboard session's subscription stops once the
+    /// session is logged out.
+    #[tokio::test]
+    async fn a_dashboard_session_subscription_ends_at_logout() {
+        use crate::security::audit::CredentialKind as Kind;
         let dashboard = Arc::new(crate::gateway::auth::DashboardBootstrap::new());
         let handle = dashboard.issue_session();
         let session = bound(
@@ -588,9 +600,5 @@ mod tests {
         let limits = crate::gateway::auth::SessionLimits::default();
         assert!(dashboard.revoke(&handle, crate::gateway::auth::Now::read(), &limits));
         assert!(!open.admits_subscription(&session, "x").await, "logged out");
-
-        // A bound kind stored without its binding is refused.
-        let unbound = bound(Kind::KeyServerToken, None);
-        assert!(!live.admits_subscription(&unbound, "x").await);
     }
 }
