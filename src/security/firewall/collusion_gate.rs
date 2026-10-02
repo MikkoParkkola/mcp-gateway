@@ -312,8 +312,11 @@ pub(super) enum Walk {
 
 /// The text of `value` read as `walk`: every string leaf, contiguous and
 /// newline-joined (so content split over short fields still matches), then
-/// the keys `walk` reads. Nothing is skipped: the direct route attaches no
-/// metadata of its own, so a backend's `_context_integrity` was delivered.
+/// the keys `walk` reads. A delivery leaves out the top-level
+/// `_context_integrity`: that slot is the gateway's verdict about the
+/// result, whose fixed wording would make unrelated results look alike; a
+/// backend writing its own content there is backend collusion (§9). A
+/// nested one, and any one on egress, is content.
 pub(super) fn text_of(value: &Value, walk: Walk) -> String {
     fn push(out: &mut String, s: &str) {
         if !out.is_empty() {
@@ -333,7 +336,16 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
         }
     }
     let (mut out, mut keys) = (String::new(), Vec::new());
-    visit(value, &mut out, &mut keys);
+    match value {
+        Value::Object(map) if walk == Walk::Delivery => map
+            .iter()
+            .filter(|(k, _)| k.as_str() != "_context_integrity")
+            .for_each(|(k, v)| {
+                keys.push(k);
+                visit(v, &mut out, &mut keys);
+            }),
+        _ => visit(value, &mut out, &mut keys),
+    }
     for key in keys {
         if walk == Walk::Egress || key.chars().count() >= super::collusion::K {
             push(&mut out, key);

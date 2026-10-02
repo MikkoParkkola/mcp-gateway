@@ -115,9 +115,9 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
         .expect("nine principals can still be reached before a fingerprint saturates");
 }
 
-/// B3: nothing is skipped: this route attaches no metadata of its own, so
-/// a backend's `_context_integrity`, at any depth and in any shape, is
-/// delivered content. Values are read first, contiguous, so content split
+/// B3: a delivery skips only the top-level `_context_integrity`, the
+/// gateway's own verdict slot; a nested one, in any shape, is delivered
+/// content. Values are read first, contiguous, so content split
 /// over several short fields still matches; keys follow. Egress reads every
 /// key (a key reaches the backend like a value); a delivery reads only keys
 /// long enough to fingerprint alone, so short schema keys never make two
@@ -126,6 +126,7 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
 fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
     let long_key = "k".repeat(48);
     let value = json!({
+        "_context_integrity": {"note": "five"},
         "a": [{"text": "one"}],
         "b": {"_context_integrity": {"schema_version": "two"}},
         "c": {"_context_integrity": {"note": "three"}},
@@ -137,7 +138,12 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
     assert!(delivered.contains(&long_key), "{delivered:?}");
     assert!(!delivered.contains("key four"), "{delivered:?}");
     let egress = text_of(&value, Walk::Egress);
-    assert!(egress.starts_with("one\ntwo\nthree\n"), "{egress:?}");
+    assert!(
+        !delivered.contains("five"),
+        "the gateway's own slot: {delivered:?}"
+    );
+    assert!(egress.contains("one\ntwo\nthree\n"), "{egress:?}");
+    assert!(egress.contains("five"), "{egress:?}");
     for key in [
         "key four",
         "_context_integrity",
