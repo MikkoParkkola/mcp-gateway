@@ -50,12 +50,13 @@ fn refusal_config(root: &Path) -> Value {
                 "audience": "https://idp.example", "session_mode": "per_user"},
         },
         "fine": {"http_url": format!("{DEAD}/mcp"), "streamable_http": true},
+        "off": {"http_url": format!("{DEAD}/sse"), "enabled": false},
     });
     cfg["auth"]["api_keys"] = json!([
         key(
             "alice",
             ALICE,
-            &["hooks", "sse", "plain", "agent", "idp", "fine"]
+            &["hooks", "sse", "plain", "agent", "idp", "fine", "off"]
         ),
         key("carol", CAROL, &["hooks"]),
     ]);
@@ -112,6 +113,9 @@ async fn the_refusal_is_not_a_probe() {
     // An eligible backend is never refused for a reason it does not have.
     let fine = subscribe(&gw, ALICE, "backend.fine.resources_changed").await;
     assert_ne!(error(&fine)["code"], -32014, "eligible: {fine}");
+    // A disabled backend is absent, whatever it would be refused for.
+    let off = subscribe(&gw, ALICE, "backend.off.resources_changed").await;
+    assert_eq!(error(&off)["code"], -32011, "disabled: {off}");
     // Some other suffix on an ineligible backend is not one of the three.
     let other = subscribe(&gw, ALICE, "backend.sse.something_else").await;
     assert_eq!(error(&other)["code"], -32011, "other suffix: {other}");

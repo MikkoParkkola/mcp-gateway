@@ -59,8 +59,9 @@ pub(crate) enum Ineligible {
     /// The backend is reached with the caller's propagated identity; the
     /// shared listener would observe under the gateway's own (D3).
     IdentityPropagation,
-    /// The backend's credential is one person's (a per-user OAuth login or a
-    /// personal account) and the gateway serves several callers (D3).
+    /// The backend's credential is one person's (a per-user OAuth login) and
+    /// the gateway serves several callers (D3). A personal account compiles
+    /// to identity propagation and is refused as that.
     PerUserCredential,
 }
 
@@ -91,6 +92,9 @@ pub(crate) fn ineligible_backends(config: &Config) -> BTreeMap<String, Ineligibl
     config
         .backends
         .iter()
+        // A disabled backend is absent, not refused: naming its reason would
+        // tell a caller what is configured but switched off.
+        .filter(|(_, raw)| raw.enabled)
         .filter_map(|(name, raw)| {
             let effective = bound.get(name).map(|b| b.effective(raw));
             reason(effective.as_ref().unwrap_or(raw), multi_user).map(|r| (name.clone(), r))
