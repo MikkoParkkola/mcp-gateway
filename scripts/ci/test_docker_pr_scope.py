@@ -38,6 +38,7 @@ BUILDS = (
     "Cargo.toml",
     "Cargo.lock",
     "deploy/helm/mcp-gateway/values.yaml",
+    "scripts/dev/helm-kind-real-image.sh",
 )
 SKIPS = ("docs/DEPLOYMENT.md", "scripts/ci/changed-scope.sh")
 SMOKES = ("scripts/ci/smoke-image.sh", "scripts/ci/smoke-full-image.sh")
@@ -46,9 +47,15 @@ SMOKES = ("scripts/ci/smoke-image.sh", "scripts/ci/smoke-full-image.sh")
 def check(doc: dict) -> list[str]:
     errors = []
     on = doc.get(True) or doc.get("on") or {}  # PyYAML reads `on` as True
-    branches = (on.get("pull_request") or {}).get("branches") or []
-    if RELEASE_LINE not in branches:
+    pr = on.get("pull_request") or {}
+    branches = pr.get("branches") or []
+    if RELEASE_LINE not in branches or any(str(b).startswith("!") for b in branches):
         errors.append(f"pull_request does not fire for {RELEASE_LINE}: {branches}")
+    # The path decision lives in `scope`; a trigger-level filter or a narrowed
+    # activity list would stop it from running at all.
+    for narrowing in ("paths", "paths-ignore", "types"):
+        if narrowing in pr:
+            errors.append(f"pull_request is narrowed by {narrowing}, so scope may never run")
 
     jobs = doc["jobs"]
     script = next(s["run"] for s in jobs["scope"]["steps"] if s.get("id") == "decide")
@@ -61,19 +68,19 @@ def check(doc: dict) -> list[str]:
         errors += [f"{p} builds the image" for p in SKIPS if inputs.search(p)]
 
     for name in ("security-gate", "release-criteria"):
-        if str(jobs[name].get("if", "")).strip() != GATED:
+        job = jobs[name]
+        if str(job.get("if", "")).strip() != GATED or job.get("needs") != "scope":
             errors.append(f"{name} no longer runs exactly when scope decides to build")
     build = jobs["build"]
     if "if" in build:
         errors.append("build has an if: of its own, so it can skip a decided build")
-    if not {"security-gate", "release-criteria"} <= set(build.get("needs", [])):
-        errors.append("build no longer follows the scope decision")
+    if sorted(build.get("needs", [])) != ["release-criteria", "security-gate"]:
+        errors.append("build no longer follows the scope decision alone")
     for smoke in SMOKES:
-        steps = [s for s in build["steps"] if smoke in str(s.get("run", ""))]
-        if not steps:
-            errors.append(f"build no longer runs {smoke}")
-        elif all("event_name" in str(s.get("if", "")) for s in steps):
-            errors.append(f"{smoke} is gated on the event, so a pull request skips it")
+        # The script must be the step's command, unconditional and fatal.
+        steps = [s for s in build["steps"] if str(s.get("run", "")).strip().startswith(smoke)]
+        if not any("if" not in s and not s.get("continue-on-error") for s in steps):
+            errors.append(f"build no longer runs {smoke} unconditionally on every event")
     return errors
 
 
