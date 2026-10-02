@@ -248,10 +248,11 @@ already served as a configured backend, so `McpConfig` has no `url`), with
    lists what may run, each entry `{ command, args_prefix }` compared EXACTLY against the pinned YAML:
    `command` is the YAML string itself (a bare name or an absolute path, never a resolved basename,
    never a name prefix), and `args_prefix` must equal the YAML's leading static args element by element.
-   Defaults (the shipped catalogue): `gws []`, `metacognition []`, `trawl []`, `openpencil-mcp []`,
-   `pact-mcp []`, `pyghidra-mcp []`, `axterminator [mcp, serve]`, `npx [-y,
-   @cloudflare/mcp-server-cloudflare@0.2.0]` (the full args list: nothing may precede or follow the
-   package), `mcp-scanner [remote]`. A non-matching definition is refused at call time and reported by
+   Defaults (the shipped catalogue after the §9 decisions): `gws []`, `trawl []`,
+   `openpencil-mcp []`, `pact-mcp []`, `pyghidra-mcp []`, `mcp-scanner [--analyzers, yara, remote]`
+   (the analyzer pin is part of the prefix, so a definition without it is refused), `skill-scanner
+   [scan]`. No `npx`, `axterminator` or `metacognition` entry: those capabilities became REST, a webhook
+   route, or were removed. A non-matching definition is refused at call time and reported by
    `cap validate`. Operators extend the list for their own capabilities.
 3. **Kill switch.** `capabilities.process_execution: enabled | disabled` (enum, default `enabled`, lead
    decision D6), hot reloadable, refuses all `cli`/`mcp` calls when disabled. UPGRADING and SECURITY
@@ -379,7 +380,8 @@ recorded `tools/list` snapshot and answers `tools/call` with the name and argume
 Real binaries in CI (a separate job, not a required gate for external contributors):
 - gws: `npm install -g @googleworkspace/cli@0.22.5` (its postinstall downloads the native binary, so
   `--ignore-scripts` cannot be used; pinned version, run in the CI sandbox only), then every T1 argv
-  plus `--dry-run` must exit 0 and print `"dry_run": true`. This proves the flags exist. One real
+  with `--dry-run` inserted before any `--` (after it, the flag would be an operand) must exit 0 and
+  print `"dry_run": true`. This proves the flags exist. One real
   (non-dry-run) call with `GOOGLE_WORKSPACE_CLI_TOKEN=<invalid>` and an empty HOME must fail with
   Google's 401 (gws exit 2 with an API error), not with gws's "no credentials" message: this proves gws
   reads the token from that variable and has no other credential to fall back on.
@@ -411,11 +413,11 @@ and are excluded from the public count. Nothing is removed without operator appr
     list and objects list; cache purge. `account_id` and `zone_id` are required caller inputs (the REST
     path substitutes caller parameters only); `Authorization: Bearer {env.CLOUDFLARE_API_TOKEN}`.
     `deploy_worker` (multipart body, unsupported by the REST executor) is dropped for now; a Linear
-    ticket (not 4.0) tracks multipart support.
+    ticket (MIK-7786, not 4.0) tracks multipart support.
   - `cisco_scanner` narrows to two operations, both `service: cli`: `scan_mcp_server` as
     `mcp-scanner --analyzers yara remote --server-url=<url> --raw` (yara pinned: the default analyzers
     `api` and `llm` send tool descriptions off-host) and `scan_skill_file` as `skill-scanner scan
-    -- <dir> --format json` (`cisco-ai-skill-scanner`; input reshaped to a directory under the `projects`
+    --format=json -- <dir>` (`cisco-ai-skill-scanner`; input reshaped to a directory under the `projects`
     root). `scan_all_backends`, `get_vulnerability_report` and `check_compliance` are dropped with an
     UPGRADING note. `scan_mcp_server` is an egress parameter (§6.2): runnable only once mcp-scanner's
     connect-time enforcement question is settled like D8; until then refused and not counted.
@@ -423,6 +425,10 @@ and are excluded from the public count. Nothing is removed without operator appr
     fed by a documented Hammerspoon script on the operator's Mac (app launch/activate/terminate, window
     focus/create, distributed notifications). Before shipping, Hammerspoon's `hs.hash.hmacSHA256` output
     is checked against the gateway's webhook signature verifier; a mismatch is reported, not shipped.
+    Checked from source (lowercase `%02x` hex, `libhash.m:235`, matches `webhooks/mod.rs:559-590`);
+    lead: acceptable, with a gateway-side CI test that verifies a signature produced the Hammerspoon
+    way (lowercase hex HMAC-SHA256 over the raw body, headers `sha256=<hex>` and `<hex>`), and the
+    capability docs saying the Hammerspoon side was verified from source, not at runtime.
     Electron DOM mutation events and the rule operations are out (no tool produces DOM events; rules
     belong to the subscribing agent), documented in the file.
   - `metacognition_verify` is removed from the public catalogue (a private tool), with an UPGRADING note.
@@ -447,6 +453,7 @@ and are excluded from the public count. Nothing is removed without operator appr
   - `docs_write.title`: KEPT (operator). A title exists only on `documents.create`, a separate call,
     and one capability is one call: a new `gws_docs_create` (raw `docs documents create --json
     {title}`, returns `documentId`) carries it, and `docs_write` appends to a `documentId` via `+write`.
+    Lead: accepted; the count grows by one rather than hiding a chain.
   - `calendar_insert.attendees`: becomes an array emitted as repeated `--attendee=` (§3.2 `each`).
   - `gmail_save_attachment.output_dir`: DROPPED; writes go only to the configured `downloads` root (§7).
 - **D8 egress tools** (`trawl_extract`, `cisco_scanner.scan_mcp_server`): the gateway cannot stop a
@@ -454,8 +461,9 @@ and are excluded from the public count. Nothing is removed without operator appr
   (akdavidsson/trawl, MIT) and builds its own `http.Transport` with no dial hook; it would need a
   dial-time refusal of private/reserved addresses (`net.Dialer.Control`, also on its headless-browser
   path) behind a flag the capability always passes, contributed upstream (a third-party PR goes through
-  the community lane) or carried in a fork. Until a release with it exists, these are refused and not
-  counted. Needs a lead/operator decision: upstream contribution, fork, or hold.
+  the community lane) or carried in a fork. Lead decision: HOLD both in 4.0, refused with a clear
+  reason and not counted (the written reason under the security rule); upstream changes are drafted
+  and handed to the community lane, tracked in MIK-7788. `scan_skill_file` ships.
 
 ## 10. Delivery (WIP 1, each PR: red tests on CI, implementation, two seats, mutants, merge)
 
