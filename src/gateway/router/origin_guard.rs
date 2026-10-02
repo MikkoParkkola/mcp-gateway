@@ -184,12 +184,14 @@ impl OriginPolicy {
         if parsed.scheme() != self.listener_scheme {
             return false;
         }
-        let Some(origin_host) = parsed.host_str() else {
+        // An http(s) URL always has a host; `filter` folds that into the one
+        // numeric-host refusal, so no separate hostless branch exists.
+        let Some(origin_host) = parsed
+            .host_str()
+            .filter(|host| is_numeric_host(strip_brackets(host)))
+        else {
             return false;
         };
-        if !is_numeric_host(strip_brackets(origin_host)) {
-            return false;
-        }
         let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
         let origin = canonical_authority(
             &format!("{}:{}", origin_host, parsed.port().unwrap_or(default_port)),
