@@ -1,0 +1,5 @@
+head_sha	a24330c795fa46926a38a5584a01b67426fda80b
+k1	linux	k1.patch	--test mik_7272_subscriptions_acs
+k2	linux	k2.patch	--test mik_7272_subscriptions_acs
+k3	linux	k3.patch	--test mik_7272_subscriptions_acs
+k4	linux	k4.patch	--test mik_7272_subscriptions_acs

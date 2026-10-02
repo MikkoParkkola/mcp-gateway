@@ -1,0 +1,13 @@
+diff --git a/src/protocol/subscriptions.rs b/src/protocol/subscriptions.rs
+index d6c943f6e..73f7820bc 100644
+--- a/src/protocol/subscriptions.rs
++++ b/src/protocol/subscriptions.rs
+@@ -204,7 +204,7 @@ impl ListenRequest {
+     /// omitted rather than promised.
+     fn honoured(&self) -> Value {
+         let mut filter = serde_json::Map::new();
+-        if self.wants(NotificationKind::ToolsListChanged) {
++        if false && self.wants(NotificationKind::ToolsListChanged) {
+             filter.insert(
+                 NotificationKind::ToolsListChanged
+                     .opt_in_field()

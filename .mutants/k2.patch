@@ -1,0 +1,13 @@
+diff --git a/src/protocol/subscriptions.rs b/src/protocol/subscriptions.rs
+index d6c943f6e..8a8ccdbbd 100644
+--- a/src/protocol/subscriptions.rs
++++ b/src/protocol/subscriptions.rs
+@@ -212,7 +212,7 @@ impl ListenRequest {
+                 Value::Bool(true),
+             );
+         }
+-        if !self.task_ids.is_empty() {
++        if false {
+             filter.insert(
+                 NotificationKind::Tasks.opt_in_field().to_string(),
+                 Value::from(self.task_ids.clone()),
