@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/provider.rs b/src/personal_accounts/provider.rs
+index 0762c274d..8142a0588 100644
+--- a/src/personal_accounts/provider.rs
++++ b/src/personal_accounts/provider.rs
+@@ -500,7 +500,7 @@ fn accept_metadata(
+     // Optional only when unused. Configured means it will be used, so it is
+     // held to the same binding as the rest.
+     if let Some(configured) = descriptor.revocation_endpoint.as_deref()
+-        && metadata.revocation_endpoint.as_deref() != Some(configured)
++        && false
+     {
+         return None;
+     }

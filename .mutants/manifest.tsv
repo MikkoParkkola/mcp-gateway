@@ -1,0 +1,23 @@
+head_sha	a059dec48e4525f55e4c136b04de7bcad369000e
+# mutants for #2584
+CAPOFFBYONE	linux	CAPOFFBYONE.patch	--lib personal_accounts::journey::callback::guard_tests::an_oversized_state_or_binding_is_refused_before_any_store_access -- --exact
+CAPSTATE	linux	CAPSTATE.patch	--lib personal_accounts::journey::callback::guard_tests::an_oversized_state_or_binding_is_refused_before_any_store_access -- --exact
+CAPBINDING	linux	CAPBINDING.patch	--lib personal_accounts::journey::callback::guard_tests::an_oversized_state_or_binding_is_refused_before_any_store_access -- --exact
+OWNER	linux	OWNER.patch	--lib personal_accounts::journey::callback::guard_tests::a_journey_record_without_its_owner_is_not_admitted -- --exact
+METAISSUER	linux	METAISSUER.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
+METAAUTH	linux	METAAUTH.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
+METATOKEN	linux	METATOKEN.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
+METAREVOKE	linux	METAREVOKE.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
+METAHTTPS	linux	METAHTTPS.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
+METAUSERINFO	linux	METAUSERINFO.patch	--lib personal_accounts::provider::provider_accept_tests::metadata_is_accepted_only_when_every_configured_endpoint_matches_exactly -- --exact
+SECRETLITERAL	linux	SECRETLITERAL.patch	--lib personal_accounts::provider::provider_accept_tests::a_secret_reference_resolves_from_a_file_and_nothing_else_does -- --exact
+LEGOVERRIDE	linux	LEGOVERRIDE.patch	--lib personal_accounts::offline_migration::offline_migration_resolve_tests::a_legacy_backend_is_named_only_when_it_is_the_one_bound_or_the_operator_said -- --exact
+LEGNONE	linux	LEGNONE.patch	--lib personal_accounts::offline_migration::offline_migration_resolve_tests::a_legacy_backend_is_named_only_when_it_is_the_one_bound_or_the_operator_said -- --exact
+LEGAMBIG	linux	LEGAMBIG.patch	--lib personal_accounts::offline_migration::offline_migration_resolve_tests::a_legacy_backend_is_named_only_when_it_is_the_one_bound_or_the_operator_said -- --exact
+PATHNOTDIR	linux	PATHNOTDIR.patch	--lib personal_accounts::storage::storage_guard_tests::a_store_path_must_be_real_directories_or_absent -- --exact
+PATHSTAT	linux	PATHSTAT.patch	--lib personal_accounts::storage::storage_guard_tests::a_store_path_must_be_real_directories_or_absent -- --exact
+PRIVMODE	linux	PRIVMODE.patch	--lib personal_accounts::storage::storage_guard_tests::a_store_directory_must_be_private_and_not_a_link -- --exact
+CREATEOVERFILE	linux	CREATEOVERFILE.patch	--lib personal_accounts::storage::storage_guard_tests::a_store_directory_is_created_private_or_refused -- --exact
+CREATEMODE	linux	CREATEMODE.patch	--lib personal_accounts::storage::storage_guard_tests::a_store_directory_is_created_private_or_refused -- --exact
+CREATEPIN	linux	CREATEPIN.patch	--lib personal_accounts::storage::storage_guard_tests::a_store_directory_is_created_private_or_refused -- --exact
+VAULTAUD	linux	VAULTAUD.patch	--lib personal_accounts::vault::vault_tests::prepare_refuses_a_wrong_audience_and_an_unbindable_principal_before_custody -- --exact
