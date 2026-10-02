@@ -610,6 +610,12 @@ impl OAuthClient {
         if let Some(refresh_token) = refresh_token_opt {
             match self.refresh_token(&refresh_token).await {
                 Ok(_) => return true,
+                // A policy refusal: no other grant will reach a different
+                // place, and re-authorizing is not the remedy (MIK-7701).
+                Err(e) if destination::is_policy_refusal(&e) => {
+                    warn!(backend = %self.backend_name, error = %e, "Token renewal refused");
+                    return false;
+                }
                 Err(e) => {
                     debug!(
                         backend = %self.backend_name,
