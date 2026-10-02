@@ -326,11 +326,18 @@ fn is_backend_key(key: &str) -> bool {
 /// The feature a key needs when this build lacks it. Refusing such a key as a
 /// misspelling would send the operator hunting for a typo that is not there.
 fn missing_feature(key: &str, leaf: &str) -> Option<&'static str> {
-    missing_feature_for(key, leaf, |feature| match feature {
-        "cost-governance" => cfg!(feature = "cost-governance"),
-        "a2a" => cfg!(feature = "a2a"),
-        "firewall" => cfg!(feature = "firewall"),
-        _ => true,
+    // A table, not a `match`: with every feature off a match folds into
+    // `matches!` shape and clippy refuses that build.
+    let built = [
+        ("cost-governance", cfg!(feature = "cost-governance")),
+        ("a2a", cfg!(feature = "a2a")),
+        ("firewall", cfg!(feature = "firewall")),
+    ];
+    missing_feature_for(key, leaf, |feature| {
+        built
+            .iter()
+            .find(|(name, _)| *name == feature)
+            .is_none_or(|(_, on)| *on)
     })
 }
 
