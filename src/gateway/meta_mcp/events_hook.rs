@@ -57,9 +57,11 @@ impl MetaMcp {
     pub(crate) fn events_services(
         &self,
         live: Arc<crate::config_reload::LiveConfig>,
+        credentials: crate::events::LiveCredentials,
     ) -> crate::events::Services {
         crate::events::Services {
             live,
+            credentials,
             #[cfg(feature = "firewall")]
             firewall: self.firewall.clone(),
             audit: self.transparency_logger.clone(),

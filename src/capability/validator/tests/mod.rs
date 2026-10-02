@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 mod fallback;
+mod unread_keys;
 mod yaml_roundtrip;
 
 use super::checks::extract_placeholders;
@@ -52,6 +53,7 @@ pub(super) fn providers_with_base_url(base_url: &str) -> ProvidersConfig {
     ProvidersConfig {
         named,
         fallback: vec![],
+        unread_keys: Vec::new(),
     }
 }
 
@@ -73,6 +75,7 @@ pub(super) fn providers_with_path(base_url: &str, path: &str) -> ProvidersConfig
     ProvidersConfig {
         named,
         fallback: vec![],
+        unread_keys: Vec::new(),
     }
 }
 
@@ -311,6 +314,7 @@ fn provider_missing_url_is_error() {
     cap.providers = ProvidersConfig {
         named,
         fallback: vec![],
+        unread_keys: Vec::new(),
     };
     let issues = validate_capability_definition(&cap, None);
     assert!(
@@ -451,6 +455,7 @@ fn static_params_overlap_with_params_is_warning() {
     cap.providers = ProvidersConfig {
         named,
         fallback: vec![],
+        unread_keys: Vec::new(),
     };
     let issues = validate_capability_definition(&cap, None);
     assert!(
@@ -494,6 +499,7 @@ fn static_params_no_overlap_passes() {
     cap.providers = ProvidersConfig {
         named,
         fallback: vec![],
+        unread_keys: Vec::new(),
     };
     let issues = validate_capability_definition(&cap, None);
     assert!(!has_code(&warnings_of(&issues), "CAP-007"));

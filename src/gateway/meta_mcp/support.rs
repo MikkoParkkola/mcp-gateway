@@ -193,6 +193,21 @@ pub(super) fn caller_cache_principal(
     }
 }
 
+/// The proven subject a caller with no credential owns its keyed calls by
+/// (MIK-7688): an OAuth agent (its client id) or a client certificate (its
+/// SAN URI, else its CN), as the router's `caller_key` encodes them. Never a
+/// header identity, and never a certificate naming no subject: its
+/// `caller_key` is then no subject key.
+pub(super) fn proven_subject_owner<'a>(
+    caller: &super::MetaMcpCallerContext<'a>,
+) -> Option<&'a str> {
+    let authority = caller.grant_subject.as_ref()?.authority.as_str();
+    if !matches!(authority, "agent_oauth" | "mtls") {
+        return None;
+    }
+    caller.caller_key.filter(|key| key.starts_with("subject:"))
+}
+
 /// Build the response-cache key for a `gateway_invoke` call.
 ///
 /// One function rather than the expression repeated at the read and the write:
@@ -587,3 +602,7 @@ mod retry_input_tests;
 #[cfg(test)]
 #[path = "cache_principal_tests.rs"]
 mod cache_principal_tests;
+
+#[cfg(test)]
+#[path = "proven_owner_tests.rs"]
+mod proven_owner_tests;
