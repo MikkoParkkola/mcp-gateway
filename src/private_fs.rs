@@ -217,7 +217,11 @@ const WRITE_BITS: u32 = windows_sys::Win32::Storage::FileSystem::FILE_WRITE_DATA
 
 /// `S-1-5-18` (SYSTEM) or `S-1-5-32-544` (Administrators).
 fn is_system_or_admins(sid: &Sid) -> bool {
-    matches!(sid.to_sddl().as_str(), "S-1-5-18" | "S-1-5-32-544")
+    // Compared by value against SIDs built once: no string per owner or ACE.
+    static TRUSTED: OnceLock<[Sid; 2]> = OnceLock::new();
+    TRUSTED
+        .get_or_init(|| [Sid::from_parts(5, &[18]), Sid::from_parts(5, &[32, 544])])
+        .contains(sid)
 }
 
 /// Every rule the open object breaks; empty when it is private.
