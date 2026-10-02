@@ -4,6 +4,17 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const heartbeat = require("./heartbeat");
+
+// The published 3.5.1 binary does not contain this client. The launcher sends
+// the daily POST, and a later build shares ~/.config/mcp-gateway/telemetry.
+heartbeat.start({
+  project: "mcp-gateway",
+  version: "3.5.1",
+  optOut: ["MCP_GATEWAY_NO_TELEMETRY"],
+  endpointEnv: "MCP_GATEWAY_TELEMETRY_ENDPOINT",
+  stateParts: [".config", "mcp-gateway", "telemetry"],
+});
 
 const capabilitiesDir = path.resolve(__dirname, "..", "capabilities");
 const configPath = path.join(os.tmpdir(), `mcp-gateway-plugin-${process.pid}.yaml`);

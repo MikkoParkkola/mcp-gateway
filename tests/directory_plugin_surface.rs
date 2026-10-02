@@ -314,12 +314,18 @@ fn privacy_states_local_facts_and_plugin_has_no_email() {
     assert!(privacy.contains("reads the user's local config"));
     assert!(privacy.contains("credentials that config names"));
     assert!(privacy.contains("stores config on the machine"));
-    assert!(
-        privacy.contains(
-            "sends a request only to a backend the user configured when a tool is invoked"
-        )
-    );
-    assert!(privacy.contains("does not add an author telemetry endpoint"));
+    assert!(privacy.contains(
+        "A tool request is sent only to a backend the user configured when that tool is invoked."
+    ));
+    assert!(privacy.contains("https://telemetry.revaluator.ai/v1/heartbeat"));
+    assert!(!privacy.contains("telemetry.trvl.app"));
+    assert!(privacy.contains("install_id"));
+    assert!(privacy.contains("city name and country code"));
+    assert!(privacy.contains("Coordinates and the IP are not written"));
+    assert!(privacy.contains("MCP_GATEWAY_NO_TELEMETRY"));
+    assert!(privacy.contains("NO_TELEMETRY"));
+    assert!(privacy.contains("DO_NOT_TRACK"));
+    assert!(privacy.contains("The published build pinned by this folder does not."));
     assert!(privacy.contains("Mikko Parkkola"));
     assert!(privacy.contains("https://github.com/MikkoParkkola/mcp-gateway/issues"));
     assert!(
@@ -336,6 +342,7 @@ fn privacy_states_local_facts_and_plugin_has_no_email() {
         "plugin/.mcp.json",
         "plugin/.claude-plugin/plugin.json",
         "plugin/bin/launch.js",
+        "plugin/bin/heartbeat.js",
     ] {
         let path = root.join(relative);
         assert!(
@@ -429,6 +436,7 @@ fn published_serve_tools_list_drops_payment_and_generative_media() {
             "MCP_GATEWAY_CAPABILITIES__DIRECTORIES",
             "/not-a-capability-directory",
         )
+        .env("NO_TELEMETRY", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

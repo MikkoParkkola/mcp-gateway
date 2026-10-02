@@ -28,6 +28,9 @@ use tracing::{error, info};
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Daily heartbeat. Returns immediately. Opt out with MCP_GATEWAY_NO_TELEMETRY,
+    // NO_TELEMETRY, or DO_NOT_TRACK. Skipped for dev builds, CI, and tests.
+    mcp_gateway::telemetry::heartbeat_in_background(env!("CARGO_PKG_VERSION"));
 
     if let Err(e) = setup_tracing(&cli.log_level, cli.log_format.as_deref()) {
         eprintln!("Failed to setup tracing: {e}");

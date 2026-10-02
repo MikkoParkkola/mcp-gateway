@@ -73,6 +73,7 @@ pub mod routing_profile;
 pub mod runtime;
 pub mod scheduler;
 pub mod secret_injection;
+pub mod telemetry;
 pub mod secrets;
 pub mod security;
 #[cfg(feature = "semantic-search")]
