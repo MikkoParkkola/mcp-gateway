@@ -66,6 +66,24 @@ pub struct TenantGuardConfig {
     /// same keys attribute tool results (text-JSON included) to tenants in
     /// the audit logs, hashed, never raw.
     pub arg_keys: Vec<String>,
+    /// What the cross-tenant read verdict (MIK-7116.MIN.2) does with a caller
+    /// whose delivered frames name a second tenant inside the window.
+    pub cross_tenant_reads: CrossTenantReads,
+}
+
+/// Mode of the cross-tenant read verdict on outbound frames (MIK-7116.MIN.2).
+///
+/// Observe-first: blocking by default waits for the MIN.KILL week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CrossTenantReads {
+    /// No verdict.
+    Off,
+    /// Flag the frame in the audit record and deliver it.
+    #[default]
+    Observe,
+    /// Withhold the frame and record the refusal.
+    Block,
 }
 
 impl Default for TenantGuardConfig {
@@ -80,6 +98,7 @@ impl Default for TenantGuardConfig {
             max_tenants_per_window: 3,
             window_secs: 300,
             arg_keys: Vec::new(),
+            cross_tenant_reads: CrossTenantReads::Observe,
         }
     }
 }

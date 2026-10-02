@@ -921,6 +921,7 @@ mod tests {
                 max_tenants_per_window: 1,
                 window_secs: 60,
                 arg_keys: vec!["customer_id".to_string()],
+                ..Default::default()
             },
             ..FirewallConfig::default()
         };
