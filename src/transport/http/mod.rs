@@ -31,8 +31,8 @@ use crate::protocol::era::Era;
 use crate::protocol::extensions::Extension;
 use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
-    SUPPORTED_VERSIONS, is_version_mismatch_error, is_version_token, negotiate_best_version,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
+    checked_selection, is_version_mismatch_error, negotiate_best_version,
     parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
@@ -954,27 +954,7 @@ impl HttpTransport {
         // the gateway kept announcing its own latest to a backend that had
         // already told it otherwise, which is the gateway violating the
         // negotiation it opened.
-        if let Some(selected) = response
-            .result
-            .as_ref()
-            .and_then(|result| result.get("protocolVersion"))
-            .and_then(Value::as_str)
-        {
-            if !SUPPORTED_VERSIONS.contains(&selected) {
-                // `selected` is backend-controlled text that failed the
-                // membership check, so it is named only when it is shaped like
-                // a version: a backend must not be able to echo a credential
-                // the gateway sent it into this diagnostic.
-                let named = if is_version_token(selected) {
-                    selected
-                } else {
-                    "a value that is not a protocol version"
-                };
-                return Err(Error::Protocol(format!(
-                    "Backend selected protocol version {named}, which this gateway does not speak; it speaks: {}",
-                    SUPPORTED_VERSIONS.join(", ")
-                )));
-            }
+        if let Some(selected) = checked_selection(response.result.as_ref(), Selectable::Legacy)? {
             *self.protocol_version.write() = Some(selected.to_string());
         }
 
