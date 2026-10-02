@@ -1,22 +1,17 @@
-sha256: 86eb7928316b6272a5fbe775ea946a5f172b41719349295e696a0502076f3b85
+sha256: 5be6f2514407f77649c0dc603745fe930759d762eb8bf1e8f963eec1df540a36
 fulcrum: "1.0"
-name: gws_docs_write
-description: Create a new Google Docs document or write content to an existing one using batch update requests.
+name: gws_docs_create
+description: Create an empty Google Doc with a title. Returns the new document's ID, which gws_docs_write can append text to.
 
 schema:
   input:
     type: object
     properties:
-      documentId:
+      title:
         type: string
-        description: Existing document ID to update (omit to create new)
-      text:
-        type: string
-        format: multiline
-        description: Text to append to the document
+        description: "Document title"
     required:
-    - documentId
-    - text
+      - title
   output:
     type: object
     properties:
@@ -36,9 +31,11 @@ providers:
       command: gws
       args:
       - docs
-      - +write
-      - --document={documentId}
-      - --text={text}
+      - documents
+      - create
+      - json: --json=
+        value:
+          title: '{title}'
       token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
@@ -58,8 +55,7 @@ metadata:
   tags:
     - google
     - docs
-    - documents
-    - write
+    - document
     - create
     - workspace
   cost_category: free

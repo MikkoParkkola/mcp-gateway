@@ -1,4 +1,4 @@
-sha256: ccfa50fed453ba47e78c7c5c24fcf6f50edc266cef92879f1a24dee9fc595016
+sha256: a62953ae3d5b1d53dfde65fd976e96bd2e4b5e5af11ed0d0d636421347984e3c
 fulcrum: "1.0"
 name: gws_docs_read
 description: Read the content of a Google Docs document.
@@ -30,11 +30,13 @@ providers:
     config:
       command: gws
       args:
-        - docs
-        - documents
-        - get
-        - "--params"
-        - '{"documentId": "{documentId}"}'
+      - docs
+      - documents
+      - get
+      - json: --params=
+        value:
+          documentId: '{documentId}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: ttl
@@ -42,8 +44,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s docs"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/documents.readonly
 
 metadata:
   category: productivity

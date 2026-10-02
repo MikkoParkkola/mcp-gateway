@@ -1,4 +1,4 @@
-sha256: 585823f3c69ccf98d27c434f0182cc7c9adc463ba7b1563eeabb98bb13093924
+sha256: 2cd6191e1c79b887b112b25f724f22a2ec389a43d84ed5de26d76efd45ab6551
 fulcrum: "1.0"
 name: gws_gmail_search
 description: Search Gmail messages using Gmail search syntax. Returns message IDs and metadata.
@@ -41,12 +41,16 @@ providers:
     config:
       command: gws
       args:
-        - gmail
-        - users
-        - messages
-        - list
-        - "--params"
-        - '{"userId": "me", "q": "{query}", "maxResults": {maxResults}}'
+      - gmail
+      - users
+      - messages
+      - list
+      - json: --params=
+        value:
+          userId: me
+          q: '{query}'
+          maxResults: '{maxResults}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: ttl
@@ -54,8 +58,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s gmail"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/gmail.readonly
 
 metadata:
   category: productivity

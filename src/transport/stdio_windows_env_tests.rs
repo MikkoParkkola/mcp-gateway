@@ -19,7 +19,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::process::Stdio;
 
-use crate::transport::stdio::configure_child_environment;
+use crate::transport::child_env::configure_child_environment;
 
 const SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_WINDOWS_ENV_SCENARIO";
 const DUMP_ENV: &str = "MCP_GATEWAY_TEST_WINDOWS_ENV_DUMP";

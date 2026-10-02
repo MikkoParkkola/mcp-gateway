@@ -152,7 +152,7 @@ fn refuse_egress(capability: &CapabilityDefinition) -> Result<()> {
 
 /// Resolve every parameter whose schema declares `path_root` to a canonical
 /// path inside that configured root, and hand the child that canonical path.
-fn confine_paths(
+pub(crate) fn confine_paths(
     capability: &CapabilityDefinition,
     params: &Value,
     roots: &crate::config::FileRoots,

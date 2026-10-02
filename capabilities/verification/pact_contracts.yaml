@@ -1,4 +1,4 @@
-sha256: 48089754ffa13ffc03e5eb76e1a76b073b554209d1c240e3402c681e251f024c
+sha256: 5f1d97705fb9e533c8914b6a36621ad5a6ee35fd0a226dffad8f734d19d4aebb
 fulcrum: "1.0"
 name: pact_contracts
 description: >
@@ -13,35 +13,39 @@ schema:
     properties:
       operation:
         type: string
-        description: "PACT operation to perform"
+        description: PACT operation to perform
         enum:
-          - verify_contract
-          - list_contracts
-          - get_contract
-          - check_budget
-          - get_retrospective
-          - validate_gate
-          - resume_run
+        - verify_contract
+        - list_contracts
+        - get_contract
+        - check_budget
+        - get_retrospective
+        - validate_gate
+        - resume_run
       component:
         type: string
-        description: "Component name (for get_contract operation)"
+        description: Component name (for get_contract operation)
+      project_dir:
+        type: string
+        path_root: projects
+        description: PACT project directory inside capabilities.files.projects
     required:
-      - operation
+    - operation
   output:
     type: object
     properties:
       status:
         type: string
-        description: "Operation status"
+        description: Operation status
       contracts:
         type: array
-        description: "List of contracts (for list_contracts)"
+        description: List of contracts (for list_contracts)
       budget:
         type: object
-        description: "Budget summary (for check_budget)"
+        description: Budget summary (for check_budget)
       validation:
         type: object
-        description: "Validation result (for validate_gate)"
+        description: Validation result (for validate_gate)
 
 providers:
   primary:
@@ -51,6 +55,38 @@ providers:
     config:
       command: pact-mcp
       transport: stdio
+      tool_selector:
+        param: operation
+        tools:
+          verify_contract:
+            tool: pact_validate
+            arguments:
+              project_dir: '{project_dir}'
+          validate_gate:
+            tool: pact_validate
+            arguments:
+              project_dir: '{project_dir}'
+          list_contracts:
+            tool: pact_contracts
+            arguments:
+              project_dir: '{project_dir}'
+          get_contract:
+            tool: pact_contract
+            arguments:
+              component_id: '{component}'
+              project_dir: '{project_dir}'
+          check_budget:
+            tool: pact_budget
+            arguments:
+              project_dir: '{project_dir}'
+          get_retrospective:
+            tool: pact_retrospective
+            arguments:
+              project_dir: '{project_dir}'
+          resume_run:
+            tool: pact_resume
+            arguments:
+              project_dir: '{project_dir}'
 
 auth:
   required: false
