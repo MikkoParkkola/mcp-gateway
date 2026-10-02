@@ -155,6 +155,29 @@ async fn send_frame(
 /// which is exactly the pre-concurrency behaviour and no worse (design §6).
 const STDIO_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// The teardown window after the stdio drain: `run_stdio_on` returns within
+/// `STDIO_DRAIN_TIMEOUT + STDIO_TEARDOWN_TIMEOUT` of EOF, whatever a backend
+/// stop, the custody store or a task does (MIK-7685). A step still running
+/// at the deadline is abandoned and logged; the process exits behind it.
+const STDIO_TEARDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Run one stdio teardown step under the shutdown deadline. `None` when it
+/// did not finish: the step is dropped, and the expiry logged by name.
+async fn bounded_step<F: std::future::Future>(
+    deadline: tokio::time::Instant,
+    step: &str,
+    future: F,
+) -> Option<F::Output> {
+    let finished = tokio::time::timeout_at(deadline, future).await.ok();
+    if finished.is_none() {
+        warn!(
+            step,
+            "stdio: shutdown step did not finish within the teardown deadline; abandoned"
+        );
+    }
+    finished
+}
+
 /// The stdio protocol-revision sink, shared by every spawned dispatch.
 ///
 /// A `std::sync::Mutex` and never a `tokio` one: every writer is synchronous,
@@ -2713,9 +2736,10 @@ impl Gateway {
         channel.close();
         // One deadline for the drain and the writer join (MIK-7272.LIFE.1):
         // a client that stops reading stdout blocks the writer, and the two
-        // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. The
-        // teardown after the join is not bounded here.
+        // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. Every
+        // await after them ends by `shutdown_deadline` (MIK-7685).
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
+        let shutdown_deadline = deadline + STDIO_TEARDOWN_TIMEOUT;
         if tokio::time::timeout_at(deadline, async {
             while let Some(joined) = dispatches.join_next().await {
                 if let Err(e) = joined
@@ -2740,7 +2764,7 @@ impl Gateway {
         #[cfg(feature = "cost-governance")]
         if let Some(enforcer) = &meta_mcp.budget_enforcer {
             if let Some(saver) = cost_saver {
-                saver.stop().await;
+                bounded_step(shutdown_deadline, "cost saver stop", saver.stop()).await;
             }
             persistence::save_costs(enforcer, &data_dir);
         }
@@ -2768,18 +2792,34 @@ impl Gateway {
         // backend while `stop_all` drains it — delaying shutdown and logging
         // starts for a gateway that is on its way out. The guard remains the
         // backstop for every path that does not reach this line.
-        warm_start_tasks.cancel().await;
+        bounded_step(
+            shutdown_deadline,
+            "warm-start cancel",
+            warm_start_tasks.cancel(),
+        )
+        .await;
         // Tasks before custody and backends: a worker's dispatch IS a backend call.
         if let Some((tasks, expiry)) = task_store {
-            stdio_tasks::shutdown(&tasks, expiry, self.config.server.shutdown_timeout).await;
+            let timeout = self.config.server.shutdown_timeout;
+            bounded_step(
+                shutdown_deadline,
+                "task store shutdown",
+                stdio_tasks::shutdown(&tasks, expiry, timeout),
+            )
+            .await;
         }
         // Release the custody store before the backends go. Reached on the EOF
         // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
-        // Not covered by gateway_bootstrap_tests — no test drives `run_stdio`.
-        if let Err(e) = self.shutdown_account_custody().await {
+        if let Some(Err(e)) = bounded_step(
+            shutdown_deadline,
+            "account custody shutdown",
+            self.shutdown_account_custody(),
+        )
+        .await
+        {
             warn!(error = %e, "Personal account custody shutdown failed");
         }
-        self.backends.stop_all().await;
+        bounded_step(shutdown_deadline, "backend stop", self.backends.stop_all()).await;
         Ok(())
     }
 
