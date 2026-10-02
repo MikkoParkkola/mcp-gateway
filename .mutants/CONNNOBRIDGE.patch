@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/connections.rs b/src/gateway/router/accounts/connections.rs
+index 92b958c5a..873e44a31 100644
+--- a/src/gateway/router/accounts/connections.rs
++++ b/src/gateway/router/accounts/connections.rs
+@@ -110,7 +110,7 @@ async fn dispatch(
+             } = caller;
+             super::revoke_for(&state, &*revocation, &identity, account_id).await
+         }
+-        (false, true, ..) => refusal(StatusCode::SERVICE_UNAVAILABLE, "unavailable", None),
++        (false, true, ..) => refusal(StatusCode::UNAUTHORIZED, "unauthenticated", None),
+         (false, false, ..) => refusal(StatusCode::UNAUTHORIZED, "unauthenticated", None),
+     }
+ }

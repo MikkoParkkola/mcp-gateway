@@ -1,0 +1,12 @@
+diff --git a/src/gateway/router/accounts/complete.rs b/src/gateway/router/accounts/complete.rs
+index 768a3466b..bbedd4f6b 100644
+--- a/src/gateway/router/accounts/complete.rs
++++ b/src/gateway/router/accounts/complete.rs
+@@ -83,6 +83,7 @@ async fn connections(
+     let mut rows = Vec::new();
+     for compiled in account_bindings::compile_descriptors(config).ok()? {
+         let Some((descriptor, revision)) = compiled.account else {
++            rows.push((compiled.descriptor_id, false));
+             continue;
+         };
+         let key = account_key(Some(Principal::Verified(identity)), &descriptor).ok()?;

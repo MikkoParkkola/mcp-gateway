@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/start.rs b/src/gateway/router/accounts/start.rs
+index 27f825635..46c7216fc 100644
+--- a/src/gateway/router/accounts/start.rs
++++ b/src/gateway/router/accounts/start.rs
+@@ -104,7 +104,7 @@ pub(super) async fn start(
+         return Page::SignIn.into_response();
+     };
+     let Ok(owner) = super::own_key(&config, &identity, &account) else {
+-        return Page::Expired.into_response();
++        return Page::Unavailable.into_response();
+     };
+     match journeys.start(limits, id.clone(), owner).await {
+         Ok(Ok(started)) => redirect(&id, &started),

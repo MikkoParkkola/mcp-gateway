@@ -1,0 +1,13 @@
+head_sha	583a346645e9e130a52f446d61b9b356ed38d108
+# mutants for #2623
+CONNNOBRIDGE	linux	CONNNOBRIDGE.patch	--lib gateway::router::accounts::connections::connections_tests::a_session_cookie_without_a_bridge_client_is_unavailable -- --exact
+CONNAPIIDENT	linux	CONNAPIIDENT.patch	--lib gateway::router::tests::openwebui_adapter::callback_route::delete::api_delete_without_an_adapter_assertion_is_unauthenticated -- --exact
+CONNREJECTED	linux	CONNREJECTED.patch	--lib gateway::router::tests::openwebui_adapter::callback_route::delete::browser_delete_with_a_rejected_session_is_unauthenticated -- --exact
+COMPNOADAPTER	linux	COMPNOADAPTER.patch	--lib gateway::router::tests::openwebui_adapter::callback_route::complete_page::complete_page_without_a_session_adapter_never_asks_open_webui -- --exact
+COMPREJECTED	linux	COMPREJECTED.patch	--lib gateway::router::tests::openwebui_adapter::callback_route::complete_page::complete_page_with_a_rejected_session_asks_to_sign_in -- --exact
+COMPUNCOMPILABLE	linux	COMPUNCOMPILABLE.patch	--lib gateway::router::tests::openwebui_adapter::callback_route::complete_page::complete_page_with_uncompilable_descriptors_is_503_without_a_list -- --exact
+COMPMANAGED	linux	COMPMANAGED.patch	--lib gateway::router::tests::openwebui_adapter::callback_route::complete_page::complete_page_lists_only_managed_descriptors -- --exact
+STARTNOADAPTER	linux	STARTNOADAPTER.patch	--lib gateway::router::tests::openwebui_adapter::start_route::service::start_without_a_session_adapter_is_the_expired_page -- --exact
+STARTREMOVED	linux	STARTREMOVED.patch	--lib gateway::router::tests::openwebui_adapter::start_route::service::start_for_an_account_removed_by_reload_is_the_expired_page -- --exact
+STARTACCOUNTOF	linux	STARTACCOUNTOF.patch	--lib gateway::router::tests::openwebui_adapter::start_route::service::start_when_custody_cannot_name_the_account_is_unavailable -- --exact
+STARTARM	linux	STARTARM.patch	--lib gateway::router::tests::openwebui_adapter::start_route::service::start_when_custody_cannot_arm_the_journey_is_unavailable -- --exact

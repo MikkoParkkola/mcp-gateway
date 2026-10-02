@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/connections.rs b/src/gateway/router/accounts/connections.rs
+index 92b958c5a..19616874c 100644
+--- a/src/gateway/router/accounts/connections.rs
++++ b/src/gateway/router/accounts/connections.rs
+@@ -35,7 +35,7 @@ pub(super) fn api_route(revocation: Arc<dyn AccountRevocation>) -> Router<Arc<Ap
+             extensions.get::<VerifiedIdentity>().cloned(),
+             extensions.get::<Forwarded>().cloned(),
+         ) else {
+-            return refusal(StatusCode::UNAUTHORIZED, "unauthenticated", None);
++            return refusal(StatusCode::FORBIDDEN, "forbidden", None);
+         };
+         super::revoke_for(&state, &*revocation, &identity, account_id).await
+     };

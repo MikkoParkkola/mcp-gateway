@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/complete.rs b/src/gateway/router/accounts/complete.rs
+index 768a3466b..97a2fc08b 100644
+--- a/src/gateway/router/accounts/complete.rs
++++ b/src/gateway/router/accounts/complete.rs
+@@ -81,7 +81,7 @@ async fn connections(
+     revocation: &dyn AccountRevocation,
+ ) -> Option<Vec<(String, bool)>> {
+     let mut rows = Vec::new();
+-    for compiled in account_bindings::compile_descriptors(config).ok()? {
++    for compiled in account_bindings::compile_descriptors(config).ok().unwrap_or_default() {
+         let Some((descriptor, revision)) = compiled.account else {
+             continue;
+         };

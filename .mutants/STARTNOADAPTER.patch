@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/start.rs b/src/gateway/router/accounts/start.rs
+index 27f825635..5dbc96262 100644
+--- a/src/gateway/router/accounts/start.rs
++++ b/src/gateway/router/accounts/start.rs
+@@ -93,7 +93,7 @@ pub(super) async fn start(
+ ) -> Response {
+     let config = state.live_config.get();
+     let Some((session, limits)) = bridged(&config) else {
+-        return Page::Expired.into_response();
++        return Page::Unavailable.into_response();
+     };
+     let account = match journeys.account_of(limits, id.clone()).await {
+         Ok(Ok(account)) => account,
