@@ -36,6 +36,7 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         api_key: None,
         credential_kind: None,
         credential_principal: None,
+        binding: None,
         legacy_api_key_name: None,
         url: format!("https://h/{id}"),
         name: "e".into(),

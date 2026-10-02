@@ -138,7 +138,7 @@ impl EventsHub {
             body_sha256: "",
             delivered: false,
         };
-        if !services.admits_subscription(&sub, &record.backend) {
+        if !services.admits_subscription(&sub, &record.backend).await {
             services.audit_attempt(&refused("access_revoked")).await;
             if !self.revoke(&sub.id).await {
                 // The removal did not reach the store: the record goes back to

@@ -1523,8 +1523,6 @@ impl Gateway {
             LiveConfig::new(self.config.clone())
                 .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
         );
-        // Webhook registry into MetaMcp (gateway_webhook_status), and events.
-        events_wiring::install(&self.config, &meta_mcp, &webhook_registry, &live_config)?;
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.
         // The control-plane base, resolved once: the export task, the store
@@ -1796,6 +1794,23 @@ impl Gateway {
         // The registry re-validates every listener against the same credential
         // stores the request middleware reads, so the two cannot disagree.
         let dashboard_bootstrap = Arc::new(crate::gateway::auth::DashboardBootstrap::new());
+        // Webhook registry into MetaMcp (gateway_webhook_status), and events,
+        // which re-check credentials against the same authorities as requests.
+        let credentials = crate::events::LiveCredentials {
+            key_server: key_server.clone(),
+            bearer_principal: auth_config
+                .bearer_token
+                .as_deref()
+                .map(crate::gateway::auth::principal_of),
+            dashboard: Some(Arc::clone(&dashboard_bootstrap)),
+        };
+        events_wiring::install(
+            &self.config,
+            &meta_mcp,
+            &webhook_registry,
+            &live_config,
+            credentials,
+        )?;
         let subscriptions = Arc::new(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
                 crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
