@@ -106,7 +106,10 @@ mod custody {
 
         let file = root.path().join("file");
         std::fs::write(&file, b"x").unwrap();
-        assert!(private_directory(&file).is_err());
+        assert_eq!(
+            private_directory(&file).err(),
+            Some(AccountError::InvalidConfiguration)
+        );
 
         let shared = root.path().join("shared");
         create_directory(&shared).unwrap();
