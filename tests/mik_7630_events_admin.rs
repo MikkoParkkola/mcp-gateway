@@ -540,7 +540,7 @@ async fn an_exhausted_dead_letter_replays_with_a_fresh_attempt_count() {
 }
 
 /// Section 17: an oversize dead letter is refused on replay (`too_large`),
-/// never POSTed, and stays listed.
+/// never `POSTed`, and stays listed.
 #[tokio::test]
 async fn an_oversize_dead_letter_is_refused_on_replay() {
     let root = tempfile::tempdir().expect("root");
