@@ -446,8 +446,16 @@ fn saturated_fingerprint_never_flags() {
     let now = Instant::now();
     let s = secret();
     // Controls at 8 tuples: the excuse holds, and without it the relay flags.
-    assert!(crowded(true, 6, now).check_egress_at(B, U, &s, now).is_none());
-    assert!(crowded(false, 7, now).check_egress_at(B, U, &s, now).is_some());
+    assert!(
+        crowded(true, 6, now)
+            .check_egress_at(B, U, &s, now)
+            .is_none()
+    );
+    assert!(
+        crowded(false, 7, now)
+            .check_egress_at(B, U, &s, now)
+            .is_some()
+    );
     // A 9th tuple saturates: evicting the oldest would drop B's excuse.
     let d = crowded(true, 7, now);
     assert!(d.saturated() > 0);

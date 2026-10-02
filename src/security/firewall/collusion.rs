@@ -299,7 +299,11 @@ impl CollusionDetector {
                 t.last_seen = t.last_seen.max(new.last_seen);
                 t.first_seen = t.first_seen.min(new.first_seen);
                 t.sensitive_at = t.sensitive_at.max(new.sensitive_at);
-                t.sensitive_first = t.sensitive_first.into_iter().chain(new.sensitive_first).min();
+                t.sensitive_first = t
+                    .sensitive_first
+                    .into_iter()
+                    .chain(new.sensitive_first)
+                    .min();
             }
             None => tuples.push(new),
         }
@@ -358,7 +362,8 @@ impl CollusionDetector {
             };
             let sensitive = |t: &&Holder| {
                 t.sensitive_first.is_some_and(|first| first <= now)
-                    && t.sensitive_at.is_some_and(|at| now.saturating_duration_since(at) <= window)
+                    && t.sensitive_at
+                        .is_some_and(|at| now.saturating_duration_since(at) <= window)
             };
             if let Some(t) = tuples
                 .iter()
