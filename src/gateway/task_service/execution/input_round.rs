@@ -334,7 +334,7 @@ impl TaskExecutor {
             id.to_owned(),
             principal.to_owned(),
         );
-        tokio::spawn(async move {
+        self.spawn_worker(async move {
             let workers = Arc::clone(&executor.workers);
             let provided = executor
                 .service
