@@ -315,7 +315,13 @@ async fn t_offer3_an_exhausted_creation_budget_offers_a_retry_and_no_link() {
         "{refused}"
     );
     assert!(data.get("connect_url").is_none(), "{refused}");
-    assert_eq!(refused["error"]["message"], ABSENT_TEXT, "{refused}");
+    // The envelope prefixes the JSON-RPC code; the text itself is today's, with
+    // no connect link appended.
+    assert_eq!(
+        refused["error"]["message"],
+        format!("JSON-RPC error -32001: {ABSENT_TEXT}"),
+        "{refused}"
+    );
 }
 
 #[tokio::test]
