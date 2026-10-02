@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 728ed56e6..0d9752f1f 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -659,7 +659,7 @@ pub fn subscription_stream(
+         }
+         // Every way out of the loop is the server ending the subscription; a
+         // client that hangs up drops the stream and never gets here.
+-        yield Ok(Event::default().event("message").data(subscription.graceful_end().to_string()));
++        let _ = &subscription;
+     };
+ 
+     Sse::new(stream)

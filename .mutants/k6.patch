@@ -1,0 +1,12 @@
+diff --git a/src/protocol/subscriptions.rs b/src/protocol/subscriptions.rs
+index 10be55424..a32dac141 100644
+--- a/src/protocol/subscriptions.rs
++++ b/src/protocol/subscriptions.rs
+@@ -264,7 +264,6 @@ impl SubscriptionId {
+             "jsonrpc": "2.0",
+             "id": self.as_value(),
+             "result": {
+-                "resultType": "complete",
+                 "_meta": { "io.modelcontextprotocol/subscriptionId": self.as_value() },
+             },
+         })
