@@ -94,10 +94,14 @@ impl MetaMcp {
             let capability = self
                 .get_capabilities()
                 .is_some_and(|cap| server == cap.name);
+            // Secret injection overwrites its keys after this check: what the
+            // caller put there never leaves, so it is not checked.
+            let mut arguments = egress.arguments.clone();
+            self.secret_injector
+                .strip_overwritten(server, tool, &mut arguments);
             let params = if capability {
-                egress.arguments.clone()
+                arguments
             } else {
-                let arguments = egress.arguments.clone();
                 let (meta, key) = (egress.inbound_meta, egress.prompt_cache_key);
                 outbound_params(tool, arguments, meta, key, egress.retry)
             };
@@ -398,6 +402,31 @@ impl MetaMcp {
     }
 }
 
+impl MetaMcp {
+    /// A prompt handed to a client, as it is recorded: its own text, since
+    /// that is what the client receives, plus the context-integrity verdict
+    /// read from a classified copy (an enforcing gate may have rewritten or
+    /// withheld that copy, so it is never the recorded text).
+    pub(crate) fn recorded_prompt(
+        &self,
+        (server, tool): (&str, &str),
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        prompt: &Value,
+    ) -> Value {
+        let (classified, _) =
+            self.apply_context_integrity(server, tool, api_key_name, trace_id, prompt.clone());
+        let mut recorded = prompt.clone();
+        if let (Some(map), Some(verdict)) = (
+            recorded.as_object_mut(),
+            classified.get("_context_integrity"),
+        ) {
+            map.insert("_context_integrity".to_owned(), verdict.clone());
+        }
+        recorded
+    }
+}
+
 /// Drop every staged receipt: what was staged was never delivered (a
 /// state-only round the gateway answered for itself).
 pub(crate) fn discard_staged() {
@@ -414,8 +443,9 @@ pub(crate) fn discard_if_changed(snapshot: Option<Value>, result: Option<&Value>
 }
 
 /// A bridged prompt is content delivered to the caller (§13.3): recorded
-/// when it is handed to the client, before the reply is awaited, classified
-/// on a copy as a tool result is.
+/// when it is handed to the client, before the reply is awaited. The text
+/// recorded is the text sent; only the classification verdict comes from a
+/// copy, as a tool result's does.
 pub(super) struct RecordingChannel<'a> {
     pub(super) inner: &'a dyn crate::gateway::input_bridge::ClientChannel,
     pub(super) meta: &'a MetaMcp,
@@ -435,16 +465,11 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
         params: Option<Value>,
     ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
         if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_active()) {
-            let (server, tool) = self.target;
-            let (classified, _) = self.meta.apply_context_integrity(
-                server,
-                tool,
-                self.api_key_name,
-                self.trace_id,
-                prompt.clone(),
-            );
+            let recorded =
+                self.meta
+                    .recorded_prompt(self.target, self.api_key_name, self.trace_id, prompt);
             self.meta
-                .record_relay_delivery(self.who, self.target, &classified);
+                .record_relay_delivery(self.who, self.target, &recorded);
         }
         self.inner
             .send_request(session_id, id, method, params)

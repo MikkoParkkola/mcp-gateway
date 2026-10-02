@@ -101,6 +101,63 @@ async fn relay_audit_has_no_injected_secret() {
     assert_eq!(seen[0]["arguments"]["token"], PROSE, "base: injected");
 }
 
+/// A value the caller put under a key secret injection overwrites never
+/// leaves the gateway, so the relay check does not read it either.
+#[tokio::test]
+async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    backend.set_transport_for_test(Arc::new(Seen(Arc::clone(&seen))));
+    assert!(registry.register(backend));
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
+        json!({"name": "token", "value": "vault-secret", "inject_key": "token"}),
+    )
+    .expect("rule parses");
+    let injector = crate::secret_injection::SecretInjector::new(HashMap::from([(
+        "alpha".to_string(),
+        vec![rule],
+    )]));
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
+    firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
+
+    let bob = MetaMcpCallerContext {
+        caller_key: Some("bob"),
+        ..ctx(&AllowAll)
+    };
+    let call = json!({"server": "alpha", "tool": "send", "arguments": {"token": PROSE}});
+    let result = meta.invoke_tool(&call, None, &bob).await;
+    assert!(
+        result.is_ok(),
+        "an overwritten caller value was checked: {result:?}"
+    );
+    let seen = seen.lock().clone();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(
+        seen[0]["arguments"]["token"], "vault-secret",
+        "base: overwritten"
+    );
+}
+
 /// The relay check and the dispatch read one builder: every field a
 /// backend receives beside `arguments` is in it.
 #[test]

@@ -2288,6 +2288,11 @@ impl MetaMcp {
                 if let Some(reservation) = idem_reservation.as_mut() {
                     reservation.release();
                 }
+                // The outer lease was marked before round one; this refusal
+                // is no result of a call that acted, so it is not retained.
+                if let Some(execution) = caller.execution {
+                    execution.withdraw_dispatch();
+                }
                 return Err(refused);
             }
             match bridged {

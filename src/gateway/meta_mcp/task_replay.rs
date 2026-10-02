@@ -38,14 +38,30 @@ impl MetaMcp {
         let refused = self
             .authorize_stored(stored, attestation, session, caller)
             .err();
-        // COLLUDE.1 §13.3: a completed single-target result delivered again
+        // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.
         if refused.is_none()
-            && matches!(stored.task.status(), TaskStatus::Completed)
-            && let ([target], Some(result)) = (stored.targets.as_slice(), stored.task.result())
+            && self.relay_active()
+            && let [target] = stored.targets.as_slice()
         {
             let who = caller.relay_caller(session);
-            self.stage_relay_receipt(who, (&target.server, &target.tool), result);
+            let to = (target.server.as_str(), target.tool.as_str());
+            match stored.task.status() {
+                TaskStatus::Completed => {
+                    if let Some(result) = stored.backend_result() {
+                        self.stage_relay_receipt(who, to, result);
+                    }
+                }
+                TaskStatus::InputRequired => {
+                    if let Some(requests) = stored.task.input_requests() {
+                        let prompt = serde_json::Value::Object(requests.clone());
+                        let key = caller.api_key_name;
+                        let recorded = self.recorded_prompt(to, key, "tasks/get", &prompt);
+                        self.stage_relay_receipt(who, to, &recorded);
+                    }
+                }
+                _ => {}
+            }
         }
         refused.map(|error| error_response_preserving_status(id.clone(), &error))
     }

@@ -259,6 +259,54 @@ async fn meta_bridged_prompt_recorded() {
     assert_eq!(calls.lock().len(), 2, "the relay reached the backend");
 }
 
+/// M6 under an enforcing context-integrity gate: the gate withholds the
+/// classified copy of the prompt, but `alice` still receives the whole text,
+/// so `bob` sending it is refused all the same.
+#[tokio::test]
+async fn meta_bridged_prompt_recorded_under_enforcement() {
+    use crate::context_integrity::{
+        ContextIntegrityDecisionKind, ContextIntegrityKernel, ContextIntegrityPolicy,
+        ContextIntegrityPolicyMode,
+    };
+    let prompt = format!("{PROSE} Contact: keeper@orchardcoop.fi");
+    let request = json!({"method": "elicitation/create",
+                         "params": {"message": prompt,
+                                    "requestedSchema": {"type": "object", "properties": {}}}});
+    let (meta, _firewall, calls) = meta_asking(request, Vec::new());
+    let deny = ContextIntegrityDecisionKind::Deny;
+    meta.set_context_integrity_kernel(ContextIntegrityKernel::new(ContextIntegrityPolicy {
+        mode: ContextIntegrityPolicyMode::Enforce,
+        untrusted_instruction_decision: deny,
+        guarded_material_decision: deny,
+        personal_data_decision: deny,
+        destructive_instruction_decision: deny,
+        tool_poisoning_decision: deny,
+        high_risk_action_decision: deny,
+        allow_benign_read_only: true,
+        non_bypassable: false,
+    }));
+    let accepting = Replying {
+        reply: json!({"action": "accept", "content": {}}),
+    };
+    let declared = json!({"elicitation": {}});
+    let alice = caller("alice", &declared, Era::Legacy, &accepting, &NO_RETRY);
+    let first = meta
+        .invoke_tool(&args(&json!({})), Some("session-m6c"), &alice)
+        .await;
+    assert!(first.is_ok(), "base: the exchange runs: {first:?}");
+    let sent = calls.lock().len();
+
+    let bob = caller("bob", &json!({}), Era::Legacy, &NoClientChannel, &NO_RETRY);
+    let relay = args(&json!({"text": prompt}));
+    let result = meta.invoke_tool(&relay, Some("session-m6d"), &bob).await;
+    assert_eq!(
+        code_of(&result),
+        Some(-32002),
+        "relay not refused: {result:?}"
+    );
+    assert_eq!(calls.lock().len(), sent, "the relay reached the backend");
+}
+
 /// M14: a modern retry whose redeemed answers carry what `alice` was
 /// delivered is refused at the first dispatch.
 #[tokio::test]

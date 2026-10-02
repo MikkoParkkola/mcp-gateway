@@ -53,7 +53,7 @@ pub(super) fn interrupted_result(outcome: &str, reason: &str, text: &str) -> Val
         "content": [{"type": "text", "text": text}],
         "isError": true,
         "_meta": {
-            "io.mcp-gateway/executionOutcome": outcome,
+            (super::super::record::EXECUTION_OUTCOME_KEY): outcome,
             "io.mcp-gateway/reason": reason,
         }
     })

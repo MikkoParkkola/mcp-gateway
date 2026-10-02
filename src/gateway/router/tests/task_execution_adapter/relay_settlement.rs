@@ -186,3 +186,30 @@ async fn abandoned_round_records_nothing() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
+
+/// A task parked on a prompt delivers that prompt to the reader on
+/// `tasks/get`: relaying its text is refused.
+#[tokio::test]
+async fn parked_task_prompt_read_is_recorded() {
+    let prompt = json!({"method": "elicitation/create",
+                        "params": {"message": PROSE,
+                                   "requestedSchema": {"type": "object", "properties": {}}}});
+    let ask = json!({"resultType": "input_required",
+                     "inputRequests": {"k1": prompt}, "requestState": "round-1"});
+    let mock = MockBackend::answering(Answer::Sequence(vec![ask, text("ok")]));
+    let (state, _store) = relay_state(&mock, 600).await;
+    let created = post(
+        &state,
+        "key-a",
+        super::input_round::create(1, "relay-parked"),
+    )
+    .await;
+    let task = task_id(&created);
+    // The wait reads the task as `key-a`: that read delivers the prompt.
+    super::input_round::wait_input_required(&state, &task).await;
+    let answer = relay(&state, 2).await;
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "prompt not recorded: {answer}"
+    );
+}
