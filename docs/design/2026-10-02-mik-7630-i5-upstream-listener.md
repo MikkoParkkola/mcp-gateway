@@ -1,0 +1,458 @@
+# MIK-7630 I5 — the upstream listener (detailed design)
+
+Status: design for review; no product code yet.
+Parent: `docs/design/2026-10-01-mik-7630-mcp-events.md` (§3.3 b2, §4, §11 I5, row T39).
+Depends on: I2 (outbox, fan-out, `EventsHub::emit`) and I4 (the refcounted
+`on_first_subscriber` / `on_last_subscriber` hooks and the `BackendNotification`
+source that carries b1). I5 adds b2 to that source; it adds no new send site.
+
+Where this document and the parent disagree, this one wins for I5, and the
+parent's §3.3 gets a pointer here when I5 merges. The disagreements are listed
+in §11.
+
+## 1. What I5 delivers
+
+Three event types per eligible backend `x` (§6 says which are eligible):
+
+| Event | Argument | `data` | Upstream notification |
+|---|---|---|---|
+| `backend.x.resource_updated` | `uri` (required, exact) | `{"uri": <uri>}` | `notifications/resources/updated` |
+| `backend.x.resources_changed` | none | `{}` | `notifications/resources/list_changed` |
+| `backend.x.prompts_changed` | none | `{}` | `notifications/prompts/list_changed` |
+
+`data` is built by the gateway from the one field it needs. Nothing else the
+backend sends (`_meta`, `title`, extra keys) is copied, so the firewall scan in
+I2 sees at most a URI.
+
+The connection that receives these notifications is opened only while at least
+one live event subscription needs it, and closed when the last one goes.
+
+## 2. Sources of truth (read at base `d80e2cfd2`)
+
+Spec, MCP 2026-07-28 `basic/patterns/subscriptions` (fetched 2026-10-02):
+
+- `subscriptions/listen` "replaces the former `resources/subscribe` RPC and the
+  HTTP GET endpoint". The filter is `params.notifications` with
+  `toolsListChanged`, `promptsListChanged`, `resourcesListChanged` (booleans) and
+  `resourceSubscriptions` (URI list).
+- "The server MUST send `notifications/subscriptions/acknowledged` as the first
+  message", tagged `_meta["io.modelcontextprotocol/subscriptionId"]` = the listen
+  request's JSON-RPC id, and its `notifications` field "reflects the subset the
+  server agreed to honor".
+- Every notification on the stream carries the same tag. On stdio "clients MUST
+  use this field to correlate".
+- A JSON-RPC **response** to the listen request means the server ended the
+  subscription gracefully; a transport close without one is a disconnect.
+- Client cancel: close the SSE stream (HTTP), or send `notifications/cancelled`
+  naming the listen request id (stdio).
+- "On stdio, if the connection is terminated and then re-established, the client
+  MUST re-send `subscriptions/listen`."
+
+Code:
+
+- No transport delivers an out-of-request notification anywhere. stdio drops it
+  (`src/transport/stdio.rs:538-540`, "Ignoring peer notification"); WebSocket
+  the same (`src/transport/websocket.rs:497-513`, `route_progress`). HTTP request SSE stops at the
+  first response frame (`src/transport/http/sse_decoder.rs:246-297`), and the
+  legacy GET is read only up to the `endpoint` event and dropped
+  (`src/transport/http/mod.rs:1188-1290`).
+- `SseDecoder` (`sse_decoder.rs:66`, `push`/`finish`) parses frames
+  incrementally with a byte cap. I5 reuses it with a smaller cap.
+- The gateway never sends `subscriptions/listen` or `resources/subscribe`
+  upstream. The direct route `/mcp/{name}` forwards a client's own
+  `resources/subscribe` and discards what comes back
+  (`src/gateway/router/backend_handlers.rs:431,449`).
+- Era: `Backend::cached_era()` (`src/backend/era.rs:136`), resolved once per
+  start for every transport. WebSocket backends are legacy only
+  (`src/config/ws_backend.rs:37`).
+- Idle stop refuses while the shared slot's `in_flight > 0`
+  (`src/backend/pool.rs:712`). `begin_internal_activity()` (`pool.rs:670`) takes
+  such a lease without touching the idle clock. `force_restart` closes a busy
+  slot's old transport only when its `Arc` strong count reaches one
+  (`src/backend/lifecycle.rs:918-930`, `close_after_last_owner`). No hook
+  announces a start, restart or stop.
+- Resource access on `/mcp`: no per-URI policy exists. `resources/read` is
+  allowed when the caller may reach the backend **and** the URI is in the
+  catalogue that caller is served (`find_resource_owner`,
+  `src/gateway/meta_mcp/resources.rs:452`; exact match, templates not matched).
+  The catalogue admission is `catalogue_credential_for`
+  (`src/gateway/meta_mcp/discovery_fetch.rs:143`).
+
+## 3. Per-era handling
+
+One listener per backend, holding the **union** of what that backend's live
+event subscriptions need: a set of kinds (`resources_changed`,
+`prompts_changed`) and a refcounted set of URIs. The way it talks upstream
+depends on the transport and on `cached_era()` read at each (re)connect:
+
+| Backend | Era | Upstream channel | Resource interest | Close |
+|---|---|---|---|---|
+| HTTP (`http_url`, streamable or plain) | Modern | `POST subscriptions/listen`, SSE body read until it ends | `resourceSubscriptions` in the filter | drop the body stream |
+| HTTP (streamable or plain) | Legacy | `GET` on the base URL with `Accept: text/event-stream` and the shared bucket's `Mcp-Session-Id` | `resources/subscribe` per URI on that same session | `resources/unsubscribe` per URI, then drop the GET |
+| stdio | Modern | `subscriptions/listen` written as a request; the reader routes frames tagged with its id to the listener | `resourceSubscriptions` in the filter | `notifications/cancelled` naming the listen id |
+| stdio | Legacy | the reader's out-of-request notifications | `resources/subscribe` per URI | `resources/unsubscribe` per URI |
+| WebSocket | Legacy only | as stdio legacy | as stdio legacy | as stdio legacy |
+| HTTP+SSE handshake (`http_url` ending `/sse`), A2A | — | none: no b2 descriptors (§6) | — | — |
+
+**Filter changes.** Modern: the filter is fixed per listen request, so a change
+(first subscriber of a new URI or kind, last subscriber of one) opens a new
+listen with the new filter, waits for its acknowledgement, then closes the old
+one (make before break), so no notification falls into the gap. Legacy: one
+`resources/subscribe` or `resources/unsubscribe` on the existing channel; the
+list-changed kinds need nothing upstream, they are filtered locally.
+
+**Acknowledgement (modern).** The first frame tagged with the listen id must be
+`notifications/subscriptions/acknowledged` within 10 s, or the attempt fails.
+A kind or URI the acknowledgement omits is recorded as unsupported for that
+backend (counter + one `warn` per change of the acknowledged set); the listener
+stays open for what was honoured and does not reconnect to retry the omission.
+A peer that acknowledges with a non-`complete` JSON-RPC response as its first
+frame (this gateway does, today; §11) is accepted as acknowledged with the full
+filter, so a gateway behind a gateway works.
+
+**Legacy refusals.** `resources/subscribe` answered `-32601` (or the backend
+lacks `resources.subscribe`) marks that backend's resource interest
+unsupported; list-changed delivery continues. A `GET` answered 405 marks the
+whole backend unsupported until its next restart.
+
+**Tagged frames only.** On a modern stream every notification must carry the
+listen id; an untagged or wrongly tagged frame is dropped and counted. Only the
+three methods of §1 (plus the acknowledgement) are accepted; anything else is
+dropped. A `notifications/resources/updated` whose `uri` the listener did not ask
+for is dropped before it reaches the hub.
+
+## 4. Transport additions
+
+Two new methods with a refusing default on `Transport` (`src/transport/mod.rs:98`),
+so A2A and any transport that does not implement them stay untouched (eligibility in
+§6 never calls them on such a transport, so the default is just a failed attempt;
+no `Error` variant is added):
+
+```rust
+/// Open `subscriptions/listen` with `filter` and yield every frame of that
+/// subscription until it ends. Dropping the stream cancels it upstream.
+async fn listen(&self, filter: Value) -> Result<FrameStream> { Err(Error::Protocol("not supported by this transport".into())) }
+
+/// The peer's out-of-request notifications (legacy peers): the reader-loop tap
+/// on stdio and WebSocket, the session GET stream on HTTP.
+async fn unsolicited(&self) -> Result<FrameStream> { Err(Error::Protocol("not supported by this transport".into())) }
+```
+
+`FrameStream` is a bounded `tokio::sync::mpsc::Receiver<JsonRpcMessage>`
+(capacity 64) plus a drop guard that performs the cancel of §3.
+
+- **HTTP.** Both methods clone the transport's own `reqwest::Client`, so the
+  backend's destination pinning and redirect policy apply unchanged, and run
+  the body read on a spawned task that holds no `Arc` of the transport.
+  Headers come from `build_mcp_headers` (+ `finalise_modern_headers` for
+  `listen`), shared bucket only (`identity_key = None`). The body is decoded
+  with `SseDecoder::new(64 KiB)`, not the 10 MiB request cap: a notification
+  is small, and a frame over the cap ends the stream (and reconnects). The
+  client's total timeout would cut a long stream, so these requests set a
+  per-request timeout of 1 h: the stream is recycled hourly, make before break
+  for modern, re-subscribe for legacy.
+- **stdio / WebSocket.** The reader loop gains one routing step before the
+  "Ignoring" arm: a frame tagged with a registered listen id goes to that
+  listen's sender; otherwise one of the three §1 methods goes to the
+  `unsolicited` sender if one is registered. Both sends are `try_send`: the
+  reader is the only reader of the peer's output and must never park
+  (the rule `capture_notification` already follows); a full channel drops and
+  counts. The senders live in the reader task's state, so the receiver sees
+  `Closed` when the process exits or the socket drops. `listen` writes the
+  request with a minted id from the transport's own id counter and does **not**
+  register it as a pending request, so no request timeout fires on it; a
+  response with that id is routed to the listen sender as the graceful end.
+
+These are the only changes to `src/transport/`. Progress routing, the
+request-scoped sink and every existing request path are unchanged.
+
+## 5. Lifecycle and refcount
+
+**Ownership.** `src/events/upstream.rs` (new) owns an `UpstreamListeners` map
+`backend name → ListenerHandle`. I4's `BackendNotification` source (the one
+source of that `SourceKind`, since I2's fan-out looks sources up by kind) gains
+a field pointing at it and delegates the three b2 names to it; b1
+(`tools_changed`) is untouched. The backend-facing part, which needs
+`pub(super)` items of `crate::backend`, is one new file
+`src/backend/listen.rs` exposing a single `pub(crate)` entry point; no
+existing item's visibility is widened.
+
+**Refcount.** The core (I4) refcounts subscriptions per `lifecycle_key`
+(default: JCS of `[name, arguments]`, shared across principals) and calls the
+hooks on 0→1 and 1→0. I5 keeps a second, per-backend count beneath it:
+
+```text
+Need(backend) = { kinds: {resources_changed?, prompts_changed?},
+                  uris:  map uri → number of live lifecycle keys naming it }
+```
+
+`on_first_subscriber(key, …, name, arguments)` parses `(backend, kind, uri)`
+from the name and arguments, adds it to `Need`, and, if `Need` went from empty
+to non-empty, starts the listener task. `on_last_subscriber(key)` re-parses the
+key (it is the JCS of name and arguments, so nothing extra is stored), removes
+it, and, when `Need` is empty, stops the task. Each change in `Need` is sent to
+the task on a `watch` channel; the task applies it as in §3 (make before break,
+or one subscribe/unsubscribe). With the default key two principals subscribing
+to the same URI share one lifecycle key, so the backend sees one upstream
+subscription for the URI, which is T39's "exactly one".
+
+`on_first_subscriber` never fails because the backend is down: it records the
+need and returns `Ok`, as the parent §3.3 says. It fails only for policy
+(§7): an ineligible backend, a URI the principal may not read, or the URI cap.
+
+**Restart of the gateway.** The core replays `on_first_subscriber` once per
+live key on load (parent §4), which rebuilds `Need` and starts the listeners.
+
+**The task.** One tokio task per backend with a non-empty `Need`:
+
+```text
+loop {
+  wait for backoff (0 on the first attempt);
+  backend = registry.get(name)  // gone → park until Need changes or the key is deleted (F10)
+  lease = backend.begin_internal_activity()   // held while connected (below)
+  transport = backend.ensure_entry_started(Shared) // in listen.rs; may start a stopped child
+  era = backend.cached_era()
+  stream = open per §3 (listen | unsolicited + resources/subscribe per URI)
+  drop(transport)                             // never hold the Arc across the read
+  read frames → coalesce → emit, applying Need changes, until the stream ends
+}
+```
+
+**Lease, and why the `Arc` is dropped.** While connected the task holds an
+internal activity lease on the shared slot. It keeps the idle reaper from
+stopping a backend that has live event subscribers (`stop_if_idle` refuses while
+`in_flight > 0`) without moving the idle clock, so the backend is stopped as
+usual once the last subscription ends. An event subscription therefore counts
+as use of the backend; that is deliberate, and bounded by the subscription TTL
+(max 24 h, refreshed by the client). The task does **not** keep the transport
+`Arc` while reading: `force_restart` closes a busy slot's old transport only
+when its strong count reaches one, so a held `Arc` would keep a wedged process
+alive for ever. The read side holds only the `FrameStream`, which closes when
+the old process or session dies, and the loop reconnects to the new one.
+
+**Shutdown.** The hub cancels every listener task (one `CancellationToken`)
+before backends stop. A task that loses the race finds `ensure_started`
+refusing (`stopping` latched) and exits.
+
+## 6. Which backends offer b2 events
+
+A backend offers the three descriptors when all hold:
+
+1. Its transport is stdio, WebSocket, or HTTP without the `/sse` handshake.
+   HTTP+SSE (2024-11-05) needs a second initialised session on its own GET
+   stream, and A2A has no MCP notifications; neither gets descriptors in 4.0.
+2. Its catalogue is the shared one: `catalogue_credential_for` admits an
+   identity-free caller with binding `None`. The listener runs on the shared
+   slot under the gateway's own upstream credential. For a backend with
+   identity propagation or per-caller isolation that credential is not the
+   subscriber's, and notifications seen under it could name resources the
+   subscriber cannot read. Those backends get no b2 descriptors (stated limit,
+   §10).
+3. The events source config `sources.backend_notifications` is true (parent §9).
+
+Eligibility is computed from config, not from the backend's runtime
+capabilities, so `events/list` never starts a backend. A backend that turns out
+not to support a kind is reported as unsupported (§3); its subscriptions
+succeed and stay silent, the emit-only contract.
+
+## 7. Security
+
+**Who may subscribe and receive.** `authorize` (called at subscribe and at
+every fan-out, parent §4) for a b2 name:
+
+- the principal passes I2's backend admission (`services.admits`, the
+  `admits_backend` predicate `events/list` uses); otherwise the name is
+  invisible and the core answers `-32011`;
+- for `resource_updated`, the `uri` is in the backend's shared resource
+  catalogue (`get_resources_for_binding(None, &[])`, the cached list
+  `resources/list` serves), by exact match: the same rule `resources/read` on
+  `/mcp` applies (`find_resource_owner`). Otherwise `-32012`. URIs reachable
+  only through a resource template are refused, as `resources/read` refuses
+  them.
+
+The fan-out re-check uses the cached catalogue (served stale-while-refresh), so
+it costs no upstream call per event. A URI removed from the catalogue stops
+delivery at its next occurrence and deletes the subscription (parent F9).
+
+**Kept out of `SubscriptionRegistry`.** b2 notifications go only to
+`EventsHub::emit`; nothing in I5 calls `publish` or `publish_for_backend`, so
+a downstream `subscriptions/listen` client never sees them (parent §3.3, T39
+last clause). A unit test pins that the listener module has no path to the
+registry (it does not import it).
+
+**Payload path.** b2 enters I2's pipeline at `EventsHub::emit` like every
+source. Fan-out then applies, unchanged: the per-occurrence access re-check,
+the firewall scan of `data` (`ResponseArtifactKind::EventPayload`), tenant
+attribution before redaction for the tenant guard, and the single send site.
+The tenant verdict is the MIN.2 outbound frame once L1 converts that send site
+(MIN.2 row E1); until then I2's observe-only path applies, exactly as for
+webhook events. I5 adds no send site, no scan and no tenant logic of its own.
+`data` is `{"uri"}` or `{}`, so there is little to scan, but the scan runs
+anyway: a URI is backend-controlled text.
+
+**Upstream requests.** The listener sends only `subscriptions/listen`,
+`resources/subscribe`, `resources/unsubscribe` and `notifications/cancelled`,
+on the shared slot, through the backend's existing transport with its
+destination policy. The URIs it sends were already checked against the
+backend's own catalogue, so it tells the backend nothing the backend did not
+list.
+
+**Limits.**
+
+| Limit | Value | Over it |
+|---|---|---|
+| URIs per backend listener | 1 024 (const) | subscribe answers `-32013`, `data.limit = "upstream_uris"` |
+| URI length | 2 048 bytes | `-32602`, `data.field = "arguments.uri"` |
+| Listeners | one per eligible backend | — (bounded by config) |
+| SSE frame | 64 KiB | stream ends, reconnect |
+| Tap channel | 64 frames | drop and count |
+
+Per-principal and global subscription caps (I1) already bound how many keys
+can exist; the URI cap stops a few principals from making one backend track an
+unbounded URI set.
+
+## 8. Backpressure and coalescing
+
+From backend to outbox, no stage blocks the one before it except where
+blocking is free:
+
+1. **stdio / WebSocket reader → tap:** `try_send`; full drops and counts
+   (per-backend drop counter, §9). The reader never parks.
+2. **HTTP body task → listener:** `send().await`. Waiting here only stops
+   reading the socket, so TCP flow control pushes back on the backend and
+   no memory grows.
+3. **Listener → coalescer:** one entry per `(kind, uri)`, at most 2 + 1 024 per
+   backend. Window 1 s, trailing edge: the first notification opens the window,
+   later ones inside it are absorbed, one event is emitted when it closes. A
+   burst becomes one event with at most 1 s of delay, and the event always
+   follows the last change it stands for. This is the parent's F11 rule; if
+   I4 lands a coalescer for `tools_changed`, I5 uses that one.
+4. **Coalescer → hub:** `EventsHub::emit`, I2's non-blocking `try_send` into
+   the bounded source queue; a full queue drops and counts there.
+
+So a backend in a notification storm costs the gateway parsing time and at
+most `2 + uris` events per second, never memory.
+
+`upstream_id` for the event id (parent §3.6) is a gateway-minted UUID per
+emitted event: upstream notifications carry no stable id.
+
+## 9. Failure and reconnect
+
+| Event | What the listener does |
+|---|---|
+| Backend not running / start fails / circuit open | attempt fails; backoff |
+| Stream ends without a listen response, transport error, frame over cap | reconnect after backoff |
+| Graceful listen response (modern) | reconnect after backoff |
+| No acknowledgement within 10 s | close; backoff |
+| `-32601` / 405 / omitted in acknowledgement | mark unsupported (§3); no fast retry |
+| Backend restarted (new process or session) | old stream closes; reconnect re-sends the whole `Need` (the spec: the server keeps no subscription state across reconnects) |
+| Backend removed from config | the core deletes its subscriptions (parent F10) → `on_last_subscriber` → task stops |
+| Hourly recycle | modern: make before break; legacy: reopen and re-subscribe; no backoff |
+
+Backoff is jittered exponential, 1 s doubling to a 5 min cap (`backon`, as
+`src/failsafe/retry.rs` uses it), reset once a stream has been acknowledged
+(modern) or has stayed open 60 s (legacy). Unsupported waits at the cap.
+
+Notifications sent while disconnected are lost: the emit-only contract
+(parent F3). The make-before-break filter change and the hourly recycle are
+the two places I5 avoids a self-inflicted gap; a backend restart is not one of
+them.
+
+Observability: per backend, plain `AtomicU64` counters beside I2's runtime drop
+counters (connected flag, reconnects, drops by reason: `tap_full`, `untagged`,
+`unrequested`, `oversize`; unsupported kinds), and one `info` per connect and
+disconnect with the era and the reason. A URI value is never logged above
+`debug`. No new metrics dependency.
+
+## 10. Test plan (T39, split by era)
+
+All rows drive the shipped binary through the I2 harness
+(`tests/mik_7630_events/gateway.rs`, HTTPS receiver `receiver.rs`), so they run
+where the receiver rows run (Linux, parent §15). New file
+`tests/mik_7630_events_upstream.rs` plus one fixture module
+`tests/mik_7630_events/upstream_peer.rs` with three mock peers, each recording
+every frame it receives and exposing a `push(notification)` control:
+
+- **HTTP peer** (axum), era by flag: modern answers `server/discover` and
+  serves `subscriptions/listen` as an SSE body (acknowledgement first, tagged
+  frames after); legacy answers `initialize`, mints `Mcp-Session-Id`, serves
+  `resources/subscribe|unsubscribe` and a GET SSE stream for that session.
+  Both serve `resources/list` with `file:///a`, `file:///b`, `file:///c`.
+- **stdio peer**: a `python3` script (stdlib only), era by argument, the same
+  methods over lines; `push` writes a trigger file it polls, it logs every line
+  it reads.
+- **WebSocket peer**: the existing `tests/sub2b/websocket_backend.rs` shape,
+  legacy only.
+
+Principals: alice and bob may reach backend `x`; carol may not. There is no
+per-principal URI policy (§2), so the URI refusal is driven by a URI absent
+from `x`'s shared catalogue (`file:///secret`), which every principal is
+refused. The row does not pretend to test a per-principal URI policy.
+
+| Row | Era / transport | Clauses (each a separate assertion) |
+|---|---|---|
+| T39a | modern HTTP | (1) subscribe `resource_updated {uri: a}` → peer sees exactly one `subscriptions/listen` whose filter names `a`; (2) a second principal subscribing to `a` → still one live listen naming `a`; (3) push `resources/updated a` → one event per subscription, `data == {"uri": a}`; push `…updated b` → none; (4) subscribe `b` → a new listen naming `a` and `b` is acknowledged before the old one closes, and a push of `a` between them is delivered once; (5) unsubscribe all → the peer sees the stream close and no listen remains; (6) `resources/list_changed` and `prompts/list_changed` with matching subscriptions → one `resources_changed` and one `prompts_changed` event; (7) a frame without the listen tag → no event |
+| T39b | legacy HTTP | (1) one `resources/subscribe a` and one GET stream on the same session id; (2) as T39a(3); (3) last unsubscribe → `resources/unsubscribe a`, GET closed; (4) as T39a(6) |
+| T39c | modern stdio | as T39a (1), (3), (5) with close seen as `notifications/cancelled` naming the listen id, (6) |
+| T39d | legacy stdio | as T39b (1)–(4), channel = stdout lines |
+| T39e | WebSocket | as T39d |
+| T39f | any (modern HTTP) | `resource_updated {uri: file:///secret}` (not in the catalogue) → `-32012`; carol → `-32011`; the peer sees no listen for either |
+| T39g | modern HTTP + legacy stdio | a downstream `subscriptions/listen` client of the gateway (alice's key, filter naming `a` and both list kinds) receives none of the pushed notifications while event subscribers do |
+| T39h | modern HTTP | the peer drops the SSE stream → the gateway reopens a listen with the same filter within the backoff floor; a push after the reconnect is delivered |
+| T39i | legacy stdio | the peer process exits → restarted on reconnect, `resources/subscribe a` re-sent; with `stop_when_idle_for: 1s` the subscribed backend is not idle-stopped for 5 s, and is stopped within 5 s of the last unsubscribe |
+| T39j | config | an identity-propagating HTTP backend, an `/sse` backend and the modern peer side by side → `events/list` lists b2 names for the modern peer only |
+| T39k | modern HTTP | five `resources/updated a` within 200 ms → exactly one event, delivered after the last push |
+
+**Fails first because:** on the I2/I4 base no b2 descriptor exists, so each
+row's first subscribe answers `-32011` and the row fails at its own "subscribe
+accepted" or "listed" assertion, after the gateway and the peer have started
+(the harness steps before it are asserted green separately). T39g's
+"receives none" clause would pass vacuously on that base, so it is asserted
+only after the same row has seen the event subscriber receive the push.
+
+**Unit rows (in `src/`, not red-first, landing with the code):** refcount
+algebra of `Need` (two keys sharing a URI, last-unsubscribe order); key
+re-parse round trip; coalescer window; the tag filter; the acknowledgement
+check including the response-as-ack compatibility rule; the tap's `try_send`
+never blocking a full channel.
+
+**Mutation targets:** the tag check, the `Need` decrement, the URI catalogue
+check in `authorize`, make-before-break ordering, and the lease release on
+last unsubscribe.
+
+## 11. Known limits and departures from the parent design
+
+| # | Item | Why |
+|---|---|---|
+| D1 | Modern stdio uses `subscriptions/listen`, not `resources/subscribe` (parent §3.3 said stdio uses `resources/subscribe`) | 2026-07-28 removed `resources/subscribe` (`src/protocol/meta.rs:297`); the era decides, not the transport |
+| D2 | Legacy HTTP listens on the session GET stream; HTTP+SSE (`/sse`) and A2A backends offer no b2 events | the `/sse` handshake needs a second initialised session; A2A has no MCP notifications. SOURCE.1 is graded "any MCP backend except HTTP+SSE" unless the lead rules otherwise |
+| D3 | Backends with identity propagation or per-caller catalogue isolation offer no b2 events | the shared-slot listener would observe under the gateway's credential, not the subscriber's (§6) |
+| D4 | URI access = shared catalogue membership, exact match; template-only URIs refused | the rule `/mcp` `resources/read` already applies; no new policy model |
+| D5 | A live event subscription keeps its backend from being idle-stopped | otherwise reaper and listener fight; bounded by the subscription TTL |
+| D6 | Lost while disconnected | emit-only (parent F3); make before break and hourly recycle avoid self-inflicted gaps |
+| D7 | Unsupported kinds are silent, not refused at subscribe | eligibility comes from config so `events/list` never starts a backend; the refusal would need a live probe at subscribe |
+
+**Finding outside I5 (for the lead):** the gateway's own downstream
+`subscriptions/listen` acknowledges with a JSON-RPC success response
+(`src/gateway/router/handlers.rs:1081-1087`, sent first by
+`src/gateway/streaming.rs:549-555`). The spec makes the first message the
+`notifications/subscriptions/acknowledged` notification and a response the
+graceful end. A conformant client therefore reads the gateway's
+acknowledgement as "closed". I5 tolerates it upstream (§3); fixing the
+downstream side is a separate ticket.
+
+## 12. Delivery
+
+Branch `feat/mik-7630-i5-upstream`, stacked on I2 (and on I4 once it exists),
+one PR:
+
+1. this document (review frozen after at most two rounds);
+2. red commit: `tests/mik_7630_events_upstream.rs` + `upstream_peer.rs` (T39a–k),
+   seen red on CI at the rows' own assertions;
+3. transport taps (`listen`, `unsolicited`) with their unit rows;
+4. `src/backend/listen.rs` and `src/events/upstream.rs` (listener task,
+   `Need`, coalescer), b2 in the `BackendNotification` source;
+5. changelog fragment; parent §3.3 pointer to this document.
+
+Implementation starts only after I2 and I4 merge: the hooks this design hangs
+on are I4's, and the source it extends is I4's.
