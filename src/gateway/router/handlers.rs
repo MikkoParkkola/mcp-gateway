@@ -268,7 +268,9 @@ pub(super) async fn mcp_sse_handler(
             .get_or_create_session_scoped(existing_session_id.as_deref(), &owner, held)
     };
 
-    info!(session_id = %session_fp(&session_id), "Client connected to SSE stream");
+    // Computed before the macro so its count is graded (MIK-7725).
+    let session = session_fp(&session_id);
+    info!(session_id = %session, "Client connected to SSE stream");
 
     // Auto-subscribe to configured backends
     let multiplexer = Arc::clone(&state.multiplexer);
@@ -333,7 +335,8 @@ pub(super) async fn mcp_delete_handler(
 
     match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
-            info!(session_id = %session_fp(id), "Session terminated by client");
+            let session = session_fp(id);
+            info!(session_id = %session, "Session terminated by client");
             // The id is dead from here; what was keyed by it goes too.
             if let Some(ref lifecycle) = state.session_lifecycle {
                 lifecycle.on_disconnect(id);
@@ -341,7 +344,8 @@ pub(super) async fn mcp_delete_handler(
             StatusCode::NO_CONTENT
         }
         Some(id) => {
-            debug!(session_id = %session_fp(id), "No owned session for DELETE");
+            let session = session_fp(id);
+            debug!(session_id = %session, "No owned session for DELETE");
             StatusCode::NOT_FOUND
         }
         None => StatusCode::BAD_REQUEST,
@@ -826,7 +830,8 @@ async fn meta_mcp_dispatch(
     // still declared what it declared.
     crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
 
-    debug!(method = %method, session_id = %session_fp(&session_id), "Meta-MCP request");
+    let session = session_fp(&session_id);
+    debug!(method = %method, session_id = %session, "Meta-MCP request");
 
     if let Some((rpc, status)) = request_checks::request_check_refusal(
         &state,

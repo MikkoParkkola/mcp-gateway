@@ -688,8 +688,8 @@ async fn backend_handler_inner(
         session_id,
         crate::protocol_revision_telemetry::Transport::Http,
     );
-
-    debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
+    let client_name = client.as_ref().map(|c| &c.name);
+    debug!(backend = %name, method = %method, client = ?client_name, "Backend request");
 
     // One backend's level is still shared by every user of that backend, so
     // this route applies the meta route's admin gate before anything forwards.
