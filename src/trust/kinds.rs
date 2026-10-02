@@ -20,6 +20,8 @@ pub enum CbomSubjectKind {
     Runtime,
     /// Dependency subject.
     Dependency,
+    /// An MCP event delivery (MIK-7630).
+    Event,
 }
 
 /// CBOM component kind.
