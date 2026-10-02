@@ -3297,8 +3297,9 @@ impl Gateway {
                 client,
             );
             if let Some(context) = signing_context.as_mut()
-                && let Err(error) = meta_mcp.prepare_signing_invocation(
+                && let Err(error) = meta_mcp.prepare_signing_for_call(
                     context,
+                    &tool_name,
                     arguments.as_ref(),
                     Some(session_id),
                     &caller,
@@ -3326,7 +3327,7 @@ impl Gateway {
                 }
             }
             // A task is admitted durably by its handoff, as on HTTP.
-            let admission = if caller.task.is_some() {
+            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
             } else {
                 meta_mcp.admit_meta_sync(
