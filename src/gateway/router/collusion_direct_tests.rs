@@ -42,6 +42,8 @@ enum Read {
     Injected,
     /// Both a result and an error, as a non-conformant backend may send.
     Both,
+    /// [`PROSE`] as a tool-level failure: a result with `isError: true`.
+    IsError,
     /// A result carrying a backend-supplied context-integrity verdict.
     Classified(&'static str),
     /// [`PROSE`] plus an email address the gateway classifies as personal
@@ -93,6 +95,10 @@ impl Transport for Alpha {
                 r.result = Some(text_result(PROSE));
                 r
             }
+            Read::IsError => JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": PROSE}], "isError": true}),
+            ),
             Read::ForgedPublic => {
                 let mut result = text_result(&format!("{PROSE} Contact: keeper@orchardcoop.fi"));
                 result["_context_integrity"] =
@@ -628,3 +634,5 @@ async fn a_forged_public_verdict_is_replaced_by_the_gateways_own() {
     );
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
 }
+
+mod meta;
