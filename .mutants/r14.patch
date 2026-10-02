@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/task_replay.rs b/src/gateway/meta_mcp/task_replay.rs
+--- a/src/gateway/meta_mcp/task_replay.rs
++++ b/src/gateway/meta_mcp/task_replay.rs
+@@ -52,7 +52,7 @@
+                         self.stage_relay_receipt(who, to, result);
+                     }
+                 }
+-                TaskStatus::InputRequired => {
++                TaskStatus::InputRequired if false => {
+                     if let Some(requests) = stored.task.input_requests() {
+                         let prompt = serde_json::Value::Object(requests.clone());
+                         let key = caller.api_key_name;
