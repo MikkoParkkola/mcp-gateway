@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index cc3534178..9ed429a10 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -640,7 +640,7 @@ impl MetaMcp {
+         };
+         // A string or array result has no member to carry the verdict: wrap it
+         // rather than drop it.
+-        if !recorded.is_object() {
++        if false {
+             recorded = serde_json::json!({ "value": recorded });
+         }
+         if let Some(map) = recorded.as_object_mut() {

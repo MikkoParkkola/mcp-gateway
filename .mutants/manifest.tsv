@@ -1,0 +1,8 @@
+head_sha	a224f33f1df8ce45fc4e362d54dd1673cd01b179
+# #2810 catalogue relay
+M1	linux	m1.patch	--lib -- meta_catalogue_relay_audit_names
+M2	linux	m2.patch	--lib -- meta_catalogue_relay_refusal_carries
+M3	linux	m3.patch	--lib -- a_recorded_catalogue_result_omits
+M4	linux	m4.patch	--lib -- a_recorded_non_object_result
+M5	linux	m5.patch	--lib -- staging_a_catalogue_result_classifies
+M6	linux	m6.patch	--lib -- direct_relay_scan_skips_the_progress
