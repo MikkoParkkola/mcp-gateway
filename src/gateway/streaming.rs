@@ -855,11 +855,14 @@ pub(crate) fn subscription_stream(
                     let Some(frame) = judged else {
                         continue;
                     };
-                    let Some(data) = sse_data(&judge.record(frame).await) else {
+                    let recorded = judge.record(frame).await;
+                    if recorded.is_withheld() {
                         continue;
-                    };
+                    }
                     // Only a frame that is about to go out is on the delivery
-                    // record, and its relay receipts count only then.
+                    // record, and its relay receipts count only then. The
+                    // read-history commit (`sse_data`) comes after this gate,
+                    // so a frame withheld here consumes no allowance.
                     if let (Some(task), Some(sent)) = (task, sent)
                         && !task.delivery.delivered(&sent).await
                     {
@@ -867,6 +870,9 @@ pub(crate) fn subscription_stream(
                         graceful = false;
                         break;
                     }
+                    let Some(data) = sse_data(&recorded) else {
+                        continue;
+                    };
                     yield Ok(Event::default().event("message").data(data));
                 }
                 Err(broadcast::error::RecvError::Closed) => break,

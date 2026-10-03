@@ -63,7 +63,10 @@ impl MetaMcp {
                         Some(task) if !withheld => serde_json::to_value(task.task.wire()).ok(),
                         _ => None,
                     };
-                    let restored_output = params.is_some();
+                    // A read of stored backend output only when the task serves some, as
+                    // `tasks/get` counts it: a working or cancelled task read nothing.
+                    let restored_output = params.is_some()
+                        && stored.is_some_and(CommittedTask::serves_backend_output);
                     let frame = match params {
                         Some(params) => json!({
                             "jsonrpc": "2.0",
