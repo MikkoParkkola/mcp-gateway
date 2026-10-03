@@ -104,3 +104,43 @@ async fn a_reader_refused_by_policy_gets_the_status_and_no_output() {
         "a refused reader must receive no output: {event}"
     );
 }
+
+/// A reader who names another principal's task receives nothing of it: not the
+/// notification, not the result.
+#[tokio::test]
+async fn a_cross_tenant_reader_never_sees_the_result() {
+    let (mock, gate) = MockBackend::holding(Answer::ok());
+    let mut gate = ReleasedOnDrop(gate);
+    let (state, _store) = state_with(&mock).await;
+
+    let id_a = task_id(
+        &post(
+            &state,
+            "key-a",
+            task_invoke(7701, "p3-a", json!({ "q": "a" })),
+        )
+        .await,
+    );
+    gate.0.wait_for_dispatch().await;
+
+    let mut intruder = open_listen(&state, "key-b", 7711, json!({ "taskIds": [&id_a] })).await;
+    let mut nested = open_listen(
+        &state,
+        "key-b",
+        7712,
+        json!({ "notifications": { "taskIds": [&id_a] } }),
+    )
+    .await;
+    gate.0.release_all();
+    assert_carries_the_backend_result(&poll_until_terminal(&state, "key-a", &id_a).await);
+
+    for (stream, form) in [(&mut intruder, "root"), (&mut nested, "nested")] {
+        super::helpers::assert_receives_nothing(
+            stream,
+            &format!(
+                "another principal's task named in the {form} form must not reach this reader"
+            ),
+        )
+        .await;
+    }
+}

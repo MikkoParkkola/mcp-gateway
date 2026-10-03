@@ -592,6 +592,27 @@ pub fn create_sse_response(
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
 }
 
+/// Builds the frame a listener receives for a `notifications/tasks`
+/// notification: the full task state, re-authorized for that reader.
+///
+/// `None` withholds the frame. `reader` is the listener's credential
+/// re-resolved just now (`None` when it no longer authenticates), so a role
+/// revoked since the stream opened is not honoured from a stale snapshot.
+#[async_trait::async_trait]
+pub trait TaskFrames: Send + Sync {
+    /// The tagged frame to send, or `None` to withhold it.
+    async fn frame(
+        &self,
+        notification: &Value,
+        subscription: &crate::protocol::subscriptions::SubscriptionId,
+        reader: Option<&crate::gateway::auth::AuthenticatedClient>,
+    ) -> Option<Value>;
+}
+
+fn is_task_notification(notification: &Value) -> bool {
+    notification.get("method").and_then(Value::as_str) == Some("notifications/tasks")
+}
+
 /// The response body of a `subscriptions/listen` request.
 ///
 /// An SSE stream that stays open, per the transport specification: the
@@ -606,6 +627,7 @@ pub fn subscription_stream(
     subscription: crate::protocol::subscriptions::SubscriptionId,
     acknowledgement: &Value,
     keep_alive_interval: Duration,
+    task_frames: Option<std::sync::Arc<dyn TaskFrames>>,
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;
 
@@ -639,7 +661,22 @@ pub fn subscription_stream(
                             break;
                         }
                     }
-                    let tagged = subscription.tag(published.notification);
+                    // A task notification is built for THIS reader at delivery
+                    // (full state, re-authorized); every other kind is the
+                    // published value, tagged.
+                    let tagged = match &task_frames {
+                        Some(frames) if is_task_notification(&published.notification) => {
+                            let reader = listener.current_client().await;
+                            match frames
+                                .frame(&published.notification, &subscription, reader.as_ref())
+                                .await
+                            {
+                                Some(frame) => frame,
+                                None => continue,
+                            }
+                        }
+                        _ => subscription.tag(published.notification),
+                    };
                     yield Ok(Event::default()
                         .event("message")
                         .data(tagged.to_string()));

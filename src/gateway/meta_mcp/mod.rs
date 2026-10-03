@@ -105,6 +105,7 @@ mod spec_preview;
 mod support;
 mod surfaced;
 mod task_confirmation;
+pub(crate) mod task_notify;
 mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
@@ -2765,6 +2766,8 @@ mod grant_replay_dedupe_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+#[cfg(test)]
+mod task_notify_tests;
 
 mod session_end;
 

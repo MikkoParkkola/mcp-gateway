@@ -288,7 +288,45 @@ impl super::MetaMcp {
         response: &crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
     ) -> bool {
-        use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
+        use crate::security::audit::AuditOutcome;
+
+        let outcome = response
+            .error
+            .as_ref()
+            .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code));
+        self.record_delivery_attempt(
+            serde_json::to_value(response),
+            outcome,
+            "transport_finalized",
+            correlation,
+        )
+        .await
+    }
+
+    /// The delivery evidence for one pushed notification frame, hashed as it
+    /// is about to be sent. Same event, same failure policy as a response.
+    pub(super) async fn record_notification_delivery_attempt(
+        &self,
+        frame: &serde_json::Value,
+        correlation: &ResponseCorrelation<'_>,
+    ) -> bool {
+        self.record_delivery_attempt(
+            Ok(frame.clone()),
+            crate::security::audit::AuditOutcome::Ok,
+            "notification_delivered",
+            correlation,
+        )
+        .await
+    }
+
+    async fn record_delivery_attempt(
+        &self,
+        value: serde_json::Result<serde_json::Value>,
+        outcome: crate::security::audit::AuditOutcome,
+        stage: &str,
+        correlation: &ResponseCorrelation<'_>,
+    ) -> bool {
+        use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditWho};
 
         use sha2::{Digest, Sha256};
 
@@ -296,7 +334,7 @@ impl super::MetaMcp {
             return true;
         };
         let fail_closed = logger.failure_policy() == AuditFailurePolicy::FailClosed;
-        let encoded = serde_json::to_value(response).and_then(|value| serde_json::to_vec(&value));
+        let encoded = value.and_then(|value| serde_json::to_vec(&value));
         let Ok(encoded) = encoded else {
             tracing::warn!("Failed to encode response delivery attempt for transparency log");
             return !fail_closed;
@@ -304,7 +342,7 @@ impl super::MetaMcp {
         let hash = format!("sha256:{}", hex::encode(Sha256::digest(encoded)));
         let mut fields = serde_json::Map::new();
         fields.insert("event".into(), "response_delivery_attempt".into());
-        fields.insert("response_stage".into(), "transport_finalized".into());
+        fields.insert("response_stage".into(), stage.into());
         fields.insert("response_hash_encoding".into(), "sorted-json-v1".into());
         fields.insert("response_hash".into(), hash.into());
         fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
@@ -315,10 +353,7 @@ impl super::MetaMcp {
         fields.insert("server".into(), correlation.external_server.into());
         fields.insert("tool".into(), correlation.external_tool.into());
         let envelope = AuditEnvelope {
-            outcome: response
-                .error
-                .as_ref()
-                .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code)),
+            outcome,
             ..AuditEnvelope::ok(AuditWho::from_actor_id(correlation.caller))
         };
         // F20: bounded on the blocking pool; a stalled disk withholds the
