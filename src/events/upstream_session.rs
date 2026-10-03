@@ -69,6 +69,10 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
 
 /// The task: reconnect until stopped.
 pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub: Weak<EventsHub>) {
+    let _gate = tokio::select! {
+        () = shared.stop.cancelled() => return,
+        gate = Arc::clone(&shared.gate).lock_owned() => gate,
+    };
     let mut failures = 0u32;
     loop {
         if shared.stop.is_cancelled() {

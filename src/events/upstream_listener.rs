@@ -28,6 +28,9 @@ pub(super) struct Shared {
     /// Bumped on every change of the upstream filter.
     pub wake: watch::Sender<u64>,
     pub stop: CancellationToken,
+    /// Held for a task's whole life, its stop cleanup included, so a
+    /// successor for the same backend starts only after it.
+    pub gate: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// The per-backend listeners of one hub.
@@ -35,6 +38,7 @@ pub(crate) struct UpstreamListeners {
     registry: Arc<BackendRegistry>,
     hub: Weak<EventsHub>,
     backends: Mutex<HashMap<String, Arc<Shared>>>,
+    gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     stop: CancellationToken,
 }
 
@@ -79,6 +83,7 @@ impl UpstreamListeners {
             registry,
             hub,
             backends: Mutex::new(HashMap::new()),
+            gates: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
         })
     }
@@ -181,6 +186,7 @@ impl UpstreamListeners {
             snapshot: Mutex::new(Snapshot::default()),
             wake,
             stop: self.stop.child_token(),
+            gate: Arc::clone(self.gates.lock().entry(backend.to_owned()).or_default()),
         });
         tokio::spawn(super::upstream_session::run(
             Arc::clone(&shared),
