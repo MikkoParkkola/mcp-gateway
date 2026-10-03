@@ -227,7 +227,10 @@ async fn stdio_judged_out_read_records_no_receipt() {
                 staged,
             )
             .await;
-            frame.delivers_result()
+            let delivered = frame.delivers_result();
+            // The sink writes it: that is what commits the read history.
+            frame.stdio_written();
+            delivered
         }
     };
     let relayed = |text: &str| {
