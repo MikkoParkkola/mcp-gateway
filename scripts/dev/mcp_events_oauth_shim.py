@@ -14,7 +14,7 @@ tokens, secrets, callback paths or bodies).
 NOT for production: the authorize step approves every request. Run it only
 behind a short-lived tunnel. Stdlib only.
 """
-import argparse, base64, hashlib, http.client, json, secrets, sys, threading, time
+import argparse, os, base64, hashlib, http.client, json, secrets, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -204,10 +204,12 @@ def main():
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--upstream", type=int, required=True, help="gateway port on 127.0.0.1")
     p.add_argument("--public", required=True, help="public https origin of the tunnel")
-    p.add_argument("--api-key", required=True, help="the access token handed out")
+    p.add_argument("--api-key", default=os.environ.get("EVENTS8_API_KEY"), help="the access token handed out (or env EVENTS8_API_KEY)")
     p.add_argument("--log", required=True)
     p.add_argument("--redirect-host", action="append", default=["chatgpt.com", "openai.com"])
     a = p.parse_args()
+    if not a.api_key:
+        sys.exit("--api-key or EVENTS8_API_KEY is required")
     Shim.cfg = argparse.Namespace(upstream=a.upstream, public=a.public.rstrip("/"),
                                   api_key=a.api_key, log=a.log, lock=threading.Lock(),
                                   redirect_hosts=a.redirect_host)

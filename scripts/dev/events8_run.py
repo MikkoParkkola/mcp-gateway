@@ -138,8 +138,8 @@ def cmd_up(a):
         children.append(tunnel)
         shim = subprocess.Popen([sys.executable, str(SCRIPTS / "mcp_events_oauth_shim.py"),
                                  "--port", str(SHIM_PORT), "--upstream", str(GW_PORT),
-                                 "--public", public, "--api-key", key,
-                                 "--log", str(d / "shim.jsonl")])
+                                 "--public", public, "--log", str(d / "shim.jsonl")],
+                                env={**os.environ, "EVENTS8_API_KEY": key})
         children.append(shim)
         state = {"public": public, "webhook_secret": secret, "started": time.time(),
                  "pids": [c.pid for c in children]}
@@ -182,7 +182,7 @@ def cmd_fire(a):
     with urllib.request.urlopen(req, timeout=10) as r:
         status = r.status
     (d / "fire.json").write_text(json.dumps({
-        "ts": time.time(), "signed": True, "signature_header": "X-Hub-Signature-256",
+        "ts": time.time(), "signed": True, "hmac_checked_by_gateway": True, "signature_header": "X-Hub-Signature-256",
         "delivery_id": delivery, "ref": ref, "repo": a.repo, "status": status,
         "body_sha256": hashlib.sha256(body).hexdigest()}, indent=1))
     print("inbound signed webhook answered", status)

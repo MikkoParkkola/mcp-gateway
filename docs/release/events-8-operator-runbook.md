@@ -20,7 +20,7 @@ clicks and ChatGPT's own reply are left to you.
 | Prerequisite | State |
 |---|---|
 | Config: events on, a signed webhook route, API-key auth, audit log | `events8_run.py up` writes it (`events.enabled`, capability `github` with an HMAC `secret`, `webhooks.require_signature: true`) |
-| Endpoint | a separate gateway on 127.0.0.1:39561; the live gateway (PID 53431) is never touched |
+| Endpoint | a separate gateway on 127.0.0.1:39561 with its own HOME and store; this run binds only ports 39561 and 39560, so any other gateway is untouched |
 | Event source | `webhook.github.push.received`, filters `repo` and `ref`, fired by a signed `X-Hub-Signature-256` POST |
 | OAuth | **gap, bridged**: the gateway is only a resource server (no authorization-server metadata, empty `authorization_servers`), and `events/subscribe` needs an authenticated principal, so ChatGPT cannot connect to it directly. `scripts/dev/mcp_events_oauth_shim.py` (test only, auto-approving) fronts it with RFC 9728 and RFC 8414 metadata, dynamic client registration and a PKCE token step |
 | Tunnel | `cloudflared` quick tunnel to the shim, started by `up` with an explicit empty config (a default `config.yml` would answer 404) |
