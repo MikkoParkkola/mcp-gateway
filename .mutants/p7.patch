@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/stream.rs b/src/gateway/outbound/stream.rs
+index 954a4f71d..c2528b671 100644
+--- a/src/gateway/outbound/stream.rs
++++ b/src/gateway/outbound/stream.rs
+@@ -87,7 +87,7 @@ impl StreamJudge {
+         &self,
+         document: serde_json::Value,
+     ) -> Option<OutboundFrame> {
+-        let hidden = self.unattributed_read();
++        let hidden = None;
+         self.admit_hiding(Payload::Request(document), hidden.as_ref())
+     }
+ 
