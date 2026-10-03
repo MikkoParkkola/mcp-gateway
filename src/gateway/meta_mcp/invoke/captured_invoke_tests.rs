@@ -18,8 +18,9 @@ use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::{Authentication, InvokeScope, MetaMcp, MetaMcpCallerContext};
 use crate::gateway::router::CallerStanding;
 use crate::identity_propagation::{
-    BackendDescriptor, IdentityPropagation, IdentityPropagationConfig, PropagatedCredential,
-    PropagationError, PropagationStrategyKind, SessionMode,
+    BackendDescriptor, CallerProof, CallerProvenance, IdentityPropagation,
+    IdentityPropagationConfig, PropagatedCredential, PropagationError, PropagationStrategyKind,
+    SessionMode,
 };
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::RequestId;
@@ -101,6 +102,8 @@ impl Transport for Listing {
 struct SwapDuringMint {
     registry: Arc<BackendRegistry>,
     replacement: Arc<Backend>,
+    /// The mint fails as an account that is not connected, not a plain refusal.
+    not_connected: bool,
 }
 
 #[async_trait::async_trait]
@@ -115,7 +118,11 @@ impl IdentityPropagation for SwapDuringMint {
             self.registry.register(Arc::clone(&self.replacement)),
             "the reload registers the replacement"
         );
-        Err(PropagationError::Refuse("the mint failed".to_string()))
+        Err(if self.not_connected {
+            PropagationError::AccountNotConnected("connect the account".to_string())
+        } else {
+            PropagationError::Refuse("the mint failed".to_string())
+        })
     }
 }
 
@@ -161,28 +168,8 @@ fn shared_login() -> BackendConfig {
     }
 }
 
-/// The captured backend has no gateway-held login, so the multi-user guard
-/// passes for it and the call is served by it. The replacement the reload
-/// registered mid-mint does hold one. Mutant: the guard (or the dispatch)
-/// looked up by name judges or reaches the replacement: the call is refused as
-/// if the shared login were the captured backend's, or it is served by the
-/// replacement's transport.
-#[tokio::test]
-async fn a_reload_during_the_mint_does_not_change_the_backend_a_call_is_judged_or_served_by() {
-    let (captured_calls, replacement_calls) =
-        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-    let registry = Arc::new(BackendRegistry::new());
-    assert!(
-        registry.register(backend(optional_propagation(), &captured_calls)),
-        "registration"
-    );
-    let meta = MetaMcp::new(Arc::clone(&registry));
-    meta.set_multi_user(true);
-    meta.set_identity_propagation(Arc::new(SwapDuringMint {
-        registry: Arc::clone(&registry),
-        replacement: backend(shared_login(), &replacement_calls),
-    }));
-
+/// An authenticated OIDC caller invoking `alpha`'s `read` through the meta route.
+async fn call_alpha(meta: &MetaMcp) -> crate::Result<Value> {
     let identity = VerifiedIdentity {
         subject: "alice".to_string(),
         email: "alice@example.invalid".to_string(),
@@ -221,13 +208,38 @@ async fn a_reload_during_the_mint_does_not_change_the_backend_a_call_is_judged_o
         channel: &crate::gateway::input_bridge::NoClientChannel,
     };
 
-    let answer = meta
-        .invoke_tool(
-            &json!({"server": "alpha", "tool": "read", "arguments": {}}),
-            None,
-            &context,
-        )
-        .await;
+    meta.invoke_tool(
+        &json!({"server": "alpha", "tool": "read", "arguments": {}}),
+        None,
+        &context,
+    )
+    .await
+}
+
+/// The captured backend has no gateway-held login, so the multi-user guard
+/// passes for it and the call is served by it. The replacement the reload
+/// registered mid-mint does hold one. Mutant: the guard (or the dispatch)
+/// looked up by name judges or reaches the replacement: the call is refused as
+/// if the shared login were the captured backend's, or it is served by the
+/// replacement's transport.
+#[tokio::test]
+async fn a_reload_during_the_mint_does_not_change_the_backend_a_call_is_judged_or_served_by() {
+    let (captured_calls, replacement_calls) =
+        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(
+        registry.register(backend(optional_propagation(), &captured_calls)),
+        "registration"
+    );
+    let meta = MetaMcp::new(Arc::clone(&registry));
+    meta.set_multi_user(true);
+    meta.set_identity_propagation(Arc::new(SwapDuringMint {
+        registry: Arc::clone(&registry),
+        replacement: backend(shared_login(), &replacement_calls),
+        not_connected: false,
+    }));
+
+    let answer = call_alpha(&meta).await;
 
     assert!(
         answer.is_ok(),
@@ -295,4 +307,92 @@ async fn the_schema_check_lists_the_captured_backend_not_the_replacement() {
         (1, 0),
         "the caller's headers must reach only the backend the call was judged on"
     );
+}
+
+/// A mint that fails as "account not connected" is answered with the connect
+/// offer for the account the captured backend names. The reload registered a
+/// replacement bound to another account mid-mint. Mutant: the marking looks
+/// the name up again and offers the replacement's account.
+#[tokio::test]
+async fn a_not_connected_refusal_offers_the_account_of_the_backend_it_was_judged_on() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let bound = |account: &str, required: bool| {
+        let mut config = optional_propagation();
+        config.account = Some(account.to_string());
+        if let Some(propagation) = config.identity_propagation.as_mut() {
+            propagation.required = required;
+        }
+        config
+    };
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(backend(bound("acct-captured", true), &calls)));
+    let meta = MetaMcp::new(Arc::clone(&registry));
+    meta.set_multi_user(true);
+    // An account-bound backend mints through its own installed strategy.
+    meta.set_backend_identity_propagation(
+        "alpha",
+        Arc::new(SwapDuringMint {
+            registry: Arc::clone(&registry),
+            replacement: backend(bound("acct-replacement", true), &calls),
+            not_connected: true,
+        }),
+    );
+
+    // Straight at the resolver: the dispatch sites unmark an undecorated
+    // refusal, so the mark is only observable here.
+    let captured = registry.get("alpha").expect("registered");
+    let idp_cfg = captured
+        .identity_propagation_config()
+        .cloned()
+        .expect("propagation is configured");
+    let identity = VerifiedIdentity {
+        subject: "alice".to_string(),
+        email: "alice@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp.example.invalid".to_string(),
+    };
+    let caller = CallerProof::new(Some(&identity), CallerProvenance::Anonymous);
+
+    let refused = meta
+        .resolve_caller_credential_as("alpha", Some(&captured), &idp_cfg, caller)
+        .await
+        .expect_err("the mint failed");
+
+    let marked = crate::personal_accounts::refusal::marked(&refused).expect("a marked refusal");
+    assert_eq!(
+        marked.account_id, "acct-captured",
+        "the offer names the account of the backend the call was judged on"
+    );
+}
+
+/// A chained backend's answer is never cached (D7). Whether the call is chained
+/// is read off the backend it was judged on: the reload registered a chained
+/// replacement under the same name. Mutant: the check looks the name up again.
+#[test]
+fn chain_eligibility_is_read_off_the_backend_the_call_was_judged_on() {
+    let served = Arc::new(AtomicUsize::new(0));
+    let chain = |mode| BackendConfig {
+        signature_chain: mode,
+        ..BackendConfig::default()
+    };
+    let registry = Arc::new(BackendRegistry::new());
+    let captured = backend(chain(crate::config::ChainMode::Off), &served);
+    assert!(registry.register(backend(chain(crate::config::ChainMode::Require), &served)));
+    let mut meta = MetaMcp::new(Arc::clone(&registry));
+    meta.set_chain_signer(
+        crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")
+            .expect("signer"),
+        crate::config::ChainEmit::OnRequest,
+    );
+
+    assert!(
+        !meta.is_chained(Some(&captured)),
+        "the captured backend is unchained, whatever the registry now holds"
+    );
+    assert!(
+        meta.is_chained(registry.get("alpha").as_deref()),
+        "a chained backend is chained"
+    );
+    assert!(!meta.is_chained(None), "no backend, no chain");
 }
