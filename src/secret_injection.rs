@@ -152,6 +152,23 @@ pub struct SecretInjector {
     rules: HashMap<String, Vec<CredentialRule>>,
 }
 
+/// Remove the key `rule` owns from the caller's arguments: whatever the caller
+/// put there is never forwarded in place of the gateway's credential.
+fn drop_caller_value(
+    rule: &CredentialRule,
+    arguments: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    match rule.inject_as {
+        InjectTarget::Argument => {
+            arguments.remove(&rule.inject_key);
+        }
+        InjectTarget::Query => {
+            arguments.remove(&format!("__query_{}", rule.inject_key));
+        }
+        InjectTarget::Header => {}
+    }
+}
+
 impl SecretInjector {
     /// Create a new secret injector with the given per-backend rules.
     #[must_use]
@@ -213,15 +230,7 @@ impl SecretInjector {
             {
                 continue;
             }
-            match rule.inject_as {
-                InjectTarget::Argument => {
-                    obj.remove(&rule.inject_key);
-                }
-                InjectTarget::Query => {
-                    obj.remove(&format!("__query_{}", rule.inject_key));
-                }
-                InjectTarget::Header => {}
-            }
+            drop_caller_value(rule, obj);
         }
     }
 
@@ -280,6 +289,13 @@ impl SecretInjector {
                     credential = %rule.name,
                     "Credential resolved to empty value, skipping injection"
                 );
+                // The firewall check may have stripped this key from its copy
+                // on the strength of an earlier, non-empty resolution; a value
+                // it never saw must not be forwarded because the credential
+                // changed in between (MIK-7888).
+                if let Some(obj) = args.as_object_mut() {
+                    drop_caller_value(rule, obj);
+                }
                 continue;
             }
 

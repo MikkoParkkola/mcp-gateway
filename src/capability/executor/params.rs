@@ -181,25 +181,20 @@ impl CapabilityExecutor {
     /// such as `{env.NAME}` reaches the provider as that text, never as the
     /// gateway's own secret.
     pub(super) fn substitute_string(&self, template: &str, params: &Value) -> Result<String> {
-        let mut result = self.secret_resolver.resolve(template)?;
-
-        if let Value::Object(map) = params {
-            for (key, value) in map {
-                let placeholder = format!("{{{key}}}");
-                if result.contains(&placeholder) {
-                    let value_str = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => String::new(),
-                        _ => serde_json::to_string(value).unwrap_or_default(),
-                    };
-                    result = result.replace(&placeholder, &value_str);
-                }
-            }
-        }
-
-        Ok(result)
+        // One scan of the template resolves secrets and caller parameters
+        // together: a substituted value is data and is never scanned again, so
+        // a secret holding `{q}` or a caller value holding `{other}` arrives
+        // as written (MIK-7888).
+        let caller = |key: &str| {
+            params.as_object()?.get(key).map(|value| match value {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::Null => String::new(),
+                _ => serde_json::to_string(value).unwrap_or_default(),
+            })
+        };
+        self.secret_resolver.resolve_with(template, &caller)
     }
 
     /// Resolve a map of string templates to `(key, value)` query-param pairs.

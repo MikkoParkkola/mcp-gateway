@@ -23,12 +23,12 @@ fn overlay(vars: &str) -> (tempfile::TempDir, Arc<EnvOverlay>) {
     (dir, Arc::new(EnvOverlay::from_paths(&[path])))
 }
 
-fn rule() -> CredentialRule {
+fn rule(inject_as: InjectTarget) -> CredentialRule {
     CredentialRule {
         name: "api".into(),
         credential_type: CredentialType::ApiKey,
         value: "{env.MIK7888_FLIP:-}".into(),
-        inject_as: InjectTarget::Argument,
+        inject_as,
         inject_key: "api_key".into(),
         tools: vec![],
     }
@@ -36,25 +36,31 @@ fn rule() -> CredentialRule {
 
 #[test]
 fn a_credential_that_empties_between_strip_and_inject_does_not_forward_the_callers_value() {
-    let (_d1, full) = overlay("MIK7888_FLIP=gateway-key\n");
-    let (_d2, empty) = overlay("MIK7888_FLIP=\n");
-    let env = Arc::new(LiveEnv::new(full, ResolvedEnvFiles::default()));
-    let injector = SecretInjector::new(HashMap::from([("b".to_owned(), vec![rule()])]))
-        .with_env(Arc::clone(&env));
-    let sent = json!({ "api_key": "caller-chosen", "q": 1 });
+    // The argument target, and the query target (which owns `__query_<key>`).
+    for (target, owned_key) in [
+        (InjectTarget::Argument, "api_key"),
+        (InjectTarget::Query, "__query_api_key"),
+    ] {
+        let (_d1, full) = overlay("MIK7888_FLIP=gateway-key\n");
+        let (_d2, empty) = overlay("MIK7888_FLIP=\n");
+        let env = Arc::new(LiveEnv::new(full, ResolvedEnvFiles::default()));
+        let injector = SecretInjector::new(HashMap::from([("b".to_owned(), vec![rule(target)])]))
+            .with_env(Arc::clone(&env));
+        let sent = json!({ owned_key: "caller-chosen", "q": 1 });
 
-    // The firewall's copy: the caller's key is gone, so it is not checked.
-    let mut checked = sent.clone();
-    injector.strip_overwritten("b", "t", &mut checked);
-    assert!(checked.get("api_key").is_none());
+        // The firewall's copy: the caller's key is gone, so it is not checked.
+        let mut checked = sent.clone();
+        injector.strip_overwritten("b", "t", &mut checked);
+        assert!(checked.get(owned_key).is_none());
 
-    // The env reloads: the credential is now empty and injection skips it.
-    env.set(empty);
-    let out = injector.inject("b", "t", sent).unwrap();
-    assert!(
-        out.arguments.get("api_key").is_none(),
-        "an unchecked caller value was forwarded: {}",
-        out.arguments
-    );
-    assert_eq!(out.arguments["q"], 1, "the rest is untouched");
+        // The env reloads: the credential is now empty and injection skips it.
+        env.set(empty);
+        let out = injector.inject("b", "t", sent).unwrap();
+        assert!(
+            out.arguments.get(owned_key).is_none(),
+            "an unchecked caller value was forwarded: {}",
+            out.arguments
+        );
+        assert_eq!(out.arguments["q"], 1, "the rest is untouched");
+    }
 }
