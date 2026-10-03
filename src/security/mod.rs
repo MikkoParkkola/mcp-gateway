@@ -25,6 +25,8 @@ pub mod http_diagnostics;
 pub mod message_signing;
 pub mod policy;
 pub(crate) mod posture;
+#[cfg(all(test, feature = "firewall"))]
+mod tenant_read_corpus_tests;
 pub(crate) mod tenant_reads;
 /// The `security.posture` value and the multi-user warning `doctor` shows;
 /// the rest of the posture module is crate-private.
