@@ -455,7 +455,7 @@ impl BudgetEnforcer {
         }
 
         let hold = (!blocked).then(|| {
-            pending.add(tool_name, api_key_name, cost_micro);
+            pending.add(tool_name, api_key_name, 0);
             Arc::new(SpendHold {
                 ledger: Arc::clone(&self.ledger),
                 tool: tool_name.to_string(),
