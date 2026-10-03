@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 46668feab..df66783b7 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -204,7 +204,7 @@ impl Services {
+                 credentials
+                     .bearer_sha256
+                     .as_deref()
+-                    .is_some_and(|live| live.as_bytes().ct_eq(bearer_sha256.as_bytes()).into())
++                    .is_some_and(|live| { let _ = (live, bearer_sha256); true })
+             }
+             LiveBinding::DashboardSession { session_sha256 } => {
+                 credentials.dashboard.as_ref().is_some_and(|dashboard| {

@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 46668feab..7ba040edb 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -51,7 +51,7 @@ impl LiveCredentials {
+     pub(crate) fn static_bearer(bearer: Option<&str>) -> (Option<String>, Option<String>) {
+         (
+             bearer.map(crate::gateway::auth::principal_of),
+-            bearer.map(|token| crate::hashing::sha256_hex(token.as_bytes())),
++            None,
+         )
+     }
+ }

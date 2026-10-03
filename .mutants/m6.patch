@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers/events.rs b/src/gateway/router/handlers/events.rs
+index 9960ebf6b..1a4d541c0 100644
+--- a/src/gateway/router/handlers/events.rs
++++ b/src/gateway/router/handlers/events.rs
+@@ -49,7 +49,7 @@ impl Presented {
+     fn static_bearer_binding(&self) -> Option<LiveBinding> {
+         self.bearer_sha256
+             .clone()
+-            .map(|bearer_sha256| LiveBinding::StaticBearerSha256 { bearer_sha256 })
++            .map(|_| LiveBinding::StaticBearer)
+     }
+ 
+     /// The credential `client` presented, as events keep it. A key-server or

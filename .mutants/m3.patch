@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index 574168977..fef0e9d82 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -218,7 +218,7 @@ impl McpChildren {
+         // Under the map lock `acquire` holds from its epoch check to the
+         // lease, so a reload cannot land between the two (MIK-7889). Same
+         // order as `acquire`: map, then generations.
+-        let _admission = self.map.lock();
++        
+         *self
+             .generations
+             .lock()

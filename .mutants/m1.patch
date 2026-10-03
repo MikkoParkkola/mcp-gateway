@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+index 09d69ea31..6d9f8b299 100644
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -390,7 +390,7 @@ pub(super) const EXECUTION_OUTCOME_KEY: &str = "io.mcp-gateway/executionOutcome"
+ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
+     // A row older than the descriptor cannot have captured one; a descriptor
+     // found there is forged or downgraded (the loader and store.rs agree).
+-    if record.version < UPSTREAM_VERSION
++    if false
+         || matches!(task.tool(), "gateway_execute" | "gateway_run_playbook")
+     {
+         return Vec::new();

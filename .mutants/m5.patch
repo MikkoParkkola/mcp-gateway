@@ -1,0 +1,13 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 46668feab..3b23c0ac9 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -202,7 +202,7 @@ impl Services {
+             LiveBinding::StaticBearerSha256 { bearer_sha256 } => {
+                 use subtle::ConstantTimeEq as _;
+                 credentials
+-                    .bearer_sha256
++                    .bearer_principal
+                     .as_deref()
+                     .is_some_and(|live| live.as_bytes().ct_eq(bearer_sha256.as_bytes()).into())
+             }
