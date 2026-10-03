@@ -22,7 +22,7 @@ T0 = 1_000_000.0
 REPO = "demo/repo"
 
 
-def shim_rows(sub_args, unsub_args):
+def shim_rows(sub_args, unsub_args, result_id=SUB):
     def http(ts, method, params=None, **kw):
         row = {"kind": "http", "ts": ts, "status": 200, "error_code": None, "rpc": [method], **kw}
         if params is not None:
@@ -33,7 +33,8 @@ def shim_rows(sub_args, unsub_args):
         {"kind": "oauth", "ts": T0 + 1, "step": "token"},
         http(T0 + 2, "server/discover"),
         http(T0 + 3, "events/list"),
-        http(T0 + 5, "events/subscribe", {"name": EVENT, "arguments": sub_args}, result_has_id=True),
+        http(T0 + 5, "events/subscribe", {"name": EVENT, "arguments": sub_args}, result_has_id=True,
+             result_id=result_id),
         http(T0 + 20, "events/unsubscribe", {"name": EVENT, "arguments": unsub_args}),
     ]
 
@@ -84,6 +85,19 @@ class EvidenceTests(unittest.TestCase):
         args = {"repo": REPO}
         code, out = run_evidence(shim_rows(args, args), audit_rows(unsub_detail="absent"))
         self.assertEqual(code, 1, out)
+
+    def test_delivery_and_removal_of_another_subscription_fail(self):
+        # The filtered subscribe answered sub-b; the audit shows only sub-123.
+        args = {"repo": REPO}
+        code, out = run_evidence(shim_rows(args, args, result_id="sub-b"), audit_rows())
+        self.assertEqual(code, 1, out)
+
+    def test_a_removal_logged_before_the_shim_response_still_passes(self):
+        args = {"repo": REPO}
+        audit = audit_rows()
+        audit[2]["ts"] = T0 + 19.5  # audit written before the shim logged the response at T0+20
+        code, out = run_evidence(shim_rows(args, args), audit)
+        self.assertEqual(code, 0, out)
 
     def test_an_unsubscribe_with_other_arguments_fails(self):
         code, out = run_evidence(shim_rows({"repo": REPO}, {"repo": "someone/else"}), audit_rows())

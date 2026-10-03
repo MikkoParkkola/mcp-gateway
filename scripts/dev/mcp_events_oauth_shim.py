@@ -166,8 +166,12 @@ class Shim(BaseHTTPRequestHandler):
                 for d in calls:
                     if d.get("method") in ("events/subscribe", "events/unsubscribe"):
                         p = d.get("params") or {}
+                        args = p.get("arguments") if isinstance(p.get("arguments"), dict) else {}
+                        # Allowlisted filter keys only: arguments are caller-supplied.
                         rpc_params.append({"method": d["method"], "name": p.get("name"),
-                                           "arguments": p.get("arguments") or {}})
+                                           "arguments": {k: v for k, v in args.items()
+                                                         if k in ("repo", "ref", "event_type")
+                                                         and isinstance(v, str)}})
             except (ValueError, AttributeError):
                 pass
         headers = {k: v for k, v in self.headers.items()
@@ -204,6 +208,8 @@ class Shim(BaseHTTPRequestHandler):
                 reply = reply[0] if isinstance(reply, list) else reply
                 entry["error_code"] = (reply.get("error") or {}).get("code")
                 entry["result_has_id"] = "id" in (reply.get("result") or {})
+                if isinstance((reply.get("result") or {}).get("id"), str):
+                    entry["result_id"] = reply["result"]["id"]
             except (ValueError, AttributeError, IndexError) as e:
                 entry["parse_error"] = type(e).__name__
         self.evidence(**entry)
