@@ -26,17 +26,15 @@ pub(crate) enum Attribution<'a> {
     Admin(&'a Actor),
 }
 
-/// An authenticated admin, as the UI routes resolved it.
+/// An authenticated admin, as the UI routes resolved it: the credential and,
+/// for an SSO admin, the verified `(issuer, subject)`, as the admin audit layer
+/// names them.
 #[cfg_attr(
     not(feature = "webui"),
     allow(dead_code, reason = "built by the dashboard routes")
 )]
 pub(crate) struct Actor {
-    pub kind: crate::security::audit::CredentialKind,
-    /// The audit principal: a digest of the credential, never the secret.
-    pub principal: String,
-    /// The configured key name.
-    pub name: String,
+    pub who: AuditWho,
 }
 
 /// One governance act.
@@ -90,12 +88,7 @@ impl Services {
                 );
             }
             Attribution::Admin(actor) => {
-                envelope.who = AuditWho::from_parts(
-                    actor.kind,
-                    Some(&actor.principal),
-                    Some(&actor.name),
-                    None,
-                );
+                envelope.who = actor.who.clone();
             }
         }
         if !act.ok {
