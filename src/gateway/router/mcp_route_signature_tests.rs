@@ -20,7 +20,17 @@ fn read(relative: &str) -> String {
 /// `handlers::` function, so a closure, an unqualified function or a nested
 /// router fails closed instead of going unchecked.
 fn registered_in(table: &str) -> Result<Vec<String>, String> {
-    let methods = ["post(", "get(", "delete(", "put(", "patch(", "any(", "on("];
+    // Composition forms this scanner cannot follow: refused anywhere in the
+    // table, so a nested or merged router cannot carry an MCP route unseen.
+    for form in [".nest(", ".nest_service(", ".route_service("] {
+        if table.contains(form) {
+            return Err(format!("unsupported router composition: {form}"));
+        }
+    }
+    let methods = [
+        "post(", "get(", "delete(", "put(", "patch(", "any(", "on(", "head(", "options(", "trace(",
+        "connect(",
+    ];
     let mut names = Vec::new();
     let mut open = false;
     for line in table.lines() {
@@ -30,13 +40,22 @@ fn registered_in(table: &str) -> Result<Vec<String>, String> {
         if line.contains("\"/mcp") {
             open = true;
         }
-        if line.contains(".nest") && line.contains("mcp") {
-            return Err(format!("nested MCP router: {line}"));
-        }
         if !open {
             continue;
         }
-        let registrations: usize = methods.iter().map(|m| line.matches(m).count()).sum();
+        let registrations: usize = methods
+            .iter()
+            .map(|m| {
+                line.match_indices(m)
+                    .filter(|(at, _)| {
+                        !line[..*at]
+                            .chars()
+                            .next_back()
+                            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+                    })
+                    .count()
+            })
+            .sum();
         let mut found = 0;
         let mut rest = line;
         while let Some(at) = rest.find("handlers::") {
@@ -109,6 +128,10 @@ fn an_unresolvable_mcp_registration_fails_closed() {
         ".route(\"/mcp\", post(|| async { \"raw\" }))",
         ".route(\"/mcp\", post(meta_mcp_handler))",
         ".route(\"/mcp\", post(handlers::meta_mcp_handler).get(local_handler))",
+        ".route(\"/mcp\", handlers::prebuilt_router())\n.nest(\"/mcp\", inner)",
+        ".route(\"/mcp\", post(handlers::meta_mcp_handler))\n.nest_service(\"/mcp\", svc)",
+        ".route(\"/mcp\", post(handlers::meta_mcp_handler).head(local_handler))",
+        ".route(\"/mcp\",\n    post(handlers::meta_mcp_handler)\n    .options(local))",
     ] {
         assert!(registered_in(table).is_err(), "must not pass: {table}");
     }
