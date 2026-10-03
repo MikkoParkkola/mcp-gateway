@@ -337,6 +337,47 @@ async fn a_redaction_keeps_the_receipt_for_the_text_still_delivered() {
     );
 }
 
+/// MIK-7887: a `gateway_invoke` answer carries the backend value as one
+/// pretty-printed text block. Rebuilt from that block as written, multi-line
+/// text would be fingerprinted with its newlines escaped, and relaying the
+/// lines the caller read would go unmatched.
+#[tokio::test]
+async fn a_redacted_wrapped_answer_keeps_the_receipt_for_its_lines() {
+    let (meta, firewall) = relay_meta();
+    // Lines shorter than a fingerprint: every window crosses a newline.
+    let lines = PROSE
+        .split(' ')
+        .collect::<Vec<_>>()
+        .chunks(4)
+        .map(|words| words.join(" "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let both = text_result(&format!("{lines}\n{OTHER_PROSE}"));
+    let delivered = crate::gateway::meta_mcp_helpers::wrap_tool_success(
+        RequestId::Number(1),
+        &text_result(&lines),
+        false,
+    )
+    .result
+    .expect("a success carries a result");
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
+            let snapshot = meta.relay_snapshot(&both);
+            meta.restage_if_changed(snapshot, Some(&delivered));
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, &lines),
+        "wrapped lines lost their receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, OTHER_PROSE),
+        "redacted text kept a receipt"
+    );
+}
+
 /// MIK-7887: with several staged receipts (a plan) a change cannot be
 /// attributed to one of them, so they are dropped, as before.
 #[tokio::test]

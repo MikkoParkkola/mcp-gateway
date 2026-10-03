@@ -570,7 +570,8 @@ impl MetaMcp {
             let staged = std::mem::take(&mut *receipts);
             #[cfg(feature = "firewall")]
             if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
-                && let Some(digest) = fw.delivery_digest(&one.server, &one.tool, delivered)
+                && let Some(digest) =
+                    fw.delivery_digest(&one.server, &one.tool, &delivered_value(delivered))
             {
                 // A redaction can drop the classification marker with the
                 // text; what the call was judged sensitive for stays so.
@@ -662,6 +663,28 @@ impl MetaMcp {
             map.insert("_context_integrity".to_owned(), verdict.clone());
         }
         recorded
+    }
+}
+
+/// The backend value a delivered result carries. A `gateway_invoke` answer
+/// wraps it as one pretty-printed text block, whose escapes (`\n` as two
+/// characters) would fingerprint text the caller never reads; it is decoded,
+/// as the receipt was staged from the backend value. A result with
+/// `structuredContent` is the backend's own and is read as delivered.
+#[cfg(feature = "firewall")]
+fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> {
+    let wrapped = delivered.get("structuredContent").is_none()
+        && delivered
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| content.len() == 1);
+    match (wrapped
+        .then(|| super::audit::invoke_value(delivered))
+        .flatten())
+    .filter(Value::is_object)
+    {
+        Some(inner) => std::borrow::Cow::Owned(inner),
+        None => std::borrow::Cow::Borrowed(delivered),
     }
 }
 
