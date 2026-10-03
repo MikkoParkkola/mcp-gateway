@@ -941,7 +941,9 @@ impl CapabilityDefinition {
             name: self.name.clone(),
             title: None,
             description: Some(self.build_description()),
-            input_schema: self.schema.input.clone(),
+            input_schema: crate::capability::schema_validator::advertised_input_schema(
+                &self.schema.input,
+            ),
             output_schema: if self.schema.output.is_null() {
                 None
             } else {

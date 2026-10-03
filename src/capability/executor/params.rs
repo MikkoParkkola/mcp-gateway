@@ -461,6 +461,43 @@ fn detect_xml_format(headers: &reqwest::header::HeaderMap, response_format: &str
     }
 }
 
+/// The call's parameters plus the schema `default` of every parameter the REST
+/// path names and the caller left out.
+///
+/// A `{placeholder}` left in a URL path is always wrong, and a parameter that
+/// has a default can be left out by design (`ruleset_phase` of a Cloudflare
+/// ruleset call). Only path parameters get this: a default for a query or body
+/// field stays the upstream's own to apply.
+pub(super) fn with_path_defaults<'a>(
+    config: &crate::capability::definition::RestConfig,
+    input_schema: &Value,
+    params: &'a Value,
+) -> std::borrow::Cow<'a, Value> {
+    let Some(properties) = input_schema.get("properties").and_then(Value::as_object) else {
+        return std::borrow::Cow::Borrowed(params);
+    };
+    let mut merged: Option<serde_json::Map<String, Value>> = None;
+    for (name, property) in properties {
+        let Some(default) = property.get("default") else {
+            continue;
+        };
+        let given = params.get(name).is_some_and(|value| !value.is_null());
+        if given || !config.path.contains(&format!("{{{name}}}")) {
+            continue;
+        }
+        merged
+            .get_or_insert_with(|| params.as_object().cloned().unwrap_or_default())
+            .insert(name.clone(), default.clone());
+    }
+    merged.map_or(std::borrow::Cow::Borrowed(params), |map| {
+        std::borrow::Cow::Owned(Value::Object(map))
+    })
+}
+
 #[cfg(test)]
 #[path = "params_secret_tests.rs"]
 mod secret_tests;
+
+#[cfg(test)]
+#[path = "params_cloudflare_tests.rs"]
+mod cloudflare_catalogue_tests;
