@@ -1134,6 +1134,26 @@ async fn meta_mcp_dispatch(
                 "subscriptions/listen opened"
             );
 
+            // A stream that named tasks gets their full state, rebuilt per
+            // reader at delivery; the names were narrowed to this caller's own
+            // tasks above, and each frame is re-authorized against the
+            // reader's credential as it is resolved at that moment.
+            let task_frames = (!request.task_ids().is_empty()).then(|| {
+                let reader = tasks::RecoveryCaller {
+                    client: client.as_ref(),
+                    oauth_agent_identity: oauth_agent_identity.as_ref(),
+                    cert_identity: cert_identity.as_ref(),
+                    api_key_name: client.as_ref().map(|client| client.name.as_str()),
+                    agent_id: agent_identity.proven_agent_id(),
+                    agent_declared: None,
+                    grant_subject: grant_subject.clone(),
+                    verified_identity: verified_identity.as_ref(),
+                    is_admin: client.as_ref().is_some_and(|client| client.admin),
+                    input_capabilities: declared_capabilities,
+                    session_id: Some(session_id.as_str()),
+                };
+                tasks::task_frames(&state, &owner, &reader)
+            });
             let judge = state.meta_mcp.stream_judge(read_guard, read_key);
             return crate::gateway::streaming::subscription_stream(
                 listener,
@@ -1143,6 +1163,7 @@ async fn meta_mcp_dispatch(
                 state.streaming_config.keep_alive_interval,
                 judge,
                 params.cloned(),
+                task_frames,
             );
         }
         // MIK-7630. Answered here, never proxied; with events off the guard
