@@ -419,6 +419,11 @@ async fn wait_ready(
             call_tool(backend, &wait.tool, args.clone()),
         )
         .await;
+        // A dead or broken transport ends the wait now; only the server's own
+        // "not there yet" answers (tool errors) count as not ready.
+        if let Ok(Err(e @ (Error::Transport(_) | Error::TransportPermanent(_)))) = &poll {
+            return Err(Error::Transport(format!("wait aborted: {e}")));
+        }
         if let Ok(Ok(result)) = poll
             && let Some(found) = result
                 .get(&wait.until.array)
