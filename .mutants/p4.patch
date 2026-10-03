@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_preflight.rs b/src/gateway/router/backend_handlers/direct_preflight.rs
+index 818101925..e098c9147 100644
+--- a/src/gateway/router/backend_handlers/direct_preflight.rs
++++ b/src/gateway/router/backend_handlers/direct_preflight.rs
+@@ -163,7 +163,7 @@ pub(super) fn preflight(
+     let isolation_guarded = !matches!(envelope.method.as_str(), "initialize" | "ping")
+         && !envelope.method.starts_with("notifications/");
+     if isolation_guarded {
+-        check_attestation(state, caller, envelope, id)?;
++        let _ = check_attestation(state, caller, envelope, id);
+     }
+     Ok(Preflight {
+         retry,
