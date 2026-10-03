@@ -33,10 +33,12 @@ use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 
 pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, audit_rejection, recorded};
 pub(crate) use callback::{CallbackSend, callback_frame, send_callback};
-pub(crate) use http::{HeldAnswerId, carry_record, emit_http, to_http};
+pub(crate) use http::{HeldAnswerId, carry_record, emit_http, emit_http_checked, to_http};
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, delivered};
-pub(crate) use reply::{OutboundReply, gateway_reply, judged_reply, stream_reply};
+pub(crate) use reply::{
+    OutboundReply, gateway_reply, judged_reply, judged_reply_checked, stream_reply,
+};
 pub(crate) use stdio::StdioReads;
 pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_data, sse_message};
 
@@ -97,6 +99,9 @@ pub(crate) struct OutboundFrame {
     assessment: Option<Assessment>,
     /// The history reservation; committed by the sink that writes the frame.
     ticket: Option<ReadTicket>,
+    /// The `tenant_read` fields were taken by a record of the caller's own
+    /// (MIK-7799): no standalone record is written for this frame.
+    record_taken: bool,
     /// The `caller_key` the frame was judged for; a sink bound to another key
     /// drops it. `None` on the fast path, where nothing was judged.
     key: Option<Arc<str>>,
@@ -110,6 +115,7 @@ impl OutboundFrame {
             payload,
             assessment: None,
             ticket: None,
+            record_taken: false,
             key: None,
         }
     }
@@ -148,6 +154,12 @@ impl OutboundFrame {
         self.key.as_deref().is_none_or(|key| key == destination)
     }
 
+    /// Commit as a sink would on writing it (tests only).
+    #[cfg(test)]
+    pub(crate) fn commit_for_test(&self) {
+        self.written();
+    }
+
     /// The sink wrote this frame: refresh its tenants' last-seen time. The
     /// pending reservation is released when the last copy goes.
     fn written(&self) {
@@ -165,6 +177,7 @@ impl OutboundFrame {
             payload: Payload::Response(refusal),
             assessment: self.assessment,
             ticket: None,
+            record_taken: self.record_taken,
             key: self.key,
         }
     }
@@ -176,8 +189,25 @@ impl OutboundFrame {
             payload: Payload::Withheld,
             assessment: self.assessment,
             ticket: None,
+            record_taken: self.record_taken,
             key: self.key,
         }
+    }
+
+    /// The `tenant_read` fields of this judgement, for a caller that writes
+    /// them inside a record of its own (the answer's delivery record,
+    /// MIK-7799). Taken once: the sink then writes no standalone record.
+    pub(crate) fn take_record_fields(&mut self) -> Option<serde_json::Map<String, Value>> {
+        if self.record_taken {
+            return None;
+        }
+        let fields = self
+            .assessment
+            .as_ref()
+            .map(|a| a.record_fields(self.key.as_deref()))
+            .filter(|fields| !fields.is_empty())?;
+        self.record_taken = true;
+        Some(fields)
     }
 
     /// The answer's id, for a replacement that must keep it.
