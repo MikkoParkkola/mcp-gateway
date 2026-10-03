@@ -1,0 +1,14 @@
+diff --git a/src/events/types.rs b/src/events/types.rs
+index 9c1f3dc29..3104637f8 100644
+--- a/src/events/types.rs
++++ b/src/events/types.rs
+@@ -151,7 +151,8 @@ impl Visibility {
+     pub(crate) fn grant_backend(&self) -> Option<&str> {
+         match self {
+             Self::Backend(backend) => Some(backend),
+-            Self::Owner | Self::Operator => None,
++            Self::Owner => Some("tasks"),
++            Self::Operator => None,
+         }
+     }
+ }

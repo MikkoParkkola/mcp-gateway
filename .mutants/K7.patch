@@ -1,0 +1,14 @@
+diff --git a/src/events/lifecycle.rs b/src/events/lifecycle.rs
+index 5291f8e96..c48229a71 100644
+--- a/src/events/lifecycle.rs
++++ b/src/events/lifecycle.rs
+@@ -107,7 +107,8 @@ impl EventsHub {
+         let mut started = self.lifecycle.lock().await;
+         let live: HashSet<(SourceKind, String)> =
+             self.live_keys().into_iter().map(|(key, ..)| key).collect();
+-        let gone: Vec<_> = started.difference(&live).cloned().collect();
++        let gone: Vec<_> = started.iter().cloned().collect();
++        let _ = &live;
+         for key in gone {
+             started.remove(&key);
+             if let Some(source) = self.source_of_kind(key.0) {
