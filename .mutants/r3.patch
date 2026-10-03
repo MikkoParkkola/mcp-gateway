@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index cd1fe8b0c..4ac766cb5 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -197,7 +197,7 @@ impl EventsHub {
+         }
+         self.runtime
+             .reconciled
+-            .store(true, std::sync::atomic::Ordering::Release);
++            .store(false, std::sync::atomic::Ordering::Release);
+         self.runtime.wake.notify_one();
+         true
+     }

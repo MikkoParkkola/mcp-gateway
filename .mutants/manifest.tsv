@@ -1,0 +1,8 @@
+head_sha	822519d1206d442c104921d126231a8c33dce04d
+# #2732 batch 1
+W1	linux	w1.patch	--lib -- a_route_without_a_method_accepts_post
+W2	linux	w2.patch	--lib -- a_mapping_without_braces_is_a_literal_and_an_unresolved_template_is_omitted
+R1	linux	r1.patch	--lib -- reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked
+R2	linux	r2.patch	--lib -- reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked
+R3	linux	r3.patch	--lib -- reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked
+Q1	linux	q1.patch	--lib -- an_attempt_the_audit_log_refuses_is_not_sent

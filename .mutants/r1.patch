@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index cd1fe8b0c..a0d7e3a63 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -189,7 +189,7 @@ impl EventsHub {
+             .into_iter()
+             .map(|sub| sub.name)
+             .filter(|name| {
+-                name.starts_with(super::webhook_source::NAME_PREFIX) && !offered.contains(name)
++                name.starts_with(super::webhook_source::NAME_PREFIX) && offered.contains(name)
+             })
+             .collect();
+         if !self.withdraw(&gone) {
