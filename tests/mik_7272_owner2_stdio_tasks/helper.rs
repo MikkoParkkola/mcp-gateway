@@ -41,6 +41,9 @@ pub const API_KEY: &str = "owner2-test-key-0123456789abcdef";
 /// Every wait for a frame, an exit or readiness.
 pub const BOUND: Duration = Duration::from_secs(10);
 const POLL_GAP: Duration = Duration::from_millis(50);
+/// How much later than its bound a timeout may fire before the delay is the
+/// machine's, not the gateway's.
+const STALL_SLACK: Duration = Duration::from_secs(3);
 
 /// The fixture backend, served in the test process so its counters and the
 /// `held` barrier are directly observable.
@@ -410,12 +413,26 @@ impl StdioGateway {
 
     /// The next response (not a request or notification) answering `id`, or
     /// `None` if none arrives within [`BOUND`].
+    ///
+    /// A bound that fires far later than it was set means the whole machine
+    /// stood still (a paused VM, a starved runner), not that the gateway sat
+    /// on the request: the clock ran, the gateway could not. That case gets
+    /// one more bound (MIK-7808); a gateway that is merely slow does not.
     pub async fn try_answer(&mut self, id: &Value) -> Option<Value> {
-        let deadline = tokio::time::Instant::now() + BOUND;
+        let mut started = tokio::time::Instant::now();
+        let mut deadline = started + BOUND;
+        let mut stalled_once = false;
         loop {
-            let line = tokio::time::timeout_at(deadline, self.stdout.next_line()).await;
-            let Ok(Ok(Some(line))) = line else {
-                return None;
+            let outcome = tokio::time::timeout_at(deadline, self.stdout.next_line()).await;
+            let line = match outcome {
+                Ok(Ok(Some(line))) => line,
+                Err(_) if !stalled_once && started.elapsed() > BOUND + STALL_SLACK => {
+                    stalled_once = true;
+                    started = tokio::time::Instant::now();
+                    deadline = started + BOUND;
+                    continue;
+                }
+                _ => return None,
             };
             let Ok(frame) = serde_json::from_str::<Value>(&line) else {
                 continue;
@@ -436,13 +453,19 @@ impl StdioGateway {
 
     /// `tasks/get` until the task is terminal.
     pub async fn terminal(&mut self, task: &str) -> Value {
-        let deadline = tokio::time::Instant::now() + BOUND;
+        let mut deadline = tokio::time::Instant::now() + BOUND;
         let mut n = 0;
         loop {
             n += 1;
+            let asked = tokio::time::Instant::now();
             let got = self
                 .request(&tasks_get(json!(format!("poll-{n}")), task))
                 .await;
+            // A poll that took longer than a poll can means the machine
+            // stood still: that time is not the task's (MIK-7808).
+            if asked.elapsed() > STALL_SLACK {
+                deadline += asked.elapsed();
+            }
             if matches!(status(&got), Some("completed" | "failed" | "cancelled")) {
                 return got;
             }
