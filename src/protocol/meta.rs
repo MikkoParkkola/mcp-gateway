@@ -53,6 +53,7 @@ pub const KEY_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 
 /// The value under [`KEY_SERVER_INFO`]. One builder, so a result that skips
 /// the response shaper still names the server the same way.
+#[must_use]
 pub(crate) fn server_info() -> Value {
     serde_json::json!({
         "name": "mcp-gateway",
