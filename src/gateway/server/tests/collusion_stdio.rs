@@ -523,6 +523,25 @@ async fn stdio_catalogue_is_inside_relay_detection() {
     .await;
     assert!(clean.get("error").is_none(), "control: {clean}");
 
+    // One operator across methods: a `tools/call` copy of PROSE excuses the
+    // operator's `prompts/get` arguments carrying it (keyed as tools/call is).
+    let tool_read = rpc(
+        "tools/call",
+        json!({"name": "gateway_invoke",
+               "arguments": {"server": "alpha", "tool": "read", "arguments": {}}}),
+    )
+    .await;
+    assert!(tool_read.get("error").is_none(), "base: {tool_read}");
+    let own = rpc(
+        "prompts/get",
+        json!({"name": "alpha/orchard", "arguments": {"topic": PROSE}}),
+    )
+    .await;
+    assert!(
+        own.get("error").is_none(),
+        "the operator's own copy excuses it: {own}"
+    );
+
     // The operator's own `resources/read` of PROSE is a delivery to the operator.
     let read = rpc("resources/read", json!({"uri": "res://orchard"})).await;
     assert!(read.get("error").is_none(), "base: {read}");
