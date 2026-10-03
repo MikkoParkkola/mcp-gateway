@@ -24,10 +24,13 @@ mod client;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
+mod mcp;
 mod params;
 mod process;
 mod readiness;
 pub mod rest;
+mod save_file;
+pub use save_file::SaveFileSpec;
 mod xml;
 
 use std::sync::Arc;
@@ -91,6 +94,10 @@ pub struct CapabilityExecutor {
     pub(super) process_policy: process::ProcessPolicy,
     /// Per-capability bound on simultaneous CLI children.
     pub(super) process_slots: DashMap<String, Arc<tokio::sync::Semaphore>>,
+    /// Per-caller MCP capability children (MIK-7782).
+    pub(super) mcp_children: Arc<mcp::McpChildren>,
+    /// Mirrors the capability backend's multi-user flag.
+    pub(super) multi_user: std::sync::atomic::AtomicBool,
 }
 
 impl CapabilityExecutor {
@@ -114,6 +121,8 @@ impl CapabilityExecutor {
             account_strategies: None,
             process_policy: process::ProcessPolicy::default(),
             process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -138,11 +147,34 @@ impl CapabilityExecutor {
         executor
     }
 
+    /// Whether several callers share this gateway (set with the capability
+    /// backend's flag): an MCP capability then needs an identified caller.
+    pub fn set_multi_user(&self, multi_user: bool) {
+        self.multi_user
+            .store(multi_user, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Stop the MCP children of every capability `loaded` rejects.
+    pub(crate) fn stop_unloaded_mcp(&self, loaded: &dyn Fn(&str) -> bool) {
+        self.mcp_children.evict(std::time::Duration::MAX, loaded);
+    }
+
     /// Share the gateway policy epoch so capability reload can bump it.
     #[must_use]
     pub fn with_policy_epoch(mut self, epoch: Arc<std::sync::atomic::AtomicU64>) -> Self {
         self.policy_epoch = Some(epoch);
         self
+    }
+
+    /// The MCP revocation generation of one capability.
+    pub(crate) fn mcp_generation(&self, capability: &str) -> u64 {
+        self.mcp_children.generation(capability)
+    }
+
+    /// Revoke the calls of one capability that read an earlier generation
+    /// (unload, removal on reload, quarantine).
+    pub(crate) fn bump_mcp_generation(&self, capability: &str) {
+        self.mcp_children.bump_generation(capability);
     }
 
     /// Advance the shared epoch after a capability-registry mutation is visible.
@@ -234,6 +266,8 @@ impl CapabilityExecutor {
             account_strategies: None,
             process_policy: process::ProcessPolicy::default(),
             process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -339,6 +373,7 @@ impl CapabilityExecutor {
                     .await?;
                 (response, protocol_config.protocol_name())
             };
+        let read = crate::security::tenant_reads::note_read(&response);
 
         // Apply response transform pipeline if configured
         let response = {
@@ -359,8 +394,8 @@ impl CapabilityExecutor {
             "Capability executed successfully"
         );
 
-        if let Some(ref cache_key) = cache_key {
-            self.cache.set(cache_key, &response, capability.cache.ttl);
+        if let Some(key) = &cache_key {
+            self.cache.set(key, &response, read, capability.cache.ttl);
         }
 
         Ok(response)
@@ -507,7 +542,19 @@ impl CapabilityExecutor {
         )
         .await?;
 
-        self.handle_response(response, config).await
+        let body = self.handle_response(response, config).await?;
+        match &config.save_file {
+            Some(spec) => {
+                Box::pin(save_file::save(
+                    spec,
+                    &body,
+                    params,
+                    &self.process_policy.files,
+                ))
+                .await
+            }
+            None => Ok(body),
+        }
     }
 
     /// Build URL with path parameter substitution.
@@ -739,6 +786,10 @@ impl Default for CapabilityExecutor {
 
 #[cfg(test)]
 mod ssrf_denial_tests;
+
+#[cfg(test)]
+#[path = "gws_real_tests.rs"]
+mod gws_real_tests;
 #[cfg(test)]
 #[path = "../executor_tests.rs"]
 mod tests;

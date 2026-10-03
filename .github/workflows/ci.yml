@@ -631,6 +631,31 @@ jobs:
           save-if: false
       - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
+  # CAT.1 (MIK-7782): the real `gws` binary, pinned, accepts the argv every
+  # shipped gws_* capability builds. `--dry-run` needs no credentials and sends
+  # nothing; the test clears the environment and gives gws a private HOME.
+  gws-dry-run:
+    name: gws dry-run conformance
+    needs: scope
+    if: ${{ !cancelled() && (needs.scope.result != 'success' || needs.scope.outputs.docs_only != 'true') && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install the pinned gws
+        run: |
+          # The package's postinstall fetches the native binary, so scripts must
+          # run. This job holds no secrets and only `contents: read`.
+          npm install --global @googleworkspace/cli@0.22.5
+          test "$(gws --version | head -1)" = "gws 0.22.5"
+      - name: Every gws capability dry-runs against the real binary
+        run: cargo test --all-features --lib -- --ignored every_gws_capability_is_accepted_by_the_real_binary_in_dry_run
+
   # Runs one SDK journey test that reads no documentation file, so a docs-only
   # pull request skips it; a failed scope decision runs it (fail-open).
   task-sdk-recovery:

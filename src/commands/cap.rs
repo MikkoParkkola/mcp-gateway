@@ -21,11 +21,11 @@ use mcp_gateway::{
 
 /// Run a `cap` subcommand (validate, list, import, test, discover, install, search, ...).
 #[allow(clippy::too_many_lines)]
-pub async fn run_cap_command(cmd: CapCommand) -> ExitCode {
+pub async fn run_cap_command(cmd: CapCommand, config: Option<&std::path::Path>) -> ExitCode {
     match cmd {
         CapCommand::Validate { file } => cap_validate(file).await,
         CapCommand::Pin { file } => cap_pin(file).await,
-        CapCommand::List { directory } => cap_list(directory).await,
+        CapCommand::List { directory } => cap_list(directory, config).await,
         CapCommand::Import {
             spec,
             output,
@@ -156,7 +156,24 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-async fn cap_list(directory: std::path::PathBuf) -> ExitCode {
+/// The executor `cap list` asks "is this one served?" with: the environment
+/// the gateway would start with (its config's `env_files` over the process
+/// environment), so the answer is the one `tools/list` gives.
+fn list_executor(config: Option<&std::path::Path>) -> CapabilityExecutor {
+    let (_, load_path) = crate::discovered_config::resolve(config);
+    match mcp_gateway::config::Config::load_evaluated(load_path.as_deref()) {
+        Ok(evaluated) => {
+            let env = Arc::new(mcp_gateway::config::LiveEnv::new(
+                evaluated.overlay,
+                evaluated.env_paths,
+            ));
+            CapabilityExecutor::for_listing(&evaluated.config, env)
+        }
+        Err(_) => CapabilityExecutor::new(),
+    }
+}
+
+async fn cap_list(directory: std::path::PathBuf, config: Option<&std::path::Path>) -> ExitCode {
     let path = directory.to_string_lossy();
     match CapabilityLoader::load_directory(&path).await {
         Ok(caps) => {
@@ -164,13 +181,9 @@ async fn cap_list(directory: std::path::PathBuf) -> ExitCode {
                 println!("No capabilities found in {path}");
             } else {
                 println!("Found {} capabilities in {}:\n", caps.len(), path);
+                let executor = list_executor(config);
                 for cap in caps {
-                    let auth_info = if cap.auth.required {
-                        format!(" [{}]", cap.auth.auth_type)
-                    } else {
-                        String::new()
-                    };
-                    println!("  {} - {}{}", cap.name, cap.description, auth_info);
+                    println!("{}", executor.list_line(&cap));
                 }
             }
             ExitCode::SUCCESS

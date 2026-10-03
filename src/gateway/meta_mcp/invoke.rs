@@ -107,6 +107,7 @@ pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
+pub(crate) mod cache_reads;
 pub(super) use bridge_settle::arm_for_dispatch;
 pub(super) use bridge_settle::classify_bridged_dispatch_error;
 use bridge_settle::{arm, refuse_if_killed};
@@ -116,11 +117,12 @@ use r2_check::miss_with_hint;
 mod account_mint;
 
 use super::support::{
-    MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, response_cache_key_for, strip_backend_provenance,
+    MetaMcpInvoker, augment_with_predictions, augment_with_trace, idempotency_key_for,
+    response_cache_key_for,
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 mod output_shape;
+mod provenance_stamp;
 pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
 use output_shape::{apply_validated_output, extract_output_validation_target};
@@ -1222,96 +1224,30 @@ impl MetaMcp {
             // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
             let traced =
                 Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
-            let (result, notes) = audit::with_dispatch_scope(traced).await;
+            // MIN.2: read in a scope of its own, counted for the request only
+            // when the call delivered (design §4.4).
+            let ((result, notes), reading) = crate::security::tenant_reads::with_dispatch_reads(
+                audit::with_dispatch_scope(traced),
+            )
+            .await;
+            let responded = notes.responded();
             // Single delivery boundary: unwrap the guard-sealed result.
             let (result, source, upstream) = match result.map(GuardedValue::into_parts) {
                 Ok((value, source, upstream)) => (Ok(value), source, upstream),
                 Err(error) => (Err(error), crate::protocol::ChainSource::NotEligible, None),
             };
             // One record per call, refusals and failures included (D1-d).
-            let audited =
-                self.audit_invocation(args, session_id, caller, &trace_id_clone, result, notes);
-            audited.await.map(|value| (value, source, upstream))
+            let audited = self
+                .audit_invocation(args, session_id, caller, &trace_id_clone, result, notes)
+                .await;
+            // Only a delivered call counts: its own reading, and the tenants its
+            // arguments name when a backend answered it, with or without a log.
+            if audited.is_ok() {
+                self.note_delivered_reading(args, reading, responded);
+            }
+            audited.map(|value| (value, source, upstream))
         })
         .await
-    }
-
-    /// Stamp a signed runtime-provenance receipt into `value._meta` when
-    /// provenance stamping is enabled (MIK-6905). No-op when the signer is
-    /// absent, so payloads stay byte-identical with the feature off.
-    ///
-    /// `backend_ok` is derived from the result's `isError` flag so cache hits
-    /// carrying a stored error are reported honestly.
-    ///
-    /// When shadow claim capture is also enabled (MIK-6908, rung 3.1), this
-    /// is the single chokepoint both the meta and direct-route call paths
-    /// funnel through, so a call whose receipt carries a `call_id` is
-    /// shadow-captured here alongside the derived claim. A `call_id`-less
-    /// receipt (no trace scope active) is skipped rather than captured
-    /// un-joinable — consistent with `score_corpus`'s mis-join contract,
-    /// which treats a missing join key as unscoreable, not as evidence.
-    ///
-    /// `client_claim` is the MIK-6914 Option B claim-under-test — an untrusted
-    /// typed claim the caller supplied for this call. When present it is
-    /// captured verbatim as the claim under scrutiny; when absent, capture
-    /// falls back to the honest `Claim::Succeeded` floor. It is never used as
-    /// the ground-truth leg (that is the receipt's extractor-observed
-    /// `row_count`).
-    fn maybe_stamp_provenance(
-        &self,
-        mut value: Value,
-        server: &str,
-        tool: &str,
-        api_key_name: Option<&str>,
-        cache: crate::trust::CacheOutcome,
-        client_claim: Option<&crate::trust::ClientClaim>,
-    ) -> Value {
-        // Only this gateway may put a signature chain on a result (ASI07).
-        crate::security::signature_chain::strip_chain(&mut value);
-        let Some(ref signer) = self.provenance_signer else {
-            // Stamping off: any `_meta.provenance` is backend-injected. Strip
-            // it so it cannot pass as a gateway receipt (MIK-6909).
-            return strip_backend_provenance(value);
-        };
-        let backend_ok = !value
-            .get("isError")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let (stamped, signed_receipt) =
-            augment_with_provenance(value, signer, server, tool, api_key_name, cache, backend_ok);
-        if let Some(sink) = &self.claim_capture
-            && let Some(call_id) = signed_receipt.receipt.call_id.clone()
-        {
-            let claim = crate::trust::derive_claim(client_claim);
-            sink.capture(call_id, claim, signed_receipt);
-        }
-        stamped
-    }
-
-    /// Stamp provenance onto a direct per-backend route result (the
-    /// `/mcp/{name}` passthrough, which bypasses the meta chokepoint — rung 3).
-    ///
-    /// Tagged [`CacheOutcome::Bypass`] because the direct route never consults
-    /// the meta response cache. No-op when stamping is disabled, so the
-    /// passthrough stays byte-identical with the feature off.
-    #[must_use]
-    pub fn stamp_direct_result(
-        &self,
-        result: Value,
-        backend_id: &str,
-        tool: &str,
-        api_key_name: Option<&str>,
-    ) -> Value {
-        self.maybe_stamp_provenance(
-            result,
-            backend_id,
-            tool,
-            api_key_name,
-            crate::trust::CacheOutcome::Bypass,
-            // The direct passthrough carries no gateway-parsed `_claim`
-            // directive, so there is no client claim-under-test here.
-            None,
-        )
     }
 
     /// The post-dispatch response gates a backend result must pass before any
@@ -1353,7 +1289,7 @@ impl MetaMcp {
         mut result: Value,
     ) -> Result<(Value, super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
-        let mut result = audit::noted_response(self, result);
+        let (mut result, raw_read) = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -1404,7 +1340,10 @@ impl MetaMcp {
             }
         }
 
-        Ok(self.apply_context_integrity(server, tool, api_key_name, trace_id, result))
+        let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+        // MIN.2: past every gate, so this dispatch's raw reading counts.
+        crate::security::tenant_reads::note_attribution(raw_read);
+        Ok(delivered)
     }
 
     /// The response contract gate (issue #133, D1), split out of
@@ -1612,16 +1551,21 @@ impl MetaMcp {
         // resolved `cache_binding` (user+audience) is mixed into every cache key
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
-        let caller_credential = if let Some(idp_cfg) = self
-            .backends
-            .get(server)
+        let backend = self.backends.get(server);
+        let caller_credential = if let Some(idp_cfg) = backend
+            .as_ref()
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            let resolved = self.resolve_caller_credential_as(server, &idp_cfg, caller_proof);
+            let resolved = self.resolve_caller_credential_as(
+                server,
+                backend.as_deref(),
+                &idp_cfg,
+                caller_proof,
+            );
             self.with_connect_offer(resolved.await, verified_identity)
                 .await?
         } else {
-            self.refuse_unbound_account_backend(server)?;
+            Self::refuse_unbound_account_backend(server, backend.as_deref())?;
             CallerCredential::default()
         };
 
@@ -1891,8 +1835,9 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && let Some(cached) = cache.get(&cache_key)
+            && let Some((cached, read)) = cache.get_read(&cache_key)
         {
+            cache_reads::restore(read.as_ref());
             debug!(server, tool, trace_id, "Cache hit");
             self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &cached);
             if let Some(ref stats) = self.stats {
@@ -1907,7 +1852,7 @@ impl MetaMcp {
             // Terminal state on the response-cache-hit return: settle through
             // the reservation, or its `Drop` would remove what was just stored.
             if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.complete(&cached);
+                reservation.complete_read(&cached, read);
             }
             let predictions =
                 self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
@@ -2576,13 +2521,18 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && cache.set(&cache_key, result.clone(), self.default_cache_ttl)
+            && cache.set_read(
+                &cache_key,
+                result.clone(),
+                self.dispatch_reading(args),
+                self.default_cache_ttl,
+            )
         {
             debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
         }
 
         if let Some(reservation) = idem_reservation.as_mut()
-            && reservation.complete(&result)
+            && reservation.complete_read(&result, self.dispatch_reading(args))
         {
             debug!(
                 server,
@@ -2954,7 +2904,8 @@ impl MetaMcp {
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
         // Identity-only by construction; production reads pass a proof (#2231).
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
-        self.resolve_propagation_credential_held(server, caller)
+        let backend = self.backends.get(server);
+        self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
             .map(|(headers, cache_binding, _)| (headers, cache_binding))
     }
@@ -2963,21 +2914,28 @@ impl MetaMcp {
     /// keeping the managed lease for the direct route's post-dispatch 401 site
     /// (A11-e′). The direct route passes its classified proof, so the sole
     /// operator is served there as on `gateway_invoke` (#2190).
-    pub(crate) async fn resolve_propagation_credential_held(
+    /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,
+    /// keeping the managed lease for the direct route's post-dispatch 401 site
+    /// (A11-e'), against the backend the caller already holds. A route that
+    /// captured the instance it will dispatch through must resolve against THAT
+    /// instance: a name lookup can return a replacement registered by a reload
+    /// in between, and the credential rules of one backend would then apply to
+    /// a request sent through another (MIK-7804). `None` is a backend the
+    /// registry does not hold, as a name miss always was. The direct route
+    /// passes its classified proof, so the sole operator is served there as on
+    /// `gateway_invoke` (#2190).
+    pub(crate) async fn resolve_propagation_credential_held_for(
         &self,
         server: &str,
+        backend: Option<&crate::backend::Backend>,
         caller: CallerProof<'_>,
     ) -> Result<HeldCredential> {
-        let Some(idp_cfg) = self
-            .backends
-            .get(server)
-            .and_then(|b| b.identity_propagation_config().cloned())
-        else {
-            self.refuse_unbound_account_backend(server)?;
+        let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
+            Self::refuse_unbound_account_backend(server, backend)?;
             return Ok((Vec::new(), None, None));
         };
         let cred = self
-            .resolve_caller_credential_as(server, &idp_cfg, caller)
+            .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
         Ok((cred.headers, cred.cache_binding, cred.managed))
     }
@@ -2995,11 +2953,11 @@ impl MetaMcp {
     /// # Errors
     ///
     /// [`Error::Config`] naming the backend and its descriptor reference.
-    fn refuse_unbound_account_backend(&self, server: &str) -> Result<()> {
-        let account = self
-            .backends
-            .get(server)
-            .and_then(|b| b.account_descriptor_id().map(str::to_string));
+    fn refuse_unbound_account_backend(
+        server: &str,
+        backend: Option<&crate::backend::Backend>,
+    ) -> Result<()> {
+        let account = backend.and_then(|b| b.account_descriptor_id().map(str::to_string));
         match account {
             Some(account) => Err(Error::Config(format!(
                 "backend '{server}' is bound to account '{account}' but no account strategy is \
@@ -3028,7 +2986,8 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<CallerCredential> {
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
-        self.resolve_caller_credential_as(server, idp_cfg, caller)
+        let backend = self.backends.get(server);
+        self.resolve_caller_credential_as(server, backend.as_deref(), idp_cfg, caller)
             .await
     }
 
@@ -3050,6 +3009,7 @@ impl MetaMcp {
     async fn resolve_caller_credential_as(
         &self,
         server: &str,
+        backend: Option<&crate::backend::Backend>,
         idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
         caller: CallerProof<'_>,
     ) -> Result<CallerCredential> {
@@ -3061,14 +3021,11 @@ impl MetaMcp {
         // minted credential bytes.
         let audit_logger = self.transparency_logger.as_ref();
         // #1961: the vault's own sole-operator predicate (as REST); else verified only.
-        let descriptor_id = self
-            .backends
-            .get(server)
-            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
+        let descriptor_id = backend.and_then(|b| b.account_descriptor_id().map(str::to_owned));
         let managed_vault = self
             .account_strategies
             .managed_vault(descriptor_id.as_deref());
-        let principal = self.principal_for_server(server, caller);
+        let principal = self.caller_principal(descriptor_id.as_deref(), caller);
         let subject_id = principal.map_or_else(|| audit_subject(None), Principal::stable_actor_id);
         let audience = idp_cfg.audience.as_str();
 
@@ -3108,10 +3065,8 @@ impl MetaMcp {
         // guarantees the backend exists in production; "not found" only happens
         // in unit tests against a fabricated config, and a genuinely absent
         // backend fails downstream at dispatch regardless.
-        let transport_capable = self
-            .backends
-            .get(server)
-            .is_none_or(|b| b.transport_carries_identity_headers());
+        let transport_capable =
+            backend.is_none_or(crate::backend::Backend::transport_carries_identity_headers);
         if let Err(msg) = crate::identity_propagation::ensure_transport_carries_identity_headers(
             idp_cfg.required,
             transport_capable,
@@ -3512,6 +3467,7 @@ impl MetaMcp {
                     // against the same registry before its own cache lookup
                     // and again before egress.
                     account_credential,
+                    mcp_generation: None,
                 },
             )
             .await?;

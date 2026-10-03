@@ -9,7 +9,6 @@
 use super::MetaMcp;
 use crate::backend::Backend;
 use crate::identity_propagation::CallerProof;
-use crate::personal_accounts::identity::Principal;
 use crate::protocol::Tool;
 use std::sync::Arc;
 use tracing::debug;
@@ -42,13 +41,13 @@ impl MetaMcp {
     /// because one backend out of many refused.
     pub(crate) async fn caller_credential_for_identity(
         &self,
-        server: &str,
+        backend: &Backend,
         caller: CallerProof<'_>,
     ) -> (Vec<(String, String)>, Option<String>) {
-        if self.principal_for_server(server, caller).is_none() {
+        if self.principal_for(backend, caller).is_none() {
             return (Vec::new(), None);
         }
-        self.resolve_propagation_credential_held(server, caller)
+        self.resolve_propagation_credential_held_for(&backend.name, Some(backend), caller)
             .await
             .map(|(headers, binding, _lease)| (headers, binding))
             .unwrap_or_default()
@@ -93,7 +92,7 @@ impl MetaMcp {
         if !required {
             return false;
         }
-        let Some(principal) = self.principal_for_server(&backend.name, caller) else {
+        let Some(principal) = self.principal_for(backend, caller) else {
             return true;
         };
         let Some(vault) = self
@@ -109,22 +108,6 @@ impl MetaMcp {
             }
             None => true,
         }
-    }
-
-    /// Who the resolver would resolve `server`'s credential for, if anyone.
-    ///
-    /// THE ONE LOOKUP both the resolver and every short-circuit ahead of it
-    /// use, so a gate can never pick a different descriptor than the mint.
-    pub(super) fn principal_for_server<'a>(
-        &self,
-        server: &str,
-        caller: CallerProof<'a>,
-    ) -> Option<Principal<'a>> {
-        let descriptor_id = self
-            .backends
-            .get(server)
-            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
-        self.caller_principal(descriptor_id.as_deref(), caller)
     }
 
     /// Whether `backend` must be omitted from a per-caller catalogue
@@ -145,9 +128,7 @@ impl MetaMcp {
         backend: &Backend,
         caller: CallerProof<'_>,
     ) -> Option<(Vec<(String, String)>, Option<String>)> {
-        let (headers, binding) = self
-            .caller_credential_for_identity(&backend.name, caller)
-            .await;
+        let (headers, binding) = self.caller_credential_for_identity(backend, caller).await;
         if self.meta_route_isolation_refused_for_caller(backend, binding.as_deref()) {
             return None;
         }
@@ -306,3 +287,7 @@ impl MetaMcp {
             .set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, shared);
     }
 }
+
+#[cfg(test)]
+#[path = "captured_backend_tests.rs"]
+mod captured_backend_tests;

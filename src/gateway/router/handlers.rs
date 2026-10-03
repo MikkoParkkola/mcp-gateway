@@ -21,14 +21,16 @@ use super::authorization::{
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_error_response_with_data, build_http_error_response, build_http_response, build_response,
-    extract_tools_call_params, merge_client_meta, parse_elicitation_params, parse_request,
-    parse_sampling_params,
+    extract_tools_call_params, extract_tools_call_params_ref, merge_client_meta,
+    parse_elicitation_params, parse_request_ref, parse_sampling_params,
 };
 use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::relay::{self, CatalogueCaller};
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::outbound::{OutboundReply, gateway_reply, judged_reply, stream_reply};
 use crate::gateway::session_id::session_fp;
 use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
@@ -42,10 +44,14 @@ use crate::security::{
 };
 
 mod events;
+mod modern_response;
 mod owner;
 pub(super) mod request_checks;
 mod tasks;
 
+use modern_response::shape_modern_response;
+#[cfg(test)]
+use modern_response::{CACHEABLE_METHODS, build_modern_response};
 pub(super) use owner::owner_of;
 use owner::request_session_owner;
 #[cfg(test)]
@@ -186,30 +192,42 @@ pub(super) async fn mcp_sse_handler(
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
     extensions: axum::http::Extensions,
-) -> impl IntoResponse {
+) -> OutboundReply {
     let client = client.map(|axum::Extension(c)| c);
 
     // Before the streaming and Accept checks, and before any session work: a
     // refusal that ran later would mint a session per refused caller and
     // overwrite the resumption point of whoever owns the id it presented.
     if let Some(refusal) = get_era_refusal(&state, &headers) {
-        return refusal;
+        return gateway_reply(refusal);
     }
     // The owner the POST that minted the session used, so a subject resumes
     // its own stream and nobody else's.
-    let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
-        Ok((_, owner)) => owner,
-        Err(refusal) => return refusal,
-    };
+    let (subject, owner) =
+        match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
+            Ok(resolved) => resolved,
+            Err(refusal) => return gateway_reply(refusal),
+        };
+    // MIN.2: the caller this stream writes to, keyed as on POST (H7, §4.2).
+    let read_key = state
+        .multiplexer
+        .judges_reads()
+        .then(|| {
+            super::identity::caller_key(
+                subject.as_ref(),
+                extensions.get::<CertIdentity>(),
+                client.as_ref(),
+            )
+        })
+        .filter(|key| !key.is_empty());
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
-        return build_http_error_response(
+        return gateway_reply(build_http_error_response(
             None,
             -32600,
             "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
             StatusCode::METHOD_NOT_ALLOWED,
-        )
-        .into_response();
+        ));
     }
 
     // Check Accept header - must accept text/event-stream
@@ -219,13 +237,12 @@ pub(super) async fn mcp_sse_handler(
         .unwrap_or("");
 
     if !accept.contains("text/event-stream") {
-        return build_http_error_response(
+        return gateway_reply(build_http_error_response(
             None,
             -32600,
             "Must accept text/event-stream for SSE notifications",
             StatusCode::NOT_ACCEPTABLE,
-        )
-        .into_response();
+        ));
     }
 
     let existing_session_id = session_id_header(&headers).map(String::from);
@@ -236,22 +253,28 @@ pub(super) async fn mcp_sse_handler(
         .map(String::from);
 
     let held = crate::gateway::auth::live::held_credential(&headers);
-    let (session_id, _rx) = if super::hardened_elicitation::is_hardened(&state) {
+    let session_id = if super::hardened_elicitation::is_hardened(&state) {
         // Hardened (row 10): a stream only resumes a session a declaring
         // `initialize` opened; it never opens one.
-        match state
-            .multiplexer
-            .resume_session_scoped(existing_session_id.as_deref(), &owner, held)
-        {
+        match state.multiplexer.resume_session_id_scoped(
+            existing_session_id.as_deref(),
+            &owner,
+            held,
+        ) {
             Some(resumed) => resumed,
-            None => return super::hardened_elicitation::refusal().into_response(),
+            None => return gateway_reply(super::hardened_elicitation::refusal()),
         }
     } else {
-        state
-            .multiplexer
-            .get_or_create_session_scoped(existing_session_id.as_deref(), &owner, held)
+        state.multiplexer.get_or_create_session_id_scoped(
+            existing_session_id.as_deref(),
+            &owner,
+            held,
+        )
     };
 
+    if let Some(key) = read_key {
+        state.multiplexer.bind_session_reader(&session_id, key);
+    }
     // Computed before the macro so its count is graded (MIK-7725).
     let session = session_fp(&session_id);
     info!(session_id = %session, "Client connected to SSE stream");
@@ -278,15 +301,14 @@ pub(super) async fn mcp_sse_handler(
             // Add session ID header to response
             let mut response = sse.into_response();
             attach_session_header(response.headers_mut(), &session_id);
-            response
+            stream_reply(response)
         }
-        None => build_http_error_response(
+        None => gateway_reply(build_http_error_response(
             None,
             -32603,
             "Failed to create SSE stream",
             StatusCode::INTERNAL_SERVER_ERROR,
-        )
-        .into_response(),
+        )),
     }
 }
 
@@ -297,7 +319,7 @@ pub(super) async fn mcp_delete_handler(
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
     extensions: axum::http::Extensions,
-) -> impl IntoResponse {
+) -> OutboundReply {
     let client = client.map(|axum::Extension(c)| c);
     // Public paths may reach this handler without a validated identity even
     // when authentication is enabled. Their shared anonymous owner is not a
@@ -307,17 +329,17 @@ pub(super) async fn mcp_delete_handler(
             .as_ref()
             .is_some_and(|c| c.authenticated && !c.principal.is_empty())
     {
-        return crate::gateway::middleware::bearer_unauthorized_response(
+        return gateway_reply(crate::gateway::middleware::bearer_unauthorized_response(
             "Session termination requires an authenticated credential.",
-        );
+        ));
     }
     let session_id = session_id_header(&headers);
     let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
         Ok((_, owner)) => owner,
-        Err(refusal) => return refusal,
+        Err(refusal) => return gateway_reply(refusal),
     };
 
-    match session_id {
+    let status = match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
             let session = session_fp(id);
             info!(session_id = %session, "Session terminated by client");
@@ -333,8 +355,8 @@ pub(super) async fn mcp_delete_handler(
             StatusCode::NOT_FOUND
         }
         None => StatusCode::BAD_REQUEST,
-    }
-    .into_response()
+    };
+    gateway_reply(status)
 }
 
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
@@ -431,7 +453,7 @@ pub(super) async fn health_handler(
 pub(super) async fn meta_mcp_handler(
     state: State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
-) -> axum::response::Response {
+) -> OutboundReply {
     let offers_event_stream = http_request
         .headers()
         .get(axum::http::header::ACCEPT)
@@ -440,26 +462,45 @@ pub(super) async fn meta_mcp_handler(
 
     // D3-a: one grant-decision slot spans signing, admission and dispatch.
     let logger = state.meta_mcp.transparency_logger.clone();
+    // MIN.2: the dispatch notes what its inner calls read before transforms,
+    // so the answer's judge sees tenants the delivered value no longer shows.
+    let guard = super::helpers::read_guard(&state);
+    let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
+    let guard_for_scope = guard.clone();
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
-        logger,
+        logger.clone(),
         // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
-        Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting(
-            meta_mcp_dispatch(state, http_request),
-        )),
+        Box::pin(async move {
+            crate::gateway::outbound::read_scoped(
+                guard_for_scope,
+                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
+                    Arc::clone(&state.meta_mcp),
+                    meta_mcp_dispatch(state, http_request),
+                )),
+            )
+            .await
+            .0
+        }),
     );
 
-    if offers_event_stream {
+    if let Some(audit) = audit {
         // Scope rather than collect: the client offered a stream, so the first
         // notification decides the body shape instead of waiting for dispatch.
-        let (scoped, rx) = crate::transport::notification_sink::scope(dispatch);
-        crate::gateway::streaming::first_event_wins_stream(scoped, rx).await
+        // Each notification is judged for this caller as it is queued.
+        let judge = Arc::new(crate::gateway::outbound::StreamJudge::new(
+            guard, audit, logger,
+        ));
+        let (scoped, rx) =
+            crate::transport::notification_sink::scope_judged(dispatch, Arc::clone(&judge));
+        stream_reply(crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await)
     } else {
         // Still scoped, and still drained alongside: `publish` sheds on a full
         // sink, and a client that did not offer a stream must not make a
         // backend's notifications count against that depth.
         let (response, _notifications) =
             crate::transport::notification_sink::collect(dispatch).await;
-        response
+        // The answer's read record, written after every late replacer.
+        judged_reply(response, logger.as_ref()).await
     }
 }
 
@@ -535,6 +576,21 @@ async fn meta_mcp_dispatch(
             Ok(resolved) => resolved,
             Err(refusal) => return refusal,
         };
+    // MIN.2: the caller every frame of this request is judged for, formed
+    // only when the verdict is on (the default config allocates nothing).
+    let read_guard = super::helpers::read_guard(&state);
+    let read_key = crate::gateway::outbound::judges(read_guard.as_deref())
+        .then(|| {
+            super::identity::caller_key(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+            )
+        })
+        .filter(|key| !key.is_empty());
+    if let Some(key) = &read_key {
+        crate::transport::notification_sink::bind_reader(|| key.clone());
+    }
 
     // Parse JSON body
     let body_bytes = match super::helpers::read_body(http_request).await {
@@ -717,8 +773,8 @@ async fn meta_mcp_dispatch(
     }
 
     // Parse request
-    let (id, method, params) = match parse_request(&request) {
-        Ok(parsed) => parsed,
+    let (id, method, params) = match parse_request_ref(&request) {
+        Ok((id, method, params)) => (id, method.to_string(), params),
         Err(response) => {
             return build_response(response, &session_id, StatusCode::BAD_REQUEST);
         }
@@ -729,7 +785,7 @@ async fn meta_mcp_dispatch(
         .and_then(|value| value.to_str().ok());
     crate::protocol_revision_telemetry::observe_inbound_request(
         &request,
-        params.as_ref(),
+        params,
         &method,
         protocol_header,
         Some(session_id.as_str()),
@@ -748,7 +804,7 @@ async fn meta_mcp_dispatch(
     // dispatchers cannot drift apart on what a request declared.
     let shape = crate::protocol::meta::classify_and_observe(
         &method,
-        params.as_ref(),
+        params,
         declared_version,
         // HTTP echoes the revision in a header on every request, so there
         // is nothing for a session lookup to add.
@@ -827,7 +883,7 @@ async fn meta_mcp_dispatch(
         &shape,
         declared_version,
         &method,
-        params.as_ref(),
+        params,
         id.as_ref(),
     ) {
         return build_response(rpc, &session_id, status);
@@ -866,7 +922,7 @@ async fn meta_mcp_dispatch(
     // A request reaching the tasks extension must DECLARE it, on that request.
     // Handing a task handle to a client that never said it could hold one
     // strands the work: the client reads a handle it will never redeem.
-    if reaches_tasks_extension(method.as_str(), params.as_ref())
+    if reaches_tasks_extension(method.as_str(), params)
         && !declared_extensions.contains(crate::protocol::extensions::Extension::Tasks)
     {
         return build_error_response_with_data(
@@ -909,7 +965,7 @@ async fn meta_mcp_dispatch(
     // silence IS the refusal (see below).
     if unattributed
         && method != "subscriptions/listen"
-        && reaches_tasks_extension(method.as_str(), params.as_ref())
+        && reaches_tasks_extension(method.as_str(), params)
     {
         // The early return skips the tail that counts every other JSON-RPC
         // answer, so the refusal is counted here or it is invisible: an
@@ -936,13 +992,16 @@ async fn meta_mcp_dispatch(
     // principal owns must be indistinguishable from one that never existed, and
     // a refusal would announce the difference. A caller with no credential
     // under authentication is refused at the listen arm, whatever ids it names.
-    let mut params = params;
+    // Borrowed from `request` for every method but this one, which narrows a
+    // private copy; `tools/call` payloads are never duplicated here.
+    let mut narrowed_listen: Option<Value> = None;
     if method == "subscriptions/listen" {
-        let ids = listened_task_ids(params.as_ref());
+        let ids = listened_task_ids(params);
         if !ids.is_empty() {
             let caller_holds_ids =
                 !unattributed && state.tasks.owns_all(&owner, ids.iter().map(String::as_str));
-            if let Some(map) = params.as_mut().and_then(Value::as_object_mut) {
+            narrowed_listen = params.cloned();
+            if let Some(map) = narrowed_listen.as_mut().and_then(Value::as_object_mut) {
                 map.entry("notifications").or_insert_with(|| json!({}));
                 if !caller_holds_ids {
                     // Both placements: a copy left standing would opt the
@@ -960,8 +1019,10 @@ async fn meta_mcp_dispatch(
         }
     }
 
+    let params = narrowed_listen.as_ref().or(params);
+
     let external_tool = if method == "tools/call" {
-        extract_tools_call_params(params.as_ref()).0.to_owned()
+        extract_tools_call_params_ref(params).0.to_owned()
     } else {
         method.clone()
     };
@@ -1019,8 +1080,7 @@ async fn meta_mcp_dispatch(
             // ordinary response builder: the specification's response to this
             // method is a stream that stays open, and an acknowledgement that
             // closes is a subscription the client waits on forever.
-            let Some(request) =
-                crate::protocol::subscriptions::ListenRequest::from_params(params.as_ref())
+            let Some(request) = crate::protocol::subscriptions::ListenRequest::from_params(params)
             else {
                 // No `notifications` filter at all. An *empty* filter is valid
                 // and opens a quiet stream; this is a request that never said
@@ -1080,12 +1140,36 @@ async fn meta_mcp_dispatch(
                 "subscriptions/listen opened"
             );
 
+            // A stream that named tasks gets their full state, rebuilt per
+            // reader at delivery; the names were narrowed to this caller's own
+            // tasks above, and each frame is re-authorized against the
+            // reader's credential as it is resolved at that moment.
+            let task_frames = (!request.task_ids().is_empty()).then(|| {
+                let reader = tasks::RecoveryCaller {
+                    client: client.as_ref(),
+                    oauth_agent_identity: oauth_agent_identity.as_ref(),
+                    cert_identity: cert_identity.as_ref(),
+                    api_key_name: client.as_ref().map(|client| client.name.as_str()),
+                    agent_id: agent_identity.proven_agent_id(),
+                    agent_declared: None,
+                    grant_subject: grant_subject.clone(),
+                    verified_identity: verified_identity.as_ref(),
+                    is_admin: client.as_ref().is_some_and(|client| client.admin),
+                    input_capabilities: declared_capabilities,
+                    session_id: Some(session_id.as_str()),
+                };
+                tasks::task_frames(&state, &owner, &reader)
+            });
+            let judge = state.meta_mcp.stream_judge(read_guard, read_key);
             return crate::gateway::streaming::subscription_stream(
                 listener,
                 request,
                 subscription,
-                &acknowledgement,
+                acknowledgement,
                 state.streaming_config.keep_alive_interval,
+                judge,
+                params.cloned(),
+                task_frames,
             );
         }
         // MIK-7630. Answered here, never proxied; with events off the guard
@@ -1097,6 +1181,7 @@ async fn meta_mcp_dispatch(
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
                 principal: events::principal(&owner, state.auth_config.enabled),
+                read_key: read_key.clone(),
                 credential: presented.credential(client.as_ref(), &state),
                 visible_backends: hub
                     .scope_backends()
@@ -1104,7 +1189,7 @@ async fn meta_mcp_dispatch(
                     .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
                     .collect(),
             };
-            events::answer(&hub, id, &method, params.as_ref(), &caller).await
+            events::answer(&hub, id, &method, params, &caller).await
         }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.
@@ -1116,7 +1201,7 @@ async fn meta_mcp_dispatch(
         ),
         "initialize" => state.meta_mcp.handle_initialize(
             id,
-            params.as_ref(),
+            params,
             Some(session_id.as_str()),
             header_profile.as_deref(),
             era,
@@ -1136,7 +1221,6 @@ async fn meta_mcp_dispatch(
             // is read from the value it names, so a reader can check the record
             // against the request rather than against an assumption.
             let query_present = params
-                .as_ref()
                 .and_then(|p| p.get("query"))
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|query| !query.is_empty());
@@ -1154,7 +1238,7 @@ async fn meta_mcp_dispatch(
             );
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
-                params.as_ref(),
+                params,
                 Some(session_id.as_str()),
                 code_mode_url_active,
                 invoke_scope,
@@ -1166,14 +1250,14 @@ async fn meta_mcp_dispatch(
         // takes. Only that one arm breaks; the refusals that return directly
         // still do, because each already carries the status it must be sent with.
         "tools/call" => 'tools_call: {
-            let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+            let (tool_name, arguments) = extract_tools_call_params(params);
             // A conforming client's `_meta` is a sibling of `arguments`, and
             // the meta layer reads it off the argument object it is handed.
             // Meta-tool path only -- the direct backend route runs before the
             // meta-tool match and must stay byte-identical.
             let arguments = merge_client_meta(
                 arguments,
-                params.as_ref(),
+                params,
                 state.meta_mcp.exposes_meta_tool(tool_name),
             );
 
@@ -1200,7 +1284,7 @@ async fn meta_mcp_dispatch(
             //
             // What cannot wait is the malformed shape, refused below before
             // anything dispatches.
-            let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+            let retry = crate::protocol::mrtr::RetryFields::from_params(params);
             if retry.is_malformed() {
                 // Neither a usable retry nor a fresh call. Running it as a fresh
                 // call would repeat whatever the first attempt already did, and
@@ -1401,7 +1485,7 @@ async fn meta_mcp_dispatch(
                     // grant must digest what admission will key on.
                     tool_name,
                     arguments: &arguments,
-                    task: params.as_ref().and_then(|p| p.get("task")),
+                    task: params.and_then(|p| p.get("task")),
                     retry: &retry,
                     verified_identity: verified_identity.as_ref(),
                     input_capabilities: declared_capabilities,
@@ -1469,7 +1553,7 @@ async fn meta_mcp_dispatch(
             // ordinary `tools/call` must reach the synchronous path unchanged,
             // and the builder's own refusals (no verified owner, no idempotency
             // key) are conditions on asking for a task, not on calling a tool.
-            let task_intent = if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
+            let task_intent = if params.is_some_and(|p| p.get("task").is_some()) {
                 match tasks::task_intent_for_call(
                     &state,
                     id.clone(),
@@ -1698,18 +1782,27 @@ async fn meta_mcp_dispatch(
         // Resources
         "resources/list" => {
             let meta = &state.meta_mcp;
-            meta.handle_resources_list(id, params.as_ref(), scope, identity)
+            meta.handle_resources_list(id, params, scope, identity)
                 .await
         }
         "resources/read" => {
             let standing = CallerStanding::of_client(scope);
             let meta = &state.meta_mcp;
-            meta.handle_resources_read(id, params.as_ref(), standing, scope, identity)
-                .await
+            let caller = catalogue_caller(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+                &session_id,
+            );
+            relay::as_caller(
+                caller,
+                meta.handle_resources_read(id, params, standing, scope, identity),
+            )
+            .await
         }
         "resources/templates/list" => {
             let meta = &state.meta_mcp;
-            meta.handle_resources_templates_list(id, params.as_ref(), scope, identity)
+            meta.handle_resources_templates_list(id, params, scope, identity)
                 .await
         }
         // F24: the gateway never delivers `resources/updated`, so a
@@ -1723,31 +1816,31 @@ async fn meta_mcp_dispatch(
         // Prompts
         "prompts/list" => {
             let meta = &state.meta_mcp;
-            meta.handle_prompts_list(id, params.as_ref(), scope, identity)
-                .await
+            meta.handle_prompts_list(id, params, scope, identity).await
         }
         "prompts/get" => {
             let meta = &state.meta_mcp;
-            meta.handle_prompts_get(id, params.as_ref(), scope, identity)
-                .await
+            let caller = catalogue_caller(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+                &session_id,
+            );
+            relay::as_caller(caller, meta.handle_prompts_get(id, params, scope, identity)).await
         }
 
         // Logging. Admin standing is checked before this match, for every
         // spelling of the method (see `require_admin_log_level`).
-        "logging/setLevel" => {
-            state
-                .meta_mcp
-                .handle_logging_set_level(id, params.as_ref())
-                .await
-        }
+        "logging/setLevel" => state.meta_mcp.handle_logging_set_level(id, params).await,
 
         "ping" => JsonRpcResponse::success(id, json!({})),
 
         "sampling/createMessage" => {
-            let sampling_params = match parse_sampling_params(id.clone(), params, &session_id) {
-                Ok(p) => p,
-                Err(resp) => return resp,
-            };
+            let sampling_params =
+                match parse_sampling_params(id.clone(), params.cloned(), &session_id) {
+                    Ok(p) => p,
+                    Err(resp) => return resp,
+                };
 
             // To the session that asked, and only that one.
             let timeout = std::time::Duration::from_secs(120);
@@ -1762,11 +1855,11 @@ async fn meta_mcp_dispatch(
         }
 
         "elicitation/create" => {
-            let elicitation_params = match parse_elicitation_params(id.clone(), params, &session_id)
-            {
-                Ok(p) => p,
-                Err(resp) => return resp,
-            };
+            let elicitation_params =
+                match parse_elicitation_params(id.clone(), params.cloned(), &session_id) {
+                    Ok(p) => p,
+                    Err(resp) => return resp,
+                };
 
             // To the session that asked, and only that one.
             let timeout = std::time::Duration::from_secs(120);
@@ -1785,7 +1878,7 @@ async fn meta_mcp_dispatch(
         "tools/resolve" => {
             state
                 .meta_mcp
-                .handle_tools_resolve(id, params.as_ref(), Some(session_id.as_str()), invoke_scope)
+                .handle_tools_resolve(id, params, Some(session_id.as_str()), invoke_scope)
                 .await
         }
 
@@ -1812,12 +1905,12 @@ async fn meta_mcp_dispatch(
                 session_id: Some(session_id.as_str()),
             };
             if method == "tasks/get" {
-                tasks::tasks_get(&state, &owner, id.clone(), params.as_ref(), &caller).await
+                tasks::tasks_get(&state, &owner, id.clone(), params, &caller).await
             } else {
-                tasks::tasks_update(&state, &owner, id.clone(), params.as_ref(), &caller).await
+                tasks::tasks_update(&state, &owner, id.clone(), params, &caller).await
             }
         }
-        "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params.as_ref()).await,
+        "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params).await,
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
@@ -1841,13 +1934,34 @@ async fn meta_mcp_dispatch(
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
     };
-    response = (state.meta_mcp)
-        .finalize_response_after_inspection(response, &delivery, delivery_inspection)
-        .await;
-    state.meta_mcp.commit_relay_receipts(&response);
-    if let Some(execution) = execution {
-        execution.complete_delivery(&response, signing_context.as_ref());
+    let response = (state.meta_mcp).finalize_content(response, &delivery, delivery_inspection);
+    // Kept for the stored delivery (cloned only when an execution stores it).
+    let finalized = execution.as_ref().map(|_| response.clone());
+    // MIN.2: judged on the finalized answer; the verdict rides its delivery
+    // record (MIK-7799), and the sink commits when the body is read.
+    let hidden = crate::gateway::outbound::noted_reads();
+    let frame = crate::gateway::outbound::answer(
+        read_guard.as_deref(),
+        read_key.as_deref(),
+        response,
+        request.get("params"),
+        hidden.as_ref(),
+    );
+    let (frame, finalized) = super::judged_answer::record_delivery(
+        &state.meta_mcp,
+        frame,
+        &delivery.correlation,
+        finalized,
+    )
+    .await;
+    if let (Some(execution), Some(finalized)) = (execution, finalized) {
+        execution.complete_delivery(&finalized, signing_context.as_ref());
     }
+    let response = frame
+        .response()
+        .expect("an answer frame stays an answer through its replacements");
+    // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
+    state.meta_mcp.settle_relay_receipts(response);
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
@@ -1873,7 +1987,7 @@ async fn meta_mcp_dispatch(
     // router never inspects — arrives here as a JSON-RPC error, and answering
     // it 200 tells every caller and intermediary the call succeeded. The status
     // travels on the error precisely so this line can honour it.
-    let status = refusal_status(&response).unwrap_or(StatusCode::OK);
+    let status = refusal_status(response).unwrap_or(StatusCode::OK);
     if is_modern {
         // An unimplemented method is 404 on this revision, not 200-with-error.
         // The status is what a client uses to tell "this server does not have
@@ -1892,92 +2006,9 @@ async fn meta_mcp_dispatch(
         // A stateless client has no handshake in which to learn who answered,
         // so every result says. And it holds no session, so it is sent no
         // session header — the legacy path below keeps both unchanged.
-        return (status, axum::Json(response)).into_response();
+        return crate::gateway::outbound::to_http(frame, status, "");
     }
-    build_response(response, &session_id, status)
-}
-
-/// Build a response for a request written against 2026-07-28.
-///
-/// Two differences from the legacy path, and they are the same difference: the
-/// connection carries no state. There is no `Mcp-Session-Id`, because the
-/// revision deleted protocol sessions; and the result names the server, because
-/// there was no handshake in which to say so.
-/// The methods whose results carry `ttlMs` and `cacheScope`.
-///
-/// Five, from the `CacheableResult` interface. `server/discover` supports
-/// caching too, but is not in this list — its document is built elsewhere and
-/// the fields are added there when its own scope is decided.
-const CACHEABLE_METHODS: &[&str] = &[
-    "tools/list",
-    "prompts/list",
-    "resources/list",
-    "resources/read",
-    "resources/templates/list",
-];
-
-/// How long a client may consider a list fresh. A freshness hint, not a
-/// promise: `listChanged` notifications remain the authority on change, and
-/// this only stops a client re-listing on every turn.
-const LIST_TTL_MS: u64 = 60_000;
-
-// Unit-test adapter only: production must shape before security finalization
-// and serialize afterward without mutating the signed response.
-#[cfg(test)]
-fn build_modern_response(
-    mut response: crate::protocol::JsonRpcResponse,
-    status: StatusCode,
-    method: &str,
-) -> axum::response::Response {
-    shape_modern_response(&mut response, method);
-    (status, axum::Json(response)).into_response()
-}
-
-/// Shape modern metadata before security finalization and signing.
-fn shape_modern_response(response: &mut crate::protocol::JsonRpcResponse, method: &str) {
-    if let Some(ref mut result) = response.result
-        && let Some(object) = result.as_object_mut()
-    {
-        // Required on every result in this revision, and supplied here only
-        // when the result does not already carry one.
-        //
-        // Inserting unconditionally overwrote the discriminator that the
-        // multi-round-trip path had just set: an `input_required` result was
-        // relabelled `complete` on its way out, so a client saw a finished call
-        // where the server was waiting for an answer and could no longer supply
-        // one. The comment said this value was safe because interim results own
-        // their own; the code then overwrote exactly those.
-        object
-            .entry("resultType")
-            .or_insert_with(|| serde_json::Value::String("complete".to_string()));
-
-        if CACHEABLE_METHODS.contains(&method) {
-            object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
-            // Per method, from the table that records which ones were
-            // assessed. Answering with one method's decision for all five
-            // would make `resources/read` inherit `tools/list`'s reasoning.
-            object.insert(
-                "cacheScope".to_string(),
-                serde_json::Value::String(
-                    crate::protocol::cacheable::scope_for_method(method)
-                        .as_str()
-                        .to_string(),
-                ),
-            );
-        }
-        let meta = object
-            .entry("_meta")
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(meta) = meta.as_object_mut() {
-            meta.insert(
-                crate::protocol::meta::KEY_SERVER_INFO.to_string(),
-                serde_json::json!({
-                    "name": "mcp-gateway",
-                    "version": env!("CARGO_PKG_VERSION"),
-                }),
-            );
-        }
-    }
+    crate::gateway::outbound::to_http(frame, status, &session_id)
 }
 
 /// The HTTP status a response deserves when it carries an authorization
@@ -2053,6 +2084,24 @@ mod session_tests;
 #[cfg(test)]
 #[path = "handlers_session_subject_tests.rs"]
 mod session_subject_tests;
+
+/// The caller a `prompts/get` or `resources/read` runs for, keyed as the same
+/// caller's `tools/call` is: the key the grant, certificate or API key names,
+/// else the unkeyed session bucket.
+fn catalogue_caller(
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    cert_identity: Option<&CertIdentity>,
+    client: Option<&AuthenticatedClient>,
+    session_id: &str,
+) -> CatalogueCaller {
+    let key = super::identity::caller_key(grant_subject, cert_identity, client);
+    let keyed = !key.is_empty();
+    CatalogueCaller {
+        key: if keyed { key } else { session_id.to_owned() },
+        keyed,
+        name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
+    }
+}
 
 #[cfg(test)]
 mod cacheable_field_tests {

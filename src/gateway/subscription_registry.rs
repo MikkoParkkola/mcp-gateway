@@ -131,6 +131,13 @@ impl Listener {
         self.receiver.recv().await
     }
 
+    /// The caller this stream's credential resolves to right now, `None` when
+    /// it no longer authenticates. Not cached: a role or scope changed since
+    /// the stream opened must show.
+    pub(crate) async fn current_client(&self) -> Option<crate::gateway::auth::AuthenticatedClient> {
+        crate::gateway::auth::live::current_client(&self.authorizer, self.credential.as_ref()).await
+    }
+
     /// What delivering `published` to this listener's caller should do now.
     pub(crate) async fn delivery(&self, published: &Published) -> Delivery {
         let audience = match &published.audience {

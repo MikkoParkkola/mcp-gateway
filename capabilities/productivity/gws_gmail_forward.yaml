@@ -1,4 +1,4 @@
-sha256: 49d99575a027850ab111f4b643f24470daeaa5c15d66005f697cec47402f3907
+sha256: 801c20b1575cfaebf9d68ecc9638b9e71fc0de5ebd0fcd8c3bb2e832875f6087
 fulcrum: "1.0"
 name: gws_gmail_forward
 description: Forward a Gmail message to another recipient. Forwards the specified message with optional additional body text.
@@ -9,17 +9,18 @@ schema:
     properties:
       messageId:
         type: string
-        description: "Gmail message ID to forward"
+        description: Gmail message ID to forward
       to:
         type: string
-        description: "Recipient email address to forward to"
+        description: Recipient email address to forward to
         format: email
       body:
         type: string
-        description: "Optional additional text to prepend to forwarded message"
+        format: multiline
+        description: Note above the forwarded message
     required:
-      - messageId
-      - to
+    - messageId
+    - to
   output:
     type: object
     properties:
@@ -36,14 +37,13 @@ providers:
     config:
       command: gws
       args:
-        - gmail
-        - "+forward"
-        - "--message-id"
-        - "{messageId}"
-        - "--to"
-        - "{to}"
-        - "--body"
-        - "{body}"
+      - gmail
+      - +forward
+      - --message-id={messageId}
+      - --to={to}
+      - arg: --body={body}
+        if: body
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -51,8 +51,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s gmail"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/gmail.modify
 
 metadata:
   category: productivity

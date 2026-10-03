@@ -58,6 +58,8 @@ struct Alpha {
     read: Arc<Mutex<Read>>,
     reads: Arc<AtomicUsize>,
     sends: Arc<AtomicUsize>,
+    /// `resources/read` and `prompts/get` calls that reached the backend.
+    catalogue: Arc<AtomicUsize>,
 }
 
 fn text_result(text: &str) -> Value {
@@ -74,6 +76,32 @@ impl Transport for Alpha {
                 .map(|n| json!({"name": n, "description": "A tool.", "inputSchema": {"type": "object"}}))
                 .collect();
             return Ok(JsonRpcResponse::success(id, json!({ "tools": tools })));
+        }
+        // The catalogue: one resource and one prompt, both answering PROSE.
+        let served = match &*self.read.lock().unwrap() {
+            Read::Text(text) => text.clone(),
+            _ => PROSE.to_string(),
+        };
+        let doc = |text: &str| json!({"contents": [{"uri": "res://orchard", "text": text}]});
+        match method {
+            "resources/list" => {
+                let listed = json!({"resources": [{"uri": "res://orchard", "name": "orchard"}]});
+                return Ok(JsonRpcResponse::success(id, listed));
+            }
+            "prompts/list" => {
+                let listed = json!({"prompts": [{"name": "orchard"}]});
+                return Ok(JsonRpcResponse::success(id, listed));
+            }
+            "resources/read" => {
+                self.catalogue.fetch_add(1, Ordering::SeqCst);
+                return Ok(JsonRpcResponse::success(id, doc(&served)));
+            }
+            "prompts/get" => {
+                self.catalogue.fetch_add(1, Ordering::SeqCst);
+                let message = json!({"role": "user", "content": {"type": "text", "text": served}});
+                return Ok(JsonRpcResponse::success(id, json!({"messages": [message]})));
+            }
+            _ => {}
         }
         let name = params
             .as_ref()
@@ -130,6 +158,7 @@ struct Fixture {
     read: Arc<Mutex<Read>>,
     reads: Arc<AtomicUsize>,
     sends: Arc<AtomicUsize>,
+    catalogue: Arc<AtomicUsize>,
     _store: tempfile::TempDir,
 }
 
@@ -146,6 +175,9 @@ struct Setup {
     /// relay block; a `block` rule on `read` makes a response finding a
     /// refusal where that is the stimulus.
     rules: &'static str,
+    /// Tenant attribution on `customer_id` with `cross_tenant_reads: block`
+    /// (MIN.2), so a read naming a second tenant is withheld.
+    tenants: bool,
 }
 
 impl Default for Setup {
@@ -159,6 +191,7 @@ impl Default for Setup {
             non_egress: Vec::new(),
             allowed_flows: Vec::new(),
             rules: "[{match: \"*\", action: allow}]",
+            tenants: false,
         }
     }
 }
@@ -187,6 +220,7 @@ async fn fixture(setup: Setup) -> Fixture {
     };
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let (reads, sends) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let catalogue = Arc::new(AtomicUsize::new(0));
     let read = Arc::new(Mutex::new(Read::Text(PROSE.to_string())));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     let backend = Arc::new(Backend::new(
@@ -202,6 +236,7 @@ async fn fixture(setup: Setup) -> Fixture {
         read: Arc::clone(&read),
         reads: Arc::clone(&reads),
         sends: Arc::clone(&sends),
+        catalogue: Arc::clone(&catalogue),
     }));
     assert!(state_mut.backends.register(Arc::clone(&backend)));
     let config = FirewallConfig {
@@ -215,6 +250,15 @@ async fn fixture(setup: Setup) -> Fixture {
             allowed_flows: setup.allowed_flows,
             ..CollusionConfig::default()
         },
+        tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
+            arg_keys: if setup.tenants {
+                vec!["customer_id".to_string()]
+            } else {
+                Vec::new()
+            },
+            cross_tenant_reads: crate::security::firewall::tenant_guard::CrossTenantReads::Block,
+            ..Default::default()
+        },
         ..FirewallConfig::default()
     };
     state_mut.firewall = Some(Arc::new(Firewall::from_config(config, None)));
@@ -226,11 +270,16 @@ async fn fixture(setup: Setup) -> Fixture {
         read,
         reads,
         sends,
+        catalogue,
         _store: store,
     }
 }
 
 impl Fixture {
+    fn catalogue(&self) -> usize {
+        self.catalogue.load(Ordering::SeqCst)
+    }
+
     fn sends(&self) -> usize {
         self.sends.load(Ordering::SeqCst)
     }
@@ -693,7 +742,9 @@ async fn a_forged_public_verdict_is_replaced_by_the_gateways_own() {
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
 }
 
+mod catalogue;
 mod meta;
+mod verdict;
 
 /// Row 13: an allowlisted flow is not refused under `block`; the same content
 /// from a source outside the entry still is.

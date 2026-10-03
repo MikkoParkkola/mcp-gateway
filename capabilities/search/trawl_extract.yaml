@@ -1,7 +1,7 @@
-sha256: 7a02bb9c3a5e3495300c3c033e8becf5a533f1de25a14168a8f2e91b75d5ac40
+sha256: 19a4be0064483629a6d2e52bf24a7cb38f0aee4d1f8657dade8af520fd0e910f
 fulcrum: "1.0"
 name: trawl_extract
-description: Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign.
+description: Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign. Not executable yet - held until trawl refuses private addresses at connect time (MIK-7788).
 
 schema:
   input:
@@ -11,39 +11,23 @@ schema:
         type: string
         description: URL of the page to extract data from
         egress: true
-        format: uri
       fields:
         type: string
-        description: Comma-separated field names to extract (e.g., 'name, price, rating, url')
+        description: "Comma-separated field names to extract (e.g., 'name, price, rating, url')"
       query:
         type: string
-        description: 'Optional: target a specific section of the page (e.g., ''Market Share'' or ''Leaderboard'')'
+        description: "Optional: target a specific section of the page (e.g., 'Market Share' or 'Leaderboard')"
       format:
         type: string
         description: Output format
         default: json
-        enum:
-        - json
-        - jsonl
-        - csv
-      js:
-        type: boolean
-        description: Enable headless browser for JS-rendered pages (React, Next.js, Vue, etc.)
-        default: false
-      plan_only:
-        type: boolean
-        description: Show extraction plan without actually extracting data
-        default: false
-      no_cache:
-        type: boolean
-        description: Bypass strategy cache and re-derive extraction strategy
-        default: false
+        enum: [json, jsonl, csv]
       wait:
         type: string
-        description: Extra wait time after DOM stabilization (e.g., '5s')
+        description: "Extra wait time after DOM stabilization (e.g., '5s')"
     required:
-    - url
-    - fields
+      - url
+      - fields
 
 providers:
   primary:
@@ -51,23 +35,16 @@ providers:
     cost_per_call: 1
     timeout: 60
     config:
-      command: trawl
+      command: "trawl"
       args:
-      - --fields={fields}
-      - arg: --query={query}
-        if: query
-      - arg: --format={format}
-        if: format
-      - arg: --js={js}
-        if: js
-      - arg: --plan={plan_only}
-        if: plan_only
-      - arg: --no-cache={no_cache}
-        if: no_cache
-      - arg: --wait={wait}
-        if: wait
-      - --
-      - '{url}'
+        - "--fields={fields}"
+        - arg: "--query={query}"
+          if: query
+        - "--format={format}"
+        - arg: "--wait={wait}"
+          if: wait
+        - "--"
+        - "{url}"
 
 metadata:
   read_only: true
@@ -84,14 +61,3 @@ metadata:
       input:
         url: "https://example.com/products"
         fields: "name, price, rating"
-    - description: "Extract leaderboard from JS-rendered page"
-      input:
-        url: "https://openrouter.ai/rankings"
-        fields: "rank, model, tokens"
-        query: "LLM Leaderboard"
-        js: true
-    - description: "Preview extraction plan"
-      input:
-        url: "https://example.com/products"
-        fields: "name, price"
-        plan_only: true

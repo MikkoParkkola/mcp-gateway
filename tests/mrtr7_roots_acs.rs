@@ -60,7 +60,11 @@ async fn emitted_frame(label: &str) -> (Value, String) {
                 .await
         }
     });
-    let frame = rx.recv().await.expect("a frame must reach the session");
+    let frame = rx
+        .recv()
+        .await
+        .expect("a frame must reach the session")
+        .into_inner();
     (frame.data, frame.event_type)
 }
 
@@ -124,7 +128,11 @@ async fn roots_3_a_client_reply_reaches_the_awaiting_caller() {
     });
 
     // WHEN the client answers the id the gateway actually put on the wire
-    let frame = rx.recv().await.expect("a frame must reach the session");
+    let frame = rx
+        .recv()
+        .await
+        .expect("a frame must reach the session")
+        .into_inner();
     let id = minted_id(&frame.data);
     let answer = json!({"roots": [{"uri": "file:///w", "name": "w"}]});
     assert!(
@@ -160,7 +168,11 @@ async fn roots_4_an_unprompted_session_cannot_answer_and_the_entry_survives() {
                 .await
         }
     });
-    let frame = rx.recv().await.expect("a frame must reach the session");
+    let frame = rx
+        .recv()
+        .await
+        .expect("a frame must reach the session")
+        .into_inner();
     let id = minted_id(&frame.data);
 
     // WHEN the session that was never prompted answers
@@ -200,7 +212,11 @@ async fn roots_5_an_abandoned_request_strands_no_pending_entry() {
                 .await
         }
     });
-    let frame = rx.recv().await.expect("a frame must reach the session");
+    let frame = rx
+        .recv()
+        .await
+        .expect("a frame must reach the session")
+        .into_inner();
     let id = minted_id(&frame.data);
 
     // WHEN the in-flight future is dropped without a reply or a timeout

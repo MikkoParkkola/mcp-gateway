@@ -232,6 +232,56 @@ pub struct ToolCall {
     /// A call made first on the same child, whose result feeds this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prepare: Option<PrepareCall>,
+    /// Input properties this operation needs. A missing or null one is refused
+    /// before a child starts. The schema stays flat: the capability schemas may
+    /// not compose subschemas, so per-operation requirements live here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<String>,
+    /// Polled after the call until the work it started has finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait: Option<WaitStep>,
+}
+
+/// The `wait` step of a [`ToolCall`]: poll a tool until a condition holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WaitStep {
+    /// The server's tool name to poll.
+    pub tool: String,
+    /// Argument template (`json:` leaf rules).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Value>,
+    /// When to stop polling.
+    pub until: WaitUntil,
+    /// Pause between polls, 200 to 5000 ms.
+    #[serde(default = "default_wait_interval_ms")]
+    pub interval_ms: u64,
+    /// Longest the wait may last, in seconds; at most the provider timeout
+    /// minus 10 s.
+    pub max_wait_s: u64,
+}
+
+fn default_wait_interval_ms() -> u64 {
+    1000
+}
+
+/// Smallest and largest `interval_ms`.
+pub const WAIT_INTERVAL_MS: std::ops::RangeInclusive<u64> = 200..=5000;
+
+/// A poll result is ready when its `array` holds an element whose `match`
+/// fields equal the given templates and whose `field` equals `equals`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WaitUntil {
+    /// Result field holding the array to search.
+    pub array: String,
+    /// Element field to the template it must equal (`{param}` or a literal).
+    #[serde(rename = "match")]
+    pub matches: BTreeMap<String, String>,
+    /// Element field to test once an element matches.
+    pub field: String,
+    /// The value that field must equal.
+    pub equals: Value,
 }
 
 /// The `prepare` step of a [`ToolCall`].

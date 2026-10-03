@@ -98,24 +98,100 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
     }
 }
 
-/// D2: one write per tools/call, with the notes of its dispatch scope.
+/// What the inner handler learns that the read verdict needs (MIK-7116.MIN.2):
+/// the caller, formed only when the verdict is on, and the request params.
+#[derive(Default)]
+pub(super) struct DirectReads {
+    key: Option<String>,
+    params: Option<Value>,
+}
+
+impl DirectReads {
+    /// Capture the caller (`key` forms it) and the request params, only when
+    /// the verdict is on, so the default config copies nothing.
+    pub(super) fn capture(
+        &mut self,
+        state: &AppState,
+        request: &Value,
+        key: impl FnOnce() -> String,
+    ) {
+        if crate::gateway::outbound::judges(super::super::helpers::read_guard(state).as_deref()) {
+            self.key = Some(key()).filter(|key| !key.is_empty());
+            self.params = request.get("params").cloned();
+        }
+    }
+}
+
+/// D2: one write per tools/call, with the notes of its dispatch scope. Then
+/// every answer, whatever the method, is judged for the caller (H9) and
+/// written through the outbound sink.
+/// [`audited_call_judged`] inside one relay-receipt collector, which spans the
+/// dispatch, the audit write and the judge (COLLUDE.1). With relay detection
+/// off there is nothing to collect.
 pub(super) async fn audited_call(
     state: Arc<AppState>,
     name: String,
     request: axum::http::Request<axum::body::Body>,
-) -> Answer {
+) -> crate::gateway::outbound::OutboundReply {
+    let judged = audited_call_judged(Arc::clone(&state), name, request);
+    #[cfg(feature = "firewall")]
+    if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
+        return crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged)).await;
+    }
+    Box::pin(judged).await
+}
+
+async fn audited_call_judged(
+    state: Arc<AppState>,
+    name: String,
+    request: axum::http::Request<axum::body::Body>,
+) -> crate::gateway::outbound::OutboundReply {
     let mut call = None;
-    let inner = Box::pin(super::backend_handler_inner(
-        Arc::clone(&state),
-        name.clone(),
-        request,
-        &mut call,
+    let mut reads = DirectReads::default();
+    let guard = super::super::helpers::read_guard(&state);
+    let inner = Box::pin(crate::gateway::outbound::read_scoped(
+        guard.clone(),
+        super::backend_handler_inner(
+            Arc::clone(&state),
+            name.clone(),
+            request,
+            &mut call,
+            &mut reads,
+        ),
     ));
-    let (answer, notes) = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
-    match call {
+    let ((answer, hidden), notes) =
+        crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
+    let (status, Json(body)) = match call {
         Some(call) => record(&state, &name, call, answer, notes).await,
         None => answer,
+    };
+    if status == StatusCode::ACCEPTED {
+        // An accepted notification: the gateway's own placeholder, sent
+        // with no body (MIK-7759), carries nothing to judge.
+        return crate::gateway::outbound::gateway_reply(super::super::helpers::bodiless_accepted(
+            (status, Json(body)),
+        ));
     }
+    let frame = crate::gateway::outbound::answer_value(
+        guard.as_deref(),
+        reads.key.as_deref(),
+        body,
+        reads.params.as_ref(),
+        hidden.as_ref(),
+    );
+    // COLLUDE.1 x MIN.2: receipts record only an answer that was delivered, so
+    // they follow the judge, the audit write and the read record that
+    // `emit_http` writes last, as it can still replace the answer.
+    let delivers = frame.delivers_result();
+    let response = crate::gateway::outbound::to_http(frame, status, "");
+    let (reply, written) =
+        crate::gateway::outbound::judged_reply_checked(response, state.transparency_log.as_ref())
+            .await;
+    #[cfg(feature = "firewall")]
+    super::relay::commit_direct_receipts(&state, delivers && written);
+    #[cfg(not(feature = "firewall"))]
+    let _ = (delivers, written);
+    reply
 }
 
 /// Write the record for `call` and hand `answer` on, or withhold it when the

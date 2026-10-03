@@ -17,7 +17,7 @@ mod webhook;
 pub use process::{
     CliArg, CliConfig, CliOutput, ConditionalArg, DEFAULT_MAX_OUTPUT_BYTES, EachArg, JsonArg,
     MAX_OUTPUT_BYTES_CEILING, McpConfig, McpTransport, PrepareCall, ProcessConfig, ToolCall,
-    ToolSelector,
+    ToolSelector, WAIT_INTERVAL_MS, WaitStep, WaitUntil,
 };
 pub use providers::{Integrity, ProvidersConfig};
 pub use webhook::WebhookEvent;
@@ -343,6 +343,11 @@ pub struct RestConfig {
     /// is treated as XML automatically.
     #[serde(default)]
     pub response_format: String,
+
+    /// Write a base64 field of the response to the configured downloads
+    /// directory instead of returning it (MIK-7782, ATTACH.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_file: Option<crate::capability::executor::SaveFileSpec>,
 
     /// Override the `Content-Type` header for the request body.
     ///
@@ -697,7 +702,8 @@ pub struct WebhookTransform {
     /// Template for extracting the event type (e.g., "linear.issue.{action}")
     #[serde(default)]
     pub event_type: Option<String>,
-    /// Field mappings: `output_key` -> template or JSON path
+    /// Field mappings: `output_key` -> template (`{a.b}` placeholders; text
+    /// with none is a literal)
     #[serde(default)]
     pub data: HashMap<String, String>,
 }
@@ -708,7 +714,7 @@ pub struct WebhookDefinition {
     /// URL path relative to `base_path` (e.g., "/linear/webhook")
     pub path: String,
     /// HTTP method to accept (default: POST)
-    #[serde(default = "default_method")]
+    #[serde(default = "webhook::default_method")]
     pub method: String,
     /// HMAC secret reference (e.g., "`env:LINEAR_WEBHOOK_SECRET`")
     #[serde(default)]

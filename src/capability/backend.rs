@@ -155,7 +155,7 @@ pub struct CapabilityBackend {
     /// they may be set in either order at startup. Read by
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
-    initial_scan: std::sync::atomic::AtomicBool,
+    initial_scan: std::sync::atomic::AtomicU8,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -181,7 +181,7 @@ impl CapabilityBackend {
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
-            initial_scan: std::sync::atomic::AtomicBool::new(true), // see initial_scan.rs
+            initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
         }
     }
 
@@ -192,6 +192,7 @@ impl CapabilityBackend {
     pub fn set_multi_user(&self, multi_user: bool) {
         self.multi_user
             .store(multi_user, std::sync::atomic::Ordering::Relaxed);
+        self.executor.set_multi_user(multi_user);
     }
 
     /// Whether the capability backend is currently considered healthy by its
@@ -215,7 +216,7 @@ impl CapabilityBackend {
     /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
         let mut caps = self.capabilities.write();
-        if let Some(&pos) = caps.index.get(name) {
+        let removed = if let Some(&pos) = caps.index.get(name) {
             caps.entries.remove(pos);
             caps.tools.remove(pos);
             caps.index.remove(name);
@@ -228,10 +229,16 @@ impl CapabilityBackend {
             // Published, and the lock still held: no reader can observe the
             // removal under the old epoch.
             self.executor.bump_policy_epoch();
+            self.executor.bump_mcp_generation(name);
             true
         } else {
             false
-        }
+        };
+        drop(caps);
+        // After the epoch bump: a call that started before it is stopped here,
+        // and one that starts after it is refused at `acquire`.
+        self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
+        removed
     }
 
     /// Mark a capability as quarantined by a rug-pull event.
@@ -385,8 +392,15 @@ impl CapabilityBackend {
         // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
+            let kept: std::collections::HashSet<&str> =
+                admitted.iter().map(|c| c.name.as_str()).collect();
+            for gone in caps.index.keys().filter(|n| !kept.contains(n.as_str())) {
+                self.executor.bump_mcp_generation(gone);
+            }
             caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
+            self.executor
+                .stop_unloaded_mcp(&|name| caps.index.contains_key(name));
         }
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
@@ -454,6 +468,14 @@ impl CapabilityBackend {
         self.capabilities.read().get(name).cloned()
     }
 
+    /// The definition and the MCP revocation generation, read under one lock so
+    /// an unload cannot fall between them.
+    fn get_with_generation(&self, name: &str) -> Option<(CapabilityDefinition, u64)> {
+        let caps = self.capabilities.read();
+        let generation = self.executor.mcp_generation(name);
+        caps.get(name).cloned().map(|def| (def, generation))
+    }
+
     /// List all capability names in insertion order.
     pub fn list(&self) -> Vec<String> {
         self.capabilities
@@ -494,14 +516,15 @@ impl CapabilityBackend {
         &self,
         name: &str,
         arguments: Value,
-        context: CapabilityExecutionContext,
+        mut context: CapabilityExecutionContext,
     ) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
 
         // O(1) lookup; clone releases the read lock before the async executor call.
-        let capability = self
-            .get(name)
+        let (capability, generation) = self
+            .get_with_generation(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
+        context.mcp_generation = Some(generation);
         validate_personal_capability_identity(&capability, &context)?;
 
         let multi_user = self.multi_user.load(std::sync::atomic::Ordering::Relaxed);
@@ -632,39 +655,6 @@ impl CapabilityBackend {
     pub fn watched_directories(&self) -> Vec<String> {
         self.directories.read().clone()
     }
-
-    /// Scan every watched directory for capability YAMLs whose embedded
-    /// `sha256:` pin no longer matches the on-disk content, and quarantine
-    /// any mismatches as rug-pull events.
-    ///
-    /// Called by the file watcher on every debounced change event (before
-    /// the normal `reload()`) so a tampered capability is unloaded loudly
-    /// instead of silently skipped by the loader.
-    ///
-    /// Returns the list of newly-detected rug-pull records.
-    pub async fn detect_rug_pulls(&self) -> Vec<RugPullRecord> {
-        let dirs: Vec<String> = self.directories.read().clone();
-        let mut detected = Vec::new();
-
-        for dir in &dirs {
-            detect_rug_pulls_in_dir(Path::new(dir), &mut detected).await;
-        }
-
-        for record in &detected {
-            warn!(
-                backend = %self.name,
-                capability = %record.capability,
-                file = %record.file,
-                expected = %record.expected,
-                actual = %record.actual,
-                "RUG-PULL DETECTED: capability YAML sha256 pin mismatch — unloading",
-            );
-            self.unload_capability(&record.capability);
-            self.mark_rug_pull(record.clone());
-        }
-
-        detected
-    }
 }
 
 fn path_selector_type_error(
@@ -706,64 +696,8 @@ fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -
     }
 }
 
-use std::path::Path;
-
-/// Recursively walk a directory and report any YAML file whose embedded
-/// `sha256:` pin does not match the file's current content.
-async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
-    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
-        return;
-    };
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        if path
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-        {
-            continue;
-        }
-        if path.is_dir() {
-            Box::pin(detect_rug_pulls_in_dir(&path, out)).await;
-            continue;
-        }
-        if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
-            continue;
-        }
-        let Ok(content) = tokio::fs::read_to_string(&path).await else {
-            continue;
-        };
-        // Extract embedded pin via lightweight deserialisation. A parse error
-        // here is not a rug-pull (the loader will surface it); we only care
-        // about files that self-declare a pin that no longer matches.
-        let pinned: Option<String> = serde_yaml::from_str::<serde_yaml::Value>(&content)
-            .ok()
-            .and_then(|v| {
-                v.get("sha256")
-                    .and_then(serde_yaml::Value::as_str)
-                    .map(str::to_string)
-            });
-        let Some(expected) = pinned else { continue };
-        let actual = compute_capability_hash(&content);
-        if !expected.eq_ignore_ascii_case(&actual) {
-            // Recover the capability name the same way parse_capability_file does.
-            let name = serde_yaml::from_str::<serde_yaml::Value>(&content)
-                .ok()
-                .and_then(|v| {
-                    v.get("name")
-                        .and_then(serde_yaml::Value::as_str)
-                        .map(str::to_string)
-                })
-                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .unwrap_or_default();
-            out.push(RugPullRecord {
-                capability: name,
-                file: path.display().to_string(),
-                expected,
-                actual,
-            });
-        }
-    }
-}
+#[path = "backend_rug_pull.rs"]
+mod rug_pull;
 
 /// Status information for a capability backend
 #[derive(Debug, Clone, serde::Serialize)]

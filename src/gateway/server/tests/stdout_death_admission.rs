@@ -77,7 +77,9 @@ async fn a_dead_stdout_closes_the_queue_the_read_loop_admits_on() {
     let task = tokio::spawn(Gateway::run_stdout_writer(DeadSink, queue));
 
     writer
-        .send(json!({"jsonrpc": "2.0", "id": 1, "result": {}}))
+        .send(crate::gateway::outbound::OutboundFrame::gateway_stdio(
+            json!({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        ))
         .await
         .expect("the queue is open before the first failed write");
 
@@ -104,7 +106,9 @@ async fn a_live_stdout_keeps_the_queue_open() {
     let task = tokio::spawn(Gateway::run_stdout_writer(LiveSink(reported), queue));
 
     writer
-        .send(json!({"jsonrpc": "2.0", "id": 1, "result": {}}))
+        .send(crate::gateway::outbound::OutboundFrame::gateway_stdio(
+            json!({"jsonrpc": "2.0", "id": 1, "result": {}}),
+        ))
         .await
         .expect("a live sink accepts the frame");
 
