@@ -147,6 +147,8 @@ pub struct FirewallConfig {
     ///       action: observe          # off (default) | observe | block
     ///       sources: ["crm:*"]       # results always treated as sensitive
     ///       non_egress: ["notes:read_*"]
+    ///       allowed_flows:           # expected collaboration, not a relay
+    ///         - {source: "docs:read", egress: "mail:send_*"}
     /// ```
     #[serde(default)]
     pub collusion: CollusionConfig,

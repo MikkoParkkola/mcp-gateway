@@ -383,3 +383,21 @@ fn a_reported_relay_increments_the_metric() {
         assert!(count(label) > before, "{label}: not counted");
     }
 }
+
+/// An egress checked without an authenticated caller is counted, by action.
+#[cfg(feature = "metrics")]
+#[test]
+fn a_keyless_egress_increments_the_unkeyed_metric() {
+    crate::metrics::install();
+    let count = || -> u64 {
+        let line = "mcp_gateway_collusion_unkeyed_egress_total{action=\"observe\"} ";
+        crate::metrics::render()
+            .lines()
+            .find_map(|l| l.strip_prefix(line).and_then(|v| v.trim().parse().ok()))
+            .unwrap_or(0)
+    };
+    let (fw, _dir) = observing(|_| {});
+    let before = count();
+    let _ = egress(&fw, RelayCaller::Unkeyed("direct:alpha"));
+    assert!(count() > before, "not counted");
+}
