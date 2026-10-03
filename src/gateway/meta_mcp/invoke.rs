@@ -117,11 +117,12 @@ use r2_check::miss_with_hint;
 mod account_mint;
 
 use super::support::{
-    MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, response_cache_key_for, strip_backend_provenance,
+    MetaMcpInvoker, augment_with_predictions, augment_with_trace, idempotency_key_for,
+    response_cache_key_for,
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 mod output_shape;
+mod provenance_stamp;
 pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
 use output_shape::{apply_validated_output, extract_output_validation_target};
@@ -1247,84 +1248,6 @@ impl MetaMcp {
             audited.map(|value| (value, source, upstream))
         })
         .await
-    }
-
-    /// Stamp a signed runtime-provenance receipt into `value._meta` when
-    /// provenance stamping is enabled (MIK-6905). No-op when the signer is
-    /// absent, so payloads stay byte-identical with the feature off.
-    ///
-    /// `backend_ok` is derived from the result's `isError` flag so cache hits
-    /// carrying a stored error are reported honestly.
-    ///
-    /// When shadow claim capture is also enabled (MIK-6908, rung 3.1), this
-    /// is the single chokepoint both the meta and direct-route call paths
-    /// funnel through, so a call whose receipt carries a `call_id` is
-    /// shadow-captured here alongside the derived claim. A `call_id`-less
-    /// receipt (no trace scope active) is skipped rather than captured
-    /// un-joinable — consistent with `score_corpus`'s mis-join contract,
-    /// which treats a missing join key as unscoreable, not as evidence.
-    ///
-    /// `client_claim` is the MIK-6914 Option B claim-under-test — an untrusted
-    /// typed claim the caller supplied for this call. When present it is
-    /// captured verbatim as the claim under scrutiny; when absent, capture
-    /// falls back to the honest `Claim::Succeeded` floor. It is never used as
-    /// the ground-truth leg (that is the receipt's extractor-observed
-    /// `row_count`).
-    fn maybe_stamp_provenance(
-        &self,
-        mut value: Value,
-        server: &str,
-        tool: &str,
-        api_key_name: Option<&str>,
-        cache: crate::trust::CacheOutcome,
-        client_claim: Option<&crate::trust::ClientClaim>,
-    ) -> Value {
-        // Only this gateway may put a signature chain on a result (ASI07).
-        crate::security::signature_chain::strip_chain(&mut value);
-        let Some(ref signer) = self.provenance_signer else {
-            // Stamping off: any `_meta.provenance` is backend-injected. Strip
-            // it so it cannot pass as a gateway receipt (MIK-6909).
-            return strip_backend_provenance(value);
-        };
-        let backend_ok = !value
-            .get("isError")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let (stamped, signed_receipt) =
-            augment_with_provenance(value, signer, server, tool, api_key_name, cache, backend_ok);
-        if let Some(sink) = &self.claim_capture
-            && let Some(call_id) = signed_receipt.receipt.call_id.clone()
-        {
-            let claim = crate::trust::derive_claim(client_claim);
-            sink.capture(call_id, claim, signed_receipt);
-        }
-        stamped
-    }
-
-    /// Stamp provenance onto a direct per-backend route result (the
-    /// `/mcp/{name}` passthrough, which bypasses the meta chokepoint — rung 3).
-    ///
-    /// Tagged [`CacheOutcome::Bypass`] because the direct route never consults
-    /// the meta response cache. No-op when stamping is disabled, so the
-    /// passthrough stays byte-identical with the feature off.
-    #[must_use]
-    pub fn stamp_direct_result(
-        &self,
-        result: Value,
-        backend_id: &str,
-        tool: &str,
-        api_key_name: Option<&str>,
-    ) -> Value {
-        self.maybe_stamp_provenance(
-            result,
-            backend_id,
-            tool,
-            api_key_name,
-            crate::trust::CacheOutcome::Bypass,
-            // The direct passthrough carries no gateway-parsed `_claim`
-            // directive, so there is no client claim-under-test here.
-            None,
-        )
     }
 
     /// The post-dispatch response gates a backend result must pass before any
