@@ -101,3 +101,32 @@ fn a_refused_call_holds_nothing_back_from_the_next() {
         "a call that never ran must give its allowance back"
     );
 }
+
+#[test]
+fn a_settled_call_counts_once_after_its_hold_drops() {
+    let enforcer = enforcer(Scope::Global, 2);
+    let first = enforcer.check(TOOL, Some(KEY));
+    assert!(first.allowed);
+    enforcer.record_spend(TOOL, Some(KEY), first.cost_usd);
+    drop(first);
+    // Spent once, reserved nothing: one more call fits, a second does not.
+    let second = enforcer.check(TOOL, Some(KEY));
+    assert!(second.allowed, "the settled call must not be counted twice");
+    enforcer.record_spend(TOOL, Some(KEY), second.cost_usd);
+    drop(second);
+    assert!(!enforcer.check(TOOL, Some(KEY)).allowed);
+}
+
+#[test]
+fn a_clone_of_a_result_shares_one_hold() {
+    let enforcer = enforcer(Scope::Global, 1);
+    let first = enforcer.check(TOOL, Some(KEY));
+    let copy = first.clone();
+    drop(first);
+    assert!(
+        !enforcer.check(TOOL, Some(KEY)).allowed,
+        "the copy still holds the allowance"
+    );
+    drop(copy);
+    assert!(enforcer.check(TOOL, Some(KEY)).allowed);
+}

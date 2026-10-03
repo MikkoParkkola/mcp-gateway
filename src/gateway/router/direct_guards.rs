@@ -7,7 +7,7 @@
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::gateway::meta_mcp::invoke::dispatch_guards::{BackendCall, DirectOutcome};
+use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall, DirectOutcome};
 use crate::gateway::meta_mcp::signing::SigningScope;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
@@ -63,7 +63,10 @@ impl DirectRouteGuards {
 
     /// S2 spend, once, immediately before an actual backend dispatch (after
     /// the idempotency short-circuit: a replay spends nothing).
-    pub(crate) fn before_dispatch(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<Vec<String>> {
+    ///
+    /// The caller keeps the admission until `after_dispatch` has recorded the
+    /// call's spend, then drops it (MIK-7763).
+    pub(crate) fn before_dispatch(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<Admission> {
         meta.admit_spend_for(call)
     }
 
