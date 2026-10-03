@@ -386,6 +386,11 @@ pub(crate) struct ManagedLease {
 }
 
 impl ManagedLease {
+    /// Whether `vault` is the very instance that released this lease.
+    pub(crate) fn minted_by(&self, vault: &Arc<VaultStrategy>) -> bool {
+        Arc::ptr_eq(vault, &self.strategy)
+    }
+
     /// The real custody release for this lease, refused unless `installed` is
     /// still the very vault that released it: a descriptor re-installed
     /// against different custody cannot be rechecked with the previous one.
@@ -393,7 +398,7 @@ impl ManagedLease {
         &self,
         installed: &Arc<VaultStrategy>,
     ) -> Result<(), PropagationError> {
-        if !Arc::ptr_eq(installed, &self.strategy) {
+        if !self.minted_by(installed) {
             return Err(PropagationError::Refuse(
                 "the managed custody backing it was replaced after the credential was minted"
                     .to_string(),
