@@ -1,0 +1,13 @@
+diff --git a/src/attestation/signer.rs b/src/attestation/signer.rs
+index 455004ffa..529a6091c 100644
+--- a/src/attestation/signer.rs
++++ b/src/attestation/signer.rs
+@@ -145,7 +145,7 @@ impl BnautAttestationSigner {
+             now,
+             ttl,
+             None,
+-            self.audience.clone().unwrap_or_default(),
++            String::new(),
+         )
+     }
+ 
