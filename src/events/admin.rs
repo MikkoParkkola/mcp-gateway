@@ -104,10 +104,8 @@ impl EventsHub {
             .into_iter()
             .find(|s| s.id == dead.record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
-        if !services
-            .admits_subscription(&sub, &dead.record.backend)
-            .await
-        {
+        let grant = (!dead.record.owner_scoped).then_some(dead.record.backend.as_str());
+        if !services.admits_subscription(&sub, grant).await {
             return Err(ReplayRefusal::AccessRevoked);
         }
         let bytes = base64::engine::general_purpose::STANDARD

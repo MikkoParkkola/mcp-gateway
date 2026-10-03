@@ -275,6 +275,7 @@ impl AppState {
             crate::gateway::subscription_registry::tools_list_changed(),
             backend,
         );
+        self.meta_mcp.events_tools_changed(backend);
     }
 }
 
