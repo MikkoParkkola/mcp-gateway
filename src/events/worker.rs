@@ -200,6 +200,15 @@ impl EventsHub {
             self.settle(services, record, retry).await;
             return;
         }
+        // MIN.2 E1, before the checks below: its own audit wait can span a
+        // rotation or an unsubscribe too. A frame dropped by a later refusal
+        // releases its reservation unsent.
+        let Some((frame, verdict)) = self
+            .admit_delivery(services, sub, record, value, ended("tenant"))
+            .await
+        else {
+            return;
+        };
         // The wait for the record can span a rotation or an unsubscribe: the
         // row that signs is read after it, never before.
         let Some(current) = self.store.signing_row(record) else {
@@ -223,12 +232,6 @@ impl EventsHub {
                 .await;
             return;
         }
-        let Some((frame, verdict)) = self
-            .admit_delivery(services, sub, record, value, ended("tenant"))
-            .await
-        else {
-            return;
-        };
         let answer = self
             .send_event(url, &current, event_id, frame, sub.read_key.as_deref())
             .await;
