@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 57cb4371d..23da2d049 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -100,7 +100,7 @@ impl EventsHub {
+             }
+             // An occurrence that carries its owner was authorized where it was
+             // made: the record it describes may be gone (an expired task).
+-            if event.owner.is_some() {
++            if false {
+                 self.offer(services, event, &sub).await;
+                 continue;
+             }

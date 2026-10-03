@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+index 34244583a..98964f1ef 100644
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -363,7 +363,7 @@ impl CommittedTask {
+             revision: record.revision,
+             targets_recorded: record.version >= TARGET_VERSION,
+             output_free: record.output_free,
+-            owner_digest: record.admission.principal_digest.clone(),
++            owner_digest: String::new(),
+         }
+     }
+ 

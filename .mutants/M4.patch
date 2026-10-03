@@ -1,0 +1,14 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 57cb4371d..fb3c9e1f5 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -245,9 +245,6 @@ impl EventsHub {
+         // the gateway was down takes its subscriptions with it (MIK-7803).
+         let offered: std::collections::HashSet<String> =
+             self.catalogue().into_iter().map(|d| d.name).collect();
+-        if !self.withdraw(&self.absent_names(super::backend_source::NAME_PREFIX, &offered)) {
+-            return false;
+-        }
+         if scan == CatalogueScan::Partial && webhooks_on {
+             tracing::warn!(
+                 "events: a capability directory could not be read at startup; stored \

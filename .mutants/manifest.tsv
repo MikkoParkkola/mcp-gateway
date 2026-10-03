@@ -1,0 +1,6 @@
+head_sha	2303a8174e16738bda52ea72716420169c941c76
+M1	linux	M1.patch	--lib events::sources_tests::a_settled_task_is_matched_by_its_carried_owner_after_expiry
+M2	linux	M2.patch	--lib events::sources_tests::an_expired_tasks_event_reaches_named_and_all_task_subscribers
+M3	linux	M3.patch	--test mik_7630_events_surface discover_advertises_events_only_when_enabled
+M4	linux	M4.patch	--lib events::sources_tests::startup_reconcile_withdraws_absent_backends_on_a_partial_scan
+M5	linux	M5.patch	--lib gateway::task_service::record::legacy_tests::a_committed_snapshot_carries_its_owner_digest

@@ -1,0 +1,13 @@
+diff --git a/src/events/mod.rs b/src/events/mod.rs
+index d17da236c..13fe4432c 100644
+--- a/src/events/mod.rs
++++ b/src/events/mod.rs
+@@ -241,7 +241,7 @@ impl EventsHub {
+     /// event type (design §6.1). `listChanged` is false: nothing pushes a
+     /// catalogue change, so a client re-reads `events/list` (MIK-7803).
+     pub(crate) fn capability(&self) -> Option<serde_json::Value> {
+-        (!self.catalogue().is_empty()).then(|| serde_json::json!({ "listChanged": false }))
++        (!self.catalogue().is_empty()).then(|| serde_json::json!({ "listChanged": true }))
+     }
+ }
+ 
