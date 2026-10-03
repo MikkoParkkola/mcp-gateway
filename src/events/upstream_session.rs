@@ -495,3 +495,7 @@ impl<'a> State<'a> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "upstream_session_tests.rs"]
+mod tests;

@@ -196,3 +196,7 @@ impl UpstreamListeners {
         shared
     }
 }
+
+#[cfg(test)]
+#[path = "upstream_listener_tests.rs"]
+mod tests;
