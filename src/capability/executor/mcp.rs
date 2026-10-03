@@ -9,6 +9,8 @@
 //! long as it does. These backends are never registered as public servers.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -24,6 +26,7 @@ use crate::capability::definition::{McpConfig, ToolCall};
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use crate::error::rpc_codes::INVALID_PARAMS;
+use crate::protocol::JsonRpcResponse;
 use crate::{Error, Result};
 
 /// Most live children one capability may have (one per caller).
@@ -269,12 +272,15 @@ fn arguments(template: Option<&Value>, params: &Value) -> Result<Map<String, Val
 
 /// One `tools/call`; a JSON-RPC error or `isError` is an error.
 async fn call_tool(backend: &Backend, tool: &str, args: Map<String, Value>) -> Result<Value> {
-    let response = backend
-        .request(
+    // Type-erased on purpose: left generic, this future's auto-trait proof
+    // runs through every transport (WebSocket's mio types on Windows) on top of
+    // the whole invoke chain and overflows rustc's recursion limit.
+    let request: Pin<Box<dyn Future<Output = Result<JsonRpcResponse>> + Send + '_>> =
+        Box::pin(backend.request(
             "tools/call",
             Some(json!({ "name": tool, "arguments": args })),
-        )
-        .await?;
+        ));
+    let response = request.await?;
     if let Some(error) = response.error {
         return Err(Error::Protocol(format!(
             "tool '{tool}' failed: {}",
