@@ -39,6 +39,8 @@ mod stdio_initialize_order;
 #[cfg(feature = "firewall")]
 mod stdio_tenant_reads;
 
+mod stdio_hardened_signing;
+
 mod stdio_sole_operator;
 
 mod stdio_catalogue_sole_operator;

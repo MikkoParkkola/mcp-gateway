@@ -1006,6 +1006,9 @@ impl Gateway {
                 std::time::Duration::from_secs(signing.replay_window),
                 signing.require_nonce,
             );
+            meta_mcp_builder.set_signing_scope(super::meta_mcp::signing::SigningScope::of(
+                self.config.security.posture,
+            ));
         }
         let security = &self.config.security;
         if let Some(chain) = &security.signature_chain {
@@ -3076,9 +3079,12 @@ impl Gateway {
     > {
         // A bad chain nonce keeps the caller's id; a bad envelope has none.
         let raw_id = crate::protocol::mrtr::raw_request_id(request);
-        let mut signing_context = meta_mcp
-            .signing_enabled()
-            .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(request));
+        let mut signing_context = meta_mcp.signing_enabled().then(|| {
+            super::meta_mcp::signing::SigningInvocationContext::capture_scoped(
+                request,
+                meta_mcp.signing_scope(),
+            )
+        });
         let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
         let id = restored.is_ok().then_some(raw_id).flatten();
         match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
