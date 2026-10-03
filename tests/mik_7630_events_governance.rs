@@ -38,6 +38,57 @@ async fn records_of(root: &std::path::Path, action: &str) -> Vec<Value> {
         .collect()
 }
 
+/// A bulk replay writes one admin-attributed record per dead letter it
+/// revives: two here, so a record naming the admin for the first only is caught.
+async fn bulk_replay_names_the_admin(
+    gw: &gateway::Gateway,
+    rx: &Receiver,
+    root: &std::path::Path,
+    id: &str,
+) {
+    rx.script([EventReply::Status(410), EventReply::Status(410)]);
+    fire(gw, "d-7806", "o/r").await;
+    fire(gw, "d-7806b", "o/r").await;
+    let both = wait_until(DEADLINE, || {
+        delivery::dead_letters(root)
+            .iter()
+            .filter(|d| d["reason"] == "gone")
+            .count()
+            >= 2
+    })
+    .await;
+    assert!(both, "two dead letters wait for the bulk replay");
+    let bulk_ids: Vec<String> = delivery::dead_letters(root)
+        .iter()
+        .filter_map(|d| d["event_id"].as_str().map(str::to_owned))
+        .collect();
+    let (status, _) = gw
+        .admin(
+            Some(ADMIN),
+            "POST",
+            &format!("/ui/api/events/dead-letters/replay?all=1&subscription={id}"),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let bulk = wait_until(DEADLINE, || {
+        let seen: Vec<Value> = audit_records(root)
+            .into_iter()
+            .filter(|r| r["action"] == "events.replay")
+            .collect();
+        bulk_ids
+            .iter()
+            .all(|id| seen.iter().any(|r| r["event_id"] == id.as_str()))
+    })
+    .await;
+    assert!(bulk, "bulk replay writes a record per dead letter");
+    for record in audit_records(root)
+        .iter()
+        .filter(|r| r["action"] == "events.replay")
+    {
+        assert_eq!(record["who"]["account"], "admin", "{record}");
+    }
+}
+
 /// Every lifecycle step writes its record, naming the subscription, the
 /// event and the callback host, never the callback path or the secret.
 #[tokio::test]
@@ -82,49 +133,7 @@ async fn the_subscription_lifecycle_writes_governance_records() {
             .is_some_and(|p| !p.is_empty()),
         "the admin credential's principal is on the record"
     );
-    // A bulk replay writes one such record per dead letter it revives: two
-    // here, so a record that names the admin for the first only is caught.
-    rx.script([EventReply::Status(410), EventReply::Status(410)]);
-    fire(&gw, "d-7806", "o/r").await;
-    fire(&gw, "d-7806b", "o/r").await;
-    let both = wait_until(DEADLINE, || {
-        delivery::dead_letters(root.path())
-            .iter()
-            .filter(|d| d["reason"] == "gone")
-            .count()
-            >= 2
-    })
-    .await;
-    assert!(both, "two dead letters wait for the bulk replay");
-    let bulk_ids: Vec<String> = delivery::dead_letters(root.path())
-        .iter()
-        .filter_map(|d| d["event_id"].as_str().map(str::to_owned))
-        .collect();
-    let (status, _) = gw
-        .admin(
-            Some(ADMIN),
-            "POST",
-            &format!("/ui/api/events/dead-letters/replay?all=1&subscription={id}"),
-        )
-        .await;
-    assert_eq!(status, 200);
-    let bulk = wait_until(DEADLINE, || {
-        let seen: Vec<Value> = audit_records(root.path())
-            .into_iter()
-            .filter(|r| r["action"] == "events.replay")
-            .collect();
-        bulk_ids
-            .iter()
-            .all(|id| seen.iter().any(|r| r["event_id"] == id.as_str()))
-    })
-    .await;
-    assert!(bulk, "bulk replay writes a record per dead letter");
-    for record in audit_records(root.path())
-        .iter()
-        .filter(|r| r["action"] == "events.replay")
-    {
-        assert_eq!(record["who"]["account"], "admin", "{record}");
-    }
+    bulk_replay_names_the_admin(&gw, &rx, root.path(), &id).await;
     unsubscribe(&gw, ALICE, &rx.url, json!({})).await;
     records_of(root.path(), "events.unsubscribe").await;
     let verified = records_of(root.path(), "events.verification").await;
