@@ -92,3 +92,25 @@ fn update_dns_record_needs_a_field_to_change() {
         assert!(valid(&cap, &args), "{args}");
     }
 }
+
+/// Only a parameter the path names gets its default: a default for a query or
+/// body field stays the upstream's own to apply.
+#[test]
+fn only_path_parameters_get_their_schema_default() {
+    let cap = shipped("cloudflare_get_waf_rules");
+    let config = &cap.primary_provider().expect("a primary provider").config;
+    let schema = json!({
+        "properties": {
+            "ruleset_phase": { "default": "http_request_firewall_custom" },
+            "page": { "default": 1 }
+        }
+    });
+    let args = json!({ "zone_id": "z" });
+    let effective = super::with_path_defaults(config, &schema, &args);
+    assert_eq!(effective["ruleset_phase"], "http_request_firewall_custom");
+    assert!(effective.get("page").is_none(), "{effective}");
+    // A null counts as not given.
+    let nulled = json!({ "zone_id": "z", "ruleset_phase": null });
+    let effective = super::with_path_defaults(config, &schema, &nulled);
+    assert_eq!(effective["ruleset_phase"], "http_request_firewall_custom");
+}
