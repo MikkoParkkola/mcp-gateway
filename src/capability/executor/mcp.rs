@@ -310,11 +310,13 @@ pub(crate) fn principal(
     Ok("operator".to_owned())
 }
 
-type Selected<'a> = (
-    &'a str,
-    Option<&'a Value>,
-    Option<&'a crate::capability::definition::PrepareCall>,
-);
+/// What `select` resolves for one call.
+struct Selected<'a> {
+    tool: &'a str,
+    template: Option<&'a Value>,
+    prepare: Option<&'a crate::capability::definition::PrepareCall>,
+    wait: Option<&'a crate::capability::definition::WaitStep>,
+}
 
 /// The tool, its argument template and any prepare step for this call.
 fn select<'a>(config: &'a McpConfig, params: &Value) -> Result<Selected<'a>> {
@@ -332,16 +334,86 @@ fn select<'a>(config: &'a McpConfig, params: &Value) -> Result<Selected<'a>> {
             tool,
             arguments,
             prepare,
+            requires,
+            wait,
         } = selector.tools.get(op).ok_or_else(|| {
             Error::json_rpc(INVALID_PARAMS, format!("unknown {} '{op}'", selector.param))
         })?;
-        return Ok((tool, arguments.as_ref(), prepare.as_ref()));
+        // Before a child is acquired: a call that cannot work spends no process.
+        if let Some(missing) = requires
+            .iter()
+            .find(|name| params.get(name.as_str()).is_none_or(Value::is_null))
+        {
+            return Err(Error::json_rpc(
+                INVALID_PARAMS,
+                format!("operation '{op}' needs parameter '{missing}'"),
+            ));
+        }
+        return Ok(Selected {
+            tool,
+            template: arguments.as_ref(),
+            prepare: prepare.as_ref(),
+            wait: wait.as_ref(),
+        });
     }
     match &config.tool {
-        Some(tool) => Ok((tool, config.arguments.as_ref(), None)),
+        Some(tool) => Ok(Selected {
+            tool,
+            template: config.arguments.as_ref(),
+            prepare: None,
+            wait: None,
+        }),
         None => Err(Error::Config(
             "not executable: this mcp capability declares no tool mapping (`tool` or `tool_selector`)".into(),
         )),
+    }
+}
+
+/// Poll `wait.tool` until `until` holds, `max_wait_s` passes, or the call's
+/// own deadline cuts in. A poll that errors or does not match yet is "not
+/// ready", never fatal: the server answers an absent or unfinished item with
+/// an error. Running out of time says so and leaves the child alone, since a
+/// busy server is not a wedged one.
+async fn wait_ready(
+    backend: &Backend,
+    wait: &crate::capability::definition::WaitStep,
+    params: &Value,
+) -> Result<Value> {
+    let args = arguments(wait.arguments.as_ref(), params)?;
+    let mut wanted = Vec::with_capacity(wait.until.matches.len());
+    for (field, template) in &wait.until.matches {
+        let value = render_json(&Value::String(template.clone()), params)?.ok_or_else(|| {
+            Error::json_rpc(
+                INVALID_PARAMS,
+                format!("wait needs a value for '{template}'"),
+            )
+        })?;
+        wanted.push((field.as_str(), value));
+    }
+    let limit = Duration::from_secs(wait.max_wait_s);
+    let interval = Duration::from_millis(wait.interval_ms);
+    let started = Instant::now();
+    loop {
+        if let Ok(result) = call_tool(backend, &wait.tool, args.clone()).await
+            && let Some(found) = result
+                .get(&wait.until.array)
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items.iter().find(|item| {
+                        wanted.iter().all(|(f, v)| item.get(*f) == Some(v))
+                            && item.get(&wait.until.field) == Some(&wait.until.equals)
+                    })
+                })
+        {
+            return Ok(found.clone());
+        }
+        if started.elapsed() + interval > limit {
+            return Err(Error::BackendTimeout(format!(
+                "not finished within {} s; call again to keep waiting",
+                wait.max_wait_s
+            )));
+        }
+        tokio::time::sleep(interval).await;
     }
 }
 
@@ -422,7 +494,12 @@ impl CapabilityExecutor {
     ) -> Result<Value> {
         super::cli::refuse_egress(capability)?;
         let params = super::cli::confine_paths(capability, params, &self.process_policy.files)?;
-        let (tool, template, prepare) = select(config, &params)?;
+        let Selected {
+            tool,
+            template,
+            prepare,
+            wait,
+        } = select(config, &params)?;
         let principal = principal(capability, context, self.multi_user.load(Ordering::Acquire))?;
         self.mcp_children.ensure_sweeper();
         let lookup = self.env_lookup();
@@ -481,7 +558,14 @@ impl CapabilityExecutor {
                     args.insert(arg.clone(), value);
                 }
             }
-            call_tool(&backend, tool, args).await
+            let result = call_tool(&backend, tool, args).await?;
+            match wait {
+                Some(wait) => {
+                    let ready = wait_ready(&backend, wait, &params).await?;
+                    Ok(json!({ "result": result, "ready": ready }))
+                }
+                None => Ok(result),
+            }
         })
         .await;
         match outcome {

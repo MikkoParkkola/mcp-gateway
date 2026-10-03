@@ -15,7 +15,8 @@ import os
 import subprocess
 import sys
 
-TOOLS = ["echo", "import_binary", "fail", "flood", "grandchild"]
+TOOLS = ["echo", "import_binary", "fail", "flood", "grandchild", "list_project_binaries"]
+POLLS = {"n": 0}
 
 
 def send(msg):
@@ -51,6 +52,17 @@ for line in sys.stdin:
         elif name == "import_binary":
             base = os.path.basename(args.get("binary_path", ""))
             result(req_id, {"content": [], "structuredContent": {"program_name": "prog-" + base}})
+        elif name == "list_project_binaries":
+            # Analysis "finishes" on the third poll; the first two answer an error
+            # for an absent program, as the real server does.
+            POLLS["n"] += 1
+            if POLLS["n"] < 2:
+                result(req_id, {"isError": True, "content": [{"type": "text", "text": "no such binary"}]})
+            else:
+                done = POLLS["n"] >= 4
+                result(req_id, {"content": [], "structuredContent": {"programs": [
+                    {"name": "other", "file_path": "/other", "analysis_complete": True},
+                    {"name": "prog-x", "file_path": args.get("expect", ""), "analysis_complete": done}]}})
         elif name == "fail":
             result(req_id, {"isError": True, "content": [{"type": "text", "text": "tool said no"}]})
         elif name == "flood":

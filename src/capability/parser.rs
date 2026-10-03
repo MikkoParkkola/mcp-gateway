@@ -129,7 +129,68 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
     validate_no_secrets(&capability.auth)?;
 
     validate_webhook_events(capability)?;
+    validate_mcp_operations(capability)?;
 
+    Ok(())
+}
+
+/// An MCP operation's `requires` must name declared input properties, and a
+/// `wait` must be bounded: a typo cannot silently weaken a check, and no wait
+/// can outlive the call's own deadline.
+fn validate_mcp_operations(capability: &CapabilityDefinition) -> Result<()> {
+    use super::definition::{ProcessConfig, WAIT_INTERVAL_MS};
+    let declared: std::collections::BTreeSet<&str> = capability
+        .schema
+        .input
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .map(|p| p.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    for (name, process) in &capability.providers.process {
+        let ProcessConfig::Mcp(config) = process else {
+            continue;
+        };
+        let Some(selector) = &config.tool_selector else {
+            continue;
+        };
+        let timeout = capability
+            .providers
+            .named
+            .get(name)
+            .map_or(30, |p| p.timeout);
+        for (operation, call) in &selector.tools {
+            let refuse = |why: String| {
+                Err(Error::Config(format!(
+                    "Capability '{}' operation '{operation}': {why}",
+                    capability.name
+                )))
+            };
+            if let Some(bad) = call
+                .requires
+                .iter()
+                .find(|r| !declared.contains(r.as_str()))
+            {
+                return refuse(format!(
+                    "requires '{bad}', which is not a declared input property"
+                ));
+            }
+            if let Some(wait) = &call.wait {
+                if !WAIT_INTERVAL_MS.contains(&wait.interval_ms) {
+                    return refuse(format!(
+                        "wait interval_ms must be between {} and {}",
+                        WAIT_INTERVAL_MS.start(),
+                        WAIT_INTERVAL_MS.end()
+                    ));
+                }
+                if wait.max_wait_s == 0 || wait.max_wait_s + 10 > timeout {
+                    return refuse(format!(
+                        "wait max_wait_s must be above 0 and at most the provider timeout \
+                         ({timeout} s) minus 10 s"
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
