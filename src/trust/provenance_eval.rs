@@ -392,6 +392,20 @@ mod tests {
     /// MIK-6904.RUNG2.3 — the report keeps could-not-check separate from
     /// authoritative-negative. The fixture contains at least one of each and
     /// they land in different buckets.
+    /// MIK-7859 SCORE.2: an event receipt describes a delivery, not a tool
+    /// result, so no claim about a result is supported or contradicted by it.
+    #[test]
+    fn an_event_receipt_scores_every_claim_as_could_not_check() {
+        let receipt = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
+        for claim in [
+            Claim::Succeeded,
+            Claim::AuthoritativeEmpty,
+            Claim::FoundRows { count: 1 },
+        ] {
+            assert_eq!(score(&claim, &receipt), ClaimVerdict::Abstain, "{claim:?}");
+        }
+    }
+
     #[test]
     fn report_separates_abstain_from_authoritative_negative() {
         let cases: Vec<ReplayCase> = ground_truth().into_iter().map(|(c, _)| c).collect();
