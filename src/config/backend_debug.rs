@@ -16,6 +16,7 @@ impl std::fmt::Debug for BackendConfig {
             .field("enabled", &self.enabled)
             .field("transport", &self.transport)
             .field("stop_when_idle_for", &self.stop_when_idle_for)
+            .field("max_frame_bytes", &self.max_frame_bytes)
             .field("timeout", &self.timeout)
             // `env` and `headers` values routinely carry credentials
             // (Authorization bearers, API keys, env-injected secrets). The

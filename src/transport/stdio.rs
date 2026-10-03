@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -121,6 +121,8 @@ pub struct StdioTransport {
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
     /// How the last start ended if the child died before `initialize` (#526).
     start: early_exit::StartState,
+    /// Longest frame the reader accepts; set before `start`.
+    max_frame_bytes: AtomicUsize,
 }
 
 impl StdioTransport {
@@ -150,7 +152,15 @@ impl StdioTransport {
             protocol_version: RwLock::new(protocol_version),
             progress_destinations: dashmap::DashMap::new(),
             start: early_exit::StartState::default(),
+            max_frame_bytes: AtomicUsize::new(DEFAULT_MAX_FRAME_BYTES),
         })
+    }
+
+    /// Set the longest frame this transport accepts (clamped to the ceiling).
+    /// Call before [`start`](Self::start).
+    pub fn set_max_frame_bytes(&self, bytes: usize) {
+        self.max_frame_bytes
+            .store(bytes.clamp(1, CEILING_MAX_FRAME_BYTES), Ordering::Relaxed);
     }
 
     fn diagnostic_command(&self) -> String {
@@ -229,13 +239,14 @@ impl StdioTransport {
         // which ends this task. Ownership does the cleanup; nothing has to
         // decide when it is safe.
         let transport = Arc::downgrade(self);
+        let max_frame = self.max_frame_bytes.load(Ordering::Relaxed);
         tokio::spawn(async move {
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout);
             let mut frame = Vec::new();
 
             loop {
-                match read_frame(&mut reader, &mut frame).await {
+                match read_frame(&mut reader, &mut frame, max_frame).await {
                     Ok(Some(line)) => {
                         let line_len = line.len();
                         debug!(line_len, "Received line from stdout");
@@ -744,8 +755,7 @@ impl Transport for StdioTransport {
 
 #[path = "stdio_tree.rs"]
 mod tree;
-#[cfg(test)]
-use tree::MAX_FRAME_BYTES;
+pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
 use tree::{read_frame, spawn_in_own_tree};
 
 #[path = "stdio_early_exit.rs"]
