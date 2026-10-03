@@ -85,8 +85,11 @@ async fn the_subscription_lifecycle_writes_governance_records() {
     // A bulk replay writes one such record per dead letter it revives.
     rx.script([EventReply::Status(410)]);
     fire(&gw, "d-7806", "o/r").await;
-    let second = dead_with_reason(root.path(), "gone").await;
-    let second_id = second[0]["event_id"].as_str().expect("event id").to_owned();
+    let second_dead = dead_with_reason(root.path(), "gone").await;
+    let second_id = second_dead[0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_owned();
     let (status, _) = gw
         .admin(
             Some(ADMIN),
