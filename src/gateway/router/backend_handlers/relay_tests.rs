@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 
 use super::super::{AppState, BackendAuthContext};
 use super::{
-    commit_direct_receipts, direct_control_identity, relay_refusal, stage_direct_delivery,
+    commit_direct_receipts, direct_control_identity, relay_refusal, stage_direct_catalogue,
+    stage_direct_delivery,
 };
 use crate::config::AuthConfig;
 use crate::gateway::auth::{AuthenticatedClient, anonymous_client, principal_of};
@@ -195,5 +196,57 @@ async fn a_signing_refusal_records_nothing() {
     assert!(
         !refused(&state, b.auth(&key)),
         "a result the caller never received was recorded"
+    );
+}
+
+/// MIK-7832.RELAY.5: staging a direct catalogue result classifies its text
+/// only when relay detection is on. Classification notes its data classes in
+/// the call's dispatch scope, which is how the skip is observed.
+async fn classes_noted_by_staging(state: &AppState) -> String {
+    let key = shared_key();
+    let who = Who::Subject(GrantSubject::new("oidc:https://idp", "alice", None));
+    let text = format!("{PROSE} Contact: keeper@orchardcoop.fi");
+    let result = json!({"contents": [{"uri": "res://orchard", "text": text}]});
+    let ((), notes) = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
+        crate::gateway::meta_mcp::invoke::relay::collecting(async {
+            stage_direct_catalogue(
+                state,
+                who.auth(&key),
+                ("alpha", "resources/read"),
+                Some(&result),
+            );
+        })
+        .await;
+    })
+    .await;
+    format!("{notes:?}")
+}
+
+#[tokio::test]
+async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
+    let (active, _store) = blocking_state().await;
+    assert!(active.firewall.as_ref().is_some_and(|fw| fw.relay_active()));
+    let noted = classes_noted_by_staging(&active).await;
+    assert!(noted.contains("personal_data"), "classified: {noted}");
+
+    let (mut inactive, _store) =
+        crate::gateway::router::tests::test_router_app_state_with_auth(&AuthConfig::default())
+            .await;
+    Arc::get_mut(&mut inactive)
+        .expect("state is unique")
+        .firewall = Some(Arc::new(Firewall::from_config(
+        FirewallConfig::default(),
+        None,
+    )));
+    assert!(
+        !inactive
+            .firewall
+            .as_ref()
+            .is_some_and(|fw| fw.relay_active())
+    );
+    let noted = classes_noted_by_staging(&inactive).await;
+    assert!(
+        !noted.contains("personal_data"),
+        "classified with relay off: {noted}"
     );
 }

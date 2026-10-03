@@ -2107,6 +2107,7 @@ fn catalogue_caller(
         key: if keyed { key } else { session_id.to_owned() },
         keyed,
         name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
+        session: session_id.to_owned(),
     }
 }
 
