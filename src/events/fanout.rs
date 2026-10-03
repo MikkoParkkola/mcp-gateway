@@ -245,7 +245,7 @@ impl EventsHub {
         // the gateway was down takes its subscriptions with it (MIK-7803).
         let offered: std::collections::HashSet<String> =
             self.catalogue().into_iter().map(|d| d.name).collect();
-        if !self.withdraw(&self.absent_names(super::backend_source::NAME_PREFIX, &offered)) {
+        if !self.withdraw(&self.absent_backend_names(&offered)) {
             return false;
         }
         if scan == CatalogueScan::Partial && webhooks_on {
@@ -273,6 +273,25 @@ impl EventsHub {
             .into_iter()
             .map(|sub| sub.name)
             .filter(|name| name.starts_with(prefix) && !offered.contains(name))
+            .collect()
+    }
+
+    /// Stored `backend.<x>.<kind>` names whose backend `x` is gone. A backend
+    /// always offers `tools_changed`, so its absence is the test; the upstream
+    /// kinds depend on a listener that is not up yet at startup and are not
+    /// judged by themselves.
+    fn absent_backend_names(&self, offered: &std::collections::HashSet<String>) -> Vec<String> {
+        self.store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| {
+                name.strip_prefix(super::backend_source::NAME_PREFIX)
+                    .and_then(|rest| rest.rsplit_once('.'))
+                    .is_some_and(|(backend, _kind)| {
+                        !offered.contains(&format!("backend.{backend}.tools_changed"))
+                    })
+            })
             .collect()
     }
 

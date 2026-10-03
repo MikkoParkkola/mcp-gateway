@@ -282,6 +282,8 @@ async fn startup_reconcile_withdraws_absent_backends_on_a_partial_scan() {
     for (id, name) in [
         ("sub_gone", "backend.gone.tools_changed"),
         ("sub_kept", "backend.kept.tools_changed"),
+        ("sub_kept_resource", "backend.kept.resource_updated"),
+        ("sub_gone_resource", "backend.gone.resource_updated"),
         ("sub_hook", "webhook.cap.route.received"),
     ] {
         let row: records::Subscription = serde_json::from_value(serde_json::json!({
@@ -317,9 +319,10 @@ async fn startup_reconcile_withdraws_absent_backends_on_a_partial_scan() {
     left.sort();
     assert_eq!(
         left,
-        ["sub_hook", "sub_kept"],
+        ["sub_hook", "sub_kept", "sub_kept_resource"],
         "only the absent backend's goes"
     );
+}
 
 /// A `resource_updated` subscription hears only its own URI; the list-changed
 /// kinds carry no URI and match every subscriber.
@@ -334,6 +337,7 @@ fn a_resource_update_matches_only_its_uri() {
         name: name.to_owned(),
         backend: "x".to_owned(),
         scope: types::Visibility::Backend("x".to_owned()),
+        owner: None,
         upstream_id: "id".to_owned(),
         occurred_at: chrono::Utc::now(),
         data,
