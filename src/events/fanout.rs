@@ -114,6 +114,7 @@ impl EventsHub {
                 name: &event.name,
             },
         );
+        let firewall = services.firewall_verdict(scan, data != event.data);
         let bytes = body(
             &id,
             event,
@@ -130,6 +131,7 @@ impl EventsHub {
             tenants,
             attribution,
             attribution_keys,
+            firewall: Some(firewall.to_owned()),
             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             attempt: 0,
             next_attempt_at: now,
@@ -148,10 +150,12 @@ impl EventsHub {
         };
         if let Some(reason) = refusal {
             let policy = self.dead_policy();
+            let buried = record.clone();
             let evicted = self
                 .blocking(move |store| store.dead_letter(record, reason, now, policy))
                 .await;
             services.audit_evictions(evicted.unwrap_or_default()).await;
+            self.dead_lettered(services, &buried, reason).await;
             return;
         }
         let caps = self.outbox_caps();

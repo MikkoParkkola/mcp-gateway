@@ -149,6 +149,24 @@ impl EventsHub {
         {
             Some(Revived::Written) => {
                 self.runtime.wake.notify_one();
+                let host = url::Url::parse(&sub.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_owned))
+                    .unwrap_or_default();
+                services
+                    .audit_lifecycle(
+                        &super::governance::Lifecycle {
+                            action: "events.replay",
+                            subscription_id: &sub.id,
+                            event_name: &dead.record.name,
+                            callback_host: &host,
+                            detail: "replayed",
+                            event_id: Some(event_id),
+                            ok: true,
+                        },
+                        None,
+                    )
+                    .await;
                 Ok(())
             }
             Some(Revived::NoSubscription) => Err(ReplayRefusal::SubscriptionGone),

@@ -20,6 +20,7 @@ mod admin;
 mod client;
 mod dedupe;
 mod fanout;
+mod governance;
 mod limiter;
 mod outbox;
 mod rate;

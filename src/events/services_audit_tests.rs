@@ -25,6 +25,7 @@ fn attempt() -> Attempt<'static> {
         callback_host: "h",
         status: "sending",
         body_sha256: "",
+        firewall: "pass",
         delivered: false,
         cross_tenant_read: None,
     }

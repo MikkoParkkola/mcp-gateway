@@ -44,6 +44,10 @@ pub(crate) struct OutboxRecord {
     /// only while they match.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attribution_keys: Vec<String>,
+    /// What the firewall decided about the payload at fan-out (`pass`,
+    /// `redacted`, `block`, `none`); absent on older records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firewall: Option<String>,
     /// Attempts started so far.
     pub attempt: u32,
     pub next_attempt_at: DateTime<Utc>,
