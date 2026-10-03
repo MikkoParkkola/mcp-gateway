@@ -1,0 +1,15 @@
+diff --git a/src/gateway/outbound/audit.rs b/src/gateway/outbound/audit.rs
+index 0b1d7cb8e..1cf8a13c7 100644
+--- a/src/gateway/outbound/audit.rs
++++ b/src/gateway/outbound/audit.rs
+@@ -39,9 +39,7 @@ impl Assessment {
+         if self.attribution.uninspected {
+             fields.insert("attribution".into(), "uninspected".into());
+         }
+-        if let Some(verdict) = self.verdict {
+-            fields.insert("cross_tenant_read".into(), json!(verdict));
+-        }
++        let _ = self.verdict;
+         fields
+     }
+ }
