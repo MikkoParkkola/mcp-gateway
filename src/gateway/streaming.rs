@@ -672,7 +672,14 @@ pub fn subscription_stream(
                                 .await
                             {
                                 Some(frame) => frame,
-                                None => continue,
+                                None => {
+                                    // The frame could not be delivered
+                                    // auditably. Closing makes the gap visible;
+                                    // re-subscribing recovers, as for a lag.
+                                    warn!("task notification withheld; closing so the client re-subscribes");
+                                    graceful = false;
+                                    break;
+                                }
                             }
                         }
                         _ => subscription.tag(published.notification),
