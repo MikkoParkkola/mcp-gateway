@@ -47,8 +47,8 @@ pub(crate) struct Lifecycle<'a> {
     pub detail: &'a str,
     /// The dead letter an act is about, when it is about one.
     pub event_id: Option<&'a str>,
-    /// Whether the act succeeded.
-    pub ok: bool,
+    /// The JSON-RPC code the act failed with; `None` when it succeeded.
+    pub failed_with: Option<i32>,
 }
 
 impl Services {
@@ -91,7 +91,8 @@ impl Services {
                 envelope.who = actor.who.clone();
             }
         }
-        if !act.ok {
+        if act.failed_with.is_some() {
+            // Scaffold: the act's own code is not carried yet.
             envelope.outcome = AuditOutcome::Error(-32015);
         }
         let written = log
@@ -143,7 +144,7 @@ impl EventsHub {
             callback_host: url.host_str().unwrap_or_default(),
             detail: "",
             event_id: None,
-            ok: true,
+            failed_with: None,
         };
         self.govern(&act, Attribution::Caller(caller)).await;
     }

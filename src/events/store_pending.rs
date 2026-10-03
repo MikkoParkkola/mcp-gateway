@@ -141,6 +141,16 @@ fn sendable(sub: &Subscription, now: DateTime<Utc>) -> bool {
     sub.active && sub.live(now)
 }
 
+/// What a settlement or burial did, as one receipt taken under the store lock.
+#[derive(Debug, Default)]
+pub(crate) struct Settled {
+    /// Dead letters the retention and caps then evicted.
+    pub evicted: Vec<Evicted>,
+    /// This call wrote the dead letter of the occurrence it was given, whether
+    /// or not the caps evicted it a moment later.
+    pub buried: bool,
+}
+
 impl Store {
     /// Write `record` unless a cap or a missing subscription refuses it.
     /// Pending records are never dropped to make room (F11).
@@ -407,7 +417,7 @@ impl Store {
         outcome: Settle,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+    ) -> std::io::Result<Settled> {
         let mut state = self.state.lock();
         // Only the claimed occurrence: a later one under the same id, admitted
         // after the claim was cancelled, is not settled by the old answer.
@@ -417,7 +427,7 @@ impl Store {
             .filter(|r| r.created_at == created_at)
             .cloned()
         else {
-            return Ok(Vec::new());
+            return Ok(Settled::default());
         };
         let sub_id = record.subscription_id.clone();
         let settled = self.settle_record(&mut state, record, outcome, now, policy);
@@ -471,14 +481,14 @@ impl Store {
         outcome: Settle,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+    ) -> std::io::Result<Settled> {
         let event_id = record.event_id.clone();
         let file = OutboxRecord::file(&event_id);
         match outcome {
             Settle::Delivered => {
                 remove_record(&self.outbox_dir, &file)?;
                 state.outbox.remove(&event_id);
-                Ok(Vec::new())
+                Ok(Settled::default())
             }
             Settle::Retry { next, status } => {
                 record.state = OutboxState::Pending;
@@ -486,7 +496,7 @@ impl Store {
                 record.last_status = Some(status.to_owned());
                 write_record(&self.outbox_dir, &file, &record)?.durable()?;
                 state.outbox.insert(event_id, record);
-                Ok(Vec::new())
+                Ok(Settled::default())
             }
             Settle::Dead { reason, status } => {
                 if let Some(status) = status {
@@ -498,7 +508,11 @@ impl Store {
                 self.entomb(state, record, reason, now)?;
                 state.outbox.remove(&event_id);
                 remove_record(&self.outbox_dir, &file)?;
-                self.evict_dead(state, now, policy)
+                Ok(Settled {
+                    evicted: self.evict_dead(state, now, policy)?,
+                    // Scaffold: the receipt is not taken yet.
+                    buried: false,
+                })
             }
         }
     }
@@ -511,7 +525,7 @@ impl Store {
         reason: DeadReason,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+    ) -> std::io::Result<Settled> {
         let mut state = self.state.lock();
         self.bury(&mut state, record, reason, now, policy)
     }
@@ -612,9 +626,13 @@ impl Store {
         reason: DeadReason,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+    ) -> std::io::Result<Settled> {
         self.entomb(state, record, reason, now)?;
-        self.evict_dead(state, now, policy)
+        Ok(Settled {
+            evicted: self.evict_dead(state, now, policy)?,
+            // Scaffold: the receipt is not taken yet.
+            buried: false,
+        })
     }
 
     /// Write `record` into `dead/`.

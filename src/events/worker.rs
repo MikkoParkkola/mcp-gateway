@@ -387,10 +387,12 @@ impl EventsHub {
             record.created_at,
             self.dead_policy(),
         );
-        let evicted = self
+        let settled = self
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
-        services.audit_evictions(evicted.unwrap_or_default()).await;
+        services
+            .audit_evictions(settled.map(|s| s.evicted).unwrap_or_default())
+            .await;
         if let Settle::Dead { reason, .. } = outcome {
             self.dead_lettered(services, record, reason).await;
         }
@@ -426,7 +428,7 @@ impl EventsHub {
                     callback_host: &host,
                     detail: reason.as_str(),
                     event_id: Some(&record.event_id),
-                    ok: false,
+                    failed_with: Some(-32015),
                 },
                 super::governance::Attribution::Gateway,
             )

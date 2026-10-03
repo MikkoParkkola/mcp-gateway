@@ -33,6 +33,10 @@ pub(crate) struct OutboxRecord {
     /// not a backend grant.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner_scoped: bool,
+    /// The callback host, stamped at fan-out from the subscription the record
+    /// is for (its id hashes the URL, so the host cannot change under it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub callback_host: String,
     /// The exact body bytes, base64.
     pub body_b64: String,
     /// Hashed tenant attribution of `data` (MIN.1), fixed at fan-out.

@@ -62,6 +62,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         name: "e".into(),
         backend: "b".into(),
         owner_scoped: false,
+        callback_host: String::new(),
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attribution: None,
@@ -197,7 +198,8 @@ fn dead_letters_are_capped_oldest_first() {
         let at = now + chrono::Duration::seconds(i64::try_from(n).expect("small"));
         let evicted = store
             .dead_letter(record(id, "s1", at), DeadReason::Gone, at, policy)
-            .expect("io");
+            .expect("io")
+            .evicted;
         if n == 2 {
             assert_eq!(evicted.len(), 1);
             assert_eq!(evicted[0].event_id, "a");
