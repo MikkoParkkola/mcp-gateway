@@ -1,0 +1,13 @@
+diff --git a/src/attestation/wiring.rs b/src/attestation/wiring.rs
+index ceeb0f7f8..2565187a6 100644
+--- a/src/attestation/wiring.rs
++++ b/src/attestation/wiring.rs
+@@ -89,7 +89,7 @@ pub fn resolve_attestation_wiring(
+              without a key every call would be refused"
+         ));
+     }
+-    let audience = audience.map(str::trim).filter(|a| !a.is_empty());
++    let audience = audience.filter(|a| !a.is_empty());
+     if audience.is_none() && mode == AttestationMode::Enforce {
+         return Err(format!(
+             "{ATTESTATION_MODE_ENV}=enforce needs {ATTESTATION_AUDIENCE_ENV}; \

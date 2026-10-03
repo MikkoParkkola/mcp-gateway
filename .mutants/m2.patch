@@ -1,0 +1,13 @@
+diff --git a/src/attestation/validator.rs b/src/attestation/validator.rs
+index 0cce77cd6..6f5a35288 100644
+--- a/src/attestation/validator.rs
++++ b/src/attestation/validator.rs
+@@ -417,7 +417,7 @@ impl AttestationValidator {
+         // matches nothing, so an unconfigured validator refuses every token
+         // instead of accepting all of them (MIK-7795).
+         let expected = self.signer.audience().unwrap_or_default();
+-        if expected.is_empty() || claims.audience.is_empty() || claims.audience != expected {
++        if expected.is_empty() || claims.audience.is_empty() || claims.audience == expected {
+             let rejection = AttestationRejection::AudienceMismatch {
+                 expected: expected.to_string(),
+                 presented: claims.audience.clone(),

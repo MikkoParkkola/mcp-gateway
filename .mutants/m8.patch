@@ -1,0 +1,13 @@
+diff --git a/src/attestation/wiring.rs b/src/attestation/wiring.rs
+index ceeb0f7f8..bd33e4897 100644
+--- a/src/attestation/wiring.rs
++++ b/src/attestation/wiring.rs
+@@ -129,7 +129,7 @@ pub fn resolve_attestation_wiring(
+ 
+     let mut signer = BnautAttestationSigner::new(key, key_id);
+     if let Some(audience) = audience {
+-        signer = signer.with_audience(audience);
++        let _ = audience;
+     }
+     let validator = Arc::new(AttestationValidator::new(signer));
+     Ok(Some((validator, mode)))
