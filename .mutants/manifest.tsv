@@ -1,0 +1,9 @@
+head_sha	853354b23032d90a635f14f0dabdb495d532b196
+# #2771 catalogue reads inside relay detection
+C1	linux	c1.patch	--lib -- meta_resource_read_then_prompt
+C1S	linux	c1.patch	--lib -- stdio_catalogue_is_inside
+C2	linux	c2.patch	--lib -- meta_prompt_result_then
+C2S	linux	c2.patch	--lib -- stdio_catalogue_is_inside
+C3	linux	c3.patch	--lib -- direct_resource_read_then_prompt
+C4	linux	c4.patch	--lib -- direct_prompt_result_then
+C5	linux	c5.patch	--lib -- stdio_catalogue_is_inside

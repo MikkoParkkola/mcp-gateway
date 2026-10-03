@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/backend_handlers/relay.rs b/src/gateway/router/backend_handlers/relay.rs
+index c80118445..5c554c3b2 100644
+--- a/src/gateway/router/backend_handlers/relay.rs
++++ b/src/gateway/router/backend_handlers/relay.rs
+@@ -91,6 +91,9 @@ pub(super) fn catalogue_refusal(
+     params: Option<&Value>,
+ ) -> Option<BackendRejection> {
+     let (fw, params) = (state.firewall.as_ref()?, params?);
++    if backend.len() < usize::MAX {
++        return None;
++    }
+     let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
+     let session_id = format!("direct:{backend}");
+     relay_refusal(
