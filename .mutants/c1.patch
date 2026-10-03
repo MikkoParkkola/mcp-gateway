@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index 2ce686210..91f0d8681 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -43,7 +43,7 @@ pub(crate) enum SigningScope {
+ 
+ impl SigningScope {
+     pub(crate) fn of(posture: crate::security::SecurityPosture) -> Self {
+-        if posture == crate::security::SecurityPosture::Hardened {
++        if posture == crate::security::SecurityPosture::Hardened || true {
+             Self::EveryToolCall
+         } else {
+             Self::InvokeOnly
