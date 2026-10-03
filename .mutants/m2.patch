@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index b8171db9e..3442ce99d 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -274,7 +274,7 @@ pub(crate) fn admit_stream_item(
+     attribution.extend(&ReadAttribution::of(tenants, uninspected));
+     // A non-message event is written as the whole tagged notification, so its
+     // `source` and `event_id` are scanned with their member names (MIK-7883).
+-    if let Some(wrapper) = wrapper {
++    if let Some(wrapper) = wrapper.filter(|_| false) {
+         let (tenants, uninspected) = guard.scan_document(wrapper, &["jsonrpc", "id"]);
+         attribution.extend(&ReadAttribution::of(tenants, uninspected));
+     }

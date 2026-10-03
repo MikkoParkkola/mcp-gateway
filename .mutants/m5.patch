@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index b8171db9e..09dcd914c 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -82,7 +82,7 @@ fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
+             guard.scan_frame(&note.params.iter().collect::<Vec<_>>(), &[&note.method])
+         }
+         Payload::Request(doc) | Payload::Answer(doc) => {
+-            guard.scan_document(doc, &["jsonrpc", "id"])
++            guard.scan_document(doc, &["jsonrpc", "id", "customer_id"])
+         }
+         Payload::Event(doc) => guard.scan_frame(&[doc], &[]),
+         // The event data the record's attribution covers was redacted
