@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index dafeee6c0..2cf786960 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -444,7 +444,7 @@ fn finish_response(
+             &mut response,
+             nonce,
+         );
+-    } else if matches!(method, "prompts/get" | "resources/read") && response.error.is_none() {
++    } else if matches!(method, "prompts/get" | "resources/read") && name.is_empty() {
+         // MIK-7765: what a catalogue read delivers is a relay source too.
+         #[cfg(feature = "firewall")]
+         super::stage_direct_catalogue(

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index ffd3c3496..3c618640c 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -355,7 +355,7 @@ impl MetaMcp {
+         let (Some(caller), Some(result)) = (caller, response.result.as_ref()) else {
+             return;
+         };
+-        if response.error.is_some() || !self.relay_active() {
++        if response.error.is_some() || target.0.len() < usize::MAX {
+             return;
+         }
+         let recorded = self.recorded_prompt(target, Some(&caller.name), "catalogue", result);

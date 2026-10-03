@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_catalogue.rs b/src/gateway/server/stdio_catalogue.rs
+index 1e5407103..f8a5a8a82 100644
+--- a/src/gateway/server/stdio_catalogue.rs
++++ b/src/gateway/server/stdio_catalogue.rs
+@@ -58,7 +58,7 @@ pub(super) async fn dispatch(
+ ) -> JsonRpcResponse {
+     // The local operator is one relay principal, the one `tools/call` keys.
+     let operator = relay::CatalogueCaller {
+-        key: crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
++        key: "stdio".to_owned(),
+         keyed: true,
+         name: "stdio".to_owned(),
+     };

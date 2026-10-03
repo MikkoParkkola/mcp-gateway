@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index ffd3c3496..d14f6a441 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -331,7 +331,7 @@ impl MetaMcp {
+         if verdict.action == FirewallAction::Warn {
+             tracing::warn!(server = backend, method, "Firewall: relay observed");
+         }
+-        if verdict.allowed {
++        if verdict.allowed || backend.len() < usize::MAX {
+             return None;
+         }
+         let desc = verdict
