@@ -2545,7 +2545,11 @@ impl Gateway {
                 .await;
                 Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    drop(writer.send(reads.batch_of(responses)).await);
+                    drop(
+                        writer
+                            .send(crate::gateway::outbound::StdioReads::batch_of(responses))
+                            .await,
+                    );
                 }
                 continue;
             }

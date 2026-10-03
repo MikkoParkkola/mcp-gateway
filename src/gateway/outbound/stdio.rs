@@ -114,7 +114,7 @@ impl StdioReads {
 
     /// One frame for a batch whose items were each judged (and had their relay
     /// receipts recorded) right after their own dispatch.
-    pub(crate) fn batch_of(&self, items: Vec<OutboundFrame>) -> OutboundFrame {
+    pub(crate) fn batch_of(items: Vec<OutboundFrame>) -> OutboundFrame {
         OutboundFrame::unjudged(Payload::Batch(items))
     }
 

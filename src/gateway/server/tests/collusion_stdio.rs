@@ -311,7 +311,7 @@ async fn batch_read_delivers(
     let delivered = frames
         .iter()
         .all(crate::gateway::outbound::OutboundFrame::delivers_result);
-    reads.batch_of(frames).stdio_written();
+    crate::gateway::outbound::StdioReads::batch_of(frames).stdio_written();
     delivered
 }
 
