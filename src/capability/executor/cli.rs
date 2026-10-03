@@ -360,17 +360,41 @@ pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
 fn scrub_value(value: &mut Value, needles: &[&str]) {
     match value {
         Value::String(s) => *s = scrub(s, needles),
+        // A credential that is all digits can come back as a JSON number. A
+        // short needle would hit every number, so only one a caller could not
+        // guess by chance (the same floor as caller values) is looked for.
+        Value::Number(n) => {
+            let digits = n.to_string();
+            if needles
+                .iter()
+                .any(|needle| needle.len() >= MIN_REDACTED_CALLER_VALUE && digits.contains(needle))
+            {
+                *value = Value::String("[redacted]".to_owned());
+            }
+        }
         Value::Array(items) => items.iter_mut().for_each(|v| scrub_value(v, needles)),
         Value::Object(map) => {
             let old = std::mem::take(map);
+            let mut renamed = Vec::new();
+            // Keys that survive keep their names whole: a renamed key never
+            // takes one of them.
             for (key, mut item) in old {
                 scrub_value(&mut item, needles);
-                let base = scrub(&key, needles);
-                // Two keys can collapse to the same marker: keep both entries.
+                let new = scrub(&key, needles);
+                if new == key {
+                    map.insert(key, item);
+                } else {
+                    renamed.push((new, item));
+                }
+            }
+            // Keys that collapse to the same marker all survive, `#2`, `#3`, ...
+            let mut next: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for (base, item) in renamed {
                 let mut key = base.clone();
-                let mut n = 1;
                 while map.contains_key(&key) {
-                    n += 1;
+                    let n = next.entry(base.clone()).or_insert(1);
+                    *n += 1;
                     key = format!("{base}#{n}");
                 }
                 map.insert(key, item);

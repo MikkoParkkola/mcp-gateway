@@ -355,10 +355,40 @@ fn success_redaction_keeps_json_valid_and_does_not_truncate() {
 }
 
 #[test]
-fn two_keys_that_collapse_to_the_marker_both_survive() {
+fn a_renamed_key_never_takes_the_name_of_one_that_stays() {
+    // `SECRET` becomes `[redacted]`; the key that already had that name keeps
+    // its own value, and the renamed one gets the next free name.
     let mut value = json!({"[redacted]": 1, "SECRET": 2});
     super::super::cli::redact_value(&mut value, &["SECRET".to_owned()]);
-    assert_eq!(value.as_object().unwrap().len(), 2, "{value}");
+    assert_eq!(value["[redacted]"], 1, "{value}");
+    assert_eq!(value["[redacted]#2"], 2, "{value}");
+    assert_eq!(value.as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn many_keys_that_collapse_to_the_marker_all_survive() {
+    // Fifty secrets, each also a key: every key renames to the same marker.
+    let secrets: Vec<String> = (0..50).map(|i| format!("SECRET-{i:02}")).collect();
+    let map: serde_json::Map<String, Value> =
+        secrets.iter().map(|s| (s.clone(), json!(s))).collect();
+    let mut value = Value::Object(map);
+    super::super::cli::redact_value(&mut value, &secrets);
+    assert_eq!(value.as_object().unwrap().len(), 50, "{value}");
+    assert!(!value.to_string().contains("SECRET-"), "{value}");
+}
+
+#[test]
+fn an_all_digit_credential_does_not_survive_as_a_json_number() {
+    let mut value = json!({"pin": 4_815_162_342_u64, "count": 3, "nested": [4_815_162_342_u64]});
+    super::super::cli::redact_value(&mut value, &["4815162342".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["nested"][0], "[redacted]", "{value}");
+    assert_eq!(value["count"], 3, "an unrelated number is untouched");
+
+    // A short needle would hit every number: numbers are only checked from 4 bytes.
+    let mut value = json!({"n": 1234});
+    super::super::cli::redact_value(&mut value, &["1".to_owned()]);
+    assert_eq!(value["n"], 1234);
 }
 
 #[test]
