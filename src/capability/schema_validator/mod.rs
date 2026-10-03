@@ -312,9 +312,6 @@ fn validate_object(
         }
     }
 
-    // Step 1b – `anyOf` / `oneOf`: which parameters must be given.
-    alternatives_violations(input_schema, &arg_map, &mut violations);
-
     // Step 2 – extra keys not declared in the schema (strict for inputs only).
     for key in arg_map.keys() {
         if reject_extra_keys && !properties.contains_key(key.as_str()) {
@@ -354,6 +351,14 @@ fn validate_object(
 
         violations.extend(type_violations);
         coerced_map.insert(name.clone(), coerced_value);
+    }
+
+    // `anyOf` / `oneOf`: which parameters must be given, judged on the values as
+    // they are forwarded (after coercion), not as they were typed.
+    if violations.is_empty() {
+        let mut forwarded = arg_map.clone();
+        forwarded.extend(coerced_map.clone());
+        alternatives_violations(input_schema, &forwarded, &mut violations);
     }
 
     // If there are type violations keep the original args (they'll be rejected).

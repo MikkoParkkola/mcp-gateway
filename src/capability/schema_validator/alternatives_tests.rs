@@ -105,3 +105,16 @@ fn a_schema_without_alternatives_is_unchanged() {
     });
     assert!(validate_arguments(&json!({}), &schema).is_valid());
 }
+
+/// The alternatives are judged on the values as forwarded: `"true"` for a
+/// boolean is coerced to `true` before the pin is compared.
+#[test]
+fn one_of_compares_the_coerced_value_not_the_typed_one() {
+    let mut schema = purge_schema();
+    schema["properties"]["everything"] = json!({ "type": "boolean", "description": "d" });
+    let result = validate_arguments(&json!({ "zone": "z", "everything": "true" }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["everything"], json!(true));
+    let off = validate_arguments(&json!({ "zone": "z", "everything": "false" }), &schema);
+    assert!(!off.is_valid(), "a string false selects nothing");
+}
