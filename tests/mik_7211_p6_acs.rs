@@ -87,6 +87,7 @@ mod source_checks {
         // built without the literal; the wire tests below cover delivery.
         let allowed = [
             "src/gateway/router/handlers.rs",
+            "src/gateway/router/handlers/modern_response.rs",
             "src/protocol/cacheable.rs",
             "src/gateway/meta_mcp/chain_emission_tests.rs",
             "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
