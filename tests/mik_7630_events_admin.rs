@@ -378,11 +378,11 @@ async fn gateway_search_finds_visible_events() {
     let rx = Receiver::start(root.path()).await;
     let gw = start(root.path(), &rx, json!({})).await;
     let listed = gw.rpc(Some(ALICE), "events/list", json!({})).await;
-    let schema = listed["result"]["events"]
+    let webhook = listed["result"]["events"]
         .as_array()
         .and_then(|events| events.iter().find(|e| e["name"] == gateway::EVENT))
-        .map(|e| e["inputSchema"].clone())
         .unwrap_or_else(|| panic!("{} is listed: {listed}", gateway::EVENT));
+    let schema = webhook["inputSchema"].clone();
     for tool in ["gateway_search_tools", "gateway_search"] {
         let found = gw.tool_call(ALICE, tool, json!({"query": "push"})).await;
         let entry = found["matches"]
