@@ -259,14 +259,14 @@ fn passthrough_identity_key(credential: &str) -> String {
 /// principal every unauthenticated caller shares.
 fn charged_binding(
     state: &AppState,
-    name: &str,
+    backend: &crate::backend::Backend,
     caller: crate::identity_propagation::CallerProof<'_>,
     proven: Option<&str>,
     digest: Option<String>,
 ) -> Option<String> {
     let principal = match (caller.verified(), proven) {
         (None, Some(proven)) => format!("proven:{proven}"),
-        _ => state.meta_mcp.audit_subject_for(name, caller),
+        _ => state.meta_mcp.audit_subject_for(backend, caller),
     };
     digest.map(|digest| crate::backend::passthrough_binding(&principal, &digest))
 }

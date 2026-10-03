@@ -96,40 +96,39 @@ impl MetaMcp {
         super::invoke::arm_for_dispatch(reservation);
     }
 
-    /// The audit subject a credential for `server` is resolved under: the
-    /// same string the credential resolver records, for a route
-    /// that writes its own record (the direct route, #2190).
+    /// The audit subject a credential for `backend` is resolved under: the
+    /// same string the credential resolver records, for a route that writes its
+    /// own record (the direct route, #2190). Taken from the instance the route
+    /// captured, so a reload that registers a replacement under the same name
+    /// cannot change whose subject a credential is audited under (MIK-7804).
     pub(crate) fn audit_subject_for(
         &self,
-        server: &str,
+        backend: &crate::backend::Backend,
         caller: crate::identity_propagation::CallerProof<'_>,
     ) -> String {
-        self.principal_for(server, caller).map_or_else(
+        self.principal_for(backend, caller).map_or_else(
             || crate::identity_propagation::audit_subject(None),
             crate::personal_accounts::identity::Principal::stable_actor_id,
         )
     }
 
-    /// Whether the credential resolver has a principal to mint for `server`
+    /// Whether the credential resolver has a principal to mint for `backend`
     /// under (#2310). Without one it mints nothing: a non-required backend
     /// keeps its static credential (IDP.5).
     pub(crate) fn has_principal_for(
         &self,
-        server: &str,
+        backend: &crate::backend::Backend,
         caller: crate::identity_propagation::CallerProof<'_>,
     ) -> bool {
-        self.principal_for(server, caller).is_some()
+        self.principal_for(backend, caller).is_some()
     }
 
     fn principal_for<'a>(
         &self,
-        server: &str,
+        backend: &crate::backend::Backend,
         caller: crate::identity_propagation::CallerProof<'a>,
     ) -> Option<crate::personal_accounts::identity::Principal<'a>> {
-        let descriptor_id = self
-            .backends
-            .get(server)
-            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
+        let descriptor_id = backend.account_descriptor_id().map(str::to_owned);
         self.caller_principal(descriptor_id.as_deref(), caller)
     }
 }

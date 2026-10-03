@@ -1551,16 +1551,21 @@ impl MetaMcp {
         // resolved `cache_binding` (user+audience) is mixed into every cache key
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
-        let caller_credential = if let Some(idp_cfg) = self
-            .backends
-            .get(server)
+        let backend = self.backends.get(server);
+        let caller_credential = if let Some(idp_cfg) = backend
+            .as_ref()
             .and_then(|b| b.identity_propagation_config().cloned())
         {
-            let resolved = self.resolve_caller_credential_as(server, &idp_cfg, caller_proof);
+            let resolved = self.resolve_caller_credential_as(
+                server,
+                backend.as_deref(),
+                &idp_cfg,
+                caller_proof,
+            );
             self.with_connect_offer(resolved.await, verified_identity)
                 .await?
         } else {
-            self.refuse_unbound_account_backend(server)?;
+            Self::refuse_unbound_account_backend(server, backend.as_deref())?;
             CallerCredential::default()
         };
 
@@ -2913,16 +2918,30 @@ impl MetaMcp {
         server: &str,
         caller: CallerProof<'_>,
     ) -> Result<HeldCredential> {
-        let Some(idp_cfg) = self
-            .backends
-            .get(server)
-            .and_then(|b| b.identity_propagation_config().cloned())
-        else {
-            self.refuse_unbound_account_backend(server)?;
+        let backend = self.backends.get(server);
+        self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
+            .await
+    }
+
+    /// [`Self::resolve_propagation_credential_held`] against the backend the
+    /// caller already holds. A route that captured the instance it will
+    /// dispatch through must resolve against THAT instance: a name lookup here
+    /// can return a replacement registered by a reload in between, and the
+    /// credential rules of one backend would then apply to a request sent
+    /// through another (MIK-7804). `None` is a backend the registry does not
+    /// hold, as a name miss always was.
+    pub(crate) async fn resolve_propagation_credential_held_for(
+        &self,
+        server: &str,
+        backend: Option<&crate::backend::Backend>,
+        caller: CallerProof<'_>,
+    ) -> Result<HeldCredential> {
+        let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
+            Self::refuse_unbound_account_backend(server, backend)?;
             return Ok((Vec::new(), None, None));
         };
         let cred = self
-            .resolve_caller_credential_as(server, &idp_cfg, caller)
+            .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
         Ok((cred.headers, cred.cache_binding, cred.managed))
     }
@@ -2940,11 +2959,11 @@ impl MetaMcp {
     /// # Errors
     ///
     /// [`Error::Config`] naming the backend and its descriptor reference.
-    fn refuse_unbound_account_backend(&self, server: &str) -> Result<()> {
-        let account = self
-            .backends
-            .get(server)
-            .and_then(|b| b.account_descriptor_id().map(str::to_string));
+    fn refuse_unbound_account_backend(
+        server: &str,
+        backend: Option<&crate::backend::Backend>,
+    ) -> Result<()> {
+        let account = backend.and_then(|b| b.account_descriptor_id().map(str::to_string));
         match account {
             Some(account) => Err(Error::Config(format!(
                 "backend '{server}' is bound to account '{account}' but no account strategy is \
@@ -2973,7 +2992,8 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
     ) -> Result<CallerCredential> {
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
-        self.resolve_caller_credential_as(server, idp_cfg, caller)
+        let backend = self.backends.get(server);
+        self.resolve_caller_credential_as(server, backend.as_deref(), idp_cfg, caller)
             .await
     }
 
@@ -2995,6 +3015,7 @@ impl MetaMcp {
     async fn resolve_caller_credential_as(
         &self,
         server: &str,
+        backend: Option<&crate::backend::Backend>,
         idp_cfg: &crate::identity_propagation::IdentityPropagationConfig,
         caller: CallerProof<'_>,
     ) -> Result<CallerCredential> {
@@ -3006,14 +3027,11 @@ impl MetaMcp {
         // minted credential bytes.
         let audit_logger = self.transparency_logger.as_ref();
         // #1961: the vault's own sole-operator predicate (as REST); else verified only.
-        let descriptor_id = self
-            .backends
-            .get(server)
-            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
+        let descriptor_id = backend.and_then(|b| b.account_descriptor_id().map(str::to_owned));
         let managed_vault = self
             .account_strategies
             .managed_vault(descriptor_id.as_deref());
-        let principal = self.principal_for_server(server, caller);
+        let principal = self.caller_principal(descriptor_id.as_deref(), caller);
         let subject_id = principal.map_or_else(|| audit_subject(None), Principal::stable_actor_id);
         let audience = idp_cfg.audience.as_str();
 
@@ -3053,10 +3071,8 @@ impl MetaMcp {
         // guarantees the backend exists in production; "not found" only happens
         // in unit tests against a fabricated config, and a genuinely absent
         // backend fails downstream at dispatch regardless.
-        let transport_capable = self
-            .backends
-            .get(server)
-            .is_none_or(|b| b.transport_carries_identity_headers());
+        let transport_capable =
+            backend.is_none_or(crate::backend::Backend::transport_carries_identity_headers);
         if let Err(msg) = crate::identity_propagation::ensure_transport_carries_identity_headers(
             idp_cfg.required,
             transport_capable,
