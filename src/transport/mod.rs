@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Transport implementations for MCP backends
 
-mod child_env;
 mod command_split;
 mod http;
 pub(crate) mod notification_sink;

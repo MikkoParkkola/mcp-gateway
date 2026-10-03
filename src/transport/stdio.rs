@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
-use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
+use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -24,7 +24,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::transport::notification_sink::DeliveryHandle;
 
-use super::child_env::configure_child_environment;
 use super::{PendingRequestGuard, Transport};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
@@ -36,6 +35,55 @@ use crate::{Error, Result};
 #[path = "stdio_cache.rs"]
 mod cache;
 pub use cache::isolated_package_manager_env;
+
+#[cfg(unix)]
+const FALLBACK_EXEC_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+#[cfg(windows)]
+const FALLBACK_EXEC_PATH: &str = r"C:\Windows\System32;C:\Windows";
+#[cfg(not(any(unix, windows)))]
+const FALLBACK_EXEC_PATH: &str = "";
+
+pub(crate) fn configure_child_environment(
+    cmd: &mut Command,
+    backend_env: &HashMap<String, String>,
+) {
+    cmd.env_clear();
+
+    let path = std::env::var_os("PATH").unwrap_or_else(|| OsString::from(FALLBACK_EXEC_PATH));
+    cmd.env("PATH", path);
+
+    if let Some(home) = std::env::var_os("HOME")
+        .or_else(|| dirs::home_dir().map(std::path::PathBuf::into_os_string))
+    {
+        cmd.env("HOME", home);
+    }
+
+    let tmpdir =
+        std::env::var_os("TMPDIR").unwrap_or_else(|| std::env::temp_dir().into_os_string());
+    cmd.env("TMPDIR", tmpdir);
+
+    #[cfg(windows)]
+    for key in [
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "PATHEXT",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            cmd.env(key, value);
+        }
+    }
+
+    // Backend configuration is authoritative and may intentionally override
+    // a safe default such as PATH, HOME, or TMPDIR.
+    for (key, value) in backend_env {
+        cmd.env(key, value);
+    }
+}
 
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
@@ -693,74 +741,10 @@ impl Transport for StdioTransport {
     }
 }
 
-impl Drop for StdioTransport {
-    /// A dropped transport ends the whole tree. `KillOnDrop` only kills the
-    /// group leader, so `npx`/`uvx` descendants would outlive it.
-    fn drop(&mut self) {
-        if let Some(child) = self.child.get_mut().as_mut() {
-            let _ = child.start_kill();
-        }
-    }
-}
-
-/// Start `cmd` as the leader of its own process group (Unix) or Job object
-/// (Windows), so stopping the backend ends every process it started:
-/// `npx`/`uvx`-style launchers otherwise leave the real server behind.
-fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
-    let mut wrap = CommandWrap::from(cmd);
-    wrap.wrap(KillOnDrop);
-    #[cfg(unix)]
-    wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
-    #[cfg(windows)]
-    wrap.wrap(process_wrap::tokio::JobObject);
-    wrap.spawn().map_err(|e| match e.kind() {
-        // A command path that does not exist, or a file that is not
-        // executable. No amount of waiting fixes either, and warm-start
-        // retries transport failures indefinitely -- so before this, a
-        // typo in a backend command was respawned once a minute for the
-        // life of the process with no indication the config was wrong.
-        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
-            Error::TransportPermanent(format!("Failed to spawn: {e}"))
-        }
-        _ => Error::Transport(format!("Failed to spawn: {e}")),
-    })
-}
-
-/// Longest JSON-RPC frame a stdio peer may send (16 MiB). Without a bound, a
-/// peer that never sends a newline grows the gateway's buffer without limit.
-pub(crate) const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
-
-/// Read one newline-terminated frame (without its `\n` or `\r\n`).
-/// `Ok(None)` at end of stream; an error for a frame over
-/// [`MAX_FRAME_BYTES`] or one that is not UTF-8.
-async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
-    reader: &mut R,
-    frame: &mut Vec<u8>,
-) -> std::io::Result<Option<String>> {
-    frame.clear();
-    // Room for the longest allowed frame plus its `\r\n`; a longer line is cut
-    // here and refused below once the terminator is trimmed.
-    let limit = u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX) + 2;
-    let read = reader.take(limit).read_until(b'\n', frame).await?;
-    if read == 0 {
-        return Ok(None);
-    }
-    if frame.last() == Some(&b'\n') {
-        frame.pop();
-        if frame.last() == Some(&b'\r') {
-            frame.pop();
-        }
-    }
-    if frame.len() > MAX_FRAME_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("stdio frame over {MAX_FRAME_BYTES} bytes"),
-        ));
-    }
-    String::from_utf8(std::mem::take(frame))
-        .map(Some)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-}
+#[path = "stdio_tree.rs"]
+mod tree;
+pub(crate) use tree::MAX_FRAME_BYTES;
+use tree::{read_frame, spawn_in_own_tree};
 
 #[path = "stdio_early_exit.rs"]
 mod early_exit;
