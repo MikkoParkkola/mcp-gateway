@@ -220,8 +220,13 @@ async fn every_delivery_attempt_writes_one_attributed_audit_record() {
         assert!(text.contains(&hash), "body hash of the bytes sent: {text}");
         assert!(text.contains("127.0.0.1"), "callback host: {text}");
         assert!(!text.contains("/hook"), "never the callback path: {text}");
+        // Attributed: the hashed tenant of the data, never its name.
+        let tenants = record["tenants"].as_array().expect("tenants array");
         assert!(
-            record.get("tenants").is_some(),
+            !tenants.is_empty()
+                && tenants
+                    .iter()
+                    .all(|t| t.as_str().is_some_and(|h| !h.contains("canary"))),
             "tenant attribution: {text}"
         );
     }
