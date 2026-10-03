@@ -353,7 +353,9 @@ pub(super) async fn forward_notification(
             name,
             &caller.inbound_headers,
             caller.proof(),
-            caller.proven.as_deref(),
+            // The credential's slot principal, as the request arm charges it,
+            // not the display label two credentials can share (MIK-7885).
+            caller.slot.as_deref(),
         )
         .await
     else {
