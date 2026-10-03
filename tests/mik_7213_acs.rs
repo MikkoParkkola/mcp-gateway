@@ -602,7 +602,7 @@ fn ac_cache_3_the_deciding_function_names_the_table() {
 
 #[test]
 fn ac_cache_3_the_wire_field_is_filled_from_the_table() {
-    let text = source("src/gateway/router/handlers.rs");
+    let text = source("src/gateway/router/handlers/modern_response.rs");
     assert!(
         text.contains("scope_for_method(method)"),
         "the `cacheScope` a client receives must come from the table, not from \
