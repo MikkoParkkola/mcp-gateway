@@ -176,6 +176,11 @@ impl Snapshot {
         self.good = Some((uris, complete));
     }
 
+    /// Whether any read has succeeded yet.
+    pub(crate) fn is_known(&self) -> bool {
+        self.good.is_some()
+    }
+
     pub(crate) fn verdict(&self, uri: &str) -> Verdict {
         match &self.good {
             Some((uris, _)) if uris.contains(uri) => Verdict::Deliver,
