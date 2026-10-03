@@ -66,6 +66,7 @@ fn caller(principal: &str) -> Caller {
             binding: None,
         },
         visible_backends: std::collections::HashSet::new(),
+        read_key: None,
     }
 }
 
