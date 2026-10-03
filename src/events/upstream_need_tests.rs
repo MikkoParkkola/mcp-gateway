@@ -125,3 +125,18 @@ fn the_snapshot_keeps_on_error_and_revokes_only_on_complete_absence() {
     assert_eq!(snap.verdict("b"), Verdict::Revoke);
     assert_eq!(snap.verdict("a"), Verdict::Deliver);
 }
+
+/// A `tools_changed` subscription keeps the backend's listener alive and asks
+/// upstream for tool-list changes; the last one releases both (I5b).
+#[test]
+fn tools_interest_is_counted_asked_for_and_emitted() {
+    let mut need = Need::default();
+    assert_eq!(need.add(&Interest::ToolsChanged), Ok(true));
+    assert!(need.filter().0.tools_changed);
+    assert!(need.emits(NoteKind::ToolsChanged, None));
+    assert!(!need.emits(NoteKind::PromptsChanged, None));
+    assert!(!need.is_empty());
+    assert!(need.remove(&Interest::ToolsChanged));
+    assert!(need.is_empty());
+    assert!(!need.filter().0.tools_changed);
+}
