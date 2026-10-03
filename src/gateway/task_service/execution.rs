@@ -393,6 +393,7 @@ impl TaskExecutor {
     }
 
     /// Whether [`Self::seal`] or a cancelling shutdown has closed admission.
+    #[cfg(test)]
     pub(crate) fn is_sealed(&self) -> bool {
         self.shutdown.is_cancelled()
     }

@@ -77,7 +77,7 @@ impl ShutdownBudget {
         Self {
             drain: timeout.min(remaining.saturating_sub(reserve)),
             cancel: reserve / 2,
-            close: reserve - reserve / 2,
+            close: reserve.saturating_sub(reserve / 2),
         }
     }
 }
