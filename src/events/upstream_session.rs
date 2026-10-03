@@ -488,6 +488,7 @@ impl<'a> State<'a> {
                 name: event_name(&backend, kind),
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
+                owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at: Utc::now(),
                 data: uri.map_or_else(|| json!({}), |uri| json!({ "uri": uri })),

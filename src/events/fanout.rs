@@ -28,6 +28,9 @@ pub(crate) struct SourceEvent {
     pub backend: String,
     /// Who may receive this occurrence: a backend's callers, or the owner.
     pub scope: Visibility,
+    /// The owner's digest, for sources whose occurrences belong to one owner;
+    /// carried so fan-out needs no read of the record the source describes.
+    pub owner: Option<String>,
     /// Stable per occurrence (design §3.6).
     pub upstream_id: String,
     pub occurred_at: DateTime<Utc>,
@@ -93,6 +96,12 @@ impl EventsHub {
                 .await
             {
                 self.revoke(&sub).await;
+                continue;
+            }
+            // An occurrence that carries its owner was authorized where it was
+            // made: the record it describes may be gone (an expired task).
+            if event.owner.is_some() {
+                self.offer(services, event, &sub).await;
                 continue;
             }
             match source
@@ -216,8 +225,9 @@ impl EventsHub {
     /// delete the subscriptions to webhook event types the catalogue no
     /// longer offers (a route removed while the gateway was down, or webhooks
     /// turned off), their pending records with them, and let the worker start.
-    /// Before this the catalogue is partial, so nothing is withdrawn and
-    /// nothing is sent (MIK-7772). `false`, with the worker still held, when
+    /// Before this the webhook catalogue is partial, so no webhook type is
+    /// withdrawn and nothing is sent (MIK-7772); backend types are complete
+    /// from the start and are withdrawn whatever the scan did (MIK-7803). `false`, with the worker still held, when
     /// a removal failed: the caller retries.
     pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
         // Held through the snapshot and the withdrawal, so a capability reload
@@ -230,6 +240,14 @@ impl EventsHub {
             .read()
             .iter()
             .any(|source| source.kind() == SourceKind::Webhook);
+        // Backends are registered before the hub starts, so their catalogue is
+        // complete whatever the capability scan did: a backend removed while
+        // the gateway was down takes its subscriptions with it (MIK-7803).
+        let offered: std::collections::HashSet<String> =
+            self.catalogue().into_iter().map(|d| d.name).collect();
+        if !self.withdraw(&self.absent_backend_names(&offered)) {
+            return false;
+        }
         if scan == CatalogueScan::Partial && webhooks_on {
             tracing::warn!(
                 "events: a capability directory could not be read at startup; stored \
@@ -237,21 +255,44 @@ impl EventsHub {
             );
             return self.release_worker();
         }
-        let offered: std::collections::HashSet<String> =
-            self.catalogue().into_iter().map(|d| d.name).collect();
-        let gone: Vec<String> = self
-            .store
-            .subscriptions()
-            .into_iter()
-            .map(|sub| sub.name)
-            .filter(|name| {
-                name.starts_with(super::webhook_source::NAME_PREFIX) && !offered.contains(name)
-            })
-            .collect();
+        let gone = self.absent_names(super::webhook_source::NAME_PREFIX, &offered);
         if !self.withdraw(&gone) {
             return false;
         }
         self.release_worker()
+    }
+
+    /// Stored subscriptions' event names under `prefix` that `offered` lacks.
+    fn absent_names(
+        &self,
+        prefix: &str,
+        offered: &std::collections::HashSet<String>,
+    ) -> Vec<String> {
+        self.store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| name.starts_with(prefix) && !offered.contains(name))
+            .collect()
+    }
+
+    /// Stored `backend.<x>.<kind>` names whose backend `x` is gone. A backend
+    /// always offers `tools_changed`, so its absence is the test; the upstream
+    /// kinds depend on a listener that is not up yet at startup and are not
+    /// judged by themselves.
+    fn absent_backend_names(&self, offered: &std::collections::HashSet<String>) -> Vec<String> {
+        self.store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| {
+                name.strip_prefix(super::backend_source::NAME_PREFIX)
+                    .and_then(|rest| rest.rsplit_once('.'))
+                    .is_some_and(|(backend, _kind)| {
+                        !offered.contains(&format!("backend.{backend}.tools_changed"))
+                    })
+            })
+            .collect()
     }
 
     /// Reconciliation is over: the delivery worker may start.

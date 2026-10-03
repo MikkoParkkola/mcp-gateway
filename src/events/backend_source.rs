@@ -42,6 +42,9 @@ pub(crate) struct BackendSource {
     pub upstream: Option<Upstream>,
 }
 
+/// Every backend event name starts with this.
+pub(super) const NAME_PREFIX: &str = "backend.";
+
 fn event_name(backend: &str) -> String {
     format!("backend.{backend}.tools_changed")
 }
@@ -273,6 +276,7 @@ impl EventsHub {
                 name: event_name(&backend),
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
+                owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at: Utc::now(),
                 data: json!({}),
