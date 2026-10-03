@@ -206,8 +206,8 @@ class Shim(BaseHTTPRequestHandler):
                     text = [ln[5:] for ln in text.splitlines() if ln.startswith("data:")][-1]
                 reply = json.loads(text)
                 reply = reply[0] if isinstance(reply, list) else reply
-                # Fail closed: only a JSON-RPC object with a result or an error is an answer.
-                entry["reply_ok"] = isinstance(reply, dict) and ("result" in reply or "error" in reply)
+                # Fail closed: only a JSON-RPC object with a result and no error is an answer.
+                entry["reply_ok"] = isinstance(reply, dict) and "result" in reply and "error" not in reply
                 entry["error_code"] = (reply.get("error") or {}).get("code")
                 entry["result_has_id"] = "id" in (reply.get("result") or {})
                 if isinstance((reply.get("result") or {}).get("id"), str):
