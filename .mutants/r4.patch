@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index 3bbf7291e..bace7cc89 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -2836,7 +2836,7 @@ impl Gateway {
+         staged: crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+     ) -> crate::gateway::outbound::OutboundFrame {
+         let frame = reads.answer(value, params, hidden).await;
+-        staged.commit(frame.delivers_result());
++        staged.commit(true);
+         frame
+     }
+ 

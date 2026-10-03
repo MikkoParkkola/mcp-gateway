@@ -1,0 +1,7 @@
+head_sha	decf630e589c7979b1aff931e72c83941a253a35
+# #2747 receipts after the read verdict
+R1	linux	r1.patch	--lib -- direct_read_records_no_receipt
+R2	linux	r2.patch	--lib -- direct_read_records_no_receipt
+R3	linux	r3.patch	--lib -- an_audit_withheld_direct_read
+R4	linux	r4.patch	--lib -- stdio_judged_out_read_records_no_receipt
+R5	linux	r5.patch	--lib -- stdio_judged_out_batch_item

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/stdio.rs b/src/gateway/outbound/stdio.rs
+index 47ffaef6a..428e8dd0d 100644
+--- a/src/gateway/outbound/stdio.rs
++++ b/src/gateway/outbound/stdio.rs
+@@ -127,7 +127,7 @@ impl StdioReads {
+         for (answer, hidden, params, staged) in answers {
+             let frame = self.answer(answer, params.as_ref(), hidden.as_ref()).await;
+             // Each item's receipts follow its own frame's verdict.
+-            staged.commit(frame.delivers_result());
++            staged.commit(true);
+             items.push(frame);
+         }
+         OutboundFrame::unjudged(Payload::Batch(items))
