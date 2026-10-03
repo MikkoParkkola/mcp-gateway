@@ -76,6 +76,20 @@ providers:
                 equals: true
               interval_ms: 200
               max_wait_s: 5
+          import_die:
+            tool: import_binary
+            requires: [binary_path]
+            arguments: {{ binary_path: "{{binary_path}}" }}
+            wait:
+              tool: list_project_binaries
+              arguments: {{ expect: "die" }}
+              until:
+                array: programs
+                match: {{ file_path: "x" }}
+                field: analysis_complete
+                equals: true
+              interval_ms: 200
+              max_wait_s: 10
           import_slow:
             tool: import_binary
             requires: [binary_path]
@@ -499,4 +513,23 @@ fn a_wait_must_leave_ten_seconds_of_the_provider_timeout() {
     assert!(check(20).is_ok());
     let err = check(21).unwrap_err().to_string();
     assert!(err.contains("max_wait_s"), "{err}");
+}
+
+#[tokio::test]
+async fn a_server_that_dies_during_a_wait_ends_it_at_once() {
+    let executor = CapabilityExecutor::new();
+    let started = std::time::Instant::now();
+    let err = call(
+        &executor,
+        &capability(),
+        json!({"operation": "import_die", "binary_path": "/data/x"}),
+        &caller("a"),
+    )
+    .await;
+    assert!(err.is_err(), "{err:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "a dead server is not polled for the whole wait: {:?}",
+        started.elapsed()
+    );
 }

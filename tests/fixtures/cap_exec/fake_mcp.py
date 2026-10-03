@@ -55,6 +55,8 @@ for line in sys.stdin:
         elif name == "list_project_binaries":
             # Analysis "finishes" on the third poll; the first two answer an error
             # for an absent program, as the real server does.
+            if args.get("expect") == "die":
+                os._exit(0)
             POLLS["n"] += 1
             if POLLS["n"] < 2:
                 result(req_id, {"isError": True, "content": [{"type": "text", "text": "no such binary"}]})
