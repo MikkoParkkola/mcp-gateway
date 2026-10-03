@@ -75,7 +75,7 @@ impl CapabilityExecutor {
     ) -> Self {
         let accounts =
             std::sync::Arc::new(crate::identity_propagation::AccountStrategyRegistry::default());
-        crate::gateway::server::account_bindings::declare_account_descriptors(config, &accounts);
+        crate::gateway::declare_account_descriptors(config, &accounts);
         Self::new().with_env(env).with_account_strategies(accounts)
     }
 
