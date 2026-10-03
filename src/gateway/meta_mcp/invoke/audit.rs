@@ -606,6 +606,13 @@ impl MetaMcp {
             let Some(outcome) = AuditOutcome::from_result(&result) else {
                 return replay;
             };
+            // A delivered error carries a code and no provenance, and `from_result`
+            // reads a bare `-32001`/`-32004` as a gateway refusal: with no stored
+            // class, that is a peer's answer as likely as a refusal (MIK-7735).
+            let outcome = match outcome {
+                AuditOutcome::Denied(code) => AuditOutcome::Error(code),
+                other => other,
+            };
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
         };
         let trace_id =
