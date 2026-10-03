@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_preflight.rs b/src/gateway/router/backend_handlers/direct_preflight.rs
+index 46e17ec9f..a225ab1b8 100644
+--- a/src/gateway/router/backend_handlers/direct_preflight.rs
++++ b/src/gateway/router/backend_handlers/direct_preflight.rs
+@@ -249,7 +249,7 @@ async fn resolve_headers(
+     }
+     resolution.result = match state
+         .meta_mcp
+-        .resolve_propagation_credential_held_for(name, Some(&route.backend), caller.proof())
++        .resolve_propagation_credential_held_for(name, state.backends.get(name).as_deref().or(Some(&route.backend)), caller.proof())
+         .await
+     {
+         Ok((headers, binding, held)) => {

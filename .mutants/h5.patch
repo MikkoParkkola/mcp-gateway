@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/discovery_fetch.rs b/src/gateway/meta_mcp/discovery_fetch.rs
+index 995ae2b14..c3785dc85 100644
+--- a/src/gateway/meta_mcp/discovery_fetch.rs
++++ b/src/gateway/meta_mcp/discovery_fetch.rs
+@@ -47,7 +47,7 @@ impl MetaMcp {
+         if self.principal_for(backend, caller).is_none() {
+             return (Vec::new(), None);
+         }
+-        self.resolve_propagation_credential_held_for(&backend.name, Some(backend), caller)
++        self.resolve_propagation_credential_held_for(&backend.name, self.backends.get(&backend.name).as_deref(), caller)
+             .await
+             .map(|(headers, binding, _lease)| (headers, binding))
+             .unwrap_or_default()

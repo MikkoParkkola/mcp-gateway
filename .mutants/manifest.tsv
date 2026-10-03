@@ -1,0 +1,7 @@
+head_sha	e9fc17286db02d639d4422a721452596b901e313
+# batch 2 for #2772 (captured backend, with the audit-subject cell)
+H1	linux	h1.patch	--lib -- direct_captured_backend_tests
+H2	linux	h2.patch	--lib -- direct_captured_backend_tests
+H3	linux	h3.patch	--lib -- direct_audit_subject_tests
+H4	linux	h4.patch	--lib -- direct_captured_backend_tests
+H5	linux	h5.patch	--lib -- captured_backend_tests
