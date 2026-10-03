@@ -107,6 +107,7 @@ fn stoppable_backend_with_command(command: &str, idle_for: Duration) -> Arc<Back
             protocol_version: None,
         },
         stop_when_idle_for: Some(idle_for),
+        max_frame_bytes: None,
         ..BackendConfig::default()
     };
     Arc::new(Backend::new(

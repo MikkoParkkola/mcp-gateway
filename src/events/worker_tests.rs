@@ -187,6 +187,7 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
         dead_as: None,
         attribution: None,
         attribution_keys: Vec::new(),
+        firewall: None,
     };
     let caps = OutboxCaps {
         global: 10,
@@ -220,6 +221,7 @@ fn queued_event(hub: &EventsHub, event_id: &str) {
         dead_as: None,
         attribution: None,
         attribution_keys: Vec::new(),
+        firewall: None,
     };
     let caps = OutboxCaps {
         global: 10,

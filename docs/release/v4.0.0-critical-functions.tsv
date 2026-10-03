@@ -62,25 +62,25 @@ src/gateway/router/authorization.rs	of_client	1	standard	borderline	CallerStandi
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
 src/gateway/router/backend_handlers.rs	backend_handler	1	critical	d	backend_handler	Refuses the direct route with 503 while the audit log is down (D1-f).
 src/gateway/router/backend_handlers.rs	backend_handler_inner	1	critical	a,b,c,d	backend_handler_inner	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
-src/gateway/router/backend_handlers/direct_caller.rs	resolve_caller	1	standard	a,d	resolve_caller	Resolves the caller before the body is read: agent allowlist, identity-header refusal, hardened identity.
-src/gateway/router/backend_handlers/direct_caller.rs	validate_agent	1	standard	a,d	validate_agent	C5 route parity: refuses an unknown agent or a missing required id on the direct route.
-src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	1	standard	a,d	read_envelope	Refuses a malformed envelope, a key outside its backend scope (403, no 404 oracle) and a hardened legacy request.
-src/gateway/router/backend_handlers/direct_caller.rs	route	1	standard	a,c	route	Backend lookup, session ownership by the /mcp owner rule, and the admin log-level gate.
-src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	1	standard	d	forward_notification	Refuses a notification where the caller request would be refused for identity; never forwards it.
-src/gateway/router/backend_handlers/direct_preflight.rs	preflight	1	standard	a,b,d	preflight	Task-method refusal, malformed retry fields, nonces, chain challenge and attestation, all before any credential is minted.
-src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	standard	b,d	take_nonces	Takes the chain and signing nonces off the params and refuses an invalid signing nonce.
-src/gateway/router/backend_handlers/direct_preflight.rs	check_attestation	1	standard	b,d	check_attestation	Refuses an unattested call before it mints a per-user credential or writes a mint audit row.
-src/gateway/router/backend_handlers/direct_preflight.rs	propagate_identity	1	standard	a,d	propagate_identity	Resolves the per-user credential and enforces the OAuth-isolation guard (ADR-008 INV-2).
-src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	1	standard	a	resolve_headers	Passthrough versus minting credential resolution; binds the upstream session bucket to the caller.
-src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	1	standard	d	audit_mint	Fails closed when a minted credential has no durable audit record; audits refusals.
-src/gateway/router/backend_handlers/direct_dispatch.rs	admit	1	standard	d	admit	Admission order: dispatch controls, tool-call gate, idempotency guard, then the signing nonce.
-src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	1	standard	d	guard_and_sanitize	Applies the tool-call security gate before the idempotency cache (#2445).
-src/gateway/router/backend_handlers/direct_dispatch.rs	idempotency_outcome	1	standard	d	idempotency_outcome	Re-enforces the idempotency guard on the direct route (MIK-7272.SUB.4).
-src/gateway/router/backend_handlers/direct_dispatch.rs	admit_signing_nonce	1	standard	b,d	admit_signing_nonce	Admits the signing nonce after every refusal so a refused call consumes none (MIK-7698).
-src/gateway/router/backend_handlers/direct_dispatch.rs	dispatch	1	standard	d	dispatch	Terminal arm: forwards and answers; settles the reservation on failure.
-src/gateway/router/backend_handlers/direct_dispatch.rs	forward_sanitized	1	standard	d	forward_sanitized	Forwards the sanitized params through the spend and response gates and signs the answer.
-src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	1	standard	d	forward_plain	Forwards a pass-through call or drains tools/list through the same gates.
-src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	1	standard	d	finish_response	Firewall scan, list filtering, provenance stamp, settlement and signing of what the caller receives.
+src/gateway/router/backend_handlers/direct_caller.rs	resolve_caller	1	critical	a,d	resolve_caller	Resolves the caller before the body is read: agent allowlist, identity-header refusal, hardened identity.
+src/gateway/router/backend_handlers/direct_caller.rs	validate_agent	1	critical	a,d	validate_agent	C5 route parity: refuses an unknown agent or a missing required id on the direct route.
+src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	1	critical	a,d	read_envelope	Refuses a malformed envelope, a key outside its backend scope (403, no 404 oracle) and a hardened legacy request.
+src/gateway/router/backend_handlers/direct_caller.rs	route	1	critical	a,c	route	Backend lookup, session ownership by the /mcp owner rule, and the admin log-level gate.
+src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	1	critical	d	forward_notification	Refuses a notification where the caller request would be refused for identity; never forwards it.
+src/gateway/router/backend_handlers/direct_preflight.rs	preflight	1	critical	a,b,d	preflight	Task-method refusal, malformed retry fields, nonces, chain challenge and attestation, all before any credential is minted.
+src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	critical	b,d	take_nonces	Takes the chain and signing nonces off the params and refuses an invalid signing nonce.
+src/gateway/router/backend_handlers/direct_preflight.rs	check_attestation	1	critical	b,d	check_attestation	Refuses an unattested call before it mints a per-user credential or writes a mint audit row.
+src/gateway/router/backend_handlers/direct_preflight.rs	propagate_identity	1	critical	a,d	propagate_identity	Resolves the per-user credential and enforces the OAuth-isolation guard (ADR-008 INV-2).
+src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	1	critical	a	resolve_headers	Passthrough versus minting credential resolution; binds the upstream session bucket to the caller.
+src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	1	critical	d	audit_mint	Fails closed when a minted credential has no durable audit record; audits refusals.
+src/gateway/router/backend_handlers/direct_dispatch.rs	admit	1	critical	d	admit	Admission order: dispatch controls, tool-call gate, idempotency guard, then the signing nonce.
+src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	1	critical	d	guard_and_sanitize	Applies the tool-call security gate before the idempotency cache (#2445).
+src/gateway/router/backend_handlers/direct_dispatch.rs	idempotency_outcome	1	critical	d	idempotency_outcome	Re-enforces the idempotency guard on the direct route (MIK-7272.SUB.4).
+src/gateway/router/backend_handlers/direct_dispatch.rs	admit_signing_nonce	1	critical	b,d	admit_signing_nonce	Admits the signing nonce after every refusal so a refused call consumes none (MIK-7698).
+src/gateway/router/backend_handlers/direct_dispatch.rs	dispatch	1	critical	d	dispatch	Terminal arm: forwards and answers; settles the reservation on failure.
+src/gateway/router/backend_handlers/direct_dispatch.rs	forward_sanitized	1	critical	d	forward_sanitized	Forwards the sanitized params through the spend and response gates and signs the answer.
+src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	1	critical	d	forward_plain	Forwards a pass-through call or drains tools/list through the same gates.
+src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	1	critical	d	finish_response	Firewall scan, list filtering, provenance stamp, settlement and signing of what the caller receives.
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_unavailable	1	standard	borderline	audit_unavailable	The generic client answer when the mint audit cannot be written (CWE-209).
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	1	standard	borderline	answer_failure	Settles the idempotency reservation for a dispatched failure.
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
@@ -273,13 +273,13 @@ src/oauth/client/destination.rs	check_advertised_endpoints	1	critical	d	OAuthCli
 src/oauth/client/destination.rs	check_destination	1	critical	d	OAuthClient::check_destination	Refuses OAuth URLs whose literal host the destination policy denies
 src/oauth/client/destination.rs	hop	1	critical	d	hop	Redirect hop SSRF literal check plus hop budget
 src/oauth/client/destination.rs	http_client	1	standard	borderline	http_client	Installs the redirect policy enforcing hop()
-src/oauth/client/mod.rs	authorize	1	critical	b	OAuthClient::authorize	Issuer check enforced before redeeming the authorization code
+src/oauth/client/grants.rs	authorize	1	critical	b	OAuthClient::authorize	Issuer check enforced before redeeming the authorization code
+src/oauth/client/grants.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
 src/oauth/client/mod.rs	credential_key	1	critical	c	OAuthClient::credential_key	Credentials keyed by issuer; refuses before the issuer is known
 src/oauth/client/mod.rs	drop_credentials_from_other_issuer	1	critical	c	OAuthClient::drop_credentials_from_other_issuer	Drops token and registered client_id when the issuer changes
 src/oauth/client/mod.rs	get_token	1	critical	b	get_token	Reuses a cached credential only while it is unexpired
 src/oauth/client/mod.rs	has_valid_token	1	critical	b	has_valid_token	Decides whether a cached credential is still valid
 src/oauth/client/mod.rs	validate_issuer	1	critical	b	validate_issuer	RFC 9207: a present iss must exactly equal the recorded issuer
-src/oauth/client/mod.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
 src/oauth/client/mod.rs	generate_pkce	1	standard	borderline	generate_pkce	PKCE verifier randomness and S256 derivation
 src/oauth/client/mod.rs	generate_state	1	standard	borderline	generate_state	CSRF state randomness
 src/oauth/client/mod.rs	initialize	1	standard	borderline	OAuthClient::initialize	Orchestrates destination and issuer checks before keeping metadata

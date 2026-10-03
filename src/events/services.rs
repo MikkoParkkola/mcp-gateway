@@ -346,6 +346,8 @@ pub(crate) struct Attempt<'a> {
     pub callback_host: &'a str,
     pub status: &'a str,
     pub body_sha256: &'a str,
+    /// What the firewall decided about the payload at fan-out.
+    pub firewall: &'a str,
     pub delivered: bool,
     /// The read verdict on this delivery (MIN.2), when it had one.
     pub cross_tenant_read: Option<crate::security::tenant_reads::ReadVerdict>,
@@ -364,8 +366,13 @@ impl Services {
             AuditEnvelope, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
         };
         use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
+        // No logger means no record, and so no POST (MIK-7802): delivery
+        // needs the audit trail it promises.
         let Some(log) = &self.audit else {
-            return Ok(());
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no audit log",
+            ));
         };
         let mut extra = Map::new();
         extra.insert("subscription_id".into(), attempt.subscription_id.into());
@@ -375,6 +382,7 @@ impl Services {
         extra.insert("callback_host".into(), attempt.callback_host.into());
         extra.insert("status".into(), attempt.status.into());
         extra.insert("body_sha256".into(), attempt.body_sha256.into());
+        extra.insert("firewall_verdict".into(), attempt.firewall.into());
         // Present even when empty: the record says it was attributed.
         extra.insert("tenants".into(), json!(attempt.tenants));
         let envelope = AuditEnvelope {

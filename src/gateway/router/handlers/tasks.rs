@@ -489,3 +489,155 @@ pub(super) async fn tasks_cancel(
 mod intent_tests;
 #[cfg(test)]
 mod scope_tests;
+
+/// The frames a listener that named tasks receives for `notifications/tasks`.
+///
+/// Owns what the stream needs after the request that opened it is gone: the
+/// owner, the immutable identity facts, and the state. The credential is NOT
+/// snapshotted: each delivery is handed the client the listener's credential
+/// resolves to at that moment, so a revoked role or narrowed scope applies to
+/// the very next frame. (MIK-7778 PAYLOAD.1)
+struct TaskFrameSource {
+    state: Arc<AppState>,
+    owner: String,
+    oauth_agent_identity: Option<OAuthAgentIdentity>,
+    cert_identity: Option<CertIdentity>,
+    agent_id: Option<crate::security::OwnedProvenAgentId>,
+    grant_subject: Option<crate::identity_grants::GrantSubject>,
+    verified_identity: Option<VerifiedIdentity>,
+    input_capabilities: Declared,
+    session_id: Option<String>,
+    /// The principal the stream was opened as. The credential is re-resolved
+    /// at delivery by the listener's own precedence (a dashboard session
+    /// before a bearer), which the HTTP middleware does not share; a reader
+    /// who now resolves to anyone else is sent task id and status only.
+    principal: Option<String>,
+    /// The caller's identity came from something nothing re-validates after
+    /// the stream opened (an agent token, a proxy or gateway assertion), so
+    /// such a reader is sent task id and status only. An API key, a
+    /// certificate and a verified bearer re-resolve at delivery.
+    status_only: bool,
+}
+
+pub(super) fn task_frames(
+    state: &Arc<AppState>,
+    owner: &str,
+    caller: &RecoveryCaller<'_>,
+) -> Arc<dyn crate::gateway::streaming::TaskFrames> {
+    Arc::new(TaskFrameSource {
+        state: Arc::clone(state),
+        owner: owner.to_owned(),
+        oauth_agent_identity: caller.oauth_agent_identity.cloned(),
+        cert_identity: caller.cert_identity.cloned(),
+        agent_id: caller
+            .agent_id
+            .map(crate::security::OwnedProvenAgentId::from),
+        grant_subject: caller.grant_subject.clone(),
+        verified_identity: caller.verified_identity.cloned(),
+        input_capabilities: caller.input_capabilities,
+        session_id: caller.session_id.map(str::to_owned),
+        principal: caller.client.map(|client| client.principal.clone()),
+        // What cannot be re-proven at delivery is not trusted at delivery: an
+        // agent token, or a grant subject that is not the API key, the
+        // connection's certificate, or the verified bearer identity (whose
+        // bearer is re-checked at delivery); in particular a subject asserted
+        // by a trusted proxy or an access gateway.
+        status_only: caller.oauth_agent_identity.is_some()
+            || caller.grant_subject.as_ref().is_some_and(|subject| {
+                !matches!(subject.authority.as_str(), "api_key" | "mtls")
+                    && caller
+                        .verified_identity
+                        .is_none_or(|verified| verified.issuer != subject.authority)
+            }),
+    })
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
+    async fn frame(
+        &self,
+        notification: &Value,
+        subscription: &crate::protocol::subscriptions::SubscriptionId,
+        reader: &AuthenticatedClient,
+    ) -> Option<crate::gateway::streaming::TaskFrame> {
+        // Owner-scoped read: a task this reader does not own is absence, and
+        // absence gets the notification as published (id and status only).
+        let stored = notification
+            .pointer("/params/taskId")
+            .and_then(Value::as_str)
+            .filter(|_| {
+                !self.status_only
+                    && self
+                        .principal
+                        .as_ref()
+                        .is_none_or(|opened_as| *opened_as == reader.principal)
+            })
+            .and_then(|id| self.state.tasks.get(&self.owner, id).ok());
+        let live = RecoveryCaller {
+            client: Some(reader),
+            oauth_agent_identity: self.oauth_agent_identity.as_ref(),
+            cert_identity: self.cert_identity.as_ref(),
+            api_key_name: Some(reader.name.as_str()),
+            agent_id: self
+                .agent_id
+                .as_ref()
+                .map(crate::security::OwnedProvenAgentId::as_proven),
+            agent_declared: None,
+            grant_subject: self.grant_subject.clone(),
+            verified_identity: self.verified_identity.as_ref(),
+            is_admin: reader.admin,
+            input_capabilities: self.input_capabilities,
+            session_id: self.session_id.as_deref(),
+        };
+        let request = RequestId::Number(0);
+        let refused = |stored: &crate::gateway::task_service::CommittedTask| {
+            with_policy_caller(&self.state, &live, |policy| {
+                self.state
+                    .meta_mcp
+                    .refuse_stored_delivery(&request, stored, None, live.session_id, policy)
+                    .is_some()
+            })
+        };
+        let pending = self
+            .state
+            .meta_mcp
+            .task_notification_frame(notification, stored.as_ref(), refused, subscription)
+            .await?;
+        Some(crate::gateway::streaming::TaskFrame {
+            frame: pending.frame.clone(),
+            restored_output: pending.restored_output,
+            delivery: Box::new(FrameDelivery {
+                state: Arc::clone(&self.state),
+                pending,
+                caller: reader.name.clone(),
+                session_id: self.session_id.clone().unwrap_or_default(),
+            }),
+        })
+    }
+}
+
+/// The delivery record of one built frame, written when the stream is about to
+/// send it.
+struct FrameDelivery {
+    state: Arc<AppState>,
+    pending: crate::gateway::meta_mcp::task_notify::PendingTaskFrame,
+    caller: String,
+    session_id: String,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::streaming::TaskFrameDelivery for FrameDelivery {
+    async fn delivered(self: Box<Self>, sent: &Value) -> bool {
+        let Self {
+            state,
+            pending,
+            caller,
+            session_id,
+        } = *self;
+        let who = crate::gateway::meta_mcp::task_notify::Reader {
+            caller: &caller,
+            session_id: &session_id,
+        };
+        state.meta_mcp.finish_task_frame(pending, sent, &who).await
+    }
+}

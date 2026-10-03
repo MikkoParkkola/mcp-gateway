@@ -1,5 +1,6 @@
 # NFR.BUILD.1 C6 mutation sample, drawn 2026-10-02 before any result: python3 scripts/release/c6_mutation_sample.py 8edb1c00edf8571ffabc3e492341e347 Re-published 2026-10-03 with the same nonce after normalize_tools_list_response moved to backend_handlers/direct_list.rs (#2640): the SAMPLE rows are identical, only the understudy order at ranks 35-45 moved.
 # nonce 8edb1c00edf8571ffabc3e492341e347 (first and only draw); Critical rows of docs/release/v4.0.0-critical-functions.tsv (this draw: sha256 9ed18bfc3fa9071e1e0b3d701a43d8344a1ffd7c8b15f5e0256ddb0e1f6824d8; identical Critical rows to d0fd145d..., which differed only in one Standard row's file).
+# Frozen frame: the draw reproduces from docs/release/v4.0.0-c6-sampling-frame.tsv (sha256 76d59ee30271da57a8f8324e8519b23c63e90301249b82b2dd8b58a89df661ae), not from the live inventory, so later inventory edits cannot move the sample. Drawn from the draw-time inventory 6f0dd5fec the SAMPLE rows are identical (68 rows, same hash).
 # SAMPLE rows are the gate's obligations; understudies replace a row only in rank order, under the rules in the C6 gate-day procedure.
 rank	status	named_path	file	qualified	occurrence	reason
 1	SAMPLE	HTTP dispatch	src/gateway/router/origin_guard_hosted.rs	HostedScope::admits_host	1	Admits the hosted Host only under the prefix.
