@@ -1,0 +1,13 @@
+diff --git a/src/secrets.rs b/src/secrets.rs
+index 7e8db3fd6..1caff739f 100644
+--- a/src/secrets.rs
++++ b/src/secrets.rs
+@@ -110,7 +110,7 @@ impl SecretResolver {
+             };
+             if let Some(text) = replacement {
+                 out.push_str(&value[copied_to..whole.start()]);
+-                out.push_str(&text);
++                out.push_str(&self.resolve_with(&text, other)?);
+                 copied_to = whole.end();
+             }
+         }

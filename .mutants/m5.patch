@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/params.rs b/src/capability/executor/params.rs
+index ca50f1406..23ee2597e 100644
+--- a/src/capability/executor/params.rs
++++ b/src/capability/executor/params.rs
+@@ -230,7 +230,7 @@ impl CapabilityExecutor {
+ 
+         for (key, value_template) in template {
+             let (value, unfilled) = self.substitute_string_tracked(value_template, params)?;
+-            if !value.is_empty() && value != "null" && !(unfilled && value.starts_with('{')) {
++            if !value.is_empty() && value != "null" && !value.starts_with('{') {
+                 result.push((key.clone(), value));
+             }
+         }
