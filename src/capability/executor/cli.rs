@@ -4,7 +4,9 @@
 //! answer into a result or a redacted error.
 
 use std::ffi::OsString;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
+#[cfg(feature = "firewall")]
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use serde_json::{Value, json};
