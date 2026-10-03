@@ -31,6 +31,12 @@ pub(crate) struct Subscription {
     /// The audit principal of that credential (a digest, never the secret).
     #[serde(default)]
     pub credential_principal: Option<String>,
+    /// The caller key the read verdict judges this principal's frames under
+    /// (MIN.2): formed when the subscription was made, only when the verdict
+    /// is on. Absent on older records, whose deliveries count as
+    /// unattributable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_key: Option<String>,
     /// What every attempt re-checks for a credential that is not an API key
     /// (design F9, MIK-7769). A bound kind without one is refused.
     #[serde(default)]
