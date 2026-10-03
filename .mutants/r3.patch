@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/mod.rs b/src/gateway/outbound/mod.rs
+index 2e1d681b4..8d972a235 100644
+--- a/src/gateway/outbound/mod.rs
++++ b/src/gateway/outbound/mod.rs
+@@ -130,7 +130,7 @@ impl OutboundFrame {
+     pub(crate) fn delivers_result(&self) -> bool {
+         match &self.payload {
+             Payload::Response(response) => response.result.is_some() && !response.delivery_refusal,
+-            Payload::Answer(value) => value.get("result").is_some_and(|r| !r.is_null()),
++            Payload::Answer(_) => true,
+             _ => false,
+         }
+     }
