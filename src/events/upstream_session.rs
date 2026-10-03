@@ -63,6 +63,7 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
         NoteKind::ResourceUpdated => Kind::ResourceUpdated,
         NoteKind::ResourcesChanged => Kind::ResourcesChanged,
         NoteKind::PromptsChanged => Kind::PromptsChanged,
+        NoteKind::ToolsChanged => Kind::ToolsChanged,
     };
     format!("backend.{backend}.{}", kind.suffix())
 }
@@ -264,6 +265,8 @@ struct State<'a> {
     subscribed: BTreeSet<String>,
     resource_interest_unsupported: bool,
     reread: bool,
+    /// A backend tools notice waits to be handed to the hub (§14).
+    tools_pending: bool,
     snapshot_due: Instant,
     /// A catalogue read is not retried before this.
     snapshot_retry_at: Instant,
@@ -285,6 +288,7 @@ impl<'a> State<'a> {
             subscribed: BTreeSet::new(),
             resource_interest_unsupported: false,
             reread: false,
+            tools_pending: false,
             snapshot_due: now + SNAPSHOT_TTL,
             snapshot_retry_at: now,
             retry_open_at: now,
@@ -344,7 +348,10 @@ impl<'a> State<'a> {
                 if kind == NoteKind::ResourcesChanged && !requested(self.shared).uris.is_empty() {
                     self.reread = true;
                 }
-                if self.shared.need.lock().emits(kind, uri.as_deref()) {
+                if kind == NoteKind::ToolsChanged {
+                    // Not coalesced here: the hub's own quiet window does it.
+                    self.tools_pending |= self.shared.need.lock().emits(kind, None);
+                } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
                 }
                 false
@@ -468,6 +475,11 @@ impl<'a> State<'a> {
 
     /// Emit the coalescing windows that closed (§8), through the hub only.
     fn flush(&mut self, hub: &Weak<EventsHub>) {
+        if std::mem::take(&mut self.tools_pending)
+            && let Some(hub) = hub.upgrade()
+        {
+            hub.backend_tools_changed(&self.shared.name);
+        }
         let due = self.coalescer.due(Instant::now());
         if due.is_empty() {
             return;

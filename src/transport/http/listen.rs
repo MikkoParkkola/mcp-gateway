@@ -248,6 +248,7 @@ mod tests {
             kinds: KindSet {
                 resources_changed: true,
                 prompts_changed: true,
+                tools_changed: false,
             },
             uris: vec!["file:///a".into()],
         }
