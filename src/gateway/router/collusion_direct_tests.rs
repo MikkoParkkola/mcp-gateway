@@ -19,7 +19,9 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::idempotency::IdempotencyCache;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
+use crate::security::firewall::{
+    AllowedFlow, CollusionAction, CollusionConfig, Firewall, FirewallConfig,
+};
 use crate::transport::Transport;
 
 /// Ordinary prose, long enough for several fingerprints, with nothing any
@@ -139,6 +141,7 @@ struct Setup {
     window_secs: u64,
     sources: Vec<String>,
     non_egress: Vec<String>,
+    allowed_flows: Vec<AllowedFlow>,
     /// Firewall rules (YAML). The default wildcard `allow` must not soften a
     /// relay block; a `block` rule on `read` makes a response finding a
     /// refusal where that is the stimulus.
@@ -154,6 +157,7 @@ impl Default for Setup {
             window_secs: 600,
             sources: vec!["alpha:read".to_string()],
             non_egress: Vec::new(),
+            allowed_flows: Vec::new(),
             rules: "[{match: \"*\", action: allow}]",
         }
     }
@@ -208,6 +212,7 @@ async fn fixture(setup: Setup) -> Fixture {
             window_secs: setup.window_secs,
             sources: setup.sources,
             non_egress: setup.non_egress,
+            allowed_flows: setup.allowed_flows,
             ..CollusionConfig::default()
         },
         ..FirewallConfig::default()
@@ -689,3 +694,27 @@ async fn a_forged_public_verdict_is_replaced_by_the_gateways_own() {
 }
 
 mod meta;
+
+/// Row 13: an allowlisted flow is not refused under `block`; the same content
+/// from a source outside the entry still is.
+#[tokio::test]
+async fn an_allowed_flow_is_not_refused() {
+    let flow = |source: &str| AllowedFlow {
+        source: source.to_string(),
+        egress: "alpha:send".to_string(),
+    };
+    let allowed = Setup {
+        allowed_flows: vec![flow("alpha:read")],
+        ..Setup::default()
+    };
+    let fx = fixture(allowed).await;
+    fx.read(Some("a")).await;
+    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    let other = Setup {
+        allowed_flows: vec![flow("alpha:other")],
+        ..Setup::default()
+    };
+    let fx = fixture(other).await;
+    fx.read(Some("a")).await;
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+}

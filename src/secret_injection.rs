@@ -195,6 +195,7 @@ impl SecretInjector {
     /// whatever the caller sent, since the value the caller put there never
     /// leaves the gateway. A rule whose credential resolves empty (injection
     /// skips it) or fails keeps the caller's value in view.
+    #[cfg(feature = "firewall")]
     pub(crate) fn strip_overwritten(
         &self,
         backend: &str,
