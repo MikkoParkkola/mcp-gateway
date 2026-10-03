@@ -146,19 +146,22 @@ for is dropped before it reaches the hub.
 
 ## 4. Transport additions
 
-Two new methods with a refusing default on `Transport` (`src/transport/mod.rs:98`),
-so A2A and any transport that does not implement them stay untouched (eligibility in
-§6 never calls them on such a transport, so the default is just a failed attempt;
-no `Error` variant is added):
+Two new methods, on a crate-private side trait `UpstreamListen` (in
+`src/transport/upstream_tap.rs`), **not** on the public `Transport` trait
+(ruling B, lead, 2026-10-02: no public API widening, so `UpstreamNote`,
+`KindSet` and the other tap types stay `pub(crate)`). `StdioTransport`,
+`WebSocketTransport` and `HttpTransport` implement it; A2A and any other
+transport do not, and §6 eligibility never reaches them, so no refusing default
+and no new `Error` variant is needed:
 
 ```rust
 /// Open `subscriptions/listen` with `filter` and yield every frame of that
 /// subscription until it ends. Dropping the stream cancels it upstream.
-async fn listen(&self, filter: Value) -> Result<FrameStream> { Err(Error::Protocol("not supported by this transport".into())) }
+async fn listen(&self, filter: Value) -> Result<FrameStream>;
 
 /// The peer's out-of-request notifications (legacy peers): the reader-loop tap
 /// on stdio and WebSocket, the session GET stream on HTTP.
-async fn unsolicited(&self) -> Result<FrameStream> { Err(Error::Protocol("not supported by this transport".into())) }
+async fn unsolicited(&self) -> Result<FrameStream>;
 ```
 
 `FrameStream` is a bounded `tokio::sync::mpsc::Receiver<UpstreamNote>`
@@ -214,17 +217,29 @@ listen id and not carried; a legacy frame never has one.
   removes the listen's sender whether or not `End` fit, so a full channel
   still reports the end as `Closed`.
 
-**Open decision (found while building, 2026-10-02).** `Transport` is a public
-trait (`pub mod transport`, `src/lib.rs:91`), so the two default methods above
-would put `UpstreamNote`, `Requested`, `KindSet` and `NoteKind` in the public
-API, a visibility widening that needs a ruling. (A) widen: make those four
-types `pub` and add the methods as written. (B) keep them crate-private: the
-three transports implement a `pub(crate)` side trait with the same two
-methods, and the backend slot keeps an `Arc` of it beside the `dyn Transport`
-it already holds; no public API changes, and A2A has no implementation, so it
-stays ineligible as §6 says. Recommended: B. The transport-side pieces
-(`src/transport/upstream_tap.rs`, the reader tap step, `http/listen.rs`) work
-under either and are built.
+**Reaching the side trait (ruling B).** The backend slot already builds the
+concrete transport before erasing it to `Arc<dyn Transport>`
+(`src/backend/lifecycle.rs`, the `match &self.config.transport` arms). It keeps
+a second handle in the pool entry, `Option<Weak<dyn UpstreamListen>>`, set in the
+same write as `entry.transport` for the three implementing arms and `None` for
+anything else. It is a `Weak`, not an `Arc`, so the slot's strong count stays
+one and `close_after_last_owner`'s wait on `strong_count > 1` (restart, stop,
+failed replacement startup) is unchanged: the extra handle can never keep a
+retired transport alive. The listener upgrades it only for the duration of one
+`listen`/`unsolicited` call, under the same lock that `ensure_entry_started`
+takes, and drops the upgraded `Arc` as soon as the stream is open (the stream's
+tasks hold no `Arc` of the transport, §4 HTTP and stdio/WebSocket). A failed
+upgrade means the transport is gone and is treated as a restart (§5). The
+WebSocket arm today
+receives an already-erased `Arc` from its start helper: the crate-private
+helper returns the concrete `Arc<WebSocketTransport>` (the public `start`
+keeps its return type through coercion), so the arm can build both handles.
+Consequences: no
+downcasting, no `Any`, no public item added; a transport added later is
+ineligible until its arm sets the field; and a test double implements the side
+trait directly. The transport-side pieces (`upstream_tap.rs`, the reader tap
+step, `http/listen.rs`) are unchanged by the ruling, apart from the two
+methods moving from the `Transport` impl blocks to `UpstreamListen` impl blocks.
 
 These are the only changes to `src/transport/`. Progress routing, the
 request-scoped sink and every existing request path are unchanged.
@@ -617,3 +632,5 @@ on are I4's, and the source it extends is I4's.
 Frozen after round 2 (two rounds, per the lane rule). Both round-2 verdicts were
 SHIP-WITH-FIXES with every finding local to a stated mechanism; all are applied
 above and none changed the design's scope. No third round.
+
+Amendment (ruling B, 2026-10-02): §4 moves `listen`/`unsolicited` to a crate-private side trait. gpt-review SHIP-WITH-FIXES (a second `Arc` would pin a retired transport; WebSocket arm holds an erased `Arc`) and grok-review SHIP-WITH-FIXES (same pin; proposed a `Weak`). Both applied: the pool entry holds a `Weak`, the WebSocket start helper returns the concrete type.
