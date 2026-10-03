@@ -222,7 +222,7 @@ fn queued_event(hub: &EventsHub, event_id: &str) {
 }
 
 /// SAFETY.2 (MIK-7784): an attempt whose audit record the log refuses is not
-/// POSTed and goes back to retry; with a working log the same attempt
+/// sent (no `POST`) and goes back to retry; with a working log the same attempt
 /// connects to the callback.
 #[tokio::test]
 async fn an_attempt_the_audit_log_refuses_is_not_sent() {
