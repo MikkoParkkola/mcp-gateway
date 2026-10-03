@@ -667,20 +667,18 @@ pub fn subscription_stream(
                     let tagged = match &task_frames {
                         Some(frames) if is_task_notification(&published.notification) => {
                             let reader = listener.current_client().await;
-                            match frames
+                            let Some(frame) = frames
                                 .frame(&published.notification, &subscription, reader.as_ref())
                                 .await
-                            {
-                                Some(frame) => frame,
-                                None => {
-                                    // The frame could not be delivered
-                                    // auditably. Closing makes the gap visible;
-                                    // re-subscribing recovers, as for a lag.
-                                    warn!("task notification withheld; closing so the client re-subscribes");
-                                    graceful = false;
-                                    break;
-                                }
-                            }
+                            else {
+                                // The frame could not be delivered auditably.
+                                // Closing makes the gap visible; re-subscribing
+                                // recovers, as for a lag.
+                                warn!("task notification withheld; closing so the client re-subscribes");
+                                graceful = false;
+                                break;
+                            };
+                            frame
                         }
                         _ => subscription.tag(published.notification),
                     };
