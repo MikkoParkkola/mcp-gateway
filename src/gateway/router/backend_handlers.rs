@@ -28,11 +28,10 @@ use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
 use crate::personal_accounts::refusal::refusal_text;
-use crate::protocol::{JsonRpcResponse, RequestId, Tool};
+use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{sanitize_json_value, validate_tool_name};
-use crate::trust::project_tool_descriptors_trust_cards;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
@@ -237,56 +236,6 @@ fn backend_security_error_with_status(
     build_http_error_response(Some(id.clone()), code, message, status)
 }
 
-/// Fill missing MCP tool annotation hints on direct backend `tools/list`
-/// responses before returning them to clients.
-fn normalize_tools_list_response(
-    backend: &crate::backend::Backend,
-    response: &mut JsonRpcResponse,
-) {
-    let backend_name = backend.name.as_str();
-    if response.error.is_some() {
-        // Never forward an unjudged list beside an error (#1441).
-        response.result = None;
-        return;
-    }
-
-    let Some(result) = response.result.as_mut() else {
-        return;
-    };
-    let Some(tools_value) = result.get_mut("tools") else {
-        return;
-    };
-
-    let Some(items) = tools_value.as_array() else {
-        warn!(backend = %backend_name, "Backend tools/list result is not an array");
-        return;
-    };
-
-    // Element by element: one unparseable descriptor must not forward the
-    // whole list verbatim (a bypass). It is dropped, since it cannot be judged
-    // and would disclose a name the caller may not invoke (A3).
-    let mut tools = Vec::with_capacity(items.len());
-    for item in items {
-        match serde_json::from_value::<Tool>(item.clone()) {
-            Ok(tool) => tools.push(tool),
-            Err(e) => {
-                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized; dropped");
-            }
-        }
-    }
-
-    backend.prepare_judged_tools(&mut tools);
-
-    let server_id = format!("backend:{backend_name}");
-    let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
-
-    // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
-    // upstream sibling key or cursor could name a withheld tool (A3). The
-    // projected descriptors are already JSON values, so building the result
-    // has no failure arm to fall through to the unjudged original.
-    *result = crate::trust::tools_list_result_with_trust_cards(tools);
-}
-
 /// Stable, collision-safe upstream-session bucket key for a passthrough caller
 /// (MIK-6785). On the passthrough route the forwarded backend credential is the
 /// only value that distinguishes one caller from another (there is usually no
@@ -444,6 +393,16 @@ async fn dispatch_in_scope(
         }
     })
     .await;
+    // MIK-7116.MIN.2: what the backend sent counts as read here, before a
+    // list drain, filter or normalisation drops fields. `tools/call` notes
+    // its result at its gates instead, once they pass.
+    if method != "tools/call"
+        && let Ok(JsonRpcResponse {
+            result: Some(raw), ..
+        }) = &response
+    {
+        crate::security::tenant_reads::note_read(raw);
+    }
     response
 }
 
@@ -489,7 +448,7 @@ pub(super) async fn backend_handler(
         ));
     }
 
-    bodiless_accepted(direct_audit::audited_call(Arc::clone(&state), name, request).await)
+    direct_audit::audited_call(Arc::clone(&state), name, request).await
 }
 
 #[allow(clippy::too_many_lines)]
@@ -498,6 +457,7 @@ async fn backend_handler_inner(
     name: String,
     request: axum::http::Request<axum::body::Body>,
     call: &mut Option<direct_audit::DirectCall>,
+    reads: &mut direct_audit::DirectReads,
 ) -> (StatusCode, Json<Value>) {
     // Extract authenticated client from extensions (injected by auth middleware)
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
@@ -607,6 +567,13 @@ async fn backend_handler_inner(
     // D2-a: the slot is filled before the envelope is validated, so a
     // malformed tools/call is recorded as `invalid` too.
     *call = direct_audit::DirectCall::of(&json_request, client.as_ref(), grant_subject.as_ref());
+    reads.capture(&state, &json_request, || {
+        super::identity::caller_key(
+            grant_subject.as_ref(),
+            cert_identity.as_ref(),
+            client.as_ref(),
+        )
+    });
 
     // After the audit hash (D2-e: params as sent), before anything else reads
     // the request: parse, telemetry and every forwarding arm see no token.
@@ -1302,7 +1269,11 @@ fn settle_direct_idempotency(
         return;
     }
     if let Some(result) = response.result.as_ref() {
-        reservation.complete(result);
+        // MIN.2 row 14: the direct route is one dispatch per read scope, so
+        // all the scope noted is this call's reading.
+        let reading =
+            crate::gateway::meta_mcp::invoke::cache_reads::reading(std::collections::BTreeSet::new);
+        reservation.complete_read(result, reading);
     }
 }
 
@@ -1448,6 +1419,7 @@ mod key_check;
 mod notification_key;
 pub(super) use costs::costs_handler;
 use direct_failure::DirectFailure;
+use direct_list::normalize_tools_list_response;
 
 #[cfg(test)]
 mod tests;

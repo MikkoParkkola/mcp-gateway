@@ -154,6 +154,7 @@ backend" and "fails a capability file" first.**
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
 | 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 | 129 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
+| 130 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity; an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3629,6 +3630,25 @@ capability invoked by name behaves as before.
 
 **Action:** if a capability you use disappeared from the list, set the variable it names; supplying
 the key lists it again.
+
+## 130. Frames naming a second tenant for one caller are recorded, or withheld
+
+**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
+
+With `arg_keys` set, every frame the gateway sends a caller is checked for the tenants it names:
+answers and errors, notifications, server-to-client requests and webhook deliveries, on HTTP, the
+POST and GET streams, the direct route and stdio. Content the gateway read but did not show
+(before a capability transform, a cache or idempotency replay, a stored task's output) counts
+too, and a response it could not read counts as a tenant of its own. When one `caller_key`'s
+frames name more than one tenant inside `window_secs`, the new key
+`tenant_guard.cross_tenant_reads` decides: `observe` (the default) writes a `tenant_read`
+audit record with `cross_tenant_read: flagged`, `block` withholds the frame with a JSON-RPC
+error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
+Tenant ids are compared across backends, so two backends that reuse one id count as one tenant.
+Name tenant fields that appear inside backend content in `arg_keys`; the names of protocol members the gateway writes itself (`jsonrpc`, `id`, `method`, `params`, `result`, `error`, `data`, `cacheScope`, and the event envelope's own members) are matched inside content only, not on the wrapper. A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
+
+**Action:** none. Set `off` to silence it, or `block` to withhold such frames; namespace tenant
+ids that two backends reuse.
 
 ## Upgrading from 3.5.x: a walkthrough
 
