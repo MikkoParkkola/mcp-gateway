@@ -4,17 +4,13 @@
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
+mod allocator;
 mod commands;
 mod home_dir;
 
-use std::path::Path;
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode};
 
 use clap::Parser;
-
-/// The system allocator costs about 10 us p50 per tool call here (MIK-7536).
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
