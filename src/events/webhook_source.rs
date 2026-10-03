@@ -17,6 +17,9 @@ use super::{EventSource, EventsHub};
 use crate::capability::WebhookEvent;
 use crate::gateway::WebhookRegistry;
 
+/// Every webhook event type's name starts with this.
+pub(super) const NAME_PREFIX: &str = "webhook.";
+
 /// The webhook-route source: its catalogue follows the live registry, so a
 /// capability reload changes it.
 pub(crate) struct WebhookSource {

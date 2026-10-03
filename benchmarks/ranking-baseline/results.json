@@ -1,18 +1,18 @@
 {
   "criterion": "MIK-3274.RANKING.3",
-  "tool_inventory_size": 119,
+  "tool_inventory_size": 127,
   "corpus_size": 114,
-  "candidate_pool_size": 119,
+  "candidate_pool_size": 127,
   "overall_top1_hit_rate": 0.7807017543859649,
   "overall_top3_hit_rate": 0.8859649122807017,
   "overall_top5_hit_rate": 0.9122807017543859,
-  "overall_mean_reciprocal_rank": 0.8393064012367351,
+  "overall_mean_reciprocal_rank": 0.8388611621459966,
   "by_derivation": {
     "abbreviation": {
       "n": 15,
       "top1_hit_rate": 0.8,
       "top3_hit_rate": 0.8,
-      "mean_reciprocal_rank": 0.8226455026455025
+      "mean_reciprocal_rank": 0.8224501424501424
     },
     "description_lead": {
       "n": 24,
@@ -36,13 +36,13 @@
       "n": 20,
       "top1_hit_rate": 0.65,
       "top3_hit_rate": 0.65,
-      "mean_reciprocal_rank": 0.671961349964252
+      "mean_reciprocal_rank": 0.6709588961824526
     },
     "typo": {
       "n": 12,
       "top1_hit_rate": 0.75,
       "top3_hit_rate": 0.8333333333333334,
-      "mean_reciprocal_rank": 0.7946127946127945
+      "mean_reciprocal_rank": 0.7922979797979798
     }
   },
   "cases": [
@@ -768,11 +768,11 @@
       "gold_tools": [
         "contacts_list"
       ],
-      "best_gold_rank": 17,
+      "best_gold_rank": 19,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.058823529411764705
+      "reciprocal_rank": 0.05263157894736842
     },
     {
       "id": "tag_query::albums",
@@ -811,11 +811,11 @@
         "confluence_search",
         "jira_search"
       ],
-      "best_gold_rank": 16,
+      "best_gold_rank": 18,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.0625
+      "reciprocal_rank": 0.05555555555555555
     },
     {
       "id": "tag_query::audit",
@@ -853,11 +853,11 @@
         "stripe_charges",
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 97,
+      "best_gold_rank": 103,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.010309278350515464
+      "reciprocal_rank": 0.009708737864077669
     },
     {
       "id": "tag_query::bus",
@@ -935,11 +935,11 @@
       "gold_tools": [
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 98,
+      "best_gold_rank": 104,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.01020408163265306
+      "reciprocal_rank": 0.009615384615384616
     },
     {
       "id": "tag_query::climate",
@@ -948,11 +948,11 @@
       "gold_tools": [
         "weather"
       ],
-      "best_gold_rank": 112,
+      "best_gold_rank": 120,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.008928571428571428
+      "reciprocal_rank": 0.008333333333333333
     },
     {
       "id": "tag_query::code-review",
@@ -961,11 +961,11 @@
       "gold_tools": [
         "github_create_pr"
       ],
-      "best_gold_rank": 26,
+      "best_gold_rank": 30,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.038461538461538464
+      "reciprocal_rank": 0.03333333333333333
     },
     {
       "id": "tag_query::comments",
@@ -1125,11 +1125,11 @@
       "gold_tools": [
         "github_search_repos"
       ],
-      "best_gold_rank": 35,
+      "best_gold_rank": 39,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.02857142857142857
+      "reciprocal_rank": 0.02564102564102564
     },
     {
       "id": "abbreviation::crm",
@@ -1529,11 +1529,11 @@
       "gold_tools": [
         "jira_search"
       ],
-      "best_gold_rank": 9,
+      "best_gold_rank": 12,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.1111111111111111
+      "reciprocal_rank": 0.08333333333333333
     },
     {
       "id": "typo::linear_get_teams",

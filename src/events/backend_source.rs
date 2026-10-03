@@ -92,6 +92,7 @@ impl EventsHub {
             && !source.offers(&event_name(backend))
         {
             self.withdraw(&[event_name(backend)]);
+            self.reconcile_stops_in_background();
             return;
         }
         let generation = {

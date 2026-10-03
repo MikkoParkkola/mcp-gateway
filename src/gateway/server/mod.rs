@@ -1417,7 +1417,7 @@ impl Gateway {
                             refused.extend(report.rejected);
                         }
                         Err(e) => {
-                            // Don't fail startup if capability dir doesn't exist
+                            cap_backend_for_load.mark_initial_scan_failed(); // not fatal
                             debug!(directory = %dir, error = %e, "Failed to load capabilities");
                         }
                     }

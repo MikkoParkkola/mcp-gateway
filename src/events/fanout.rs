@@ -50,6 +50,15 @@ pub(crate) fn event_id(kind: SourceKind, upstream_id: &str, subscription_id: &st
 /// signed body, outside `payloadSchema` (design §3.6).
 const PROVENANCE_KEY: &str = "io.github.mikkoparkkola/provenance";
 
+/// Whether every configured capability directory was read by the startup
+/// scan. A partial scan builds a partial catalogue, which proves nothing about
+/// a route's absence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogueScan {
+    Complete,
+    Partial,
+}
+
 /// The delivery body: exactly the protocol fields, the source's data and
 /// the provenance receipt in `_meta`.
 pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: &Value) -> Vec<u8> {
@@ -176,17 +185,77 @@ impl EventsHub {
     /// Delete every subscription to an event type a reload removed; their
     /// pending records go with them (design §9). Synchronous, inside the
     /// reload, so a later reload that restores the type cannot interleave.
-    pub(crate) fn withdraw(self: &Arc<Self>, names: &[String]) {
+    ///
+    /// `false` when a subscription could not be removed.
+    pub(crate) fn withdraw(&self, names: &[String]) -> bool {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
+        let mut all_removed = true;
         for sub in self.store.subscriptions() {
             if names.contains(&sub.name)
                 && let Err(error) = self.store.remove(&sub.id, now, tail)
             {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
+                all_removed = false;
             }
         }
-        self.reconcile_stops_in_background();
+        all_removed
+    }
+
+    /// Once the startup capability scan has registered the webhook routes:
+    /// delete the subscriptions to webhook event types the catalogue no
+    /// longer offers (a route removed while the gateway was down, or webhooks
+    /// turned off), their pending records with them, and let the worker start.
+    /// Before this the catalogue is partial, so nothing is withdrawn and
+    /// nothing is sent (MIK-7772). `false`, with the worker still held, when
+    /// a removal failed: the caller retries.
+    pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
+        // Held through the snapshot and the withdrawal, so a capability reload
+        // cannot restore a route in between and lose its subscriptions.
+        let _gate = self.catalogue_lock();
+        // With webhooks off no route can come back, so a partial capability
+        // scan proves nothing about them: their catalogue is complete (empty).
+        let webhooks_on = self
+            .sources
+            .read()
+            .iter()
+            .any(|source| source.kind() == SourceKind::Webhook);
+        if scan == CatalogueScan::Partial && webhooks_on {
+            tracing::warn!(
+                "events: a capability directory could not be read at startup; stored \
+                 subscriptions are kept and reconciled at the next complete start"
+            );
+            return self.release_worker();
+        }
+        let offered: std::collections::HashSet<String> =
+            self.catalogue().into_iter().map(|d| d.name).collect();
+        let gone: Vec<String> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| {
+                name.starts_with(super::webhook_source::NAME_PREFIX) && !offered.contains(name)
+            })
+            .collect();
+        if !self.withdraw(&gone) {
+            return false;
+        }
+        self.release_worker()
+    }
+
+    /// Reconciliation is over: the delivery worker may start.
+    fn release_worker(&self) -> bool {
+        self.runtime
+            .reconciled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.runtime.wake.notify_one();
+        true
+    }
+
+    /// Serializes startup reconciliation with capability reloads.
+    pub(crate) fn catalogue_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.catalogue_gate.lock()
     }
 
     /// Delete subscription `refused`, the snapshot the access check refused,
