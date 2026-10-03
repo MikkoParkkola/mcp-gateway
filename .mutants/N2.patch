@@ -1,0 +1,15 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index 8a1f1fe0d..0e17b2d76 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -528,9 +528,7 @@ impl Store {
+                 }
+                 Ok(Settled {
+                     evicted,
+-                    // Taken before the caps run: the burial happened even if
+-                    // they evict it at once.
+-                    buried: true,
++                    buried: false,
+                 })
+             }
+         }

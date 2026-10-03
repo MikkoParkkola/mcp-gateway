@@ -1,0 +1,13 @@
+diff --git a/src/events/store.rs b/src/events/store.rs
+index 5190c5c4f..7c9c8f66b 100644
+--- a/src/events/store.rs
++++ b/src/events/store.rs
+@@ -345,7 +345,7 @@ impl Store {
+         state.subs.insert(sub.id.clone(), sub);
+         placed.durable()?;
+         self.trim_tails(&mut state, now, tail)?;
+-        Ok(Ok(if refreshed {
++        Ok(Ok(if false && refreshed {
+             Admission::Refreshed
+         } else {
+             Admission::Inserted

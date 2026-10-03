@@ -1,0 +1,16 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index de56edf97..c300deca1 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -446,10 +446,7 @@ impl Store {
+                 if let Err(error) = &settled {
+                     tracing::warn!(%error, "events store: cleanup after a burial failed");
+                 }
+-                settled = Ok(Settled {
+-                    evicted: Vec::new(),
+-                    buried: true,
+-                });
++                let _ = &settled;
+             } else if let Some(left) = state.outbox.get_mut(event_id) {
+                 left.state = OutboxState::Pending;
+                 left.next_attempt_at = now + SETTLE_RETRY;

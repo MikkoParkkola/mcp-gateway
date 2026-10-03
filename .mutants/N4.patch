@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 2c93463f0..1ab56a6a8 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -410,7 +410,7 @@ impl EventsHub {
+     ) {
+         // Stamped at fan-out from the subscription the record is for; a record
+         // written before the stamp existed falls back to the store.
+-        let host = if record.callback_host.is_empty() {
++        let host = if true {
+             self.store
+                 .get(&record.subscription_id)
+                 .and_then(|s| url::Url::parse(&s.url).ok())
