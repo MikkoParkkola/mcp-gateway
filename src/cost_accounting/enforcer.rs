@@ -145,12 +145,7 @@ struct Pending {
 impl Pending {
     fn add(&mut self, tool: &str, key: Option<&str>, micro: u64) {
         self.global = self.global.saturating_add(micro);
-        let slot = self.tools.entry(tool.to_string()).or_default();
-        *slot = slot.saturating_add(micro);
-        if let Some(key) = key {
-            let slot = self.keys.entry(key.to_string()).or_default();
-            *slot = slot.saturating_add(micro);
-        }
+        let _ = (tool, key);
     }
 
     fn release(&mut self, tool: &str, key: Option<&str>, micro: u64) {
