@@ -209,8 +209,7 @@ fn installed(
         required: true,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
-        strategy,
-        managed: None,
+        minter: Minter::External(strategy),
     }
 }
 

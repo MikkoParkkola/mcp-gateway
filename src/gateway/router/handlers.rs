@@ -81,21 +81,18 @@ fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
     match method {
         "tools/call" => params.is_some_and(|p| p.get("task").is_some()),
         "tasks/get" | "tasks/update" | "tasks/cancel" => true,
-        "subscriptions/listen" => params.is_some_and(|p| p.get("taskIds").is_some()),
+        "subscriptions/listen" => {
+            params.is_some_and(crate::protocol::subscriptions::names_task_ids)
+        }
         _ => false,
     }
 }
 
-/// The task ids a `subscriptions/listen` names, if it names any.
+/// The task ids a `subscriptions/listen` names, if it names any, in either
+/// placement.
 fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
     params
-        .and_then(|p| p.get("taskIds"))
-        .and_then(Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(|id| id.as_str().map(String::from))
-                .collect()
-        })
+        .map(crate::protocol::subscriptions::named_task_ids)
         .unwrap_or_default()
 }
 
@@ -948,7 +945,16 @@ async fn meta_mcp_dispatch(
             if let Some(map) = params.as_mut().and_then(Value::as_object_mut) {
                 map.entry("notifications").or_insert_with(|| json!({}));
                 if !caller_holds_ids {
+                    // Both placements: a copy left standing would opt the
+                    // stream into a task the caller does not own.
                     map.insert("taskIds".into(), json!([]));
+                    if let Some(filter) = map
+                        .get_mut("notifications")
+                        .and_then(Value::as_object_mut)
+                        .filter(|filter| filter.contains_key("taskIds"))
+                    {
+                        filter.insert("taskIds".into(), json!([]));
+                    }
                 }
             }
         }

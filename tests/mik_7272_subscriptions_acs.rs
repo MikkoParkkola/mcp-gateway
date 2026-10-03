@@ -153,6 +153,33 @@ fn ac_sub_1_the_acknowledgement_names_what_is_delivered() {
     assert_eq!(ack["params"]["notifications"], json!({}), "{ack}");
 }
 
+/// MIK-7778: the tasks extension's own placement, `notifications.taskIds`,
+/// opts in and is named back in the acknowledgement, like the root form.
+#[test]
+fn ac_sub_1_a_nested_task_filter_opts_in_and_is_acknowledged() {
+    let request = ListenRequest::from_params(Some(&json!({
+        "notifications": { "taskIds": ["t-1", 5, "t-2"] },
+    })))
+    .expect("a valid filter");
+    assert!(request.wants(NotificationKind::Tasks));
+    assert_eq!(request.task_ids(), ["t-1", "t-2"]);
+    let ack = request.acknowledgement(&SubscriptionId::of_request(RequestId::Number(9)));
+    assert_eq!(
+        ack["params"]["notifications"],
+        json!({ "taskIds": ["t-1", "t-2"] }),
+        "{ack}"
+    );
+
+    // Both placements are one filter: merged in request order (root first),
+    // each id once.
+    let both = ListenRequest::from_params(Some(&json!({
+        "taskIds": ["t-2", "t-1"],
+        "notifications": { "taskIds": ["t-1", "t-3", "t-2"] },
+    })))
+    .expect("a valid filter");
+    assert_eq!(both.task_ids(), ["t-2", "t-1", "t-3"]);
+}
+
 /// MIK-7766: a server-ended subscription closes with the listen request's
 /// own response, a complete result carrying only the subscription id.
 #[test]
