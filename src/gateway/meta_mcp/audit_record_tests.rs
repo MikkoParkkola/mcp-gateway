@@ -56,6 +56,36 @@ impl Transport for Scripted {
     }
 }
 
+/// A backend that answers every `tools/call` with its own JSON-RPC error.
+struct PeerError(i32);
+
+#[async_trait::async_trait]
+impl Transport for PeerError {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            return Ok(crate::protocol::JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                self.0,
+                "the peer's own refusal",
+            ));
+        }
+        Scripted(Ok(ok_result())).request(method, params).await
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 fn ok_result() -> Value {
     json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
 }
@@ -372,3 +402,81 @@ async fn response_hash_covers_returned_value() {
 // MIK-7116.MIN.1 attribution, which reads the firewall's `arg_keys`.
 #[cfg(feature = "firewall")]
 mod tenants;
+
+/// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
+/// refusal, not the gateway's policy: the record says `error`, with the
+/// peer's code, never `denied`.
+#[tokio::test]
+async fn a_peer_error_code_is_not_a_gateway_denial() {
+    for code in [-32001, -32004] {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = meta(Ok(ok_result()), &dir);
+        let backend = meta.backends.get("alpha").expect("alpha");
+        backend.set_transport_for_test(Arc::new(PeerError(code)));
+        let who = api_key_caller();
+        let _ = meta
+            .invoke_tool(&args(), None, &context(&AllowAll, &who))
+            .await;
+        let record = only_record(&dir);
+        assert_eq!(record["outcome"], json!("error"), "{code}: {record}");
+        assert_eq!(record["error_code"], json!(code), "{code}: {record}");
+    }
+}
+
+/// MIK-7735. A replay records the class its first execution carried, stored
+/// beside the cached delivery: the code alone cannot say whose refusal a
+/// `-32001` was. A peer's answer replays as `error`, a gateway refusal as
+/// `denied`, with the same code.
+#[tokio::test]
+async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
+    use crate::gateway::meta_mcp::admission::ReplayAudit;
+    use crate::security::audit::AuditOutcome;
+    for (stored, label) in [
+        (AuditOutcome::Error(-32001), "error"),
+        (AuditOutcome::Denied(-32001), "denied"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = meta(Ok(ok_result()), &dir);
+        let who = api_key_caller();
+        let delivered =
+            crate::protocol::JsonRpcResponse::success(RequestId::Number(1), ok_result());
+        let _ = meta
+            .audit_replay(
+                "gateway_invoke",
+                &args(),
+                None,
+                &context(&AllowAll, &who),
+                delivered,
+                Some(ReplayAudit::new(stored, None)),
+            )
+            .await;
+        let record = only_record(&dir);
+        assert_eq!(record["outcome"], json!(label), "{label}: {record}");
+        assert_eq!(record["error_code"], json!(-32001), "{label}: {record}");
+    }
+}
+
+/// MIK-7735. With no stored class (the first run wrote no record) the replay
+/// derives one from the delivered error, which carries a code and no
+/// provenance: it must not claim a gateway denial for a bare `-32001`.
+#[tokio::test]
+async fn a_replayed_error_with_no_stored_class_is_not_claimed_as_a_denial() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta(Ok(ok_result()), &dir);
+    let who = api_key_caller();
+    let delivered =
+        crate::protocol::JsonRpcResponse::error(Some(RequestId::Number(1)), -32001, "peer says no");
+    let _ = meta
+        .audit_replay(
+            "gateway_invoke",
+            &args(),
+            None,
+            &context(&AllowAll, &who),
+            delivered,
+            None,
+        )
+        .await;
+    let record = only_record(&dir);
+    assert_eq!(record["outcome"], json!("error"), "{record}");
+    assert_eq!(record["error_code"], json!(-32001), "{record}");
+}
