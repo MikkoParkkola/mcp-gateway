@@ -182,6 +182,9 @@ src/gateway/task_service/execution.rs	install_recovery	1	standard	borderline	Tas
 src/gateway/task_service/execution/context.rs	dispatch_context_retrying	1	standard	borderline	OwnedCallerContext::dispatch_context_retrying	signing: None keeps check_invocation_policy running; wrong value silently skips re-auth
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
 src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
+src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
+src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	critical	d	settle_interrupted	Settles a resumed task interrupted when its host is gone, instead of dispatching without one
+src/gateway/task_service/execution/input_round.rs	proceed_unless_late	1	critical	d	TaskExecutor::proceed_unless_late	The one place both late-deadline checks of a resume close the round
 src/gateway/task_service/execution/input_round.rs	round_deadline	1	critical	borderline	round_deadline	Opens the sealed continuation (authenticates) to derive the deadline; refuses unopenable ones
 src/gateway/task_service/execution/input_round.rs	dispatch	1	standard	borderline	dispatch	Builds the worker's authorizer and caller context for the resume dispatch
 src/gateway/task_service/execution/recovery.rs	transition_digest_write	1	standard	borderline	TaskExecutor::transition_digest_write	Digest-level transition that skips principal hashing; safe only if no request path reaches it

@@ -6,6 +6,7 @@ mod command_split;
 mod http;
 pub(crate) mod notification_sink;
 mod stdio;
+pub(crate) mod upstream_tap;
 pub mod websocket;
 #[cfg(test)]
 pub(crate) mod websocket_test_server;

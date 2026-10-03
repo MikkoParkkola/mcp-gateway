@@ -152,7 +152,7 @@ backend" and "fails a capability file" first.**
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
 | 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, Chrome DevTools, fetch, git without a pinned repository). `init` (local profile) enables memory, sequential-thinking, context7 and time. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
-| 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
+| 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; stdio, WebSocket and streamable HTTP backends offer the three events | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 | 129 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
 | 130 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity (for an answer on `POST /mcp` the fields ride its `response_delivery_attempt` record); an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
 | 131 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
@@ -3594,13 +3594,14 @@ capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
 
 **Startup:** no notice, a subscription to such an event answers -32014
 
-MCP Events is to turn a backend's `notifications/resources/updated`,
+MCP Events turns a backend's `notifications/resources/updated`,
 `notifications/resources/list_changed` and `notifications/prompts/list_changed` into the events
 `backend.<name>.resource_updated`, `backend.<name>.resources_changed` and
-`backend.<name>.prompts_changed`, listened for on one shared connection per backend. The
-listener is not in this build yet: until it lands, these names are not offered for any backend,
-and a subscription on an eligible backend (stdio, WebSocket, streamable HTTP) answers `-32011`.
-The four kinds of backend below will not offer them in 4.0 at all, and say why now:
+`backend.<name>.prompts_changed`, listened for on one shared connection per backend while an
+event subscription needs it (stdio, WebSocket, streamable HTTP). A `resource_updated`
+subscription names a `uri` from the backend's own resource list; bursts of one kind become one
+event per second.
+The four kinds of backend below do not offer them in 4.0, and say why:
 
 | Backend | `data.reason` | Why |
 |---|---|---|

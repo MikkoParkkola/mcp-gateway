@@ -99,11 +99,11 @@ pub(crate) struct PooledEntry {
     /// be resent (ADR-012 A1). Absent means deny, so an unfilled slot denies
     /// every resend, which is the safe direction.
     pub(crate) resend_permitted: RwLock<std::collections::HashSet<String>>,
-    /// Set when the last tools-cache drain (MIK 7570 PAGING.1) stopped before
-    /// the upstream catalogue was exhausted (page cap, repeated cursor, or the
-    /// fill budget). Cleared by the next fill that drains to completion.
-    /// Tools only — the other three families keep their pages either way.
+    /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
+    /// catalogue was exhausted (page cap, repeated cursor, or the fill
+    /// budget); cleared by the next complete fill. Tools and resources only.
     pub(crate) tools_truncated: AtomicBool,
+    pub(crate) resources_truncated: AtomicBool,
     /// When this slot's last tools fill ended without storing (F13): a drain,
     /// parse or start error, a `CallTimeout` expiry, or a voided store. Fills
     /// within `LIST_FILL_COOLDOWN` of it fail fast. Tokio's `Instant`, so a
@@ -123,8 +123,9 @@ pub(crate) struct PooledEntry {
     /// A mutex, held across each record and its flag change, so a warm-up's
     /// check-then-reset cannot interleave with a request failure.
     pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
-
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
+    /// The events listener's weak handle on the transport (I5 §4).
+    pub(crate) listen: RwLock<Option<super::listen::ListenHandle>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
     /// A `PerUser` slot's admission (#2300); dropped with the entry.
@@ -177,12 +178,10 @@ impl ActivityGuard {
         }
     }
 
-    /// The slot this lease holds.
-    ///
-    /// The metadata path reads its cache through this rather than looking the
-    /// slot up a second time, so the cache it fills and the transport it is
-    /// holding open are the same object by construction rather than by two
-    /// lookups agreeing (MIK-7334.CATALOGUE.1 §3.1).
+    /// The slot this lease holds. The metadata path reads its cache through
+    /// this rather than looking the slot up a second time, so the cache it
+    /// fills and the transport it holds open are the same object by
+    /// construction, not by two lookups agreeing (MIK-7334.CATALOGUE.1 §3.1).
     pub(super) fn entry(&self) -> &Arc<PooledEntry> {
         &self.entry
     }
@@ -190,9 +189,8 @@ impl ActivityGuard {
 
 impl Drop for ActivityGuard {
     fn drop(&mut self) {
-        // Touch on the way out too: a long CLIENT request should leave the slot
-        // looking used as of its COMPLETION, not its start. Internal leases skip
-        // this so they never defer the idle deadline.
+        // Touch on exit: a long CLIENT request leaves the slot used as of its
+        // completion. Internal leases skip it, so they never defer idling.
         if self.touch_on_drop {
             self.entry.touch();
         }
@@ -212,11 +210,13 @@ impl PooledEntry {
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
+            resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),
             request_failed_since_close: parking_lot::Mutex::new(false),
 
             resources_cache: CachedMetadata::new(),
+            listen: RwLock::new(None),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
             identity_lease: None,

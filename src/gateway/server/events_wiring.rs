@@ -43,11 +43,25 @@ pub(super) fn install(
             .capabilities
             .enabled
             .then(|| config.capabilities.name.clone());
-        hub.install_backend_source(Arc::new(move || {
-            let mut names: Vec<String> = registry.all().iter().map(|b| b.name.clone()).collect();
-            names.extend(capability.clone());
-            names
-        }));
+        let live = Arc::clone(live_config);
+        hub.install_backend_source_with_upstream(
+            Arc::new({
+                let registry = Arc::clone(&registry);
+                move || {
+                    let mut names: Vec<String> =
+                        registry.all().iter().map(|b| b.name.clone()).collect();
+                    names.extend(capability.clone());
+                    names
+                }
+            }),
+            registry,
+            Arc::new(move || {
+                let multi_user = crate::events::upstream_multi_user(live.running());
+                crate::events::upstream_ineligible(&live.get(), multi_user)
+                    .into_keys()
+                    .collect()
+            }),
+        );
     }
     hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
     meta_mcp.set_events(hub);

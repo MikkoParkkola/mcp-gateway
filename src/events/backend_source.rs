@@ -15,7 +15,10 @@ use parking_lot::Mutex;
 use serde_json::{Value, json};
 
 use super::fanout::SourceEvent;
-use super::types::{EventDescriptor, SourceKind, Visibility};
+use super::types::{EventDescriptor, RpcError, SourceKind, Visibility};
+use super::upstream::{Kind, parse_name};
+use super::upstream_listener::UpstreamListeners;
+use super::upstream_need::{Interest, MAX_URIS};
 use super::{EventSource, EventsHub};
 
 /// How long a backend must be quiet before its burst is reported.
@@ -24,8 +27,19 @@ pub(super) const QUIET: Duration = Duration::from_millis(500);
 /// Lists the backends that exist now.
 pub(crate) type BackendNames = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 
+/// The configured backends that cannot offer the upstream-notification
+/// events (design §6), read from the live config at each call.
+pub(crate) type Ineligible = Arc<dyn Fn() -> std::collections::BTreeSet<String> + Send + Sync>;
+
+/// The three upstream-notification names (I5), delegated to the listeners.
+pub(crate) struct Upstream {
+    pub listeners: Arc<UpstreamListeners>,
+    pub ineligible: Ineligible,
+}
+
 pub(crate) struct BackendSource {
     pub names: BackendNames,
+    pub upstream: Option<Upstream>,
 }
 
 /// Every backend event name starts with this.
@@ -45,24 +59,138 @@ impl EventSource for BackendSource {
         let mut names = (self.names)();
         names.sort();
         names.dedup();
-        names
-            .into_iter()
-            .map(|backend| EventDescriptor {
+        let refused = self.upstream.as_ref().map(|u| (u.ineligible)());
+        let mut out = Vec::new();
+        for backend in names {
+            let upstream = self
+                .upstream
+                .as_ref()
+                .is_some_and(|u| u.listeners.knows(&backend))
+                && refused.as_ref().is_some_and(|r| !r.contains(&backend));
+            out.push(EventDescriptor {
                 name: event_name(&backend),
                 description: format!("The tool set of backend {backend} changed."),
                 input_schema: json!({"type": "object", "properties": {},
                     "additionalProperties": false}),
                 payload_schema: json!({"type": "object", "properties": {},
                     "additionalProperties": false}),
-                scope: Visibility::Backend(backend),
+                scope: Visibility::Backend(backend.clone()),
                 kind: SourceKind::BackendNotification,
-            })
-            .collect()
+            });
+            if upstream {
+                out.extend(upstream_descriptors(&backend));
+            }
+        }
+        out
     }
 
-    fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
-        true
+    async fn authorize(
+        &self,
+        _principal: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<(), RpcError> {
+        let (Some(up), Some((backend, Kind::ResourceUpdated))) = (&self.upstream, parse_name(name))
+        else {
+            return Ok(());
+        };
+        let Some(uri) = arguments
+            .get("uri")
+            .and_then(Value::as_str)
+            .filter(|u| u.len() <= 2048)
+        else {
+            return Err(RpcError::invalid("arguments.uri"));
+        };
+        up.listeners.authorize_uri(backend, uri).await
     }
+
+    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+        match parse_name(&event.name) {
+            Some((_, Kind::ResourceUpdated)) => {
+                arguments.get("uri").is_some() && arguments.get("uri") == event.data.get("uri")
+            }
+            _ => true,
+        }
+    }
+
+    async fn on_first_subscriber(
+        &self,
+        _key: &str,
+        _principal: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<(), RpcError> {
+        let (Some(up), Some((backend, interest))) = (&self.upstream, interest_of(name, arguments))
+        else {
+            return Ok(());
+        };
+        up.listeners
+            .add(backend, &interest)
+            .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)))
+    }
+
+    async fn on_last_subscriber(&self, key: &str) {
+        let Some(up) = &self.upstream else { return };
+        let Ok(Value::Array(parts)) = serde_json::from_str::<Value>(key) else {
+            return;
+        };
+        let (Some(name), Some(arguments)) = (parts.first().and_then(Value::as_str), parts.get(1))
+        else {
+            return;
+        };
+        if let Some((backend, interest)) = interest_of(name, arguments) {
+            up.listeners.remove(backend, &interest);
+        }
+    }
+}
+
+/// `(backend, interest)` of a b2 subscription; `None` for `tools_changed`.
+fn interest_of<'a>(name: &'a str, arguments: &Value) -> Option<(&'a str, Interest)> {
+    let (backend, kind) = parse_name(name)?;
+    let interest = match kind {
+        Kind::ResourcesChanged => Interest::ResourcesChanged,
+        Kind::PromptsChanged => Interest::PromptsChanged,
+        Kind::ResourceUpdated => {
+            Interest::ResourceUpdated(arguments.get("uri")?.as_str()?.to_owned())
+        }
+    };
+    Some((backend, interest))
+}
+
+fn upstream_descriptors(backend: &str) -> Vec<EventDescriptor> {
+    let none = json!({"type": "object", "properties": {}, "additionalProperties": false});
+    let uri = json!({"type": "object", "properties": {"uri": {"type": "string", "maxLength": 2048}},
+        "required": ["uri"], "additionalProperties": false});
+    let descriptor =
+        |kind: Kind, description: String, input: &Value, payload: &Value| EventDescriptor {
+            name: format!("backend.{backend}.{}", kind.suffix()),
+            description,
+            input_schema: input.clone(),
+            payload_schema: payload.clone(),
+            scope: Visibility::Backend(backend.to_owned()),
+            kind: SourceKind::BackendNotification,
+        };
+    vec![
+        descriptor(
+            Kind::ResourceUpdated,
+            format!("A resource of backend {backend} changed (re-read it)."),
+            &uri,
+            &json!({"type": "object", "properties": {"uri": {"type": "string"}},
+                "required": ["uri"], "additionalProperties": false}),
+        ),
+        descriptor(
+            Kind::ResourcesChanged,
+            format!("The resource list of backend {backend} changed."),
+            &none,
+            &none,
+        ),
+        descriptor(
+            Kind::PromptsChanged,
+            format!("The prompt list of backend {backend} changed."),
+            &none,
+            &none,
+        ),
+    ]
 }
 
 /// Per-backend change counters: a pending report fires only if no newer
@@ -77,8 +205,30 @@ pub(super) struct Debounce {
 
 impl EventsHub {
     /// Offer `backend.<x>.tools_changed` for the backends `names` lists.
+    #[cfg(test)]
     pub(crate) fn install_backend_source(self: &Arc<Self>, names: BackendNames) {
-        self.register_source(Arc::new(BackendSource { names }));
+        self.register_source(Arc::new(BackendSource {
+            names,
+            upstream: None,
+        }));
+    }
+
+    /// [`Self::install_backend_source`] plus the three upstream-notification
+    /// names for the eligible backends of `registry` (MIK-7630 I5).
+    pub(crate) fn install_backend_source_with_upstream(
+        self: &Arc<Self>,
+        names: BackendNames,
+        registry: Arc<crate::backend::BackendRegistry>,
+        ineligible: Ineligible,
+    ) {
+        let listeners = UpstreamListeners::new(registry, Arc::downgrade(self));
+        self.register_source(Arc::new(BackendSource {
+            names,
+            upstream: Some(Upstream {
+                listeners,
+                ineligible,
+            }),
+        }));
     }
 
     /// Backend `backend`'s tool set changed. Reports once, after [`QUIET`].

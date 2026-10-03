@@ -26,6 +26,9 @@ pub(crate) enum CommitStage {
     Transitioned,
     /// A worker committed `input_required` and still owns the handoff.
     InputRequired,
+    /// Not a write: a `cancel` lost its revision and is about to retry once at
+    /// the one it just re-read. The seam a test uses to move the record again.
+    CancelRetry,
 }
 
 /// After a successful durable write at `stage`, before the worker proceeds.

@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde_json::Value;
 
 use super::settlement::interrupted_result;
-use super::{CommitFailure, CommitStage, TaskExecutor, TaskWrite, WriteOutcome};
+use super::{CommitFailure, CommittedTask, TaskExecutor, TransitionWrite};
 use crate::gateway::task_service::Target;
 use crate::gateway::task_service::service::ServiceError;
 use crate::gateway::task_service::store::StoreError;
@@ -56,7 +56,7 @@ impl TaskExecutor {
             }
             let event = TaskTransition::Complete(restart_result(row.never_dispatched));
             match self
-                .commit(TaskWrite::Recover {
+                .commit_transition(TransitionWrite::Recover {
                     owner_digest: &row.owner_digest,
                     id: &row.id,
                     revision: row.revision,
@@ -64,11 +64,10 @@ impl TaskExecutor {
                 })
                 .await
             {
-                Ok(WriteOutcome::Transitioned(_)) => {}
+                Ok(_) => {}
                 // No worker and no request can hold this record yet, so a
                 // refusal here is a store that cannot be recovered rather than a
                 // race worth re-reading.
-                Ok(WriteOutcome::Create(_)) => return Err(ServiceError::Unavailable),
                 Err(error) => {
                     tracing::error!(
                         task_id = %row.id,
@@ -95,7 +94,7 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         (event, targets): (TaskTransition, Option<Vec<Target>>),
-    ) -> Result<(WriteOutcome, bool, CommitStage, String), CommitFailure> {
+    ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         match self
             .service
             .store
@@ -104,12 +103,7 @@ impl TaskExecutor {
         {
             Ok(committed) => {
                 let wrote = committed.revision != revision;
-                Ok((
-                    WriteOutcome::Transitioned(committed),
-                    wrote,
-                    CommitStage::Transitioned,
-                    id.to_owned(),
-                ))
+                Ok((committed, wrote, id.to_owned()))
             }
             Err(StoreError::RevisionConflict) => Err(CommitFailure::RevisionConflict),
             Err(StoreError::NotFound) => Err(CommitFailure::Service(ServiceError::NotFound)),

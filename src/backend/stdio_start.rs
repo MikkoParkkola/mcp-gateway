@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::Backend;
 use crate::Result;
-use crate::transport::{StdioTransport, Transport, isolated_package_manager_env};
+use crate::transport::{StdioTransport, isolated_package_manager_env};
 
 impl Backend {
     /// Spawn the backend's process and complete the MCP handshake.
@@ -15,7 +15,7 @@ impl Backend {
         command: &str,
         cwd: Option<&String>,
         protocol_version: Option<&String>,
-    ) -> Result<Arc<dyn Transport>> {
+    ) -> Result<Arc<StdioTransport>> {
         let launch = self.resolve_stdio_runtime_launch(command)?;
         let transport = StdioTransport::new(
             &launch.command,
