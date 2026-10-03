@@ -644,3 +644,18 @@ These amend the r2 text above; where they disagree, r3 wins.
    - M5 mutant extended: commit at the end of the `tools/call` arm instead of after finalize.
    - M15 `meta_upstream_task_result_recorded`.
    - M16 `meta_capability_meta_not_checked`: capability-call `_meta` is not checked.
+
+### 13.4 Increment 3: allowlist and metric (MIK-7797, 2026-10-03)
+
+- `allowed_flows` is a list of `{source, egress}` `server:tool` glob pairs, at most 64 (one bit
+  each), checked at load like the other globs. A delivery records the entries whose source glob
+  matched its source; an egress computes the entries whose egress glob matched its target; a
+  holder sharing a bit with the egress is skipped when looking for a relay witness. Other holders
+  still count, and no state beyond one `u64` per (source, principal) pair is added. Allowing a
+  flow never changes what is recorded, so a later non-allowed egress is still checked.
+- `mcp_gateway_collusion_relay_total{action}` (`observe` or `block`) counts every reported relay.
+  `mcp_gateway_collusion_unkeyed_egress_total{action}` counts egress checks made without an
+  authenticated caller (the §13.1 internal counter, now exported).
+- Tests: `allowed_flow_not_flagged` (detector, gate, direct, meta), `allowed_flow_globs_match`,
+  `allowed_flows_are_checked_at_load`, `a_reported_relay_increments_the_metric`. Mutants: skip
+  the flow mask in the witness search; drop the relay counter increment.

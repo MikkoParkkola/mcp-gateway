@@ -766,3 +766,6 @@ fn prepare_refuses_a_wrong_audience_and_an_unbindable_principal_before_custody()
             .expect("control: the seeded grant leases");
     });
 }
+
+#[path = "vault_revalidate_tests.rs"]
+mod revalidate;

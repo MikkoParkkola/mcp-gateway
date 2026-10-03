@@ -32,6 +32,53 @@ impl MetaMcp {
         self.events.get()
     }
 
+    /// Event entries for a keyword search, visible to `caller` by the same
+    /// predicate `events/list` uses (design §3.9, §17).
+    pub(super) fn event_search_matches(
+        &self,
+        query: &str,
+        limit: usize,
+        caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Vec<serde_json::Value> {
+        use crate::events::Visibility;
+        let Some(hub) = self.events() else {
+            return Vec::new();
+        };
+        let api_key = (caller.credential_kind == crate::security::audit::CredentialKind::ApiKey)
+            .then(|| {
+                Some(crate::events::ApiKeyRef {
+                    name: caller.api_key_name?.to_owned(),
+                    principal: caller.credential_principal?.to_owned(),
+                })
+            })
+            .flatten();
+        hub.search(query, limit, |scope| match scope {
+            Visibility::Backend(backend) => {
+                self.admits_backend(backend, caller.scope(), session_id)
+                    && hub.live_admits(api_key.as_ref(), backend)
+            }
+            Visibility::Owner => caller.credential_principal.is_some(),
+            Visibility::Operator => false,
+        })
+    }
+
+    /// Append up to `limit` visible event entries to `matches`; how many
+    /// matched in all, for the search's `total_available`.
+    pub(super) fn add_event_matches(
+        &self,
+        query: &str,
+        limit: usize,
+        caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+        matches: &mut Vec<serde_json::Value>,
+    ) -> usize {
+        let events = self.event_search_matches(query, usize::MAX, caller, session_id);
+        let found = events.len();
+        matches.extend(events.into_iter().take(limit));
+        found
+    }
+
     /// `capabilities` as JSON, with `events` advertised when it applies.
     pub(super) fn capabilities_with_events(
         &self,

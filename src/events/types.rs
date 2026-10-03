@@ -60,6 +60,16 @@ impl RpcError {
         )
     }
 
+    /// `-32014` for an upstream-notification event `name` its backend cannot
+    /// offer, naming why (I5 design §11 D2/D3).
+    pub(crate) fn unsupported_backend_events(name: &str, reason: &'static str) -> Self {
+        Self::new(
+            -32014,
+            "Unsupported",
+            Some(json!({ "feature": "backendEvents", "value": name, "reason": reason })),
+        )
+    }
+
     /// `-32015` with one of the [`CallbackFailure`] categories.
     pub(crate) fn callback(reason: CallbackFailure) -> Self {
         Self::new(

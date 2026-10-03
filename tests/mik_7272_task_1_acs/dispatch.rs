@@ -192,6 +192,10 @@ async fn lifecycle_1_the_per_backend_route_refuses_a_task_served_on_mcp() {
         ("tasks/update", json!({ "taskId": task_id })),
         ("tasks/cancel", json!({ "taskId": task_id })),
         ("subscriptions/listen", json!({ "taskIds": [task_id] })),
+        (
+            "subscriptions/listen",
+            json!({ "notifications": { "taskIds": [task_id] } }),
+        ),
     ] {
         let (status, body) = post_direct(
             Arc::clone(&fixture.state),

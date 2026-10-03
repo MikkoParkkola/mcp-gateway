@@ -96,6 +96,10 @@ struct Holder {
     sensitive_at: Option<Instant>,
     /// The earliest sensitive delivery: a witness must predate the egress.
     sensitive_first: Option<Instant>,
+    /// The `allowed_flows` entries whose source glob matched this source (one
+    /// bit per entry): a copy delivered here may leave through an egress
+    /// matching the same entry without being a relay.
+    flows: u64,
 }
 
 enum Holders {
@@ -253,6 +257,20 @@ impl CollusionDetector {
         text: &str,
         now: Instant,
     ) {
+        self.record_delivery_flows_at(source, principal, (sensitive, 0), text, now);
+    }
+
+    /// [`Self::record_delivery_at`] for a source that matched the
+    /// `allowed_flows` entries in `flows` (bit per entry), given with the
+    /// delivery's sensitivity.
+    pub(crate) fn record_delivery_flows_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, flows): (bool, u64),
+        text: &str,
+        now: Instant,
+    ) {
         if self.params.action == RelayAction::Off {
             return;
         }
@@ -271,6 +289,7 @@ impl CollusionDetector {
             first_seen: last_seen,
             sensitive_at: sensitive.then_some(last_seen),
             sensitive_first: sensitive.then_some(last_seen),
+            flows,
         };
         let window = self.params.window;
         let mut state = self.state.lock();
@@ -316,6 +335,7 @@ impl CollusionDetector {
                     .into_iter()
                     .chain(new.sensitive_first)
                     .min();
+                t.flows |= new.flows;
             }
             None => tuples.push(new),
         }
@@ -339,6 +359,19 @@ impl CollusionDetector {
         &self,
         principal: &str,
         tool: &str,
+        args: &str,
+        now: Instant,
+    ) -> Option<RelayFinding> {
+        self.check_egress_flows_at(principal, (tool, 0), args, now)
+    }
+
+    /// [`Self::check_egress_at`] for an egress that matched the
+    /// `allowed_flows` entries in `flows` (bit per entry): a copy whose source
+    /// matched the same entry is an allowed flow, not a relay.
+    pub(crate) fn check_egress_flows_at(
+        &self,
+        principal: &str,
+        (tool, egress_flows): (&str, u64),
         args: &str,
         now: Instant,
     ) -> Option<RelayFinding> {
@@ -377,11 +410,9 @@ impl CollusionDetector {
                     && t.sensitive_at
                         .is_some_and(|at| now.saturating_duration_since(at) <= window)
             };
-            if let Some(t) = tuples
-                .iter()
-                .filter(sensitive)
-                .find(|t| t.principal != sender && !excused(t.source))
-            {
+            if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
+                t.principal != sender && !excused(t.source) && t.flows & egress_flows == 0
+            }) {
                 matches += 1;
                 first.get_or_insert((t.source, t.principal));
             }
