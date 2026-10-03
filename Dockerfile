@@ -167,3 +167,12 @@ RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
     chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
 
 USER gateway
+
+# The entrypoint installs EXTRA_APT_PACKAGES and runs /docker-entrypoint.d when
+# a deployment starts the container as root, then drops to `gateway`. The image
+# still declares `USER gateway`, so a container not started as root stays
+# unprivileged, `docker exec` included. Declaring ENTRYPOINT resets the
+# inherited CMD, so it is restored.
+COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint-full.sh"]
+CMD ["--config", "/config.yaml"]

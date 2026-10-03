@@ -2959,6 +2959,130 @@ class VariantStage(unittest.TestCase):
             "an npm command fetches a spec that is not in the verified list",
         )
 
+    # The entrypoint and drop-ins below are from #729 by @terafin, carried
+    # onto this branch. These read the script; the root legs of
+    # smoke-full-image.sh run it.
+
+    def entrypoint(self):
+        return (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+
+    def test_the_variant_installs_what_a_deployment_declares(self):
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            r"COPY[^\n]*docker/entrypoint-full\.sh",
+            "the variant does not copy the entrypoint into the image",
+        )
+        self.assertRegex(
+            stage,
+            r"ENTRYPOINT \[[^\]]*entrypoint-full\.sh",
+            "the variant does not run its own entrypoint",
+        )
+        script = self.entrypoint()
+        self.assertIn(
+            "EXTRA_APT_PACKAGES",
+            script,
+            "the entrypoint ignores the packages a deployment declares",
+        )
+        self.assertRegex(
+            script, r"apt-get install", "the entrypoint never installs anything"
+        )
+        # Installing needs root, but the image must not *default* to it: a
+        # deployment asks for root itself, and the entrypoint drops back.
+        self.assertEqual(
+            re.findall(r"(?m)^USER\s+(\S+)\s*$", stage)[-1],
+            "gateway",
+            "the variant leaves the image declaring root as its user",
+        )
+
+    def test_the_variant_keeps_the_default_command(self):
+        # Declaring ENTRYPOINT in a stage resets the CMD it inherited, so an
+        # image run with no arguments would start a gateway with no config.
+        stage = self.variant_stage()
+        self.assertIn("ENTRYPOINT", stage, "the variant declares no entrypoint")
+        entry = stage.index("ENTRYPOINT")
+        self.assertRegex(
+            stage[entry:],
+            r'CMD \["--config", "/config\.yaml"\]',
+            "the variant's ENTRYPOINT drops the inherited CMD and nothing restores it",
+        )
+
+    def test_a_deployment_gets_its_startup_steps_before_the_gateway(self):
+        script = self.entrypoint()
+        self.assertRegex(
+            script,
+            r"/docker-entrypoint\.d",
+            "the entrypoint has no drop-in directory for a deployment's steps",
+        )
+        self.assertRegex(
+            script, r'\.\s+"\$f"', "the entrypoint does not source an envsh drop-in"
+        )
+        self.assertRegex(
+            script,
+            r'\[ ! -x "\$f" \]',
+            "the entrypoint runs a drop-in that arrived without the exec bit",
+        )
+        run = script.index("run_dropins\n")
+        drop = script.index("setpriv")
+        self.assertLess(
+            run,
+            drop,
+            "the entrypoint drops privileges before a deployment's steps run, "
+            "so a step that needs root would fail",
+        )
+        self.assertEqual(
+            script.count("run_dropins\n"),
+            2,
+            "a path through the entrypoint skips the drop-ins: root and "
+            "non-root each call them once",
+        )
+
+    def test_the_install_is_bounded_and_fails_closed(self):
+        script = self.entrypoint()
+        self.assertIn(
+            "DEBIAN_FRONTEND=noninteractive",
+            script,
+            "a package with a debconf prompt would wait on PID 1 forever",
+        )
+        self.assertRegex(
+            script,
+            r"timeout\s",
+            "an apt mirror that stops answering would hang start-up",
+        )
+        self.assertRegex(
+            script,
+            r"trap\s[^\n]*TERM",
+            "PID 1 ignores docker stop while the install runs",
+        )
+        self.assertNotRegex(
+            script,
+            r"apt-get[^\n]*&&",
+            "under set -e a failure before the last command of an && chain "
+            "does not exit, so a failed install would start the gateway anyway",
+        )
+        lists = script.index("/var/lib/apt/lists/")
+        self.assertGreater(
+            lists,
+            script.index("set +f"),
+            "globbing is still off when the apt lists cleanup runs, so it "
+            "removes nothing",
+        )
+
+    def test_privileges_drop_to_the_images_own_identity(self):
+        script = self.entrypoint()
+        self.assertRegex(
+            script,
+            r"setpriv --reuid=gateway --regid=gateway --init-groups",
+            "the entrypoint does not drop to the gateway user and its own groups",
+        )
+        self.assertNotIn(
+            "--groups=",
+            script,
+            "a fixed supplementary group can open files on mounted volumes "
+            "that the gateway user cannot",
+        )
 
 class VariantGateCoverage(unittest.TestCase):
     """What the variant's gate proves, as opposed to that it is called.

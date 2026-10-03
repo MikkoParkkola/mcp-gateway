@@ -107,6 +107,64 @@ if ! probe "${PROBE_TIMEOUT}" 'touch /home/gateway/.npm/.w /home/gateway/.cache/
   fail "cache directories are not writable by uid 1001: $(cat "${ANSWER}")"
 fi
 
+# The root path of the entrypoint (#729). A deployment starts the container as
+# root to get drop-ins and packages; the gateway must still run as uid 1001, and
+# a failing drop-in must stop start-up. The `.envsh` drop-in puts a stand-in
+# `mcp-gateway` first on PATH, so the process the entrypoint execs reports the
+# identity it was given instead of starting a server.
+DROPINS="${RUNNER_TEMP:-/tmp}/smoke-full-dropins.$$"
+mkdir -p "${DROPINS}/ok" "${DROPINS}/fail"
+trap 'rm -f "${ANSWER}"; rm -rf "${DROPINS}"' EXIT
+cat > "${DROPINS}/ok/10-mark.sh" <<'DROPIN'
+#!/bin/sh
+echo "dropin-uid=$(id -u)"
+DROPIN
+cat > "${DROPINS}/ok/20-shim.envsh" <<'DROPIN'
+mkdir -p /tmp/shim
+printf '#!/bin/sh\necho "gateway-uid=$(id -u) groups=$(id -G)"\n' > /tmp/shim/mcp-gateway
+chmod 0755 /tmp/shim /tmp/shim/mcp-gateway
+export PATH="/tmp/shim:${PATH}"
+DROPIN
+printf '#!/bin/sh\nexit 3\n' > "${DROPINS}/fail/10-fail.sh"
+# The shim follows the failing step, so a start that carried on past it would
+# exit 0 and say so. Without it the real gateway would refuse for lack of a
+# config, and that refusal would pass for the drop-in stopping start-up.
+cp "${DROPINS}/ok/20-shim.envsh" "${DROPINS}/fail/20-shim.envsh"
+chmod 0755 "${DROPINS}/ok/10-mark.sh" "${DROPINS}/ok/20-shim.envsh" \
+  "${DROPINS}/fail/10-fail.sh" "${DROPINS}/fail/20-shim.envsh"
+
+run_as_root() {
+  dir="$1"
+  shift
+  timeout -k 10 "${PROBE_TIMEOUT}" docker run --rm --user root --pull never \
+    "$@" -v "${dir}:/docker-entrypoint.d:ro" "${IMAGE}" > "${ANSWER}" 2>&1
+}
+
+if ! run_as_root "${DROPINS}/ok"; then
+  fail "a root start with drop-ins did not complete: $(cat "${ANSWER}")"
+fi
+case "$(cat "${ANSWER}")" in
+  *"dropin-uid=0"*"gateway-uid=1001 groups=1001"*) ;;
+  *) fail "a root start must run drop-ins as root and then exec the gateway as uid 1001 with only its own group: $(cat "${ANSWER}")" ;;
+esac
+
+# Exactly the drop-in's own status: a Docker error (125), a probe timeout
+# (124) or an unrelated entrypoint failure must not pass for this one.
+status=0
+run_as_root "${DROPINS}/fail" || status=$?
+if [ "${status}" -ne 3 ] || grep -q 'gateway-uid=' "${ANSWER}"; then
+  fail "a failing drop-in did not stop start-up with its status 3 (got ${status}): $(cat "${ANSWER}")"
+fi
+
+# The install branch itself, in the real image and with no network needed: an
+# apt option smuggled into the package list is refused before apt runs.
+status=0
+run_as_root "${DROPINS}/ok" -e EXTRA_APT_PACKAGES="--simulate iproute2" || status=$?
+if [ "${status}" -ne 1 ] || grep -q 'gateway-uid=' "${ANSWER}" \
+  || ! grep -q 'EXTRA_APT_PACKAGES' "${ANSWER}"; then
+  fail "a root start must refuse an apt option in EXTRA_APT_PACKAGES (got ${status}): $(cat "${ANSWER}")"
+fi
+
 "$(dirname "$0")/smoke-image.sh" "${IMAGE}"
 
 echo "${IMAGE} spawns npx and uvx backends and its caches are writable by the service user"
