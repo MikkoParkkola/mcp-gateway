@@ -403,7 +403,25 @@ async fn a_test_source_event_reaches_a_receiver() {
     hub.register_source(probe.clone());
     seed_verified_at(&hub, &config, "p1", &rx.url);
     subscribe_at(&hub, "p1", &rx.url).await;
-    hub.start(services());
+    // Delivery needs the audit trail it promises (MIK-7802): a real log.
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::TransparencyLogConfig {
+                enabled: true,
+                path: dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..crate::security::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("audit log"),
+    );
+    hub.start(Services {
+        audit: Some(log),
+        ..services()
+    });
     assert!(hub.reconcile_catalogue(fanout::CatalogueScan::Complete));
     hub.emit(event());
     for _ in 0..600 {
@@ -413,7 +431,30 @@ async fn a_test_source_event_reaches_a_receiver() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let posts = rx.got.lock().clone();
-    assert_eq!(posts.len(), 1, "one delivery to the receiver");
+    let state = |sub: &str| -> String {
+        std::fs::read_dir(dir.path().join(sub))
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                    .map(|t| {
+                        let v: Value = serde_json::from_str(&t).unwrap_or_default();
+                        format!(
+                            "state={} attempt={} last_status={} dead_as={}",
+                            v["state"], v["attempt"], v["last_status"], v["dead_as"]
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        posts.len(),
+        1,
+        "one delivery to the receiver; outbox: [{}] dead: [{}]",
+        state("outbox"),
+        state("dead")
+    );
     let body: Value = serde_json::from_slice(&posts[0].1).expect("json body");
     assert_eq!(body["name"], NAME);
     // Verified here with an independent HMAC over id.timestamp.body under
