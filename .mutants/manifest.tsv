@@ -1,0 +1,6 @@
+head_sha	b8ca001ea0e9dff166f2ccc4c58af393e965130b
+# #2774 batch 2
+R1	linux	r1.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+R2	linux	r2.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+V1	linux	v1.patch	--test mik_7630_events_governance -- a_redacted_payload_is_recorded_as_redacted
+V2	linux	v2.patch	--test mik_7630_events_governance -- a_redacted_payload_is_recorded_as_redacted
