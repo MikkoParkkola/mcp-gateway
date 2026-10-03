@@ -399,3 +399,64 @@ fn a_keyless_egress_increments_the_unkeyed_metric() {
     let _ = egress(&fw, RelayCaller::Unkeyed("direct:alpha"));
     assert!(count() > before, "not counted");
 }
+
+/// The observed-relay warnings `check` logs, as parsed records.
+fn observed_relay_warnings(
+    fw: &Firewall,
+    caller: &str,
+    text: &str,
+) -> (Option<String>, Vec<serde_json::Value>) {
+    let params = json!({"name": "send", "arguments": {"text": text}});
+    let mut message = None;
+    let records = crate::test_log_capture::records(|| {
+        message = fw.relay_block_message(
+            RelayCaller::Keyed(caller),
+            ("alpha", "send"),
+            &params,
+            ("direct:alpha", caller),
+        );
+    });
+    let warnings = records
+        .into_iter()
+        .filter(|r| r["fields"]["message"] == "Firewall: relay observed")
+        .collect();
+    (message, warnings)
+}
+
+/// Under `observe` a relay goes through and is logged once, as a WARN whose
+/// fields are exactly `server` and `tool`: the names an operator's alert rule
+/// matches, the same on every route.
+#[test]
+fn an_observed_relay_warns_with_server_and_tool_fields() {
+    let (fw, _dir) = observing(|_| {});
+    delivered(&fw, "alice");
+    let (message, warnings) = observed_relay_warnings(&fw, "bob", PROSE);
+    assert_eq!(message, None, "observe lets the call go");
+    let [warning] = warnings.as_slice() else {
+        panic!("one relay warning, got: {warnings:?}");
+    };
+    assert_eq!(warning["level"], "WARN");
+    let fields = warning["fields"].as_object().expect("fields");
+    assert_eq!(fields["server"], "alpha", "{warning}");
+    assert_eq!(fields["tool"], "send", "{warning}");
+    assert_eq!(fields.len(), 3, "message, server, tool only: {warning}");
+}
+
+/// No relay, no warning; under `block` the call is refused, not warned about.
+#[test]
+fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
+    let (observe, _dir) = observing(|_| {});
+    delivered(&observe, "alice");
+    let (message, warnings) = observed_relay_warnings(&observe, "bob", "an unrelated short note");
+    assert_eq!((message, warnings.len()), (None, 0));
+
+    let (block, _dir) = observing(|c| c.action = CollusionAction::Block);
+    delivered(&block, "alice");
+    let (message, warnings) = observed_relay_warnings(&block, "bob", PROSE);
+    let message = message.expect("block refuses the relay");
+    assert!(
+        message.starts_with("Relay detection blocked: "),
+        "{message}"
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+}

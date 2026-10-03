@@ -106,6 +106,7 @@ impl EventsHub {
             occurred_at: Utc::now(),
             data: json!({ "event_type": inbound.event_type, "fields": inbound.fields }),
             scope: Visibility::Backend(inbound.backend.to_owned()),
+            owner: None,
         });
     }
 }

@@ -113,6 +113,7 @@ fn a_row_serves_backend_output_by_status() {
         targets: Vec::new(),
         targets_recorded: true,
         output_free,
+        owner_digest: String::new(),
     };
     let working = Task::create("t");
     let mut completed = working.clone();
@@ -183,4 +184,13 @@ fn a_gateway_authored_result_is_not_backend_output() {
     let own = json!({"content": [], "isError": true,
                      "_meta": {(super::EXECUTION_OUTCOME_KEY): "interrupted"}});
     assert!(complete(own, false).backend_result().is_none());
+}
+
+/// The snapshot carries the owner digest the record persisted, so a listener
+/// told of a commit needs no later read of a row that may have expired.
+#[test]
+fn a_committed_snapshot_carries_its_owner_digest() {
+    let task = Task::create("probe");
+    let record = row(&task, 3, None);
+    assert_eq!(CommittedTask::of(task, &record).owner_digest, "principal");
 }
