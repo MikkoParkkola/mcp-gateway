@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/well_known.rs b/src/gateway/router/well_known.rs
+index 2f0e3a603..5deb0bc42 100644
+--- a/src/gateway/router/well_known.rs
++++ b/src/gateway/router/well_known.rs
+@@ -212,7 +212,7 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
+ /// gateway itself serves no authorization-server metadata.
+ fn authorization_servers(config: &Config) -> Vec<String> {
+     let key_server = &config.key_server;
+-    if !(key_server.enabled && key_server.delegated_bearer) {
++    if !key_server.enabled {
+         return Vec::new();
+     }
+     let mut issuers: Vec<String> = Vec::new();
