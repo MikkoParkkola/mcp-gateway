@@ -50,8 +50,9 @@ async fn discover_advertises_events_only_when_enabled() {
     };
     assert_eq!(
         advertised(true, true).await,
-        Some(json!({"listChanged": true})),
-        "events on with a webhook event route must advertise events.listChanged"
+        Some(json!({"listChanged": false})),
+        "events on with a webhook event route advertise events; nothing pushes \
+         catalogue changes, so listChanged is false"
     );
     assert_eq!(advertised(false, true).await, None, "events off: no key");
     assert_eq!(

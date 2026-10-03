@@ -16,6 +16,7 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
         targets: Vec::new(),
         targets_recorded: true,
         output_free: false,
+        owner_digest: String::new(),
     };
 
     let response = BeginOutcome::Existing(stored).into_response(RequestId::Number(9));
