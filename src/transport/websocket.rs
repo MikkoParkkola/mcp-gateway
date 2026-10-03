@@ -593,6 +593,7 @@ async fn run_io_loop(
     // "connection closed before the response arrived" instead of waiting out
     // its timeout.
     inner.pending.clear();
+    inner.taps.clear();
 }
 
 // ── Transport impl ────────────────────────────────────────────────────────────
@@ -669,6 +670,7 @@ impl Transport for WebSocketTransport {
         // The aborted task skips its own cleanup: fail in-flight calls here so
         // they do not wait out their timeouts.
         self.inner.pending.clear();
+        self.inner.taps.clear();
 
         Ok(())
     }

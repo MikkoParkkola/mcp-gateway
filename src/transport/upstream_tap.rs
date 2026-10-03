@@ -241,6 +241,13 @@ impl Taps {
         rx
     }
 
+    /// The peer is gone: drop every sender so each receiver reports
+    /// `Closed` instead of waiting for a frame that cannot come.
+    pub(crate) fn clear(&self) {
+        self.listens.lock().clear();
+        *self.unsolicited.lock() = None;
+    }
+
     fn drop_one(&self) {
         self.drops
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

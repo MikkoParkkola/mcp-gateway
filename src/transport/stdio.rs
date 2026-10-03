@@ -271,6 +271,8 @@ impl StdioTransport {
             let _ = eof_tx.send(true);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
+                // The listener's receivers see `Closed` at once.
+                transport.taps.clear();
             }
             debug!("Stdio reader task ended");
         });

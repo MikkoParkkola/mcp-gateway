@@ -27,6 +27,9 @@ use crate::transport::upstream_tap::{
 /// How often the loop looks at timers; also bounds coalescing latency.
 const TICK: Duration = Duration::from_millis(250);
 /// A modern listen must be acknowledged within this (§3).
+/// Opening a channel may not outlast this.
+const OPEN_LIMIT: Duration = Duration::from_secs(30);
+/// A modern listen must be acknowledged within this (§3).
 const ACK_DEADLINE: Duration = Duration::from_secs(10);
 /// Re-read the catalogue at least this often while URIs are watched (§7).
 const SNAPSHOT_TTL: Duration = Duration::from_secs(300);
@@ -121,9 +124,15 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, false).await;
-    let opened = open(&target.handle, modern, requested(shared)).await;
+    let first = requested(shared);
+    let opened = tokio::select! {
+        () = shared.stop.cancelled() => return Outcome::Stopped,
+        opened = tokio::time::timeout(OPEN_LIMIT, open(&target.handle, modern, first.clone())) => {
+            opened.unwrap_or(Err(Refused::Expired))
+        }
+    };
     match opened {
-        Ok(stream) => state.current = Some((stream, requested(shared))),
+        Ok(stream) => state.current = Some((stream, first)),
         Err(Refused::Unsupported) => return Outcome::Unsupported,
         Err(Refused::Expired) => return failed(),
         Err(Refused::Failed(error)) => {
@@ -136,7 +145,10 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     let mut wake = shared.wake.subscribe();
     loop {
         let event = tokio::select! {
-            () = shared.stop.cancelled() => return Outcome::Stopped,
+            () = shared.stop.cancelled() => {
+                state.release(backend).await;
+                return Outcome::Stopped;
+            }
             note = recv(&mut state.current) => Ev::Current(note),
             note = recv_pending(&mut state.pending) => Ev::Pending(note),
             _ = wake.changed() => Ev::Wake,
@@ -159,7 +171,14 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return state.ended(started);
         }
-        state.maintain(backend, &target.handle, modern).await;
+        let stopped = tokio::select! {
+            () = shared.stop.cancelled() => true,
+            () = state.maintain(backend, &target.handle, modern) => false,
+        };
+        if stopped {
+            state.release(backend).await;
+            return Outcome::Stopped;
+        }
         state.flush(hub);
     }
 }
@@ -234,6 +253,8 @@ struct State<'a> {
     resource_interest_unsupported: bool,
     reread: bool,
     snapshot_due: Instant,
+    /// A catalogue read is not retried before this.
+    snapshot_retry_at: Instant,
     /// A modern replacement listen is not retried before this.
     retry_open_at: Instant,
 }
@@ -253,6 +274,7 @@ impl<'a> State<'a> {
             resource_interest_unsupported: false,
             reread: false,
             snapshot_due: now + SNAPSHOT_TTL,
+            snapshot_retry_at: now,
             retry_open_at: now,
         }
     }
@@ -278,7 +300,7 @@ impl<'a> State<'a> {
             }
             Err(error) => {
                 debug!(backend = %self.shared.name, %error, "upstream listener: catalogue read failed");
-                self.snapshot_due = Instant::now() + SNAPSHOT_RETRY;
+                self.snapshot_retry_at = Instant::now() + SNAPSHOT_RETRY;
             }
         }
     }
@@ -364,7 +386,9 @@ impl<'a> State<'a> {
         } else {
             self.sync_legacy(backend).await;
         }
-        if self.reread || now >= self.snapshot_due {
+        let watching = !requested(self.shared).uris.is_empty();
+        let unread = watching && !self.shared.snapshot.lock().is_known();
+        if (self.reread || unread || now >= self.snapshot_due) && now >= self.snapshot_retry_at {
             let fresh = self.reread;
             self.read_snapshot(backend, fresh).await;
         }
@@ -389,8 +413,24 @@ impl<'a> State<'a> {
             }
         }
         for uri in self.subscribed.clone().difference(&want) {
-            let _ = backend.legacy_resource_interest(uri, false).await;
-            self.subscribed.remove(uri);
+            if backend.legacy_resource_interest(uri, false).await.is_ok() {
+                self.subscribed.remove(uri);
+            }
+        }
+    }
+
+    /// Best effort on stop: a legacy peer keeps `resources/subscribe` state
+    /// until told otherwise, so release what this connection subscribed.
+    async fn release(&mut self, backend: &Backend) {
+        if self.era == Era::Modern {
+            return;
+        }
+        for uri in std::mem::take(&mut self.subscribed) {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(3),
+                backend.legacy_resource_interest(&uri, false),
+            )
+            .await;
         }
     }
 

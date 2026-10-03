@@ -91,10 +91,13 @@ impl EventSource for BackendSource {
         else {
             return Ok(());
         };
-        let uri = arguments
+        let Some(uri) = arguments
             .get("uri")
             .and_then(Value::as_str)
-            .unwrap_or_default();
+            .filter(|u| u.len() <= 2048)
+        else {
+            return Err(RpcError::invalid("arguments.uri"));
+        };
         up.listeners.authorize_uri(backend, uri).await
     }
 
