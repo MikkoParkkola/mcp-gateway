@@ -28,6 +28,9 @@ pub(crate) struct BackendSource {
     pub names: BackendNames,
 }
 
+/// Every backend event name starts with this.
+pub(super) const NAME_PREFIX: &str = "backend.";
+
 fn event_name(backend: &str) -> String {
     format!("backend.{backend}.tools_changed")
 }

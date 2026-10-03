@@ -238,9 +238,10 @@ impl EventsHub {
     }
 
     /// The `capabilities.events` value, or `None` when no source offers an
-    /// event type (design §6.1).
+    /// event type (design §6.1). `listChanged` is false: nothing pushes a
+    /// catalogue change, so a client re-reads `events/list` (MIK-7803).
     pub(crate) fn capability(&self) -> Option<serde_json::Value> {
-        (!self.catalogue().is_empty()).then(|| serde_json::json!({ "listChanged": true }))
+        (!self.catalogue().is_empty()).then(|| serde_json::json!({ "listChanged": false }))
     }
 }
 

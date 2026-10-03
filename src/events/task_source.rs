@@ -97,7 +97,15 @@ impl EventSource for TaskSource {
         {
             return false;
         }
-        self.owns(principal, task_id)
+        // The occurrence carries its owner (taken when the task committed), so
+        // an expired row still reaches its owner and only its owner.
+        match &event.owner {
+            Some(owner) => self
+                .service
+                .owner(principal)
+                .is_ok_and(|mine| mine.as_digest() == owner),
+            None => self.owns(principal, task_id),
+        }
     }
 }
 

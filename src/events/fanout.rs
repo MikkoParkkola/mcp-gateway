@@ -98,6 +98,12 @@ impl EventsHub {
                 self.revoke(&sub).await;
                 continue;
             }
+            // An occurrence that carries its owner was authorized where it was
+            // made: the record it describes may be gone (an expired task).
+            if event.owner.is_some() {
+                self.offer(services, event, &sub).await;
+                continue;
+            }
             match source
                 .authorize(&sub.principal, &sub.name, &sub.arguments)
                 .await
@@ -233,6 +239,14 @@ impl EventsHub {
             .read()
             .iter()
             .any(|source| source.kind() == SourceKind::Webhook);
+        // Backends are registered before the hub starts, so their catalogue is
+        // complete whatever the capability scan did: a backend removed while
+        // the gateway was down takes its subscriptions with it (MIK-7803).
+        let offered: std::collections::HashSet<String> =
+            self.catalogue().into_iter().map(|d| d.name).collect();
+        if !self.withdraw(&self.absent_names(super::backend_source::NAME_PREFIX, &offered)) {
+            return false;
+        }
         if scan == CatalogueScan::Partial && webhooks_on {
             tracing::warn!(
                 "events: a capability directory could not be read at startup; stored \
@@ -240,21 +254,25 @@ impl EventsHub {
             );
             return self.release_worker();
         }
-        let offered: std::collections::HashSet<String> =
-            self.catalogue().into_iter().map(|d| d.name).collect();
-        let gone: Vec<String> = self
-            .store
-            .subscriptions()
-            .into_iter()
-            .map(|sub| sub.name)
-            .filter(|name| {
-                name.starts_with(super::webhook_source::NAME_PREFIX) && !offered.contains(name)
-            })
-            .collect();
+        let gone = self.absent_names(super::webhook_source::NAME_PREFIX, &offered);
         if !self.withdraw(&gone) {
             return false;
         }
         self.release_worker()
+    }
+
+    /// Stored subscriptions' event names under `prefix` that `offered` lacks.
+    fn absent_names(
+        &self,
+        prefix: &str,
+        offered: &std::collections::HashSet<String>,
+    ) -> Vec<String> {
+        self.store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| name.starts_with(prefix) && !offered.contains(name))
+            .collect()
     }
 
     /// Reconciliation is over: the delivery worker may start.
