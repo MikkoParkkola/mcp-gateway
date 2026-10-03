@@ -200,21 +200,32 @@ class Shim(BaseHTTPRequestHandler):
             entry["rpc"] = rpc
             if rpc_params:
                 entry["rpc_params"] = rpc_params
-            try:
-                text = out.decode()
-                if stream:
-                    text = [ln[5:] for ln in text.splitlines() if ln.startswith("data:")][-1]
-                reply = json.loads(text)
-                reply = reply[0] if isinstance(reply, list) else reply
-                # Fail closed: only a JSON-RPC object with a result and no error is an answer.
-                entry["reply_ok"] = isinstance(reply, dict) and "result" in reply and "error" not in reply
-                entry["error_code"] = (reply.get("error") or {}).get("code")
-                entry["result_has_id"] = "id" in (reply.get("result") or {})
-                if isinstance((reply.get("result") or {}).get("id"), str):
-                    entry["result_id"] = reply["result"]["id"]
-            except (ValueError, AttributeError, IndexError) as e:
-                entry["parse_error"] = type(e).__name__
+            entry.update(reply_facts(out.decode(errors="replace"), stream))
         self.evidence(**entry)
+
+
+def reply_facts(text, stream):
+    """What the evidence check may rely on about one upstream reply body.
+
+    Fail closed: only a JSON-RPC object with a `result` and no `error` has
+    `reply_ok`; anything that does not parse, or is not an object, carries
+    `parse_error` instead.
+    """
+    try:
+        if stream:
+            text = [ln[5:] for ln in text.splitlines() if ln.startswith("data:")][-1]
+        reply = json.loads(text)
+        reply = reply[0] if isinstance(reply, list) else reply
+        if not isinstance(reply, dict):
+            return {"reply_ok": False, "parse_error": "NotAnObject"}
+        facts = {"reply_ok": "result" in reply and "error" not in reply,
+                 "error_code": (reply.get("error") or {}).get("code") if isinstance(reply.get("error"), dict) else None,
+                 "result_has_id": "id" in (reply.get("result") or {})}
+        if isinstance((reply.get("result") or {}).get("id"), str):
+            facts["result_id"] = reply["result"]["id"]
+        return facts
+    except (ValueError, AttributeError, IndexError, TypeError) as e:
+        return {"reply_ok": False, "parse_error": type(e).__name__}
 
 
 def main():

@@ -130,5 +130,37 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(code, 1, out)
 
 
+class ShimReplyTests(unittest.TestCase):
+    """The shim's own reply parser, not a hand-made `reply_ok` flag."""
+
+    @staticmethod
+    def facts(text, stream=False):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "events_shim", Path(__file__).resolve().parent / "mcp_events_oauth_shim.py")
+        shim = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(shim)
+        return shim.reply_facts(text, stream)
+
+    def test_which_replies_count_as_valid(self):
+        cases = {
+            "good result": ('{"jsonrpc":"2.0","id":1,"result":{"id":"s1"}}', True),
+            "error with an empty object": ('{"jsonrpc":"2.0","id":1,"error":{}}', False),
+            "result and error together": ('{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":-1}}', False),
+            "not json": ("<html>502</html>", False),
+            "not an object": ("5", False),
+        }
+        for name, (text, valid) in cases.items():
+            with self.subTest(name):
+                self.assertIs(self.facts(text)["reply_ok"], valid)
+
+    def test_a_good_result_keeps_its_id(self):
+        facts = self.facts('{"result":{"id":"s1"}}')
+        self.assertEqual((facts["result_id"], facts["result_has_id"]), ("s1", True))
+
+    def test_a_streamed_reply_is_read_from_its_last_data_line(self):
+        self.assertIs(self.facts('event: message\ndata: {"result":{}}\n\n', stream=True)["reply_ok"], True)
+
+
 if __name__ == "__main__":
     unittest.main()
