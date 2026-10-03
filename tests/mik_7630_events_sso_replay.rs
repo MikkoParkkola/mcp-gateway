@@ -66,7 +66,7 @@ async fn an_sso_admins_replays_carry_the_verified_issuer_and_subject() {
     .await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
     let subscription = subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
-    rx.script([EventReply::Status(410); 3]);
+    rx.script((0..3).map(|_| EventReply::Status(410)));
     for n in 0..3 {
         fire(&gw, &format!("d-7806-sso-{n}"), "o/r").await;
     }
