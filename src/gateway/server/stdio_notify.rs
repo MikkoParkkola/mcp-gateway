@@ -12,15 +12,6 @@ use super::Gateway;
 use crate::gateway::outbound::{OutboundFrame, StdioReads};
 use crate::security::tenant_reads::ReadAttribution;
 
-/// One batch answer, the reading of its own dispatch, its request's params,
-/// and the relay receipts it staged (recorded after its frame is judged).
-pub(super) type BatchAnswer = (
-    serde_json::Value,
-    Option<ReadAttribution>,
-    Option<serde_json::Value>,
-    crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
-);
-
 impl Gateway {
     /// Run `fut` inside a notification scope, writing each notification the
     /// backend publishes as it arrives.
@@ -78,8 +69,9 @@ impl Gateway {
         }
     }
 
-    /// A JSON-RPC batch, each answer beside what its own dispatch read before
-    /// any transform (MIN.2: judged one by one, design S1).
+    /// A JSON-RPC batch: each answer judged right after its own dispatch
+    /// (MIN.2: one by one, design S1), and its relay receipts recorded then,
+    /// so a later item's relay check sees what an earlier item delivered.
     pub(super) async fn dispatch_batch_read(
         meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
         tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
@@ -87,35 +79,24 @@ impl Gateway {
         batch: serde_json::Value,
         session_id: &str,
         protocol_telemetry_sink: &super::StdioTelemetry,
-        guard: Option<std::sync::Arc<crate::gateway::outbound::Guard>>,
-    ) -> Vec<BatchAnswer> {
-        let serde_json::Value::Array(requests) = batch else {
-            return vec![(
-                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
-                    .to_value_lossy(),
-                None,
-                None,
-                crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
-            )];
+        reads: &StdioReads,
+    ) -> Vec<OutboundFrame> {
+        let invalid = || {
+            crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
+                .to_value_lossy()
+        };
+        let requests = match batch {
+            serde_json::Value::Array(requests) if !requests.is_empty() => requests,
+            _ => return vec![reads.answer(invalid(), None, None).await],
         };
 
-        if requests.is_empty() {
-            return vec![(
-                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
-                    .to_value_lossy(),
-                None,
-                None,
-                crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
-            )];
-        }
-
-        let mut responses = Vec::new();
-        let judging = crate::gateway::outbound::judges(guard.as_deref());
+        let mut frames = Vec::new();
+        let judging = reads.judges();
         for req in requests {
             // Each answer keeps its own request's params: ids may repeat.
             let params = judging.then(|| req.get("params").cloned()).flatten();
-            let (resp, read) = crate::gateway::outbound::read_scoped(
-                guard.clone(),
+            let ((resp, staged), read) = crate::gateway::outbound::read_scoped(
+                reads.guard(),
                 Box::pin(Self::dispatch_single_staged(
                     meta_mcp,
                     tool_policy,
@@ -139,11 +120,14 @@ impl Gateway {
             )
             .await;
             match resp {
-                (Some(resp), staged) => responses.push((resp, read, params, staged)),
-                (None, staged) => staged.commit(false),
+                Some(resp) => frames.push(
+                    Self::judge_and_commit(reads, (resp, params.as_ref(), read.as_ref()), staged)
+                        .await,
+                ),
+                None => staged.commit(false),
             }
         }
-        responses
+        frames
     }
 
     /// [`Self::dispatch_batch_read`] without the readings.
@@ -156,6 +140,7 @@ impl Gateway {
         session_id: &str,
         protocol_telemetry_sink: &super::StdioTelemetry,
     ) -> Vec<serde_json::Value> {
+        let reads = meta_mcp.stdio_reads();
         Self::dispatch_batch_read(
             meta_mcp,
             tool_policy,
@@ -163,14 +148,11 @@ impl Gateway {
             batch,
             session_id,
             protocol_telemetry_sink,
-            None,
+            &reads,
         )
         .await
         .into_iter()
-        .map(|(answer, _, _, staged)| {
-            staged.commit(answer.get("error").is_none());
-            answer
-        })
+        .filter_map(|frame| frame.stdio_value().map(std::borrow::Cow::into_owned))
         .collect()
     }
 }

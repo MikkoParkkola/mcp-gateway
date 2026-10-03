@@ -2537,7 +2537,7 @@ impl Gateway {
                         request,
                         session_id,
                         &protocol_telemetry_sink,
-                        reads.guard(),
+                        &reads,
                     )),
                     &writer,
                     &reads,
@@ -2545,8 +2545,7 @@ impl Gateway {
                 .await;
                 Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    let frame = reads.batch(responses);
-                    drop(writer.send(frame.await).await);
+                    drop(writer.send(reads.batch_of(responses)).await);
                 }
                 continue;
             }
