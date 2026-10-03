@@ -143,6 +143,7 @@ fn sendable(sub: &Subscription, now: DateTime<Utc>) -> bool {
 
 /// What a settlement or burial did, as one receipt taken under the store lock.
 #[derive(Debug, Default)]
+#[allow(dead_code, reason = "scaffold: the receipt is read by the fix")]
 pub(crate) struct Settled {
     /// Dead letters the retention and caps then evicted.
     pub evicted: Vec<Evicted>,

@@ -38,6 +38,7 @@ pub(crate) struct Caps {
 
 /// How an admitted subscription met the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code, reason = "scaffold: the refresh arm is built by the fix")]
 pub(crate) enum Admission {
     /// No live row held this id.
     Inserted,

@@ -36,6 +36,7 @@ pub(crate) struct OutboxRecord {
     /// The callback host, stamped at fan-out from the subscription the record
     /// is for (its id hashes the URL, so the host cannot change under it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[allow(dead_code, reason = "scaffold: read by the fix")]
     pub callback_host: String,
     /// The exact body bytes, base64.
     pub body_b64: String,
