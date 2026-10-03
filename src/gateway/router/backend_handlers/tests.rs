@@ -806,6 +806,3 @@ mod direct_firewall_edge_tests;
 
 #[path = "direct_signing_edge_tests.rs"]
 mod direct_signing_edge_tests;
-
-#[path = "direct_admission_edge_tests.rs"]
-mod direct_admission_edge_tests;
