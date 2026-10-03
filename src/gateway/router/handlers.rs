@@ -1794,10 +1794,13 @@ async fn meta_mcp_dispatch(
                 client.as_ref(),
                 &session_id,
             );
-            relay::as_caller(
+            // Boxed like `handle_tools_call` above: an inline future would
+            // grow `meta_mcp_dispatch`'s own, which every chain step pays for
+            // on the caller's stack (the lib test stack overflowed).
+            Box::pin(relay::as_caller(
                 caller,
                 meta.handle_resources_read(id, params, standing, scope, identity),
-            )
+            ))
             .await
         }
         "resources/templates/list" => {
@@ -1826,7 +1829,11 @@ async fn meta_mcp_dispatch(
                 client.as_ref(),
                 &session_id,
             );
-            relay::as_caller(caller, meta.handle_prompts_get(id, params, scope, identity)).await
+            Box::pin(relay::as_caller(
+                caller,
+                meta.handle_prompts_get(id, params, scope, identity),
+            ))
+            .await
         }
 
         // Logging. Admin standing is checked before this match, for every
