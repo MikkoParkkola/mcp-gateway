@@ -362,10 +362,18 @@ impl Backend {
                 streamable_http,
                 protocol_version,
             } => {
-                // Create OAuth client if configured
-                let oauth_client = self.create_oauth_client(http_url)?;
-
+                // One read, before anything is built: the OAuth client and the
+                // transport are both built under it, and `begin_connecting`
+                // refuses the start if a pairing stamped another policy since.
                 built_under = self.destination();
+                #[cfg(test)]
+                let gate = self.mark_window_gate.lock().clone();
+                #[cfg(test)]
+                if let Some(gate) = gate {
+                    gate.reached.notify_one();
+                    gate.release.notified().await;
+                }
+                let oauth_client = self.create_oauth_client(http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
                     self.config.headers.clone(),
@@ -390,13 +398,6 @@ impl Backend {
                 transport.attach_era(Arc::clone(&self.era));
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
-                #[cfg(test)]
-                let gate = self.mark_window_gate.lock().clone();
-                #[cfg(test)]
-                if let Some(gate) = gate {
-                    gate.reached.notify_one();
-                    gate.release.notified().await;
-                }
                 self.begin_connecting(built_under)?;
                 transport.connect().await?;
                 // The probe, its deadline and the meaning of its answer stay in
@@ -422,9 +423,15 @@ impl Backend {
                 ws_url,
                 protocol_version,
             } => {
+                // A target the upgrade request cannot be built for is refused
+                // before the mark: such a start never connects (MIK-7855).
+                crate::transport::websocket::WebSocketTransport::upgrade_request(
+                    ws_url,
+                    &self.config.headers,
+                )?;
                 built_under = self.mark_connecting();
                 let transport = self
-                    .start_websocket(ws_url, protocol_version.clone())
+                    .start_websocket(ws_url, protocol_version.clone(), built_under)
                     .await?;
                 listen = Some(super::listen::handle_of(&transport));
                 transport

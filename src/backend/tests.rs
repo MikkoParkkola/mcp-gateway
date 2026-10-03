@@ -260,7 +260,10 @@ fn create_oauth_client_refuses_identity_propagation_backends() {
         crate::identity_propagation::PropagationStrategyKind::Passthrough,
     ] {
         let backend = mk(strategy);
-        match backend.create_oauth_client("https://backend.example") {
+        match backend.create_oauth_client(
+            "https://backend.example",
+            crate::security::ssrf::DestinationPolicy::Configured,
+        ) {
             Err(Error::ConfigValidation(_)) => {}
             Err(other) => {
                 panic!("expected ConfigValidation, got {other:?} for {strategy:?}")
@@ -290,7 +293,10 @@ fn create_oauth_client_refuses_identity_propagation_backends() {
     );
     assert!(
         shared
-            .create_oauth_client("https://backend.example")
+            .create_oauth_client(
+                "https://backend.example",
+                crate::security::ssrf::DestinationPolicy::Configured
+            )
             .is_err(),
         "shared_account=true must not exempt the F3 guard"
     );
@@ -307,7 +313,12 @@ fn create_oauth_client_refuses_identity_propagation_backends() {
         Duration::from_secs(60),
     );
     assert!(
-        plain.create_oauth_client("https://backend.example").is_ok(),
+        plain
+            .create_oauth_client(
+                "https://backend.example",
+                crate::security::ssrf::DestinationPolicy::Configured
+            )
+            .is_ok(),
         "backend oauth without identity_propagation must still be allowed"
     );
 }
