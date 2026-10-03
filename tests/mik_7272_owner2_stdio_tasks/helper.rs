@@ -41,6 +41,35 @@ pub const API_KEY: &str = "owner2-test-key-0123456789abcdef";
 /// Every wait for a frame, an exit or readiness.
 pub const BOUND: Duration = Duration::from_secs(10);
 const POLL_GAP: Duration = Duration::from_millis(50);
+const STALL_SLACK: Duration = Duration::from_secs(3);
+const TICK: Duration = Duration::from_millis(250);
+
+/// `fut`'s output, or `None` once it has had [`BOUND`] of unstalled time.
+pub async fn bound<F: std::future::Future>(fut: F) -> Option<F::Output> {
+    tokio::pin!(fut);
+    let mut left = BOUND;
+    let mut last = tokio::time::Instant::now();
+    loop {
+        tokio::select! {
+            biased;
+            () = tokio::time::sleep(TICK) => {
+                // A gap between two looks far longer than a look takes means
+                // the whole machine stood still (a paused VM, a starved
+                // runner): the clock ran, the gateway could not, and that gap
+                // is not charged (MIK-7808). A slow answer is charged in full.
+                let gap = last.elapsed();
+                last = tokio::time::Instant::now();
+                if gap <= TICK + STALL_SLACK {
+                    left = left.saturating_sub(gap);
+                }
+                if left.is_zero() {
+                    return None;
+                }
+            }
+            out = &mut fut => return Some(out),
+        }
+    }
+}
 
 /// The fixture backend, served in the test process so its counters and the
 /// `held` barrier are directly observable.
@@ -90,7 +119,7 @@ impl Backend {
 
     /// Wait until `count` `held` calls have arrived.
     pub async fn wait_arrivals(&mut self, count: usize) {
-        tokio::time::timeout(BOUND, self.arrived.wait_for(|seen| *seen >= count))
+        bound(self.arrived.wait_for(|seen| *seen >= count))
             .await
             .expect("the held call reaches the backend within the bound")
             .expect("the fixture is alive");
@@ -409,21 +438,22 @@ impl StdioGateway {
     }
 
     /// The next response (not a request or notification) answering `id`, or
-    /// `None` if none arrives within [`BOUND`].
+    /// `None` if none arrives within [`BOUND`] of unstalled time.
     pub async fn try_answer(&mut self, id: &Value) -> Option<Value> {
-        let deadline = tokio::time::Instant::now() + BOUND;
-        loop {
-            let line = tokio::time::timeout_at(deadline, self.stdout.next_line()).await;
-            let Ok(Ok(Some(line))) = line else {
-                return None;
-            };
-            let Ok(frame) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if frame.get("method").is_none() && frame.get("id") == Some(id) {
-                return Some(frame);
+        let stdout = &mut self.stdout;
+        bound(async {
+            loop {
+                let line = stdout.next_line().await.ok()??;
+                let Ok(frame) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if frame.get("method").is_none() && frame.get("id") == Some(id) {
+                    return Some(frame);
+                }
             }
-        }
+        })
+        .await
+        .flatten()
     }
 
     pub async fn request(&mut self, request: &Value) -> Value {
@@ -436,28 +466,27 @@ impl StdioGateway {
 
     /// `tasks/get` until the task is terminal.
     pub async fn terminal(&mut self, task: &str) -> Value {
-        let deadline = tokio::time::Instant::now() + BOUND;
-        let mut n = 0;
-        loop {
-            n += 1;
-            let got = self
-                .request(&tasks_get(json!(format!("poll-{n}")), task))
-                .await;
-            if matches!(status(&got), Some("completed" | "failed" | "cancelled")) {
-                return got;
+        let polled = bound(async {
+            let mut n = 0;
+            loop {
+                n += 1;
+                let got = self
+                    .request(&tasks_get(json!(format!("poll-{n}")), task))
+                    .await;
+                if matches!(status(&got), Some("completed" | "failed" | "cancelled")) {
+                    return got;
+                }
+                tokio::time::sleep(POLL_GAP).await;
             }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "task {task} is not terminal within {BOUND:?}: {got}"
-            );
-            tokio::time::sleep(POLL_GAP).await;
-        }
+        })
+        .await;
+        polled.unwrap_or_else(|| panic!("task {task} is not terminal within {BOUND:?}"))
     }
 
     /// Close stdin and wait for a clean exit.
     pub async fn close(mut self) {
         drop(self.stdin.take());
-        let status = tokio::time::timeout(BOUND, self.child.wait())
+        let status = bound(self.child.wait())
             .await
             .expect("the stdio gateway exits after EOF within the bound")
             .expect("child status");
@@ -527,41 +556,44 @@ impl HttpGateway {
     pub async fn start(root: &Path, config: &Path, log_name: &str) -> Self {
         let mut gateway = Self::spawn(root, config, log_name);
         let client = reqwest::Client::new();
-        let deadline = tokio::time::Instant::now() + BOUND;
-        loop {
-            if let Some(status) = gateway.child.try_wait().expect("child status") {
-                panic!(
-                    "HTTP gateway exited before readiness ({status})\n{}",
-                    gateway.logs()
-                );
+        let ready = bound(async {
+            loop {
+                if let Some(status) = gateway.child.try_wait().expect("child status") {
+                    panic!(
+                        "HTTP gateway exited before readiness ({status})\n{}",
+                        gateway.logs()
+                    );
+                }
+                if gateway.base.is_empty()
+                    && let Some(port) = bound_port(&gateway.logs())
+                {
+                    gateway.base = format!("http://127.0.0.1:{port}");
+                }
+                if !gateway.base.is_empty()
+                    && let Ok(response) =
+                        client.get(format!("{}/health", gateway.base)).send().await
+                    && let Ok(body) = response.json::<Value>().await
+                    && body["version"] == env!("CARGO_PKG_VERSION")
+                {
+                    return;
+                }
+                tokio::time::sleep(POLL_GAP).await;
             }
-            if gateway.base.is_empty()
-                && let Some(port) = bound_port(&gateway.logs())
-            {
-                gateway.base = format!("http://127.0.0.1:{port}");
-            }
-            if !gateway.base.is_empty()
-                && let Ok(response) = client.get(format!("{}/health", gateway.base)).send().await
-                && let Ok(body) = response.json::<Value>().await
-                && body["version"] == env!("CARGO_PKG_VERSION")
-            {
-                return gateway;
-            }
-            assert!(
-                tokio::time::Instant::now() < deadline,
-                "HTTP gateway not ready within {BOUND:?}\n{}",
-                gateway.logs()
-            );
-            tokio::time::sleep(POLL_GAP).await;
-        }
+        })
+        .await;
+        assert!(
+            ready.is_some(),
+            "HTTP gateway not ready within {BOUND:?}\n{}",
+            gateway.logs()
+        );
+        gateway
     }
 
     /// Whether the child exits on its own within [`BOUND`] instead of
     /// serving, with its log either way.
     pub async fn exits_instead_of_serving(mut self) -> (Option<std::process::ExitStatus>, String) {
-        let status = tokio::time::timeout(BOUND, self.child.wait())
+        let status = bound(self.child.wait())
             .await
-            .ok()
             .map(|status| status.expect("child status"));
         (status, self.logs())
     }

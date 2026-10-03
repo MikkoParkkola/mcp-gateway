@@ -47,6 +47,8 @@ use parking_lot::RwLock;
 #[cfg(feature = "webui")]
 pub(crate) use admin::{ReplayRefusal, is_dead_reason};
 pub(crate) use fanout::CatalogueScan;
+#[cfg(feature = "webui")]
+pub(crate) use governance::Actor;
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
