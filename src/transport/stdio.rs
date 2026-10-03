@@ -744,7 +744,8 @@ impl Transport for StdioTransport {
 
 #[path = "stdio_tree.rs"]
 mod tree;
-pub(crate) use tree::MAX_FRAME_BYTES;
+#[cfg(test)]
+use tree::MAX_FRAME_BYTES;
 use tree::{read_frame, spawn_in_own_tree};
 
 #[path = "stdio_early_exit.rs"]
