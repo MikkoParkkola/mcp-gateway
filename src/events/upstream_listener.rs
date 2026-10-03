@@ -112,13 +112,17 @@ impl UpstreamListeners {
     pub(crate) fn add(&self, backend: &str, interest: &Interest) -> Result<(), Full> {
         let mut map = self.backends.lock();
         // A task a reload ended (its backend became ineligible) is replaced,
-        // not reused, if the interest returns.
-        if map.get(backend).is_some_and(|s| s.stop.is_cancelled()) {
+        // not reused, if the interest returns. The replacement inherits the
+        // interest still counted (the `tools_changed` keys the reload kept),
+        // so their removal later balances against it.
+        let mut carried = Need::default();
+        if let Some(ended) = map.get(backend).filter(|s| s.stop.is_cancelled()) {
+            carried = std::mem::take(&mut *ended.need.lock());
             map.remove(backend);
         }
         let shared = Arc::clone(
             map.entry(backend.to_owned())
-                .or_insert_with(|| self.start(backend)),
+                .or_insert_with(|| self.start(backend, carried)),
         );
         let outcome = shared.need.lock().add(interest);
         match outcome {
@@ -199,11 +203,11 @@ impl UpstreamListeners {
         }
     }
 
-    fn start(&self, backend: &str) -> Arc<Shared> {
+    fn start(&self, backend: &str, need: Need) -> Arc<Shared> {
         let (wake, _) = watch::channel(0);
         let shared = Arc::new(Shared {
             name: backend.to_owned(),
-            need: Mutex::new(Need::default()),
+            need: Mutex::new(need),
             snapshot: Mutex::new(Snapshot::default()),
             wake,
             stop: self.stop.child_token(),
