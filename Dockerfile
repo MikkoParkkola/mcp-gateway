@@ -88,8 +88,9 @@ USER gateway
 # Default port (matches gateway default)
 EXPOSE 39400
 
-# Health check using the built-in /health endpoint
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+# Health check using the built-in /health endpoint. The start period covers a
+# slow first start, which the variant's install makes possible.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD wget --spider -q http://localhost:39400/health || exit 1
 
 ENTRYPOINT ["mcp-gateway"]
@@ -146,3 +147,12 @@ RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
     chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
 
 USER gateway
+
+COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
+
+# Declaring an ENTRYPOINT here resets the CMD inherited from `runtime`, so the
+# variant restates it: the image's own invocation passes no arguments, and
+# without this the entrypoint execs a gateway with no config that starts and
+# then never exits instead of refusing the way the base stage does.
+ENTRYPOINT ["/usr/local/bin/entrypoint-full.sh"]
+CMD ["--config", "/config.yaml"]
