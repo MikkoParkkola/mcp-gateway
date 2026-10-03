@@ -603,3 +603,22 @@ fn signing_nonce_cleanup_cannot_erase_a_concurrent_fresh_readmission() {
         "cleanup selection and deletion share actual admission storage guard"
     );
 }
+
+/// MIK-7869: only the principal that registered a nonce can give it back, and
+/// the give-back frees the principal's bucket and a later registration.
+#[test]
+fn release_unused_frees_only_the_registering_principals_nonce() {
+    let store = NonceStore::with_limits_for_test(8, 8);
+    store.admit_for_test("n", "alice").unwrap();
+    store.release_unused("n", "bob");
+    assert_refusal(
+        store.admit_for_test("n", "bob"),
+        -32001,
+        "Nonce replay detected",
+    );
+    store.release_unused("n", "alice");
+    assert_eq!(store.len(), 0);
+    assert_eq!(store.principal_bucket_count_for_test(), 0);
+    store.admit_for_test("n", "alice").unwrap();
+    assert_eq!(store.len(), 1);
+}

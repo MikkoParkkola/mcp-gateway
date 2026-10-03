@@ -71,9 +71,6 @@ pub(crate) struct SigningInvocationContext {
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
     admitted: bool,
-    /// Admitted at dispatch, after a destructive call's confirmation was
-    /// asked (MIK-7869), so a refusal before that leaves the nonce unspent.
-    admitted_late: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) enum SigningDelivery<'a> {
@@ -111,7 +108,6 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: false,
-            admitted_late: std::sync::atomic::AtomicBool::default(),
         };
         if origin == Origin::Unsigned {
             return context;
@@ -197,14 +193,7 @@ impl SigningInvocationContext {
     /// A signed context whose nonce has not passed admission. Dispatch refuses
     /// it: only a call predicted refused is left unadmitted (MIK-7698).
     pub(crate) fn awaits_admission(&self) -> bool {
-        self.origin != Origin::Unsigned && !self.is_admitted()
-    }
-
-    fn is_admitted(&self) -> bool {
-        self.admitted
-            || self
-                .admitted_late
-                .load(std::sync::atomic::Ordering::Acquire)
+        self.origin != Origin::Unsigned && !self.admitted
     }
 
     /// Whether this context signs what it delivers, so a stored copy of the
@@ -222,7 +211,6 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: false,
-            admitted_late: std::sync::atomic::AtomicBool::default(),
         }
     }
 
@@ -236,7 +224,6 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: true,
-            admitted_late: std::sync::atomic::AtomicBool::default(),
         }
     }
 
@@ -249,7 +236,6 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: true,
-            admitted_late: std::sync::atomic::AtomicBool::default(),
         }
     }
 
@@ -293,7 +279,7 @@ impl SigningInvocationContext {
             return Ok(SigningDelivery::Unsigned);
         }
         let nonce = self.nonce_value()?;
-        if !self.is_admitted() {
+        if !self.admitted {
             return Ok(SigningDelivery::Unsigned);
         }
         Ok(SigningDelivery::Signed { nonce })
@@ -391,53 +377,30 @@ impl super::MetaMcp {
         // The destructive prediction builds its tool set on first use, so it
         // runs only when a nonce is presented: a missing one has nothing to
         // leave unspent, and its refusal stays as cheap as it was.
-        // A call confirmed by elicitation is admitted by the dispatcher once
-        // the question was asked (`admit_after_confirmation`): a delivery that
-        // fails must not spend the nonce its retry carries (MIK-7869).
         if self.refused_before_dispatch(tool_name, caller)
             || (context.nonce_value()?.is_some()
-                && (super::confirmation::unconfirmable(tool_name, caller)
-                    || super::confirmation::confirms_by_elicitation(tool_name, caller)))
+                && super::confirmation::unconfirmable(tool_name, caller))
         {
             return Ok(());
         }
         self.prepare_signing_invocation(context, arguments, session, caller)
     }
 
-    /// Admit the nonce `prepare_signing_for_call` left for after the
-    /// confirmation (MIK-7869). Dispatch calls it once the gate let the call
-    /// through; a refusal is the answer when the nonce is a replay.
-    pub(crate) fn admit_after_confirmation(
-        &self,
-        id: &crate::protocol::RequestId,
-        tool_name: &str,
-        caller: &super::MetaMcpCallerContext<'_>,
-    ) -> Option<crate::protocol::JsonRpcResponse> {
-        let context = caller.signing.filter(|c| c.awaits_admission())?;
-        if !super::confirmation::confirms_by_elicitation(tool_name, caller) {
-            return None;
-        }
-        let admitted = context.nonce_value().and_then(|nonce| {
-            self.admit_signing_nonce(
+    /// Give back the nonce of a call refused because its confirmation question
+    /// could not be delivered (MIK-7869). Only a nonce this call admitted: a
+    /// call left unadmitted registered none.
+    pub(crate) fn release_unasked_nonce(&self, caller: &super::MetaMcpCallerContext<'_>) {
+        let (Some(store), Some(context)) = (&self.nonce_store, caller.signing) else {
+            return;
+        };
+        if let (true, Ok(Some(nonce))) = (context.admitted, context.nonce_value()) {
+            store.release_unused(
                 nonce,
                 caller.authorizer.quota_principal().map_or(
                     "anonymous",
                     crate::gateway::auth::QuotaPrincipal::as_store_key,
                 ),
-            )
-        });
-        match admitted {
-            Ok(()) => {
-                context
-                    .admitted_late
-                    .store(true, std::sync::atomic::Ordering::Release);
-                None
-            }
-            Err(error) => Some(crate::protocol::JsonRpcResponse::error(
-                Some(id.clone()),
-                error.to_rpc_code(),
-                wire_error_message(&error),
-            )),
+            );
         }
     }
 

@@ -142,6 +142,10 @@ pub(super) async fn redeem_confirmation(
 pub(super) enum GateOutcome {
     /// The call does not run. This is the answer to send.
     Refuse(Box<JsonRpcResponse>),
+    /// [`Self::Refuse`] because the confirmation question could not be
+    /// delivered: nobody was asked, so a signed call's nonce goes back unspent
+    /// (MIK-7869).
+    RefuseUnasked(Box<JsonRpcResponse>),
     /// Nothing to confirm, or confirmation obtained out of band. Dispatch
     /// normally.
     Proceed,
@@ -174,17 +178,6 @@ pub(super) fn unconfirmable(tool_name: &str, caller: &MetaMcpCallerContext<'_>) 
             ConfirmationChannel::InBand { .. } => confirmation_principal(caller).is_none(),
             ConfirmationChannel::Elicit { .. } => false,
         }
-}
-
-/// A destructive meta call whose confirmation is asked by elicitation. The
-/// question can fail to be delivered, so its signing nonce is admitted after
-/// the gate (MIK-7869), not before it as every other call's is.
-pub(super) fn confirms_by_elicitation(tool_name: &str, caller: &MetaMcpCallerContext<'_>) -> bool {
-    crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name)
-        && matches!(
-            caller.confirmation,
-            crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit { .. }
-        )
 }
 
 /// Whether the call may run, and if so whether it spent a confirmation here.
@@ -254,7 +247,10 @@ pub(super) async fn destructive_confirmation_gate(
             if outcome == ConfirmationOutcome::Unsupported
                 && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
             {
-                return GateOutcome::refuse(refused(&action_desc));
+                return match GateOutcome::refuse(refused(&action_desc)) {
+                    GateOutcome::Refuse(response) => GateOutcome::RefuseUnasked(response),
+                    other => other,
+                };
             }
         }
         // The asker is the caller itself, one round-trip away: the gate answers

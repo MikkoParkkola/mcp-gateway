@@ -326,6 +326,29 @@ impl NonceStore {
         Ok(())
     }
 
+    /// Forget a nonce `principal` registered and never used: the call it
+    /// carried was refused before anything ran, so its retry may carry it
+    /// again (MIK-7869). Another principal's nonce is left alone. The stale
+    /// expiry entry is skipped by [`Self::reclaim_expired`].
+    pub(crate) fn release_unused(&self, nonce: &str, principal: &str) {
+        let mut state = self.state.lock();
+        if state
+            .seen
+            .get(nonce)
+            .is_none_or(|e| e.principal != principal)
+        {
+            return;
+        }
+        state.seen.remove(nonce);
+        if let Some(count) = state.principal_counts.get_mut(principal) {
+            *count -= 1;
+            if *count == 0 {
+                state.principal_counts.remove(principal);
+            }
+        }
+        publish_nonce_occupancy(&state);
+    }
+
     /// Evict nonces older than the replay window.
     ///
     /// Called periodically by [`spawn_nonce_cleanup_task`] to bound memory.
