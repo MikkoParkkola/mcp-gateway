@@ -352,7 +352,9 @@ pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[Strin
 /// stays a string. No truncation.
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
     let needles = needles(secrets, &[]);
-    scrub_value(value, &needles);
+    if !needles.is_empty() {
+        scrub_value(value, &needles);
+    }
     #[cfg(feature = "firewall")]
     REDACTOR.scan_and_redact(value);
 }

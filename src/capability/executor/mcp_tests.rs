@@ -613,3 +613,29 @@ async fn a_successful_result_loses_the_injected_env_value() {
         "the ready payload was reached and redacted: {waited}"
     );
 }
+
+/// The child is started with the environment the call redacts against, not a
+/// second read of it: after a reload between the two, the value the child holds
+/// is still one the result is scrubbed of.
+#[tokio::test]
+async fn the_child_starts_with_the_snapshot_the_call_redacts_against() {
+    let (_dir, executor) = executor_holding("old-snapshot-value");
+    let cap = capability_with_env();
+    let Some(ProcessConfig::Mcp(config)) = cap.providers.process.get("primary") else {
+        panic!("not an mcp provider");
+    };
+    let snapshot =
+        |name: &str| (name == "CAP_EXEC_TEST_TOKEN").then(|| "old-snapshot-value".into());
+
+    // A reload publishes another value after the call took its snapshot.
+    let (_other, reloaded) = executor_holding("new-value-after-reload");
+    executor.env.set(reloaded.env.get());
+
+    let (backend, _workdir) = CapabilityExecutor::start_mcp(&cap, config, &snapshot).unwrap();
+    let args = serde_json::Map::from_iter([("message".to_owned(), json!("x"))]);
+    let echoed = super::call_tool(&backend, "echo", args).await.unwrap();
+    assert_eq!(
+        echoed["test_values"]["CAP_EXEC_TEST_TOKEN"], "old-snapshot-value",
+        "the child got the snapshot, not the reloaded value: {echoed}"
+    );
+}
