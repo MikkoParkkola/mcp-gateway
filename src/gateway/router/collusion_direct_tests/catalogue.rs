@@ -114,21 +114,35 @@ fn setup() -> Setup {
     }
 }
 
+/// The fixture for `route`: the meta route needs its Meta-MCP to hold the
+/// firewall too.
+async fn fixture_for(route: Route) -> Fixture {
+    match route {
+        Route::Meta => meta_fixture(setup(), None).await,
+        Route::Direct => fixture(setup()).await,
+    }
+}
+
 /// A reads a resource; B sends its text as `prompts/get` arguments.
 async fn resource_read_then_prompt_argument(route: Route) {
-    let fx = fixture(setup()).await;
+    let fx = fixture_for(route).await;
     read_resource(&fx, route, "a").await;
     let forwarded = fx.catalogue();
-    assert_catalogue_refused(&fx, &prompt_with(&fx, route, "b", PROSE).await, forwarded);
-    // Controls: unrelated arguments pass; A's own copy excuses A.
-    assert_catalogue_sent(
-        &fx,
-        &prompt_with(&fx, route, "b", "harbour").await,
-        forwarded + 1,
-    );
+    // Control: A's own copy excuses A.
     assert_catalogue_sent(
         &fx,
         &prompt_with(&fx, route, "a", PROSE).await,
+        forwarded + 1,
+    );
+    assert_catalogue_refused(
+        &fx,
+        &prompt_with(&fx, route, "b", PROSE).await,
+        forwarded + 1,
+    );
+    // Control: unrelated arguments pass.
+    assert_catalogue_sent(
+        &fx,
+        &prompt_with(&fx, route, "b", "harbour").await,
         forwarded + 2,
     );
 }
