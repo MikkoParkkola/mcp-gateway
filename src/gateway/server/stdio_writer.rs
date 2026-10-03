@@ -16,13 +16,19 @@ impl Gateway {
     /// true, which is the signal the read loop stops admitting on.
     pub(super) async fn run_stdout_writer<W: tokio::io::AsyncWrite + Unpin>(
         mut sink: W,
-        mut queue: tokio::sync::mpsc::Receiver<serde_json::Value>,
+        mut queue: tokio::sync::mpsc::Receiver<crate::gateway::outbound::OutboundFrame>,
     ) {
         while let Some(frame) = queue.recv().await {
-            if !Self::write_response(&mut sink, &frame).await {
+            // A withheld frame writes nothing (MIK-7116.MIN.2).
+            let Some(value) = frame.stdio_value() else {
+                continue;
+            };
+            if !Self::write_response(&mut sink, &value).await {
                 queue.close();
                 break;
             }
+            // Committed only once `stdout` took it (design §4.3).
+            frame.stdio_written();
         }
     }
 
