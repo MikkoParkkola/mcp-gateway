@@ -166,6 +166,16 @@ impl CapabilityExecutor {
         self
     }
 
+    /// The MCP revocation generation now.
+    pub(crate) fn mcp_generation(&self) -> u64 {
+        self.mcp_children.generation()
+    }
+
+    /// Revoke calls that read an earlier generation (unload, reload, quarantine).
+    pub(crate) fn bump_mcp_generation(&self) {
+        self.mcp_children.bump_generation();
+    }
+
     /// Advance the shared epoch after a capability-registry mutation is visible.
     pub(crate) fn bump_policy_epoch(&self) {
         if let Some(epoch) = &self.policy_epoch {

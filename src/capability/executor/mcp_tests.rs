@@ -6,6 +6,7 @@
 
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -57,6 +58,52 @@ providers:
           refuse: {{ tool: fail }}
           flood: {{ tool: flood }}
           spawn: {{ tool: grandchild }}
+          get_contract:
+            tool: echo
+            requires: [text]
+            arguments: {{ message: "{{text}}" }}
+          import_wait:
+            tool: import_binary
+            requires: [binary_path]
+            arguments: {{ binary_path: "{{binary_path}}" }}
+            wait:
+              tool: list_project_binaries
+              arguments: {{ expect: "{{binary_path}}" }}
+              until:
+                array: programs
+                match: {{ file_path: "{{binary_path}}" }}
+                field: analysis_complete
+                equals: true
+              interval_ms: 200
+              max_wait_s: 5
+          import_die:
+            tool: import_binary
+            requires: [binary_path]
+            arguments: {{ binary_path: "{{binary_path}}" }}
+            wait:
+              tool: list_project_binaries
+              arguments: {{ expect: "die" }}
+              until:
+                array: programs
+                match: {{ file_path: "x" }}
+                field: analysis_complete
+                equals: true
+              interval_ms: 200
+              max_wait_s: 10
+          import_slow:
+            tool: import_binary
+            requires: [binary_path]
+            arguments: {{ binary_path: "{{binary_path}}" }}
+            wait:
+              tool: list_project_binaries
+              arguments: {{ expect: "never" }}
+              until:
+                array: programs
+                match: {{ file_path: "never-there" }}
+                field: analysis_complete
+                equals: true
+              interval_ms: 200
+              max_wait_s: 1
           analyze:
             tool: echo
             arguments: {{ binary_name: "" }}
@@ -192,6 +239,7 @@ async fn the_prepare_step_binds_its_result_into_the_main_call() {
 #[tokio::test]
 async fn a_frame_over_the_limit_fails_the_call() {
     let executor = CapabilityExecutor::new();
+    let started = std::time::Instant::now();
     let err = call(
         &executor,
         &capability(),
@@ -200,6 +248,11 @@ async fn a_frame_over_the_limit_fails_the_call() {
     )
     .await;
     assert!(err.is_err(), "a 20 MiB frame must not be accepted");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "a broken stream wakes the waiting call at once, not at its 20 s timeout: {:?}",
+        started.elapsed()
+    );
 }
 
 #[cfg(unix)]
@@ -265,4 +318,218 @@ async fn unloading_stops_a_child_even_while_a_call_is_in_flight() {
         "unload does not wait for a busy child"
     );
     drop(lease);
+}
+
+fn ctx_with_generation(generation: u64) -> CapabilityExecutionContext {
+    CapabilityExecutionContext {
+        mcp_generation: Some(generation),
+        ..caller("alice")
+    }
+}
+
+#[tokio::test]
+async fn a_call_from_before_an_unload_never_starts_a_child() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    // The backend read the generation with the definition, then the unload ran.
+    let stale = ctx_with_generation(executor.mcp_generation());
+    executor.bump_mcp_generation();
+    executor.stop_unloaded_mcp(&|name| name != cap.name);
+    let err = call(&executor, &cap, say.clone(), &stale).await;
+    assert!(err.is_err(), "a stale call is refused: {err:?}");
+    assert_eq!(executor.mcp_children.len(), 0, "and starts no child");
+    let fresh = ctx_with_generation(executor.mcp_generation());
+    call(&executor, &cap, say, &fresh).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_late_discard_leaves_a_newer_child_alone() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    call(&executor, &cap, say, &caller("alice")).await.unwrap();
+    let current = executor.mcp_children.id_for_test(&cap.name);
+    executor
+        .mcp_children
+        .discard_for_test(&cap.name, current + 1000);
+    assert_eq!(
+        executor.mcp_children.len(),
+        1,
+        "another child's id removes nothing"
+    );
+    executor.mcp_children.discard_for_test(&cap.name, current);
+    assert_eq!(executor.mcp_children.len(), 0, "its own id removes it");
+}
+
+#[tokio::test]
+async fn a_changed_provider_timeout_restarts_the_child() {
+    let executor = CapabilityExecutor::new();
+    let mut cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    let first = call(&executor, &cap, say.clone(), &caller("alice"))
+        .await
+        .unwrap();
+    cap.providers.named.get_mut("primary").unwrap().timeout = 25;
+    let second = call(&executor, &cap, say, &caller("alice")).await.unwrap();
+    assert_ne!(
+        first["pid"], second["pid"],
+        "a new timeout starts a new child"
+    );
+}
+
+#[tokio::test]
+async fn a_long_call_does_not_count_as_idle_time() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    call(&executor, &cap, say, &caller("alice")).await.unwrap();
+    let lease = executor.mcp_children.hold_for_test("alice");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drop(lease);
+    executor
+        .mcp_children
+        .evict(Duration::from_millis(200), &|_| true);
+    assert_eq!(
+        executor.mcp_children.len(),
+        1,
+        "idleness counts from when the call ended"
+    );
+}
+
+#[tokio::test]
+async fn an_operation_missing_a_required_parameter_is_refused_before_any_child_starts() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let err = call(
+        &executor,
+        &cap,
+        json!({"operation": "get_contract"}),
+        &caller("a"),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("needs parameter 'text'"), "{err}");
+    assert_eq!(
+        executor.mcp_children.len(),
+        0,
+        "no child was started for it"
+    );
+    let ok = call(
+        &executor,
+        &cap,
+        json!({"operation": "get_contract", "text": "hi"}),
+        &caller("a"),
+    )
+    .await;
+    assert!(ok.is_ok(), "{ok:?}");
+}
+
+#[tokio::test]
+async fn a_wait_polls_until_the_matching_item_is_ready() {
+    let executor = CapabilityExecutor::new();
+    let out = call(
+        &executor,
+        &capability(),
+        json!({"operation": "import_wait", "binary_path": "/data/x"}),
+        &caller("a"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["ready"]["analysis_complete"], true, "{out}");
+    assert_eq!(out["ready"]["name"], "prog-x");
+    assert_eq!(out["result"]["program_name"], "prog-x");
+}
+
+#[tokio::test]
+async fn a_wait_that_runs_out_says_so_and_keeps_the_child() {
+    let executor = CapabilityExecutor::new();
+    let err = call(
+        &executor,
+        &capability(),
+        json!({"operation": "import_slow", "binary_path": "/data/x"}),
+        &caller("a"),
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("call again to keep waiting"), "{err}");
+    assert_eq!(
+        executor.mcp_children.len(),
+        1,
+        "a busy server is not discarded"
+    );
+}
+
+fn probe_with(operation: &str) -> String {
+    format!(
+        r"name: mcp_probe2
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      operation: {{ type: string }}
+      text: {{ type: string }}
+providers:
+  primary:
+    service: mcp
+    timeout: 30
+    config:
+      command: '{python}'
+      transport: stdio
+      tool_selector:
+        param: operation
+        tools:
+          op:
+{operation}
+",
+        python = python(),
+    )
+}
+
+#[test]
+fn a_requires_naming_an_undeclared_property_fails_the_load() {
+    let def = parse_capability(&probe_with(
+        "            tool: echo\n            requires: [typo]",
+    ))
+    .unwrap();
+    let err = crate::capability::validate_capability(&def)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("requires 'typo'"), "{err}");
+}
+
+#[test]
+fn a_wait_must_leave_ten_seconds_of_the_provider_timeout() {
+    let wait = |max: u64| {
+        probe_with(&format!(
+            "            tool: echo\n            wait:\n              tool: echo\n              until: {{ array: a, match: {{ x: y }}, field: f, equals: true }}\n              max_wait_s: {max}"
+        ))
+    };
+    let check =
+        |max| crate::capability::validate_capability(&parse_capability(&wait(max)).unwrap());
+    assert!(check(20).is_ok());
+    let err = check(21).unwrap_err().to_string();
+    assert!(err.contains("max_wait_s"), "{err}");
+}
+
+#[tokio::test]
+async fn a_server_that_dies_during_a_wait_ends_it_at_once() {
+    let executor = CapabilityExecutor::new();
+    let started = std::time::Instant::now();
+    let err = call(
+        &executor,
+        &capability(),
+        json!({"operation": "import_die", "binary_path": "/data/x"}),
+        &caller("a"),
+    )
+    .await;
+    assert!(err.is_err(), "{err:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(6),
+        "a dead server is not polled for the whole wait: {:?}",
+        started.elapsed()
+    );
 }

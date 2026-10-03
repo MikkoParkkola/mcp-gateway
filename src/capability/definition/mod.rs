@@ -17,7 +17,7 @@ mod webhook;
 pub use process::{
     CliArg, CliConfig, CliOutput, ConditionalArg, DEFAULT_MAX_OUTPUT_BYTES, EachArg, JsonArg,
     MAX_OUTPUT_BYTES_CEILING, McpConfig, McpTransport, PrepareCall, ProcessConfig, ToolCall,
-    ToolSelector,
+    ToolSelector, WAIT_INTERVAL_MS, WaitStep, WaitUntil,
 };
 pub use providers::{Integrity, ProvidersConfig};
 pub use webhook::WebhookEvent;

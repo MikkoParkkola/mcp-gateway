@@ -3457,6 +3457,7 @@ impl MetaMcp {
                     // against the same registry before its own cache lookup
                     // and again before egress.
                     account_credential,
+                    mcp_generation: None,
                 },
             )
             .await?;

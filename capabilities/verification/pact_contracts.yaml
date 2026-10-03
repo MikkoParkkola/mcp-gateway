@@ -1,4 +1,4 @@
-sha256: d46f90024747a1abe63e9694145960d92af1b77b57e29c52096c63421721d677
+sha256: 934e581aabd6edfdd1510ff572eeb07c3133ff4f48fff8c3093f6fd06ecb11d7
 fulcrum: "1.0"
 name: pact_contracts
 description: >
@@ -73,6 +73,8 @@ providers:
               project_dir: '{project_dir}'
           get_contract:
             tool: pact_contract
+            requires:
+            - component
             arguments:
               component_id: '{component}'
               project_dir: '{project_dir}'
