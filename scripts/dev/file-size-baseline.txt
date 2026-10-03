@@ -19,7 +19,6 @@
 1972 src/gateway/auth.rs
 1920 src/transport/http/mod.rs
 1888 src/backend/tests.rs
-1818 src/control_plane/store.rs
 1631 src/security/firewall/mod.rs
 1617 tests/mik_7272_sub2b_acs.rs
 1603 src/protocol_revision_telemetry.rs
