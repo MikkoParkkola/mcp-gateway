@@ -55,7 +55,7 @@ pub(crate) struct McpChildren {
 }
 
 /// Decrements a child's in-flight count when a call ends, however it ends.
-struct InFlight(Arc<AtomicUsize>);
+pub(crate) struct InFlight(Arc<AtomicUsize>);
 
 impl Drop for InFlight {
     fn drop(&mut self) {
