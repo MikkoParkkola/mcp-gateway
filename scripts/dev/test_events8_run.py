@@ -95,8 +95,18 @@ class EvidenceTests(unittest.TestCase):
     def test_a_removal_logged_before_the_shim_response_still_passes(self):
         args = {"repo": REPO}
         audit = audit_rows()
-        audit[2]["ts"] = T0 + 19.5  # audit written before the shim logged the response at T0+20
+        audit[2]["ts"] = T0 + 15  # audit written 5 s before the shim logged the response at T0+20
         code, out = run_evidence(shim_rows(args, args), audit)
+        self.assertEqual(code, 0, out)
+
+    def test_a_later_complete_chain_passes_after_an_earlier_incomplete_subscribe(self):
+        args = {"repo": REPO}
+        rows = shim_rows(args, args)
+        earlier = {"kind": "http", "ts": T0 + 4, "status": 200, "error_code": None,
+                   "rpc": ["events/subscribe"], "result_has_id": True, "result_id": "sub-a",
+                   "rpc_params": [{"method": "events/subscribe", "name": EVENT, "arguments": args}]}
+        rows.insert(3, earlier)
+        code, out = run_evidence(rows, audit_rows())
         self.assertEqual(code, 0, out)
 
     def test_an_unsubscribe_with_other_arguments_fails(self):

@@ -266,7 +266,15 @@ def cmd_evidence(a):
             p.get("name") == EVENT and fire.get("repo") and (p.get("arguments") or {}).get("repo") == fire["repo"]
             for p in named("events/subscribe", r)))
 
-    sub = step("events/subscribe answered with an id for this event and repo", shim, subscribed)
+    # Several subscribes may be filtered to the repo (ChatGPT retries): take the
+    # one whose delivery the gateway audited, else the first, so a later complete
+    # chain is not rejected for an earlier incomplete one.
+    delivered = {r.get("subscription_id") for r in audit
+                 if has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)}
+    sub = step("events/subscribe answered with an id for this event and repo", shim,
+               lambda r: subscribed(r) and r.get("result_id") in delivered) \
+        if any(subscribed(r) and r.get("result_id") in delivered for r in shim) else \
+        step("events/subscribe answered with an id for this event and repo", shim, subscribed)
     # Delivery and removal are bound to THIS subscription's id. The verification
     # handshake is not: the gateway reuses an earlier verified callback.
     sub_id = (sub or {}).get("result_id")
@@ -284,7 +292,7 @@ def cmd_evidence(a):
     step("gateway removed that subscription (gateway audit)", audit,
          lambda r: has(r, "action", "events.unsubscribe") and has(r, "detail", "removed")
          and bool(sub_id) and has(r, "subscription_id", sub_id)
-         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1)
+         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1, newer=False)
     for r in results:
         print("PASS" if r["pass"] else "FAIL", r["check"])
     print("AUTOMATED CHECKS:", "PASS" if ok else "FAIL",
