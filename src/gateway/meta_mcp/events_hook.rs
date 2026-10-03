@@ -18,7 +18,11 @@ impl MetaMcp {
     /// Reconcile the hub's stored subscriptions with the capability catalogue
     /// once the startup scan has registered its routes. Called after the
     /// hub is installed and started.
-    pub(crate) fn reconcile_events_after_scan(&self) {
+    ///
+    /// `directories` are the configured capability directories, `~` expanded:
+    /// one that cannot be read makes the scan partial, and a partial scan
+    /// withdraws nothing.
+    pub(crate) fn reconcile_events_after_scan(&self, directories: Vec<std::path::PathBuf>) {
         let Some(hub) = self.events().cloned() else {
             return;
         };
@@ -33,9 +37,17 @@ impl MetaMcp {
             // retried, the worker held meanwhile.
             loop {
                 let hub = Arc::clone(&hub);
-                if tokio::task::spawn_blocking(move || hub.reconcile_catalogue())
-                    .await
-                    .unwrap_or(false)
+                let directories = directories.clone();
+                if tokio::task::spawn_blocking(move || {
+                    let scan = if directories.iter().all(|d| std::fs::read_dir(d).is_ok()) {
+                        crate::events::Scan::Complete
+                    } else {
+                        crate::events::Scan::Partial
+                    };
+                    hub.reconcile_catalogue(scan)
+                })
+                .await
+                .unwrap_or(false)
                 {
                     break;
                 }
@@ -115,6 +127,7 @@ impl MetaMcp {
         if capabilities.name != backend || !capabilities.initial_scan_complete() {
             return;
         }
+        let _gate = hub.catalogue_lock();
         match crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities()) {
             Ok(removed) => {
                 hub.withdraw(&removed);

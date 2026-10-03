@@ -48,6 +48,15 @@ pub(crate) fn event_id(kind: SourceKind, upstream_id: &str, subscription_id: &st
 /// signed body, outside `payloadSchema` (design §3.6).
 const PROVENANCE_KEY: &str = "io.github.mikkoparkkola/provenance";
 
+/// Whether every configured capability directory was read by the startup
+/// scan. A partial scan builds a partial catalogue, which proves nothing about
+/// a route's absence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scan {
+    Complete,
+    Partial,
+}
+
 /// The delivery body: exactly the protocol fields, the source's data and
 /// the provenance receipt in `_meta`.
 pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: &Value) -> Vec<u8> {
@@ -180,7 +189,17 @@ impl EventsHub {
     /// Before this the catalogue is partial, so nothing is withdrawn and
     /// nothing is sent (MIK-7772). `false`, with the worker still held, when
     /// a removal failed: the caller retries.
-    pub(crate) fn reconcile_catalogue(&self) -> bool {
+    pub(crate) fn reconcile_catalogue(&self, scan: Scan) -> bool {
+        // Held through the snapshot and the withdrawal, so a capability reload
+        // cannot restore a route in between and lose its subscriptions.
+        let _gate = self.catalogue_lock();
+        if scan == Scan::Partial {
+            tracing::warn!(
+                "events: a capability directory could not be read at startup; stored \
+                 subscriptions are kept and reconciled at the next complete start"
+            );
+            return self.release_worker();
+        }
         let offered: std::collections::HashSet<String> =
             self.catalogue().into_iter().map(|d| d.name).collect();
         let gone: Vec<String> = self
@@ -195,11 +214,21 @@ impl EventsHub {
         if !self.withdraw(&gone) {
             return false;
         }
+        self.release_worker()
+    }
+
+    /// Reconciliation is over: the delivery worker may start.
+    fn release_worker(&self) -> bool {
         self.runtime
             .reconciled
             .store(true, std::sync::atomic::Ordering::Release);
         self.runtime.wake.notify_one();
         true
+    }
+
+    /// Serializes startup reconciliation with capability reloads.
+    pub(crate) fn catalogue_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.catalogue_gate.lock()
     }
 
     /// Delete subscription `refused`, the snapshot the access check refused,

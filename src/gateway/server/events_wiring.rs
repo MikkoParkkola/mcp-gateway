@@ -39,6 +39,13 @@ pub(super) fn install(
     }
     hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
     meta_mcp.set_events(hub);
-    meta_mcp.reconcile_events_after_scan();
+    meta_mcp.reconcile_events_after_scan(
+        config
+            .capabilities
+            .directories
+            .iter()
+            .map(|d| expand_home_path(d))
+            .collect(),
+    );
     Ok(())
 }

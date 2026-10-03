@@ -148,7 +148,7 @@ fn reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked(
             .load(std::sync::atomic::Ordering::Acquire)
     );
 
-    assert!(hub.reconcile_catalogue());
+    assert!(hub.reconcile_catalogue(Scan::Complete));
 
     let left: Vec<String> = hub
         .store
@@ -161,6 +161,40 @@ fn reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked(
         ["task.settled"],
         "only the unoffered webhook type went"
     );
+    assert!(
+        hub.runtime
+            .reconciled
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+}
+
+/// MIK-7772: a partial scan proves nothing about a route's absence, so it
+/// withdraws nothing, and still lets the worker start.
+#[test]
+fn a_partial_scan_keeps_every_subscription() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let (now, tail) = (Utc::now(), super::super::tail_policy(&config));
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    hub.store
+        .admit(
+            subscription("webhook.gone.route.received"),
+            true,
+            caps,
+            chrono::Duration::zero(),
+            now,
+            tail,
+        )
+        .expect("io")
+        .expect("admitted");
+
+    assert!(hub.reconcile_catalogue(Scan::Partial));
+
+    assert_eq!(hub.store.subscriptions().len(), 1, "kept");
     assert!(
         hub.runtime
             .reconciled
