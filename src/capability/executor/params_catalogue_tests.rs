@@ -35,27 +35,37 @@ fn accepts(cap: &CapabilityDefinition, response: &Value) {
 fn sentry_list_issues_sends_the_documented_page_size_parameter() {
     let cap = shipped("capabilities/observability/sentry_list_issues.yaml");
     let config = &provider(&cap).config;
-    let args = json!({ "organization": "acme", "limit": 10 });
-
-    let pairs = CapabilityExecutor::new()
-        .substitute_params(&config.params, &args)
-        .unwrap();
-    let find = |name: &str| {
+    let render = |args: Value| {
+        let merged = config.merge_with_static_params(&args);
+        CapabilityExecutor::new()
+            .substitute_params(&config.params, merged.as_ref())
+            .unwrap()
+    };
+    let find = |pairs: &[(String, String)], name: &str| {
         pairs
             .iter()
             .find(|(k, _)| k == name)
-            .map(|(_, v)| v.as_str())
+            .map(|(_, v)| v.clone())
     };
-    assert_eq!(find("limit"), Some("10"), "{pairs:?}");
+
+    let named = render(json!({ "organization": "acme", "limit": 10 }));
+    assert_eq!(find(&named, "limit").as_deref(), Some("10"), "{named:?}");
     assert_eq!(
-        find("per_page"),
+        find(&named, "per_page"),
         None,
-        "an undocumented parameter: {pairs:?}"
+        "an undocumented parameter: {named:?}"
     );
-    assert!(
-        !config.static_params.contains_key("per_page"),
-        "the static default overrides nothing the upstream reads"
+
+    // Left out, the page size is the one the schema advertises, not Sentry's own.
+    let omitted = render(json!({ "organization": "acme" }));
+    assert_eq!(
+        find(&omitted, "limit").as_deref(),
+        Some("25"),
+        "{omitted:?}"
     );
+    assert_eq!(find(&omitted, "per_page"), None, "{omitted:?}");
+
+    let args = json!({ "organization": "acme", "limit": 10 });
     assert!(validate_arguments(&args, &cap.schema.input).is_valid());
 }
 
@@ -83,6 +93,14 @@ fn sentry_get_issue_takes_the_id_as_a_string() {
             "{id}: {}",
             verdict.format_error(&cap.schema.input)
         );
+        // The ID reaches the URL digit for digit, however long.
+        let url = CapabilityExecutor::new()
+            .build_url(&provider(&cap).config, &args)
+            .unwrap();
+        assert_eq!(
+            url,
+            format!("https://sentry.io/api/0/organizations/acme/issues/{id}/")
+        );
     }
 }
 
@@ -100,19 +118,21 @@ fn sentry_setup_text_names_only_the_scope_the_calls_need() {
 }
 
 #[test]
-fn search_outputs_accept_the_extra_fields_and_the_null_answer_upstream_sends() {
+fn tavily_search_accepts_extra_fields_and_a_null_answer() {
+    let cap = shipped("capabilities/search/tavily_search.yaml");
     accepts(
-        &shipped("capabilities/search/tavily_search.yaml"),
+        &cap,
         &json!({
             "query": "mcp", "answer": null, "images": [], "follow_up_questions": null,
             "results": [{ "title": "t", "url": "https://x", "content": "c", "score": 0.9 }],
             "response_time": 1.2, "request_id": "r-1"
         }),
     );
-    accepts(
-        &shipped("capabilities/search/tavily_search.yaml"),
-        &json!({ "answer": "text", "results": [] }),
-    );
+    accepts(&cap, &json!({ "answer": "text", "results": [] }));
+}
+
+#[test]
+fn tavily_extract_accepts_the_usage_and_request_fields() {
     accepts(
         &shipped("capabilities/search/tavily_extract.yaml"),
         &json!({
@@ -121,6 +141,10 @@ fn search_outputs_accept_the_extra_fields_and_the_null_answer_upstream_sends() {
             "request_id": "r-2"
         }),
     );
+}
+
+#[test]
+fn brave_web_search_accepts_the_extra_sections() {
     accepts(
         &shipped("capabilities/search/brave_web_search.yaml"),
         &json!({
@@ -128,6 +152,10 @@ fn search_outputs_accept_the_extra_fields_and_the_null_answer_upstream_sends() {
             "web": { "results": [] }, "videos": { "results": [] }
         }),
     );
+}
+
+#[test]
+fn brave_news_search_accepts_the_type_and_query_fields() {
     accepts(
         &shipped("capabilities/search/brave_news_search.yaml"),
         &json!({ "type": "news", "query": { "original": "mcp" }, "results": [] }),

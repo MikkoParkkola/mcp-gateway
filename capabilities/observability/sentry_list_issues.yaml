@@ -1,4 +1,4 @@
-sha256: b177f9edca31e7b26463906b3979a6ded231660701563b57b5e23b617c0efdbb
+sha256: 5a1d8f8d0bc1db21cfc21f4070c9e66b3789f748c932bd00a1fc353bbe435c71
 fulcrum: "1.0"
 name: sentry_list_issues
 description: |
@@ -50,6 +50,8 @@ providers:
       base_url: https://sentry.io
       path: /api/0/organizations/{organization}/issues/
       method: GET
+      static_params:
+        limit: "25"
       params:
         query: "{query}"
         project: "{project}"
