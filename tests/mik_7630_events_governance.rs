@@ -219,3 +219,34 @@ async fn a_redacted_payload_is_recorded_as_redacted() {
         "no attempt of this event claims pass"
     );
 }
+
+/// MIK-7805 AC3: a refused verification carries the code the caller was
+/// answered with, not a fixed callback-error code: the per-host limit is -32013.
+#[tokio::test]
+async fn a_refused_verification_records_its_real_code() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let cfg = delivery_config(root.path(), &json!({"verification_per_host_per_minute": 1}));
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    let second = rx.url.replace("/hook", "/hook2");
+    let mut params = delivery::params(&second, &whsec(32), json!({}));
+    params["arguments"] = json!({});
+    let answer = gw.rpc(Some(ALICE), "events/subscribe", params).await;
+    assert_eq!(
+        answer["error"]["code"], -32013,
+        "the limit answers: {answer}"
+    );
+    let refused = wait_until(DEADLINE, || {
+        audit_records(root.path())
+            .iter()
+            .any(|r| r["action"] == "events.verification" && r["detail"] == "verifications")
+    })
+    .await;
+    assert!(refused, "a refused verification is recorded");
+    let record = audit_records(root.path())
+        .into_iter()
+        .find(|r| r["action"] == "events.verification" && r["detail"] == "verifications")
+        .expect("record");
+    assert_eq!(record["error_code"], -32013, "{record}");
+}

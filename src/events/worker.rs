@@ -387,11 +387,16 @@ impl EventsHub {
             record.created_at,
             self.dead_policy(),
         );
-        let evicted = self
+        let settled = self
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
-        services.audit_evictions(evicted.unwrap_or_default()).await;
-        if let Settle::Dead { reason, .. } = outcome {
+        let (evicted, buried) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
+        services.audit_evictions(evicted).await;
+        // The burial's own receipt: a cancelled occurrence settles nothing, and
+        // one the caps evicted at once still happened.
+        if let Settle::Dead { reason, .. } = outcome
+            && buried
+        {
             self.dead_lettered(services, record, reason).await;
         }
     }
@@ -403,20 +408,17 @@ impl EventsHub {
         record: &OutboxRecord,
         reason: DeadReason,
     ) {
-        // Only a dead letter that exists: a cancelled occurrence settles nothing.
-        let buried = self
-            .store
-            .dead_letter_by_id(&record.event_id)
-            .is_some_and(|dead| dead.record.created_at == record.created_at);
-        if !buried {
-            return;
-        }
-        let host = self
-            .store
-            .get(&record.subscription_id)
-            .and_then(|s| url::Url::parse(&s.url).ok())
-            .and_then(|u| u.host_str().map(str::to_owned))
-            .unwrap_or_default();
+        // Stamped at fan-out from the subscription the record is for; a record
+        // written before the stamp existed falls back to the store.
+        let host = if record.callback_host.is_empty() {
+            self.store
+                .get(&record.subscription_id)
+                .and_then(|s| url::Url::parse(&s.url).ok())
+                .and_then(|u| u.host_str().map(str::to_owned))
+                .unwrap_or_default()
+        } else {
+            record.callback_host.clone()
+        };
         services
             .audit_lifecycle(
                 &super::governance::Lifecycle {
@@ -426,7 +428,7 @@ impl EventsHub {
                     callback_host: &host,
                     detail: reason.as_str(),
                     event_id: Some(&record.event_id),
-                    ok: false,
+                    failed_with: Some(-32015),
                 },
                 super::governance::Attribution::Gateway,
             )

@@ -36,6 +36,15 @@ pub(crate) struct Caps {
     pub global: usize,
 }
 
+/// How an admitted subscription met the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Admission {
+    /// No live row held this id.
+    Inserted,
+    /// A live row held this id and was replaced.
+    Refreshed,
+}
+
 /// Why an admission was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CapHit {
@@ -251,9 +260,12 @@ impl Store {
         grace: chrono::Duration,
         now: DateTime<Utc>,
         tail: TailPolicy,
-    ) -> std::io::Result<Result<(), CapHit>> {
+    ) -> std::io::Result<Result<Admission, CapHit>> {
         let mut state = self.state.lock();
         self.sweep(&mut state, now)?;
+        // Read under the lock with the commit, so racing identical subscribes
+        // cannot both read as the first.
+        let refreshed = state.subs.contains_key(&sub.id);
         if let Some(old) = state.subs.get(&sub.id) {
             if old.secret == sub.secret {
                 sub.previous_secret.clone_from(&old.previous_secret);
@@ -333,7 +345,11 @@ impl Store {
         state.subs.insert(sub.id.clone(), sub);
         placed.durable()?;
         self.trim_tails(&mut state, now, tail)?;
-        Ok(Ok(()))
+        Ok(Ok(if refreshed {
+            Admission::Refreshed
+        } else {
+            Admission::Inserted
+        }))
     }
 
     /// Whether a new key for `principal` would pass the caps now. Advisory:
