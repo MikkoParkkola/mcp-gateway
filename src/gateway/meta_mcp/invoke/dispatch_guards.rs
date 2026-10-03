@@ -48,7 +48,7 @@ impl Admission {
     ) -> Self {
         Self {
             warnings,
-            _hold: hold,
+            _hold: hold.filter(|_| false),
         }
     }
 }
