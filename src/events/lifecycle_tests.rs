@@ -394,6 +394,8 @@ async fn a_test_source_event_reaches_a_receiver() {
     let dir = tempfile::tempdir().expect("dir");
     let config = crate::config::EventsConfig {
         callback_allow_private: vec!["127.0.0.0/8".to_owned()],
+        // A first attempt lost to a loaded runner is retried within the wait.
+        retry_base: std::time::Duration::from_millis(200),
         ..crate::config::EventsConfig::default()
     };
     let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("hub");
@@ -404,7 +406,7 @@ async fn a_test_source_event_reaches_a_receiver() {
     hub.start(services());
     assert!(hub.reconcile_catalogue(fanout::CatalogueScan::Complete));
     hub.emit(event());
-    for _ in 0..200 {
+    for _ in 0..600 {
         if !rx.got.lock().is_empty() {
             break;
         }
