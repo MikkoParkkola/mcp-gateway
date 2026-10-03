@@ -406,6 +406,9 @@ impl MetaMcp {
             Vec::new()
         };
 
+        let total_found =
+            total_found + self.add_event_matches(&query, limit, caller, session_id, &mut matches);
+
         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
         self.inspect_discovery_value(&mut out)?;
         Ok(out)
@@ -842,6 +845,9 @@ impl MetaMcp {
 
         // Truncate to requested limit AFTER ranking
         matches.truncate(limit);
+        // Event types join after the limit: a handful, and never crowded out.
+        let total_found =
+            total_found + self.add_event_matches(&query, limit, caller, session_id, &mut matches);
 
         // Annotate tool families with differential descriptions so LLMs can
         // distinguish siblings (e.g. gmail_search vs gmail_send vs gmail_batch_modify).
