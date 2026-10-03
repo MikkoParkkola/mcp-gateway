@@ -2133,6 +2133,11 @@ impl MetaMcp {
                 GateOutcome::ProceedConfirmed => true,
             };
 
+        // MIK-7869: the nonce of a call confirmed by elicitation is spent here,
+        // once the question has been asked and the call is let through.
+        if let Some(refusal) = self.admit_after_confirmation(&id, tool_name, &caller) {
+            return refusal;
+        }
         // MIK-7698: nothing acts on a nonce the signing layer left unadmitted.
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
             return refusal;

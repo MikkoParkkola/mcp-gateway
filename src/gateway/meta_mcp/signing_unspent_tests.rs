@@ -157,3 +157,90 @@ async fn a_hidden_gateway_invoke_without_a_nonce_is_left_to_dispatch() {
     .expect("the hidden tool is dispatch's to answer, not its arguments'");
     assert!(!context.admitted);
 }
+
+/// A destructive call confirmed by elicitation, its question asked of the
+/// session `""` (which no stream can answer: nothing is delivered).
+fn elicit_caller(
+    proxy: &crate::gateway::ProxyManager,
+    policy: crate::gateway::destructive_confirmation::ConfirmationPolicy,
+) -> MetaMcpCallerContext<'_> {
+    use crate::gateway::destructive_confirmation::ConfirmationChannel;
+    let mut caller = ctx(&AllowAll);
+    caller.is_admin = true;
+    caller.confirmation = ConfirmationChannel::Elicit { proxy, policy };
+    caller
+}
+
+fn undeliverable_proxy() -> crate::gateway::ProxyManager {
+    crate::gateway::ProxyManager::new(std::sync::Arc::new(
+        crate::gateway::NotificationMultiplexer::new(
+            std::sync::Arc::new(crate::backend::BackendRegistry::new()),
+            crate::config::StreamingConfig::default(),
+        ),
+    ))
+}
+
+/// Runs `gateway_kill_server` signed with `NONCE` through the dispatcher.
+async fn kill_with_nonce(
+    meta: &MetaMcp,
+    proxy: &crate::gateway::ProxyManager,
+    policy: crate::gateway::destructive_confirmation::ConfirmationPolicy,
+) -> Value {
+    const NAME: &str = "gateway_kill_server";
+    let (mut context, arguments) = captured(NAME, &json!({"server": "x"}), "elicit-nonce");
+    let mut caller = elicit_caller(proxy, policy);
+    meta.prepare_signing_for_call(&mut context, NAME, &arguments, Some(""), &caller)
+        .expect("the confirmation is the dispatcher's to ask");
+    caller.signing = Some(&context);
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(7),
+        NAME,
+        arguments,
+        Some(""),
+        caller,
+    ))
+    .await;
+    serde_json::to_value(&response).expect("a response serializes")
+}
+
+/// Whether `elicit-nonce` is still free: an ordinary call presenting it is
+/// admitted.
+fn nonce_is_free(meta: &MetaMcp) -> bool {
+    let (mut later, arguments) = captured("gateway_list_servers", &json!({}), "elicit-nonce");
+    meta.prepare_signing_for_call(
+        &mut later,
+        "gateway_list_servers",
+        &arguments,
+        None,
+        &ctx(&AllowAll),
+    )
+    .is_ok()
+}
+
+/// MIK-7869.NONCE.1: the question could not be delivered, the call is refused,
+/// and the retry carries the same nonce.
+#[tokio::test]
+async fn a_failed_elicitation_leaves_the_nonce_unspent() {
+    use crate::gateway::destructive_confirmation::ConfirmationPolicy;
+    let (meta, proxy) = (meta(), undeliverable_proxy());
+    let wire = kill_with_nonce(&meta, &proxy, ConfirmationPolicy::for_modern()).await;
+    assert!(
+        wire.get("error").is_some() || wire["result"]["isError"] == true,
+        "{wire}"
+    );
+    assert_ne!(
+        wire["error"]["code"], -32603,
+        "not the unadmitted fail-safe: {wire}"
+    );
+    assert!(nonce_is_free(&meta), "a refused delivery spent the nonce");
+}
+
+/// MIK-7869.NONCE.2: a call the question let through spends it.
+#[tokio::test]
+async fn a_call_let_through_after_the_question_spends_the_nonce() {
+    use crate::gateway::destructive_confirmation::ConfirmationPolicy;
+    let (meta, proxy) = (meta(), undeliverable_proxy());
+    let wire = kill_with_nonce(&meta, &proxy, ConfirmationPolicy::for_legacy()).await;
+    assert_ne!(wire["error"]["code"], -32603, "{wire}");
+    assert!(!nonce_is_free(&meta), "the call ran, so its nonce is spent");
+}

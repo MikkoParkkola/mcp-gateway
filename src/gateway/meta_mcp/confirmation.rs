@@ -176,6 +176,17 @@ pub(super) fn unconfirmable(tool_name: &str, caller: &MetaMcpCallerContext<'_>) 
         }
 }
 
+/// A destructive meta call whose confirmation is asked by elicitation. The
+/// question can fail to be delivered, so its signing nonce is admitted after
+/// the gate (MIK-7869), not before it as every other call's is.
+pub(super) fn confirms_by_elicitation(tool_name: &str, caller: &MetaMcpCallerContext<'_>) -> bool {
+    crate::gateway::destructive_confirmation::is_destructive_meta_tool(tool_name)
+        && matches!(
+            caller.confirmation,
+            crate::gateway::destructive_confirmation::ConfirmationChannel::Elicit { .. }
+        )
+}
+
 /// Whether the call may run, and if so whether it spent a confirmation here.
 ///
 /// Long by construction: one arm per `ConfirmationChannel` variant, and each
