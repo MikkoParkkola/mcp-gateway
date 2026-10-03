@@ -697,6 +697,8 @@ fn extract_json_path<'a>(path: &str, payload: &'a Value) -> Option<&'a Value> {
 // ============================================================================
 
 #[cfg(test)]
+mod hmac_tests;
+#[cfg(test)]
 mod mapping_tests;
 #[cfg(test)]
 mod rate_limit_tests;

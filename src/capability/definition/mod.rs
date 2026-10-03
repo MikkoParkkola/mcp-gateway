@@ -344,6 +344,11 @@ pub struct RestConfig {
     #[serde(default)]
     pub response_format: String,
 
+    /// Write a base64 field of the response to the configured downloads
+    /// directory instead of returning it (MIK-7782, ATTACH.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_file: Option<crate::capability::executor::SaveFileSpec>,
+
     /// Override the `Content-Type` header for the request body.
     ///
     /// When empty (the default) POST/PUT/PATCH bodies are sent as

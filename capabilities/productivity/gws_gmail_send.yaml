@@ -1,4 +1,4 @@
-sha256: 3dd1c6b9ebc8e505827ffadba959db57f7cf571c509f1ea00dc48803dcf6f8bd
+sha256: 23647c6a2f40066e362ca1c2fe7556a4c2ed04c8b0b12c4f9208ffc6dbe44fa2
 fulcrum: "1.0"
 name: gws_gmail_send
 description: Send an email via Gmail. Composes and sends a new message with optional CC/BCC recipients.
@@ -9,24 +9,25 @@ schema:
     properties:
       to:
         type: string
-        description: "Recipient email address"
+        description: Recipient email address
         format: email
       subject:
         type: string
-        description: "Email subject line"
+        description: Email subject line
       body:
         type: string
-        description: "Email body (plain text)"
+        format: multiline
+        description: Email body (plain text)
       cc:
         type: string
-        description: "CC recipients (comma-separated email addresses)"
+        description: CC recipients (comma-separated email addresses)
       bcc:
         type: string
-        description: "BCC recipients (comma-separated email addresses)"
+        description: BCC recipients (comma-separated email addresses)
     required:
-      - to
-      - subject
-      - body
+    - to
+    - subject
+    - body
   output:
     type: object
     properties:
@@ -47,14 +48,16 @@ providers:
     config:
       command: gws
       args:
-        - gmail
-        - "+send"
-        - "--to"
-        - "{to}"
-        - "--subject"
-        - "{subject}"
-        - "--body"
-        - "{body}"
+      - gmail
+      - +send
+      - --to={to}
+      - --subject={subject}
+      - --body={body}
+      - arg: --cc={cc}
+        if: cc
+      - arg: --bcc={bcc}
+        if: bcc
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -62,8 +65,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s gmail"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/gmail.send
 
 metadata:
   category: productivity
