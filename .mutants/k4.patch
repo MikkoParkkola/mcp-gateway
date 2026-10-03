@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index e1c3b9625..f49a9fe87 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -478,7 +478,7 @@ impl<'a> State<'a> {
+                 continue;
+             }
+             if let Some(uri) = &uri
+-                && self.shared.snapshot.lock().verdict(uri) != Verdict::Deliver
++                && false
+             {
+                 continue;
+             }

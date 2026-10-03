@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index e1c3b9625..62c3aa6ad 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -172,7 +172,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
+                     return state.ended(started);
+                 }
+             }
+-            Ev::Current(None) => return state.ended(started),
++            Ev::Current(None) => return Outcome::Stopped,
+             Ev::Pending(Some(note)) => {
+                 state.note(note, true);
+             }
