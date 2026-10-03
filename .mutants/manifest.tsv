@@ -1,0 +1,4 @@
+head_sha	7768cf4edc813c59dde0c995bb836e03a0caab6e
+# #2748 stdio receipts after the read verdict
+R4	linux	r4.patch	--lib -- stdio_judged_out_read_records_no_receipt
+R5	linux	r5.patch	--lib -- stdio_judged_out_batch_item
