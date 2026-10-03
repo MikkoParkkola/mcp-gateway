@@ -1892,14 +1892,11 @@ async fn meta_mcp_dispatch(
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
     };
-    response = (state.meta_mcp)
-        .finalize_response_after_inspection(response, &delivery, delivery_inspection)
-        .await;
-    if let Some(execution) = execution {
-        execution.complete_delivery(&response, signing_context.as_ref());
-    }
-    // MIN.2: judged on the finalized answer, then recorded; nothing changes
-    // the content after this, and the sink commits when the body is read.
+    let response = (state.meta_mcp).finalize_content(response, &delivery, delivery_inspection);
+    // Kept for the stored delivery (cloned only when an execution stores it).
+    let finalized = execution.as_ref().map(|_| response.clone());
+    // MIN.2: judged on the finalized answer; the verdict rides its delivery
+    // record (MIK-7799), and the sink commits when the body is read.
     let hidden = crate::gateway::outbound::noted_reads();
     let frame = crate::gateway::outbound::answer(
         read_guard.as_deref(),
@@ -1908,6 +1905,16 @@ async fn meta_mcp_dispatch(
         request.get("params"),
         hidden.as_ref(),
     );
+    let (frame, finalized) = super::judged_answer::record_delivery(
+        &state.meta_mcp,
+        frame,
+        &delivery.correlation,
+        finalized,
+    )
+    .await;
+    if let (Some(execution), Some(finalized)) = (execution, finalized) {
+        execution.complete_delivery(&finalized, signing_context.as_ref());
+    }
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
