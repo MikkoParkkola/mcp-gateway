@@ -349,3 +349,38 @@ async fn callback_commits_at_send() {
     );
     assert!(b_flagged(&fw), "a send cancelled in flight still commits");
 }
+
+/// MIK-7778: stored task output carries no attribution, so each such document
+/// is a read that cannot be attributed to a tenant. Under `block` a second one
+/// for the same caller is withheld; the same neutral document judged as an
+/// ordinary frame is not, so the assertion cannot pass vacuously.
+#[tokio::test]
+async fn a_restored_task_document_is_an_unattributed_read() {
+    let judge = |mode| {
+        let judge = StreamJudge::new(
+            Some(std::sync::Arc::new(firewall(mode))),
+            std::sync::Arc::new(RejectionAudit::new(None, 1)),
+            None,
+        );
+        judge.bind(KEY.to_owned());
+        judge
+    };
+    let neutral = || json!({ "jsonrpc": "2.0", "method": "notifications/tasks", "params": { "taskId": "t" } });
+
+    let ordinary = judge(CrossTenantReads::Block);
+    assert!(ordinary.judge_document(neutral()).is_some(), "control");
+    assert!(
+        ordinary.judge_document(neutral()).is_some(),
+        "control: a neutral document names no tenant"
+    );
+
+    let restored = judge(CrossTenantReads::Block);
+    // Kept unwritten, so its reservation is live when the second is judged.
+    let first = restored.judge_restored_document(neutral());
+    assert!(first.is_some());
+    assert!(
+        restored.judge_restored_document(neutral()).is_none(),
+        "a second unattributed read for one caller is withheld under block"
+    );
+    drop(first);
+}

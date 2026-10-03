@@ -24,10 +24,21 @@ pub(crate) struct Reader<'a> {
     pub session_id: &'a str,
 }
 
+/// A frame built for one reader, not yet delivered. Nothing about its delivery
+/// is on record: [`MetaMcp::finish_task_frame`] writes the delivery entry and
+/// records the relay receipts once the stream's own gates have let it out.
+pub(crate) struct PendingTaskFrame {
+    /// The tagged frame.
+    pub frame: Value,
+    /// It carries a stored task's output, so it is a read of stored data.
+    pub restored_output: bool,
+    withheld: bool,
+    staged: super::invoke::relay::StagedReceipts,
+}
+
 impl MetaMcp {
     /// The tagged frame to send this reader for `notification`, or `None` when
-    /// the frame must be withheld (the delivery could not be audited under a
-    /// fail-closed policy, or the grant-decision write failed).
+    /// a grant decision made on the way could not be written.
     ///
     /// `stored` is the reader's own owner-scoped read of the task, `None` when
     /// it cannot be read (the minimal notification is sent). `refused` is the
@@ -41,12 +52,9 @@ impl MetaMcp {
         stored: Option<&CommittedTask>,
         refused: impl FnOnce(&CommittedTask) -> bool + Send,
         subscription: &SubscriptionId,
-        reader: &Reader<'_>,
-    ) -> Option<Value> {
-        // The collector is outside the slot, and the delivery log entry comes
-        // after the slot's own write: a frame withheld because a grant
-        // decision could not be written is never logged as delivered, and its
-        // receipts are dropped.
+    ) -> Option<PendingTaskFrame> {
+        // The collector is outside the slot, so receipts outlive the slot's
+        // own write (grant decisions) and are taken out only if it succeeded.
         super::invoke::relay::collecting(async {
             let decided =
                 super::grant_audit::slot_result(self.transparency_logger.as_ref(), async {
@@ -55,6 +63,7 @@ impl MetaMcp {
                         Some(task) if !withheld => serde_json::to_value(task.task.wire()).ok(),
                         _ => None,
                     };
+                    let restored_output = params.is_some();
                     let frame = match params {
                         Some(params) => json!({
                             "jsonrpc": "2.0",
@@ -63,26 +72,45 @@ impl MetaMcp {
                         }),
                         None => notification.clone(),
                     };
-                    Ok((subscription.tag(frame), withheld))
+                    Ok((subscription.tag(frame), withheld, restored_output))
                 })
                 .await
                 .ok();
-            let Some((frame, withheld)) = decided else {
+            let Some((frame, withheld, restored_output)) = decided else {
                 self.commit_staged_relay(false);
                 return None;
             };
-            let correlation = ResponseCorrelation {
-                session_id: reader.session_id,
-                caller: reader.caller,
-                external_server: "gateway",
-                external_tool: "notifications/tasks",
-            };
-            let delivered = self
-                .record_notification_delivery_attempt(&frame, &correlation)
-                .await;
-            self.commit_staged_relay(delivered && !withheld);
-            delivered.then_some(frame)
+            Some(PendingTaskFrame {
+                frame,
+                restored_output,
+                withheld,
+                staged: self.take_staged_relay(),
+            })
         })
         .await
+    }
+
+    /// Record the delivery of `pending`, now that the stream's gates have
+    /// passed and `sent` is what goes out: the delivery entry first, then, if
+    /// it is on record and the frame carried no refused output, the relay
+    /// receipts. `false` withholds the frame (a fail-closed log that could not
+    /// record it).
+    pub(crate) async fn finish_task_frame(
+        &self,
+        pending: PendingTaskFrame,
+        sent: &Value,
+        reader: &Reader<'_>,
+    ) -> bool {
+        let correlation = ResponseCorrelation {
+            session_id: reader.session_id,
+            caller: reader.caller,
+            external_server: "gateway",
+            external_tool: "notifications/tasks",
+        };
+        let delivered = self
+            .record_notification_delivery_attempt(sent, &correlation)
+            .await;
+        pending.staged.record(self, delivered && !pending.withheld);
+        delivered
     }
 }

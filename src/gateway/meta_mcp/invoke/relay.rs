@@ -231,6 +231,31 @@ struct Receipt {
     digest: crate::security::firewall::DeliveryDigest,
 }
 
+/// Receipts taken out of a collector, recorded or dropped by their holder.
+pub(crate) struct StagedReceipts(Vec<Receipt>);
+
+impl StagedReceipts {
+    /// Record every receipt when `delivered`; drop them either way.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
+    pub(crate) fn record(self, meta: &MetaMcp, delivered: bool) {
+        if !delivered {
+            return;
+        }
+        #[cfg(feature = "firewall")]
+        if let Some(fw) = meta.firewall.as_ref() {
+            for r in self.0 {
+                let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
+                fw.record_digest(caller, &r.server, &r.tool, &r.digest);
+            }
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            let _ = meta;
+            drop(self.0);
+        }
+    }
+}
+
 tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
@@ -321,23 +346,18 @@ impl MetaMcp {
     }
 
     /// Record every staged receipt when `delivered`; drop them either way.
-    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn commit_staged_relay(&self, delivered: bool) {
-        let receipts = RELAY_RECEIPTS
-            .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
-            .unwrap_or_default();
-        if !delivered {
-            return;
-        }
-        #[cfg(feature = "firewall")]
-        if let Some(fw) = self.firewall.as_ref() {
-            for r in receipts {
-                let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
-                fw.record_digest(caller, &r.server, &r.tool, &r.digest);
-            }
-        }
-        #[cfg(not(feature = "firewall"))]
-        drop(receipts);
+        self.take_staged_relay().record(self, delivered);
+    }
+
+    /// Take the receipts staged so far out of the collector, to record them
+    /// later (a pushed frame is recorded only once it is written).
+    pub(crate) fn take_staged_relay(&self) -> StagedReceipts {
+        StagedReceipts(
+            RELAY_RECEIPTS
+                .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
+                .unwrap_or_default(),
+        )
     }
 
     /// A copy of `result` to compare after a final check, when receipts are

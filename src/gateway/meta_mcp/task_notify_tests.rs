@@ -46,10 +46,15 @@ async fn a_delivered_task_frame_is_tagged_and_logged_as_sent() {
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(5));
 
-    let frame = meta
-        .task_notification_frame(&published(), None, |_| false, &subscription, &reader())
+    let pending = meta
+        .task_notification_frame(&published(), None, |_| false, &subscription)
         .await
-        .expect("an auditable frame is delivered");
+        .expect("a frame is built");
+    let frame = pending.frame.clone();
+    assert!(
+        meta.finish_task_frame(pending, &frame, &reader()).await,
+        "an auditable frame is delivered"
+    );
     assert_eq!(frame["params"]["taskId"], json!("t-1"), "{frame}");
     assert_eq!(
         frame["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"],
@@ -75,11 +80,13 @@ async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
     let subscription = SubscriptionId::of_request(RequestId::Number(6));
     log.fail_next_append_for_test();
 
-    let frame = meta
-        .task_notification_frame(&published(), None, |_| false, &subscription, &reader())
-        .await;
+    let pending = meta
+        .task_notification_frame(&published(), None, |_| false, &subscription)
+        .await
+        .expect("a frame is built");
+    let frame = pending.frame.clone();
     assert!(
-        frame.is_none(),
-        "withheld, not delivered unlogged: {frame:?}"
+        !meta.finish_task_frame(pending, &frame, &reader()).await,
+        "withheld, not delivered unlogged"
     );
 }
