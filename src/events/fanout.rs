@@ -269,6 +269,35 @@ impl EventsHub {
         self.release_worker()
     }
 
+    /// Run [`Self::reconcile_catalogue`] until it succeeds, on the blocking
+    /// pool, waiting `retry` between attempts. Every failed attempt is
+    /// logged, a join error with its cause: a retry that fails silently
+    /// cannot be diagnosed (MIK-7891).
+    pub(crate) async fn reconcile_until_done(
+        self: &Arc<Self>,
+        scan: CatalogueScan,
+        retry: std::time::Duration,
+    ) {
+        for attempt in 1_u64.. {
+            let hub = Arc::clone(self);
+            match tokio::task::spawn_blocking(move || hub.reconcile_catalogue(scan)).await {
+                Ok(true) => return,
+                Ok(false) => tracing::warn!(
+                    attempt,
+                    retry_secs = retry.as_secs(),
+                    "events: startup reconcile could not remove a stale subscription \
+                     (cause in the preceding log line); the worker stays held, retrying"
+                ),
+                Err(error) => tracing::warn!(
+                    attempt,
+                    %error,
+                    "events: startup reconcile task failed; the worker stays held, retrying"
+                ),
+            }
+            tokio::time::sleep(retry).await;
+        }
+    }
+
     /// Stored subscriptions' event names under `prefix` that `offered` lacks.
     fn absent_names(
         &self,

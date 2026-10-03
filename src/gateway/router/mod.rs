@@ -84,6 +84,8 @@ mod direct_notification_credential_tests;
 #[cfg(test)]
 mod direct_notification_refusal_tests;
 #[cfg(test)]
+mod direct_notification_slot_tests;
+#[cfg(test)]
 mod direct_notification_wire_tests;
 #[cfg(test)]
 mod direct_sole_operator_tests;

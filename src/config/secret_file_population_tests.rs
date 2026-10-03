@@ -99,7 +99,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads sealed audit log segments for export; no secret",
     ),
     (
-        "src/control_plane/store.rs",
+        "src/control_plane/store/file_io.rs",
         "collections read through read_guarded_file (I4); raw opens are the generation probe, the 0600 writer and a dir sync",
     ),
     (

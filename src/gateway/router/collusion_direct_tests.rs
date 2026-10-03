@@ -60,6 +60,8 @@ struct Alpha {
     sends: Arc<AtomicUsize>,
     /// `resources/read` and `prompts/get` calls that reached the backend.
     catalogue: Arc<AtomicUsize>,
+    /// The params of those calls, as the backend received them.
+    catalogue_params: Arc<Mutex<Vec<Value>>>,
 }
 
 fn text_result(text: &str) -> Value {
@@ -94,10 +96,18 @@ impl Transport for Alpha {
             }
             "resources/read" => {
                 self.catalogue.fetch_add(1, Ordering::SeqCst);
+                self.catalogue_params
+                    .lock()
+                    .unwrap()
+                    .push(params.clone().unwrap_or(Value::Null));
                 return Ok(JsonRpcResponse::success(id, doc(&served)));
             }
             "prompts/get" => {
                 self.catalogue.fetch_add(1, Ordering::SeqCst);
+                self.catalogue_params
+                    .lock()
+                    .unwrap()
+                    .push(params.clone().unwrap_or(Value::Null));
                 let message = json!({"role": "user", "content": {"type": "text", "text": served}});
                 return Ok(JsonRpcResponse::success(id, json!({"messages": [message]})));
             }
@@ -159,6 +169,7 @@ struct Fixture {
     reads: Arc<AtomicUsize>,
     sends: Arc<AtomicUsize>,
     catalogue: Arc<AtomicUsize>,
+    catalogue_params: Arc<Mutex<Vec<Value>>>,
     _store: tempfile::TempDir,
 }
 
@@ -178,6 +189,8 @@ struct Setup {
     /// Tenant attribution on `customer_id` with `cross_tenant_reads: block`
     /// (MIN.2), so a read naming a second tenant is withheld.
     tenants: bool,
+    /// The firewall's audit log, for a row that reads its entries.
+    audit_log: Option<std::path::PathBuf>,
 }
 
 impl Default for Setup {
@@ -192,6 +205,7 @@ impl Default for Setup {
             allowed_flows: Vec::new(),
             rules: "[{match: \"*\", action: allow}]",
             tenants: false,
+            audit_log: None,
         }
     }
 }
@@ -221,6 +235,7 @@ async fn fixture(setup: Setup) -> Fixture {
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let (reads, sends) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let catalogue = Arc::new(AtomicUsize::new(0));
+    let catalogue_params = Arc::new(Mutex::new(Vec::new()));
     let read = Arc::new(Mutex::new(Read::Text(PROSE.to_string())));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     let backend = Arc::new(Backend::new(
@@ -237,9 +252,11 @@ async fn fixture(setup: Setup) -> Fixture {
         reads: Arc::clone(&reads),
         sends: Arc::clone(&sends),
         catalogue: Arc::clone(&catalogue),
+        catalogue_params: Arc::clone(&catalogue_params),
     }));
     assert!(state_mut.backends.register(Arc::clone(&backend)));
     let config = FirewallConfig {
+        audit_log: setup.audit_log,
         // A rule may not soften a relay block.
         rules: serde_yaml::from_str(setup.rules).unwrap(),
         collusion: CollusionConfig {
@@ -271,6 +288,7 @@ async fn fixture(setup: Setup) -> Fixture {
         reads,
         sends,
         catalogue,
+        catalogue_params,
         _store: store,
     }
 }

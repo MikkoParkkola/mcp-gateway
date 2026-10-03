@@ -503,6 +503,12 @@ pub struct MetaMcp {
     /// Populated alongside `message_signer`; both are `Some` or both `None`.
     pub(super) nonce_store: Option<Arc<NonceStore>>,
 
+    /// Which stdio `tools/call` requests get a signing context. HTTP reads the
+    /// live posture per request; stdio has one process-lifetime posture, set at
+    /// build time, so a hardened stdio caller is signed on every tool call
+    /// exactly as an HTTP one is (MIK-7886).
+    pub(super) signing_scope: signing::SigningScope,
+
     /// Runtime provenance receipt signer (MIK-6905).
     ///
     /// `Some` when `security.provenance_stamping = true`; `None` otherwise.
@@ -672,6 +678,7 @@ impl MetaMcp {
             session_state: SessionStateStore::new(),
             message_signer: None,
             nonce_store: None,
+            signing_scope: signing::SigningScope::InvokeOnly,
             provenance_signer: None,
             chain_signer: None,
             claim_capture: None,
@@ -949,6 +956,11 @@ impl MetaMcp {
         self.message_signer = Some(Arc::new(signer));
         self.nonce_store = Some(nonce_store);
         self.require_nonce = require_nonce;
+    }
+
+    /// Set the stdio signing scope from the configured posture.
+    pub(crate) fn set_signing_scope(&mut self, scope: signing::SigningScope) {
+        self.signing_scope = scope;
     }
 
     /// Attach a transparency logger (issue #133, D3).
