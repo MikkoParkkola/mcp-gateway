@@ -419,6 +419,30 @@ async fn a_failed_task_error_is_receipted_by_its_classification() {
     );
 }
 
+/// MIK-7887: a task with several recorded targets stages nothing on a read
+/// (a plan's result cannot be attributed to one target); the limit is stated
+/// in the design doc. A single-target completed read is the control.
+#[tokio::test]
+async fn reading_a_multi_target_task_stages_no_receipt() {
+    for targets in [1usize, 2] {
+        let (meta, firewall) = relay_meta();
+        let mut stored = stored_task(|task| task.complete(text_result(PROSE)));
+        if targets == 2 {
+            stored.targets.push(crate::gateway::task_service::Target {
+                server: "alpha".to_owned(),
+                tool: "other".to_owned(),
+            });
+        }
+        let ((), staged) = meta
+            .collecting_staged(async {
+                meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
+            })
+            .await;
+        staged.commit(true);
+        assert_eq!(relayed_by_bob(&firewall, PROSE), targets == 1, "{targets}");
+    }
+}
+
 /// MIK-7887 AC1: reading a failed task hands the reader the backend's own
 /// error, so the read renews a receipt for it, as a completed task's does. A
 /// failure only the gateway wrote (`output_free`) delivers nothing to receipt.
