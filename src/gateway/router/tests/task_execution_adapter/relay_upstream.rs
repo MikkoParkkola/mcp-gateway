@@ -12,6 +12,7 @@ use super::super::*;
 use super::support::*;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
@@ -78,8 +79,8 @@ impl Transport for Peer {
 }
 
 /// The recovery adapter: claims the fixture backend, answers every query with
-/// [`PROSE`].
-struct Recovery;
+/// [`PROSE`], and counts the queries.
+struct Recovery(Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
@@ -88,6 +89,7 @@ impl UpstreamRecovery for Recovery {
     }
 
     async fn query(&self, _handle: &UpstreamHandle, _deadline: Duration) -> UpstreamAnswer {
+        self.0.fetch_add(1, Ordering::SeqCst);
         UpstreamAnswer::Completed(json!({ "content": [{ "type": "text", "text": PROSE }] }))
     }
 }
@@ -127,19 +129,28 @@ async fn upstream_task_result_is_a_relay_source() {
     ));
     backend.set_transport_for_test(Arc::new(Peer));
     std::assert!(state.backends.register(backend));
-    std::assert!(state.task_executor.install_recovery(Arc::new(Recovery)));
-
-    let created = post(&state, "key-a", task_invoke(1, "relay-upstream", json!({}))).await;
-    let id = task_id(&created);
-    let settled = poll_until_terminal(&state, "key-a", &id).await;
-    std::assert_eq!(status_of(&settled), "completed", "base: {settled}");
+    let queries = Arc::new(AtomicUsize::new(0));
     std::assert!(
-        settled.to_string().contains("orchard"),
-        "base: the upstream answer settled the task: {settled}"
+        state
+            .task_executor
+            .install_recovery(Arc::new(Recovery(Arc::clone(&queries))))
     );
 
-    // The worker commits after the store write a read observes, and a read
-    // renews the receipt: keep `key-b` sending without reading the task.
+    // `key-a` never reads the task: a `tasks/get` would renew the receipt and
+    // hide a missing settlement staging. It starts the task and waits for the
+    // worker to have asked the peer for the result.
+    let created = post(&state, "key-a", task_invoke(1, "relay-upstream", json!({}))).await;
+    let _ = task_id(&created);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while queries.load(Ordering::SeqCst) == 0 {
+        std::assert!(
+            tokio::time::Instant::now() < deadline,
+            "base: the worker never queried the peer"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // The worker commits after the answer is stored: keep `key-b` sending.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let mut sends = 100;
     loop {
