@@ -395,7 +395,8 @@ def wants(flt, method, params):
     n = flt.get("notifications", {})
     if method == "notifications/resources/updated": return params.get("uri") in n.get("resourceSubscriptions", [])
     key = {"notifications/resources/list_changed": "resourcesListChanged",
-           "notifications/prompts/list_changed": "promptsListChanged"}.get(method)
+           "notifications/prompts/list_changed": "promptsListChanged",
+           "notifications/tools/list_changed": "toolsListChanged"}.get(method)
     return bool(key and n.get(key))
 def push(method, params):
     if modern:

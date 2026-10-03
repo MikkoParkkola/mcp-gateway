@@ -1647,7 +1647,7 @@ async fn an_ordinary_start_racing_shutdown_leaves_no_child_behind() {
         &server,
         format!(
             r#"echo $$ > "{}"
-sleep 0.3
+sleep 3
 while IFS= read -r request; do
     case "$request" in
         *'"method":"initialize"'*)
@@ -1671,9 +1671,15 @@ done
         tokio::spawn(async move { backend.ensure_started().await })
     };
 
-    // Let the child spawn and get into its pre-handshake delay, so the start is
-    // genuinely in flight when shutdown begins.
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    // Wait for the child to spawn and record its pid; it is then in its
+    // pre-handshake delay, so the start is genuinely in flight when shutdown
+    // begins. A fixed sleep here failed under a loaded or instrumented host.
+    let deadline = std::time::Instant::now() + Duration::from_millis(2500);
+    while !std::fs::read_to_string(&pidfile).is_ok_and(|pid| !pid.trim().is_empty())
+        && std::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 
     let pid = std::fs::read_to_string(&pidfile)
         .expect("child recorded its pid before shutdown")
@@ -1689,11 +1695,9 @@ done
 
     backend.stop().await.expect("stop");
 
-    // Checked BEFORE awaiting the starter, deliberately. Awaiting it first
-    // would only prove the child dies EVENTUALLY, which it always did - the
-    // publish refusal closes it. The claim under test is stronger and is the
-    // one shutdown has to make: by the time stop() RETURNS, nothing it started
-    // is still running.
+    // Checked BEFORE awaiting the starter: awaiting it first would only prove
+    // the child dies EVENTUALLY (the publish refusal closes it). The claim is
+    // that by the time stop() RETURNS, nothing it started is still running.
     assert!(
         !alive(),
         "stop() returned while the racing start's child (pid {pid}) was still \

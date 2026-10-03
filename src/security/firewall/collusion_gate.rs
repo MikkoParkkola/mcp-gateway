@@ -346,6 +346,30 @@ impl Firewall {
         verdict
     }
 
+    /// [`Self::check_relay`] reduced to what every route answers with: `None`
+    /// when the call may go, else the message of the `-32002` refusal. An
+    /// observed relay (`Warn`) is logged here and the call goes.
+    pub(crate) fn relay_block_message(
+        &self,
+        caller: RelayCaller<'_>,
+        (server, tool): (&str, &str),
+        params: &Value,
+        audit: (&str, &str),
+    ) -> Option<String> {
+        let verdict = self.check_relay(caller, server, tool, params, audit);
+        if verdict.action == FirewallAction::Warn {
+            tracing::warn!(server, tool, "Firewall: relay observed");
+        }
+        if verdict.allowed {
+            return None;
+        }
+        let desc = verdict
+            .findings
+            .first()
+            .map_or("", |f| f.description.as_str());
+        Some(format!("Relay detection blocked: {desc}"))
+    }
+
     /// Record `result` as delivered to `caller` from `server:tool`. Call it
     /// only with what the caller actually receives.
     pub(crate) fn record_delivery(

@@ -42,6 +42,9 @@ pub(crate) struct BackendSource {
     pub upstream: Option<Upstream>,
 }
 
+/// Every backend event name starts with this.
+pub(super) const NAME_PREFIX: &str = "backend.";
+
 fn event_name(backend: &str) -> String {
     format!("backend.{backend}.tools_changed")
 }
@@ -121,6 +124,11 @@ impl EventSource for BackendSource {
         else {
             return Ok(());
         };
+        // `tools_changed` is offered on every backend (a reload announces it);
+        // only a backend that can be listened to gets a listener (§6, §14).
+        if !up.listeners.knows(backend) || (up.ineligible)().contains(backend) {
+            return Ok(());
+        }
         up.listeners
             .add(backend, &interest)
             .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)))
@@ -141,12 +149,13 @@ impl EventSource for BackendSource {
     }
 }
 
-/// `(backend, interest)` of a b2 subscription; `None` for `tools_changed`.
+/// `(backend, interest)` of an upstream-notification subscription.
 fn interest_of<'a>(name: &'a str, arguments: &Value) -> Option<(&'a str, Interest)> {
     let (backend, kind) = parse_name(name)?;
     let interest = match kind {
         Kind::ResourcesChanged => Interest::ResourcesChanged,
         Kind::PromptsChanged => Interest::PromptsChanged,
+        Kind::ToolsChanged => Interest::ToolsChanged,
         Kind::ResourceUpdated => {
             Interest::ResourceUpdated(arguments.get("uri")?.as_str()?.to_owned())
         }
@@ -273,6 +282,7 @@ impl EventsHub {
                 name: event_name(&backend),
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
+                owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at: Utc::now(),
                 data: json!({}),

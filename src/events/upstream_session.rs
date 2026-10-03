@@ -63,6 +63,7 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
         NoteKind::ResourceUpdated => Kind::ResourceUpdated,
         NoteKind::ResourcesChanged => Kind::ResourcesChanged,
         NoteKind::PromptsChanged => Kind::PromptsChanged,
+        NoteKind::ToolsChanged => Kind::ToolsChanged,
     };
     format!("backend.{backend}.{}", kind.suffix())
 }
@@ -179,6 +180,22 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             Ev::Pending(None) => state.pending = None,
             Ev::Wake | Ev::Tick => {}
         }
+        if state.tools_due.is_some_and(|due| Instant::now() >= due) {
+            // A notice arrived: drop the cached list and refill it before the
+            // hub hears, so the subscriber's re-read is fresh and nothing sees
+            // an emptied cache. At most once per tick however many notices came.
+            state.tools_due = None;
+            backend.invalidate_tools();
+            let refill = tokio::time::timeout(OPEN_LIMIT, backend.get_tools());
+            tokio::select! {
+                () = shared.stop.cancelled() => {
+                    state.release(backend).await;
+                    return Outcome::Stopped;
+                }
+                _ = refill => {}
+            }
+            state.tools_pending = true;
+        }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return state.ended(started);
@@ -257,13 +274,17 @@ struct State<'a> {
     era: Era,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
-    acked: bool,
+    acked: Option<Instant>,
     opened: Instant,
     coalescer: Coalescer,
     /// Legacy: the URIs `resources/subscribe` was sent for.
     subscribed: BTreeSet<String>,
     resource_interest_unsupported: bool,
     reread: bool,
+    /// A backend tools notice waits to be handed to the hub (§14).
+    tools_pending: bool,
+    /// The earliest the next tools handoff may run (one per tick).
+    tools_due: Option<Instant>,
     snapshot_due: Instant,
     /// A catalogue read is not retried before this.
     snapshot_retry_at: Instant,
@@ -279,12 +300,14 @@ impl<'a> State<'a> {
             era,
             current: None,
             pending: None,
-            acked: false,
+            acked: None,
             opened: now,
             coalescer: Coalescer::default(),
             subscribed: BTreeSet::new(),
             resource_interest_unsupported: false,
             reread: false,
+            tools_pending: false,
+            tools_due: None,
             snapshot_due: now + SNAPSHOT_TTL,
             snapshot_retry_at: now,
             retry_open_at: now,
@@ -293,7 +316,7 @@ impl<'a> State<'a> {
 
     fn ended(&self, started: Instant) -> Outcome {
         Outcome::Ended {
-            acked: self.acked,
+            acked: self.acked.is_some(),
             lasted: started.elapsed(),
         }
     }
@@ -344,7 +367,12 @@ impl<'a> State<'a> {
                 if kind == NoteKind::ResourcesChanged && !requested(self.shared).uris.is_empty() {
                     self.reread = true;
                 }
-                if self.shared.need.lock().emits(kind, uri.as_deref()) {
+                if kind == NoteKind::ToolsChanged {
+                    // Not coalesced here: the hub's own quiet window does it.
+                    if self.shared.need.lock().emits(kind, None) {
+                        self.tools_due.get_or_insert(Instant::now() + TICK);
+                    }
+                } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
                 }
                 false
@@ -373,7 +401,7 @@ impl<'a> State<'a> {
                 self.current = Some((p.stream, p.requested));
             }
         }
-        self.acked = true;
+        self.acked = Some(Instant::now());
     }
 
     /// Keep the channel matching the counted interest and the snapshot
@@ -395,7 +423,7 @@ impl<'a> State<'a> {
                 self.pending = None;
                 self.retry_open_at = now + Duration::from_secs(5);
             }
-            if !self.acked && self.opened.elapsed() > ACK_DEADLINE {
+            if self.acked.is_none() && self.opened.elapsed() > ACK_DEADLINE {
                 self.current = None;
             }
             let want = requested(self.shared);
@@ -468,6 +496,11 @@ impl<'a> State<'a> {
 
     /// Emit the coalescing windows that closed (§8), through the hub only.
     fn flush(&mut self, hub: &Weak<EventsHub>) {
+        if std::mem::take(&mut self.tools_pending)
+            && let Some(hub) = hub.upgrade()
+        {
+            hub.backend_tools_changed(&self.shared.name);
+        }
         let due = self.coalescer.due(Instant::now());
         if due.is_empty() {
             return;
@@ -488,6 +521,7 @@ impl<'a> State<'a> {
                 name: event_name(&backend, kind),
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
+                owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at: Utc::now(),
                 data: uri.map_or_else(|| json!({}), |uri| json!({ "uri": uri })),
