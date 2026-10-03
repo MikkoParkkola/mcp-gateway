@@ -175,6 +175,7 @@ pub(crate) struct ReadHistory {
 
 impl ReadHistory {
     /// The history's clock.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
     fn now(&self) -> Instant {
         let now = Instant::now();
         #[cfg(test)]
