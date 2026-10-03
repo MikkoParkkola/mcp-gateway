@@ -8,6 +8,9 @@ use std::sync::Arc;
 use super::MetaMcp;
 use crate::events::EventsHub;
 
+/// How often a startup scan that has not finished is reported while waited on.
+const SCAN_WAIT_WARN_SECS: u64 = 30;
+
 impl MetaMcp {
     /// Install the events hub. Called once by the HTTP server when
     /// `events.enabled`; a second call is ignored.
@@ -40,8 +43,19 @@ impl MetaMcp {
         let capabilities = self.get_capabilities();
         tokio::spawn(async move {
             if let Some(capabilities) = &capabilities {
+                let started = std::time::Instant::now();
+                let mut warned = 0;
                 while !capabilities.initial_scan_complete() {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    let periods = started.elapsed().as_secs() / SCAN_WAIT_WARN_SECS;
+                    if periods > warned {
+                        warned = periods;
+                        tracing::warn!(
+                            waited_secs = started.elapsed().as_secs(),
+                            "events: the startup capability scan has not finished; \
+                             subscription reconcile and delivery are waiting for it"
+                        );
+                    }
                 }
             }
             // The loader's own outcome, read once the scan is over.
@@ -54,17 +68,9 @@ impl MetaMcp {
                 crate::events::CatalogueScan::Partial
             };
             // Disk work, off the async workers; a removal that failed is
-            // retried, the worker held meanwhile.
-            loop {
-                let hub = Arc::clone(&hub);
-                if tokio::task::spawn_blocking(move || hub.reconcile_catalogue(scan))
-                    .await
-                    .unwrap_or(false)
-                {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
+            // retried and logged, the worker held meanwhile.
+            hub.reconcile_until_done(scan, std::time::Duration::from_secs(5))
+                .await;
         });
     }
 
