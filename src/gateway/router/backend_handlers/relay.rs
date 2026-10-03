@@ -80,6 +80,29 @@ pub(super) fn relay_refusal(
     ))
 }
 
+/// The relay check on a catalogue read's forwarded params (`prompts/get`
+/// arguments, a `resources/read` URI), as a `tools/call`'s are (MIK-7765).
+/// `Some` is the refusal to answer with.
+pub(super) fn catalogue_refusal(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    id: &RequestId,
+    (backend, method): (&str, &str),
+    params: Option<&Value>,
+) -> Option<BackendRejection> {
+    let (fw, params) = (state.firewall.as_ref()?, params?);
+    let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
+    let session_id = format!("direct:{backend}");
+    relay_refusal(
+        fw,
+        auth,
+        id,
+        (backend, method),
+        params,
+        (&session_id, caller_name),
+    )
+}
+
 /// Stage what the direct caller is delivered, after every gate, redaction and
 /// the provenance stamp. The receipt is recorded only once the answer has
 /// passed the read judge and the audit write ([`commit_direct_receipts`]).
@@ -97,6 +120,27 @@ pub(super) fn stage_direct_delivery(
     let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
     let who = crate::gateway::meta_mcp::invoke::relay::RelayKey::new(&key, keyed);
     crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), result);
+}
+
+/// [`stage_direct_delivery`] for a catalogue result, which no response gate
+/// classifies: the staged copy carries the context-integrity verdict of the
+/// text, so content the gateway reads as sensitive needs no `sources` glob.
+#[cfg(feature = "firewall")]
+pub(super) fn stage_direct_catalogue(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    (server, method): (&str, &str),
+    result: Option<&Value>,
+) {
+    let Some(result) = result else {
+        return;
+    };
+    let caller_name = auth.client.map(|c| c.name.as_str());
+    let recorded =
+        state
+            .meta_mcp
+            .recorded_prompt((server, method), caller_name, "catalogue", result);
+    stage_direct_delivery(state, auth, server, method, Some(&recorded));
 }
 
 /// Record the staged receipts when the answer that was written delivers a

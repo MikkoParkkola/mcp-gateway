@@ -20,9 +20,12 @@ use serde_json::json;
 
 use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
-use crate::events::{EventsHub, ReplayRefusal, is_dead_reason};
+use crate::events::{Actor, EventsHub, ReplayRefusal, is_dead_reason};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
+use crate::identity_grants::GrantSubject;
+use crate::key_server::oidc::VerifiedIdentity;
+use crate::security::audit::AuditWho;
 
 pub(super) fn events_router() -> Router<Arc<AppState>> {
     Router::new()
@@ -47,14 +50,27 @@ struct BulkQuery {
 fn admitted(
     state: &AppState,
     client: Option<Extension<AuthenticatedClient>>,
-) -> Result<Arc<EventsHub>, Box<axum::response::Response>> {
+    identity: Option<Extension<VerifiedIdentity>>,
+) -> Result<(Arc<EventsHub>, Actor), Box<axum::response::Response>> {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
         return Err(Box::new(admin_auth_required().into_response()));
     }
-    state.meta_mcp.events().map(Arc::clone).ok_or_else(|| {
-        Box::new(flat_error(StatusCode::NOT_FOUND, "Events are not enabled").into_response())
-    })
+    // `is_admin` holds only for an authenticated client. (issuer, subject)
+    // only, never the email label, as the admin audit layer names an SSO admin.
+    let subject = identity
+        .map(|Extension(id)| id)
+        .filter(|id| !id.issuer.is_empty() && !id.subject.is_empty())
+        .map(|id| GrantSubject::new(id.issuer, id.subject, None));
+    let actor = client.map(|c| Actor {
+        who: AuditWho::from_request(Some(&c), subject.as_ref()),
+    });
+    let (Some(actor), Some(hub)) = (actor, state.meta_mcp.events()) else {
+        return Err(Box::new(
+            flat_error(StatusCode::NOT_FOUND, "Events are not enabled").into_response(),
+        ));
+    };
+    Ok((Arc::clone(hub), actor))
 }
 
 fn refusal(why: ReplayRefusal) -> axum::response::Response {
@@ -73,10 +89,11 @@ fn refusal(why: ReplayRefusal) -> axum::response::Response {
 async fn list(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     Query(query): Query<ListQuery>,
 ) -> axum::response::Response {
-    let hub = match admitted(&state, client) {
-        Ok(hub) => hub,
+    let (hub, _) = match admitted(&state, client, identity) {
+        Ok(admitted) => admitted,
         Err(answer) => return *answer,
     };
     if query.reason.as_deref().is_some_and(|r| !is_dead_reason(r)) {
@@ -89,13 +106,14 @@ async fn list(
 async fn replay_one(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     Path(id): Path<String>,
 ) -> axum::response::Response {
-    let hub = match admitted(&state, client) {
-        Ok(hub) => hub,
+    let (hub, actor) = match admitted(&state, client, identity) {
+        Ok(admitted) => admitted,
         Err(answer) => return *answer,
     };
-    match hub.replay_dead(&id).await {
+    match hub.replay_dead(&id, &actor).await {
         Ok(()) => Json(json!({"eventId": id, "status": "queued"})).into_response(),
         Err(why) => refusal(why),
     }
@@ -104,10 +122,11 @@ async fn replay_one(
 async fn replay_all(
     State(state): State<Arc<AppState>>,
     client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
     Query(query): Query<BulkQuery>,
 ) -> axum::response::Response {
-    let hub = match admitted(&state, client) {
-        Ok(hub) => hub,
+    let (hub, actor) = match admitted(&state, client, identity) {
+        Ok(admitted) => admitted,
         Err(answer) => return *answer,
     };
     let (Some("1"), Some(subscription)) = (query.all.as_deref(), query.subscription.as_deref())
@@ -118,7 +137,7 @@ async fn replay_all(
         )
         .into_response();
     };
-    let (replayed, refused) = hub.replay_all(subscription).await;
+    let (replayed, refused) = hub.replay_all(subscription, &actor).await;
     let refused: Vec<_> = refused
         .into_iter()
         .map(|(id, why)| json!({"eventId": id, "reason": why.as_str()}))

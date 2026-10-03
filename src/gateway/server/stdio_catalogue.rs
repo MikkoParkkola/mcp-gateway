@@ -14,6 +14,7 @@ use serde_json::Value;
 use super::{STDIO, STDIO_CREDENTIAL_PRINCIPAL};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::invoke::relay;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// Every method [`dispatch`] answers.
@@ -50,6 +51,25 @@ fn stdio_client() -> AuthenticatedClient {
 }
 
 pub(super) async fn dispatch(
+    meta: &MetaMcp,
+    method: &str,
+    id: RequestId,
+    params: Option<&Value>,
+) -> JsonRpcResponse {
+    // The local operator is one relay principal, the one `tools/call` keys.
+    let operator = relay::CatalogueCaller {
+        key: crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
+        keyed: true,
+        name: "stdio".to_owned(),
+    };
+    relay::as_caller(
+        operator,
+        Box::pin(dispatch_catalogue(meta, method, id, params)),
+    )
+    .await
+}
+
+async fn dispatch_catalogue(
     meta: &MetaMcp,
     method: &str,
     id: RequestId,

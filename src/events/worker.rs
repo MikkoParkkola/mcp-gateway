@@ -406,7 +406,7 @@ impl EventsHub {
                     event_id: Some(&record.event_id),
                     ok: false,
                 },
-                None,
+                super::governance::Attribution::Gateway,
             )
             .await;
     }

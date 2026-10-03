@@ -26,6 +26,7 @@ use super::helpers::{
 };
 use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::relay::{self, CatalogueCaller};
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
@@ -43,10 +44,14 @@ use crate::security::{
 };
 
 mod events;
+mod modern_response;
 mod owner;
 pub(super) mod request_checks;
 mod tasks;
 
+use modern_response::shape_modern_response;
+#[cfg(test)]
+use modern_response::{CACHEABLE_METHODS, build_modern_response};
 pub(super) use owner::owner_of;
 use owner::request_session_owner;
 #[cfg(test)]
@@ -468,7 +473,8 @@ pub(super) async fn meta_mcp_handler(
         Box::pin(async move {
             crate::gateway::outbound::read_scoped(
                 guard_for_scope,
-                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting(
+                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
+                    Arc::clone(&state.meta_mcp),
                     meta_mcp_dispatch(state, http_request),
                 )),
             )
@@ -1782,8 +1788,20 @@ async fn meta_mcp_dispatch(
         "resources/read" => {
             let standing = CallerStanding::of_client(scope);
             let meta = &state.meta_mcp;
-            meta.handle_resources_read(id, params, standing, scope, identity)
-                .await
+            let caller = catalogue_caller(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+                &session_id,
+            );
+            // Boxed like `handle_tools_call` above: an inline future would
+            // enlarge `meta_mcp_dispatch`'s own state, which every request
+            // through it holds on the stack (a 2 MiB test thread overflowed).
+            Box::pin(relay::as_caller(
+                caller,
+                meta.handle_resources_read(id, params, standing, scope, identity),
+            ))
+            .await
         }
         "resources/templates/list" => {
             let meta = &state.meta_mcp;
@@ -1805,7 +1823,17 @@ async fn meta_mcp_dispatch(
         }
         "prompts/get" => {
             let meta = &state.meta_mcp;
-            meta.handle_prompts_get(id, params, scope, identity).await
+            let caller = catalogue_caller(
+                grant_subject.as_ref(),
+                cert_identity.as_ref(),
+                client.as_ref(),
+                &session_id,
+            );
+            Box::pin(relay::as_caller(
+                caller,
+                meta.handle_prompts_get(id, params, scope, identity),
+            ))
+            .await
         }
 
         // Logging. Admin standing is checked before this match, for every
@@ -1939,9 +1967,8 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
-    // COLLUDE.1: receipts record only an answer that was delivered, so they
-    // follow the judge: a read it withheld leaves none.
-    state.meta_mcp.commit_relay_receipts(response);
+    // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
+    state.meta_mcp.settle_relay_receipts(response);
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
@@ -1989,89 +2016,6 @@ async fn meta_mcp_dispatch(
         return crate::gateway::outbound::to_http(frame, status, "");
     }
     crate::gateway::outbound::to_http(frame, status, &session_id)
-}
-
-/// Build a response for a request written against 2026-07-28.
-///
-/// Two differences from the legacy path, and they are the same difference: the
-/// connection carries no state. There is no `Mcp-Session-Id`, because the
-/// revision deleted protocol sessions; and the result names the server, because
-/// there was no handshake in which to say so.
-/// The methods whose results carry `ttlMs` and `cacheScope`.
-///
-/// Five, from the `CacheableResult` interface. `server/discover` supports
-/// caching too, but is not in this list — its document is built elsewhere and
-/// the fields are added there when its own scope is decided.
-const CACHEABLE_METHODS: &[&str] = &[
-    "tools/list",
-    "prompts/list",
-    "resources/list",
-    "resources/read",
-    "resources/templates/list",
-];
-
-/// How long a client may consider a list fresh. A freshness hint, not a
-/// promise: `listChanged` notifications remain the authority on change, and
-/// this only stops a client re-listing on every turn.
-const LIST_TTL_MS: u64 = 60_000;
-
-// Unit-test adapter only: production must shape before security finalization
-// and serialize afterward without mutating the signed response.
-#[cfg(test)]
-fn build_modern_response(
-    mut response: crate::protocol::JsonRpcResponse,
-    status: StatusCode,
-    method: &str,
-) -> axum::response::Response {
-    shape_modern_response(&mut response, method);
-    (status, axum::Json(response)).into_response()
-}
-
-/// Shape modern metadata before security finalization and signing.
-fn shape_modern_response(response: &mut crate::protocol::JsonRpcResponse, method: &str) {
-    if let Some(ref mut result) = response.result
-        && let Some(object) = result.as_object_mut()
-    {
-        // Required on every result in this revision, and supplied here only
-        // when the result does not already carry one.
-        //
-        // Inserting unconditionally overwrote the discriminator that the
-        // multi-round-trip path had just set: an `input_required` result was
-        // relabelled `complete` on its way out, so a client saw a finished call
-        // where the server was waiting for an answer and could no longer supply
-        // one. The comment said this value was safe because interim results own
-        // their own; the code then overwrote exactly those.
-        object
-            .entry("resultType")
-            .or_insert_with(|| serde_json::Value::String("complete".to_string()));
-
-        if CACHEABLE_METHODS.contains(&method) {
-            object.insert("ttlMs".to_string(), serde_json::json!(LIST_TTL_MS));
-            // Per method, from the table that records which ones were
-            // assessed. Answering with one method's decision for all five
-            // would make `resources/read` inherit `tools/list`'s reasoning.
-            object.insert(
-                "cacheScope".to_string(),
-                serde_json::Value::String(
-                    crate::protocol::cacheable::scope_for_method(method)
-                        .as_str()
-                        .to_string(),
-                ),
-            );
-        }
-        let meta = object
-            .entry("_meta")
-            .or_insert_with(|| serde_json::json!({}));
-        if let Some(meta) = meta.as_object_mut() {
-            meta.insert(
-                crate::protocol::meta::KEY_SERVER_INFO.to_string(),
-                serde_json::json!({
-                    "name": "mcp-gateway",
-                    "version": env!("CARGO_PKG_VERSION"),
-                }),
-            );
-        }
-    }
 }
 
 /// The HTTP status a response deserves when it carries an authorization
@@ -2147,6 +2091,24 @@ mod session_tests;
 #[cfg(test)]
 #[path = "handlers_session_subject_tests.rs"]
 mod session_subject_tests;
+
+/// The caller a `prompts/get` or `resources/read` runs for, keyed as the same
+/// caller's `tools/call` is: the key the grant, certificate or API key names,
+/// else the unkeyed session bucket.
+fn catalogue_caller(
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    cert_identity: Option<&CertIdentity>,
+    client: Option<&AuthenticatedClient>,
+    session_id: &str,
+) -> CatalogueCaller {
+    let key = super::identity::caller_key(grant_subject, cert_identity, client);
+    let keyed = !key.is_empty();
+    CatalogueCaller {
+        key: if keyed { key } else { session_id.to_owned() },
+        keyed,
+        name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
+    }
+}
 
 #[cfg(test)]
 mod cacheable_field_tests {

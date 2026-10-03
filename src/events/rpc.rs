@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use super::EventsHub;
-use super::governance::Lifecycle;
+use super::governance::{Attribution, Lifecycle};
 use super::records::{Credential, Subscription};
 use super::store::{CapHit, Caps};
 use super::types::{EventDescriptor, RpcError, Visibility};
@@ -456,7 +456,7 @@ impl EventsHub {
                 event_id: None,
                 ok: outcome.is_ok(),
             },
-            Some(caller),
+            Attribution::Caller(caller),
         )
         .await;
         outcome
@@ -511,7 +511,7 @@ impl EventsHub {
                 event_id: None,
                 ok: true,
             },
-            Some(caller),
+            Attribution::Caller(caller),
         )
         .await;
         self.reconcile_stops().await;

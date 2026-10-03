@@ -204,6 +204,71 @@ async fn meta_observe_reports_a_relay_and_sends_it() {
     assert!(!audit.contains("orchard"), "content leaked into the audit");
 }
 
+/// MIK-7800: HTTP receipts ride on the response and record only when
+/// `emit_http`, the last step, lets it out. A response a later step replaces
+/// (the grant slot) is dropped, and its receipts with it.
+#[tokio::test]
+async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    let meta = Arc::new(meta);
+    let deliver = |delivers: bool| {
+        let meta = Arc::clone(&meta);
+        async move {
+            let value = json!({"content": [{"type": "text", "text": PROSE}]});
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &value);
+            let answer = if delivers {
+                JsonRpcResponse::success(RequestId::Number(1), value)
+            } else {
+                JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "refused")
+            };
+            meta.settle_relay_receipts(&answer);
+            axum::Json(json!({"ok": true}))
+        }
+    };
+    let relayed = || {
+        let params = json!({"name": "send", "arguments": {"text": PROSE}});
+        let verdict = firewall.check_relay(
+            RelayCaller::Keyed("bob"),
+            "alpha",
+            "send",
+            &params,
+            ("s", "bob"),
+        );
+        !verdict.allowed
+    };
+
+    // Replaced after the dispatch: dropped before `emit_http`.
+    drop(
+        crate::gateway::meta_mcp::invoke::relay::collecting_http(Arc::clone(&meta), deliver(true))
+            .await,
+    );
+    assert!(!relayed(), "a replaced answer must record no receipt");
+    // An answer that is not a delivered result records nothing either.
+    let refused =
+        crate::gateway::meta_mcp::invoke::relay::collecting_http(Arc::clone(&meta), deliver(false))
+            .await;
+    crate::gateway::outbound::emit_http(refused, None).await;
+    assert!(!relayed(), "an error answer must record no receipt");
+    // Out as built: recorded.
+    let out =
+        crate::gateway::meta_mcp::invoke::relay::collecting_http(Arc::clone(&meta), deliver(true))
+            .await;
+    crate::gateway::outbound::emit_http(out, None).await;
+    assert!(relayed(), "control: a delivered answer records its receipt");
+}
+
 /// The relay check and the dispatch read one builder: every field a
 /// backend receives beside `arguments` is in it.
 #[test]
