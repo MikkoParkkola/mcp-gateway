@@ -381,7 +381,19 @@ pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidatio
     // enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`). Required and
     // type checks always apply.
     let allows_extra = output_schema.get("additionalProperties") == Some(&Value::Bool(true));
-    validate_object(result, output_schema, !allows_extra)
+    let mut verdict = validate_object(result, output_schema, !allows_extra);
+    // What is tolerated is kept: the validated output is what the caller
+    // receives, so a field the schema does not enumerate (and a declared one the
+    // upstream sent as null) stays in it instead of being dropped.
+    if allows_extra
+        && verdict.is_valid()
+        && let (Some(sent), Some(kept)) = (result.as_object(), verdict.coerced.as_object_mut())
+    {
+        for (key, value) in sent {
+            kept.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    verdict
 }
 
 // ── Per-property validation ───────────────────────────────────────────────────

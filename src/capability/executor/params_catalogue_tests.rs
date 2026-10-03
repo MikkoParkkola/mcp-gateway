@@ -29,6 +29,12 @@ fn accepts(cap: &CapabilityDefinition, response: &Value) {
         cap.name,
         verdict.format_output_error(&cap.schema.output)
     );
+    // And what the caller then receives still holds every field upstream sent.
+    assert_eq!(
+        &verdict.coerced, response,
+        "{}: the validated output lost fields",
+        cap.name
+    );
 }
 
 #[test]
@@ -72,6 +78,9 @@ fn sentry_list_issues_sends_the_documented_page_size_parameter() {
 #[test]
 fn sentry_list_issues_accepts_the_array_the_api_returns() {
     let cap = shipped("capabilities/observability/sentry_list_issues.yaml");
+    // The API answers with a bare array, and the schema says so.
+    assert_eq!(cap.schema.output["type"], "array");
+    assert_eq!(cap.schema.output["items"]["additionalProperties"], true);
     accepts(
         &cap,
         &json!([{
