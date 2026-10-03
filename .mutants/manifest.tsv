@@ -1,0 +1,7 @@
+head_sha	27c4369c33d3b43c4a5a54de0a4bd69fd9f32fd0
+N1	linux	N1.patch	--lib events::store::tests::admit_reports_inserted_then_refreshed
+N2	linux	N2.patch	--lib events::worker::tests::a_burial_the_caps_evict_at_once_still_leaves_its_record
+N3	linux	N3.patch	--test mik_7630_events_governance a_refused_verification_records_its_real_code
+N4	linux	N4.patch	--lib events::worker::tests::a_dead_letter_record_names_the_host_stamped_on_the_occurrence
+N5	linux	N5.patch	--lib events::store::pending::tests::a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails
+N6	linux	N6.patch	--lib events::store::pending::tests::a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails

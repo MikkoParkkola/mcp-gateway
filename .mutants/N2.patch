@@ -1,0 +1,15 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index de56edf97..210c5d406 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -520,9 +520,7 @@ impl Store {
+                 remove_record(&self.outbox_dir, &file)?;
+                 Ok(Settled {
+                     evicted: self.evict_dead(state, now, policy)?,
+-                    // Taken before the caps run: the burial happened even if
+-                    // they evict it at once.
+-                    buried: true,
++                    buried: false,
+                 })
+             }
+         }

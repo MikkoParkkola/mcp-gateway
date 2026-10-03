@@ -1,0 +1,14 @@
+diff --git a/src/events/governance.rs b/src/events/governance.rs
+index f9b0cd231..064968d25 100644
+--- a/src/events/governance.rs
++++ b/src/events/governance.rs
+@@ -92,7 +92,8 @@ impl Services {
+             }
+         }
+         if let Some(code) = act.failed_with {
+-            envelope.outcome = AuditOutcome::Error(code);
++            let _ = code;
++            envelope.outcome = AuditOutcome::Error(-32015);
+         }
+         let written = log
+             .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
