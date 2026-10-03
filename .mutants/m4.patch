@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/r2_check.rs b/src/gateway/meta_mcp/invoke/r2_check.rs
+index b8cedd20e..dde1eff8f 100644
+--- a/src/gateway/meta_mcp/invoke/r2_check.rs
++++ b/src/gateway/meta_mcp/invoke/r2_check.rs
+@@ -54,7 +54,7 @@ impl MetaMcp {
+         {
+             return Ok(None);
+         }
+-        let Some(backend) = backend else {
++        let Some(backend) = self.backends.get(server) else {
+             return Ok(None);
+         };
+         let text = backend

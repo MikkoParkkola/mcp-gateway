@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/chain_receipt.rs b/src/gateway/meta_mcp/chain_receipt.rs
+index b9240d319..455ba30fc 100644
+--- a/src/gateway/meta_mcp/chain_receipt.rs
++++ b/src/gateway/meta_mcp/chain_receipt.rs
+@@ -228,7 +228,7 @@ impl super::super::MetaMcp {
+     /// is bound to one challenge, so it is never served from the cache (D7).
+     /// Never a lookup by name: a reload may have answered it differently.
+     pub(crate) fn is_chained(&self, backend: Option<&crate::backend::Backend>) -> bool {
+-        self.chain_signer.is_some() && backend.is_some_and(|b| b.chain_policy().0 != ChainMode::Off)
++        self.chain_signer.is_some() && self.backends.get("alpha").is_some_and(|b| b.chain_policy().0 != ChainMode::Off)
+     }
+ 
+     /// The chain mode of `server`: `Off` for a name not registered, a
