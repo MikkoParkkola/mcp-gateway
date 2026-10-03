@@ -155,6 +155,7 @@ backend" and "fails a capability file" first.**
 | 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 | 129 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
 | 130 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity; an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
+| 131 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3533,34 +3534,6 @@ updates, so its stream just closes, with no response.
 
 **Action:** a client written against the beta that read the subscription id from the response
 `result` reads it from the notification instead.
-## 128. Backend upstream events are refused where the gateway cannot listen
-
-**Startup:** no notice, a subscription to such an event answers -32014
-
-MCP Events is to turn a backend's `notifications/resources/updated`,
-`notifications/resources/list_changed` and `notifications/prompts/list_changed` into the events
-`backend.<name>.resource_updated`, `backend.<name>.resources_changed` and
-`backend.<name>.prompts_changed`, listened for on one shared connection per backend. The
-listener is not in this build yet: until it lands, these names are not offered for any backend,
-and a subscription on an eligible backend (stdio, WebSocket, streamable HTTP) answers `-32011`.
-The four kinds of backend below will not offer them in 4.0 at all, and say why now:
-
-| Backend | `data.reason` | Why |
-|---|---|---|
-| `http_url` without `streamable_http: true` (the SSE handshake, `/sse` or not) | `sse_handshake_transport` | the handshake stream is read only up to its `endpoint` event |
-| `a2a_url` | `a2a_transport` | A2A carries no MCP notifications |
-| an `identity_propagation` block (`required: false` included), or an `account` whose descriptor is `personal_managed` or `external` | `identity_propagation` | the shared connection would observe under the gateway's credential, not the subscriber's |
-| a per-user OAuth login (`oauth` without `shared_account: true`), on a multi-user gateway | `per_user_credential` | as above: the credential is one person's |
-
-`events/list` does not list these names for such a backend. `events/subscribe` on one answers
-`-32014 Unsupported` with `data = {"feature": "backendEvents", "value": <name>, "reason": <reason>}`,
-before any callback traffic, to a caller who may reach the backend; any other caller gets
-`-32011`, the answer for a name that does not exist. A disabled backend (`enabled: false`) is
-absent and also answers `-32011`.
-
-**Action:** set `streamable_http: true` on an HTTP backend that speaks streamable HTTP. For the
-others, poll `resources/list` or `prompts/list` instead.
-
 ## 126. `add` writes the whole server, and leaves it off when it cannot start
 
 **Startup:** no notice
@@ -3611,6 +3584,34 @@ REST with an empty URL. It now runs the command, under these rules:
 capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
 `capabilities.process_commands` (the list then replaces the default).
 
+## 128. Backend upstream events are refused where the gateway cannot listen
+
+**Startup:** no notice, a subscription to such an event answers -32014
+
+MCP Events is to turn a backend's `notifications/resources/updated`,
+`notifications/resources/list_changed` and `notifications/prompts/list_changed` into the events
+`backend.<name>.resource_updated`, `backend.<name>.resources_changed` and
+`backend.<name>.prompts_changed`, listened for on one shared connection per backend. The
+listener is not in this build yet: until it lands, these names are not offered for any backend,
+and a subscription on an eligible backend (stdio, WebSocket, streamable HTTP) answers `-32011`.
+The four kinds of backend below will not offer them in 4.0 at all, and say why now:
+
+| Backend | `data.reason` | Why |
+|---|---|---|
+| `http_url` without `streamable_http: true` (the SSE handshake, `/sse` or not) | `sse_handshake_transport` | the handshake stream is read only up to its `endpoint` event |
+| `a2a_url` | `a2a_transport` | A2A carries no MCP notifications |
+| an `identity_propagation` block (`required: false` included), or an `account` whose descriptor is `personal_managed` or `external` | `identity_propagation` | the shared connection would observe under the gateway's credential, not the subscriber's |
+| a per-user OAuth login (`oauth` without `shared_account: true`), on a multi-user gateway | `per_user_credential` | as above: the credential is one person's |
+
+`events/list` does not list these names for such a backend. `events/subscribe` on one answers
+`-32014 Unsupported` with `data = {"feature": "backendEvents", "value": <name>, "reason": <reason>}`,
+before any callback traffic, to a caller who may reach the backend; any other caller gets
+`-32011`, the answer for a name that does not exist. A disabled backend (`enabled: false`) is
+absent and also answers `-32011`.
+
+**Action:** set `streamable_http: true` on an HTTP backend that speaks streamable HTTP. For the
+others, poll `resources/list` or `prompts/list` instead.
+
 ## 129. A capability that needs a login is listed once the login exists
 
 **Startup:** no notice
@@ -3629,7 +3630,8 @@ a secret or knowing the caller, so those capabilities stay listed. Calls are unc
 capability invoked by name behaves as before.
 
 **Action:** if a capability you use disappeared from the list, set the variable it names; supplying
-the key lists it again.
+the key lists it again. `mcp-gateway cap list` marks each one the gateway would not list, with
+`off: needs <KEY>` (or `off: needs a <provider> login`).
 
 ## 130. Frames naming a second tenant for one caller are recorded, or withheld
 
@@ -3649,6 +3651,17 @@ Name tenant fields that appear inside backend content in `arg_keys`; the names o
 
 **Action:** none. Set `off` to silence it, or `block` to withhold such frames; namespace tenant
 ids that two backends reuse.
+
+## 131. A webhook route without a `method` accepts POST
+
+**Startup:** no notice, decided per capability file
+
+A capability file's `webhooks:` route that omits `method` now accepts `POST`, the default its
+documentation always named. It used to accept only `GET`, so a webhook sender, which POSTs,
+was answered 405. Routes that name `method` are unchanged, and so are REST provider calls,
+which still default to `GET`.
+
+**Action:** a route that relied on the `GET` default needs `method: GET`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

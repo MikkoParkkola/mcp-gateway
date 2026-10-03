@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use super::WebhookDefinition;
 
+/// Webhook senders POST; a route that names no method accepts that.
+pub(super) fn default_method() -> String {
+    "POST".to_string()
+}
+
 /// The `event:` block of a webhook route: the route becomes the event
 /// `webhook.<capability>.<route>.received`, projected from `transform.data`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,5 +46,18 @@ impl std::fmt::Debug for WebhookDefinition {
             .field("transform", &self.transform)
             .field("event", &self.event)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WebhookDefinition;
+
+    /// The documented default: a route that names no method accepts POST,
+    /// the verb every webhook sender uses (MIK-7758).
+    #[test]
+    fn a_route_without_a_method_accepts_post() {
+        let route: WebhookDefinition = serde_yaml::from_str("path: /acme/hook").unwrap();
+        assert_eq!(route.method, "POST");
     }
 }

@@ -220,8 +220,12 @@ async fn every_delivery_attempt_writes_one_attributed_audit_record() {
         assert!(text.contains(&hash), "body hash of the bytes sent: {text}");
         assert!(text.contains("127.0.0.1"), "callback host: {text}");
         assert!(!text.contains("/hook"), "never the callback path: {text}");
-        assert!(
-            record.get("tenants").is_some(),
+        // Attributed: the hashed tenant of the data (MIN.1), never its name.
+        assert_eq!(
+            record["tenants"],
+            json!([mcp_gateway::security::hash_argument(&json!(
+                "canary-owner/canary-repo"
+            ))]),
             "tenant attribution: {text}"
         );
     }
