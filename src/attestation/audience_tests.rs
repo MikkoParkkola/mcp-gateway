@@ -132,9 +132,9 @@ fn rotation_keeps_the_destination_of_the_token_it_replaces() {
 #[test]
 fn enforce_needs_an_audience_and_observe_without_one_rejects_every_token() {
     for blank in [None, Some(""), Some("   ")] {
-        let err = resolve_attestation_wiring(Some("enforce"), Some(b"k"), None, blank)
-            .err()
-            .expect("enforce without an audience fails startup");
+        let Err(err) = resolve_attestation_wiring(Some("enforce"), Some(b"k"), None, blank) else {
+            panic!("enforce without an audience {blank:?} must fail startup");
+        };
         assert!(err.contains(ATTESTATION_AUDIENCE_ENV), "{err}");
     }
 
