@@ -1,0 +1,17 @@
+diff --git a/src/capability/schema_validator/mod.rs b/src/capability/schema_validator/mod.rs
+index 856a2433e..a5590a44d 100644
+--- a/src/capability/schema_validator/mod.rs
++++ b/src/capability/schema_validator/mod.rs
+@@ -526,11 +526,7 @@ fn coerce_to_any(value: &Value, types: &[Value]) -> Result<Value, String> {
+             return Ok(coerced);
+         }
+     }
+-    Err(format!(
+-        "expected {}, got {}",
+-        names.join(" or "),
+-        json_type_name(value)
+-    ))
++    Ok(value.clone())
+ }
+ 
+ /// Attempt to coerce `value` to the declared JSON Schema `type`.

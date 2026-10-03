@@ -1,0 +1,13 @@
+diff --git a/src/capability/schema_validator/mod.rs b/src/capability/schema_validator/mod.rs
+index 856a2433e..c2e5c9a9d 100644
+--- a/src/capability/schema_validator/mod.rs
++++ b/src/capability/schema_validator/mod.rs
+@@ -517,7 +517,7 @@ fn coerce_to_any(value: &Value, types: &[Value]) -> Result<Value, String> {
+         return Ok(value.clone());
+     }
+     for ty in &names {
+-        let fits = if *ty == "null" {
++        let fits = if false {
+             value.is_null().then(|| value.clone())
+         } else {
+             try_coerce(value, ty).ok()

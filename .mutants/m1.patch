@@ -1,0 +1,13 @@
+diff --git a/src/capability/schema_validator/mod.rs b/src/capability/schema_validator/mod.rs
+index 856a2433e..9cd941d4e 100644
+--- a/src/capability/schema_validator/mod.rs
++++ b/src/capability/schema_validator/mod.rs
+@@ -412,7 +412,7 @@ fn validate_property(
+     // `type` is one name or a list of names (`[string, "null"]`).
+     let attempt = match prop_schema.get("type") {
+         Some(Value::String(ty)) => Some(try_coerce(value, ty)),
+-        Some(Value::Array(types)) => Some(coerce_to_any(value, types)),
++        Some(Value::Array(_types)) => None,
+         _ => None,
+     };
+     let coerced = match attempt {
