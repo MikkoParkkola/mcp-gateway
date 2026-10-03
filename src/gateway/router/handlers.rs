@@ -1795,8 +1795,8 @@ async fn meta_mcp_dispatch(
                 &session_id,
             );
             // Boxed like `handle_tools_call` above: an inline future would
-            // grow `meta_mcp_dispatch`'s own, which every chain step pays for
-            // on the caller's stack (the lib test stack overflowed).
+            // enlarge `meta_mcp_dispatch`'s own state, which every request
+            // through it holds on the stack (a 2 MiB test thread overflowed).
             Box::pin(relay::as_caller(
                 caller,
                 meta.handle_resources_read(id, params, standing, scope, identity),
