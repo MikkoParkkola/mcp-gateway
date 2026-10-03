@@ -96,6 +96,31 @@ impl Services {
 }
 
 impl EventsHub {
+    /// The record of a subscribe, or of a refresh of a live subscription.
+    pub(crate) async fn subscribed(
+        &self,
+        caller: &Caller,
+        refreshed: bool,
+        id: &str,
+        name: &str,
+        url: &url::Url,
+    ) {
+        let act = Lifecycle {
+            action: if refreshed {
+                "events.refresh"
+            } else {
+                "events.subscribe"
+            },
+            subscription_id: id,
+            event_name: name,
+            callback_host: url.host_str().unwrap_or_default(),
+            detail: "",
+            event_id: None,
+            ok: true,
+        };
+        self.govern(&act, Some(caller)).await;
+    }
+
     /// Write a governance record when the pipeline has started.
     pub(crate) async fn govern(&self, act: &Lifecycle<'_>, caller: Option<&Caller>) {
         let services: Option<&Arc<Services>> = self.runtime.services.get();

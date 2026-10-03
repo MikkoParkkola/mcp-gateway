@@ -373,23 +373,8 @@ impl EventsHub {
             .await?
             {
                 Ok(()) => {
-                    self.govern(
-                        &Lifecycle {
-                            action: if existing.is_some() {
-                                "events.refresh"
-                            } else {
-                                "events.subscribe"
-                            },
-                            subscription_id: &id,
-                            event_name: &descriptor.name,
-                            callback_host: url.host_str().unwrap_or_default(),
-                            detail: "",
-                            event_id: None,
-                            ok: true,
-                        },
-                        Some(caller),
-                    )
-                    .await;
+                    self.subscribed(caller, existing.is_some(), &id, &descriptor.name, &url)
+                        .await;
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
