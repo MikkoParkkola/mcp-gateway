@@ -597,8 +597,7 @@ pub(super) fn installed_expired_external(id: &str) -> Arc<AccountStrategyRegistr
             required: false,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
-            strategy,
-            managed: None,
+            minter: crate::identity_propagation::Minter::External(strategy),
         },
         DescriptorMode::External,
     );

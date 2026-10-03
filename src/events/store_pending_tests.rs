@@ -548,3 +548,25 @@ fn a_revocation_decided_on_an_old_row_spares_a_rebound_one() {
     assert!(!store.remove_where("s1", now, TAIL, same).expect("io"));
     assert!(store.get("s1").is_some(), "the rebound row survives");
 }
+
+/// MIK-7791: a record waits behind the one on the wire, and is due.
+#[test]
+fn has_due_sees_a_pending_record_behind_one_in_flight() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1", "s2"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    assert!(!store.has_due("s1", now), "nothing queued");
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    store.enqueue(record("b", "s1", now), caps).expect("io");
+    let mut later = record("c", "s2", now);
+    later.next_attempt_at = now + chrono::Duration::hours(1);
+    store.enqueue(later, caps).expect("io");
+    assert!(matches!(store.claim("a", now), Ok(Claim::Ready(_))));
+    assert!(store.has_due("s1", now), "b waits behind a");
+    assert!(!store.has_due("s2", now), "c is not due yet");
+    assert!(!store.has_due("gone", now));
+}

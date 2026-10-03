@@ -1141,11 +1141,20 @@
     },
     {
       "id": "GH1945.COLLUDE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Today's ASI10 controls bound one gateway's behaviour (kill switch and error budgets, src/kill_switch/; cost budgets; attestation scope); firewall anomaly scoring is inert (#1756) and is not evidence. Tracked in #1945. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        "src/security/firewall/collusion_tests.rs",
+        "src/security/firewall/collusion_gate_tests.rs",
+        "src/gateway/router/collusion_direct_tests.rs",
+        "src/gateway/router/collusion_direct_tests/meta.rs",
+        "src/gateway/meta_mcp/collusion_bridge_tests.rs",
+        "src/gateway/meta_mcp/invoke/relay_tests.rs",
+        "src/gateway/router/tests/task_execution_adapter/relay_settlement.rs",
+        "docs/design/2026-09-28-asi10-verbatim-relay.md"
+      ],
+      "note": "Graded 2026-10-03. Direct route merged in #2644 (squash 6f0dd5fec), meta route in #2678 (squash 734eb228a). Clause coverage. Opt-in: CollusionAction defaults to Off (src/security/firewall/collusion_gate.rs:24-25); off records and checks nothing (collusion_tests.rs:412, collusion_direct_tests.rs:658). Reported under observe: gate verdict is Warn with one digest-only finding, audited (collusion_gate_tests.rs:229); direct route lets it through (collusion_direct_tests.rs:370); meta route lets it through and audits it (meta_mcp/invoke/relay_tests.rs:164, added by the grading PR). Refused under block: direct route (collusion_direct_tests.rs:342), meta route (collusion_direct_tests/meta.rs:126; bridged retry round collusion_bridge_tests.rs:186; bridged prompt :231, :266; modern retry :313; task settlement and task reads relay_settlement.rs:100,193). Both routes share one detector (src/gateway/server/collusion_share_tests.rs:12). One principal never flags itself: collusion_tests.rs:261; direct collusion_direct_tests.rs:470; meta collusion_direct_tests/meta.rs:261 (own copy excuses the reader). Relays outside the window are not flagged: collusion_tests.rs:273; meta collusion_direct_tests/meta.rs:210 (a send after the receipt expired goes through, base assertion at :222). ASI10 stays PARTIAL: docs/OWASP_AGENTIC_AI_COMPLIANCE.md:23 and the follow-up list name prompt and resource reads (MIK-7765) as uncovered. Mutants, judged per row: direct route runs 37020519860 (11 RED, one equivalent mutant removed) and 37033883010 (5/5 RED); meta route run 37047875543 on c9caab9e4: R1-R7 and R10-R13 RED; R8 survived there, re-run 37057688784 RED; final head aeb7529b0 run 37069692040: R8 RED, R10 RED, R14 RED. Named untested residual: R9 (upstream task result never staged, worker.rs) has no test, tracked as MIK-7790. It is not a clause of the criterion text: the criterion names the meta and direct routes, sensitivity, self-exemption and the window, and R9 is one internal staging point of the task path, whose settlement and read paths are pinned by R7 and R14. Other limits, accepted in the reviewed design: multi-step replays renew nothing (design 13.3 item 3), prompts/get and resources/read are not covered (MIK-7765), and a credential flipping to empty between the check and secret injection leaves one value unchecked."
     },
     {
       "id": "GH1625.BOTREVIEW.1",
@@ -1626,11 +1635,14 @@
     },
     {
       "id": "MIK-7630.EVENTS.4",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T22's TTL clause requests 1000 ms against a 1 s floor, so the upward clamp to min_ttl is not exercised; stays pending under MIK-7783."
+      "evidence": [
+        "tests/mik_7630_events_subscribe.rs",
+        "tests/mik_7630_events_delivery_lifecycle.rs"
+      ],
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783). T22 subscribe half (tests/mik_7630_events_subscribe.rs:316): ttlMs absent, above max_ttl, null and 1000 against a 1 s floor, persistence across a restart, the expiry sweep on load; floor clause (tests/mik_7630_events_subscribe.rs:656): ttlMs 1000 against the default 60 s floor is raised to it; T22 delivery half (tests/mik_7630_events_delivery_lifecycle.rs:60): an event is delivered after a restart with no re-subscribe and no new verification. No red run: the floor test pins a clause the I2 code already met (it ran green on its own branch, CI run 37061836780). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.EVENTS.5",
@@ -1685,7 +1697,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope; exclusions: decision mik_7630_events_source1_exclusions."
     },
     {
       "id": "MIK-7630.SOURCE.2",
@@ -1717,7 +1729,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending. Reviewed 2026-10-03 after #2718 (10bf73dde): the audit-before-POST change and the body-free assertion are merged; stays pending until T29's tenant-attribution assertion checks the attributed values rather than the key's presence (review finding), and the no-POST clause gets a worker-level test."
     },
     {
       "id": "MIK-7630.SAFETY.3",
@@ -1737,11 +1749,17 @@
     },
     {
       "id": "MIK-7630.SAFETY.5",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T28 substitutes a 0.01 budget for 0 and does not assert the budget-ledger charge attempt; stays pending under MIK-7783."
+      "evidence": [
+        "tests/mik_7630_events_subscribe.rs",
+        "tests/mik_7630_events_delivery_safety.rs",
+        "tests/mik_7630_events_delivery_store.rs",
+        "src/events/rate.rs",
+        "src/events/store_pending_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783 and MIK-7791). T26 (tests/mik_7630_events_subscribe.rs:443) and T51 (:498) subscription caps; T48 (:626) verification posts per host; T45 (tests/mik_7630_events_delivery_store.rs:172) outbox caps; T27 (tests/mik_7630_events_delivery_safety.rs:283) delay not drop with throttled reported from the bucket and the waiting deliveries (src/events/rate.rs burst_then_paced_and_reports_empty; src/events/store_pending_tests.rs has_due_sees_a_pending_record_behind_one_in_flight); T28 (tests/mik_7630_events_delivery_safety.rs:324) a refused budget dead-letters budget and leaves an audit record status budget (a refused check records no spend), :347 a delivery is charged against the key budget (1.5 budget, 1.0 charge: the first posts, the second dead-letters), :369 a zero per-key budget is no limit as for tool calls. No red run for the added tests (they pin clauses already met; run 37061836780 and 37062145389 ran them green on their branches). Mutants H1, H2, T1, T2 and C1 RED (C1 on the final head). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.SAFETY.6",
@@ -1757,11 +1775,15 @@
     },
     {
       "id": "MIK-7630.RELIABLE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but retry_window is not capped at 15 minutes (MIK-7784); stays pending."
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs",
+        "src/events/worker_tests.rs",
+        "src/config/features/events.rs"
+      ],
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7784). T32 (tests/mik_7630_events_delivery.rs:292): a receiver that always answers 503 gets five attempts (six allowed: a crash may duplicate one) with one webhook-id, then one dead letter exhausted, and a restart resumes the same record; src/events/worker_tests.rs:39 (other_failures_retry_with_bounded_backoff_then_exhaust): exponential backoff with jitter, bounded by the attempt limit; src/events/worker_tests.rs:90: a retry at the window's end is overdue before it is sent; src/config/features/events.rs a_retry_window_over_fifteen_minutes_is_refused_by_name: a window above 15 minutes is refused at load naming the field. Red first: CI run 37061829649 on the tests-only head ed01e529f failed that test and the audit-refusal test at their own assertions (7752 others passed). Mutants R1 (cap removed) and R2 (cap off by one) RED on b12829d81 (run 37073489208). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.RELIABLE.2",
@@ -1943,6 +1965,20 @@
         "docs/design/2026-10-01-mik-7630-mcp-events.md",
         "docs/design/2026-10-01-mik-7630-event-sources-4.0.1.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
+      ]
+    },
+    {
+      "id": "mik_7630_events_source1_exclusions",
+      "status": "resolved",
+      "resolved": "2026-10-02",
+      "authority": "lead interim ruling under the operator's standing instruction to decide with gpt-review and grok-review (2026-10-02); not an operator approval receipt",
+      "selection": "MIK-7630.SOURCE.1 names three exclusions: A2A backends, HTTP backends on the legacy SSE-handshake path, and backends reached with an identity-propagated or per-user credential. A subscription to backend.<name>.resource_updated, resources_changed or prompts_changed on one is refused with -32014 and a named data.reason (a2a_transport, sse_handshake_transport, identity_propagation, per_user_credential); it is never silently empty. SOURCE.1 stays pending until the upstream listener ships and is graded against the amended text.",
+      "rationale": "Identity-propagated and per-user backends answer under one principal's credential, so a shared listener would deliver one user's change to another; the handshake path and A2A carry no listen stream the gateway can hold open without a behaviour change. The operator fleet has 0 of 34 backends on the handshake path, 0 A2A and 0 identity-propagating.",
+      "consequence": "The 4.0.0 gate for SOURCE.1 covers the 2026-07-28 HTTP, streamable HTTP and stdio backends. The refusals are listed in docs/release/v4.0.0-supported-matrix.md and UPGRADING-4.0 item 128.",
+      "evidence": [
+        "docs/design/2026-10-01-mik-7630-mcp-events.md",
+        "docs/release/v4.0.0-supported-matrix.md",
+        "tests/mik_7630_events_refusal.rs"
       ]
     }
   ]

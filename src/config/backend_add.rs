@@ -4,7 +4,9 @@
 //! default OAuth stanza, and whether one backend's `${VAR}` references would
 //! resolve at the next load.
 
-use super::{BackendConfig, EnvOverlay, OAuthConfig, secret_ref};
+use super::OAuthConfig;
+#[cfg(feature = "webui")]
+use super::{BackendConfig, EnvOverlay, secret_ref};
 
 /// The stanza `oauth: {}` deserialises to: enabled, no fixed client, so the
 /// backend OAuth client follows the server's metadata and registers itself.
@@ -24,6 +26,9 @@ impl Default for OAuthConfig {
     }
 }
 
+// Only the dashboard's add and enable paths ask this (`gateway::ui`, which the
+// `webui` feature gates); without it nothing would call the method.
+#[cfg(feature = "webui")]
 impl BackendConfig {
     /// Every `${VAR}` in this backend's `headers` and `env` that the loader
     /// would refuse (C4), by the loader's own rule (`expand_field`: unset or

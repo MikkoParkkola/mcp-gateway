@@ -185,7 +185,7 @@ impl CapabilityExecutor {
     ///
     /// Answers from the DECLARED catalogue and never mints: asking this question
     /// must not consume a custody lease.
-    fn account_is_shared(&self, account: &str) -> bool {
+    pub(super) fn account_is_shared(&self, account: &str) -> bool {
         self.account_strategies().is_some_and(|registry| {
             registry
                 .declared(account)
