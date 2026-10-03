@@ -268,6 +268,22 @@ impl Fixture {
         Self::start_with(signing_config, require_nonce).await
     }
 
+    /// The same stack under `security.posture: hardened` (MIK-7886): the
+    /// production builder derives the signing scope from the posture, so this
+    /// is what `serve --stdio` holds when the operator sets it.
+    pub(super) async fn start_hardened() -> Self {
+        Self::start_with(
+            |url, require_nonce| {
+                let mut config = signing_config_base(url, require_nonce);
+                config.security.posture = crate::security::SecurityPosture::Hardened;
+                config.security.hardened.private_backends = vec![BACKEND.to_string()];
+                config
+            },
+            true,
+        )
+        .await
+    }
+
     /// A fixture whose target is mutating and uncached, for the rows that
     /// observe the keyed admission arms.
     pub(super) async fn start_mutating() -> Self {
