@@ -206,7 +206,7 @@ pub(crate) struct SpendHold {
 #[cfg(feature = "cost-governance")]
 impl Drop for SpendHold {
     fn drop(&mut self) {
-        locked(&self.ledger).release(&self.tool, self.key.as_deref(), self.micro);
+        locked(&self.ledger).release(&self.tool, self.key.as_deref(), 0);
     }
 }
 
