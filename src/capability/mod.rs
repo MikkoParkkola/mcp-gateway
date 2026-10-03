@@ -46,6 +46,8 @@ mod openapi;
 mod parser;
 mod response_cache;
 mod schema_validator;
+#[cfg(test)]
+mod tenant_read_tests;
 pub mod validator;
 mod watcher;
 

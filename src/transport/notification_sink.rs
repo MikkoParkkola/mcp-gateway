@@ -27,6 +27,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use std::sync::Arc;
+
+use crate::gateway::outbound::{OutboundFrame, StreamJudge};
 use crate::protocol::{JsonRpcNotification, LoggingLevel};
 
 /// Notifications one in-flight request may have outstanding before the sink
@@ -34,7 +37,7 @@ use crate::protocol::{JsonRpcNotification, LoggingLevel};
 const REQUEST_NOTIFICATION_DEPTH: usize = 64;
 
 tokio::task_local! {
-    static SINK: mpsc::Sender<JsonRpcNotification>;
+    static SINK: Sink;
     /// Minted-to-caller progress tokens for the requests this scope issued.
     ///
     /// A `Vec` rather than a single slot: one client request may dispatch
@@ -49,6 +52,16 @@ tokio::task_local! {
     /// whoever raised them. Set once per request from the `_meta` key, after
     /// the body has been classified.
     static LEVEL: RefCell<Option<LoggingLevel>>;
+}
+
+/// Where a scope's notifications go. `Raw` hands them on unjudged: tests,
+/// stdio, and the `Discard` sites that drop them unread. `Judged` is a POST
+/// stream that writes them to a caller, so each is judged here, at the one
+/// funnel, before it is queued (MIK-7116.MIN.2, design §4.3).
+#[derive(Clone)]
+enum Sink {
+    Raw(mpsc::Sender<JsonRpcNotification>),
+    Judged(mpsc::Sender<OutboundFrame>, Arc<StreamJudge>),
 }
 
 /// Notifications dropped because a request's sink was full. Monotonic for the
@@ -68,13 +81,39 @@ pub(crate) fn scope<F: Future>(
     mpsc::Receiver<JsonRpcNotification>,
 ) {
     let (tx, rx) = mpsc::channel(REQUEST_NOTIFICATION_DEPTH);
-    (
-        LEVEL.scope(
-            RefCell::new(None),
-            TRANSLATIONS.scope(RefCell::new(Vec::new()), SINK.scope(tx, fut)),
-        ),
-        rx,
+    (scoped(Sink::Raw(tx), fut), rx)
+}
+
+/// [`scope`] for a stream that writes to a caller: every notification is
+/// judged by `judge` as it is queued, and the receiver yields judged frames.
+pub(crate) fn scope_judged<F: Future>(
+    fut: F,
+    judge: Arc<StreamJudge>,
+) -> (
+    impl Future<Output = F::Output>,
+    mpsc::Receiver<OutboundFrame>,
+) {
+    let (tx, rx) = mpsc::channel(REQUEST_NOTIFICATION_DEPTH);
+    (scoped(Sink::Judged(tx, judge), fut), rx)
+}
+
+fn scoped<F: Future>(sink: Sink, fut: F) -> impl Future<Output = F::Output> {
+    LEVEL.scope(
+        RefCell::new(None),
+        TRANSLATIONS.scope(RefCell::new(Vec::new()), SINK.scope(sink, fut)),
     )
+}
+
+/// Bind the caller this request's stream writes to, once the dispatch knows
+/// who is asking. A no-op outside a judged scope.
+pub(crate) fn bind_reader(key: impl FnOnce() -> String) {
+    let _ = SINK.try_with(|sink| {
+        if let Sink::Judged(_, judge) = sink
+            && judge.judges()
+        {
+            judge.bind(key());
+        }
+    });
 }
 
 /// Run `fut` under a sink, draining alongside it, and yield its output with
@@ -128,8 +167,15 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
 /// streaming `DeliveryHandle` -- so a drop is counted the same way whichever
 /// one shed it. Two copies of this accounting is how one path's overflow
 /// becomes invisible in the number the other path maintains.
-fn send_or_count(tx: &mpsc::Sender<JsonRpcNotification>, notification: JsonRpcNotification) {
-    if tx.try_send(notification).is_err() {
+fn send_or_count(sink: &Sink, notification: JsonRpcNotification) {
+    let sent = match sink {
+        Sink::Raw(tx) => tx.try_send(notification).is_ok(),
+        // A withheld notification is not queued; its rejection is audited.
+        Sink::Judged(tx, judge) => judge
+            .judge(notification)
+            .is_none_or(|frame| tx.try_send(frame).is_ok()),
+    };
+    if !sent {
         let total = DROPPED.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::warn!(
             dropped_total = total,
@@ -157,7 +203,7 @@ fn send_or_count(tx: &mpsc::Sender<JsonRpcNotification>, notification: JsonRpcNo
 /// sees nothing (ADR-014 §2).
 #[derive(Clone)]
 pub(crate) struct DeliveryHandle {
-    sink: Option<mpsc::Sender<JsonRpcNotification>>,
+    sink: Option<Sink>,
     client_token: Option<Value>,
 }
 

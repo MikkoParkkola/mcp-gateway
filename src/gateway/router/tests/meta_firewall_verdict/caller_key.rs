@@ -611,6 +611,7 @@ fn tenant_firewall() -> Arc<Firewall> {
                 max_tenants_per_window: 1,
                 window_secs: 3600,
                 arg_keys: vec!["tenant".to_string()],
+                ..Default::default()
             },
             ..FirewallConfig::default()
         },
@@ -714,3 +715,5 @@ async fn h20_mcp_name_keys_an_agent_only_caller_on_its_subject() {
 
 #[path = "caller_key_routes.rs"]
 mod routes;
+
+mod tenant_reads;
