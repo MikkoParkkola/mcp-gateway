@@ -62,3 +62,17 @@ async fn the_last_interest_ends_the_listener() {
     hub.remove("b", &Interest::PromptsChanged);
     assert!(!hub.backends.lock().contains_key("b"));
 }
+
+/// MIK-7894: a task a reload ended (its backend became ineligible) is not
+/// reused when interest returns; a fresh one replaces it.
+#[tokio::test]
+async fn a_listener_task_a_reload_ended_is_replaced_when_interest_returns() {
+    let hub = listeners();
+    hub.add("b", &Interest::ResourcesChanged).expect("room");
+    let first = hub.backends.lock().get("b").cloned().expect("listener");
+    first.stop.cancel();
+    hub.add("b", &Interest::PromptsChanged).expect("room");
+    let second = hub.backends.lock().get("b").cloned().expect("listener");
+    assert!(!Arc::ptr_eq(&first, &second), "the ended task was reused");
+    assert!(!second.stop.is_cancelled());
+}
