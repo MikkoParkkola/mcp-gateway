@@ -1,0 +1,18 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index c523ed257..6eb0e819a 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -1583,9 +1583,10 @@ impl MetaMcp {
+         // token (INV-1): it refuses.
+         if self.multi_user.load(Ordering::Relaxed)
+             && caller_credential.headers.is_empty()
+-            && backend
+-                .as_deref()
+-                .is_some_and(crate::backend::Backend::oauth_requires_per_user_isolation)
++            && self
++                .backends
++                .get(server)
++                .is_some_and(|b| b.oauth_requires_per_user_isolation())
+         {
+             tracing::warn!(
+                 server = %server,
