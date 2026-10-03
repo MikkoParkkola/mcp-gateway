@@ -20,6 +20,13 @@ pub(crate) struct RelayKey<'a> {
     keyed: bool,
 }
 
+impl<'a> RelayKey<'a> {
+    /// A caller's key, and whether it is a real identity.
+    pub(crate) const fn new(key: &'a str, keyed: bool) -> Self {
+        Self { key, keyed }
+    }
+}
+
 #[cfg(test)]
 impl<'a> RelayKey<'a> {
     /// A test round's caller: unkeyed, in its own bucket.
@@ -286,30 +293,14 @@ impl MetaMcp {
     /// `value` reduced to a receipt for `who`; `None` with relay detection
     /// off or outside a collector.
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
-    fn receipt(
-        &self,
-        who: RelayKey<'_>,
-        (server, tool): (&str, &str),
-        value: &Value,
-    ) -> Option<Receipt> {
-        RELAY_RECEIPTS.try_with(|_| ()).ok()?;
+    fn receipt(&self, who: RelayKey<'_>, target: (&str, &str), value: &Value) -> Option<Receipt> {
         #[cfg(feature = "firewall")]
         {
-            let digest = self
-                .firewall
-                .as_ref()?
-                .delivery_digest(server, tool, value)?;
-            Some(Receipt {
-                key: who.key.to_owned(),
-                keyed: who.keyed,
-                server: server.to_owned(),
-                tool: tool.to_owned(),
-                digest,
-            })
+            receipt_with(self.firewall.as_deref()?, who, target, value)
         }
         #[cfg(not(feature = "firewall"))]
         {
-            let _ = (who, server, tool, value);
+            let _ = (who, target, value);
             None
         }
     }
@@ -323,21 +314,13 @@ impl MetaMcp {
     /// Record every staged receipt when `delivered`; drop them either way.
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn commit_staged_relay(&self, delivered: bool) {
-        let receipts = RELAY_RECEIPTS
-            .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
-            .unwrap_or_default();
-        if !delivered {
+        #[cfg(feature = "firewall")]
+        if let Some(fw) = self.firewall.as_deref() {
+            commit_with(fw, delivered);
             return;
         }
-        #[cfg(feature = "firewall")]
-        if let Some(fw) = self.firewall.as_ref() {
-            for r in receipts {
-                let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
-                fw.record_digest(caller, &r.server, &r.tool, &r.digest);
-            }
-        }
-        #[cfg(not(feature = "firewall"))]
-        drop(receipts);
+        let _ = delivered;
+        let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().clear());
     }
 
     /// A copy of `result` to compare after a final check, when receipts are
@@ -424,6 +407,55 @@ impl MetaMcp {
             map.insert("_context_integrity".to_owned(), verdict.clone());
         }
         recorded
+    }
+}
+
+/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
+/// or outside a collector.
+#[cfg(feature = "firewall")]
+fn receipt_with(
+    fw: &crate::security::firewall::Firewall,
+    who: RelayKey<'_>,
+    (server, tool): (&str, &str),
+    value: &Value,
+) -> Option<Receipt> {
+    RELAY_RECEIPTS.try_with(|_| ()).ok()?;
+    let digest = fw.delivery_digest(server, tool, value)?;
+    Some(Receipt {
+        key: who.key.to_owned(),
+        keyed: who.keyed,
+        server: server.to_owned(),
+        tool: tool.to_owned(),
+        digest,
+    })
+}
+
+/// Stage `value` under `fw`, for a route that holds the firewall but not a
+/// Meta-MCP (the direct route). A no-op outside a collector.
+#[cfg(feature = "firewall")]
+pub(crate) fn stage_with(
+    fw: &crate::security::firewall::Firewall,
+    who: RelayKey<'_>,
+    target: (&str, &str),
+    value: &Value,
+) {
+    if let Some(receipt) = receipt_with(fw, who, target, value) {
+        let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().push(receipt));
+    }
+}
+
+/// Record every staged receipt into `fw` when `delivered`; drop them either way.
+#[cfg(feature = "firewall")]
+pub(crate) fn commit_with(fw: &crate::security::firewall::Firewall, delivered: bool) {
+    let receipts = RELAY_RECEIPTS
+        .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
+        .unwrap_or_default();
+    if !delivered {
+        return;
+    }
+    for r in receipts {
+        let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
+        fw.record_digest(caller, &r.server, &r.tool, &r.digest);
     }
 }
 

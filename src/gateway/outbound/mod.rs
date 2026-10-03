@@ -123,6 +123,17 @@ impl OutboundFrame {
         matches!(self.payload, Payload::Withheld)
     }
 
+    /// Whether the frame, as it will be written, delivers a result: a
+    /// success answer the judge, an audit failure or a gate left in place,
+    /// not a refusal that replaced it. What a relay receipt may follow.
+    pub(crate) fn delivers_result(&self) -> bool {
+        match &self.payload {
+            Payload::Response(response) => response.error.is_none() && !response.delivery_refusal,
+            Payload::Answer(value) => value.get("error").is_none(),
+            _ => false,
+        }
+    }
+
     /// The judgement this frame carries, if it was assessed.
     pub(crate) const fn assessment(&self) -> Option<&Assessment> {
         self.assessment.as_ref()
