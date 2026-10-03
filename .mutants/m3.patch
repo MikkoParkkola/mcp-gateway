@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 4ed580550..d70639553 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -73,7 +73,6 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
+ /// the listener served. `tools_changed` stays, since the gateway announces it
+ /// itself.
+ fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
+-    shared.stop.cancel();
+     let Some(hub) = hub.upgrade() else { return };
+     let names: Vec<String> = [
+         Kind::ResourceUpdated,

@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 4ed580550..593fe7a83 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -523,7 +523,7 @@ impl<'a> State<'a> {
+         // ineligible while its listener runs (MIK-7894). Nothing pending is
+         // sent, the task ends, and the upstream subscriptions are withdrawn.
+         let due = self.coalescer.due(Instant::now());
+-        if (self.tools_pending || !due.is_empty()) && self.shared.is_ineligible() {
++        if (self.tools_pending || !due.is_empty()) && false {
+             self.tools_pending = false;
+             end_ineligible(self.shared, hub);
+             return;

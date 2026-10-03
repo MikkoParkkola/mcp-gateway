@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index d2f578e8a..00541022f 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -117,7 +117,7 @@ impl UpstreamListeners {
+         // so their removal later balances against it.
+         let mut carried = Need::default();
+         if let Some(ended) = map.get(backend).filter(|s| s.stop.is_cancelled()) {
+-            carried = std::mem::take(&mut *ended.need.lock());
++            let _ = &ended;
+             map.remove(backend);
+         }
+         let shared = Arc::clone(
