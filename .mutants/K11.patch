@@ -1,0 +1,13 @@
+diff --git a/src/events/runtime.rs b/src/events/runtime.rs
+index 3a8bb9518..1c978273b 100644
+--- a/src/events/runtime.rs
++++ b/src/events/runtime.rs
+@@ -96,7 +96,7 @@ impl EventsHub {
+         tokio::spawn(async move { hub.deliver_forever(&services).await });
+         // After a restart the upstream state is rebuilt from the store.
+         let hub = Arc::clone(self);
+-        tokio::spawn(async move { hub.replay_starts().await });
++        let _ = hub;
+     }
+ 
+     /// Whether a caller holding API key `key` may still see `backend` under

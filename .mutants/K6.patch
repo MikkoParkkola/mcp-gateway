@@ -1,0 +1,14 @@
+diff --git a/src/events/lifecycle.rs b/src/events/lifecycle.rs
+index 5291f8e96..918455501 100644
+--- a/src/events/lifecycle.rs
++++ b/src/events/lifecycle.rs
+@@ -49,9 +49,6 @@ impl EventsHub {
+             source.kind(),
+             source.lifecycle_key(principal, name, arguments),
+         );
+-        if started.contains(&key) {
+-            return Ok(None);
+-        }
+         source
+             .on_first_subscriber(&key.1, principal, name, arguments)
+             .await?;

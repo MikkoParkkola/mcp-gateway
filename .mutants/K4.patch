@@ -1,0 +1,13 @@
+diff --git a/src/events/task_source.rs b/src/events/task_source.rs
+index 8ce19d240..7cc771ad5 100644
+--- a/src/events/task_source.rs
++++ b/src/events/task_source.rs
+@@ -76,7 +76,7 @@ impl EventSource for TaskSource {
+         arguments: &Value,
+     ) -> Result<(), RpcError> {
+         match arguments.get("taskId").and_then(Value::as_str) {
+-            Some(task_id) if !self.owns(principal, task_id) => Err(RpcError::forbidden()),
++            Some(_) => Ok(()),
+             _ => Ok(()),
+         }
+     }

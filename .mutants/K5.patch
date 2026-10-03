@@ -1,0 +1,13 @@
+diff --git a/src/events/task_source.rs b/src/events/task_source.rs
+index 8ce19d240..7597331c5 100644
+--- a/src/events/task_source.rs
++++ b/src/events/task_source.rs
+@@ -88,7 +88,7 @@ impl EventSource for TaskSource {
+         if arguments
+             .get("taskId")
+             .and_then(Value::as_str)
+-            .is_some_and(|want| want != task_id)
++            .is_some_and(|want| want.is_empty())
+         {
+             return false;
+         }

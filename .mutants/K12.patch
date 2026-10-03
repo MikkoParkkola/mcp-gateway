@@ -1,0 +1,12 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 530e635ad..364fdf51a 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -463,7 +463,6 @@ impl EventsHub {
+         let tail = super::tail_policy(&self.config);
+         let removed = id.clone();
+         blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
+-        self.reconcile_stops().await;
+         // A concurrent unsubscribe of the same key waits too. An attempt
+         // still busy at the bound is not acknowledged as stopped.
+         if self.settled(&id).await {
