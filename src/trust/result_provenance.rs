@@ -284,6 +284,16 @@ mod tests {
         );
     }
 
+    /// MIK-7859 AC1: an event is not a tool result, so its receipt makes no
+    /// `backend_ok` claim.
+    #[test]
+    fn an_event_receipt_carries_no_backend_ok() {
+        let event = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert!(json.get("backend_ok").is_none(), "{json}");
+
+    }
+
     #[test]
     fn an_event_receipt_is_observed_event_evidence_never_cached() {
         let r = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
