@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index c8d2d18b2..ab1ad9ffa 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -343,7 +343,7 @@ impl<'a> State<'a> {
+                 }
+                 false
+             }
+-            UpstreamNote::End => !from_pending,
++            UpstreamNote::End => false,
+         }
+     }
+ 

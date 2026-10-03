@@ -1,0 +1,13 @@
+diff --git a/src/events/backend_source.rs b/src/events/backend_source.rs
+index 489275b07..c93458bde 100644
+--- a/src/events/backend_source.rs
++++ b/src/events/backend_source.rs
+@@ -104,7 +104,7 @@ impl EventSource for BackendSource {
+     fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+         match parse_name(&event.name) {
+             Some((_, Kind::ResourceUpdated)) => {
+-                arguments.get("uri").is_some() && arguments.get("uri") == event.data.get("uri")
++                arguments.get("uri").is_some()
+             }
+             _ => true,
+         }

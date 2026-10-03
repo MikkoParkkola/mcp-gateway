@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_need.rs b/src/events/upstream_need.rs
+index 212600526..c7f9f3ffe 100644
+--- a/src/events/upstream_need.rs
++++ b/src/events/upstream_need.rs
+@@ -128,7 +128,7 @@ pub(crate) struct Coalescer {
+ 
+ impl Coalescer {
+     pub(crate) fn offer(&mut self, kind: NoteKind, uri: Option<String>, now: Instant) {
+-        self.open.entry((kind, uri)).or_insert(now + WINDOW);
++        self.open.insert((kind, uri), now + WINDOW);
+     }
+ 
+     /// The windows closed at `now`, removed.
