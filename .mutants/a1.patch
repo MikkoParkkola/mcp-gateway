@@ -1,0 +1,13 @@
+diff --git a/src/events/governance.rs b/src/events/governance.rs
+index 30f792e89..6e292a587 100644
+--- a/src/events/governance.rs
++++ b/src/events/governance.rs
+@@ -88,7 +88,7 @@ impl Services {
+                 );
+             }
+             Attribution::Admin(actor) => {
+-                envelope.who = actor.who.clone();
++                let _ = actor;
+             }
+         }
+         if !act.ok {

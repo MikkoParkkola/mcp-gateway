@@ -1,0 +1,14 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index 4fdd1c699..3105831cd 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -194,7 +194,8 @@ impl EventsHub {
+         let mut refused = Vec::new();
+         for entry in self.list_dead_letters(Some(subscription), None) {
+             let id = entry["eventId"].as_str().unwrap_or_default().to_owned();
+-            match self.replay_dead(&id, actor).await {
++            let gateway = super::governance::Actor { who: crate::security::audit::AuditWho::gateway() };
++            match self.replay_dead(&id, if replayed == 0 { actor } else { &gateway }).await {
+                 Ok(()) => replayed += 1,
+                 Err(why) => refused.push((id, why)),
+             }
