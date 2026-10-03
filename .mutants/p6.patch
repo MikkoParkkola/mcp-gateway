@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_notify.rs b/src/gateway/meta_mcp/task_notify.rs
+index c52e912be..6e8c9fa87 100644
+--- a/src/gateway/meta_mcp/task_notify.rs
++++ b/src/gateway/meta_mcp/task_notify.rs
+@@ -61,7 +61,7 @@ impl MetaMcp {
+                         }),
+                         None => notification.clone(),
+                     };
+-                    let frame = subscription.tag(frame);
++                    let frame = frame;
+                     let correlation = ResponseCorrelation {
+                         session_id: reader.session_id,
+                         caller: reader.caller,

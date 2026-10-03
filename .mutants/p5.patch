@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 610d882c1..85d9f926a 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -668,7 +668,7 @@ pub fn subscription_stream(
+                         Some(frames) if is_task_notification(&published.notification) => {
+                             let reader = listener.current_client().await;
+                             match frames
+-                                .frame(&published.notification, &subscription, reader.as_ref())
++                                .frame(&published.notification, &subscription, None)
+                                 .await
+                             {
+                                 Some(frame) => frame,
