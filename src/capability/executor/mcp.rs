@@ -163,7 +163,8 @@ impl McpChildren {
         });
     }
 
-    /// Live children (for tests and status).
+    /// Live children, for tests.
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.map.lock().len()
     }

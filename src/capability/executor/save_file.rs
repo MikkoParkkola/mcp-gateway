@@ -105,18 +105,15 @@ fn render_filename(template: &str, params: &Value) -> String {
     while let Some(open) = rest.find('{') {
         out.push_str(&rest[..open]);
         let tail = &rest[open..];
-        match tail.find('}') {
-            Some(close) => {
-                match params.get(&tail[1..close]).and_then(Value::as_str) {
-                    Some(value) => out.push_str(value),
-                    None => out.push_str(&tail[..=close]),
-                }
-                rest = &tail[close + 1..];
+        if let Some(close) = tail.find('}') {
+            match params.get(&tail[1..close]).and_then(Value::as_str) {
+                Some(value) => out.push_str(value),
+                None => out.push_str(&tail[..=close]),
             }
-            None => {
-                out.push_str(tail);
-                rest = "";
-            }
+            rest = &tail[close + 1..];
+        } else {
+            out.push_str(tail);
+            rest = "";
         }
     }
     out.push_str(rest);
