@@ -13,6 +13,7 @@ fn requested() -> Requested {
         kinds: KindSet {
             resources_changed: true,
             prompts_changed: false,
+            tools_changed: false,
         },
         uris: vec!["file:///a".into(), "file:///b".into()],
     }
@@ -114,7 +115,8 @@ fn the_ack_is_cut_to_what_was_asked() {
         Ok(UpstreamNote::Ack {
             kinds: KindSet {
                 resources_changed: true,
-                prompts_changed: false
+                prompts_changed: false,
+                tools_changed: false,
             },
             uris: vec!["file:///a".into()],
         }),
@@ -165,11 +167,13 @@ fn the_filter_names_what_is_needed() {
         KindSet {
             resources_changed: false,
             prompts_changed: true,
+            tools_changed: true,
         },
         &["file:///a".to_owned()],
     );
     assert_eq!(f["notifications"]["promptsListChanged"], true);
     assert_eq!(f["notifications"]["resourcesListChanged"], false);
+    assert_eq!(f["notifications"]["toolsListChanged"], true);
     assert_eq!(
         f["notifications"]["resourceSubscriptions"],
         json!(["file:///a"])

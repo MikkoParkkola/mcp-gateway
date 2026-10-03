@@ -258,7 +258,7 @@ struct State<'a> {
     era: Era,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
-    acked: bool,
+    acked: Option<Instant>,
     opened: Instant,
     coalescer: Coalescer,
     /// Legacy: the URIs `resources/subscribe` was sent for.
@@ -282,7 +282,7 @@ impl<'a> State<'a> {
             era,
             current: None,
             pending: None,
-            acked: false,
+            acked: None,
             opened: now,
             coalescer: Coalescer::default(),
             subscribed: BTreeSet::new(),
@@ -297,7 +297,7 @@ impl<'a> State<'a> {
 
     fn ended(&self, started: Instant) -> Outcome {
         Outcome::Ended {
-            acked: self.acked,
+            acked: self.acked.is_some(),
             lasted: started.elapsed(),
         }
     }
@@ -380,7 +380,7 @@ impl<'a> State<'a> {
                 self.current = Some((p.stream, p.requested));
             }
         }
-        self.acked = true;
+        self.acked = Some(Instant::now());
     }
 
     /// Keep the channel matching the counted interest and the snapshot
@@ -402,7 +402,7 @@ impl<'a> State<'a> {
                 self.pending = None;
                 self.retry_open_at = now + Duration::from_secs(5);
             }
-            if !self.acked && self.opened.elapsed() > ACK_DEADLINE {
+            if self.acked.is_none() && self.opened.elapsed() > ACK_DEADLINE {
                 self.current = None;
             }
             let want = requested(self.shared);
