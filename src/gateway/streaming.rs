@@ -240,17 +240,15 @@ impl NotificationMultiplexer {
         let key = key.as_deref();
         let mark = match self.reads.get() {
             None => None,
-            Some(judge) => {
-                match judge.judge(key, &notification.data, &notification.event_type, hidden) {
-                    Ok(mark) => mark.map(Box::new),
-                    Err(()) => {
-                        return Err(broadcast::error::SendError(SessionFrame {
-                            note: notification,
-                            mark: None,
-                        }));
-                    }
+            Some(judge) => match judge.judge(key, &notification, hidden) {
+                Ok(mark) => mark.map(Box::new),
+                Err(()) => {
+                    return Err(broadcast::error::SendError(SessionFrame {
+                        note: notification,
+                        mark: None,
+                    }));
                 }
-            }
+            },
         };
         session.send(SessionFrame {
             note: notification,

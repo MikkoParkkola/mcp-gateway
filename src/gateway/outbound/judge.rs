@@ -42,9 +42,32 @@ pub(crate) fn attribute(firewall: &Firewall, value: &Value) -> ReadAttribution {
     ReadAttribution::of(tenants, uninspected)
 }
 
+/// The document a response or notification is serialized as: the one value
+/// the sink writes, so a new field is in the scan by default (MIK-7883).
+/// Serialization clamps `cacheScope` to `private`; the gateway wrote that
+/// value, so it is no evidence of a tenant. The raw `result` and `error.data`
+/// are put back, so the document names what the backend sent, not the clamp.
+fn emitted_document(payload: &Payload) -> Option<Value> {
+    match payload {
+        Payload::Response(response) => {
+            let mut document = serde_json::to_value(response).ok()?;
+            if let (Some(slot), Some(raw)) = (document.get_mut("result"), &response.result) {
+                *slot = raw.clone();
+            }
+            let raw_data = response.error.as_ref().and_then(|e| e.data.as_ref());
+            if let (Some(slot), Some(raw)) = (document.pointer_mut("/error/data"), raw_data) {
+                *slot = raw.clone();
+            }
+            Some(document)
+        }
+        Payload::Notification(note) => serde_json::to_value(note).ok(),
+        _ => None,
+    }
+}
+
 /// One walk over everything the payload emits but `jsonrpc` and `id`.
 fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
-    let (tenants, uninspected) = match payload {
+    let (mut tenants, mut uninspected) = match payload {
         Payload::Response(response) => {
             let error = response.error.as_ref();
             let values: Vec<&Value> = response
@@ -76,6 +99,13 @@ fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
         }
         Payload::Withheld => return ReadAttribution::default(),
     };
+    // The emitted document with its member names: a configured key equal to a
+    // wrapper member (`message`, `method`) is matched here, not above.
+    if let Some(document) = emitted_document(payload) {
+        let (more, unread) = guard.scan_document(&document, &["jsonrpc", "id"]);
+        tenants.extend(more);
+        uninspected |= unread;
+    }
     ReadAttribution::of(tenants, uninspected)
 }
 
@@ -231,7 +261,7 @@ pub(crate) fn admit_stream_item(
     firewall: &Firewall,
     key: Option<&str>,
     data: &Value,
-    event_type: &str,
+    (event_type, wrapper): (&str, Option<&Value>),
     hidden: Option<&ReadAttribution>,
 ) -> Admission {
     let Some((guard, mode)) = judging(firewall) else {
@@ -242,6 +272,12 @@ pub(crate) fn admit_stream_item(
     let mut attribution = ReadAttribution::of(tenants, uninspected);
     let (tenants, uninspected) = guard.scan_frame(&[], &[event_type]);
     attribution.extend(&ReadAttribution::of(tenants, uninspected));
+    // A non-message event is written as the whole tagged notification, so its
+    // `source` and `event_id` are scanned with their member names (MIK-7883).
+    if let Some(wrapper) = wrapper {
+        let (tenants, uninspected) = guard.scan_document(wrapper, &["jsonrpc", "id"]);
+        attribution.extend(&ReadAttribution::of(tenants, uninspected));
+    }
     if let Some(hidden) = hidden {
         attribution.extend(hidden);
     }
