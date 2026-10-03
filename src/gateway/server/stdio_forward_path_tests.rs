@@ -6,6 +6,15 @@ use super::Gateway;
 use crate::protocol::JsonRpcNotification;
 use crate::transport::notification_sink;
 
+/// The read judge of a gateway with the verdict off.
+fn plain_reads() -> crate::gateway::outbound::StdioReads {
+    crate::gateway::outbound::StdioReads::new(
+        None,
+        std::sync::Arc::new(crate::gateway::outbound::RejectionAudit::new(None, 1)),
+        None,
+    )
+}
+
 fn progress(token: &str) -> JsonRpcNotification {
     JsonRpcNotification {
         jsonrpc: "2.0".to_string(),
@@ -36,11 +45,19 @@ async fn a_notification_is_written_before_its_dispatch_returns() {
                 "result"
             },
             &writer,
+            &plain_reads(),
         )
         .await
+        .0
     });
 
-    let first = queue.recv().await.expect("nothing was queued");
+    let first = queue
+        .recv()
+        .await
+        .expect("nothing was queued")
+        .stdio_value()
+        .map(std::borrow::Cow::into_owned)
+        .expect("a notification writes a value");
     assert!(
         first.to_string().contains("notifications/progress"),
         "first frame was not the notification: {first}"
@@ -59,8 +76,10 @@ async fn a_dispatch_runs_inside_a_notification_scope() {
     let minted = Gateway::dispatch_streaming_notifications(
         async { notification_sink::mint_progress_token(&json!(7)) },
         &writer,
+        &plain_reads(),
     )
-    .await;
+    .await
+    .0;
     assert!(
         minted.is_some(),
         "dispatch ran outside a notification scope"
@@ -77,11 +96,15 @@ async fn a_late_notification_is_drained_before_the_response() {
             notification_sink::publish(vec![progress("gw-late")]);
         },
         &writer,
+        &plain_reads(),
     )
     .await;
     let late = queue
         .recv()
         .await
-        .expect("the late notification was dropped");
+        .expect("the late notification was dropped")
+        .stdio_value()
+        .map(std::borrow::Cow::into_owned)
+        .expect("a notification writes a value");
     assert!(late.to_string().contains("gw-late"));
 }

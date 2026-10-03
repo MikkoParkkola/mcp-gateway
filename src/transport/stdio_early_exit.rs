@@ -340,7 +340,7 @@ impl StdioTransport {
                 if let Ok(Ok(status)) = tokio::time::timeout(DRAIN, child.wait()).await {
                     Some(status)
                 } else {
-                    let _ = child.kill().await;
+                    let _ = Box::into_pin(child.kill()).await;
                     None
                 }
             }

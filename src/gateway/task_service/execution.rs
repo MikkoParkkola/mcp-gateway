@@ -95,14 +95,20 @@ impl BeginOutcome {
     }
 }
 
-pub(crate) enum TaskWrite<'a> {
-    Create {
-        request: &'a OwnedAdmissionRequest,
-        task: &'a Task,
-        backend: &'a str,
-        /// The single backend call the task makes, when it makes exactly one.
-        targets: Vec<Target>,
-    },
+/// A write that creates a task. Its own type, not a variant of the transitions:
+/// what a create can answer (created, existing, refused) and what a transition
+/// can answer (the committed record) never overlap, so neither caller has an
+/// arm for the other's outcome.
+pub(crate) struct CreateWrite<'a> {
+    pub(crate) request: &'a OwnedAdmissionRequest,
+    pub(crate) task: &'a Task,
+    pub(crate) backend: &'a str,
+    /// The single backend call the task makes, when it makes exactly one.
+    pub(crate) targets: Vec<Target>,
+}
+
+/// A write that moves an existing task. It answers with the committed record.
+pub(crate) enum TransitionWrite<'a> {
     Settle {
         principal: &'a str,
         id: &'a str,
@@ -128,10 +134,9 @@ pub(crate) enum TaskWrite<'a> {
     },
 }
 
-pub(crate) enum WriteOutcome {
-    Create(CreateOutcome),
-    Transitioned(CommittedTask),
-}
+/// A callback told of each committed task transition.
+pub(crate) type PublicationHook =
+    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>) + Send + Sync>;
 
 /// The one owner of a committed task record.
 ///
@@ -157,6 +162,8 @@ pub struct TaskExecutor {
     /// the second would find a revision that moved.
     query_gate: tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
+    /// Told of every committed transition (the events source), once installed.
+    publication_hook: std::sync::OnceLock<PublicationHook>,
     /// Cancelled once, by a shutdown whose drain ran out; every worker runs
     /// under it ([`Self::spawn_worker`]).
     shutdown: tokio_util::sync::CancellationToken,
@@ -178,8 +185,15 @@ impl TaskExecutor {
             recovery: std::sync::OnceLock::new(),
             query_gate: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             observer: Mutex::new(None),
+            publication_hook: std::sync::OnceLock::new(),
             shutdown: tokio_util::sync::CancellationToken::new(),
         })
+    }
+
+    /// Install the callback told of each committed transition with the task
+    /// id, its new status and its last-change time. Write-once.
+    pub(crate) fn on_publication(&self, hook: PublicationHook) -> bool {
+        self.publication_hook.set(hook).is_ok()
     }
 
     pub(crate) fn recovery(&self) -> Option<&Arc<dyn UpstreamRecovery>> {
@@ -225,15 +239,15 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
     ) -> Result<CommittedTask, ServiceError> {
-        let outcome = match self
-            .commit(TaskWrite::Cancel {
+        let task = match self
+            .commit_transition(TransitionWrite::Cancel {
                 principal,
                 id,
                 revision,
             })
             .await
         {
-            Ok(outcome) => outcome,
+            Ok(task) => task,
             // The one race this write has: the worker settled between the
             // caller reading its revision and this transition taking the
             // store. The record is not broken and the store is not down, so
@@ -244,10 +258,7 @@ impl TaskExecutor {
             Err(error) => return Err(commit_to_service(error)),
         };
         self.cancel_signal(id);
-        match outcome {
-            WriteOutcome::Transitioned(task) => Ok(task),
-            WriteOutcome::Create(_) => Err(ServiceError::Unavailable),
-        }
+        Ok(task)
     }
 
     /// One bounded re-read after a cancel lost its revision, mirroring what
@@ -268,19 +279,19 @@ impl TaskExecutor {
         if is_terminal(current.task.status()) {
             return Ok(current);
         }
+        self.notify_observer(CommitStage::CancelRetry, id).await;
         match self
-            .commit(TaskWrite::Cancel {
+            .commit_transition(TransitionWrite::Cancel {
                 principal,
                 id,
                 revision: current.revision,
             })
             .await
         {
-            Ok(WriteOutcome::Transitioned(task)) => {
+            Ok(task) => {
                 self.cancel_signal(id);
                 Ok(task)
             }
-            Ok(WriteOutcome::Create(_)) => Err(ServiceError::Unavailable),
             // Bounded: the record moved again. If that move was terminal the
             // committed view is still the honest answer; otherwise this really
             // is a store nobody can write to.
@@ -407,37 +418,38 @@ impl TaskExecutor {
         self.handoffs.cancel_signal(id);
     }
 
-    pub(crate) async fn commit(&self, write: TaskWrite<'_>) -> Result<WriteOutcome, CommitFailure> {
-        let (outcome, was_created, stage, task_id) = match write {
-            TaskWrite::Create {
-                request,
-                task,
-                backend,
-                targets,
-            } => {
-                let workers = Arc::clone(&self.workers);
-                let created = self
-                    .service
-                    .create_targeted(request.borrow(), task, (backend, targets), move || {
-                        workers.try_acquire_owned().ok()
-                    })
-                    .await
-                    .map_err(CommitFailure::Service)?;
-                let was_created = matches!(created, CreateOutcome::Created { .. });
-                let id = match &created {
-                    CreateOutcome::Created { task, .. } | CreateOutcome::Existing(task) => {
-                        task.task.id().to_owned()
-                    }
-                    _ => task.id().to_owned(),
-                };
-                (
-                    WriteOutcome::Create(created),
-                    was_created,
-                    CommitStage::Published,
-                    id,
-                )
-            }
-            TaskWrite::Settle {
+    pub(crate) async fn commit_create(
+        &self,
+        write: CreateWrite<'_>,
+    ) -> Result<CreateOutcome, CommitFailure> {
+        let CreateWrite {
+            request,
+            task,
+            backend,
+            targets,
+        } = write;
+        let workers = Arc::clone(&self.workers);
+        let created = self
+            .service
+            .create_targeted(request.borrow(), task, (backend, targets), move || {
+                workers.try_acquire_owned().ok()
+            })
+            .await
+            .map_err(CommitFailure::Service)?;
+        if let CreateOutcome::Created { task: stored, .. } = &created {
+            let id = stored.task.id().to_owned();
+            self.published(stored, &id);
+            self.notify_observer(CommitStage::Published, &id).await;
+        }
+        Ok(created)
+    }
+
+    pub(crate) async fn commit_transition(
+        &self,
+        write: TransitionWrite<'_>,
+    ) -> Result<CommittedTask, CommitFailure> {
+        let (committed, changed, id) = match write {
+            TransitionWrite::Settle {
                 principal,
                 id,
                 revision,
@@ -450,7 +462,7 @@ impl TaskExecutor {
             // Its own arm, never merged with `Settle`: the two carry the same
             // field types and merging them would hand a stored digest to the
             // adapter that hashes a principal.
-            TaskWrite::Recover {
+            TransitionWrite::Recover {
                 owner_digest,
                 id,
                 revision,
@@ -459,7 +471,7 @@ impl TaskExecutor {
                 self.transition_digest_write(owner_digest, id, revision, (event, None))
                     .await?
             }
-            TaskWrite::Cancel {
+            TransitionWrite::Cancel {
                 principal,
                 id,
                 revision,
@@ -468,11 +480,11 @@ impl TaskExecutor {
                     .await?
             }
         };
-        if was_created {
-            self.published(&outcome, &task_id);
-            self.notify_observer(stage, &task_id).await;
+        if changed {
+            self.published(&committed, &id);
+            self.notify_observer(CommitStage::Transitioned, &id).await;
         }
-        Ok(outcome)
+        Ok(committed)
     }
 
     /// The request-side adapter: a caller-supplied principal becomes an owner
@@ -485,7 +497,7 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         outcome: (TaskTransition, Option<Vec<Target>>),
-    ) -> Result<(WriteOutcome, bool, CommitStage, String), CommitFailure> {
+    ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
@@ -497,12 +509,11 @@ impl TaskExecutor {
     /// The one publication seam, reached only after a durable write that
     /// changed something: a dedupe, a no-op or a failed commit never gets here,
     /// so a listener never learns of a transition that did not happen.
-    pub(super) fn published(&self, outcome: &WriteOutcome, task_id: &str) {
-        let status = match outcome {
-            WriteOutcome::Create(CreateOutcome::Created { task, .. })
-            | WriteOutcome::Transitioned(task) => task.task.status(),
-            WriteOutcome::Create(_) => return,
-        };
+    pub(super) fn published(&self, task: &CommittedTask, task_id: &str) {
+        let (status, changed_at) = (task.task.status(), task.task.last_updated_at());
+        if let Some(hook) = self.publication_hook.get() {
+            hook(task_id, status, changed_at);
+        }
         tracing::debug!(
             task_id,
             kind = "durable",

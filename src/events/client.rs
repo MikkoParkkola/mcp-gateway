@@ -51,12 +51,33 @@ impl CallbackClient {
     /// # Errors
     /// The TLS backend failed to initialise.
     pub(crate) fn new(allowed: Vec<(IpAddr, u8)>) -> crate::Result<Self> {
-        let http = reqwest::Client::builder()
+        Self::build(allowed, None)
+    }
+
+    /// As [`Self::new`], also trusting `root`: a test receiver's own CA, so a
+    /// row can deliver over TLS without a process-wide trust file.
+    #[cfg(test)]
+    pub(crate) fn trusting(
+        allowed: Vec<(IpAddr, u8)>,
+        root: reqwest::Certificate,
+    ) -> crate::Result<Self> {
+        Self::build(allowed, Some(root))
+    }
+
+    fn build(
+        allowed: Vec<(IpAddr, u8)>,
+        root: Option<reqwest::Certificate>,
+    ) -> crate::Result<Self> {
+        let mut builder = reqwest::Client::builder()
             .no_proxy()
             .dns_resolver(PinningResolver::new(SystemResolver).with_allowed(allowed.clone()))
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TOTAL_TIMEOUT)
+            .timeout(TOTAL_TIMEOUT);
+        if let Some(root) = root {
+            builder = builder.add_root_certificate(root);
+        }
+        let http = builder
             .build()
             .map_err(|e| crate::Error::Config(format!("events callback client: {e}")))?;
         Ok(Self { http, allowed })
@@ -130,7 +151,24 @@ impl CallbackClient {
         body: Vec<u8>,
         read: ReadBody,
     ) -> Result<Answer, CallbackFailure> {
-        self.check_literal(url)?;
+        self.post_tracked(url, subscription_id, webhook_id, keys, body, read)
+            .await
+            .map_err(|(failure, _)| failure)
+    }
+
+    /// [`Self::post`], and with a failure whether it came before any byte of
+    /// the request could be written (a refused literal, DNS, connect or TLS
+    /// failure), so a caller can tell a body that never left the process.
+    pub(crate) async fn post_tracked(
+        &self,
+        url: &url::Url,
+        subscription_id: &str,
+        webhook_id: &str,
+        keys: &[&[u8]],
+        body: Vec<u8>,
+        read: ReadBody,
+    ) -> Result<Answer, (CallbackFailure, bool)> {
+        self.check_literal(url).map_err(|failure| (failure, true))?;
         let timestamp = chrono::Utc::now().timestamp().to_string();
         let signature = sign(keys, webhook_id, &timestamp, &body);
         let mut response = self
@@ -144,7 +182,7 @@ impl CallbackClient {
             .body(body)
             .send()
             .await
-            .map_err(|e| classify(&e))?;
+            .map_err(|e| (classify(&e), e.is_connect()))?;
         let status = response.status();
         let retry_after = response
             .headers()
@@ -159,9 +197,9 @@ impl CallbackClient {
         if read == ReadBody::Discard || !status.is_success() {
             return Ok(answer);
         }
-        while let Some(chunk) = response.chunk().await.map_err(|e| classify(&e))? {
+        while let Some(chunk) = response.chunk().await.map_err(|e| (classify(&e), false))? {
             if answer.body.len() + chunk.len() > MAX_READ {
-                return Err(CallbackFailure::ChallengeFailed);
+                return Err((CallbackFailure::ChallengeFailed, false));
             }
             answer.body.extend_from_slice(&chunk);
         }

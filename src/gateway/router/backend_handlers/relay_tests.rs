@@ -12,7 +12,9 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::super::{AppState, BackendAuthContext};
-use super::{direct_control_identity, record_direct_delivery, relay_refusal};
+use super::{
+    commit_direct_receipts, direct_control_identity, relay_refusal, stage_direct_delivery,
+};
 use crate::config::AuthConfig;
 use crate::gateway::auth::{AuthenticatedClient, anonymous_client, principal_of};
 use crate::identity_grants::GrantSubject;
@@ -109,7 +111,11 @@ async fn parity(a: &Who, a_other_key: &Who, b: &Who) {
         ..shared_key()
     };
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
-    record_direct_delivery(&state, a.auth(&key), "alpha", "read", Some(&delivered));
+    crate::gateway::meta_mcp::invoke::relay::collecting(async {
+        stage_direct_delivery(&state, a.auth(&key), "alpha", "read", Some(&delivered));
+        commit_direct_receipts(&state, true);
+    })
+    .await;
 
     assert!(
         refused(&state, b.auth(&key)),

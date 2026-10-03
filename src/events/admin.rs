@@ -87,7 +87,11 @@ impl EventsHub {
 
     /// Replay dead letter `event_id`: access re-check, fresh firewall scan,
     /// then a new outbox record under the same event id.
-    pub(crate) async fn replay_dead(self: &Arc<Self>, event_id: &str) -> Result<(), ReplayRefusal> {
+    pub(crate) async fn replay_dead(
+        self: &Arc<Self>,
+        event_id: &str,
+        actor: &super::governance::Actor,
+    ) -> Result<(), ReplayRefusal> {
         let services = self
             .runtime
             .services
@@ -104,10 +108,8 @@ impl EventsHub {
             .into_iter()
             .find(|s| s.id == dead.record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
-        if !services
-            .admits_subscription(&sub, &dead.record.backend)
-            .await
-        {
+        let grant = (!dead.record.owner_scoped).then_some(dead.record.backend.as_str());
+        if !services.admits_subscription(&sub, grant).await {
             return Err(ReplayRefusal::AccessRevoked);
         }
         let bytes = base64::engine::general_purpose::STANDARD
@@ -116,15 +118,18 @@ impl EventsHub {
         let mut body: Value =
             serde_json::from_slice(&bytes).map_err(|_| ReplayRefusal::Unavailable)?;
         let mut data = body["data"].take();
+        let before = data.clone();
         let subject = Subject {
             event_id,
             principal: &sub.principal,
             backend: &dead.record.backend,
             name: &dead.record.name,
         };
-        if services.scan(&mut data, &subject) == Scan::Block {
+        let scan = services.scan(&mut data, &subject);
+        if scan == Scan::Block {
             return Err(ReplayRefusal::FirewallBlocked);
         }
+        let verdict = services.firewall_verdict(scan, data != before);
         body["data"] = data;
         let bytes = serde_json::to_vec(&body).map_err(|_| ReplayRefusal::Unavailable)?;
         if bytes.len() > MAX_BODY {
@@ -139,6 +144,7 @@ impl EventsHub {
             state: OutboxState::Pending,
             last_status: None,
             dead_as: None,
+            firewall: Some(verdict.to_owned()),
             ..dead.record.clone()
         };
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);
@@ -149,6 +155,24 @@ impl EventsHub {
         {
             Some(Revived::Written) => {
                 self.runtime.wake.notify_one();
+                let host = url::Url::parse(&sub.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_owned))
+                    .unwrap_or_default();
+                services
+                    .audit_lifecycle(
+                        &super::governance::Lifecycle {
+                            action: "events.replay",
+                            subscription_id: &sub.id,
+                            event_name: &dead.record.name,
+                            callback_host: &host,
+                            detail: "replayed",
+                            event_id: Some(event_id),
+                            ok: true,
+                        },
+                        super::governance::Attribution::Admin(actor),
+                    )
+                    .await;
                 Ok(())
             }
             Some(Revived::NoSubscription) => Err(ReplayRefusal::SubscriptionGone),
@@ -164,12 +188,13 @@ impl EventsHub {
     pub(crate) async fn replay_all(
         self: &Arc<Self>,
         subscription: &str,
+        actor: &super::governance::Actor,
     ) -> (usize, Vec<(String, ReplayRefusal)>) {
         let mut replayed = 0;
         let mut refused = Vec::new();
         for entry in self.list_dead_letters(Some(subscription), None) {
             let id = entry["eventId"].as_str().unwrap_or_default().to_owned();
-            match self.replay_dead(&id).await {
+            match self.replay_dead(&id, actor).await {
                 Ok(()) => replayed += 1,
                 Err(why) => refused.push((id, why)),
             }

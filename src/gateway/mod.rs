@@ -28,6 +28,7 @@ pub mod oauth;
 #[cfg(test)]
 pub(crate) mod chain_test_support;
 mod openwebui_adapter;
+pub(crate) mod outbound;
 pub mod proxy;
 #[cfg(test)]
 mod proxy_scope_tests;
@@ -56,6 +57,8 @@ mod server;
 pub(crate) use server::STDIO_CREDENTIAL_PRINCIPAL;
 /// The stdio transport's mark: the only proof of `CallerProvenance::LocalTransport`.
 pub(crate) use server::StdioNonce;
+/// The declared account catalogue, for `cap list`'s readiness answer; crate-only.
+pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 pub(crate) mod session_id;
 pub mod session_lifecycle;

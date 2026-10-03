@@ -659,3 +659,30 @@ These amend the r2 text above; where they disagree, r3 wins.
 - Tests: `allowed_flow_not_flagged` (detector, gate, direct, meta), `allowed_flow_globs_match`,
   `allowed_flows_are_checked_at_load`, `a_reported_relay_increments_the_metric`. Mutants: skip
   the flow mask in the witness search; drop the relay counter increment.
+
+### 13.5 Catalogue reads (MIK-7765, 2026-10-03; reopens the r1 drop of prompts and resources)
+
+Why reopened: `resources/read` and `prompts/get` deliver backend content and `prompts/get` sends
+caller text to a backend, so a caller could relay a resource's text through `prompts/get`
+arguments with no finding. Round 1 dropped them for parity with the direct route and because the
+first wiring was unsound; both reasons are gone (the direct route now covers them, and the
+delivery path is the staged-receipts path of 13.3/13.4).
+
+- Egress: the forwarded params of `prompts/get` (name and arguments) and of `resources/read`
+  (the URI) are checked as a `tools/call`'s are, against target `backend:method`
+  (`prompts/get`, `resources/read`). `block` refuses with `-32002` before the backend is called.
+  On the meta route a URI is first resolved against the backends' catalogues, so a free-form URI
+  carries nothing; the direct route forwards any URI and is checked.
+- Recording: a successful result is staged as a delivery from `backend:method` (sensitivity from
+  `sources` globs such as `backend:*`, or the context-integrity classification of a copy) and
+  committed with the other receipts, after the answer's last replacer.
+- Principals: the same key `tools/call` uses on each route: the HTTP caller key (or the session
+  bucket when unkeyed), the direct route's caller key, and `LOCAL_OPERATOR_PRINCIPAL` on stdio
+  (the stdio catalogue previously keyed nowhere).
+- Plumbing: the meta handlers read the caller from a task-local set by the route
+  (`relay::as_caller`), so their public signatures do not change; no scope, no check.
+- Tests: `*_resource_read_then_prompt_argument_is_refused`, `*_prompt_result_then_tool_call_is_refused`,
+  `direct_resource_read_then_uri_is_refused`, `stdio_catalogue_is_inside_relay_detection`.
+  Mutants: skip the egress check, skip staging, skip the direct check and staging, key stdio as
+  `"stdio"`.
+

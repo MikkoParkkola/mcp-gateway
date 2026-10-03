@@ -4,11 +4,11 @@
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
+mod allocator;
 mod commands;
 mod home_dir;
 
-use std::path::Path;
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode};
 
 use clap::Parser;
 use mcp_gateway::{
@@ -73,7 +73,9 @@ async fn run() -> ExitCode {
             profile,
             with_examples,
         }) => commands::run_init_command(&output, with_examples, profile),
-        Some(Command::Cap(cap_cmd)) => commands::run_cap_command(cap_cmd).await,
+        Some(Command::Cap(cap_cmd)) => {
+            commands::run_cap_command(cap_cmd, cli.config.as_deref()).await
+        }
         Some(Command::Import(import_cmd)) => {
             commands::run_protocol_import_command(import_cmd).await
         }

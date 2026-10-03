@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use tokio::sync::{Notify, mpsc};
@@ -25,7 +25,7 @@ use super::{EventSource, EventsHub};
 pub(crate) struct Runtime {
     queue: mpsc::Sender<SourceEvent>,
     /// Taken by [`EventsHub::start`]; `None` once the pipeline runs.
-    intake: Mutex<Option<mpsc::Receiver<SourceEvent>>>,
+    pub(super) intake: Mutex<Option<mpsc::Receiver<SourceEvent>>>,
     /// Wakes the worker: a record was written or a subscription reactivated.
     pub wake: Notify,
     pub seen: Seen,
@@ -35,6 +35,9 @@ pub(crate) struct Runtime {
     pub busy: Mutex<HashSet<String>>,
     /// The gateway's controls, once [`EventsHub::start`] ran.
     pub services: std::sync::OnceLock<Arc<Services>>,
+    /// Set once the stored subscriptions have been reconciled with the
+    /// catalogue the startup capability scan built; no attempt starts before.
+    pub reconciled: AtomicBool,
     dropped: AtomicU64,
     projection_failed: AtomicU64,
 }
@@ -51,6 +54,7 @@ impl Runtime {
             failures: FailureWindows::new(config.suspend_window, config.suspend_min_attempts),
             busy: Mutex::new(HashSet::new()),
             services: std::sync::OnceLock::new(),
+            reconciled: AtomicBool::new(false),
             dropped: AtomicU64::new(0),
             projection_failed: AtomicU64::new(0),
         }
@@ -94,6 +98,9 @@ impl EventsHub {
         });
         let hub = Arc::clone(self);
         tokio::spawn(async move { hub.deliver_forever(&services).await });
+        // After a restart the upstream state is rebuilt from the store.
+        let hub = Arc::clone(self);
+        tokio::spawn(async move { hub.replay_starts().await });
     }
 
     /// Whether a caller holding API key `key` may still see `backend` under

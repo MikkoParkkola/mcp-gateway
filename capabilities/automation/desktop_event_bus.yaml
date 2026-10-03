@@ -1,113 +1,38 @@
-sha256: cfb9a7f52f6df356f335fc7531b6ba34a83727a3a7fbc71da443d5e10ca77d80
+sha256: f8efc7918c687a27cfc61c5a7ef84c79de4ea3842637a08af8ac6283a07fbb11
 fulcrum: "1.0"
 name: desktop_event_bus
 description: >
-  Universal Desktop Event Bus — subscribe to Electron app DOM mutations via CDP,
-  route cross-app events through the gateway, and trigger LLM-powered workflows.
-  IFTTT/Zapier for desktop apps with agent intelligence. Pairs with axterminator
-  for Electron CDP control.
-  [keywords: desktop, automation, electron, event, webhook, trigger, workflow, cdp]
-
+  Desktop events from a Mac (app launch, activate and quit, window focus and creation,
+  system notifications), delivered as MCP events that agents subscribe to with events/subscribe.
+  Fed by a Hammerspoon script that signs each event; see docs/capabilities/desktop_event_bus.md.
+  Electron DOM mutations over CDP and automation rules are not provided: no tool produces DOM
+  events, and rules belong to the subscribing agent.
 schema:
   input:
     type: object
-    properties:
-      operation:
-        type: string
-        description: "Event bus operation"
-        enum:
-          - subscribe
-          - unsubscribe
-          - list_subscriptions
-          - emit_event
-          - list_sources
-          - create_rule
-          - list_rules
-      source:
-        type: string
-        description: "Event source (app name or CDP endpoint, e.g. 'discord', 'slack-desktop')"
-      event_type:
-        type: string
-        description: "Event type to subscribe to (e.g. 'dom_mutation', 'notification', 'window_focus')"
-      selector:
-        type: string
-        description: "CSS selector for DOM mutation events"
-      rule:
-        type: object
-        description: "Automation rule (for create_rule)"
-        properties:
-          name:
-            type: string
-          trigger:
-            type: object
-            properties:
-              source:
-                type: string
-              event_type:
-                type: string
-              filter:
-                type: string
-          action:
-            type: object
-            properties:
-              type:
-                type: string
-                enum: [invoke_tool, run_playbook, send_notification, emit_event]
-              config:
-                type: object
-      subscription_id:
-        type: string
-        description: "Subscription ID (for unsubscribe)"
-    required:
-      - operation
+    properties: {}
   output:
     type: object
-    properties:
-      subscription_id:
-        type: string
-      events:
-        type: array
-        description: "Event stream or event history"
-      sources:
-        type: array
-        description: "Available event sources"
-      rules:
-        type: array
-        description: "Active automation rules"
-
-providers:
-  primary:
-    service: mcp
-    cost_per_call: 0
-    timeout: 30
-    config:
-      command: axterminator
-      args:
-        - "mcp"
-        - "serve"
-      transport: stdio
-
-auth:
-  required: false
-  description: >
-    Requires axterminator with Electron CDP backend.
-    Install: cargo install axterminator
-
-cache:
-  strategy: none
-
+providers: {}
+webhooks:
+  desktop_events:
+    path: /desktop/events
+    method: POST
+    secret: "{env.DESKTOP_EVENT_SECRET}"
+    signature_header: "X-Desktop-Signature"
+    transform:
+      event_type: "desktop.{app}.{kind}"
+      data:
+        app: "{app}"
+        kind: "{kind}"
+        title: "{title}"
+        bundle_id: "{bundle_id}"
+    event:
+      description: "A desktop app or window event from a Mac"
+      filters: [app, kind]
 metadata:
   category: automation
-  tags:
-    - desktop
-    - automation
-    - electron
-    - event
-    - webhook
-    - trigger
-    - workflow
-    - cdp
+  tags: [desktop, events, hammerspoon, macos, webhook]
   cost_category: free
-  execution_time: fast
-  read_only: false
-  docs: https://github.com/AXImpact/axterminator
+  execution_time: instant
+  read_only: true

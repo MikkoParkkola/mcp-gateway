@@ -70,7 +70,8 @@ pub enum Auth {
 pub enum Reach {
     /// Its own vendor's API or a local resource the user names.
     Bounded,
-    /// Any address it is given (a browser, a URL fetcher). The gateway's
+    /// Any address or path it is given (a browser, a URL fetcher, git without
+    /// a pinned repository). The gateway's
     /// private-network egress guard covers REST capabilities only, not a
     /// backend's own requests, so these are added disabled.
     Arbitrary {

@@ -2206,3 +2206,6 @@ fn server_config_debug_redacts_metrics_token() {
         "missing redaction marker: {dbg}"
     );
 }
+
+#[path = "frame_limit_tests.rs"]
+mod frame_limit_tests;

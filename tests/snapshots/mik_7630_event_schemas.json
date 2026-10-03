@@ -3,20 +3,69 @@
     "inputSchema": {
       "type": "object",
       "properties": {
-        "event_type": { "type": "string" },
-        "repo": { "type": "string" },
-        "ref": { "type": "string" }
+        "event_type": {
+          "type": "string"
+        },
+        "repo": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
       },
       "additionalProperties": false
     },
     "payloadSchema": {
       "type": "object",
       "properties": {
-        "event_type": { "type": "string" },
+        "event_type": {
+          "type": "string"
+        },
         "fields": {
           "type": "object",
-          "properties": { "repo": {}, "ref": {} },
+          "properties": {
+            "repo": {},
+            "ref": {}
+          },
           "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "backend.hooks.tools_changed": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "payloadSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  "task.settled": {
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "payloadSchema": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "settledAt": {
+          "type": "string"
         }
       },
       "additionalProperties": false

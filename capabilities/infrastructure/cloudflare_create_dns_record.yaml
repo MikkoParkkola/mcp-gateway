@@ -1,0 +1,79 @@
+sha256: 0c8873ca2025d201f1cfa0812a6632848014348d0f8b7bc28485eae3afd513b7
+fulcrum: '1.0'
+name: cloudflare_create_dns_record
+description: Create a DNS record in a Cloudflare zone.
+schema:
+  input:
+    type: object
+    properties:
+      zone_id:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+$'
+        description: Cloudflare zone ID
+      type:
+        type: string
+        description: Record type (A, AAAA, CNAME, TXT, MX, ...)
+      name:
+        type: string
+        description: Record name
+      content:
+        type: string
+        description: Record content (address, target or text)
+      ttl:
+        type: integer
+        description: TTL in seconds (1 = automatic)
+      proxied:
+        type: boolean
+        description: Proxy through Cloudflare
+      comment:
+        type: string
+        description: Comment
+    required:
+    - zone_id
+    - type
+    - name
+    - content
+  output:
+    type: object
+    properties:
+      success:
+        type: boolean
+      result: {}
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.cloudflare.com/client/v4
+      path: /zones/{zone_id}/dns_records
+      method: POST
+      headers:
+        Authorization: Bearer {env.CLOUDFLARE_API_TOKEN}
+        Content-Type: application/json
+      body:
+        type: '{type}'
+        name: '{name}'
+        content: '{content}'
+        ttl: '{ttl}'
+        proxied: '{proxied}'
+        comment: '{comment}'
+cache:
+  strategy: none
+  ttl: 0
+auth:
+  required: true
+  type: bearer
+  key: env:CLOUDFLARE_API_TOKEN
+  header: Authorization
+  prefix: Bearer
+  description: Create an API token at https://dash.cloudflare.com/profile/api-tokens with the permissions
+    this operation needs.
+metadata:
+  category: infrastructure
+  tags:
+  - cloudflare
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.cloudflare.com/api/

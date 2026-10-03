@@ -9,7 +9,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde_json::Value;
 use tokio::sync::mpsc::Permit;
 use tokio::task::{AbortHandle, Id, JoinError, JoinSet};
 use tracing::warn;
@@ -39,8 +38,8 @@ impl Cancelled {
     pub(super) fn send_unless_cancelled(
         &self,
         id: Option<&RequestId>,
-        permit: Permit<'_, Value>,
-        frame: Value,
+        permit: Permit<'_, crate::gateway::outbound::OutboundFrame>,
+        frame: crate::gateway::outbound::OutboundFrame,
     ) {
         let mut marks = self.0.lock();
         let task = tokio::task::try_id();

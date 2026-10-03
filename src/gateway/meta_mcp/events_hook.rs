@@ -15,6 +15,59 @@ impl MetaMcp {
         let _ = self.events.set(hub);
     }
 
+    /// The backend registry, for the events backend source's catalogue.
+    pub(crate) fn events_backend_registry(&self) -> Arc<crate::backend::BackendRegistry> {
+        Arc::clone(&self.backends)
+    }
+
+    /// Backend `backend`'s tool set changed: an event, when events are on.
+    pub(crate) fn events_tools_changed(&self, backend: &str) {
+        if let Some(hub) = self.events() {
+            hub.backend_tools_changed(backend);
+        }
+    }
+
+    /// Reconcile the hub's stored subscriptions with the capability catalogue
+    /// once the startup scan has registered its routes. Called after the
+    /// hub is installed and started.
+    ///
+    /// A directory the startup scan failed to load makes the scan partial,
+    /// and a partial scan withdraws nothing.
+    pub(crate) fn reconcile_events_after_scan(&self) {
+        let Some(hub) = self.events().cloned() else {
+            return;
+        };
+        let capabilities = self.get_capabilities();
+        tokio::spawn(async move {
+            if let Some(capabilities) = &capabilities {
+                while !capabilities.initial_scan_complete() {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            }
+            // The loader's own outcome, read once the scan is over.
+            let scan = if capabilities
+                .as_ref()
+                .is_none_or(|c| c.initial_scan_loaded_every_directory())
+            {
+                crate::events::CatalogueScan::Complete
+            } else {
+                crate::events::CatalogueScan::Partial
+            };
+            // Disk work, off the async workers; a removal that failed is
+            // retried, the worker held meanwhile.
+            loop {
+                let hub = Arc::clone(&hub);
+                if tokio::task::spawn_blocking(move || hub.reconcile_catalogue(scan))
+                    .await
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
+    }
+
     /// The events hub, when events are on for this transport.
     pub(crate) fn events(&self) -> Option<&Arc<EventsHub>> {
         self.events.get()
@@ -51,20 +104,30 @@ impl MetaMcp {
         })
     }
 
-    /// Append up to `limit` visible event entries to `matches`; how many
-    /// matched in all, for the search's `total_available`.
-    pub(super) fn add_event_matches(
+    /// Add up to `limit` visible event entries to a search answer `out`
+    /// (after ranking and the tool limit), counting every match in `total`
+    /// and `total_available`.
+    pub(super) fn add_events_to(
         &self,
+        out: &mut serde_json::Value,
         query: &str,
         limit: usize,
         caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
-        matches: &mut Vec<serde_json::Value>,
-    ) -> usize {
+    ) {
         let events = self.event_search_matches(query, usize::MAX, caller, session_id);
-        let found = events.len();
+        let found = events.len() as u64;
+        let Some(matches) = out["matches"].as_array_mut().filter(|_| found > 0) else {
+            return;
+        };
         matches.extend(events.into_iter().take(limit));
-        found
+        let shown = matches.len();
+        out["total"] = shown.into();
+        out["total_available"] = (out["total_available"].as_u64().unwrap_or(0) + found).into();
+        // Suggestions are for an empty answer only.
+        if let Some(object) = out.as_object_mut().filter(|_| shown > 0) {
+            object.remove("suggestions");
+        }
     }
 
     /// `capabilities` as JSON, with `events` advertised when it applies.
@@ -133,8 +196,11 @@ impl MetaMcp {
         if capabilities.name != backend || !capabilities.initial_scan_complete() {
             return;
         }
+        let _gate = hub.catalogue_lock();
         match crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities()) {
-            Ok(removed) => hub.withdraw(&removed),
+            Ok(removed) => {
+                hub.withdraw(&removed);
+            }
             Err(event) => tracing::error!(
                 %event,
                 "capability reload not applied to webhook routes: it removes a filter or \

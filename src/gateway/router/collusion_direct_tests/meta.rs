@@ -8,7 +8,10 @@ use super::*;
 
 /// The direct fixture, its Meta-MCP replaced by one holding the router's
 /// firewall, idempotency, and `cache` when a row reads the response cache.
-async fn meta_fixture(setup: Setup, cache: Option<Arc<crate::cache::ResponseCache>>) -> Fixture {
+pub(super) async fn meta_fixture(
+    setup: Setup,
+    cache: Option<Arc<crate::cache::ResponseCache>>,
+) -> Fixture {
     let mut fx = fixture(setup).await;
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
     let ttl = Duration::from_secs(600);
@@ -205,6 +208,47 @@ async fn meta_refused_delivery_not_recorded() {
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
 
+/// A second note, distinct from [`PROSE`], so a refusal of B's send can only
+/// come from the second read's receipt.
+const OTHER: &str = "Minutes of the harbour committee list the mooring fees for the winter \
+    quarter, the dredging contract awarded to the lowest bidder, the complaint about the \
+    floodlights over the fish market, and the vote to repaint the lighthouse keeper's cottage.";
+
+/// MIN.2 x M5: a read the tenant guard withheld records no receipt either.
+/// A reads tenant t1, then t2 (withheld under `block`); B, who never saw t2's
+/// text, sends it and is not refused. The control: B then reads t2 as its own
+/// first tenant, delivered, and A's relay of that text is refused.
+#[tokio::test]
+async fn meta_tenant_withheld_delivery_not_recorded() {
+    let setup = Setup {
+        tenants: true,
+        ..Setup::default()
+    };
+    let fx = meta_fixture(setup, None).await;
+    let named =
+        |tenant: &str, note: &str| format!("{{\"customer_id\":\"{tenant}\",\"note\":\"{note}\"}}");
+    fx.answer_read(Read::Text(named("t1", PROSE)));
+    meta_read(&fx, Some("a")).await;
+    fx.answer_read(Read::Text(named("t2", OTHER)));
+    let args = invoke("read", &json!({}));
+    let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        body.contains("Response withheld"),
+        "base: the second tenant's read is withheld by the tenant guard: {body}"
+    );
+    let text = named("t2", OTHER);
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &text).await, 1);
+    // Control: delivered, the same text records a receipt. The added space
+    // changes the response-cache key, as in M7.
+    let (_, delivered) = post(&fx, Some("b"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        envelope(&delivered).get("error").is_none(),
+        "control: B's first tenant is delivered: {delivered}"
+    );
+    let relay = format!("{text} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("a"), &relay).await, 1);
+}
+
 /// M7: a response-cache hit renews A's receipt after the first expired.
 #[tokio::test]
 async fn meta_cache_hit_recorded() {
@@ -331,4 +375,59 @@ async fn meta_allowed_flow_not_refused() {
     let fx = meta_fixture(setup, None).await;
     meta_read(&fx, Some("a")).await;
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+}
+
+/// MIK-7800 (pin): on the meta route a read whose delivery record the log
+/// refuses under `fail-closed` is replaced before the receipts commit (the
+/// record is written inside the dispatch since MIK-7799): B sending A's text
+/// is not refused; the next read is audited, delivered and recorded.
+#[tokio::test]
+async fn meta_read_record_failure_leaves_no_receipt() {
+    use crate::security::TransparencyLogger;
+    use crate::security::audit::AuditFailurePolicy;
+    use crate::security::transparency_log::TransparencyLogConfig;
+    let mut fx = meta_fixture(
+        Setup {
+            tenants: true,
+            ..Setup::default()
+        },
+        None,
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "rv".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log")
+        .with_failure_policy(AuditFailurePolicy::FailClosed),
+    );
+    let state = Arc::get_mut(&mut fx.state).expect("state is unique");
+    Arc::get_mut(&mut state.meta_mcp)
+        .expect("meta is unique")
+        .enable_transparency_log(Arc::clone(&log));
+    let text = format!("{{\"customer_id\":\"t1\",\"note\":\"{PROSE}\"}}");
+    fx.answer_read(Read::Text(text.clone()));
+    let args = invoke("read", &json!({}));
+    log.fail_next_append_for_test();
+    let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        body.contains("-32005"),
+        "base: the failed read record withholds the read: {body}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &text).await, 1);
+    let (_, delivered) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        envelope(&delivered).get("error").is_none(),
+        "control: the audited read is delivered: {delivered}"
+    );
+    let relay = format!("{text} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }

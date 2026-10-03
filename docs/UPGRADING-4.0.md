@@ -150,10 +150,18 @@ backend" and "fails a capability file" first.**
 | 123 | A capability provider key the gateway does not read logs a CAP-012 warning naming its path; `cap validate` runs the structural checks and fails on a structural error | Fix or delete the keys CAP-012 names; expect `cap validate` to fail where the loader would skip the file |
 | 124 | `mcp-gateway add <name>` uses a pinned, existing package or the vendor-hosted endpoint for every built-in server; 18 names that had no working server are removed and `jira` is now `atlassian` | Re-add a removed server with `--command`/`--url`; existing `gateway.yaml` entries are not changed |
 | 125 | A 2026-07-28 `subscriptions/listen` stream opens with a `notifications/subscriptions/acknowledged` notification instead of a JSON-RPC response | A client that read the subscription id from the response `result` reads it from the notification `params._meta` |
-| 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
+| 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, Chrome DevTools, fetch, git without a pinned repository). `init` (local profile) enables memory, sequential-thinking, context7 and time. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
 | 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 | 129 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
+| 130 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity (for an answer on `POST /mcp` the fields ride its `response_delivery_attempt` record); an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
+| 131 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
+| 132 | The shipped `gws_*` Google Workspace capabilities (18) now run through the `gws` command-line tool; their input schemas follow the tool's own parameters | Install `gws` (`npm i -g @googleworkspace/cli`) and sign in; a caller that sent the old parameter names sends the new ones (see each capability's schema) |
+| 133 | `cloudflare_manage` is removed and replaced by 11 REST capabilities (`cloudflare_*`) against the Cloudflare API v4; the npm package it declared never existed | Call the specific `cloudflare_*` capability; set the account or zone as an input. `deploy_worker` is not included yet |
+| 134 | `metacognition_verify` is removed from the public catalogue: it needs a private tool nobody else can install | None for other users; keep a private copy of the file if you run that tool |
+| 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
+| 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
+| 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3532,6 +3540,56 @@ updates, so its stream just closes, with no response.
 
 **Action:** a client written against the beta that read the subscription id from the response
 `result` reads it from the notification instead.
+## 126. `add` writes the whole server, and leaves it off when it cannot start
+
+**Startup:** no notice
+
+`mcp-gateway add <name>` for a built-in server used to write only its command or URL. The gateway
+starts a stdio server with a cleared environment, so a server that needed `TAVILY_API_KEY` started
+without it, while `add` printed the key as set. Now `add` writes:
+
+- for a stdio server, `env: { NAME: "${NAME}" }` for each variable it needs (or the value you gave
+  with `-e NAME=...`);
+- for a hosted server that logs in with OAuth, `oauth: {}`, so the first use opens the login in a
+  browser; for one that takes a token in a header, the header with a `${VAR}` reference (or the
+  value from `-e`);
+- `streamable_http` as the endpoint speaks it.
+
+`add` writes the server **disabled**, and prints why, when a `${VAR}` it wrote does not resolve
+(unset or empty in the environment and every `env_files` entry), because an enabled backend with an
+unresolved reference stops the gateway from loading its config. Playwright, Chrome DevTools and
+fetch are always added disabled: they can open any address, and the private-network guard covers REST capabilities
+only. Git is added disabled too, because without `--repository <path>` it acts on any repository a call names. Turning a backend on from the dashboard is refused, naming the variable, while one of its
+references does not resolve.
+
+`mcp-gateway init` (local profile) now writes the servers that need no account enabled: memory,
+sequential-thinking, context7 and time. A server whose launcher (`npx`, `uvx`) is not on PATH is skipped
+with a message. `mcp-gateway list --available` lists the whole library.
+
+**Action:** none for existing configs. After `add`, set any variable it names, then set
+`enabled: true` on the server.
+
+## 127. CLI capabilities run local processes
+
+**Startup:** no notice, a capability that declares `service: cli` is served and runs its command when called
+
+Through 3.x a capability with `service: cli` loaded but never ran its command: the gateway treated it as
+REST with an empty URL. It now runs the command, under these rules:
+
+- Only a pinned capability (`sha256:` matching the file) runs a process. An unpinned one is refused.
+- The command and its leading fixed arguments must match an entry of `capabilities.process_commands`
+  exactly. The default list holds the commands of the shipped catalogue; setting the key replaces it.
+- No shell is involved. Each call runs in a fresh private directory that is also its `HOME` and temp
+  area, with a cleared environment plus the names the capability lists, and is killed with every
+  process it started when it times out or its output passes the cap.
+- A parameter that names a file must resolve inside the configured `capabilities.files.<root>`; no root
+  is configured by default. A parameter that names a network destination makes the capability refuse
+  to run, because the gateway cannot confine where a child process connects.
+
+**Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
+capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
+`capabilities.process_commands` (the list then replaces the default).
+
 ## 128. Backend upstream events are refused where the gateway cannot listen
 
 **Startup:** no notice, a subscription to such an event answers -32014
@@ -3560,56 +3618,6 @@ absent and also answers `-32011`.
 **Action:** set `streamable_http: true` on an HTTP backend that speaks streamable HTTP. For the
 others, poll `resources/list` or `prompts/list` instead.
 
-## 126. `add` writes the whole server, and leaves it off when it cannot start
-
-**Startup:** no notice
-
-`mcp-gateway add <name>` for a built-in server used to write only its command or URL. The gateway
-starts a stdio server with a cleared environment, so a server that needed `TAVILY_API_KEY` started
-without it, while `add` printed the key as set. Now `add` writes:
-
-- for a stdio server, `env: { NAME: "${NAME}" }` for each variable it needs (or the value you gave
-  with `-e NAME=...`);
-- for a hosted server that logs in with OAuth, `oauth: {}`, so the first use opens the login in a
-  browser; for one that takes a token in a header, the header with a `${VAR}` reference (or the
-  value from `-e`);
-- `streamable_http` as the endpoint speaks it.
-
-`add` writes the server **disabled**, and prints why, when a `${VAR}` it wrote does not resolve
-(unset or empty in the environment and every `env_files` entry), because an enabled backend with an
-unresolved reference stops the gateway from loading its config. Playwright and fetch are always
-added disabled: they can open any address, and the private-network guard covers REST capabilities
-only. Turning a backend on from the dashboard is refused, naming the variable, while one of its
-references does not resolve.
-
-`mcp-gateway init` (local profile) now writes the servers that need no account enabled: memory,
-sequential-thinking and context7. A server whose launcher (`npx`, `uvx`) is not on PATH is skipped
-with a message. `mcp-gateway list --available` lists the whole library.
-
-**Action:** none for existing configs. After `add`, set any variable it names, then set
-`enabled: true` on the server.
-
-## 127. CLI capabilities run local processes
-
-**Startup:** no notice, a capability that declares `service: cli` is served and runs its command when called
-
-Through 3.x a capability with `service: cli` loaded but never ran its command: the gateway treated it as
-REST with an empty URL. It now runs the command, under these rules:
-
-- Only a pinned capability (`sha256:` matching the file) runs a process. An unpinned one is refused.
-- The command and its leading fixed arguments must match an entry of `capabilities.process_commands`
-  exactly. The default list holds the commands of the shipped catalogue; setting the key replaces it.
-- No shell is involved. Each call runs in a fresh private directory that is also its `HOME` and temp
-  area, with a cleared environment plus the names the capability lists, and is killed with every
-  process it started when it times out or its output passes the cap.
-- A parameter that names a file must resolve inside the configured `capabilities.files.<root>`; no root
-  is configured by default. A parameter that names a network destination makes the capability refuse
-  to run, because the gateway cannot confine where a child process connects.
-
-**Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
-capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
-`capabilities.process_commands` (the list then replaces the default).
-
 ## 129. A capability that needs a login is listed once the login exists
 
 **Startup:** no notice
@@ -3628,7 +3636,86 @@ a secret or knowing the caller, so those capabilities stay listed. Calls are unc
 capability invoked by name behaves as before.
 
 **Action:** if a capability you use disappeared from the list, set the variable it names; supplying
-the key lists it again.
+the key lists it again. `mcp-gateway cap list` marks each one the gateway would not list, with
+`off: needs <KEY>` (or `off: needs a <provider> login`).
+
+## 130. Frames naming a second tenant for one caller are recorded, or withheld
+
+**Startup:** no notice, applies only with `security.firewall.tenant_guard.arg_keys` set
+
+With `arg_keys` set, every frame the gateway sends a caller is checked for the tenants it names:
+answers and errors, notifications, server-to-client requests and webhook deliveries, on HTTP, the
+POST and GET streams, the direct route and stdio. Content the gateway read but did not show
+(before a capability transform, a cache or idempotency replay, a stored task's output) counts
+too, and a response it could not read counts as a tenant of its own. When one `caller_key`'s
+frames name more than one tenant inside `window_secs`, the new key
+`tenant_guard.cross_tenant_reads` decides: `observe` (the default) writes a `tenant_read`
+audit record with `cross_tenant_read: flagged` (for an answer on `POST /mcp`, the same fields ride the answer's own `response_delivery_attempt` record, so it costs no second record), `block` withholds the frame with a JSON-RPC
+error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
+Tenant ids are compared across backends, so two backends that reuse one id count as one tenant.
+Name tenant fields that appear inside backend content in `arg_keys`; the names of protocol members the gateway writes itself (`jsonrpc`, `id`, `method`, `params`, `result`, `error`, `data`, `cacheScope`, and the event envelope's own members) are matched inside content only, not on the wrapper. A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
+
+**Action:** none. Set `off` to silence it, or `block` to withhold such frames; namespace tenant
+ids that two backends reuse.
+
+## 131. A webhook route without a `method` accepts POST
+
+**Startup:** no notice, decided per capability file
+
+A capability file's `webhooks:` route that omits `method` now accepts `POST`, the default its
+documentation always named. It used to accept only `GET`, so a webhook sender, which POSTs,
+was answered 405. Routes that name `method` are unchanged, and so are REST provider calls,
+which still default to `GET`.
+
+**Action:** a route that relied on the `GET` default needs `method: GET`.
+
+## 132. Google Workspace capabilities run through gws
+
+**Startup:** no notice, the `gws_*` capabilities are served and run `gws` when called
+
+These capabilities loaded in 3.x but never ran. Each is now pinned and runs one `gws` subcommand with structured arguments. Their input schemas were rewritten to the parameters the tool accepts, and defaults declared in a schema now fill missing parameters.
+
+**Action:** install `gws`, sign in, and update callers to the new parameter names.
+
+## 133. cloudflare_manage is replaced by Cloudflare REST capabilities
+
+**Startup:** no notice, `cloudflare_manage` no longer appears in the catalogue
+
+The MCP package it declared was never published, so it could not run. Eleven REST capabilities (DNS records, WAF rules, R2 buckets and objects, and zone and account listings) replace it, one HTTP method per file.
+
+**Action:** switch to the `cloudflare_*` capability for the operation you need and pass the account or zone.
+
+## 134. metacognition_verify is removed
+
+**Startup:** no notice, `metacognition_verify` no longer appears in the catalogue
+
+It depended on a tool that is not published, so it could not run on any other machine.
+
+**Action:** none, unless you use that tool privately; keep your own pinned copy of the capability file.
+
+## 135. Two network-reaching CLI capabilities are held
+
+**Startup:** no notice, the capabilities load and refuse at call time
+
+A child process can follow a redirect or a DNS rebind to a private address, and the gateway cannot stop it from outside. Until the tool refuses private addresses at connect time (MIK-7788), `trawl_extract` and `cisco_scanner` `scan_mcp_server` return `not executable`.
+
+**Action:** none.
+
+## 136. Attachment capabilities save to a configured directory and return Google's field names
+
+**Startup:** no notice, `gmail_save_attachment` refuses until `capabilities.files.downloads` is set
+
+The embedded script that wrote a caller-chosen path is gone. A declarative `save_file` step decodes the payload, accepts one portable file name, never overwrites or follows a link, writes mode 0600, and stops at `downloads_quota_bytes` (default 1 GiB). The saved path is returned, never the bytes.
+
+**Action:** configure the downloads directory; update readers of `calendar_get_attachment` to Google's field names.
+
+## 137. Stdio backends have a message size limit, set per backend
+
+**Startup:** no notice, the limit applies to every stdio backend from the first message
+
+Through 3.x the gateway read a stdio backend's output line by line with no ceiling, so a peer that never sent a newline could grow its memory without bound. A message (one line) over 16 MiB now fails the call and stops that backend's process; the error names the backend setting.
+
+**Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid only on a backend declared with a `command`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

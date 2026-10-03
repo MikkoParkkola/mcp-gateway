@@ -278,3 +278,54 @@ fn a_managed_binding_with_no_custody_is_refused_not_installed_empty() {
 fn a_disabled_backend_binding_is_skipped() {
     install(&bound_config(false)).expect("a disabled backend has nothing to install");
 }
+
+/// A binding to an external descriptor whose strategy mints nothing. Config
+/// load refuses it (`external_strategy` admits only the two minting
+/// strategies), so it is built here without load validation, as a reload
+/// path that skipped it would. Mutant: the refusal dropped, so a `required`
+/// binding installs nothing and is first discovered at dispatch.
+#[test]
+fn a_binding_to_a_strategy_that_mints_nothing_is_refused_at_install() {
+    let config: Config = serde_yaml::from_str(
+        r"
+accounts:
+  schema_version: accounts.v1
+  deployment: single_process
+  instance_id: unit
+  store_dir: /unused/store
+  authority_dir: /unused/authority
+  current_key_id: primary
+  keys:
+    primary: env:UNUSED
+  descriptors:
+    partner-api:
+      mode: external
+      provider: partner
+      resource: https://external.example.invalid/
+      issuer: https://issuer.example.invalid
+      external_strategy:
+        strategy: passthrough
+        audience: https://external.example.invalid/
+        session_mode: stateless
+        required: true
+backends:
+  partner:
+    http_url: https://backend.example.invalid/mcp
+    account: partner-api
+",
+    )
+    .expect("the fixture parses without load validation");
+    let meta = crate::gateway::meta_mcp::MetaMcp::new(std::sync::Arc::new(
+        crate::backend::BackendRegistry::new(),
+    ));
+    let key =
+        std::sync::Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+
+    let refused = super::install_account_strategies(&config, None, &key, &meta, ServeMode::Http)
+        .expect_err("a binding that mints nothing must refuse");
+
+    let text = refused.to_string();
+    assert!(text.contains("mints no credential"), "{text}");
+    assert!(text.contains("'partner'"), "{text}");
+    assert!(meta.account_strategies().installed("partner-api").is_none());
+}

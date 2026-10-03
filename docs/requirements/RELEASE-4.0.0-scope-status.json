@@ -1309,19 +1309,31 @@
     },
     {
       "id": "MIK-7116.MIN.2",
-      "status": "pending",
-      "stage": "graded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.2). Audited at release tip e83b5fd5a. PARTIAL. TenantGuard refuses a principal past max_tenants_per_window distinct tenants in a window (tenant_guard.rs:55-65, default 3, off by default), keyed on the principal (MIK-7116.TENANT.1), with refusal tests in tests/mik_7116_tenant_acs.rs:29-228. With the limit at 1 that blocks an A-then-B pattern, but it counts tenant ids in request arguments, not sensitive data attributed on the response, and the allowed read is not audited (see MIN.1). 4.0.0 delivers this in observe mode (Warn, per MIN.4); blocking by default stays behind the ticket's kill gate MIN.KILL (decision mik_7116_min_kill_gate)."
+      "evidence": [
+        "src/gateway/router/tests/meta_firewall_verdict/caller_key/tenant_reads.rs",
+        "src/gateway/router/tests/meta_firewall_verdict/caller_key/tenant_read_streams.rs",
+        "src/gateway/outbound/tests.rs",
+        "src/gateway/server/tests/stdio_tenant_reads.rs",
+        "tests/mik_7630_events_delivery_safety.rs",
+        "src/gateway/router/direct_audit_tests/meta_replay.rs",
+        "src/gateway/router/mcp_route_signature_tests.rs",
+        "src/security/tenant_reads_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 against the criterion text: \"A caller that has read sensitive data attributed to tenant A is flagged (observe mode) or, when blocking is switched on, blocked from reading sensitive data attributed to tenant B; a test proves the verdict and the audit entries for both the read and the verdict.\" Verdict: tests concurrent_stateless_and_two_sessions_one_key (observe flags exactly the B read; block refuses it, across two sessions and concurrent calls), the stream, stdio, direct-route, webhook and event-delivery rows (tenant_read_streams.rs, stdio_tenant_reads.rs, mik_7630_events_delivery_safety.rs T25 observe and block). Audit entries for the read and the verdict: a_block_leaves_audit_entries_for_the_read_and_the_block (block mode: the A read has one delivery record naming tenant A with no verdict; the B read has one record naming tenant B with cross_tenant_read blocked) and a_judged_answer_is_one_record (observe: flagged on the delivery record, no second record). That block-audit test was added in the grading PR: before it no test asserted the verdict record of a block; it passed on first run, so it closes an evidence gap, not a defect. Shipped in #2640 (squash 6b463a06a; CI run 37088733125 at 472e6dd3c green except the commit-subject hygiene check on two old subjects and a file-size baseline failure caused by the base), E1 event deliveries in the same PR, typing in #2753 (db78eb49c), the delivery-record fold in #2760 (781b35ce4). Red first: CI 36952929202 (4 rows red at their assertions), 37005555003 (13 red), 37011015901 (18 red). Mutants: 17 of 17 RED on the merged commit (run 37090583921), typing 2 of 2 (37097574414), fold 3 of 3 (37103246235). Seats: gpt and grok SHIP on the final delta of each PR; the only open seat findings are the documented gaps below. Known gaps, not blocking the criterion text: the direct route and stdio commit COLLUDE relay receipts before their read judge (a false relay warning, never withheld content); protocol-member names used as arg_keys are matched inside content only (UPGRADING 130); the clippy disallowed-types tripwire and a generic mcp_route adapter are not built (a gateway_reply origin claim is not compiler-verified; design 4.1). The tenant_read record of a POST answer rides its delivery record; the paths without one (direct route, stdio, streams, notifications, callbacks) keep their own record. Blocking stays off by default (observe), per decision mik_7116_min_kill_gate."
     },
     {
       "id": "MIK-7116.MIN.4",
-      "status": "pending",
-      "stage": "graded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.4). Audited at release tip e83b5fd5a. PARTIAL. The guard ships disabled (tenant_guard.rs:67-73) and a firewall rule can set Warn instead of Block (FirewallAction::Warn, mod.rs:180). No fixture corpus and no false-positive measurement exist. Observe versus block is settled by decision mik_7116_min_kill_gate (operator ruling 2026-09-30): 4.0.0 ships observe-first and default blocking waits for the post-release MIN.KILL week (MIK-7627). What stays open for 4.0.0 is the fixture corpus and the false-positive measurement."
+      "evidence": [
+        "src/security/tenant_read_corpus_tests.rs",
+        "tests/fixtures/tenant-reads-corpus.jsonl"
+      ],
+      "note": "Graded 2026-10-03 against the criterion text: \"The tenant guard's false-positive rate is measured against a fixture corpus before blocking is enabled by default, and the guard ships observe-only first (MIK-7116).\" The text asks for two things: a measured rate and observe-first shipping. It sets no ceiling and does not require zero false positives. Measured (PR #2755, squash 10ec7b4d8): 330 outbound frames in 21 patterns, labelled by the generating pattern and never by the guard, run through the real judge, counted per principal-session. 71 legitimate sessions, of which 55 are flagged by nothing and 16 belong to four patterns that are legitimate but flagged by construction (opaque_only_multi, support_handoff_fast, admin_sweep, large_single_tenant): a measured false-positive rate of 16 of 71 sessions (22.5 percent) on this synthetic corpus; all 55 cross-tenant sessions are flagged. The two categories are separate by design: gate 1 (zero flags) applies to the legitimate patterns outside the known-false-positive group, gate 2 requires every cross-tenant session flagged, gate 3 pins the exact counts so a change in either moves the measurement. The 22.5 percent is a corpus figure, not a deployment figure: it shows the guard does misfire on handoff, sweep and opaque patterns, which is why blocking is not on by default. The criterion is satisfied by the measurement existing before default blocking and by observe being the default (cross_tenant_reads default observe, nothing judged unless arg_keys is set); the real-traffic number and the decision to block come from the post-release MIN.KILL week (MIK-7627, decision mik_7116_min_kill_gate). CI green on 5e9439d6; mutants 4 of 4 RED (run 37098628952); seats gpt and grok SHIP."
     },
     {
       "id": "MIK-7211.PARENT.1",
@@ -1614,11 +1626,16 @@
     },
     {
       "id": "MIK-7630.EVENTS.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_sources.rs",
+        "tests/mik_7630_events_delivery_store.rs",
+        "tests/snapshots/mik_7630_event_schemas.json"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T3 webhook clause (tests/mik_7630_events_surface.rs:156), backend and task clauses (tests/mik_7630_events_sources.rs:166: alice sees backend.hooks.tools_changed and task.settled, bob sees task.settled and no backend.hooks name); T4 (tests/mik_7630_events_surface.rs:187); T12 (tests/mik_7630_events_surface.rs:313 over tests/snapshots/mik_7630_event_schemas.json, now with backend.hooks.tools_changed and task.settled); T42 (tests/mik_7630_events_surface.rs:376); T52 (tests/mik_7630_events_delivery_store.rs:312). Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.EVENTS.3",
@@ -1642,7 +1659,7 @@
         "tests/mik_7630_events_subscribe.rs",
         "tests/mik_7630_events_delivery_lifecycle.rs"
       ],
-      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783). T22 subscribe half (tests/mik_7630_events_subscribe.rs:316): ttlMs absent, above max_ttl, null and 1000 against a 1 s floor, persistence across a restart, the expiry sweep on load; floor clause (tests/mik_7630_events_subscribe.rs:656): ttlMs 1000 against the default 60 s floor is raised to it; T22 delivery half (tests/mik_7630_events_delivery_lifecycle.rs:60): an event is delivered after a restart with no re-subscribe and no new verification. No red run: the floor test pins a clause the I2 code already met (it ran green on its own branch, CI run 37061836780). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783). T22 subscribe half (tests/mik_7630_events_subscribe.rs:316): ttlMs absent, above max_ttl, null and 1000 against a 1 s floor, persistence across a restart, the expiry sweep on load; floor clause (tests/mik_7630_events_subscribe.rs:656): ttlMs 1000 against the default 60 s floor is raised to it; T22 delivery half (tests/mik_7630_events_delivery_lifecycle.rs:60): an event is delivered after a restart with no re-subscribe and no new verification. No red run: the floor test pins a clause the I2 code already met (it ran green on its own branch, CI run 37061836780). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.EVENTS.5",
@@ -1668,7 +1685,7 @@
         "tests/mik_7630_events_delivery_store.rs",
         "src/events/fanout_tests.rs"
       ],
-      "note": "Graded 2026-10-03 at 6c6c845ac (PR #2704, I3). Red first: CI run 37051669167 on tests-only head b8254e4b9 failed T20 (the _meta key set) and T30 (subject_kind) at their own assertions; every other test passed. Green: CI run 37067835025 at head 54a95a946 (Tests, Clippy, Windows, macOS, feature checks). Mutants P1 (receipt left unsigned while stamping is on), P2 (event receipt given the runtime subject kind), P3 (receipt moved off the provenance key) all RED on 0d740ca02 (run 37064030765); later commits moved no executable line. Reviews: gpt and grok SHIP on the implementation, gpt SHIP on the test delta; four Copilot threads answered FIXED. T20 (tests/mik_7630_events_delivery.rs:86): the body keys are exactly eventId, name, timestamp, data, cursor, _meta, data equals the transform output and _meta holds only the provenance key. T42b (tests/mik_7630_events_delivery_store.rs:121): an unresolved mapping is omitted, never replaced by the raw body."
+      "note": "Graded 2026-10-03 at 6c6c845ac (PR #2704, I3). Red first: CI run 37051669167 on tests-only head b8254e4b9 failed T20 (the _meta key set) and T30 (subject_kind) at their own assertions; every other test passed. Green: CI run 37067835025 at head 54a95a946 (Tests, Clippy, Windows, macOS). Mutants P1 (receipt left unsigned while stamping is on), P2 (event receipt given the runtime subject kind), P3 (receipt moved off the provenance key) all RED on 0d740ca02 (run 37064030765); later commits moved no executable line. Reviews: gpt and grok SHIP on the implementation, gpt SHIP on the test delta; four Copilot threads answered FIXED. T20 (tests/mik_7630_events_delivery.rs:86): the body keys are exactly eventId, name, timestamp, data, cursor, _meta, data equals the transform output and _meta holds only the provenance key. T42b (tests/mik_7630_events_delivery_store.rs:121): an unresolved mapping is omitted, never replaced by the raw body."
     },
     {
       "id": "MIK-7630.EVENTS.7",
@@ -1701,51 +1718,73 @@
     },
     {
       "id": "MIK-7630.SOURCE.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_sources.rs",
+        "src/events/sources_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T40 (tests/mik_7630_events_sources.rs:300): two delegated-bearer owners; a non-terminal transition emits nothing; alice's all-tasks and taskId-pinned subscribers hear her task settle with taskId, status and settledAt and no result content; bob hears only his own; bob subscribing with alice's taskId answers -32012; a second task of alice's reaches only her all-tasks subscriber. The terminal-status filter is also pinned in-crate (src/events/sources_tests.rs, only_terminal_task_statuses_emit). Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.SOURCE.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "src/events/lifecycle_tests.rs",
+        "src/events/client.rs"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T41 (src/events/lifecycle_tests.rs:174, in-crate: EventSource is crate-private, so no public registration surface was added; recorded in design section 19): a source written against the trait alone lists its descriptor, gets on_first_subscriber once for two subscribers with the same arguments and on_last_subscriber once after both leave, its emitted event reaches an outbox record per subscriber through start and the emit queue, and a restart replays the start once. The delivery clause (src/events/lifecycle_tests.rs, a_test_source_event_reaches_a_receiver) sends that event as a signed POST to an in-test HTTPS receiver through the unchanged client, outbox and worker (added after a review thread on the grading PR noted the first T41 stopped at the outbox; it pins behaviour the core already had, so it has no red run). The red scaffold showed the outbox assertion green and only the lifecycle assertions red, which is the without-core-changes evidence. Further rows: replacement, source refusal and replay dedupe (lifecycle_tests.rs). Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.SAFETY.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but replay re-scanning lands with I6 (T35); stays pending."
+      "evidence": [
+        "tests/mik_7630_events_delivery_safety.rs",
+        "tests/mik_7630_events_admin.rs"
+      ],
+      "note": "Graded 2026-10-03 at d04d83215 (PR #2709, I6). Red first: CI run 37085840320 on tests-only head 0fc33a601 failed 7 of the 8 admin rows at their own assertions (404 where 200 or 400 was expected, no event entry in the search answer); the eighth, T36, passes by design as the regression guard. Green: CI run 37083066425 at head 6155163bf (Tests, Clippy, Windows, macOS). Mutants m1-m22 all RED (run 37074740437 on 9650916ac; the merge after it changed no executable line of the replay or search code). Reviews: gpt and grok on the tests and on the final diff, last round both SHIP. T19 (tests/mik_7630_events_delivery_safety.rs:75): a credential arrives redacted, a blocked injection is dead-lettered firewall_blocked and never POSTed. Replay clause (tests/mik_7630_events_admin.rs:104): after the policy is tightened a replay is refused 409 firewall_blocked, nothing is POSTed and the dead letter stays."
     },
     {
       "id": "MIK-7630.SAFETY.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending. Reviewed 2026-10-03 after #2718 (10bf73dde): the audit-before-POST change and the body-free assertion are merged; stays pending until T29's tenant-attribution assertion checks the attributed values rather than the key's presence (review finding), and the no-POST clause gets a worker-level test."
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs",
+        "tests/mik_7630_events_delivery_safety.rs",
+        "src/events/services_audit_tests.rs",
+        "src/events/worker_tests.rs",
+        "src/events/worker.rs"
+      ],
+      "note": "Graded 2026-10-03 at a009b5249 (PR #2732; the audit-before-POST change merged earlier in 10bf73dde, PR #2718, MIK-7784). T29 (tests/mik_7630_events_delivery.rs, every_delivery_attempt_writes_one_attributed_audit_record): three attempts write three attributed audit records with the attempt number, the hash of the bytes sent, the callback host without its path and the exact hashed tenant of the data (hash_argument of the repo value), and no record of the event, an attempt's or its outcome's, holds the body (a canary in the data never appears). T21 (tests/mik_7630_events_delivery_safety.rs, secrets_never_leave_the_store): the whsec secret appears in no audit record. Worker level (src/events/worker_tests.rs an_attempt_the_audit_log_refuses_is_not_sent): with the audit log refusing its append the callback receives no connection and the record waits (audit_unavailable); with the log working the same flow connects. src/events/services_audit_tests.rs: a refused append reaches the caller. Red first: CI run 37061829649 (the audit-refusal unit test failed at its own assertion). The worker-level test and the exact tenant assertion have no red run; they pin behaviour the merged code already had. Green: CI run 37091855027 on the PR head e1b51997c (the merged tree: a009b5249 is that head squashed onto the base it was last merged with; Tests, Clippy, Windows, macOS). Mutants: A1 (refusal swallowed) RED on b12829d81 (run 37073489208); Q1 (audit refusal ignored in the worker) RED on the final head (run 37092186093). Reviews: gpt and grok on each part and on every delta; bot threads answered FIXED. Outside the criterion's wording, design 3.7 also lists a firewall verdict on the attempt record and governance records for subscribe, refresh, unsubscribe, verification, dead-letter and replay; those are not built and are tracked in MIK-7802. Scope of 'attempt': the record is written, and must succeed, before a POST; the refusals that send nothing (access revoked, window exhausted, budget) are audited best effort with an empty body hash, because no payload leaves the gateway for them."
     },
     {
       "id": "MIK-7630.SAFETY.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_sources.rs",
+        "tests/mik_7630_events_delivery_safety.rs"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T3 (tests/mik_7630_events_surface.rs:156 and tests/mik_7630_events_sources.rs:166); T24 revocation (tests/mik_7630_events_delivery_safety.rs:160: the next event is not delivered, the pending retry is cancelled, the subscription is deleted, a refresh answers -32011); T25 in observe and block mode (tests/mik_7630_events_delivery_safety.rs, tenant_guard_applies_to_event_payloads and tenant_guard_blocks_a_cross_tenant_event_delivery). T24's source-level -32012 clause, now that EventSource has authorize: tests/mik_7630_events_sources.rs:317-327 (the backend and event are visible to bob, the source refuses alice's taskId, -32012), and a refusal at fan-out ends the subscription (src/events/lifecycle_tests.rs, a_source_refusal_at_fan_out_ends_the_subscription). That clause lives in T40 rather than in the T24 function, which is a webhook-only fixture. Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.SAFETY.4",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_delivery_safety.rs",
+        "tests/mik_7630_events_admin.rs"
+      ],
+      "note": "Graded 2026-10-03 at d04d83215 (PR #2709, I6). Red first: CI run 37085840320 on tests-only head 0fc33a601 failed 7 of the 8 admin rows at their own assertions (404 where 200 or 400 was expected, no event entry in the search answer); the eighth, T36, passes by design as the regression guard. Green: CI run 37083066425 at head 6155163bf (Tests, Clippy, Windows, macOS). Mutants m1-m22 all RED (run 37074740437 on 9650916ac; the merge after it changed no executable line of the replay or search code). Reviews: gpt and grok on the tests and on the final diff, last round both SHIP. T21 (tests/mik_7630_events_delivery_safety.rs:111): no log line, audit record or RPC answer holds the whsec value or its key, and subscription files are owner-only. Admin clause (tests/mik_7630_events_admin.rs:305): the listing, the replay answer and a refused bulk call carry neither the secret nor the callback URL; the listing key set is pinned to seven fields (:59)."
     },
     {
       "id": "MIK-7630.SAFETY.5",
@@ -1759,7 +1798,7 @@
         "src/events/rate.rs",
         "src/events/store_pending_tests.rs"
       ],
-      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783 and MIK-7791). T26 (tests/mik_7630_events_subscribe.rs:443) and T51 (:498) subscription caps; T48 (:626) verification posts per host; T45 (tests/mik_7630_events_delivery_store.rs:172) outbox caps; T27 (tests/mik_7630_events_delivery_safety.rs:283) delay not drop with throttled reported from the bucket and the waiting deliveries (src/events/rate.rs burst_then_paced_and_reports_empty; src/events/store_pending_tests.rs has_due_sees_a_pending_record_behind_one_in_flight); T28 (tests/mik_7630_events_delivery_safety.rs:324) a refused budget dead-letters budget and leaves an audit record status budget (a refused check records no spend), :347 a delivery is charged against the key budget (1.5 budget, 1.0 charge: the first posts, the second dead-letters), :369 a zero per-key budget is no limit as for tool calls. No red run for the added tests (they pin clauses already met; run 37061836780 and 37062145389 ran them green on their branches). Mutants H1, H2, T1, T2 and C1 RED (C1 on the final head). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783 and MIK-7791). T26 (tests/mik_7630_events_subscribe.rs:443) and T51 (:498) subscription caps; T48 (:626) verification posts per host; T45 (tests/mik_7630_events_delivery_store.rs:172) outbox caps; T27 (tests/mik_7630_events_delivery_safety.rs:283) delay not drop with throttled reported from the bucket and the waiting deliveries (src/events/rate.rs burst_then_paced_and_reports_empty; src/events/store_pending_tests.rs has_due_sees_a_pending_record_behind_one_in_flight); T28 (tests/mik_7630_events_delivery_safety.rs:324) a refused budget dead-letters budget and leaves an audit record status budget (a refused check records no spend), :347 a delivery is charged against the key budget (1.5 budget, 1.0 charge: the first posts, the second dead-letters), :369 a zero per-key budget is no limit as for tool calls. No red run for the added tests (they pin clauses already met; run 37061836780 and 37062145389 ran them green on their branches). Mutants H1, H2, T1, T2 and C1 RED (C1 on the final head). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.SAFETY.6",
@@ -1771,7 +1810,7 @@
         "src/events/services.rs",
         "src/trust/result_provenance.rs"
       ],
-      "note": "Graded 2026-10-03 at 6c6c845ac (PR #2704, I3). Red first: CI run 37051669167 on tests-only head b8254e4b9 failed T20 (the _meta key set) and T30 (subject_kind) at their own assertions; every other test passed. Green: CI run 37067835025 at head 54a95a946 (Tests, Clippy, Windows, macOS, feature checks). Mutants P1 (receipt left unsigned while stamping is on), P2 (event receipt given the runtime subject kind), P3 (receipt moved off the provenance key) all RED on 0d740ca02 (run 37064030765); later commits moved no executable line. Reviews: gpt and grok SHIP on the implementation, gpt SHIP on the test delta; four Copilot threads answered FIXED. T30 (tests/mik_7630_events_delivery.rs:134): with stamping on the receipt in _meta has subject kind event, verifies against the gateway key, and sits inside the body the webhook signature covers; with stamping off (T20) the bare receipt is unsigned. Linux-only for SSL_CERT_FILE."
+      "note": "Graded 2026-10-03 at 6c6c845ac (PR #2704, I3). Red first: CI run 37051669167 on tests-only head b8254e4b9 failed T20 (the _meta key set) and T30 (subject_kind) at their own assertions; every other test passed. Green: CI run 37067835025 at head 54a95a946 (Tests, Clippy, Windows, macOS). Mutants P1 (receipt left unsigned while stamping is on), P2 (event receipt given the runtime subject kind), P3 (receipt moved off the provenance key) all RED on 0d740ca02 (run 37064030765); later commits moved no executable line. Reviews: gpt and grok SHIP on the implementation, gpt SHIP on the test delta; four Copilot threads answered FIXED. T30 (tests/mik_7630_events_delivery.rs:134): with stamping on the receipt in _meta has subject kind event, verifies against the gateway key, and sits inside the body the webhook signature covers; with stamping off (T20) the bare receipt is unsigned. Linux-only for SSL_CERT_FILE."
     },
     {
       "id": "MIK-7630.RELIABLE.1",
@@ -1783,31 +1822,41 @@
         "src/events/worker_tests.rs",
         "src/config/features/events.rs"
       ],
-      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7784). T32 (tests/mik_7630_events_delivery.rs:292): a receiver that always answers 503 gets five attempts (six allowed: a crash may duplicate one) with one webhook-id, then one dead letter exhausted, and a restart resumes the same record; src/events/worker_tests.rs:39 (other_failures_retry_with_bounded_backoff_then_exhaust): exponential backoff with jitter, bounded by the attempt limit; src/events/worker_tests.rs:90: a retry at the window's end is overdue before it is sent; src/config/features/events.rs a_retry_window_over_fifteen_minutes_is_refused_by_name: a window above 15 minutes is refused at load naming the field. Red first: CI run 37061829649 on the tests-only head ed01e529f failed that test and the audit-refusal test at their own assertions (7752 others passed). Mutants R1 (cap removed) and R2 (cap off by one) RED on b12829d81 (run 37073489208). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7784). T32 (tests/mik_7630_events_delivery.rs:292): a receiver that always answers 503 gets five attempts (six allowed: a crash may duplicate one) with one webhook-id, then one dead letter exhausted, and a restart resumes the same record; src/events/worker_tests.rs:39 (other_failures_retry_with_bounded_backoff_then_exhaust): exponential backoff with jitter, bounded by the attempt limit; src/events/worker_tests.rs:90: a retry at the window's end is overdue before it is sent; src/config/features/events.rs a_retry_window_over_fifteen_minutes_is_refused_by_name: a window above 15 minutes is refused at load naming the field. Red first: CI run 37061829649 on the tests-only head ed01e529f failed that test and the audit-refusal test at their own assertions (7752 others passed). Mutants R1 (cap removed) and R2 (cap off by one) RED on b12829d81 (run 37073489208). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.RELIABLE.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs",
+        "tests/mik_7630_events_delivery_store.rs",
+        "tests/mik_7630_events_admin.rs"
+      ],
+      "note": "Graded 2026-10-03 at d04d83215 (PR #2709, I6). Red first: CI run 37085840320 on tests-only head 0fc33a601 failed 7 of the 8 admin rows at their own assertions (404 where 200 or 400 was expected, no event entry in the search answer); the eighth, T36, passes by design as the regression guard. Green: CI run 37083066425 at head 6155163bf (Tests, Clippy, Windows, macOS). Mutants m1-m22 all RED (run 37074740437 on 9650916ac; the merge after it changed no executable line of the replay or search code). Reviews: gpt and grok on the tests and on the final diff, last round both SHIP. T33 (tests/mik_7630_events_delivery.rs:318): two subscriptions sharing a callback URL get two webhook-ids and a retry keeps its own; replay clause (tests/mik_7630_events_admin.rs:252): a replayed dead letter is delivered under its original webhook-id. T34 (tests/mik_7630_events_delivery_store.rs:91): inbound repeats are dropped per route key (delivery id, body hash, or neither)."
     },
     {
       "id": "MIK-7630.RELIABLE.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_admin.rs",
+        "tests/mik_7630_events_delivery_store.rs",
+        "src/events/store_pending_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at d04d83215 (PR #2709, I6). Red first: CI run 37085840320 on tests-only head 0fc33a601 failed 7 of the 8 admin rows at their own assertions (404 where 200 or 400 was expected, no event entry in the search answer); the eighth, T36, passes by design as the regression guard. Green: CI run 37083066425 at head 6155163bf (Tests, Clippy, Windows, macOS). Mutants m1-m22 all RED (run 37074740437 on 9650916ac; the merge after it changed no executable line of the replay or search code). Reviews: gpt and grok on the tests and on the final diff, last round both SHIP. T35 (tests/mik_7630_events_admin.rs:104): admin replay re-delivers under the same event id with the current secret, a tightened firewall policy blocks it, a non-admin caller is refused, a deleted subscription takes no replay. T54 (:193): bulk replay touches only the named subscription and needs both all=1 and a subscription. T36 (:354): tools/list is identical with events on and off and no name mentions events. T49 (tests/mik_7630_events_delivery_store.rs:208, listing clause tests/mik_7630_events_admin.rs:275) and T50 (tests/mik_7630_events_delivery_store.rs:265): retention sweep and caps. Refusals keep the dead letter (access revoked :479, oversize :545, store unit test for expiry and already-pending)."
     },
     {
       "id": "MIK-7630.DISCOVER.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_admin.rs"
+      ],
+      "note": "Graded 2026-10-03 at d04d83215 (PR #2709, I6). Red first: CI run 37085840320 on tests-only head 0fc33a601 failed 7 of the 8 admin rows at their own assertions (404 where 200 or 400 was expected, no event entry in the search answer); the eighth, T36, passes by design as the regression guard. Green: CI run 37083066425 at head 6155163bf (Tests, Clippy, Windows, macOS). Mutants m1-m22 all RED (run 37074740437 on 9650916ac; the merge after it changed no executable line of the replay or search code). Reviews: gpt and grok on the tests and on the final diff, last round both SHIP. T37 (tests/mik_7630_events_admin.rs:376): gateway_search_tools and gateway_search return an entry with kind event and the descriptor's inputSchema to alice, none to bob, none for an unmatched query, and total_available counts it. T36 (:354): the meta surface did not grow."
     }
   ],
   "decisions": [

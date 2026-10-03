@@ -13,8 +13,8 @@ use super::settlement::{
 };
 use super::upstream::QueryLease;
 use super::{
-    BeginOutcome, Handoff, TaskCall, TaskExecutor, TaskIntent, TaskWrite, UpstreamAnswer,
-    UpstreamCapture, UpstreamHandle, WriteOutcome,
+    BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
+    TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
 };
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
 use crate::gateway::task_service::Target;
@@ -39,8 +39,8 @@ pub(super) async fn commit_and_run(
     let executor = Arc::clone(handoff.executor());
     let principal = intent.request.principal().to_string();
 
-    let Ok(WriteOutcome::Create(outcome)) = executor
-        .commit(TaskWrite::Create {
+    let Ok(outcome) = executor
+        .commit_create(CreateWrite {
             request: &intent.request,
             task: &task,
             backend: &backend,
@@ -633,7 +633,7 @@ impl TaskExecutor {
         (event, targets): (TaskTransition, Option<Vec<Target>>),
     ) -> bool {
         match self
-            .commit(TaskWrite::Settle {
+            .commit_transition(TransitionWrite::Settle {
                 principal,
                 id,
                 revision,
@@ -642,7 +642,7 @@ impl TaskExecutor {
             })
             .await
         {
-            Ok(outcome) => return stored_completed(&outcome),
+            Ok(stored) => return stored_completed(&stored),
             Err(CommitFailure::RevisionConflict) => {}
             Err(_) => {
                 tracing::warn!(task_id = %id, "task settlement write failed");
@@ -660,7 +660,7 @@ impl TaskExecutor {
             return false;
         }
         let settled = self
-            .commit(TaskWrite::Settle {
+            .commit_transition(TransitionWrite::Settle {
                 principal,
                 id,
                 revision: current.revision,
@@ -668,22 +668,18 @@ impl TaskExecutor {
                 targets,
             })
             .await;
-        let Ok(outcome) = settled else {
+        let Ok(stored) = settled else {
             tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
             return false;
         };
-        stored_completed(&outcome)
+        stored_completed(&stored)
     }
 }
 
 /// Whether a settlement stored a completed result with output: what a relay
 /// receipt may be committed for. A bounded settlement stores no output.
-fn stored_completed(outcome: &WriteOutcome) -> bool {
-    matches!(
-        outcome,
-        WriteOutcome::Transitioned(stored)
-            if stored.task.status() == TaskStatus::Completed && !stored.output_free
-    )
+fn stored_completed(stored: &CommittedTask) -> bool {
+    stored.task.status() == TaskStatus::Completed && !stored.output_free
 }
 
 fn is_terminal(status: TaskStatus) -> bool {

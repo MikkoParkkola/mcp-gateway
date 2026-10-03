@@ -9,7 +9,6 @@
 2853 src/transport/http/tests.rs
 2668 src/gateway/meta_mcp/mod.rs
 2348 tests/mik_7272_task_1_acs.rs
-2296 src/config/mod.rs
 2219 src/config/tests.rs
 2192 src/backend/pool_tests.rs
 2176 src/gateway/router/handlers.rs
@@ -24,11 +23,9 @@
 1631 src/security/firewall/mod.rs
 1617 tests/mik_7272_sub2b_acs.rs
 1603 src/protocol_revision_telemetry.rs
-1573 src/gateway/ui/control_plane.rs
 1497 src/gateway/proxy.rs
 1464 src/capability/definition/tests.rs
 1460 src/idempotency.rs
-1450 src/gateway/router/backend_handlers.rs
 1412 src/gateway/meta_mcp/account_rest_tests.rs
 1405 src/capability/definition/mod.rs
 1398 tests/mik_7212_mrtr_component_acs.rs
@@ -36,8 +33,6 @@
 1329 tests/openwebui_adapter_config.rs
 1285 src/gateway/meta_mcp/authz_tests.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
-1275 src/oauth/client/mod.rs
-1257 src/oauth/storage.rs
 1246 src/backend/lifecycle.rs
 1180 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1179 src/identity_propagation/mod.rs
@@ -67,7 +62,6 @@
 935 src/trust/mod.rs
 908 src/gateway/meta_mcp_helpers_tests.rs
 900 src/identity_grants.rs
-884 src/gateway/meta_mcp/search.rs
 874 src/personal_accounts/provider/provider_tests.rs
 857 src/mtls/cert_manager.rs
 852 src/protocol/types.rs
