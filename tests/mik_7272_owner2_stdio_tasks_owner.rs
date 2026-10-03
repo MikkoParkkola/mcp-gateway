@@ -216,7 +216,7 @@ async fn the_local_operator_answers_an_input_round() {
         .request(&task_call(json!(1), ASK, Some("k-t15")))
         .await;
     let id = task_id(&created);
-    let deadline = tokio::time::Instant::now() + helper::BOUND;
+    let mut budget = helper::Budget::new();
     let mut n = 0;
     loop {
         n += 1;
@@ -224,10 +224,7 @@ async fn the_local_operator_answers_an_input_round() {
         if status(&task) == Some("input_required") {
             break;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no input round: {task}"
-        );
+        assert!(budget.ok(), "no input round: {task}");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     let updated = stdio.request(&tasks_update(json!(2), &id)).await;
