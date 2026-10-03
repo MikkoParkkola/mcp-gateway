@@ -691,3 +691,97 @@ mod login_gate {
         assert_eq!(names(backend.get_tools()), ["late"]);
     }
 }
+
+// ── MIK-7870: a reload revokes the in-flight calls of an EDITED capability ──
+
+fn mcp_probe_yaml(description: &str) -> String {
+    format!(
+        r"name: mcp_probe
+description: {description}
+schema:
+  input:
+    type: object
+    properties:
+      text:
+        type: string
+providers:
+  primary:
+    service: mcp
+    timeout: 20
+    config:
+      command: /nonexistent/never-started
+      args: []
+      transport: stdio
+      tool_selector:
+        param: operation
+        tools:
+          say: {{ tool: echo, arguments: {{ message: x }} }}
+"
+    )
+}
+
+async fn loaded_mcp_backend(dir: &std::path::Path) -> CapabilityBackend {
+    std::fs::write(dir.join("probe.yaml"), mcp_probe_yaml("first")).unwrap();
+    let backend = make_backend();
+    backend
+        .load_from_directory(dir.to_str().unwrap())
+        .await
+        .unwrap();
+    backend
+}
+
+/// MIK-7870.RELOAD.1: an edited, retained capability gets a new generation;
+/// an untouched one keeps its own (no spurious revocation).
+#[tokio::test]
+async fn reloading_an_edited_capability_bumps_its_mcp_generation() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let backend = loaded_mcp_backend(dir.path()).await;
+    let before = backend.executor.mcp_generation("mcp_probe");
+
+    backend.reload().await.unwrap();
+    assert_eq!(
+        backend.executor.mcp_generation("mcp_probe"),
+        before,
+        "an unchanged definition is not revoked by a reload"
+    );
+
+    std::fs::write(dir.path().join("probe.yaml"), mcp_probe_yaml("edited")).unwrap();
+    backend.reload().await.unwrap();
+    assert_ne!(
+        backend.executor.mcp_generation("mcp_probe"),
+        before,
+        "an edited definition must be revoked"
+    );
+}
+
+/// MIK-7870.RELOAD.2 and .3: the call read its definition and generation, then
+/// the reload ran; the call reaches acquire with the pre-edit generation and is
+/// refused instead of starting or replacing a child.
+#[tokio::test]
+async fn a_call_that_read_the_pre_edit_definition_is_refused_after_reload() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let backend = loaded_mcp_backend(dir.path()).await;
+    let (stale_def, generation) = backend.get_with_generation("mcp_probe").unwrap();
+
+    std::fs::write(dir.path().join("probe.yaml"), mcp_probe_yaml("edited")).unwrap();
+    backend.reload().await.unwrap();
+
+    let Some(super::definition::ProcessConfig::Mcp(config)) =
+        stale_def.providers.process.get("primary")
+    else {
+        panic!("not an mcp provider");
+    };
+    let context = CapabilityExecutionContext {
+        mcp_generation: Some(generation),
+        ..CapabilityExecutionContext::default()
+    };
+    let err = backend
+        .executor
+        .execute_mcp(&stale_def, config, &json!({"operation": "say"}), &context)
+        .await
+        .expect_err("a pre-edit call must not start a child");
+    assert!(
+        err.to_string().contains("changed while this call was starting"),
+        "refused at acquire, not by a failed spawn: {err}"
+    );
+}
