@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/journeys.rs b/src/gateway/router/accounts/journeys.rs
+index 2bd038014..3ae1916a1 100644
+--- a/src/gateway/router/accounts/journeys.rs
++++ b/src/gateway/router/accounts/journeys.rs
+@@ -159,7 +159,7 @@ pub(super) async fn status(
+     match journeys.status(limits, id, principal).await {
+         Ok(Ok(view)) => (StatusCode::OK, axum::Json(status_body(&view))).into_response(),
+         Ok(Err(error)) => journey_refusal(error),
+-        Err(_) => refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable", None),
++        Err(_) => refusal(StatusCode::INTERNAL_SERVER_ERROR, "storage_unavailable", None),
+     }
+ }
+ 

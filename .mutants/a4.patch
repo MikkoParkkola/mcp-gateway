@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/journeys.rs b/src/gateway/router/accounts/journeys.rs
+index 2bd038014..83581b48e 100644
+--- a/src/gateway/router/accounts/journeys.rs
++++ b/src/gateway/router/accounts/journeys.rs
+@@ -71,7 +71,7 @@ pub(super) async fn create(
+     let Some(accounts) = config
+         .accounts
+         .as_ref()
+-        .filter(|_| is_bridged(&config, &identity))
++        .filter(|_| true)
+     else {
+         return refusal(StatusCode::FORBIDDEN, "forbidden", None);
+     };

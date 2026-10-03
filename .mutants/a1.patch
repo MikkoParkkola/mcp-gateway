@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/journeys.rs b/src/gateway/router/accounts/journeys.rs
+index 2bd038014..a78918587 100644
+--- a/src/gateway/router/accounts/journeys.rs
++++ b/src/gateway/router/accounts/journeys.rs
+@@ -97,7 +97,7 @@ pub(super) async fn create(
+             (StatusCode::CREATED, axum::Json(body)).into_response()
+         }
+         Ok(Err(error)) => journey_refusal(error),
+-        Err(_) => refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable", None),
++        Err(_) => refusal(StatusCode::INTERNAL_SERVER_ERROR, "storage_unavailable", None),
+     }
+ }
+ 
