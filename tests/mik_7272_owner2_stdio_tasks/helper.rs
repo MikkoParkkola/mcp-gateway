@@ -44,49 +44,26 @@ const POLL_GAP: Duration = Duration::from_millis(50);
 const STALL_SLACK: Duration = Duration::from_secs(3);
 const TICK: Duration = Duration::from_millis(250);
 
-/// [`BOUND`] of time the gateway had. A gap between two looks that is far
-/// longer than a look takes means the whole machine stood still (a paused
-/// VM, a starved runner): the clock ran, the gateway could not, and that gap
-/// is not charged (MIK-7808).
-pub struct Budget {
-    left: Duration,
-    last: tokio::time::Instant,
-}
-
-impl Budget {
-    pub fn new() -> Self {
-        Self {
-            left: BOUND,
-            last: tokio::time::Instant::now(),
-        }
-    }
-
-    /// Charge the time since the last look; whether any is left.
-    pub fn ok(&mut self) -> bool {
-        let gap = self.last.elapsed();
-        self.last = tokio::time::Instant::now();
-        if gap <= STALL_SLACK {
-            self.left = self.left.saturating_sub(gap);
-        }
-        !self.left.is_zero()
-    }
-}
-
-impl Default for Budget {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// `fut`'s output, or `None` once it has had [`BOUND`] of unstalled time.
 pub async fn bound<F: std::future::Future>(fut: F) -> Option<F::Output> {
     tokio::pin!(fut);
-    let mut budget = Budget::new();
+    let mut left = BOUND;
+    let mut last = tokio::time::Instant::now();
     loop {
         tokio::select! {
+            biased;
             out = &mut fut => return Some(out),
             () = tokio::time::sleep(TICK) => {
-                if !budget.ok() {
+                // A gap between two looks far longer than a look takes means
+                // the whole machine stood still (a paused VM, a starved
+                // runner): the clock ran, the gateway could not, and that gap
+                // is not charged (MIK-7808). A slow answer is charged in full.
+                let gap = last.elapsed();
+                last = tokio::time::Instant::now();
+                if gap <= TICK + STALL_SLACK {
+                    left = left.saturating_sub(gap);
+                }
+                if left.is_zero() {
                     return None;
                 }
             }
@@ -489,22 +466,21 @@ impl StdioGateway {
 
     /// `tasks/get` until the task is terminal.
     pub async fn terminal(&mut self, task: &str) -> Value {
-        let mut budget = Budget::new();
-        let mut n = 0;
-        loop {
-            n += 1;
-            let got = self
-                .request(&tasks_get(json!(format!("poll-{n}")), task))
-                .await;
-            if matches!(status(&got), Some("completed" | "failed" | "cancelled")) {
-                return got;
+        let polled = bound(async {
+            let mut n = 0;
+            loop {
+                n += 1;
+                let got = self
+                    .request(&tasks_get(json!(format!("poll-{n}")), task))
+                    .await;
+                if matches!(status(&got), Some("completed" | "failed" | "cancelled")) {
+                    return got;
+                }
+                tokio::time::sleep(POLL_GAP).await;
             }
-            assert!(
-                budget.ok(),
-                "task {task} is not terminal within {BOUND:?}: {got}"
-            );
-            tokio::time::sleep(POLL_GAP).await;
-        }
+        })
+        .await;
+        polled.unwrap_or_else(|| panic!("task {task} is not terminal within {BOUND:?}"))
     }
 
     /// Close stdin and wait for a clean exit.
@@ -580,33 +556,37 @@ impl HttpGateway {
     pub async fn start(root: &Path, config: &Path, log_name: &str) -> Self {
         let mut gateway = Self::spawn(root, config, log_name);
         let client = reqwest::Client::new();
-        let mut budget = Budget::new();
-        loop {
-            if let Some(status) = gateway.child.try_wait().expect("child status") {
-                panic!(
-                    "HTTP gateway exited before readiness ({status})\n{}",
-                    gateway.logs()
-                );
+        let ready = bound(async {
+            loop {
+                if let Some(status) = gateway.child.try_wait().expect("child status") {
+                    panic!(
+                        "HTTP gateway exited before readiness ({status})\n{}",
+                        gateway.logs()
+                    );
+                }
+                if gateway.base.is_empty()
+                    && let Some(port) = bound_port(&gateway.logs())
+                {
+                    gateway.base = format!("http://127.0.0.1:{port}");
+                }
+                if !gateway.base.is_empty()
+                    && let Ok(response) =
+                        client.get(format!("{}/health", gateway.base)).send().await
+                    && let Ok(body) = response.json::<Value>().await
+                    && body["version"] == env!("CARGO_PKG_VERSION")
+                {
+                    return;
+                }
+                tokio::time::sleep(POLL_GAP).await;
             }
-            if gateway.base.is_empty()
-                && let Some(port) = bound_port(&gateway.logs())
-            {
-                gateway.base = format!("http://127.0.0.1:{port}");
-            }
-            if !gateway.base.is_empty()
-                && let Ok(response) = client.get(format!("{}/health", gateway.base)).send().await
-                && let Ok(body) = response.json::<Value>().await
-                && body["version"] == env!("CARGO_PKG_VERSION")
-            {
-                return gateway;
-            }
-            assert!(
-                budget.ok(),
-                "HTTP gateway not ready within {BOUND:?}\n{}",
-                gateway.logs()
-            );
-            tokio::time::sleep(POLL_GAP).await;
-        }
+        })
+        .await;
+        assert!(
+            ready.is_some(),
+            "HTTP gateway not ready within {BOUND:?}\n{}",
+            gateway.logs()
+        );
+        gateway
     }
 
     /// Whether the child exits on its own within [`BOUND`] instead of

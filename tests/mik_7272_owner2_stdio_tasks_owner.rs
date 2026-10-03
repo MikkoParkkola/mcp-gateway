@@ -216,17 +216,19 @@ async fn the_local_operator_answers_an_input_round() {
         .request(&task_call(json!(1), ASK, Some("k-t15")))
         .await;
     let id = task_id(&created);
-    let mut budget = helper::Budget::new();
-    let mut n = 0;
-    loop {
-        n += 1;
-        let task = stdio.request(&tasks_get(json!(format!("p{n}")), &id)).await;
-        if status(&task) == Some("input_required") {
-            break;
+    let asked = helper::bound(async {
+        let mut n = 0;
+        loop {
+            n += 1;
+            let task = stdio.request(&tasks_get(json!(format!("p{n}")), &id)).await;
+            if status(&task) == Some("input_required") {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        assert!(budget.ok(), "no input round: {task}");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    })
+    .await;
+    assert!(asked.is_some(), "no input round");
     let updated = stdio.request(&tasks_update(json!(2), &id)).await;
     assert!(updated.get("error").is_none(), "{updated}");
     let task = stdio.terminal(&id).await;
