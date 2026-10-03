@@ -348,9 +348,7 @@ fn allowed_flows_are_checked_at_load() {
     );
     let bad = "    collusion:\n      action: observe\n      allowed_flows:\n        - {source: \"a:*\", egress: \"b:[\"}\n";
     assert!(load(bad).is_err(), "bad egress glob");
-    let many: String = (0..65)
-        .map(|i| format!("        - {{source: \"a:{i}\", egress: \"b:*\"}}\n"))
-        .collect();
+    let many = "        - {source: \"a:*\", egress: \"b:*\"}\n".repeat(65);
     let many = format!("    collusion:\n      action: observe\n      allowed_flows:\n{many}");
     assert!(load(&many).is_err(), "65 entries");
     let ok = "    collusion:\n      action: observe\n      allowed_flows:\n        - {source: \"a:*\", egress: \"b:*\"}\n";
