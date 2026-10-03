@@ -267,6 +267,20 @@ fn self_relay_not_flagged() {
     assert!(d.check_egress_at(B, U, &s, now).is_some());
 }
 
+/// An allowed flow: a copy whose source matched an `allowed_flows` entry the
+/// egress also matched is no relay; another entry, or none, still is.
+#[test]
+fn allowed_flow_not_flagged() {
+    let d = detector();
+    let now = Instant::now();
+    let s = secret();
+    d.record_delivery_flows_at(T, A, (true, 0b01), &s, now);
+    assert!(d.check_egress_flows_at(B, (U, 0b01), &s, now).is_none());
+    assert!(d.check_egress_flows_at(B, (U, 0b11), &s, now).is_none());
+    assert!(d.check_egress_flows_at(B, (U, 0b10), &s, now).is_some());
+    assert!(d.check_egress_flows_at(B, (U, 0), &s, now).is_some());
+}
+
 // Row 9 ────────────────────────────────────────────────────────────────────
 
 #[test]
