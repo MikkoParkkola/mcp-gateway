@@ -9,6 +9,7 @@
 //! supported version.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -17,7 +18,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
