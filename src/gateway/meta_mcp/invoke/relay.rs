@@ -22,6 +22,7 @@ pub(crate) struct RelayKey<'a> {
 
 impl<'a> RelayKey<'a> {
     /// A caller's key, and whether it is a real identity.
+    #[cfg(feature = "firewall")]
     pub(crate) const fn new(key: &'a str, keyed: bool) -> Self {
         Self { key, keyed }
     }

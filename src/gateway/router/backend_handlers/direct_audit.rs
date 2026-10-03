@@ -177,12 +177,19 @@ async fn audited_call_judged(
         reads.params.as_ref(),
         hidden.as_ref(),
     );
-    // COLLUDE.1 x MIN.2: receipts record only an answer that was delivered,
-    // so they follow the judge and the audit write, as on the meta route.
-    #[cfg(feature = "firewall")]
-    super::relay::commit_direct_receipts(&state, frame.delivers_result());
+    // COLLUDE.1 x MIN.2: receipts record only an answer that was delivered, so
+    // they follow the judge, the audit write and the read record that
+    // `emit_http` writes last, as it can still replace the answer.
+    let delivers = frame.delivers_result();
     let response = crate::gateway::outbound::to_http(frame, status, "");
-    crate::gateway::outbound::emit_http(response, state.transparency_log.as_ref()).await
+    let (response, written) =
+        crate::gateway::outbound::emit_http_checked(response, state.transparency_log.as_ref())
+            .await;
+    #[cfg(feature = "firewall")]
+    super::relay::commit_direct_receipts(&state, delivers && written);
+    #[cfg(not(feature = "firewall"))]
+    let _ = (delivers, written);
+    response
 }
 
 /// Write the record for `call` and hand `answer` on, or withhold it when the

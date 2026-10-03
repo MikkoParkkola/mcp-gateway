@@ -89,3 +89,43 @@ async fn an_audit_withheld_direct_read_records_no_receipt() {
     let relay = format!("{PROSE} ");
     assert_refused(&fx, &fx.send(Some("b"), &relay).await, 1);
 }
+
+/// The read record `emit_http` writes last can still replace the answer: with
+/// it failing under `fail-closed`, the 503 leaves no receipt either.
+#[tokio::test]
+async fn a_read_record_failure_leaves_no_direct_receipt() {
+    let mut fx = fixture(Setup {
+        tenants: true,
+        ..Setup::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "rv".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log")
+        .with_failure_policy(AuditFailurePolicy::FailClosed),
+    );
+    Arc::get_mut(&mut fx.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    let text = named("t1", PROSE);
+    fx.answer_read(Read::Text(text.clone()));
+    log.fail_next_append_of_kind_for_test("tenant_read");
+    let body = withheld_read(&fx, "a").await;
+    assert!(
+        body.contains("-32005"),
+        "base: the failed read record withholds the read: {body}"
+    );
+    assert_sent(&fx, &fx.send(Some("b"), &text).await, 1);
+    fx.read(Some("a")).await;
+    assert_refused(&fx, &fx.send(Some("b"), &format!("{text} ")).await, 1);
+}

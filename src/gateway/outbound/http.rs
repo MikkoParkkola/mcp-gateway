@@ -40,14 +40,24 @@ struct PendingRecord(serde_json::Map<String, serde_json::Value>);
 /// the audit-unavailable refusal; its body is dropped unread, so its
 /// reservation commits nothing.
 pub(crate) async fn emit_http(
-    mut response: axum::response::Response,
+    response: axum::response::Response,
     log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
 ) -> axum::response::Response {
+    emit_http_checked(response, log).await.0
+}
+
+/// [`emit_http`], also saying whether the answer went out as built (`true`)
+/// or a failed read-record write replaced it (`false`): what a relay receipt
+/// may follow.
+pub(crate) async fn emit_http_checked(
+    mut response: axum::response::Response,
+    log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+) -> (axum::response::Response, bool) {
     let Some(PendingRecord(fields)) = response.extensions_mut().remove::<PendingRecord>() else {
-        return response;
+        return (response, true);
     };
     if super::audit::record_fields(fields, log).await {
-        return response;
+        return (response, true);
     }
     let id = response
         .extensions()
@@ -73,7 +83,7 @@ pub(crate) async fn emit_http(
             .headers_mut()
             .insert("mcp-session-id", session.clone());
     }
-    refused
+    (refused, false)
 }
 
 /// A late replacer swapping `from` for `to`: the original's pending read

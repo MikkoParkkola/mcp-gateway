@@ -2841,7 +2841,8 @@ impl Gateway {
     }
 
     /// [`Self::dispatch_single_staged`] recording the receipts straight away,
-    /// for a caller that judges no frame (a test, a path with no read judge).
+    /// for a caller that judges no frame (a test).
+    #[cfg(test)]
     async fn dispatch_single_with_sink(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
