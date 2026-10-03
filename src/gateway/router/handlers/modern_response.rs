@@ -81,10 +81,7 @@ pub(super) fn shape_modern_response(response: &mut crate::protocol::JsonRpcRespo
         if let Some(meta) = meta.as_object_mut() {
             meta.insert(
                 crate::protocol::meta::KEY_SERVER_INFO.to_string(),
-                serde_json::json!({
-                    "name": "mcp-gateway",
-                    "version": env!("CARGO_PKG_VERSION"),
-                }),
+                crate::protocol::meta::server_info(),
             );
         }
     }
