@@ -11,19 +11,21 @@ use std::collections::BTreeMap;
 
 use crate::config::{BackendConfig, Config, TransportConfig};
 
-/// The three upstream-notification event kinds (design §1).
+/// The upstream-notification event kinds (design §1, §14).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
     ResourceUpdated,
     ResourcesChanged,
     PromptsChanged,
+    ToolsChanged,
 }
 
 impl Kind {
-    const ALL: [Self; 3] = [
+    const ALL: [Self; 4] = [
         Self::ResourceUpdated,
         Self::ResourcesChanged,
         Self::PromptsChanged,
+        Self::ToolsChanged,
     ];
 
     /// The last segment of the event name.
@@ -32,6 +34,7 @@ impl Kind {
             Self::ResourceUpdated => "resource_updated",
             Self::ResourcesChanged => "resources_changed",
             Self::PromptsChanged => "prompts_changed",
+            Self::ToolsChanged => "tools_changed",
         }
     }
 }
@@ -151,8 +154,11 @@ mod tests {
             parse_name("backend.x.resources_changed"),
             Some(("x", Kind::ResourcesChanged))
         );
+        assert_eq!(
+            parse_name("backend.x.tools_changed"),
+            Some(("x", Kind::ToolsChanged))
+        );
         for other in [
-            "backend.x.tools_changed",
             "backend..resources_changed",
             "backend.resources_changed",
             "backend.xresources_changed",

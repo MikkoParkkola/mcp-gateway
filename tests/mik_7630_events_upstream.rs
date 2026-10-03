@@ -22,6 +22,8 @@ mod receiver;
 #[path = "mik_7630_events/upstream_peer.rs"]
 #[allow(dead_code, reason = "mock peers; each row uses a subset")]
 mod upstream_peer;
+#[path = "mik_7630_events/upstream_tools.rs"]
+mod upstream_tools;
 
 use std::path::Path;
 use std::time::Duration;
