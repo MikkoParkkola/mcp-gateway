@@ -184,11 +184,12 @@ impl MetaMcp {
         {
             // Names only: this runs on every initialize and tools/list, and
             // `get_tools()` deep-clones every definition's schemas (#2110).
+            let mut seen = std::collections::HashMap::new();
             let admitted = cap
                 .list()
                 .iter()
                 .filter(|name| {
-                    cap.is_listed(name)
+                    cap.is_listed_in(name, &mut seen)
                         && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
                 })
                 .count();
@@ -206,8 +207,10 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Vec<crate::capability::CapabilityDefinition> {
-        let allowed = |name: &str| {
-            cap.is_listed(name) && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+        let mut seen = std::collections::HashMap::new();
+        let mut allowed = |name: &str| {
+            cap.is_listed_in(name, &mut seen)
+                && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
         };
         let mut caps = cap.list_capabilities();
         caps.retain(|c| allowed(&c.name));

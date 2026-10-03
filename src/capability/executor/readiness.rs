@@ -54,12 +54,23 @@ impl CapabilityExecutor {
             return (!present).then(|| var.to_string());
         }
         let provider = auth.key.strip_prefix("oauth:")?;
+        let refreshable = auth.token_endpoint.is_some();
         let logged_in = *oauth_seen.entry(provider.to_string()).or_insert_with(|| {
-            self.oauth_tokens.read().contains_key(provider)
+            // The rule `fetch_oauth_token` runs: a token that has not expired,
+            // or an expired one with a refresh token and an endpoint to use it
+            // at. A file that cannot be read or parsed is no login.
+            let usable = |token: &crate::oauth::TokenInfo| {
+                !token.is_expired() || (refreshable && token.refresh_token.is_some())
+            };
+            self.oauth_tokens
+                .read()
+                .get(provider)
+                .is_some_and(|t| usable(&t))
                 || self
                     .token_storage
                     .as_ref()
-                    .is_some_and(|storage| storage.token_path(provider, provider).exists())
+                    .and_then(|storage| storage.load(provider, provider))
+                    .is_some_and(|token| usable(&token))
         });
         (!logged_in).then(|| format!("a {provider} login"))
     }

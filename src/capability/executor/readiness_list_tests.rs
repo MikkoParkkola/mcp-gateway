@@ -96,3 +96,109 @@ fn a_shared_account_key_is_checked_and_a_per_caller_one_is_not() {
         "  personal - Keyed [bearer]"
     );
 }
+
+// MIK-7856.OAUTH.1 and .4: an oauth capability is listed while a usable token
+// exists (cached, or in the token file), and not for an expired token that
+// cannot be refreshed, or one that cannot be read.
+
+fn oauth_cap(endpoint: bool) -> crate::capability::CapabilityDefinition {
+    let endpoint = if endpoint {
+        "  token_endpoint: https://issuer.invalid/token\n"
+    } else {
+        ""
+    };
+    let yaml = format!(
+        "name: oauthy\ndescription: Keyed\nproviders:\n  primary:\n    service: rest\n    \
+         config:\n      base_url: https://api.invalid\n      path: /k\nauth:\n  required: true\n  \
+         type: oauth\n  key: \"oauth:mik7856\"\n{endpoint}"
+    );
+    crate::capability::parse_capability(&yaml).unwrap()
+}
+
+fn token(expires_in: i64, refresh: bool) -> crate::oauth::TokenInfo {
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    )
+    .unwrap();
+    let mut token: crate::oauth::TokenInfo =
+        serde_json::from_value(serde_json::json!({"access_token": "t"})).unwrap();
+    token.expires_at = Some(u64::try_from(now + expires_in).unwrap());
+    token.refresh_token = refresh.then(|| "r".to_string());
+    token
+}
+
+fn executor_with_storage() -> (
+    tempfile::TempDir,
+    Arc<crate::oauth::TokenStorage>,
+    CapabilityExecutor,
+) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let storage = Arc::new(crate::oauth::TokenStorage::new(dir.path().to_path_buf()).unwrap());
+    let executor = CapabilityExecutor::with_token_storage(Arc::clone(&storage));
+    (dir, storage, executor)
+}
+
+fn off(executor: &CapabilityExecutor, endpoint: bool) -> bool {
+    executor
+        .missing_credential(
+            &oauth_cap(endpoint).auth,
+            &mut std::collections::HashMap::new(),
+        )
+        .is_some()
+}
+
+#[test]
+fn a_cached_token_and_a_token_file_each_turn_an_oauth_capability_on() {
+    let (_dir, storage, executor) = executor_with_storage();
+    assert!(off(&executor, false), "no login yet");
+    storage
+        .save("mik7856", "mik7856", &token(3600, false))
+        .unwrap();
+    assert!(!off(&executor, false), "a valid token file lists it");
+
+    let (_dir, _storage, cached) = executor_with_storage();
+    cached
+        .oauth_tokens
+        .read()
+        .insert("mik7856".to_string(), token(3600, false));
+    assert!(!off(&cached, false), "a valid cached token lists it");
+}
+
+#[test]
+fn an_expired_token_that_cannot_be_refreshed_does_not_list_the_capability() {
+    let (_dir, storage, executor) = executor_with_storage();
+    storage
+        .save("mik7856", "mik7856", &token(-3600, false))
+        .unwrap();
+    assert!(
+        off(&executor, false),
+        "an expired file token is not a login"
+    );
+    // A refresh token needs the capability's token endpoint to be usable.
+    storage
+        .save("mik7856", "mik7856", &token(-3600, true))
+        .unwrap();
+    assert!(off(&executor, false), "refresh token without an endpoint");
+    assert!(!off(&executor, true), "refreshable: still listed");
+
+    let (_dir, _storage, cached) = executor_with_storage();
+    cached
+        .oauth_tokens
+        .read()
+        .insert("mik7856".to_string(), token(-3600, false));
+    assert!(
+        off(&cached, false),
+        "an expired cached token is not a login"
+    );
+}
+
+#[test]
+fn an_unreadable_token_file_does_not_list_the_capability() {
+    let (_dir, storage, executor) = executor_with_storage();
+    let path = storage.token_path("mik7856", "mik7856");
+    crate::gateway::test_helpers::write_owner_only(&path, "{not json").unwrap();
+    assert!(off(&executor, false));
+}

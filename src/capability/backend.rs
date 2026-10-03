@@ -456,11 +456,38 @@ impl CapabilityBackend {
     /// required login (if any) is in place. A name this backend does not hold
     /// is not its to hide, so it counts as listed.
     pub fn is_listed(&self, name: &str) -> bool {
+        self.is_listed_in(name, &mut HashMap::new())
+    }
+
+    /// [`Self::is_listed`] for a pass over many names: `seen` memoises the
+    /// per-provider OAuth lookups, so one listing or search reads each
+    /// provider's token once however many capabilities use it.
+    pub fn is_listed_in(&self, name: &str, seen: &mut HashMap<String, bool>) -> bool {
         self.capabilities.read().get(name).is_none_or(|entry| {
             self.executor
-                .missing_credential(&entry.auth, &mut HashMap::new())
+                .missing_credential(&entry.auth, seen)
                 .is_none()
         })
+    }
+
+    /// The names clients are shown now, sorted. A change between two calls is
+    /// a change of what `tools/list` answers.
+    pub fn listed_names(&self) -> Vec<String> {
+        let mut seen = HashMap::new();
+        let mut names: Vec<String> = self
+            .capabilities
+            .read()
+            .entries
+            .iter()
+            .filter(|entry| {
+                self.executor
+                    .missing_credential(&entry.auth, &mut seen)
+                    .is_none()
+            })
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        names
     }
 
     /// Get a specific capability by name — O(1) via the name index.
