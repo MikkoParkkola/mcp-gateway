@@ -24,9 +24,12 @@ mod client;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
+mod mcp;
 mod params;
 mod process;
 pub mod rest;
+mod save_file;
+pub use save_file::SaveFileSpec;
 mod xml;
 
 use std::sync::Arc;
@@ -90,6 +93,10 @@ pub struct CapabilityExecutor {
     pub(super) process_policy: process::ProcessPolicy,
     /// Per-capability bound on simultaneous CLI children.
     pub(super) process_slots: DashMap<String, Arc<tokio::sync::Semaphore>>,
+    /// Per-caller MCP capability children (MIK-7782).
+    pub(super) mcp_children: Arc<mcp::McpChildren>,
+    /// Mirrors the capability backend's multi-user flag.
+    pub(super) multi_user: std::sync::atomic::AtomicBool,
 }
 
 impl CapabilityExecutor {
@@ -113,6 +120,8 @@ impl CapabilityExecutor {
             account_strategies: None,
             process_policy: process::ProcessPolicy::default(),
             process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -135,6 +144,18 @@ impl CapabilityExecutor {
             executor.client = client::build(Some(&proxy));
         }
         executor
+    }
+
+    /// Whether several callers share this gateway (set with the capability
+    /// backend's flag): an MCP capability then needs an identified caller.
+    pub fn set_multi_user(&self, multi_user: bool) {
+        self.multi_user
+            .store(multi_user, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Stop the MCP children of every capability `loaded` rejects.
+    pub(crate) fn stop_unloaded_mcp(&self, loaded: &dyn Fn(&str) -> bool) {
+        self.mcp_children.evict(std::time::Duration::MAX, loaded);
     }
 
     /// Share the gateway policy epoch so capability reload can bump it.
@@ -233,6 +254,8 @@ impl CapabilityExecutor {
             account_strategies: None,
             process_policy: process::ProcessPolicy::default(),
             process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -506,7 +529,11 @@ impl CapabilityExecutor {
         )
         .await?;
 
-        self.handle_response(response, config).await
+        let body = self.handle_response(response, config).await?;
+        match &config.save_file {
+            Some(spec) => save_file::save(spec, &body, params, &self.process_policy.files).await,
+            None => Ok(body),
+        }
     }
 
     /// Build URL with path parameter substitution.

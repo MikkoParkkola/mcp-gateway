@@ -1,0 +1,62 @@
+sha256: badff04cc3b962fce39399ce55204235829d725246bd7969e508550b417d82aa
+fulcrum: '1.0'
+name: cloudflare_purge_cache
+description: 'Purge a zone''s cache: everything, or the listed files.'
+schema:
+  input:
+    type: object
+    properties:
+      zone_id:
+        type: string
+        description: Cloudflare zone ID
+      purge_everything:
+        type: boolean
+        description: Purge the whole zone cache
+      files:
+        type: array
+        items:
+          type: string
+        maxItems: 30
+        description: URLs to purge
+    required:
+    - zone_id
+  output:
+    type: object
+    properties:
+      success:
+        type: boolean
+      result: {}
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.cloudflare.com/client/v4
+      path: /zones/{zone_id}/purge_cache
+      method: POST
+      headers:
+        Authorization: Bearer {env.CLOUDFLARE_API_TOKEN}
+        Content-Type: application/json
+      body:
+        purge_everything: '{purge_everything}'
+        files: '{files}'
+cache:
+  strategy: none
+  ttl: 0
+auth:
+  required: true
+  type: bearer
+  key: env:CLOUDFLARE_API_TOKEN
+  header: Authorization
+  prefix: Bearer
+  description: Create an API token at https://dash.cloudflare.com/profile/api-tokens with the permissions
+    this operation needs.
+metadata:
+  category: infrastructure
+  tags:
+  - cloudflare
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.cloudflare.com/api/
