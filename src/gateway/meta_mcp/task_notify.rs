@@ -43,37 +43,43 @@ impl MetaMcp {
         subscription: &SubscriptionId,
         reader: &Reader<'_>,
     ) -> Option<Value> {
-        let delivery = super::invoke::relay::collecting(async {
-            let withheld = stored.is_none_or(refused);
-            let params = match stored {
-                Some(task) if !withheld => serde_json::to_value(task.task.wire()).ok(),
-                _ => None,
-            };
-            let frame = match params {
-                Some(params) => json!({
-                    "jsonrpc": "2.0",
-                    "method": notification["method"],
-                    "params": params,
-                }),
-                None => notification.clone(),
-            };
-            let frame = subscription.tag(frame);
-            let correlation = ResponseCorrelation {
-                session_id: reader.session_id,
-                caller: reader.caller,
-                external_server: "gateway",
-                external_tool: "notifications/tasks",
-            };
-            let delivered = self
-                .record_notification_delivery_attempt(&frame, &correlation)
-                .await;
+        // The collector is outside the slot: receipts are recorded only after
+        // the slot's own write (grant decisions) has also succeeded.
+        super::invoke::relay::collecting(async {
+            let slotted =
+                super::grant_audit::slot_result(self.transparency_logger.as_ref(), async {
+                    let withheld = stored.is_none_or(refused);
+                    let params = match stored {
+                        Some(task) if !withheld => serde_json::to_value(task.task.wire()).ok(),
+                        _ => None,
+                    };
+                    let frame = match params {
+                        Some(params) => json!({
+                            "jsonrpc": "2.0",
+                            "method": notification["method"],
+                            "params": params,
+                        }),
+                        None => notification.clone(),
+                    };
+                    let frame = subscription.tag(frame);
+                    let correlation = ResponseCorrelation {
+                        session_id: reader.session_id,
+                        caller: reader.caller,
+                        external_server: "gateway",
+                        external_tool: "notifications/tasks",
+                    };
+                    let delivered = self
+                        .record_notification_delivery_attempt(&frame, &correlation)
+                        .await;
+                    Ok(delivered.then_some((frame, withheld)))
+                })
+                .await
+                .ok()
+                .flatten();
             // Receipts a refused or withheld frame staged are dropped.
-            self.commit_staged_relay(delivered && !withheld);
-            Ok(delivered.then_some(frame))
-        });
-        super::grant_audit::slot_result(self.transparency_logger.as_ref(), delivery)
-            .await
-            .ok()
-            .flatten()
+            self.commit_staged_relay(slotted.as_ref().is_some_and(|(_, withheld)| !withheld));
+            slotted.map(|(frame, _)| frame)
+        })
+        .await
     }
 }

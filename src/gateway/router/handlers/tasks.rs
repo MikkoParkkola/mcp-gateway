@@ -507,6 +507,10 @@ struct TaskFrameSource {
     verified_identity: Option<VerifiedIdentity>,
     input_capabilities: Declared,
     session_id: Option<String>,
+    /// An agent-JWT caller's scopes were read from the token when the stream
+    /// opened and nothing re-validates that token afterwards, so such a reader
+    /// is sent task id and status only. Everything else re-resolves at delivery.
+    status_only: bool,
 }
 
 pub(super) fn task_frames(
@@ -526,6 +530,7 @@ pub(super) fn task_frames(
         verified_identity: caller.verified_identity.cloned(),
         input_capabilities: caller.input_capabilities,
         session_id: caller.session_id.map(str::to_owned),
+        status_only: caller.oauth_agent_identity.is_some(),
     })
 }
 
@@ -541,6 +546,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         // absence gets the notification as published (id and status only).
         // A credential that no longer authenticates reads nothing.
         let stored = reader
+            .filter(|_| !self.status_only)
             .zip(
                 notification
                     .pointer("/params/taskId")
