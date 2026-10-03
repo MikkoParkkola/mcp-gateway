@@ -333,10 +333,9 @@ impl MetaMcp {
             status: 403,
             message,
         };
-        Some(super::super::response_security::error_response_preserving_status(
-            id.clone(),
-            &refusal,
-        ))
+        Some(
+            super::super::response_security::error_response_preserving_status(id.clone(), &refusal),
+        )
     }
 
     /// Stage a delivered catalogue result as a delivery from `backend:method`.

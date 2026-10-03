@@ -81,7 +81,9 @@ pub(super) fn relay_refusal(
 fn without_progress_token(params: &Value) -> Option<Value> {
     params.pointer("/_meta/progressToken")?;
     let mut copy = params.clone();
-    copy.get_mut("_meta")?.as_object_mut()?.remove("progressToken");
+    copy.get_mut("_meta")?
+        .as_object_mut()?
+        .remove("progressToken");
     Some(copy)
 }
 
