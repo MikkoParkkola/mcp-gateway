@@ -362,3 +362,29 @@ async fn status_after_a_reload_removed_accounts_is_not_found() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(code_of(&body), "not_found", "{body}");
 }
+
+/// Mutant: create dropping the bridge check. A reload that left the accounts
+/// block but took the browser bridge off every adapter must refuse an identity
+/// the startup adapter still vouches for, before custody (which would say 503).
+#[tokio::test(flavor = "multi_thread")]
+async fn create_refuses_when_a_reload_unbridged_the_caller() {
+    // GIVEN
+    let owui = FakeOwui::start(users(), Answer::Session).await;
+    let gw = with_journeys(gateway(&owui, 5).await, Arc::new(Owner::Down));
+    let (status, _, body) = post_journey(&gw, Some(ALICE), WORK).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "control: bridged reaches custody: {body}"
+    );
+    let mut config = (*gw.state.live_config.get()).clone();
+    for adapter in &mut config.accounts.as_mut().expect("accounts").adapters {
+        adapter.session = None;
+    }
+    gw.state.live_config.set(config);
+    // WHEN
+    let (status, _, body) = post_journey(&gw, Some(ALICE), WORK).await;
+    // THEN
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(code_of(&body), "forbidden", "{body}");
+}
