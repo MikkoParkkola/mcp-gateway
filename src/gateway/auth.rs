@@ -661,6 +661,12 @@ fn presented_credential(headers: &axum::http::HeaderMap) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// The SHA-256 of the bearer a request presents, for a binding that must
+/// tell two bearers apart (the 12-hex principal is only a log fingerprint).
+pub(crate) fn presented_bearer_sha256(headers: &axum::http::HeaderMap) -> Option<String> {
+    presented_credential(headers).map(|token| crate::hashing::sha256_hex(token.as_bytes()))
+}
+
 /// Read the session cookie from a request's headers, if present.
 #[must_use]
 pub fn session_cookie_value(headers: &axum::http::HeaderMap) -> Option<String> {

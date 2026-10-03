@@ -177,6 +177,58 @@ async fn a_static_bearer_subscription_needs_the_same_running_bearer() {
     );
 }
 
+/// MIK-7889 (#2695): the static-bearer re-check compares the full SHA-256 of
+/// the bearer, not only the 12-hex log fingerprint. A running bearer whose
+/// fingerprint matches but whose digest differs is refused.
+#[tokio::test]
+async fn a_static_bearer_recheck_compares_the_full_digest() {
+    use crate::security::audit::CredentialKind as Kind;
+    let digest = |t: &str| crate::hashing::sha256_hex(t.as_bytes());
+    let sub = bound(
+        Kind::StaticBearer,
+        Some(LiveBinding::StaticBearerSha256 {
+            bearer_sha256: digest("old"),
+        }),
+    );
+    let live = |token: &str, fingerprint_of: &str| {
+        with(LiveCredentials {
+            bearer_principal: Some(crate::gateway::auth::principal_of(fingerprint_of)),
+            bearer_sha256: Some(digest(token)),
+            ..LiveCredentials::default()
+        })
+    };
+    assert!(
+        live("old", "old")
+            .admits_subscription(&sub, Some("x"))
+            .await
+    );
+    assert!(
+        !live("other", "old")
+            .admits_subscription(&sub, Some("x"))
+            .await,
+        "same 12-hex fingerprint, different bearer"
+    );
+    let none = with(LiveCredentials {
+        bearer_principal: Some(crate::gateway::auth::principal_of("old")),
+        ..LiveCredentials::default()
+    });
+    assert!(
+        !none.admits_subscription(&sub, Some("x")).await,
+        "no running digest, no admission"
+    );
+}
+
+/// MIK-7889: the running bearer yields both the fingerprint and the digest,
+/// and none without a bearer.
+#[test]
+fn the_running_static_bearer_yields_a_fingerprint_and_a_full_digest() {
+    let (principal, digest) = LiveCredentials::static_bearer(Some("tok"));
+    assert_eq!(principal, Some(crate::gateway::auth::principal_of("tok")));
+    assert_eq!(digest, Some(crate::hashing::sha256_hex(b"tok")));
+    assert_eq!(digest.unwrap().len(), 64);
+    assert_eq!(LiveCredentials::static_bearer(None), (None, None));
+}
+
 /// Design F9 (MIK-7769): key-server tokens live until revoked; delegated
 /// bearers while the live policy grants the backend; a bound kind
 /// without its binding is refused.
