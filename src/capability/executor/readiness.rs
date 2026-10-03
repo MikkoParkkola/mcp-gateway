@@ -74,7 +74,11 @@ impl CapabilityExecutor {
         } else {
             String::new()
         };
-        format!("  {} - {}{}", cap.name, cap.description, auth_info)
+        let off = self
+            .missing_credential(&cap.auth, &mut HashMap::new())
+            .map(|what| format!(" off: needs {what}"))
+            .unwrap_or_default();
+        format!("  {} - {}{}{}", cap.name, cap.description, auth_info, off)
     }
 }
 
