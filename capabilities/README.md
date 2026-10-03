@@ -1,6 +1,6 @@
 # MCP Gateway Built-in Capabilities
 
-mcp-gateway currently ships **119 built-in capabilities** (marketed publicly as **110+**), derived from the tracked YAML inventory under `capabilities/` excluding `examples/`.
+mcp-gateway currently ships **137 built-in capabilities** (marketed publicly as **130+**), derived from the tracked YAML inventory under `capabilities/` excluding `examples/`.
 
 ## Categories
 
@@ -12,15 +12,16 @@ mcp-gateway currently ships **119 built-in capabilities** (marketed publicly as 
 | **finance/** | 6 |
 | **food/** | 1 |
 | **google/** | 21 |
-| **infrastructure/** | 1 |
+| **infrastructure/** | 11 |
 | **knowledge/** | 22 |
 | **linear/** | 13 |
+| **observability/** | 2 |
 | **media/** | 10 |
-| **productivity/** | 25 |
-| **search/** | 1 |
+| **productivity/** | 26 |
+| **search/** | 7 |
 | **security/** | 2 |
 | **utility/** | 3 |
-| **verification/** | 2 |
+| **verification/** | 1 |
 
 ## Discovering the Catalog
 
@@ -121,7 +122,8 @@ metadata:
 ## API Categories Explained
 
 - **knowledge/**: Reference data, facts, geocoding, academic papers
-- **search/**: Web, news, images, code search
+- **search/**: Web and news search, page extraction (Brave, Tavily, Firecrawl; each needs its own API key)
+- **observability/**: Error tracking (Sentry issues; needs SENTRY_AUTH_TOKEN)
 - **finance/**: Stock quotes, currency exchange, SEC filings, company data
 - **geo/**: IP geolocation
 - **entertainment/**: Movies, music, jokes, trivia

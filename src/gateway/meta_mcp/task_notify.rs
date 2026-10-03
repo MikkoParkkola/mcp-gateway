@@ -54,17 +54,19 @@ impl MetaMcp {
         subscription: &SubscriptionId,
     ) -> Option<PendingTaskFrame> {
         // The collector is outside the slot, so receipts outlive the slot's
-        // own write (grant decisions) and are taken out only if it succeeded.
-        super::invoke::relay::collecting(async {
-            let decided =
+        // own write (grant decisions); they are handed back, recorded or
+        // dropped by `finish_task_frame`.
+        let (decided, staged) = self
+            .collecting_staged(async {
                 super::grant_audit::slot_result(self.transparency_logger.as_ref(), async {
                     let withheld = stored.is_none_or(refused);
                     let params = match stored {
                         Some(task) if !withheld => serde_json::to_value(task.task.wire()).ok(),
                         _ => None,
                     };
-                    // A read of stored backend output only when the task serves some, as
-                    // `tasks/get` counts it: a working or cancelled task read nothing.
+                    // A read of stored backend output only when the task serves
+                    // some, as `tasks/get` counts it: a working or cancelled
+                    // task read nothing.
                     let restored_output = params.is_some()
                         && stored.is_some_and(CommittedTask::serves_backend_output);
                     let frame = match params {
@@ -78,19 +80,16 @@ impl MetaMcp {
                     Ok((subscription.tag(frame), withheld, restored_output))
                 })
                 .await
-                .ok();
-            let Some((frame, withheld, restored_output)) = decided else {
-                self.commit_staged_relay(false);
-                return None;
-            };
-            Some(PendingTaskFrame {
-                frame,
-                restored_output,
-                withheld,
-                staged: self.take_staged_relay(),
+                .ok()
             })
+            .await;
+        let (frame, withheld, restored_output) = decided?;
+        Some(PendingTaskFrame {
+            frame,
+            restored_output,
+            withheld,
+            staged,
         })
-        .await
     }
 
     /// Record the delivery of `pending`, now that the stream's gates have
@@ -113,7 +112,7 @@ impl MetaMcp {
         let delivered = self
             .record_notification_delivery_attempt(sent, &correlation)
             .await;
-        pending.staged.record(self, delivered && !pending.withheld);
+        pending.staged.commit(delivered && !pending.withheld);
         delivered
     }
 }

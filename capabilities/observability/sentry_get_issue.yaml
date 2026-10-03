@@ -1,0 +1,56 @@
+sha256: 3021c487feda21f08bab8353b0c906cd998299f46399732d88f19095d58892e6
+fulcrum: "1.0"
+name: sentry_get_issue
+description: |
+  Get one Sentry issue (sentry.io, US region): title, culprit, status, counts,
+  first and last seen. Use sentry_list_issues to find the issue ID.
+
+schema:
+  input:
+    type: object
+    properties:
+      organization:
+        type: string
+        description: Sentry organization slug
+        pattern: "^[a-z0-9][a-z0-9_-]*$"
+      issue_id:
+        type: integer
+        description: Numeric issue ID
+        minimum: 1
+    required:
+      - organization
+      - issue_id
+  output:
+    type: object
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 20
+    config:
+      base_url: https://sentry.io
+      path: /api/0/organizations/{organization}/issues/{issue_id}/
+      method: GET
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: bearer
+  key: "env:SENTRY_AUTH_TOKEN"
+  description: >
+    Create a user auth token with event:read and org:read at
+    https://sentry.io/settings/account/api/auth-tokens/ and set
+    SENTRY_AUTH_TOKEN. EU-region organizations (de.sentry.io) are not covered.
+
+metadata:
+  category: observability
+  tags: [sentry, errors, issues, observability]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  chains_with: [sentry_list_issues]
+  docs: https://docs.sentry.io/api/events/retrieve-an-issue/

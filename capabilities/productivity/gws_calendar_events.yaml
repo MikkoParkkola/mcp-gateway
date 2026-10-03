@@ -1,4 +1,4 @@
-sha256: 80787d26a31732a9e262bccd20fbce7efc22b0c291259df57f9ce2c6675979d5
+sha256: b3e8f7bcfb3ed7ef498b9d08df0a9068bdf41c1c8770723061f4f97771e5cf40
 fulcrum: "1.0"
 name: gws_calendar_events
 description: List upcoming Google Calendar events. Supports time range filtering and multiple calendars.
@@ -9,18 +9,18 @@ schema:
     properties:
       calendarId:
         type: string
-        description: Calendar ID (use "primary" for the main calendar)
-        default: "primary"
+        default: primary
+        description: Calendar ID ('primary' for the main calendar)
       maxResults:
         type: integer
         description: Maximum number of events to return
         default: 10
       timeMin:
         type: string
-        description: "Lower bound for event start time (RFC3339, e.g., 2026-03-11T00:00:00Z)"
+        description: Lower bound for event start time (RFC3339, e.g., 2026-03-11T00:00:00Z)
       timeMax:
         type: string
-        description: "Upper bound for event start time (RFC3339)"
+        description: Upper bound for event start time (RFC3339)
     required: []
   output:
     type: object
@@ -47,11 +47,18 @@ providers:
     config:
       command: gws
       args:
-        - calendar
-        - events
-        - list
-        - "--params"
-        - '{"calendarId": "{calendarId}", "maxResults": {maxResults}, "timeMin": "{timeMin}", "singleEvents": true, "orderBy": "startTime"}'
+      - calendar
+      - events
+      - list
+      - json: --params=
+        value:
+          calendarId: '{calendarId}'
+          maxResults: '{maxResults}'
+          timeMin: '{timeMin}'
+          timeMax: '{timeMax}'
+          singleEvents: true
+          orderBy: startTime
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: ttl
@@ -59,8 +66,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s calendar"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/calendar.readonly
 
 metadata:
   category: productivity

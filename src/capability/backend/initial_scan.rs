@@ -12,13 +12,18 @@
 
 use super::CapabilityBackend;
 
+/// `initial_scan` bits: the scan has loaded every directory; a directory
+/// failed to load.
+const COMPLETE: u8 = 0b01;
+const FAILED: u8 = 0b10;
+
 impl CapabilityBackend {
     /// Mark the backend as still scanning, until
     /// [`Self::mark_initial_scan_complete`] runs. Called by startup before it
     /// spawns the background load.
     pub(crate) fn begin_initial_scan(&self) {
         self.initial_scan
-            .store(false, std::sync::atomic::Ordering::Release);
+            .store(0, std::sync::atomic::Ordering::Release);
     }
 
     /// Record that the startup scan has loaded every configured directory.
@@ -26,13 +31,27 @@ impl CapabilityBackend {
         // Release pairs with the Acquire below: a probe that sees `true` also
         // sees every capability the scan registered before marking.
         self.initial_scan
-            .store(true, std::sync::atomic::Ordering::Release);
+            .fetch_or(COMPLETE, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Record that a configured directory could not be loaded: what the
+    /// scan registered is partial.
+    pub(crate) fn mark_initial_scan_failed(&self) {
+        self.initial_scan
+            .fetch_or(FAILED, std::sync::atomic::Ordering::Release);
     }
 
     /// Whether [`Self::mark_initial_scan_complete`] has run.
     #[must_use]
     pub(crate) fn initial_scan_complete(&self) -> bool {
-        self.initial_scan.load(std::sync::atomic::Ordering::Acquire)
+        self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & COMPLETE != 0
+    }
+
+    /// Whether every configured directory loaded (meaningful once the scan
+    /// is complete): a failed one leaves the catalogue partial.
+    #[must_use]
+    pub(crate) fn initial_scan_loaded_every_directory(&self) -> bool {
+        self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & FAILED == 0
     }
 }
 
@@ -80,5 +99,26 @@ mod tests {
         backend.mark_initial_scan_complete();
         assert!(backend.initial_scan_complete());
         assert!(backend.status().loaded);
+    }
+}
+
+#[cfg(test)]
+mod failed_tests {
+    use std::sync::Arc;
+
+    use super::super::CapabilityExecutor;
+    use super::*;
+
+    #[test]
+    fn a_failed_directory_marks_the_scan_partial_even_once_complete() {
+        let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+        backend.begin_initial_scan();
+        backend.mark_initial_scan_failed();
+        assert!(!backend.initial_scan_complete(), "still scanning");
+        backend.mark_initial_scan_complete();
+        assert!(backend.initial_scan_complete());
+        assert!(!backend.initial_scan_loaded_every_directory());
+        let clean = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+        assert!(clean.initial_scan_loaded_every_directory());
     }
 }

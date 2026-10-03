@@ -24,11 +24,9 @@
 1631 src/security/firewall/mod.rs
 1617 tests/mik_7272_sub2b_acs.rs
 1603 src/protocol_revision_telemetry.rs
-1573 src/gateway/ui/control_plane.rs
 1497 src/gateway/proxy.rs
 1464 src/capability/definition/tests.rs
 1460 src/idempotency.rs
-1450 src/gateway/router/backend_handlers.rs
 1412 src/gateway/meta_mcp/account_rest_tests.rs
 1405 src/capability/definition/mod.rs
 1398 tests/mik_7212_mrtr_component_acs.rs

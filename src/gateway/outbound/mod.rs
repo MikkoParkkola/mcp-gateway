@@ -20,6 +20,7 @@ mod callback;
 mod http;
 #[cfg(feature = "firewall")]
 mod judge;
+mod reply;
 mod stdio;
 mod stream;
 
@@ -35,6 +36,7 @@ pub(crate) use callback::{CallbackSend, callback_frame, send_callback};
 pub(crate) use http::{HeldAnswerId, carry_record, emit_http, to_http};
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, delivered};
+pub(crate) use reply::{OutboundReply, gateway_reply, judged_reply, stream_reply};
 pub(crate) use stdio::StdioReads;
 pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_data, sse_message};
 
@@ -121,6 +123,18 @@ impl OutboundFrame {
     /// fail-closed replaced it): nothing is left to write.
     pub(crate) const fn is_withheld(&self) -> bool {
         matches!(self.payload, Payload::Withheld)
+    }
+
+    /// Whether the frame, as it will be written, delivers a result: one the
+    /// judge, an audit failure or a gate left in place, not a refusal that
+    /// replaced it (a refusal carries no result). What a relay receipt may
+    /// follow; a result beside an error is still delivered.
+    pub(crate) fn delivers_result(&self) -> bool {
+        match &self.payload {
+            Payload::Response(response) => response.result.is_some() && !response.delivery_refusal,
+            Payload::Answer(value) => value.get("result").is_some_and(|r| !r.is_null()),
+            _ => false,
+        }
     }
 
     /// The judgement this frame carries, if it was assessed.

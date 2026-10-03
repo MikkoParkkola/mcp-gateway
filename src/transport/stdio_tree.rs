@@ -1,0 +1,79 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Process-tree ownership and frame reading for the stdio transport.
+
+use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _};
+use tokio::process::Command;
+
+use super::StdioTransport;
+use crate::{Error, Result};
+
+impl Drop for StdioTransport {
+    /// A dropped transport ends the whole tree. `KillOnDrop` only kills the
+    /// group leader, so `npx`/`uvx` descendants would outlive it.
+    fn drop(&mut self) {
+        if let Some(child) = self.child.get_mut().as_mut() {
+            let _ = child.start_kill();
+        }
+    }
+}
+
+/// Start `cmd` as the leader of its own process group (Unix) or Job object
+/// (Windows), so stopping the backend ends every process it started:
+/// `npx`/`uvx`-style launchers otherwise leave the real server behind.
+pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
+    let mut wrap = CommandWrap::from(cmd);
+    wrap.wrap(KillOnDrop);
+    #[cfg(unix)]
+    wrap.wrap(process_wrap::tokio::ProcessGroup::leader());
+    #[cfg(windows)]
+    wrap.wrap(process_wrap::tokio::JobObject);
+    wrap.spawn().map_err(|e| match e.kind() {
+        // A command path that does not exist, or a file that is not
+        // executable. No amount of waiting fixes either, and warm-start
+        // retries transport failures indefinitely -- so before this, a
+        // typo in a backend command was respawned once a minute for the
+        // life of the process with no indication the config was wrong.
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+            Error::TransportPermanent(format!("Failed to spawn: {e}"))
+        }
+        _ => Error::Transport(format!("Failed to spawn: {e}")),
+    })
+}
+
+/// Longest JSON-RPC frame a stdio peer may send (16 MiB). Without a bound, a
+/// peer that never sends a newline grows the gateway's buffer without limit.
+pub(crate) const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read one newline-terminated frame (without its `\n` or `\r\n`).
+/// `Ok(None)` at end of stream; an error for a frame over
+/// [`MAX_FRAME_BYTES`] or one that is not UTF-8.
+pub(super) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    frame: &mut Vec<u8>,
+) -> std::io::Result<Option<String>> {
+    frame.clear();
+    // Room for the longest allowed frame plus its `\r\n`; a longer line is cut
+    // here and refused below once the terminator is trimmed.
+    let limit = u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX) + 2;
+    let read = reader.take(limit).read_until(b'\n', frame).await?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if frame.last() == Some(&b'\n') {
+        frame.pop();
+        if frame.last() == Some(&b'\r') {
+            frame.pop();
+        }
+    }
+    if frame.len() > MAX_FRAME_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("stdio frame over {MAX_FRAME_BYTES} bytes"),
+        ));
+    }
+    String::from_utf8(std::mem::take(frame))
+        .map(Some)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}

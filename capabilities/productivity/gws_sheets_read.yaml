@@ -1,4 +1,4 @@
-sha256: 40e897c08e3027e8c690092be0f828d1961e63eef2c01fe1ca23a05ea946eb49
+sha256: 8262729ea2616ef418dc935c1832a757965122d743077c38fb9514e8c803b2fe
 fulcrum: "1.0"
 name: gws_sheets_read
 description: Read values from a Google Sheets spreadsheet range.
@@ -39,12 +39,15 @@ providers:
     config:
       command: gws
       args:
-        - sheets
-        - spreadsheets
-        - values
-        - get
-        - "--params"
-        - '{"spreadsheetId": "{spreadsheetId}", "range": "{range}"}'
+      - sheets
+      - spreadsheets
+      - values
+      - get
+      - json: --params=
+        value:
+          spreadsheetId: '{spreadsheetId}'
+          range: '{range}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: ttl
@@ -52,8 +55,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s sheets"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/spreadsheets.readonly
 
 metadata:
   category: productivity

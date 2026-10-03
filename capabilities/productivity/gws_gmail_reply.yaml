@@ -1,4 +1,4 @@
-sha256: a57e3d55921878d0183d2c58561ac9864ca57aa16f33ae9c35923bfd0a2cbea2
+sha256: 7781de5c07b2c81cc889c207827a0320ff6377a471cf279491b72b115a9f7506
 fulcrum: "1.0"
 name: gws_gmail_reply
 description: Reply to a Gmail message within its existing thread. Sends a reply to the specified message.
@@ -9,17 +9,14 @@ schema:
     properties:
       messageId:
         type: string
-        description: "Gmail message ID to reply to"
-      threadId:
-        type: string
-        description: "Thread ID of the conversation"
+        description: Gmail message ID to reply to
       body:
         type: string
-        description: "Reply body (plain text)"
+        format: multiline
+        description: Reply body (plain text)
     required:
-      - messageId
-      - threadId
-      - body
+    - messageId
+    - body
   output:
     type: object
     properties:
@@ -36,14 +33,11 @@ providers:
     config:
       command: gws
       args:
-        - gmail
-        - "+reply"
-        - "--message-id"
-        - "{messageId}"
-        - "--thread-id"
-        - "{threadId}"
-        - "--body"
-        - "{body}"
+      - gmail
+      - +reply
+      - --message-id={messageId}
+      - --body={body}
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -51,8 +45,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s gmail"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/gmail.modify
 
 metadata:
   category: productivity
