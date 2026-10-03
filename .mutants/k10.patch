@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index b7d230dba..5d372f634 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -117,7 +117,6 @@ impl UpstreamListeners {
+         };
+         let changed = shared.need.lock().remove(interest);
+         if shared.need.lock().is_empty() {
+-            shared.stop.cancel();
+             map.remove(backend);
+         } else if changed {
+             shared.wake.send_modify(|n| *n += 1);

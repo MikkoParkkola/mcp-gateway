@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_need.rs b/src/events/upstream_need.rs
+index 212600526..3c610de69 100644
+--- a/src/events/upstream_need.rs
++++ b/src/events/upstream_need.rs
+@@ -53,7 +53,7 @@ impl Need {
+             Interest::PromptsChanged => self.prompts_changed += 1,
+             Interest::ResourceUpdated(uri) => {
+                 if let Some(n) = self.uris.get_mut(uri) {
+-                    *n += 1;
++                    *n += 0;
+                 } else {
+                     let size = encoded(uri);
+                     if self.uris.len() >= MAX_URIS || self.uri_bytes + size > MAX_URI_BUDGET_BYTES {

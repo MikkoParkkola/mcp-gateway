@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index b7d230dba..37f6f81df 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -166,7 +166,7 @@ impl UpstreamListeners {
+         )
+         .await;
+         match read {
+-            Ok(Ok(snapshot)) if snapshot.complete && !snapshot.uris.contains(uri) => {
++            Ok(Ok(snapshot)) if false && !snapshot.uris.contains(uri) => {
+                 Err(RpcError::forbidden())
+             }
+             _ => Ok(()),

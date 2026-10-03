@@ -1,0 +1,14 @@
+head_sha	cf96e7f349acb65e60e5cb8b9f3fbbe2a42cf3b0
+# batch 1 for #2767
+K1	linux	k1.patch	--test mik_7630_events_upstream
+K2	linux	k2.patch	--test mik_7630_events_upstream
+K3	linux	k3.patch	--test mik_7630_events_upstream
+K4	linux	k4.patch	--test mik_7630_events_upstream
+K5	linux	k5.patch	--test mik_7630_events_upstream
+K6	linux	k6.patch	--test mik_7630_events_upstream
+K7	linux	k7.patch	--test mik_7630_events_upstream
+K8	linux	k8.patch	--test mik_7630_events_upstream
+K9	linux	k9.patch	--test mik_7630_events_upstream
+K10	linux	k10.patch	--test mik_7630_events_upstream
+K11	linux	k11.patch	--test mik_7630_events_upstream
+K12	linux	k12.patch	--test mik_7630_events_upstream

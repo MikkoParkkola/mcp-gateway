@@ -1,0 +1,15 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index e64314992..b26235f7c 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -423,9 +423,7 @@ impl<'a> State<'a> {
+             }
+         }
+         for uri in self.subscribed.clone().difference(&want) {
+-            if backend.legacy_resource_interest(uri, false).await.is_ok() {
+-                self.subscribed.remove(uri);
+-            }
++            let _ = (backend, uri);
+         }
+     }
+ 
