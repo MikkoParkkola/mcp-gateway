@@ -145,7 +145,9 @@ async fn stdio_operator_is_one_principal() {
 
 /// A stdio gateway whose firewall judges tenants (`block`) and detects relays
 /// (`block`), over a backend whose `read` answers what the returned cell holds.
-fn judged_stdio() -> (Arc<MetaMcp>, Arc<Firewall>, Arc<parking_lot::Mutex<String>>) {
+fn judged_stdio(
+    audit: Option<Arc<crate::security::TransparencyLogger>>,
+) -> (Arc<MetaMcp>, Arc<Firewall>, Arc<parking_lot::Mutex<String>>) {
     use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
