@@ -262,6 +262,19 @@ impl SecretInjector {
         let mut headers: HashMap<String, String> = HashMap::new();
         let mut injected_names: Vec<String> = Vec::new();
 
+        // Every key a matching rule owns loses the caller's value up front,
+        // whatever its credential resolves to now. The firewall check strips
+        // the same keys from its own copy on the strength of an earlier
+        // resolution; if the credential changed in between and a rule skips,
+        // a value the check never saw must not be forwarded (MIK-7888). Doing
+        // it before the loop also keeps a skipping rule from deleting what an
+        // earlier rule on the same key injected.
+        if let Some(obj) = args.as_object_mut() {
+            for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+                drop_caller_value(rule, obj);
+            }
+        }
+
         for rule in rules {
             if !tool_matches_rule(tool, &rule.tools) {
                 continue;
@@ -289,13 +302,6 @@ impl SecretInjector {
                     credential = %rule.name,
                     "Credential resolved to empty value, skipping injection"
                 );
-                // The firewall check may have stripped this key from its copy
-                // on the strength of an earlier, non-empty resolution; a value
-                // it never saw must not be forwarded because the credential
-                // changed in between (MIK-7888).
-                if let Some(obj) = args.as_object_mut() {
-                    drop_caller_value(rule, obj);
-                }
                 continue;
             }
 

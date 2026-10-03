@@ -93,3 +93,23 @@ fn a_secret_containing_another_secret_reference_is_not_chained() {
         .unwrap();
     assert_eq!(value, "x{env.MIK7888_B}y-second");
 }
+
+#[test]
+fn placeholders_that_name_nothing_stay_as_written() {
+    let (_dir, executor) = executor_holding("MIK7888_V=ö-ünï\n");
+    let params = json!({ "q": "Q" });
+    for (template, want) in [
+        ("{}", "{}"),
+        ("{env.}", "{env.}"),
+        ("{keychain.}", "{keychain.}"),
+        ("{nameless}", "{nameless}"),
+        ("{{q}}", "{Q}"),
+        ("{q", "{q"),
+        ("q}", "q}"),
+        (r#"{"a": {q}}"#, r#"{"a": Q}"#),
+        ("{env.MIK7888_V}", "ö-ünï"),
+    ] {
+        let got = executor.substitute_string(template, &params).unwrap();
+        assert_eq!(got, want, "template {template:?}");
+    }
+}

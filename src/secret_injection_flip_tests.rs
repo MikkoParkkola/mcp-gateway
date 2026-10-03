@@ -64,3 +64,19 @@ fn a_credential_that_empties_between_strip_and_inject_does_not_forward_the_calle
         assert_eq!(out.arguments["q"], 1, "the rest is untouched");
     }
 }
+
+#[test]
+fn a_skipping_rule_keeps_what_an_earlier_rule_injected_on_the_same_key() {
+    let (_d, env) = overlay("MIK7888_FIRST=first-key\nMIK7888_EMPTY=\n");
+    let env = Arc::new(LiveEnv::new(env, ResolvedEnvFiles::default()));
+    let mut first = rule(InjectTarget::Argument);
+    first.value = "{env.MIK7888_FIRST}".into();
+    let mut skipped = rule(InjectTarget::Argument);
+    skipped.value = "{env.MIK7888_EMPTY:-}".into();
+    let injector =
+        SecretInjector::new(HashMap::from([("b".to_owned(), vec![first, skipped])])).with_env(env);
+    let out = injector
+        .inject("b", "t", json!({ "api_key": "caller-chosen" }))
+        .unwrap();
+    assert_eq!(out.arguments["api_key"], "first-key", "{}", out.arguments);
+}
