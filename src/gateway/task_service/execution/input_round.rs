@@ -19,7 +19,7 @@ use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
 use super::worker::inspect_settled;
-use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor, WriteOutcome};
+use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound, Target};
 use crate::gateway::task_service::store::StoreError;
@@ -214,8 +214,7 @@ impl<'a> Settling<'a> {
             .await;
         match parked {
             Ok(committed) => {
-                self.executor
-                    .published(&WriteOutcome::Transitioned(committed), self.id);
+                self.executor.published(&committed, self.id);
                 self.executor
                     .notify_observer(CommitStage::InputRequired, self.id)
                     .await;
@@ -365,7 +364,7 @@ impl TaskExecutor {
                 .await;
             let outcome = match provided {
                 Ok(ProvideOutcome::Partial(committed)) => {
-                    executor.published(&WriteOutcome::Transitioned(committed), &id);
+                    executor.published(&committed, &id);
                     InputOutcome::Accepted
                 }
                 Ok(ProvideOutcome::PoolFull) => InputOutcome::PoolFull,
@@ -388,7 +387,7 @@ impl TaskExecutor {
                 }
                 Ok(ProvideOutcome::Resumed { task, round, slot }) => {
                     let revision = task.revision;
-                    executor.published(&WriteOutcome::Transitioned(task), &id);
+                    executor.published(&task, &id);
                     let _ = tx.send(InputOutcome::Accepted);
                     resume(
                         Resume {
@@ -578,7 +577,7 @@ impl TaskExecutor {
             .await
         {
             Ok(committed) => {
-                self.published(&WriteOutcome::Transitioned(committed), id);
+                self.published(&committed, id);
                 self.notify_observer(CommitStage::Transitioned, id).await;
                 Ok(())
             }
