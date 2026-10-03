@@ -31,6 +31,7 @@ fn finished_task() -> CommittedTask {
         }],
         targets_recorded: true,
         output_free: false,
+        owner_digest: String::new(),
     }
 }
 

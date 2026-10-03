@@ -35,6 +35,9 @@ mod store;
 mod task_source;
 mod types;
 mod upstream;
+mod upstream_listener;
+mod upstream_need;
+mod upstream_session;
 mod webhook_source;
 mod worker;
 
@@ -55,6 +58,9 @@ pub(crate) use rpc::Caller;
 pub(crate) use services::{LiveCredentials, Services};
 pub(crate) use types::CallbackFailure;
 pub(crate) use types::{RpcError, Visibility};
+pub(crate) use upstream::{
+    ineligible_backends as upstream_ineligible, multi_user as upstream_multi_user,
+};
 pub(crate) use webhook_source::Inbound;
 
 use crate::config::EventsConfig;
@@ -238,9 +244,10 @@ impl EventsHub {
     }
 
     /// The `capabilities.events` value, or `None` when no source offers an
-    /// event type (design §6.1).
+    /// event type (design §6.1). `listChanged` is false: nothing pushes a
+    /// catalogue change, so a client re-reads `events/list` (MIK-7803).
     pub(crate) fn capability(&self) -> Option<serde_json::Value> {
-        (!self.catalogue().is_empty()).then(|| serde_json::json!({ "listChanged": true }))
+        (!self.catalogue().is_empty()).then(|| serde_json::json!({ "listChanged": false }))
     }
 }
 

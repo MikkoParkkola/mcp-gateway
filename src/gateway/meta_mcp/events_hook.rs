@@ -151,7 +151,7 @@ impl MetaMcp {
         result
     }
 
-    /// Add `events: {listChanged: true}` to a capabilities object when the
+    /// Add `events: {listChanged: false}` to a capabilities object when the
     /// hub is installed and some source offers an event type (design §6.1).
     /// With events off the object is untouched, byte for byte.
     fn advertise_events(&self, capabilities: &mut serde_json::Value) {

@@ -32,13 +32,19 @@ mod identity_slots;
 mod input_keys;
 mod lifecycle;
 mod list_drain;
+pub(crate) mod listen;
 mod metadata;
+mod oauth_client;
 mod ops;
 mod pool;
+mod probe;
 mod registry;
 mod repin;
+mod restart;
+mod runtime_launch;
 mod status;
 mod stdio_start;
+mod stop;
 
 impl Backend {
     /// This backend's signature chain policy (ASI07 inc3, design D1): the
@@ -65,10 +71,10 @@ pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::text_absent;
 pub(crate) use identity_slots::passthrough_binding;
-pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
 };
+pub use runtime_launch::runtime_plan_for_backend;
 
 /// MCP Backend - manages connection to a single MCP server
 pub struct Backend {
@@ -250,7 +256,7 @@ impl Backend {
         &self,
         ws_url: &str,
         protocol_version: Option<String>,
-    ) -> crate::Result<Arc<dyn crate::transport::Transport>> {
+    ) -> crate::Result<Arc<crate::transport::websocket::WebSocketTransport>> {
         crate::transport::websocket::WebSocketTransport::start_with_destination(
             ws_url,
             &self.config.headers,
