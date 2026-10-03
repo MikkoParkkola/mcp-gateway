@@ -59,6 +59,9 @@ pub(crate) struct DispatchNotes {
     /// MIN.1: the response held text over the attribution parse bound, so its
     /// tenants were not read.
     uninspected: bool,
+    /// MIN.2: a backend answered this call (its raw response reached the
+    /// response gates); a gateway refusal returned as a result did not.
+    responded: bool,
     /// MIN.1 gap 1: the gateway task whose raw upstream handle this dispatch
     /// captured. The submission record carries it as the join key to the
     /// task's settlement record.
@@ -90,15 +93,28 @@ pub(super) fn note_dispatch_failure(error: &Error) {
 
 /// MIK-7116.MIN.1: note the tenants a raw backend `result` names, and hand it
 /// on unchanged. Called first in the response gates, on both routes.
-pub(super) fn noted_response(meta: &MetaMcp, result: Value) -> Value {
-    let tenants = meta.response_tenants(&result);
+///
+/// Also returns, inside a MIN.2 read scope, the same reading as a read
+/// attribution: the caller notes it into the scope once the call's gates have
+/// passed, so only a delivered dispatch counts (design §4.4).
+pub(super) fn noted_response(
+    meta: &MetaMcp,
+    result: Value,
+) -> (
+    Value,
+    Option<crate::security::tenant_reads::ReadAttribution>,
+) {
+    let (tenants, uninspected) = meta.response_reading(&result);
+    let read = crate::security::tenant_reads::in_read_scope()
+        .then(|| crate::security::tenant_reads::ReadAttribution::of(tenants.clone(), uninspected));
+    note(|notes| notes.responded = true);
     if !tenants.is_empty() {
         note(|notes| notes.response_tenants.extend(tenants));
     }
-    if meta.response_uninspected(&result) {
+    if uninspected {
         note(|notes| notes.uninspected = true);
     }
-    result
+    (result, read)
 }
 
 /// MIN.1: this call's response was refused before its tenants could be read
@@ -156,6 +172,11 @@ pub(crate) async fn with_dispatch_scope<F: std::future::Future>(
 }
 
 impl DispatchNotes {
+    /// MIN.2: whether a backend answered this call.
+    pub(crate) const fn responded(&self) -> bool {
+        self.responded
+    }
+
     /// The outcome of a call whose result read as `outcome`: a backend failure
     /// delivered as a tool result is still an `error`.
     pub(crate) fn outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
@@ -264,6 +285,21 @@ impl MetaMcp {
         }
         let _ = result;
         BTreeSet::new()
+    }
+
+    /// The tenants a tool result names and whether part of it went unread, in
+    /// one walk. Empty without a firewall.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(clippy::unused_self, reason = "the tenant keys live on the firewall")
+    )]
+    pub(crate) fn response_reading(&self, result: &Value) -> (BTreeSet<String>, bool) {
+        #[cfg(feature = "firewall")]
+        if let Some(firewall) = &self.firewall {
+            return firewall.tenant_guard().response_reading(result);
+        }
+        let _ = result;
+        (BTreeSet::new(), false)
     }
 
     /// MIN.1: whether tenant attribution is configured (a firewall with

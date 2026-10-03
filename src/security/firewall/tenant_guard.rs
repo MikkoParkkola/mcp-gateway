@@ -66,6 +66,24 @@ pub struct TenantGuardConfig {
     /// same keys attribute tool results (text-JSON included) to tenants in
     /// the audit logs, hashed, never raw.
     pub arg_keys: Vec<String>,
+    /// What the cross-tenant read verdict (MIK-7116.MIN.2) does with a caller
+    /// whose delivered frames name a second tenant inside the window.
+    pub cross_tenant_reads: CrossTenantReads,
+}
+
+/// Mode of the cross-tenant read verdict on outbound frames (MIK-7116.MIN.2).
+///
+/// Observe-first: blocking by default waits for the MIN.KILL week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CrossTenantReads {
+    /// No verdict.
+    Off,
+    /// Flag the frame in the audit record and deliver it.
+    #[default]
+    Observe,
+    /// Withhold the frame and record the refusal.
+    Block,
 }
 
 impl Default for TenantGuardConfig {
@@ -80,6 +98,7 @@ impl Default for TenantGuardConfig {
             max_tenants_per_window: 3,
             window_secs: 300,
             arg_keys: Vec::new(),
+            cross_tenant_reads: CrossTenantReads::Observe,
         }
     }
 }
@@ -164,6 +183,12 @@ impl TenantGuard {
         self.scan_response(result).0
     }
 
+    /// [`Self::response_tenants`] and [`Self::response_uninspected`] in one
+    /// walk.
+    pub(crate) fn response_reading(&self, result: &Value) -> (BTreeSet<String>, bool) {
+        self.scan_response(result)
+    }
+
     /// Whether tenant attribution is configured (`arg_keys` set).
     pub(crate) fn attributes(&self) -> bool {
         !self.config.arg_keys.is_empty()
@@ -174,6 +199,52 @@ impl TenantGuard {
     /// limit included), or encoding nested past [`MAX_DECODE_DEPTH`].
     pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
         self.scan_response(result).1
+    }
+
+    /// MIN.2: one walk over the parts of an outbound frame: whole values and
+    /// bare strings (a `method`, an error message), each decoded like a
+    /// response string. Empty when attribution is off.
+    pub(crate) fn scan_frame(&self, values: &[&Value], texts: &[&str]) -> (BTreeSet<String>, bool) {
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        for value in values {
+            self.walk_response(value, 0, &mut scan);
+        }
+        for text in texts {
+            self.decode_response(text, 0, &mut scan);
+        }
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    /// MIN.2: [`Self::scan_frame`] over a whole document but its top-level
+    /// `skip` keys (`jsonrpc`, `id`).
+    pub(crate) fn scan_document(&self, doc: &Value, skip: &[&str]) -> (BTreeSet<String>, bool) {
+        let Value::Object(map) = doc else {
+            return self.scan_frame(&[doc], &[]);
+        };
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        for (key, child) in map {
+            if skip.contains(&key.as_str()) {
+                continue;
+            }
+            if self.config.arg_keys.iter().any(|k| k == key)
+                && let Some(tenant) = Self::tenant_name(child)
+            {
+                scan.tenants.push(tenant);
+            }
+            self.walk_response(child, 0, &mut scan);
+        }
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    /// The configuration this guard was built from.
+    pub(crate) const fn config(&self) -> &TenantGuardConfig {
+        &self.config
     }
 
     /// One walk: the tenants read, and whether anything was left unread.
