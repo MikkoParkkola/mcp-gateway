@@ -374,10 +374,10 @@ async fn meta_allowed_flow_not_refused() {
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
 
-/// MIK-7800: on the meta route a receipt follows the read record `emit_http`
-/// writes last, which can still replace the answer. With that write failing
-/// under `fail-closed`, B sending A's text is not refused; the next read is
-/// audited, delivered and recorded (the control).
+/// MIK-7800 (pin): on the meta route a read whose delivery record the log
+/// refuses under `fail-closed` is replaced before the receipts commit (the
+/// record is written inside the dispatch since MIK-7799): B sending A's text
+/// is not refused; the next read is audited, delivered and recorded.
 #[tokio::test]
 async fn meta_read_record_failure_leaves_no_receipt() {
     use crate::security::TransparencyLogger;
@@ -413,7 +413,7 @@ async fn meta_read_record_failure_leaves_no_receipt() {
     let text = format!("{{\"customer_id\":\"t1\",\"note\":\"{PROSE}\"}}");
     fx.answer_read(Read::Text(text.clone()));
     let args = invoke("read", &json!({}));
-    log.fail_next_append_of_kind_for_test("tenant_read");
+    log.fail_next_append_for_test();
     let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
     assert!(
         body.contains("-32005"),
