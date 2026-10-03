@@ -352,6 +352,14 @@ impl Store {
         Ok(Due { ready, next })
     }
 
+    /// Whether subscription `id` has a pending record due at `now`, one on
+    /// the wire notwithstanding.
+    pub(crate) fn has_due(&self, id: &str, now: DateTime<Utc>) -> bool {
+        self.state.lock().outbox.values().any(|r| {
+            r.subscription_id == id && r.state == OutboxState::Pending && r.next_attempt_at <= now
+        })
+    }
+
     /// Mark `event_id` in flight for one more attempt, if its subscription
     /// still exists and may be attempted. Persisted before the POST, so a
     /// crash retries the same attempt number at most once (F1).

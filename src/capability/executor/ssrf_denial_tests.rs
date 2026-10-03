@@ -10,7 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::{MAX_SEND_ATTEMPTS, send_with_retry};
+use super::client::{MAX_SEND_ATTEMPTS, send_with_retry};
 use crate::security::ssrf::{HostResolver, PinningResolver};
 use crate::{Error, Result};
 

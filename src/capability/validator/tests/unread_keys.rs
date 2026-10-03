@@ -105,6 +105,9 @@ fn a_key_inside_path_selector_is_named_without_option_markers() {
 /// `body` or `static_params` reported here would warn on every REST capability.
 #[test]
 fn the_shipped_catalog_reports_only_keys_no_field_reads() {
+    // Shipped cli/mcp files in a shape the strict parser refuses (MIK-7782).
+    // Empty: every shipped file parses; a file added in the old shape fails.
+    const UNMIGRATED: &[&str] = &[];
     const NOT_YET_READ: &[&str] = &[
         "command",
         "args",
@@ -116,6 +119,7 @@ fn the_shipped_catalog_reports_only_keys_no_field_reads() {
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     let mut stack = vec![root];
+    let mut refused = Vec::new();
     let mut checked = 0;
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).expect("read capabilities/") {
@@ -128,6 +132,18 @@ fn the_shipped_catalog_reports_only_keys_no_field_reads() {
                 continue;
             }
             let yaml = std::fs::read_to_string(&path).expect("read capability");
+            // MIK-7782: a cli/mcp config is parsed strictly, so a shipped file
+            // still in the old shape is refused, by name, until it is migrated.
+            if serde_yaml::from_str::<CapabilityDefinition>(&yaml).is_err() {
+                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+                assert!(
+                    UNMIGRATED.contains(&stem.as_ref()),
+                    "{}: does not parse",
+                    path.display()
+                );
+                refused.push(stem.into_owned());
+                continue;
+            }
             for issue in cap012(&yaml) {
                 let key = issue.message.split_whitespace().next().unwrap_or_default();
                 let leaf = key.rsplit('.').next().unwrap_or_default();
@@ -141,4 +157,9 @@ fn the_shipped_catalog_reports_only_keys_no_field_reads() {
         }
     }
     assert!(checked > 100, "the catalog was read: {checked} files");
+    refused.sort();
+    assert_eq!(
+        refused, UNMIGRATED,
+        "exactly the unmigrated files are refused"
+    );
 }
