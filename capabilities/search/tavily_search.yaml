@@ -1,4 +1,4 @@
-sha256: 03edc60b833a96a6a361842cf0e5fdfff8c6c34291b743d82ac38c0f88d8f043
+sha256: b9bf9aaba160be6e16f783f1304c4412be3ad8a9f83733c2b5f7898a77e43885
 fulcrum: "1.0"
 name: tavily_search
 description: |
@@ -51,6 +51,8 @@ providers:
       base_url: https://api.tavily.com
       path: /search
       method: POST
+      static_params:
+        max_results: 5
       body:
         query: "{query}"
         max_results: "{max_results}"

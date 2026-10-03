@@ -1,4 +1,4 @@
-sha256: 35a0c5665954c81bba0e9122894489e5353332026080cad9c479327ac17bcf8d
+sha256: def74c378aab5c1e6fba47d611c868422d636c46e5f549a69e87ac779ceba29a
 fulcrum: "1.0"
 name: firecrawl_search
 description: |
@@ -37,6 +37,8 @@ providers:
       base_url: https://api.firecrawl.dev
       path: /v2/search
       method: POST
+      static_params:
+        limit: 5
       body:
         query: "{query}"
         limit: "{limit}"
