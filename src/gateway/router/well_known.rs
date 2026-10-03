@@ -217,8 +217,10 @@ fn authorization_servers(config: &Config) -> Vec<String> {
     }
     let mut issuers: Vec<String> = Vec::new();
     for provider in &key_server.oidc {
-        let issuer = provider.issuer.trim();
-        if !issuer.is_empty() && !issuers.iter().any(|seen| seen == issuer) {
+        // Exactly as configured: the token check compares the `iss` claim to
+        // this string, so a client must be sent the same identifier.
+        let issuer = provider.issuer.as_str();
+        if !issuer.trim().is_empty() && !issuers.iter().any(|seen| seen == issuer) {
             issuers.push(issuer.to_string());
         }
     }
@@ -353,13 +355,13 @@ mod tests {
     }
 
     #[test]
-    fn authorization_servers_empty_until_rfc8414_metadata_served() {
+    fn authorization_servers_empty_without_a_delegated_issuer() {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
         let meta = build_protected_resource_metadata(&config, None).unwrap();
         assert!(
             meta.authorization_servers.is_empty(),
-            "must not name an authorization server the gateway does not publish RFC 8414 metadata for"
+            "the default config accepts no issuer token and the gateway serves no authorization-server metadata of its own, so it names none"
         );
     }
 

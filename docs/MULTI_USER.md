@@ -126,7 +126,10 @@ key_server:
       audiences: [<client id the provider puts in aud>]
 ```
 
-The provider must let the client register (dynamic client registration or a
+Clients present the provider's JWT access token, so the provider must issue
+JWT access tokens whose `aud` is one of the `audiences` above, whose age is
+within `max_oidc_token_age_secs`, and for an identity that a
+`key_server.policies` rule grants access to. The provider must also let the client register (dynamic client registration or a
 client metadata document) and publish its metadata at the issuer; the gateway
 does not run an authorization server of its own. Check the result with
 `xh https://mcp.corp.internal/.well-known/oauth-protected-resource`: it shows
