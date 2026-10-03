@@ -634,3 +634,8 @@ SHIP-WITH-FIXES with every finding local to a stated mechanism; all are applied
 above and none changed the design's scope. No third round.
 
 Amendment (ruling B, 2026-10-02): §4 moves `listen`/`unsolicited` to a crate-private side trait. gpt-review SHIP-WITH-FIXES (a second `Arc` would pin a retired transport; WebSocket arm holds an erased `Arc`) and grok-review SHIP-WITH-FIXES (same pin; proposed a `Weak`). Both applied: the pool entry holds a `Weak`, the WebSocket start helper returns the concrete type.
+
+## 14. I5b: a backend's own tools/list_changed (2026-10-03, lead ruling)
+
+`backend.<x>.tools_changed` (I4) fires on the gateway's own tool-set announcements (a reload). A subscriber also expects a backend's own `notifications/tools/list_changed` to produce it, and SOURCE.1 names tools beside resources and prompts, so the listener carries it too. A `tools_changed` subscription counts as interest `ToolsChanged` in the same per-backend `Need` (its `on_first`/`on_last` hooks, only for a backend that offers upstream events, §6); the filter gains `toolsListChanged`, and the legacy unsolicited tap and the legacy session GET pass the fourth method. A tools notice does not take the coalescer or `emit`: the listener calls the existing `EventsHub::backend_tools_changed(backend)`, so authorization (backend visibility), fan-out, the 500 ms per-backend debounce and the event shape are exactly I4's. Dedup follows from that: a reload and a backend notice within one quiet window are one event; further apart they are two, each a real change and each meaning "re-read the tool list". A backend that is excluded (§6) keeps the gateway-announced event only; its upstream notices are not heard, which the supported matrix states. No `Transport` or trait change.
+
