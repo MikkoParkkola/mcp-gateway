@@ -1,0 +1,16 @@
+diff --git a/src/capability/backend.rs b/src/capability/backend.rs
+index 6c982c94b..b6a44738c 100644
+--- a/src/capability/backend.rs
++++ b/src/capability/backend.rs
+@@ -479,11 +479,6 @@ impl CapabilityBackend {
+             .read()
+             .entries
+             .iter()
+-            .filter(|entry| {
+-                self.executor
+-                    .missing_credential(&entry.auth, &mut seen)
+-                    .is_none()
+-            })
+             .map(|entry| entry.name.clone())
+             .collect();
+         names.sort();

@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/readiness.rs b/src/capability/executor/readiness.rs
+index 0ceb06a1b..f2ea5148e 100644
+--- a/src/capability/executor/readiness.rs
++++ b/src/capability/executor/readiness.rs
+@@ -67,7 +67,7 @@ impl CapabilityExecutor {
+                 .oauth_tokens
+                 .read()
+                 .get(provider)
+-                .is_some_and(|t| !t.is_expired());
++                .is_some();
+             cached
+                 || self
+                     .token_storage

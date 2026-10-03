@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/readiness.rs b/src/capability/executor/readiness.rs
+index 0ceb06a1b..ab87a3378 100644
+--- a/src/capability/executor/readiness.rs
++++ b/src/capability/executor/readiness.rs
+@@ -57,7 +57,7 @@ impl CapabilityExecutor {
+         let refreshable = auth.token_endpoint.is_some();
+         // The answer depends on whether this capability can refresh, so the
+         // memo is per provider and per endpoint presence.
+-        let memo = format!("{provider}\0{refreshable}");
++        let memo = provider.to_string();
+         let logged_in = *oauth_seen.entry(memo).or_insert_with(|| {
+             // The rule `fetch_oauth_token` runs: an unexpired cached or stored
+             // token, or an expired stored one with a refresh token and an

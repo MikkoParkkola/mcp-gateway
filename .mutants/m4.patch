@@ -1,0 +1,16 @@
+diff --git a/src/capability/executor/readiness.rs b/src/capability/executor/readiness.rs
+index 0ceb06a1b..96fa3514f 100644
+--- a/src/capability/executor/readiness.rs
++++ b/src/capability/executor/readiness.rs
+@@ -72,10 +72,7 @@ impl CapabilityExecutor {
+                 || self
+                     .token_storage
+                     .as_ref()
+-                    .and_then(|storage| storage.load(provider, provider))
+-                    .is_some_and(|token| {
+-                        !token.is_expired() || (refreshable && token.refresh_token.is_some())
+-                    })
++                    .is_some_and(|storage| storage.token_path(provider, provider).exists())
+         });
+         (!logged_in).then(|| format!("a {provider} login"))
+     }
