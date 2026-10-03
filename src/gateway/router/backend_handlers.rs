@@ -727,3 +727,6 @@ mod direct_admission_edge_tests;
 
 #[cfg(test)]
 mod direct_captured_backend_tests;
+
+#[cfg(test)]
+mod direct_audit_subject_tests;
