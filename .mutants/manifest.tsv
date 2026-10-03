@@ -1,0 +1,3 @@
+head_sha	1d8fa9d9970cfc0dca70a599bcaf892f58bba5d1
+# MIK-7809 one-permit bound
+M1	linux	m1.patch	--lib -- bounded_tests::stall_parks_one_blocking_thread
