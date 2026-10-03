@@ -236,7 +236,7 @@ async fn resolve_headers(
                 // the shared default bucket.
                 resolution.identity_key = super::charged_binding(
                     state,
-                    name,
+                    &route.backend,
                     caller.proof(),
                     caller.slot.as_deref(),
                     binding,
@@ -249,7 +249,7 @@ async fn resolve_headers(
     }
     resolution.result = match state
         .meta_mcp
-        .resolve_propagation_credential_held(name, caller.proof())
+        .resolve_propagation_credential_held_for(name, Some(&route.backend), caller.proof())
         .await
     {
         Ok((headers, binding, held)) => {
@@ -291,12 +291,14 @@ fn audit_unavailable(id: &RequestId) -> Rejection {
 async fn audit_mint(
     state: &AppState,
     name: &str,
-    caller: &Caller,
+    (caller, route): (&Caller, &Route<'_>),
     id: &RequestId,
     (idp_cfg, result, typed): (Option<&IdpConfig>, Headers, Option<crate::Error>),
 ) -> Result<Vec<(String, String)>, Rejection> {
     // The principal resolved for (passthrough: the verified identity).
-    let subject = state.meta_mcp.audit_subject_for(name, caller.proof());
+    let subject = state
+        .meta_mcp
+        .audit_subject_for(&route.backend, caller.proof());
     let audience = idp_cfg.map(|c| c.audience.as_str());
     match result {
         Ok(headers) => {
@@ -390,7 +392,8 @@ pub(super) async fn propagate_identity(
     } = resolve_headers(state, name, caller, route, idp_cfg).await;
     propagation.identity_key = identity_key;
     propagation.managed = managed;
-    propagation.headers = audit_mint(state, name, caller, id, (idp_cfg, result, typed)).await?;
+    propagation.headers =
+        audit_mint(state, name, (caller, route), id, (idp_cfg, result, typed)).await?;
 
     // ADR-008 INV-2: the direct backend route bypasses `invoke_tool_traced`, so
     // it must enforce the same fail-closed OAuth-isolation guard for every
@@ -398,10 +401,11 @@ pub(super) async fn propagate_identity(
     // credential was resolved above iff the headers are non-empty, so a
     // per-user OAuth backend on a multi-user gateway is refused rather than
     // served the shared token.
-    if let Err(e) = state
-        .meta_mcp
-        .enforce_oauth_isolation(name, !propagation.headers.is_empty())
-    {
+    if let Err(e) = state.meta_mcp.enforce_oauth_isolation_for(
+        &route.backend,
+        name,
+        !propagation.headers.is_empty(),
+    ) {
         return Err(build_http_error_response(
             Some(id.clone()),
             e.to_rpc_code(),
