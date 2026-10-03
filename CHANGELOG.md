@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `-full` image's bundled npm packages are past the new HIGH CVEs, and verified by hash.** `brace-expansion` (CVE-2026-102276, CVE-2026-102278) and `undici` (CVE-2026-19534) in npm's own tree are replaced with fixed releases, and every npm tarball the image fetches is checked against a pinned sha512 before use.
+
 - **The `-full` variant's smoke gate bounds every probe.** Four of its six probes
   resolve over the network — npx and uvx fetch a package, git fetches a remote —
   and none was bounded. On a runner whose resolver stops answering, the gate

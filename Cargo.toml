@@ -239,3 +239,8 @@ unused_async = "allow"
 # Mechanically rewriting 50+ call sites risks subtle semantic confusion
 # (e.g. 3600 read as "an hour" vs "60 minutes" vs "magic number").
 duration_suboptimal_units = "allow"
+# Stylistic only — pedantic, first fires on Rust 1.99. It rewrites `assert!(x.is_empty())`
+# as `assert_eq!(x, "")` / `assert_ne!(x, [] as [u8; 0])`: a per-type spelling that
+# reads worse than the original; the gain is the value shown on failure. 167
+# test-side call sites; keeping the plain `is_empty` form is deliberate.
+assert_is_empty = "allow"
