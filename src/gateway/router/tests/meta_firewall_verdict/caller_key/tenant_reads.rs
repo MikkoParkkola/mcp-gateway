@@ -337,7 +337,7 @@ async fn a_block_leaves_audit_entries_for_the_read_and_the_block() {
     let (b, _, body) = send(&block, call_with(&who, true, None, 1, &reading(B))).await;
     assert_ne!(b, Delivered, "the block fires: {body}");
     assert!(
-        body.contains("Response withheld"),
+        body.to_string().contains("Response withheld"),
         "the refusal is the tenant guard's: {body}"
     );
     let records: Vec<Value> = log_lines(&log_dir)
