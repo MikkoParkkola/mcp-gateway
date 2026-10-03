@@ -344,6 +344,83 @@ mod tests {
         );
     }
 
+    fn config_with_issuers(enabled: bool, delegated: bool, issuers: &[&str]) -> Config {
+        let mut config = config_with_host("gw.internal", 9000);
+        config.server.public_url = Some("https://gw.internal:9000".to_string());
+        config.key_server.enabled = enabled;
+        config.key_server.delegated_bearer = delegated;
+        config.key_server.oidc = issuers
+            .iter()
+            .map(|issuer| {
+                serde_json::from_value(serde_json::json!({
+                    "issuer": issuer,
+                    "audiences": ["gateway-client"],
+                }))
+                .unwrap()
+            })
+            .collect();
+        config
+    }
+
+    /// RFC 9728 section 2: the metadata names the authorization servers whose
+    /// tokens the resource accepts. A gateway that takes an OIDC issuer's
+    /// bearer tokens (`key_server.delegated_bearer`) names that issuer.
+    #[test]
+    fn configured_delegated_issuers_are_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://idp.corp.internal",
+                "https://login.corp.internal/tenant",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        assert_eq!(
+            meta.authorization_servers,
+            [
+                "https://idp.corp.internal",
+                "https://login.corp.internal/tenant"
+            ],
+            "a client must be able to find where to sign in"
+        );
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(
+            json["authorization_servers"][0],
+            "https://idp.corp.internal"
+        );
+    }
+
+    /// The issuer is named only when its tokens are accepted as bearers: an
+    /// exchange-only key server (`delegated_bearer: false`) or a disabled one
+    /// accepts none, so naming it would send clients to a dead end.
+    #[test]
+    fn issuers_are_not_advertised_unless_their_tokens_are_accepted() {
+        for (enabled, delegated) in [(true, false), (false, true), (false, false)] {
+            let config = config_with_issuers(enabled, delegated, &["https://idp.corp.internal"]);
+            let meta = build_protected_resource_metadata(&config, None).unwrap();
+            assert!(
+                meta.authorization_servers.is_empty(),
+                "enabled={enabled} delegated_bearer={delegated}"
+            );
+        }
+    }
+
+    #[test]
+    fn advertised_issuers_are_unique_and_never_blank() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://idp.corp.internal",
+                "  ",
+                "https://idp.corp.internal",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        assert_eq!(meta.authorization_servers, ["https://idp.corp.internal"]);
+    }
+
     #[test]
     fn empty_arrays_are_omitted_not_serialized_as_empty() {
         // RFC 9728 §3.2: zero-value parameters are omitted, not sent as `[]`.
