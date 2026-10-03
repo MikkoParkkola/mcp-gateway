@@ -106,6 +106,7 @@ mod spec_preview;
 mod support;
 mod surfaced;
 mod task_confirmation;
+pub(crate) mod task_notify;
 mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
@@ -1129,20 +1130,8 @@ impl MetaMcp {
     /// operator blessed the account as shared (`oauth.shared_account = true`). A
     /// single-user gateway never enters this branch, and this never falls back
     /// to the shared token (INV-1): it refuses.
-    pub(crate) fn enforce_oauth_isolation(
-        &self,
-        server: &str,
-        has_per_user_credential: bool,
-    ) -> Result<()> {
-        match self.backends.get(server) {
-            Some(backend) => {
-                self.enforce_oauth_isolation_for(&backend, server, has_per_user_credential)
-            }
-            None => Ok(()),
-        }
-    }
-
-    /// INV-2 check against a captured `Backend` instance rather than a name.
+    ///
+    /// Checked against the captured `Backend` instance, never a name.
     /// Callers holding the `Arc<Backend>` they will forward to MUST use this so
     /// the check and the later `backend.request` bind to the SAME instance —
     /// eliminating the hot-reload TOCTOU where a name re-lookup could evaluate a
@@ -1150,8 +1139,7 @@ impl MetaMcp {
     ///
     /// Despite the name this covers every personal binding a backend can carry,
     /// not only `oauth`: see the enumeration in the body. The name is kept
-    /// because twenty call sites and the public `enforce_oauth_isolation`
-    /// wrapper spell it.
+    /// because many call sites spell it.
     pub(crate) fn enforce_oauth_isolation_for(
         &self,
         backend: &crate::backend::Backend,
@@ -2700,6 +2688,8 @@ mod grant_replay_dedupe_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+#[cfg(test)]
+mod task_notify_tests;
 
 mod session_end;
 
