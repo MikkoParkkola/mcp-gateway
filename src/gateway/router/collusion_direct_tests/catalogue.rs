@@ -328,4 +328,12 @@ async fn direct_relay_scan_skips_the_progress_token() {
     let token = json!({"progressToken": PROSE});
     let sent = rpc_with(&fx, route, "prompts/get", (&params, &token)).await;
     assert_catalogue_sent(&fx, &sent, forwarded + 1);
+    // Why skipping it is safe: the backend is never handed the caller's own
+    // token, the gateway substitutes its own, so no caller text rides in it.
+    let seen = fx.catalogue_params.lock().unwrap().last().cloned();
+    let reached = seen.expect("the backend saw the call");
+    assert!(
+        !reached.to_string().contains("orchard ledger"),
+        "the caller's progress token reached the backend: {reached}"
+    );
 }

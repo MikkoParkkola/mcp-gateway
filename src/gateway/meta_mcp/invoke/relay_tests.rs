@@ -331,3 +331,38 @@ fn a_recorded_non_object_result_keeps_its_verdict() {
         );
     }
 }
+
+/// MIK-7832.RELAY.4: wrapping a non-object result keeps it detectable: the
+/// recorded copy's text still marks a later send of that text as a relay.
+#[test]
+fn a_wrapped_non_object_result_still_marks_a_relay() {
+    let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    let fw = Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    );
+    let delivered = json!(format!("{PROSE} Contact: keeper@orchardcoop.fi"));
+    let recorded = meta.recorded_prompt(("alpha", "resources/read"), None, "catalogue", &delivered);
+    fw.record_delivery(
+        RelayCaller::Keyed("a"),
+        "alpha",
+        "resources/read",
+        &recorded,
+    );
+    let params = json!({"name": "send", "arguments": {"text": PROSE}});
+    let verdict = fw.check_relay(
+        RelayCaller::Keyed("b"),
+        "alpha",
+        "send",
+        &params,
+        ("s", "b"),
+    );
+    assert!(!verdict.allowed, "{verdict:?}");
+}
