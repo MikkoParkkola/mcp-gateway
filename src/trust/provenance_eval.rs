@@ -69,7 +69,7 @@ pub enum ClaimVerdict {
 /// Score one claim against the facts in a receipt.
 ///
 /// This is the whole adjudication logic. It reads *only* observed facts
-/// (`backend_ok`, `row_count`) and never infers meaning the receipt does not
+/// (`subject_kind`, `backend_ok`, `row_count`) and never infers meaning the receipt does not
 /// carry — in particular an absent `row_count` is treated as "not observed"
 /// (→ `Abstain`), never as zero. A failed call can never support any positive
 /// claim, which is the checked-empty-vs-could-not-check distinction made
