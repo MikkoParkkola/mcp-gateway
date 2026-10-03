@@ -66,9 +66,15 @@ pub(super) async fn create(
         return refusal(StatusCode::UNAUTHORIZED, "unauthenticated", None);
     };
     let config = state.live_config.get();
-    if !is_bridged(&config, &identity) {
+    // Bridged implies an accounts block, so its limits are bound here, once:
+    // no later step can find them missing.
+    let Some(accounts) = config
+        .accounts
+        .as_ref()
+        .filter(|_| is_bridged(&config, &identity))
+    else {
         return refusal(StatusCode::FORBIDDEN, "forbidden", None);
-    }
+    };
     let Some((request, hosted_origin)) = admissible(&config, &body) else {
         return refusal(StatusCode::BAD_REQUEST, "invalid_request", None);
     };
@@ -76,9 +82,7 @@ pub(super) async fn create(
     else {
         return refusal(StatusCode::BAD_REQUEST, "invalid_request", None);
     };
-    let Some(limits) = limits_of(&config) else {
-        return refusal(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable", None);
-    };
+    let limits = JourneyLimits::from(&accounts.limits);
     match journeys
         .create(limits, owner, descriptor, request.return_path)
         .await
