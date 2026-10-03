@@ -22,7 +22,6 @@ pub(crate) struct RateLimits {
 struct Bucket {
     tokens: f64,
     at: Instant,
-    throttled: bool,
 }
 
 impl RateLimits {
@@ -45,26 +44,28 @@ impl RateLimits {
         let bucket = buckets.entry(id.to_owned()).or_insert(Bucket {
             tokens: self.capacity,
             at: now,
-            throttled: false,
         });
         let elapsed = now.saturating_duration_since(bucket.at).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * self.per_second).min(self.capacity);
         bucket.at = now;
         if bucket.tokens >= 1.0 {
             bucket.tokens -= 1.0;
-            bucket.throttled = false;
             Ok(())
         } else {
-            bucket.throttled = true;
             Err(Duration::from_secs_f64(
                 (1.0 - bucket.tokens) / self.per_second,
             ))
         }
     }
 
-    /// Whether `id` has a due delivery waiting on a token now.
-    pub(crate) fn throttled(&self, id: &str) -> bool {
-        self.buckets.lock().get(id).is_some_and(|b| b.throttled)
+    /// Whether `id`'s bucket holds less than one token at `now`. With a
+    /// delivery due, that is a throttled subscription, whether or not an
+    /// attempt is on the wire (the caller knows what is due).
+    pub(crate) fn empty(&self, id: &str, now: Instant) -> bool {
+        self.buckets.lock().get(id).is_some_and(|b| {
+            let elapsed = now.saturating_duration_since(b.at).as_secs_f64();
+            b.tokens + elapsed * self.per_second < 1.0
+        })
     }
 }
 
@@ -116,7 +117,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn burst_then_paced_and_reports_throttled() {
+    fn burst_then_paced_and_reports_empty() {
         let limits = RateLimits::new(&EventsRateLimit {
             per_minute: 60,
             burst: 2,
@@ -126,9 +127,16 @@ mod tests {
         assert!(limits.take("s", t0).is_ok());
         let wait = limits.take("s", t0).expect_err("bucket empty");
         assert!(wait <= Duration::from_secs(1));
-        assert!(limits.throttled("s"));
+        assert!(limits.empty("s", t0));
+        // A token is on its way, not yet here, and then it is.
+        assert!(limits.empty("s", t0 + Duration::from_millis(500)));
+        assert!(!limits.empty("s", t0 + Duration::from_secs(1)));
+        assert!(!limits.empty("other", t0), "no bucket, no throttle");
         assert!(limits.take("s", t0 + Duration::from_secs(1)).is_ok());
-        assert!(!limits.throttled("s"));
+        assert!(
+            limits.empty("s", t0 + Duration::from_secs(1)),
+            "spent again"
+        );
     }
 
     #[test]

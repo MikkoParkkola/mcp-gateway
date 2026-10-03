@@ -303,6 +303,10 @@ impl Services {
     }
 }
 
+/// The status of the record written before a POST (SAFETY.2): the attempt is
+/// on record before its bytes leave; its outcome follows as its own record.
+pub(crate) const SENDING: &str = "sending";
+
 /// One delivery attempt, as the attributed audit record states it: never
 /// the body, the secret or the callback path.
 pub(crate) struct Attempt<'a> {
@@ -326,14 +330,19 @@ pub(crate) struct Attempt<'a> {
 
 impl Services {
     /// Write one MIN.1 attributed record for `attempt`, on the bounded
-    /// blocking pool. Best effort: a down log is logged, not fatal.
-    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) {
+    /// blocking pool.
+    ///
+    /// # Errors
+    ///
+    /// The log's refusal. A caller about to send writes this record first
+    /// and does not send when it fails (SAFETY.2).
+    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) -> std::io::Result<()> {
         use crate::security::audit::{
             AuditEnvelope, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
         };
         use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
         let Some(log) = &self.audit else {
-            return;
+            return Ok(());
         };
         let mut extra = Map::new();
         extra.insert("subscription_id".into(), attempt.subscription_id.into());
@@ -345,13 +354,10 @@ impl Services {
         extra.insert("body_sha256".into(), attempt.body_sha256.into());
         // Present even when empty: the record says it was attributed.
         extra.insert("tenants".into(), json!(attempt.tenants));
-        if let Some(verdict) = attempt.cross_tenant_read {
-            extra.insert("cross_tenant_read".into(), json!(verdict));
-        }
         let envelope = AuditEnvelope {
             trace_id: None,
             otel_trace_id: None,
-            outcome: if attempt.delivered {
+            outcome: if attempt.delivered || attempt.status == SENDING {
                 AuditOutcome::Ok
             } else {
                 AuditOutcome::Error(-32015)
@@ -389,8 +395,42 @@ impl Services {
                 )
             })
             .await;
-        if let Err(error) = written {
+        if let Err(error) = &written {
             tracing::warn!(%error, "events: delivery audit record not written");
+        }
+        written
+    }
+
+    /// How an attempt already recorded as [`SENDING`] ended. Best effort: the
+    /// attempt itself is on record, and the POST has been made.
+    pub(crate) async fn audit_outcome(&self, attempt: &Attempt<'_>) {
+        let Some(log) = &self.audit else {
+            return;
+        };
+        let mut fields = Map::new();
+        fields.insert("action".into(), "events.delivery_outcome".into());
+        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        fields.insert("event_id".into(), attempt.event_id.into());
+        fields.insert("subscription_id".into(), attempt.subscription_id.into());
+        fields.insert("outcome_of_attempt".into(), attempt.number.into());
+        fields.insert("status".into(), attempt.status.into());
+        fields.insert("delivered".into(), attempt.delivered.into());
+        if let Some(verdict) = attempt.cross_tenant_read {
+            fields.insert("cross_tenant_read".into(), json!(verdict));
+        }
+        let envelope = crate::security::audit::AuditEnvelope {
+            outcome: if attempt.delivered {
+                crate::security::audit::AuditOutcome::Ok
+            } else {
+                crate::security::audit::AuditOutcome::Error(-32015)
+            },
+            ..crate::security::audit::AuditEnvelope::gateway()
+        };
+        let written = log
+            .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
+            .await;
+        if let Err(error) = written {
+            tracing::warn!(%error, "events: delivery outcome audit record not written");
         }
     }
 
@@ -735,3 +775,7 @@ mod tests {
         assert!(!open.admits_subscription(&session, "x").await, "logged out");
     }
 }
+
+#[cfg(test)]
+#[path = "services_audit_tests.rs"]
+mod audit_tests;

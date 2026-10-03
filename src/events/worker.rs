@@ -14,7 +14,7 @@ use tokio::sync::Semaphore;
 use super::EventsHub;
 use super::client::ReadBody;
 use super::outbox::{DeadReason, OutboxRecord};
-use super::services::{Attempt, Services};
+use super::services::{Attempt, SENDING, Services};
 use super::store::{Claim, Claimed, Settle};
 use super::types::CallbackFailure;
 use crate::gateway::outbound::{self, Admission, CallbackSend, OutboundFrame};
@@ -24,6 +24,9 @@ use crate::security::tenant_reads::ReadVerdict;
 const SWEEP_EVERY: Duration = Duration::from_secs(30);
 /// Longest the worker sleeps with nothing scheduled (a safety net only).
 const IDLE: Duration = Duration::from_secs(5);
+/// Back off before the next attempt of a record that was refused before its
+/// POST: the access re-check failed or the audit log refused the record.
+const REFUSAL_RETRY: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
 
 impl EventsHub {
     /// Run the worker until the runtime stops.
@@ -114,40 +117,27 @@ impl EventsHub {
             record,
             subscription: sub,
         } = *claimed;
-        let key = sub.api_key.as_ref().map(|k| k.name.as_str());
         let url = url::Url::parse(&sub.url).ok();
-        let host = url
-            .as_ref()
-            .and_then(url::Url::host_str)
-            .unwrap_or_default()
-            .to_owned();
-        // Every attempt is audited, a refused one too (§3.7).
-        let refused = |status: &'static str| Attempt {
-            subscription_id: &sub.id,
+        let ctx = Ctx {
+            sub: &sub,
+            record: &record,
             event_id,
-            name: &record.name,
-            backend: &record.backend,
-            number: record.attempt,
-            principal: &sub.principal,
-            api_key_name: key,
-            credential_kind: sub
-                .credential_kind
-                .unwrap_or(crate::security::audit::CredentialKind::None),
-            credential_principal: sub.credential_principal.as_deref(),
-            tenants: &record.tenants,
-            callback_host: &host,
-            status,
-            body_sha256: "",
-            delivered: false,
-            cross_tenant_read: None,
+            host: url
+                .as_ref()
+                .and_then(url::Url::host_str)
+                .unwrap_or_default()
+                .to_owned(),
         };
         if !services.admits_subscription(&sub, &record.backend).await {
-            services.audit_attempt(&refused("access_revoked")).await;
+            services
+                .audit_attempt(&ctx.attempt("access_revoked"))
+                .await
+                .ok();
             self.revoke(&sub).await;
             // Removed: the record went with it and this settles nothing. Not
             // removed (a store error, or a refresh re-bound the row): the
             // record goes back to pending and the next attempt re-checks.
-            let next = Utc::now() + chrono::TimeDelta::seconds(30);
+            let next = Utc::now() + REFUSAL_RETRY;
             let retry = Settle::Retry {
                 next,
                 status: "access_revoked",
@@ -158,50 +148,109 @@ impl EventsHub {
         // A record a crash or a long suspension carried past its bounds is
         // dead before it is sent again, never after (§6.5).
         if let Some(reason) = record.dead_as {
-            self.bury(services, &record, reason).await;
+            self.settle(services, &record, quiet_dead(reason)).await;
             return;
         }
         if self.overdue(&record, Utc::now()) {
-            services.audit_attempt(&refused("exhausted")).await;
-            self.bury(services, &record, DeadReason::Exhausted).await;
+            services.audit_attempt(&ctx.attempt("exhausted")).await.ok();
+            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
+                .await;
             return;
         }
         // An unsubscribe that waited past its bound has removed the
         // subscription by now: nothing is charged or sent for it. Otherwise
         // the current row signs, so a secret rotated since the claim counts.
-        let Some(current) = self.store.signing_row(&record) else {
-            return;
-        };
-        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
-            services.audit_attempt(&refused("budget")).await;
-            self.bury(services, &record, DeadReason::Budget).await;
+        if self.store.signing_row(&record).is_none() {
             return;
         }
-        let (Some((value, body_sha256)), Some(url)) = (wire_body(&record), url) else {
-            self.bury(services, &record, DeadReason::Exhausted).await;
+        let (Some(body), Some(url)) = (record.body(), url) else {
+            self.settle(services, &record, quiet_dead(DeadReason::Exhausted))
+                .await;
             return;
         };
+        self.record_and_send(services, &ctx, &url, body).await;
+    }
+
+    /// Put the attempt on record, then charge and send it. The record comes
+    /// first: a log that refuses it means no POST, and the record goes back
+    /// to retry (SAFETY.2).
+    async fn record_and_send(
+        self: &Arc<Self>,
+        services: &Services,
+        ctx: &Ctx<'_>,
+        url: &url::Url,
+        body: Vec<u8>,
+    ) {
+        let (sub, record, event_id) = (ctx.sub, ctx.record, ctx.event_id);
+        let Some((value, body_sha256)) = wire_body(&body) else {
+            self.settle(services, record, quiet_dead(DeadReason::Exhausted))
+                .await;
+            return;
+        };
+        let ended = |status: &'static str| Attempt {
+            body_sha256: &body_sha256,
+            ..ctx.attempt(status)
+        };
+        if services.audit_attempt(&ended(SENDING)).await.is_err() {
+            let next = Utc::now() + REFUSAL_RETRY;
+            let retry = Settle::Retry {
+                next,
+                status: "audit_unavailable",
+            };
+            self.settle(services, record, retry).await;
+            return;
+        }
+        // The wait for the record can span a rotation or an unsubscribe: the
+        // row that signs is read after it, never before.
+        let Some(current) = self.store.signing_row(record) else {
+            services.audit_outcome(&ended("cancelled")).await;
+            return;
+        };
+        // Past its bounds after the wait for the record: dead, unsent, and the
+        // record just written says how that attempt ended.
+        if self.overdue(record, Utc::now()) {
+            services.audit_outcome(&ended("exhausted")).await;
+            self.settle(services, record, quiet_dead(DeadReason::Exhausted))
+                .await;
+            return;
+        }
+        // Charged once the attempt is on record, so a retry after an audit
+        // outage is not charged for an attempt that never left.
+        let key = sub.api_key.as_ref().map(|k| k.name.as_str());
+        if !services.charge(&record.name, key, self.config.cost_per_delivery_usd) {
+            services.audit_outcome(&ended("budget")).await;
+            self.settle(services, record, quiet_dead(DeadReason::Budget))
+                .await;
+            return;
+        }
         let Some((frame, verdict)) = self
-            .admit_delivery(services, &sub, &record, value, refused("tenant"))
+            .admit_delivery(services, sub, record, value, ended("tenant"))
             .await
         else {
             return;
         };
         let answer = self
-            .send_event(&url, &current, event_id, frame, sub.read_key.as_deref())
+            .send_event(url, &current, event_id, frame, sub.read_key.as_deref())
             .await;
-        let (outcome, status) = self.judge(&record, &answer);
+        let (outcome, status) = self.judge(record, &answer);
         let delivered = matches!(outcome, Settle::Delivered);
         services
-            .audit_attempt(&Attempt {
-                body_sha256: &body_sha256,
+            .audit_outcome(&Attempt {
                 delivered,
                 cross_tenant_read: verdict,
-                ..refused(status)
+                ..ended(status)
             })
             .await;
-        self.track_failures(&sub, delivered).await;
-        self.settle(services, &record, outcome).await;
+        if self
+            .runtime
+            .failures
+            .record(&sub.id, delivered, Instant::now())
+        {
+            let id = sub.id.clone();
+            self.blocking(move |store| store.suspend(&id)).await;
+            tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
+        }
+        self.settle(services, record, outcome).await;
     }
 
     /// MIN.2 E1: the delivery is a read by the subscription's caller, on the
@@ -232,7 +281,7 @@ impl EventsHub {
             outbound::audit_rejection(log, &evidence).await;
         }
         services
-            .audit_attempt(&Attempt {
+            .audit_outcome(&Attempt {
                 cross_tenant_read: Some(evidence.verdict),
                 ..blocked
             })
@@ -282,24 +331,6 @@ impl EventsHub {
         .await
     }
 
-    /// Suspend a subscription whose deliveries keep failing.
-    async fn track_failures(&self, sub: &super::records::Subscription, delivered: bool) {
-        if self
-            .runtime
-            .failures
-            .record(&sub.id, delivered, Instant::now())
-        {
-            let id = sub.id.clone();
-            self.blocking(move |store| store.suspend(&id)).await;
-            tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
-        }
-    }
-
-    /// Dead-letter the claimed occurrence without a status.
-    async fn bury(&self, services: &Services, record: &OutboxRecord, reason: DeadReason) {
-        self.settle(services, record, quiet_dead(reason)).await;
-    }
-
     /// Settle the claimed occurrence `record`; a later occurrence that has
     /// since taken its event id is left alone.
     async fn settle(&self, services: &Services, record: &OutboxRecord, outcome: Settle) {
@@ -312,6 +343,40 @@ impl EventsHub {
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
         services.audit_evictions(evicted.unwrap_or_default()).await;
+    }
+}
+
+/// What one claimed attempt knows about itself, for its audit records.
+struct Ctx<'a> {
+    sub: &'a super::records::Subscription,
+    record: &'a OutboxRecord,
+    event_id: &'a str,
+    host: String,
+}
+
+impl Ctx<'_> {
+    /// The attempt as a record states it: failed, with no body hash yet.
+    fn attempt(&self, status: &'static str) -> Attempt<'_> {
+        Attempt {
+            subscription_id: &self.sub.id,
+            event_id: self.event_id,
+            name: &self.record.name,
+            backend: &self.record.backend,
+            number: self.record.attempt,
+            principal: &self.sub.principal,
+            api_key_name: self.sub.api_key.as_ref().map(|k| k.name.as_str()),
+            credential_kind: self
+                .sub
+                .credential_kind
+                .unwrap_or(crate::security::audit::CredentialKind::None),
+            credential_principal: self.sub.credential_principal.as_deref(),
+            tenants: &self.record.tenants,
+            callback_host: &self.host,
+            status,
+            body_sha256: "",
+            delivered: false,
+            cross_tenant_read: None,
+        }
     }
 }
 
@@ -429,9 +494,9 @@ fn overdue(
 /// Dead without a new HTTP status: the subscription's last error stands.
 /// The stored body as a JSON value, with the SHA-256 of what goes on the
 /// wire: the frame's own serialisation, which is what the audit hashes.
-fn wire_body(record: &OutboxRecord) -> Option<(serde_json::Value, String)> {
+fn wire_body(stored: &[u8]) -> Option<(serde_json::Value, String)> {
     use sha2::Digest as _;
-    let value: serde_json::Value = serde_json::from_slice(&record.body()?).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(stored).ok()?;
     let sent = serde_json::to_vec(&value).ok()?;
     Some((value, hex::encode(sha2::Sha256::digest(sent))))
 }
