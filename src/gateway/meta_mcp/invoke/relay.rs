@@ -246,7 +246,7 @@ tokio::task_local! {
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
 /// (finalize included) and a task's execution. Dropping the scope discards
-/// what was staged; only [`MetaMcp::commit_relay_receipts`] records.
+/// what was staged; only a commit records.
 pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output {
     RELAY_RECEIPTS
         .scope(RefCell::new(Vec::new()), delivery)
@@ -289,6 +289,65 @@ impl StagedReceipts {
         }
         #[cfg(not(feature = "firewall"))]
         let _ = delivered;
+    }
+}
+
+tokio::task_local! {
+    /// Whether the HTTP answer being built delivers a result.
+    static RELAY_DELIVERS: std::cell::Cell<bool>;
+}
+
+/// Run an HTTP `delivery` inside a receipt collector and hand what it staged to
+/// the response as [`DeferredReceipts`]: `emit_http`, the last step that can
+/// replace the answer, records them. With relay detection off nothing is
+/// collected.
+pub(crate) async fn collecting_http<F, R>(
+    meta: std::sync::Arc<MetaMcp>,
+    delivery: F,
+) -> axum::response::Response
+where
+    F: std::future::Future<Output = R>,
+    R: axum::response::IntoResponse,
+{
+    if !meta.relay_active() {
+        return delivery.await.into_response();
+    }
+    let ((mut response, answered), staged) = meta
+        .collecting_staged(RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
+            let response = delivery.await.into_response();
+            (response, RELAY_DELIVERS.with(std::cell::Cell::get))
+        }))
+        .await;
+    response
+        .extensions_mut()
+        .insert(DeferredReceipts::new(staged, answered));
+    response
+}
+
+/// Receipts an HTTP answer carries to the last step that can still replace it
+/// (the grant slot, the read record): `emit_http` records them only when the
+/// answer goes out as built. A replacement is a new response and carries
+/// none, so a replaced answer records nothing. `eligible`: the answer
+/// delivers a result.
+#[derive(Clone)]
+pub(crate) struct DeferredReceipts {
+    staged: std::sync::Arc<parking_lot::Mutex<Option<StagedReceipts>>>,
+    eligible: bool,
+}
+
+impl DeferredReceipts {
+    pub(crate) fn new(staged: StagedReceipts, eligible: bool) -> Self {
+        Self {
+            staged: std::sync::Arc::new(parking_lot::Mutex::new(Some(staged))),
+            eligible,
+        }
+    }
+
+    /// Record what was staged when the answer went out as built.
+    pub(crate) fn commit(&self, written: bool) {
+        if let Some(staged) = self.staged.lock().take() {
+            staged.commit(written && self.eligible);
+        }
     }
 }
 
@@ -368,10 +427,15 @@ impl MetaMcp {
         }
     }
 
-    /// Record every staged receipt, when `response` is a delivered result
-    /// rather than an error or a delivery refusal.
-    pub(crate) fn commit_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
-        self.commit_staged_relay(response.error.is_none() && !response.delivery_refusal);
+    /// Mark whether the answer being built delivers a result (no error, no
+    /// delivery refusal): what [`collecting_http`] hands `emit_http`.
+    #[allow(
+        clippy::unused_self,
+        reason = "the call sits beside the other relay steps on the Meta-MCP"
+    )]
+    pub(crate) fn settle_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
+        let delivers = response.error.is_none() && !response.delivery_refusal;
+        let _ = RELAY_DELIVERS.try_with(|flag| flag.set(delivers));
     }
 
     /// Record every staged receipt when `delivered`; drop them either way.

@@ -468,7 +468,8 @@ pub(super) async fn meta_mcp_handler(
         Box::pin(async move {
             crate::gateway::outbound::read_scoped(
                 guard_for_scope,
-                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting(
+                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
+                    Arc::clone(&state.meta_mcp),
                     meta_mcp_dispatch(state, http_request),
                 )),
             )
@@ -1939,9 +1940,8 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
-    // COLLUDE.1: receipts record only an answer that was delivered, so they
-    // follow the judge: a read it withheld leaves none.
-    state.meta_mcp.commit_relay_receipts(response);
+    // COLLUDE.1: receipts ride on the response to `emit_http`, after the last replacer.
+    state.meta_mcp.settle_relay_receipts(response);
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
