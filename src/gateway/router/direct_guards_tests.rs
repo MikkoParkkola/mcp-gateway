@@ -189,6 +189,34 @@ async fn t3b_failed_direct_calls_spend_nothing() {
     }
 }
 
+/// T3c (MIK-7763). An admission holds its call's cost until it is dropped:
+/// with room for one call, a second admission is refused while the first is
+/// alive and a third succeeds once the first is gone.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn t3c_an_admission_holds_its_cost_until_it_is_dropped() {
+    use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
+    let fx = budget_fixture(Answer::Ok, 1.5).await;
+    let meta = &fx.state.meta_mcp;
+    let call = BackendCall {
+        server: BACKENDS[0],
+        tool: "read",
+        session_id: None,
+        api_key_name: Some("k-budget"),
+        trace_id: "",
+    };
+    let first = meta.admit_spend_for(&call).expect("the first call fits");
+    assert!(
+        meta.admit_spend_for(&call).is_err(),
+        "a second call must not fit beside an admitted one"
+    );
+    drop(first);
+    assert!(
+        meta.admit_spend_for(&call).is_ok(),
+        "dropping the admission gives its cost back"
+    );
+}
+
 /// T3d (DIRECT.2, guard). A cached success replays after the budget is
 /// exhausted, without dispatching or spending.
 #[cfg(feature = "cost-governance")]
