@@ -91,9 +91,8 @@ impl Services {
                 envelope.who = actor.who.clone();
             }
         }
-        if act.failed_with.is_some() {
-            // Scaffold: the act's own code is not carried yet.
-            envelope.outcome = AuditOutcome::Error(-32015);
+        if let Some(code) = act.failed_with {
+            envelope.outcome = AuditOutcome::Error(code);
         }
         let written = log
             .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))

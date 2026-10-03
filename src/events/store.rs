@@ -263,6 +263,9 @@ impl Store {
     ) -> std::io::Result<Result<Admission, CapHit>> {
         let mut state = self.state.lock();
         self.sweep(&mut state, now)?;
+        // Read under the lock with the commit, so racing identical subscribes
+        // cannot both read as the first.
+        let refreshed = state.subs.contains_key(&sub.id);
         if let Some(old) = state.subs.get(&sub.id) {
             if old.secret == sub.secret {
                 sub.previous_secret.clone_from(&old.previous_secret);
@@ -342,8 +345,11 @@ impl Store {
         state.subs.insert(sub.id.clone(), sub);
         placed.durable()?;
         self.trim_tails(&mut state, now, tail)?;
-        // Scaffold: every commit reads as an insert.
-        Ok(Ok(Admission::Inserted))
+        Ok(Ok(if refreshed {
+            Admission::Refreshed
+        } else {
+            Admission::Inserted
+        }))
     }
 
     /// Whether a new key for `principal` would pass the caps now. Advisory:

@@ -510,8 +510,9 @@ impl Store {
                 remove_record(&self.outbox_dir, &file)?;
                 Ok(Settled {
                     evicted: self.evict_dead(state, now, policy)?,
-                    // Scaffold: the receipt is not taken yet.
-                    buried: false,
+                    // Taken before the caps run: the burial happened even if
+                    // they evict it at once.
+                    buried: true,
                 })
             }
         }
@@ -630,8 +631,7 @@ impl Store {
         self.entomb(state, record, reason, now)?;
         Ok(Settled {
             evicted: self.evict_dead(state, now, policy)?,
-            // Scaffold: the receipt is not taken yet.
-            buried: false,
+            buried: true,
         })
     }
 

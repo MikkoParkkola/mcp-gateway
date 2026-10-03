@@ -187,10 +187,11 @@ impl EventsHub {
             let settled = self
                 .blocking(move |store| store.dead_letter(record, reason, now, policy))
                 .await;
-            services
-                .audit_evictions(settled.map(|s| s.evicted).unwrap_or_default())
-                .await;
-            self.dead_lettered(services, &buried, reason).await;
+            let (evicted, receipt) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
+            services.audit_evictions(evicted).await;
+            if receipt {
+                self.dead_lettered(services, &buried, reason).await;
+            }
             return;
         }
         let caps = self.outbox_caps();
