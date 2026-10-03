@@ -717,3 +717,7 @@ mod mapping_tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "input_round_exit_tests.rs"]
+mod exit_tests;
