@@ -494,7 +494,9 @@ fn a_wait_must_leave_ten_seconds_of_the_provider_timeout() {
             "            tool: echo\n            wait:\n              tool: echo\n              until: {{ array: a, match: {{ x: y }}, field: f, equals: true }}\n              max_wait_s: {max}"
         ))
     };
-    assert!(parse_capability(&wait(20)).is_ok());
-    let err = parse_capability(&wait(21)).unwrap_err().to_string();
+    let check =
+        |max| crate::capability::validate_capability(&parse_capability(&wait(max)).unwrap());
+    assert!(check(20).is_ok());
+    let err = check(21).unwrap_err().to_string();
     assert!(err.contains("max_wait_s"), "{err}");
 }
