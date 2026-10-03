@@ -1,0 +1,4 @@
+head_sha	6ee8b00c1897fa2df4c045ccc5327a7ddfe84d43
+# batch 1 for #2746 (task store lease)
+T1	linux	t1.patch	--lib -- a_lease_that_cannot_be_created_leaves_the_store_unavailable
+T2	linux	sw.patch	--lib -- task_service::store

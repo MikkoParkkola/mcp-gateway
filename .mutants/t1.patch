@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index f55c30aa6..833449d41 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -734,7 +734,7 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
+         // Includes the platforms with no tested exclusion primitive: they refuse
+         // custody outright rather than pretend to hold it.
+         tracing::warn!(%error, path = %shown_path, "task store lease not acquired");
+-        StoreError::Unavailable
++        StoreError::AlreadyOwned
+     })
+ }
+ 

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index f55c30aa6..7c4d43b13 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -721,7 +721,7 @@ fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
+         }
+     }
+     ExclusiveFileLock::try_acquire(lease).map_err(|error| {
+-        if error.kind() == io::ErrorKind::WouldBlock {
++        if error.kind() == io::ErrorKind::Interrupted {
+             return StoreError::AlreadyOwned;
+         }
+         // Windows judges the lease's DACL inside `try_acquire`, the check unix
