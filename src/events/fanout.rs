@@ -28,6 +28,9 @@ pub(crate) struct SourceEvent {
     pub backend: String,
     /// Who may receive this occurrence: a backend's callers, or the owner.
     pub scope: Visibility,
+    /// The owner's digest, for sources whose occurrences belong to one owner;
+    /// carried so fan-out needs no read of the record the source describes.
+    pub owner: Option<String>,
     /// Stable per occurrence (design §3.6).
     pub upstream_id: String,
     pub occurred_at: DateTime<Utc>,

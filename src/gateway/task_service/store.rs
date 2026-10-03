@@ -183,6 +183,15 @@ impl TaskStore {
             .map_err(|_| StoreError::Storage)?
     }
 
+    /// The owner digest of task `id`, if the row still exists.
+    pub(crate) fn owner_digest_of(&self, id: &str) -> Option<String> {
+        self.0
+            .state()
+            .entries
+            .get(id)
+            .map(|entry| entry.record.admission.principal_digest.clone())
+    }
+
     pub(crate) fn get(&self, owner: &str, id: &str) -> Result<CommittedTask, StoreError> {
         let state = self.0.state();
         if !state.ready {

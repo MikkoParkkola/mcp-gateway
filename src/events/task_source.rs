@@ -103,7 +103,13 @@ impl EventSource for TaskSource {
 
 impl EventsHub {
     /// A task transition was committed: emit when it is terminal.
-    pub(crate) fn task_published(&self, task_id: &str, status: TaskStatus, at: DateTime<Utc>) {
+    pub(crate) fn task_published(
+        &self,
+        task_id: &str,
+        status: TaskStatus,
+        at: DateTime<Utc>,
+        owner: Option<String>,
+    ) {
         if !matches!(
             status,
             TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
@@ -116,6 +122,7 @@ impl EventsHub {
             name: NAME.into(),
             backend: "tasks".into(),
             scope: Visibility::Owner,
+            owner,
             upstream_id: format!("{task_id}:{}", status_name.as_str().unwrap_or_default()),
             occurred_at: at,
             data: json!({
@@ -134,8 +141,8 @@ impl EventsHub {
     ) {
         self.register_source(Arc::new(TaskSource { service }));
         let hub = Arc::clone(self);
-        executor.on_publication(Arc::new(move |id, status, at| {
-            hub.task_published(id, status, at);
+        executor.on_publication(Arc::new(move |id, status, at, owner| {
+            hub.task_published(id, status, at, owner);
         }));
     }
 }

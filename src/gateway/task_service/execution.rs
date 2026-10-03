@@ -135,7 +135,7 @@ pub(crate) enum WriteOutcome {
 
 /// A callback told of each committed task transition.
 pub(crate) type PublicationHook =
-    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>) + Send + Sync>;
+    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>, Option<String>) + Send + Sync>;
 
 /// The one owner of a committed task record.
 ///
@@ -517,7 +517,12 @@ impl TaskExecutor {
             WriteOutcome::Create(_) => return,
         };
         if let Some(hook) = self.publication_hook.get() {
-            hook(task_id, status, changed_at);
+            hook(
+                task_id,
+                status,
+                changed_at,
+                self.service.owner_digest_of(task_id),
+            );
         }
         tracing::debug!(
             task_id,

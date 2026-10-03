@@ -123,6 +123,7 @@ impl EventsHub {
                 name: event_name(&backend),
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
+                owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
                 occurred_at: Utc::now(),
                 data: json!({}),
