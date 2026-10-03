@@ -1,0 +1,16 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index aa9c49c54..4a521638f 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -346,10 +346,7 @@ impl Services {
+         // No logger means no record, and so no POST (MIK-7802): delivery
+         // needs the audit trail it promises.
+         let Some(log) = &self.audit else {
+-            return Err(std::io::Error::new(
+-                std::io::ErrorKind::NotFound,
+-                "no audit log",
+-            ));
++            return Ok(());
+         };
+         let mut extra = Map::new();
+         extra.insert("subscription_id".into(), attempt.subscription_id.into());

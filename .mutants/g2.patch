@@ -1,0 +1,13 @@
+diff --git a/src/events/rpc.rs b/src/events/rpc.rs
+index 242b8108b..e600610a2 100644
+--- a/src/events/rpc.rs
++++ b/src/events/rpc.rs
+@@ -419,7 +419,7 @@ impl EventsHub {
+     ) -> Result<(), RpcError> {
+         let outcome = self.probe(url, id, key).await;
+         let detail = match &outcome {
+-            Ok(()) => "verified",
++            Ok(()) => "ok",
+             Err(error) => error
+                 .data
+                 .as_ref()

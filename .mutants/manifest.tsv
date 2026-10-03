@@ -1,0 +1,9 @@
+head_sha	cafecf2816dbb70a87e285be1bb2fff820802693
+# #2759 batch 1
+G1	linux	g1.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+G2	linux	g2.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+G3	linux	g3.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+G4	linux	g4.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+G5	linux	g5.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+F1	linux	f1.patch	--test mik_7630_events_governance -- an_attempt_record_names_the_firewall_verdict
+A1	linux	a1.patch	--lib -- no_audit_log_configured_refuses_the_attempt_record

@@ -1,0 +1,13 @@
+diff --git a/src/events/governance.rs b/src/events/governance.rs
+index e0c4e518f..3e6f293ef 100644
+--- a/src/events/governance.rs
++++ b/src/events/governance.rs
+@@ -106,7 +106,7 @@ impl EventsHub {
+         url: &url::Url,
+     ) {
+         let act = Lifecycle {
+-            action: if refreshed {
++            action: if !refreshed {
+                 "events.refresh"
+             } else {
+                 "events.subscribe"

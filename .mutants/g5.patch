@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index 8624793c4..81271b7a7 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -156,7 +156,7 @@ impl EventsHub {
+                 services
+                     .audit_lifecycle(
+                         &super::governance::Lifecycle {
+-                            action: "events.replay",
++                            action: "events.replayed",
+                             subscription_id: &sub.id,
+                             event_name: &dead.record.name,
+                             callback_host: &host,

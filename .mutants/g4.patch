@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index d5288b87c..3f396fe0b 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -387,7 +387,7 @@ impl EventsHub {
+         services
+             .audit_lifecycle(
+                 &super::governance::Lifecycle {
+-                    action: "events.dead_letter",
++                    action: "events.dead",
+                     subscription_id: &record.subscription_id,
+                     event_name: &record.name,
+                     callback_host: &host,
