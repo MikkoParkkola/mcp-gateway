@@ -18,6 +18,13 @@ import argparse, os, base64, hashlib, http.client, json, secrets, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
+MAX_BODY = 1 << 20  # a request body over this is refused before it is read
+
+
+class TooLarge(Exception):
+    pass
+
+
 CODES = {}
 REFRESH = set()
 CLIENTS = {}  # client_id -> registered redirect_uris
@@ -43,13 +50,22 @@ class Shim(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(raw)))
+        # Token and registration answers carry credentials: never cacheable.
+        self.send_header("cache-control", "no-store")
+        self.send_header("pragma", "no-cache")
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(raw)
 
     def body(self):
-        return self.rfile.read(int(self.headers.get("content-length") or 0))
+        try:
+            length = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            raise TooLarge from None
+        if length < 0 or length > MAX_BODY:
+            raise TooLarge
+        return self.rfile.read(length)
 
     def do_GET(self):
         self.route("GET")
@@ -61,6 +77,12 @@ class Shim(BaseHTTPRequestHandler):
         self.route("DELETE")
 
     def route(self, verb):
+        try:
+            self.dispatch(verb)
+        except TooLarge:
+            self.send_json(413, {"error": "request_too_large"})
+
+    def dispatch(self, verb):
         path = urlparse(self.path).path
         o = self.origin()
         if path.startswith("/.well-known/oauth-protected-resource"):

@@ -1065,6 +1065,8 @@ jobs:
       # These pin both, and a guard that cannot fail is the thing it guards.
       - name: Check the guard catches what it claims to
         run: python3 scripts/dev/test_check_orphan_test_modules.py
+      - name: MCP events OAuth shim rows
+        run: python3 scripts/dev/test_mcp_events_oauth_shim.py
 
   control-drift-probes:
     name: Control-drift probes (NFR.SEC.7)
