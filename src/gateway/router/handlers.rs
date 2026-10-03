@@ -21,8 +21,8 @@ use super::authorization::{
 use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_error_response_with_data, build_http_error_response, build_http_response, build_response,
-    extract_tools_call_params, merge_client_meta, parse_elicitation_params, parse_request,
-    parse_sampling_params,
+    extract_tools_call_params, extract_tools_call_params_ref, merge_client_meta,
+    parse_elicitation_params, parse_request_ref, parse_sampling_params,
 };
 use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
@@ -769,8 +769,8 @@ async fn meta_mcp_dispatch(
     }
 
     // Parse request
-    let (id, method, params) = match parse_request(&request) {
-        Ok(parsed) => parsed,
+    let (id, method, params) = match parse_request_ref(&request) {
+        Ok((id, method, params)) => (id, method.to_string(), params),
         Err(response) => {
             return build_response(response, &session_id, StatusCode::BAD_REQUEST);
         }
@@ -781,7 +781,7 @@ async fn meta_mcp_dispatch(
         .and_then(|value| value.to_str().ok());
     crate::protocol_revision_telemetry::observe_inbound_request(
         &request,
-        params.as_ref(),
+        params,
         &method,
         protocol_header,
         Some(session_id.as_str()),
@@ -800,7 +800,7 @@ async fn meta_mcp_dispatch(
     // dispatchers cannot drift apart on what a request declared.
     let shape = crate::protocol::meta::classify_and_observe(
         &method,
-        params.as_ref(),
+        params,
         declared_version,
         // HTTP echoes the revision in a header on every request, so there
         // is nothing for a session lookup to add.
@@ -879,7 +879,7 @@ async fn meta_mcp_dispatch(
         &shape,
         declared_version,
         &method,
-        params.as_ref(),
+        params,
         id.as_ref(),
     ) {
         return build_response(rpc, &session_id, status);
@@ -918,7 +918,7 @@ async fn meta_mcp_dispatch(
     // A request reaching the tasks extension must DECLARE it, on that request.
     // Handing a task handle to a client that never said it could hold one
     // strands the work: the client reads a handle it will never redeem.
-    if reaches_tasks_extension(method.as_str(), params.as_ref())
+    if reaches_tasks_extension(method.as_str(), params)
         && !declared_extensions.contains(crate::protocol::extensions::Extension::Tasks)
     {
         return build_error_response_with_data(
@@ -961,7 +961,7 @@ async fn meta_mcp_dispatch(
     // silence IS the refusal (see below).
     if unattributed
         && method != "subscriptions/listen"
-        && reaches_tasks_extension(method.as_str(), params.as_ref())
+        && reaches_tasks_extension(method.as_str(), params)
     {
         // The early return skips the tail that counts every other JSON-RPC
         // answer, so the refusal is counted here or it is invisible: an
@@ -988,13 +988,16 @@ async fn meta_mcp_dispatch(
     // principal owns must be indistinguishable from one that never existed, and
     // a refusal would announce the difference. A caller with no credential
     // under authentication is refused at the listen arm, whatever ids it names.
-    let mut params = params;
+    // Borrowed from `request` for every method but this one, which narrows a
+    // private copy; `tools/call` payloads are never duplicated here.
+    let mut narrowed_listen: Option<Value> = None;
     if method == "subscriptions/listen" {
-        let ids = listened_task_ids(params.as_ref());
+        let ids = listened_task_ids(params);
         if !ids.is_empty() {
             let caller_holds_ids =
                 !unattributed && state.tasks.owns_all(&owner, ids.iter().map(String::as_str));
-            if let Some(map) = params.as_mut().and_then(Value::as_object_mut) {
+            narrowed_listen = params.cloned();
+            if let Some(map) = narrowed_listen.as_mut().and_then(Value::as_object_mut) {
                 map.entry("notifications").or_insert_with(|| json!({}));
                 if !caller_holds_ids {
                     // Both placements: a copy left standing would opt the
@@ -1012,8 +1015,10 @@ async fn meta_mcp_dispatch(
         }
     }
 
+    let params = narrowed_listen.as_ref().or(params);
+
     let external_tool = if method == "tools/call" {
-        extract_tools_call_params(params.as_ref()).0.to_owned()
+        extract_tools_call_params_ref(params).0.to_owned()
     } else {
         method.clone()
     };
@@ -1071,8 +1076,7 @@ async fn meta_mcp_dispatch(
             // ordinary response builder: the specification's response to this
             // method is a stream that stays open, and an acknowledgement that
             // closes is a subscription the client waits on forever.
-            let Some(request) =
-                crate::protocol::subscriptions::ListenRequest::from_params(params.as_ref())
+            let Some(request) = crate::protocol::subscriptions::ListenRequest::from_params(params)
             else {
                 // No `notifications` filter at all. An *empty* filter is valid
                 // and opens a quiet stream; this is a request that never said
@@ -1140,7 +1144,7 @@ async fn meta_mcp_dispatch(
                 acknowledgement,
                 state.streaming_config.keep_alive_interval,
                 judge,
-                params.clone(),
+                params.cloned(),
             );
         }
         // MIK-7630. Answered here, never proxied; with events off the guard
@@ -1160,7 +1164,7 @@ async fn meta_mcp_dispatch(
                     .filter(|b| state.meta_mcp.admits_backend(b, invoke_scope, session))
                     .collect(),
             };
-            events::answer(&hub, id, &method, params.as_ref(), &caller).await
+            events::answer(&hub, id, &method, params, &caller).await
         }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.
@@ -1172,7 +1176,7 @@ async fn meta_mcp_dispatch(
         ),
         "initialize" => state.meta_mcp.handle_initialize(
             id,
-            params.as_ref(),
+            params,
             Some(session_id.as_str()),
             header_profile.as_deref(),
             era,
@@ -1192,7 +1196,6 @@ async fn meta_mcp_dispatch(
             // is read from the value it names, so a reader can check the record
             // against the request rather than against an assumption.
             let query_present = params
-                .as_ref()
                 .and_then(|p| p.get("query"))
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|query| !query.is_empty());
@@ -1210,7 +1213,7 @@ async fn meta_mcp_dispatch(
             );
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
-                params.as_ref(),
+                params,
                 Some(session_id.as_str()),
                 code_mode_url_active,
                 invoke_scope,
@@ -1222,14 +1225,14 @@ async fn meta_mcp_dispatch(
         // takes. Only that one arm breaks; the refusals that return directly
         // still do, because each already carries the status it must be sent with.
         "tools/call" => 'tools_call: {
-            let (tool_name, arguments) = extract_tools_call_params(params.as_ref());
+            let (tool_name, arguments) = extract_tools_call_params(params);
             // A conforming client's `_meta` is a sibling of `arguments`, and
             // the meta layer reads it off the argument object it is handed.
             // Meta-tool path only -- the direct backend route runs before the
             // meta-tool match and must stay byte-identical.
             let arguments = merge_client_meta(
                 arguments,
-                params.as_ref(),
+                params,
                 state.meta_mcp.exposes_meta_tool(tool_name),
             );
 
@@ -1256,7 +1259,7 @@ async fn meta_mcp_dispatch(
             //
             // What cannot wait is the malformed shape, refused below before
             // anything dispatches.
-            let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
+            let retry = crate::protocol::mrtr::RetryFields::from_params(params);
             if retry.is_malformed() {
                 // Neither a usable retry nor a fresh call. Running it as a fresh
                 // call would repeat whatever the first attempt already did, and
@@ -1457,7 +1460,7 @@ async fn meta_mcp_dispatch(
                     // grant must digest what admission will key on.
                     tool_name,
                     arguments: &arguments,
-                    task: params.as_ref().and_then(|p| p.get("task")),
+                    task: params.and_then(|p| p.get("task")),
                     retry: &retry,
                     verified_identity: verified_identity.as_ref(),
                     input_capabilities: declared_capabilities,
@@ -1525,7 +1528,7 @@ async fn meta_mcp_dispatch(
             // ordinary `tools/call` must reach the synchronous path unchanged,
             // and the builder's own refusals (no verified owner, no idempotency
             // key) are conditions on asking for a task, not on calling a tool.
-            let task_intent = if params.as_ref().is_some_and(|p| p.get("task").is_some()) {
+            let task_intent = if params.is_some_and(|p| p.get("task").is_some()) {
                 match tasks::task_intent_for_call(
                     &state,
                     id.clone(),
@@ -1754,18 +1757,18 @@ async fn meta_mcp_dispatch(
         // Resources
         "resources/list" => {
             let meta = &state.meta_mcp;
-            meta.handle_resources_list(id, params.as_ref(), scope, identity)
+            meta.handle_resources_list(id, params, scope, identity)
                 .await
         }
         "resources/read" => {
             let standing = CallerStanding::of_client(scope);
             let meta = &state.meta_mcp;
-            meta.handle_resources_read(id, params.as_ref(), standing, scope, identity)
+            meta.handle_resources_read(id, params, standing, scope, identity)
                 .await
         }
         "resources/templates/list" => {
             let meta = &state.meta_mcp;
-            meta.handle_resources_templates_list(id, params.as_ref(), scope, identity)
+            meta.handle_resources_templates_list(id, params, scope, identity)
                 .await
         }
         // F24: the gateway never delivers `resources/updated`, so a
@@ -1779,23 +1782,16 @@ async fn meta_mcp_dispatch(
         // Prompts
         "prompts/list" => {
             let meta = &state.meta_mcp;
-            meta.handle_prompts_list(id, params.as_ref(), scope, identity)
-                .await
+            meta.handle_prompts_list(id, params, scope, identity).await
         }
         "prompts/get" => {
             let meta = &state.meta_mcp;
-            meta.handle_prompts_get(id, params.as_ref(), scope, identity)
-                .await
+            meta.handle_prompts_get(id, params, scope, identity).await
         }
 
         // Logging. Admin standing is checked before this match, for every
         // spelling of the method (see `require_admin_log_level`).
-        "logging/setLevel" => {
-            state
-                .meta_mcp
-                .handle_logging_set_level(id, params.as_ref())
-                .await
-        }
+        "logging/setLevel" => state.meta_mcp.handle_logging_set_level(id, params).await,
 
         "ping" => JsonRpcResponse::success(id, json!({})),
 
@@ -1841,7 +1837,7 @@ async fn meta_mcp_dispatch(
         "tools/resolve" => {
             state
                 .meta_mcp
-                .handle_tools_resolve(id, params.as_ref(), Some(session_id.as_str()), invoke_scope)
+                .handle_tools_resolve(id, params, Some(session_id.as_str()), invoke_scope)
                 .await
         }
 
@@ -1868,12 +1864,12 @@ async fn meta_mcp_dispatch(
                 session_id: Some(session_id.as_str()),
             };
             if method == "tasks/get" {
-                tasks::tasks_get(&state, &owner, id.clone(), params.as_ref(), &caller).await
+                tasks::tasks_get(&state, &owner, id.clone(), params, &caller).await
             } else {
-                tasks::tasks_update(&state, &owner, id.clone(), params.as_ref(), &caller).await
+                tasks::tasks_update(&state, &owner, id.clone(), params, &caller).await
             }
         }
-        "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params.as_ref()).await,
+        "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params).await,
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
