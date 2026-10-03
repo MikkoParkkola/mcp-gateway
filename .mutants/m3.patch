@@ -1,0 +1,12 @@
+diff --git a/src/gateway/router/judged_answer.rs b/src/gateway/router/judged_answer.rs
+index f8c4f0a74..fff15ea5b 100644
+--- a/src/gateway/router/judged_answer.rs
++++ b/src/gateway/router/judged_answer.rs
+@@ -34,6 +34,6 @@ pub(super) async fn record_delivery(
+         return (frame, finalized);
+     }
+     let refusal = MetaMcp::audit_unavailable_refusal(frame.answer_id());
+-    let stored = finalized.map(|_| refusal.clone());
++    let stored = finalized;
+     (frame.replaced_by(refusal), stored)
+ }
