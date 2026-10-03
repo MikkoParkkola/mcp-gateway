@@ -1,0 +1,8 @@
+head_sha	1b155ccdf6e1ccea0b938b96e69df7eac4c6f7ae
+p1	linux	p1.patch	--lib -- a_reader_refused_by_policy_gets_the_status_and_no_output
+p2	linux	p2.patch	--lib -- a_reader_refused_by_policy_gets_the_status_and_no_output
+p3	linux	p3.patch	--lib -- a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed
+p4	linux	p4.patch	--lib -- a_delivered_task_frame_is_tagged_and_logged_as_sent
+p5	linux	p5.patch	--lib -- the_owner_receives_the_full_task_and_never_the_other_principals
+p6	linux	p6.patch	--lib -- a_delivered_task_frame_is_tagged_and_logged_as_sent
+p7	linux	p7.patch	--lib -- a_restored_task_document_is_an_unattributed_read
