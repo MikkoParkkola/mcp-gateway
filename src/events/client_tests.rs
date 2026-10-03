@@ -105,3 +105,22 @@ fn retry_after_reads_seconds_and_http_dates() {
     );
     assert_eq!(retry_after("soon", now), None);
 }
+
+/// A body that never left the process is reported as unsent, so the read
+/// verdict releases its reservation: a refused literal and a refused connect.
+#[tokio::test]
+async fn failures_before_a_byte_is_written_are_reported_unsent() {
+    let keys: [&[u8]; 1] = [b"k"];
+    let client = CallbackClient::new(vec![("127.0.0.0".parse().expect("ip"), 8)]).expect("client");
+    let refused_literal = url::Url::parse("https://10.0.0.1:9/h").expect("url");
+    let closed_port = url::Url::parse("https://127.0.0.1:1/h").expect("url");
+    for url in [&refused_literal, &closed_port] {
+        let outcome = client
+            .post_tracked(url, "sub", "evt", &keys, b"{}".to_vec(), ReadBody::Discard)
+            .await;
+        assert!(
+            matches!(outcome, Err((CallbackFailure::ConnectionRefused, true))),
+            "{url}: {outcome:?}"
+        );
+    }
+}

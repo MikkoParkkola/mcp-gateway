@@ -146,6 +146,9 @@ struct Setup {
     /// relay block; a `block` rule on `read` makes a response finding a
     /// refusal where that is the stimulus.
     rules: &'static str,
+    /// Tenant attribution on `customer_id` with `cross_tenant_reads: block`
+    /// (MIN.2), so a read naming a second tenant is withheld.
+    tenants: bool,
 }
 
 impl Default for Setup {
@@ -159,6 +162,7 @@ impl Default for Setup {
             non_egress: Vec::new(),
             allowed_flows: Vec::new(),
             rules: "[{match: \"*\", action: allow}]",
+            tenants: false,
         }
     }
 }
@@ -214,6 +218,15 @@ async fn fixture(setup: Setup) -> Fixture {
             non_egress: setup.non_egress,
             allowed_flows: setup.allowed_flows,
             ..CollusionConfig::default()
+        },
+        tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
+            arg_keys: if setup.tenants {
+                vec!["customer_id".to_string()]
+            } else {
+                Vec::new()
+            },
+            cross_tenant_reads: crate::security::firewall::tenant_guard::CrossTenantReads::Block,
+            ..Default::default()
         },
         ..FirewallConfig::default()
     };
