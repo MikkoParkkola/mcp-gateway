@@ -406,9 +406,10 @@ async fn meta_read_record_failure_leaves_no_receipt() {
         .expect("open log")
         .with_failure_policy(AuditFailurePolicy::FailClosed),
     );
-    Arc::get_mut(&mut fx.state)
-        .expect("state is unique")
-        .transparency_log = Some(Arc::clone(&log));
+    let state = Arc::get_mut(&mut fx.state).expect("state is unique");
+    Arc::get_mut(&mut state.meta_mcp)
+        .expect("meta is unique")
+        .enable_transparency_log(Arc::clone(&log));
     let text = format!("{{\"customer_id\":\"t1\",\"note\":\"{PROSE}\"}}");
     fx.answer_read(Read::Text(text.clone()));
     let args = invoke("read", &json!({}));
