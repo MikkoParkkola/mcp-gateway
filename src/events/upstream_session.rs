@@ -180,9 +180,21 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             Ev::Pending(None) => state.pending = None,
             Ev::Wake | Ev::Tick => {}
         }
-        if state.tools_pending {
-            // Before the event is sent: the re-read it prompts must be fresh.
+        if state.tools_due.is_some_and(|due| Instant::now() >= due) {
+            // A notice arrived: drop the cached list and refill it before the
+            // hub hears, so the subscriber's re-read is fresh and nothing sees
+            // an emptied cache. At most once per tick however many notices came.
+            state.tools_due = None;
             backend.invalidate_tools();
+            let refill = tokio::time::timeout(OPEN_LIMIT, backend.get_tools());
+            tokio::select! {
+                () = shared.stop.cancelled() => {
+                    state.release(backend).await;
+                    return Outcome::Stopped;
+                }
+                _ = refill => {}
+            }
+            state.tools_pending = true;
         }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
@@ -271,6 +283,8 @@ struct State<'a> {
     reread: bool,
     /// A backend tools notice waits to be handed to the hub (§14).
     tools_pending: bool,
+    /// The earliest the next tools handoff may run (one per tick).
+    tools_due: Option<Instant>,
     snapshot_due: Instant,
     /// A catalogue read is not retried before this.
     snapshot_retry_at: Instant,
@@ -293,6 +307,7 @@ impl<'a> State<'a> {
             resource_interest_unsupported: false,
             reread: false,
             tools_pending: false,
+            tools_due: None,
             snapshot_due: now + SNAPSHOT_TTL,
             snapshot_retry_at: now,
             retry_open_at: now,
@@ -354,7 +369,9 @@ impl<'a> State<'a> {
                 }
                 if kind == NoteKind::ToolsChanged {
                     // Not coalesced here: the hub's own quiet window does it.
-                    self.tools_pending |= self.shared.need.lock().emits(kind, None);
+                    if self.shared.need.lock().emits(kind, None) {
+                        self.tools_due.get_or_insert(Instant::now() + TICK);
+                    }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
                 }
