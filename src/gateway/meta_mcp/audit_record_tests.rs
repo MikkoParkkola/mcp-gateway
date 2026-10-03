@@ -56,6 +56,36 @@ impl Transport for Scripted {
     }
 }
 
+/// A backend that answers every `tools/call` with its own JSON-RPC error.
+struct PeerError(i32);
+
+#[async_trait::async_trait]
+impl Transport for PeerError {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            return Ok(crate::protocol::JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                self.0,
+                "the peer's own refusal",
+            ));
+        }
+        Scripted(Ok(ok_result())).request(method, params).await
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 fn ok_result() -> Value {
     json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
 }
@@ -372,3 +402,23 @@ async fn response_hash_covers_returned_value() {
 // MIK-7116.MIN.1 attribution, which reads the firewall's `arg_keys`.
 #[cfg(feature = "firewall")]
 mod tenants;
+
+/// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
+/// refusal, not the gateway's policy: the record says `error`, with the
+/// peer's code, never `denied`.
+#[tokio::test]
+async fn a_peer_error_code_is_not_a_gateway_denial() {
+    for code in [-32001, -32004] {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = meta(Ok(ok_result()), &dir);
+        let backend = meta.backends.get("alpha").expect("alpha");
+        backend.set_transport_for_test(Arc::new(PeerError(code)));
+        let who = api_key_caller();
+        let _ = meta
+            .invoke_tool(&args(), None, &context(&AllowAll, &who))
+            .await;
+        let record = only_record(&dir);
+        assert_eq!(record["outcome"], json!("error"), "{code}: {record}");
+        assert_eq!(record["error_code"], json!(code), "{code}: {record}");
+    }
+}
