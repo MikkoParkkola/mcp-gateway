@@ -1,0 +1,12 @@
+diff --git a/src/gateway/router/mod.rs b/src/gateway/router/mod.rs
+index fd13feee5..0ab7167fa 100644
+--- a/src/gateway/router/mod.rs
++++ b/src/gateway/router/mod.rs
+@@ -477,6 +477,7 @@ pub(crate) fn create_router_with_accounts(
+                 .delete(handlers::mcp_delete_handler),
+         )
+         .route("/mcp/{name}", post(backend_handlers::backend_handler))
++        .route("/mcp/raw", post(handlers::sse_deprecated_handler))
+         .route(
+             "/mcp/{name}/{*path}",
+             post(backend_handlers::backend_handler),

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/reply.rs b/src/gateway/outbound/reply.rs
+index b711b4c26..8e9cf7f13 100644
+--- a/src/gateway/outbound/reply.rs
++++ b/src/gateway/outbound/reply.rs
+@@ -29,7 +29,7 @@ pub(crate) async fn judged_reply(
+     response: Response,
+     log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+ ) -> OutboundReply {
+-    OutboundReply(super::emit_http(response, log).await)
++    { let _ = log; OutboundReply(response) }
+ }
+ 
+ /// A response whose frames are judged one by one by a stream judge (the
