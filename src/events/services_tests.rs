@@ -50,7 +50,8 @@ fn the_receipt_is_signed_only_when_stamping_is_on() {
     let bare = services(Vec::new()).provenance("hooks", "webhook.c.r.received");
     assert_eq!(bare["receipt"]["subject_kind"], "event");
     assert!(bare.get("signature").is_none());
-    let signer = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id");
+    let signer = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id")
+        .with_audience("test-gateway");
     let stamped = Services {
         provenance: Some(Arc::new(signer)),
         ..services(Vec::new())

@@ -368,7 +368,8 @@ retries the reload every 2 seconds until one succeeds, so a valid config edit th
 alongside a broken env file is applied once the env file is fixed or put back.
 
 Env files supply values to configuration references, and also the attestation signing
-key: `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read through the same
+key: `GATEWAY_ATTESTATION_SIGNING_KEY`, `GATEWAY_ATTESTATION_KEY_ID` and
+`GATEWAY_ATTESTATION_AUDIENCE` are read through the same
 overlay under those fixed names, rather than named in a config file through a
 `{env.VAR}` reference. Injecting them from the deployment — a systemd unit, a
 Kubernetes secret — still works and is still the recommendation for an operational

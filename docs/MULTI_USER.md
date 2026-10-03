@@ -277,6 +277,20 @@ one transport is safe to share because identity travels per request.
 it is not stateless — a backend that binds anything to the session will leak it
 across users.
 
+## One principal per call
+
+Authentication, audit and credential propagation carry **one** principal per
+call: the verified end user, or the API key, agent token or certificate when
+there is none. When a call passes user, then agent A, then agent B, then the
+gateway, the gateway sees the last hop's credential and the verified identity
+it carries. The intermediate agents are not recorded and policy cannot weigh
+them. Carrying an actor chain is tracked separately (MIK-7813).
+
+`strategy: passthrough` is the one exception to "the gateway mints the
+credential": it forwards the caller's own backend credential, from
+`x-mcp-passthrough-authorization`, to the backend unexamined. The gateway
+neither validates nor scopes it, so the backend is the only judge of it.
+
 ## The name collision to avoid
 
 `backends.<name>.passthrough: true` and

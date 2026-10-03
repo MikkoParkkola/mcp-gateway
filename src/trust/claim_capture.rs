@@ -189,7 +189,7 @@ mod tests {
     const KEY: &[u8] = b"claim-capture-test-key";
 
     fn signer() -> BnautAttestationSigner {
-        BnautAttestationSigner::new(KEY.to_vec(), "unit")
+        BnautAttestationSigner::new(KEY.to_vec(), "unit").with_audience("test-gateway")
     }
 
     /// The receipt-domain subkey derived from the same raw key material as
