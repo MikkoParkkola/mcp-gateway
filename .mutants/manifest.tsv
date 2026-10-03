@@ -1,0 +1,5 @@
+head_sha	0142573011ebd61154aaf746e967ce08f6398eec
+# #2748 stdio receipts after the read verdict
+R4a	linux	r4s.patch	--lib -- stdio_judged_out
+R4b	linux	r4s.patch	--lib -- stdio_audit_withheld
+R7	linux	r7s.patch	--lib -- a_batch_item_sees_the_receipt
