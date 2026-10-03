@@ -158,3 +158,40 @@ async fn the_credential_rules_are_the_captured_backends() {
         "the captured backend has no propagation: the reload must not decide for it"
     );
 }
+
+/// The notification arm resolves the credential on the backend it forwards
+/// through. Mutant: resolving by name applies a reload's replacement rules to a
+/// notification sent through the captured backend.
+#[tokio::test]
+async fn the_notification_arm_resolves_on_the_captured_backend() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let captured = fx.state.backends.get("alpha").expect("alpha is registered");
+    let strict = backend(required_propagation());
+    reload(&fx, Arc::clone(&strict));
+    let caller = anonymous();
+
+    let refused = super::notification_key::resolve(
+        &fx.state,
+        &strict,
+        "alpha",
+        &caller.inbound_headers,
+        caller.proof(),
+        None,
+    )
+    .await;
+    assert!(refused.is_err(), "control: a required propagation refuses");
+
+    let served = super::notification_key::resolve(
+        &fx.state,
+        &captured,
+        "alpha",
+        &caller.inbound_headers,
+        caller.proof(),
+        None,
+    )
+    .await;
+    assert!(
+        served.is_ok(),
+        "the captured backend has no propagation: the reload must not decide for it"
+    );
+}
