@@ -162,6 +162,7 @@ backend" and "fails a capability file" first.**
 | 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
 | 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
+| 138 | A relay refusal of a catalogue read (`prompts/get`, `resources/read`) on the meta route now answers HTTP 403, as a `tools/call` relay refusal does; before it was HTTP 200 with the error in the body | A client that branches on the HTTP status of a refused catalogue read should treat 403 as a refusal; the JSON-RPC error (`-32002`) is unchanged |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3717,6 +3718,14 @@ The embedded script that wrote a caller-chosen path is gone. A declarative `save
 Through 3.x the gateway read a stdio backend's output line by line with no ceiling, so a peer that never sent a newline could grow its memory without bound. A message (one line) over 16 MiB now fails the call and stops that backend's process; the error names the backend setting.
 
 **Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid only on a backend declared with a `command`.
+
+## 138. A catalogue relay refusal answers HTTP 403 on the meta route
+
+**Startup:** no notice, the status changes for a refused catalogue read from the first request
+
+With relay detection set to `block`, a `prompts/get` whose arguments, or a `resources/read` whose URI, carry content another caller was delivered is refused with JSON-RPC error `-32002`. On the meta route that refusal used to travel as HTTP 200 with the error in the body, while the same refusal of a `tools/call` answered 403. Both now answer 403. The JSON-RPC error code and message are unchanged, and the direct route already answered 403.
+
+**Action:** a client that reads the HTTP status of a meta-route catalogue read and treats 200 as "the call was answered" should handle 403 as a refusal and read the JSON-RPC error from the body, as it already does for a refused `tools/call`. A client that only reads the JSON-RPC body needs no change.
 
 ## Upgrading from 3.5.x: a walkthrough
 
