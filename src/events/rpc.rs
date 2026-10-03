@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use super::EventsHub;
+use super::governance::Lifecycle;
 use super::records::{Credential, Subscription};
 use super::store::{CapHit, Caps};
 use super::types::{EventDescriptor, RpcError, Visibility};
@@ -366,13 +367,16 @@ impl EventsHub {
         // and the callback is challenged before a second commit.
         for _pass in 0..2 {
             if !verified {
-                self.challenge(&url, &id, &key).await?;
+                self.challenge(caller, &descriptor.name, &url, &id, &key)
+                    .await?;
             }
             let outcome = self
                 .commit_started(&record, !verified, (caps, grace, tail), now)
                 .await;
             match outcome? {
                 Ok(()) => {
+                    self.subscribed(caller, existing.is_some(), &id, &descriptor.name, &url)
+                        .await;
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
@@ -424,9 +428,42 @@ impl EventsHub {
         outcome
     }
 
-    /// Challenge the callback once: literal check, per-host limit, then the
-    /// verification POST.
-    async fn challenge(&self, url: &url::Url, id: &str, key: &[u8]) -> Result<(), RpcError> {
+    /// Challenge the callback once, and record how it went.
+    async fn challenge(
+        &self,
+        caller: &Caller,
+        name: &str,
+        url: &url::Url,
+        id: &str,
+        key: &[u8],
+    ) -> Result<(), RpcError> {
+        let outcome = self.probe(url, id, key).await;
+        let detail = match &outcome {
+            Ok(()) => "verified",
+            Err(error) => error
+                .data
+                .as_ref()
+                .and_then(|d| d["reason"].as_str().or_else(|| d["limit"].as_str()))
+                .unwrap_or("refused"),
+        };
+        self.govern(
+            &Lifecycle {
+                action: "events.verification",
+                subscription_id: id,
+                event_name: name,
+                callback_host: url.host_str().unwrap_or_default(),
+                detail,
+                event_id: None,
+                ok: outcome.is_ok(),
+            },
+            Some(caller),
+        )
+        .await;
+        outcome
+    }
+
+    /// The verification probe: literal check, per-host limit, then the POST.
+    async fn probe(&self, url: &url::Url, id: &str, key: &[u8]) -> Result<(), RpcError> {
         self.client.check_literal(url).map_err(RpcError::callback)?;
         let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
         if !self.host_admitted(&host) {
@@ -462,7 +499,21 @@ impl EventsHub {
         let id = subscription_id(&principal, url.as_str(), name, &arguments);
         let tail = super::tail_policy(&self.config);
         let removed = id.clone();
-        blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
+        let was_there =
+            blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
+        self.govern(
+            &Lifecycle {
+                action: "events.unsubscribe",
+                subscription_id: &id,
+                event_name: name,
+                callback_host: url.host_str().unwrap_or_default(),
+                detail: if was_there { "removed" } else { "absent" },
+                event_id: None,
+                ok: true,
+            },
+            Some(caller),
+        )
+        .await;
         self.reconcile_stops().await;
         // A concurrent unsubscribe of the same key waits too. An attempt
         // still busy at the bound is not acknowledged as stopped.

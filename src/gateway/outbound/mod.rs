@@ -99,6 +99,9 @@ pub(crate) struct OutboundFrame {
     assessment: Option<Assessment>,
     /// The history reservation; committed by the sink that writes the frame.
     ticket: Option<ReadTicket>,
+    /// The `tenant_read` fields were taken by a record of the caller's own
+    /// (MIK-7799): no standalone record is written for this frame.
+    record_taken: bool,
     /// The `caller_key` the frame was judged for; a sink bound to another key
     /// drops it. `None` on the fast path, where nothing was judged.
     key: Option<Arc<str>>,
@@ -112,6 +115,7 @@ impl OutboundFrame {
             payload,
             assessment: None,
             ticket: None,
+            record_taken: false,
             key: None,
         }
     }
@@ -173,6 +177,7 @@ impl OutboundFrame {
             payload: Payload::Response(refusal),
             assessment: self.assessment,
             ticket: None,
+            record_taken: self.record_taken,
             key: self.key,
         }
     }
@@ -184,8 +189,25 @@ impl OutboundFrame {
             payload: Payload::Withheld,
             assessment: self.assessment,
             ticket: None,
+            record_taken: self.record_taken,
             key: self.key,
         }
+    }
+
+    /// The `tenant_read` fields of this judgement, for a caller that writes
+    /// them inside a record of its own (the answer's delivery record,
+    /// MIK-7799). Taken once: the sink then writes no standalone record.
+    pub(crate) fn take_record_fields(&mut self) -> Option<serde_json::Map<String, Value>> {
+        if self.record_taken {
+            return None;
+        }
+        let fields = self
+            .assessment
+            .as_ref()
+            .map(|a| a.record_fields(self.key.as_deref()))
+            .filter(|fields| !fields.is_empty())?;
+        self.record_taken = true;
+        Some(fields)
     }
 
     /// The answer's id, for a replacement that must keep it.
