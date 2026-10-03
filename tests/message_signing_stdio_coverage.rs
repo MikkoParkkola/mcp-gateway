@@ -5,7 +5,7 @@
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -27,7 +27,7 @@ struct StdioGateway {
     output: Lines<BufReader<ChildStdout>>,
     child_pid: u32,
     profile_dir: Option<PathBuf>,
-    prior_profiles: HashSet<PathBuf>,
+    prior_profiles: ProfileStamps,
 }
 
 impl StdioGateway {
@@ -333,9 +333,13 @@ async fn verify_signed_wire(response: &Value, request_id: &str, nonce: Value) {
     );
 }
 
-fn snapshot_profile_dir() -> (Option<PathBuf>, HashSet<PathBuf>) {
+/// A profile file's size and modification time: a file that is rewritten in
+/// place changes one of them even though its name does not.
+type ProfileStamps = HashMap<PathBuf, (u64, Option<SystemTime>)>;
+
+fn snapshot_profile_dir() -> (Option<PathBuf>, ProfileStamps) {
     let Some(raw) = std::env::var_os("LLVM_PROFILE_FILE") else {
-        return (None, HashSet::new());
+        return (None, ProfileStamps::new());
     };
     let pattern = PathBuf::from(&raw);
     let pattern_text = pattern.to_string_lossy();
@@ -350,28 +354,36 @@ fn snapshot_profile_dir() -> (Option<PathBuf>, HashSet<PathBuf>) {
     (Some(dir.clone()), existing_profraw(&dir))
 }
 
-fn existing_profraw(dir: &Path) -> HashSet<PathBuf> {
-    let mut paths = HashSet::new();
+fn existing_profraw(dir: &Path) -> ProfileStamps {
+    let mut paths = ProfileStamps::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
         return paths;
     };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension() == Some(OsStr::new("profraw")) {
-            paths.insert(path);
+            let stamp = entry
+                .metadata()
+                .map_or((0, None), |m| (m.len(), m.modified().ok()));
+            paths.insert(path, stamp);
         }
     }
     paths
 }
 
-fn assert_child_profile(dir: Option<&PathBuf>, prior: &HashSet<PathBuf>, pid: u32) {
+/// A child's profile is a file whose name carries its pid and that is new or
+/// rewritten since the snapshot. Windows reuses pids within one run, and the
+/// profile runtime merges into the existing file of that name, so "not in the
+/// snapshot" alone misses a child that reused an earlier process's pid.
+fn assert_child_profile(dir: Option<&PathBuf>, prior: &ProfileStamps, pid: u32) {
     let Some(dir) = dir else {
         return;
     };
     let pid_token = pid.to_string();
     let created = existing_profraw(dir)
         .into_iter()
-        .filter(|path| !prior.contains(path))
+        .filter(|(path, stamp)| prior.get(path) != Some(stamp))
+        .map(|(path, _)| path)
         .filter(|path| {
             path.file_name()
                 .and_then(|n| n.to_str())
@@ -384,9 +396,21 @@ fn assert_child_profile(dir: Option<&PathBuf>, prior: &HashSet<PathBuf>, pid: u3
     let nonempty = created
         .iter()
         .any(|path| std::fs::metadata(path).is_ok_and(|m| m.len() > 0));
+    let reused: Vec<_> = prior
+        .keys()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|name| {
+                    name.split(|c: char| !c.is_ascii_digit())
+                        .any(|token| token == pid_token)
+                })
+        })
+        .collect();
     assert!(
         nonempty,
-        "expected nonempty child profraw containing pid {pid} in {} after EOF exit; found {created:?}",
+        "expected nonempty child profraw containing pid {pid} in {} after EOF exit; \
+         found {created:?}; profiles of an earlier process with this pid: {reused:?}",
         dir.display()
     );
 }
