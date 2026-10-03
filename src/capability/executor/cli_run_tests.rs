@@ -408,3 +408,31 @@ fn success_redaction_runs_the_credential_scanner() {
     super::super::cli::redact_value(&mut value, &[]);
     assert!(!value.to_string().contains(shaped), "{value}");
 }
+
+#[test]
+fn overlapping_credentials_leave_no_fragment_of_either() {
+    let secrets = ["abcdef".to_owned(), "cdefgh".to_owned()];
+    let out = super::super::cli::redact_untruncated("x abcdefgh y", &secrets, &[]);
+    assert_eq!(out, "x [redacted] y");
+    let mut value = json!({"k": "abcdefgh"});
+    super::super::cli::redact_value(&mut value, &secrets);
+    assert_eq!(value["k"], "[redacted]");
+
+    // A value that overlaps itself: no tail of it survives.
+    let out = super::super::cli::redact_untruncated("xabababy", &["abab".to_owned()], &[]);
+    assert_eq!(out, "x[redacted]y");
+}
+
+/// A credential that is a common word must not strip the context the
+/// scanner keys on (`Bearer <token>`).
+#[cfg(feature = "firewall")]
+#[test]
+fn a_secret_that_is_a_common_word_does_not_hide_a_credential_from_the_scanner() {
+    let token = "opaque-token-0123456789abcdef";
+    let text = format!("Authorization: Bearer {token}");
+    let out = super::super::cli::redact_untruncated(&text, &["Bearer".to_owned()], &[]);
+    assert!(!out.contains(token), "{out}");
+    let mut value = json!({ "h": text });
+    super::super::cli::redact_value(&mut value, &["Bearer".to_owned()]);
+    assert!(!value.to_string().contains(token), "{value}");
+}

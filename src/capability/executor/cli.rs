@@ -325,38 +325,70 @@ fn needles<'a>(secrets: &'a [String], caller: &'a [String]) -> Vec<&'a str> {
     needles
 }
 
+/// Replace every occurrence of every needle with a marker. All matches are
+/// located in the ORIGINAL text and overlapping ones are merged first, so two
+/// credentials that overlap leave no fragment of either behind.
 fn scrub(text: &str, needles: &[&str]) -> String {
-    let mut text = text.to_owned();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
     for needle in needles {
-        text = text.replace(needle, "[redacted]");
+        let mut from = 0;
+        while let Some(found) = text[from..].find(needle) {
+            let start = from + found;
+            spans.push((start, start + needle.len()));
+            // One character on, so a match that overlaps the last one is seen.
+            from = start + text[start..].chars().next().map_or(1, char::len_utf8);
+        }
     }
-    text
+    if spans.is_empty() {
+        return text.to_owned();
+    }
+    spans.sort_unstable();
+    let mut out = String::with_capacity(text.len());
+    let mut copied_to = 0;
+    let mut spans = spans.into_iter().peekable();
+    while let Some((start, mut end)) = spans.next() {
+        while let Some(&(next_start, next_end)) = spans.peek() {
+            if next_start > end {
+                break;
+            }
+            end = end.max(next_end);
+            spans.next();
+        }
+        out.push_str(&text[copied_to..start]);
+        out.push_str("[redacted]");
+        copied_to = end;
+    }
+    out.push_str(&text[copied_to..]);
+    out
 }
 
 /// [`redact`] without the truncation: for a result the caller receives whole.
-/// Removes the literals, then runs the firewall's credential scanner (absent
-/// without the `firewall` feature: the literal removal still applies).
+/// Runs the firewall's credential scanner (absent without the `firewall`
+/// feature), then removes the literals: the other way round, a secret that is
+/// itself a common word (`Bearer`) would strip the context the scanner keys on.
 pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
-    let text = scrub(text, &needles(secrets, caller));
     #[cfg(feature = "firewall")]
     let text = {
-        let mut value = Value::String(text);
+        let mut value = Value::String(text.to_owned());
         REDACTOR.scan_and_redact(&mut value);
         value.as_str().unwrap_or_default().to_owned()
     };
-    text
+    #[cfg(not(feature = "firewall"))]
+    let text = text.to_owned();
+    scrub(&text, &needles(secrets, caller))
 }
 
 /// Redact a successful JSON result in place: every string value and object key,
 /// never the structure, so the document still parses and a redacted string
 /// stays a string. No truncation.
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
+    // The scanner first, then the literals (see `redact_untruncated`).
+    #[cfg(feature = "firewall")]
+    REDACTOR.scan_and_redact(value);
     let needles = needles(secrets, &[]);
     if !needles.is_empty() {
         scrub_value(value, &needles);
     }
-    #[cfg(feature = "firewall")]
-    REDACTOR.scan_and_redact(value);
 }
 
 fn scrub_value(value: &mut Value, needles: &[&str]) {
