@@ -306,3 +306,7 @@ impl MetaMcp {
             .set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, shared);
     }
 }
+
+#[cfg(test)]
+#[path = "captured_backend_tests.rs"]
+mod captured_backend_tests;
