@@ -672,6 +672,8 @@ mod login_gate {
         );
         // The state-scoped listing applies the same rule.
         assert_eq!(names(backend.get_tools_for_state("any")), listed);
+        // The reload watcher compares this list, so it must be the listing.
+        assert_eq!(backend.listed_names(), listed);
     }
 
     #[test]
