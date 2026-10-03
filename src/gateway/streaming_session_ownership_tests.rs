@@ -115,6 +115,8 @@ fn an_id_only_session_opens_its_channel_on_first_subscribe() {
         "a send with no receiver reported delivery"
     );
     assert!(session.tx.get().is_none(), "a refused send built a channel");
+    m.broadcast(note());
+    assert!(session.tx.get().is_none(), "a fan-out built a channel");
     assert_eq!(
         m.resume_session_id_scoped(Some(&id), &cred("alice"), None),
         Some(id.clone()),
