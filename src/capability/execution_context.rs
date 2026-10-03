@@ -91,6 +91,12 @@ pub struct CapabilityExecutionContext {
     /// Defaults to `Anonymous`, so a construction site that does not know
     /// refuses rather than mints.
     pub(crate) caller_provenance: crate::identity_propagation::CallerProvenance,
+    /// The MCP revocation generation the capability backend read when it cloned
+    /// the definition, under the registry lock. A call whose generation is no
+    /// longer current (an unload, reload or quarantine happened since) never
+    /// starts a child. `None` for callers that bypass the backend. Not part of
+    /// the cache identity.
+    pub(crate) mcp_generation: Option<u64>,
 }
 
 impl PartialEq for CapabilityExecutionContext {
@@ -152,6 +158,7 @@ impl CapabilityExecutionContext {
             // A `GrantSubject` is an authorization handle, not evidence that a
             // credential validated on this request. Fail closed.
             caller_provenance: crate::identity_propagation::CallerProvenance::Anonymous,
+            mcp_generation: None,
         }
     }
 

@@ -5,12 +5,8 @@
     "minimum": 9,
     "readme_benchmark": 11
   },
-  "capability_count": 135,
+  "capability_count": 136,
   "held_capabilities": [
-    {
-      "name": "pyghidra_reverse",
-      "reason": "loads but refuses to run: its operations are not yet mapped to the server's tools (MIK-7796)"
-    },
     {
       "name": "trawl_extract",
       "reason": "loads but refuses to run: the tool cannot refuse private addresses at connect time, so the gateway cannot confine its network access (MIK-7788)"
