@@ -454,7 +454,7 @@ async fn a_wait_that_runs_out_says_so_and_keeps_the_child() {
     .await
     .unwrap_err()
     .to_string();
-    assert!(err.contains("call again to keep waiting"), "{err}");
+    assert!(err.contains("poll again to keep waiting"), "{err}");
     assert_eq!(
         executor.mcp_children.len(),
         1,
