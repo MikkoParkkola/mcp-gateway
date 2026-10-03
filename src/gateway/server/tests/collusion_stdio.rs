@@ -37,6 +37,8 @@ fn text_result(text: &str) -> Value {
 /// Backend `alpha`: `read` answers [`PROSE`]; `send` counts deliveries.
 struct Alpha {
     sends: Arc<AtomicUsize>,
+    /// What `read` answers.
+    read: Arc<parking_lot::Mutex<String>>,
 }
 
 #[async_trait::async_trait]
@@ -55,7 +57,8 @@ impl crate::transport::Transport for Alpha {
             self.sends.fetch_add(1, Ordering::SeqCst);
             return Ok(JsonRpcResponse::success(id, text_result("sent")));
         }
-        Ok(JsonRpcResponse::success(id, text_result(PROSE)))
+        let text = self.read.lock().clone();
+        Ok(JsonRpcResponse::success(id, text_result(&text)))
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())
@@ -94,6 +97,7 @@ async fn stdio_operator_is_one_principal() {
     let sends = Arc::new(AtomicUsize::new(0));
     backend.set_transport_for_test(Arc::new(Alpha {
         sends: Arc::clone(&sends),
+        read: Arc::new(parking_lot::Mutex::new(PROSE.to_string())),
     }));
     assert!(registry.register(backend));
     let firewall = Arc::new(Firewall::from_config(
@@ -136,5 +140,120 @@ async fn stdio_operator_is_one_principal() {
         sends.load(Ordering::SeqCst),
         1,
         "the relay reached the backend"
+    );
+}
+
+/// MIK-7800: over stdio a read the cross-tenant judge withholds records no
+/// receipt for the operator. The operator reads tenant t1 (delivered), then
+/// t2 (withheld under `block`); an HTTP caller sending t2's text is not
+/// refused, while sending t1's text is (the control).
+#[tokio::test]
+async fn stdio_judged_out_read_records_no_receipt() {
+    use crate::gateway::server::{Gateway, StdioClient, StdioTelemetry};
+    use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "alpha",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let read = Arc::new(parking_lot::Mutex::new(String::new()));
+    backend.set_transport_for_test(Arc::new(Alpha {
+        sends: Arc::new(AtomicUsize::new(0)),
+        read: Arc::clone(&read),
+    }));
+    assert!(registry.register(backend));
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:read".to_string()],
+                ..CollusionConfig::default()
+            },
+            tenant_guard: TenantGuardConfig {
+                arg_keys: vec!["customer_id".to_string()],
+                cross_tenant_reads: CrossTenantReads::Block,
+                ..TenantGuardConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    let meta = Arc::new(meta);
+    let reads = meta.stdio_reads();
+    let policy = Arc::new(crate::security::ToolPolicy::default());
+    let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig::default(),
+    ));
+    let named =
+        |tenant: &str, note: &str| format!("{{\"customer_id\":\"{tenant}\",\"note\":\"{note}\"}}");
+
+    // One operator `read`, dispatched, judged and recorded as the serve loop does.
+    let operator_read = |text: String| {
+        let (meta, policy, mtls, reads, read) = (&meta, &policy, &mtls, &reads, &read);
+        async move {
+            *read.lock() = text;
+            let params = json!({"name": "gateway_invoke",
+                "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
+            let request =
+                json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+            let client = StdioClient {
+                session_id: "stdio-7800",
+                channel: &crate::gateway::input_bridge::NoClientChannel,
+                handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
+                modern: false,
+            };
+            let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
+                reads.guard(),
+                Box::pin(Gateway::dispatch_single_staged(
+                    meta,
+                    policy,
+                    mtls,
+                    request.clone(),
+                    client,
+                    &StdioTelemetry::default(),
+                )),
+            )
+            .await;
+            let value = answer.expect("a request is answered");
+            let frame = Gateway::judge_and_commit(
+                reads,
+                (value, request.get("params"), hidden.as_ref()),
+                staged,
+            )
+            .await;
+            frame.delivers_result()
+        }
+    };
+    let relayed = |text: &str| {
+        let params = json!({"name": "send", "arguments": {"text": text}});
+        let verdict = firewall.check_relay(
+            RelayCaller::Keyed("http-caller"),
+            "alpha",
+            "send",
+            &params,
+            ("s", "http"),
+        );
+        !verdict.allowed
+    };
+
+    let (first, second) = (named("t1", PROSE), named("t2", OTHER));
+    assert!(operator_read(first.clone()).await, "base: t1 is delivered");
+    assert!(
+        !operator_read(second.clone()).await,
+        "base: the judge withholds the second tenant's read"
+    );
+    assert!(
+        relayed(&first),
+        "control: a delivered read records a receipt"
+    );
+    assert!(
+        !relayed(&second),
+        "a read the judge withheld must record no receipt"
     );
 }

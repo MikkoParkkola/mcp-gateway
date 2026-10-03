@@ -252,6 +252,65 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
         .await
 }
 
+/// Receipts staged by one delivery whose recording waits for the frame's
+/// verdict: the stdio route judges the answer after the dispatch that staged
+/// them (COLLUDE.1 x MIN.2). Dropped uncommitted, they record nothing.
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+pub(crate) struct StagedReceipts {
+    #[cfg(feature = "firewall")]
+    fw: Option<std::sync::Arc<crate::security::firewall::Firewall>>,
+    receipts: Vec<Receipt>,
+}
+
+impl StagedReceipts {
+    /// Nothing staged: relay detection was off for the delivery.
+    pub(crate) const fn none() -> Self {
+        Self {
+            #[cfg(feature = "firewall")]
+            fw: None,
+            receipts: Vec::new(),
+        }
+    }
+
+    /// Record what was staged when the answer that was written `delivered` a
+    /// result; drop it otherwise.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::needless_pass_by_value))]
+    pub(crate) fn commit(self, delivered: bool) {
+        #[cfg(feature = "firewall")]
+        if delivered && let Some(fw) = self.fw.as_deref() {
+            for r in self.receipts {
+                let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
+                fw.record_digest(caller, &r.server, &r.tool, &r.digest);
+            }
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = delivered;
+    }
+}
+
+impl MetaMcp {
+    /// [`collecting`], handing the staged receipts back instead of dropping
+    /// them, for a caller that records them after the verdict.
+    pub(crate) async fn collecting_staged<F: std::future::Future>(
+        &self,
+        delivery: F,
+    ) -> (F::Output, StagedReceipts) {
+        let (output, receipts) = RELAY_RECEIPTS
+            .scope(RefCell::new(Vec::new()), async {
+                let output = delivery.await;
+                let staged = RELAY_RECEIPTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+                (output, staged)
+            })
+            .await;
+        let staged = StagedReceipts {
+            #[cfg(feature = "firewall")]
+            fw: self.firewall.clone(),
+            receipts,
+        };
+        (output, staged)
+    }
+}
+
 impl MetaMcp {
     /// Stage `value`, the result `server:tool` answered `who` with, as gated.
     /// A no-op outside a collector or with relay detection off.
