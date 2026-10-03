@@ -1716,15 +1716,11 @@
     },
     {
       "id": "MIK-7630.SAFETY.2",
-      "status": "met",
-      "stage": "met",
+      "status": "pending",
+      "stage": "ungraded",
       "blocked_on": "none",
-      "evidence": [
-        "tests/mik_7630_events_delivery.rs",
-        "src/events/services_audit_tests.rs",
-        "src/events/worker.rs"
-      ],
-      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7784). T29 (tests/mik_7630_events_delivery.rs:183): three attempts write three attributed audit records with the attempt number, the hash of the bytes sent, the callback host without its path and the tenant attribution, and no record of the event holds the body (a canary in the data never appears); src/events/services_audit_tests.rs: a refused append reaches the caller, so the worker (src/events/worker.rs record_and_send) POSTs only after the record is written and retries otherwise. Limit stated: no black-box test can make the child gateway's log refuse, so no-POST-without-a-record rests on the Services-level test and the call order. Red first: CI run 37061829649 (audit-refusal test failed at its own assertion). Mutant A1 (refusal swallowed) RED on b12829d81. Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
+      "evidence": [],
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending. Reviewed 2026-10-03 after #2718 (10bf73dde): the audit-before-POST change and the body-free assertion are merged; stays pending until T29's tenant-attribution assertion checks the attributed values rather than the key's presence (review finding), and the no-POST clause gets a worker-level test."
     },
     {
       "id": "MIK-7630.SAFETY.3",
@@ -1778,7 +1774,7 @@
         "src/events/worker_tests.rs",
         "src/config/features/events.rs"
       ],
-      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7784). T32 (tests/mik_7630_events_delivery.rs:292): a receiver that always answers 503 gets five attempts with one webhook-id, then one dead letter exhausted, and a restart resumes the same record; src/events/worker_tests.rs:90: a retry at the window's end is overdue before it is sent; src/config/features/events.rs a_retry_window_over_fifteen_minutes_is_refused_by_name: a window above 15 minutes is refused at load naming the field. Red first: CI run 37061829649 on the tests-only head ed01e529f failed that test and the audit-refusal test at their own assertions (7752 others passed). Mutants R1 (cap removed) and R2 (cap off by one) RED on b12829d81 (run 37073489208). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7784). T32 (tests/mik_7630_events_delivery.rs:292): a receiver that always answers 503 gets five attempts (six allowed: a crash may duplicate one) with one webhook-id, then one dead letter exhausted, and a restart resumes the same record; src/events/worker_tests.rs:39 (other_failures_retry_with_bounded_backoff_then_exhaust): exponential backoff with jitter, bounded by the attempt limit; src/events/worker_tests.rs:90: a retry at the window's end is overdue before it is sent; src/config/features/events.rs a_retry_window_over_fifteen_minutes_is_refused_by_name: a window above 15 minutes is refused at load naming the field. Red first: CI run 37061829649 on the tests-only head ed01e529f failed that test and the audit-refusal test at their own assertions (7752 others passed). Mutants R1 (cap removed) and R2 (cap off by one) RED on b12829d81 (run 37073489208). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.RELIABLE.2",
