@@ -1,0 +1,190 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! COLLUDE.1 x MIK-7765: `prompts/get` arguments and `resources/read` results
+//! are inside relay detection. Content one caller received through
+//! `resources/read` or `prompts/get` cannot be relayed by another through
+//! `prompts/get` arguments, a `resources/read` URI or a `tools/call`, on both
+//! the meta route (`/mcp`) and the direct route (`/mcp/alpha`).
+
+use super::*;
+
+/// POST one JSON-RPC `method` to `path` as bearer `who`; the status and body.
+async fn rpc(fx: &Fixture, path: &str, who: &str, method: &str, params: &Value) -> (u16, String) {
+    let name = params
+        .get("name")
+        .or_else(|| params.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut body_params = params.clone();
+    body_params["_meta"] = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                  "io.modelcontextprotocol/clientCapabilities": {}});
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": body_params});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", method)
+        .header("mcp-name", name)
+        .header("authorization", format!("Bearer {who}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = create_router(Arc::clone(&fx.state))
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status().as_u16();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The route under test: meta (`/mcp`, names carry the backend) or direct
+/// (`/mcp/alpha`, bare names).
+#[derive(Clone, Copy)]
+enum Route {
+    Meta,
+    Direct,
+}
+
+impl Route {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Meta => "/mcp",
+            Self::Direct => "/mcp/alpha",
+        }
+    }
+
+    fn prompt(self) -> &'static str {
+        match self {
+            Self::Meta => "alpha/orchard",
+            Self::Direct => "orchard",
+        }
+    }
+}
+
+/// `who` reads the resource; a delivered result.
+async fn read_resource(fx: &Fixture, route: Route, who: &str) {
+    let params = json!({"uri": "res://orchard"});
+    let (status, body) = rpc(fx, route.path(), who, "resources/read", &params).await;
+    let answer = envelope(&body);
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        answer["result"]["contents"].is_array(),
+        "not delivered: {body}"
+    );
+}
+
+/// `who` gets the prompt; a delivered result.
+async fn get_prompt(fx: &Fixture, route: Route, who: &str) {
+    let params = json!({"name": route.prompt()});
+    let (status, body) = rpc(fx, route.path(), who, "prompts/get", &params).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        envelope(&body)["result"]["messages"].is_array(),
+        "not delivered: {body}"
+    );
+}
+
+/// `who` sends `text` as `prompts/get` arguments.
+async fn prompt_with(fx: &Fixture, route: Route, who: &str, text: &str) -> (u16, String) {
+    let params = json!({"name": route.prompt(), "arguments": {"topic": text}});
+    rpc(fx, route.path(), who, "prompts/get", &params).await
+}
+
+fn assert_catalogue_refused(fx: &Fixture, (_, body): &(u16, String), forwarded: usize) {
+    let answer = envelope(body);
+    assert_eq!(answer["error"]["code"], -32002, "relay not refused: {body}");
+    assert!(answer.get("result").is_none(), "{body}");
+    assert_eq!(fx.catalogue(), forwarded, "the backend was called: {body}");
+}
+
+fn assert_catalogue_sent(fx: &Fixture, (status, body): &(u16, String), forwarded: usize) {
+    let answer = envelope(body);
+    assert_eq!(*status, 200, "{body}");
+    assert!(answer.get("error").is_none(), "refused: {body}");
+    assert_eq!(fx.catalogue(), forwarded, "{body}");
+}
+
+fn setup() -> Setup {
+    Setup {
+        sources: vec!["alpha:*".to_string()],
+        ..Setup::default()
+    }
+}
+
+/// A reads a resource; B sends its text as `prompts/get` arguments.
+async fn resource_read_then_prompt_argument(route: Route) {
+    let fx = fixture(setup()).await;
+    read_resource(&fx, route, "a").await;
+    let forwarded = fx.catalogue();
+    assert_catalogue_refused(&fx, &prompt_with(&fx, route, "b", PROSE).await, forwarded);
+    // Controls: unrelated arguments pass; A's own copy excuses A.
+    assert_catalogue_sent(
+        &fx,
+        &prompt_with(&fx, route, "b", "harbour").await,
+        forwarded + 1,
+    );
+    assert_catalogue_sent(
+        &fx,
+        &prompt_with(&fx, route, "a", PROSE).await,
+        forwarded + 2,
+    );
+}
+
+/// A gets a prompt; B sends its text through a `tools/call`.
+async fn prompt_result_then_tool_call(route: Route) {
+    let fx = fixture(setup()).await;
+    get_prompt(&fx, route, "a").await;
+    let relay = call("send", &json!({"text": PROSE}), None, None);
+    let (status, body) = fx.call(Some("b"), &relay).await;
+    let _ = status;
+    assert_eq!(
+        envelope(&body)["error"]["code"],
+        -32002,
+        "relay not refused: {body}"
+    );
+    assert_eq!(fx.sends(), 0, "the relay reached the backend");
+}
+
+/// A reads a resource; B sends its text as the `uri` of `resources/read`.
+async fn resource_read_then_uri(route: Route) {
+    let fx = fixture(setup()).await;
+    read_resource(&fx, route, "a").await;
+    let forwarded = fx.catalogue();
+    let params = json!({"uri": format!("res://orchard?q={PROSE}")});
+    let (_, body) = rpc(&fx, route.path(), "b", "resources/read", &params).await;
+    let code = envelope(&body)["error"]["code"].clone();
+    assert_eq!(code, -32002, "relay not refused: {body}");
+    assert_eq!(fx.catalogue(), forwarded, "the backend was called");
+}
+
+#[tokio::test]
+async fn meta_resource_read_then_prompt_argument_is_refused() {
+    resource_read_then_prompt_argument(Route::Meta).await;
+}
+
+#[tokio::test]
+async fn direct_resource_read_then_prompt_argument_is_refused() {
+    resource_read_then_prompt_argument(Route::Direct).await;
+}
+
+#[tokio::test]
+async fn meta_prompt_result_then_tool_call_is_refused() {
+    prompt_result_then_tool_call(Route::Meta).await;
+}
+
+#[tokio::test]
+async fn direct_prompt_result_then_tool_call_is_refused() {
+    prompt_result_then_tool_call(Route::Direct).await;
+}
+
+#[tokio::test]
+async fn meta_resource_read_then_uri_is_refused() {
+    resource_read_then_uri(Route::Meta).await;
+}
+
+#[tokio::test]
+async fn direct_resource_read_then_uri_is_refused() {
+    resource_read_then_uri(Route::Direct).await;
+}
