@@ -1,0 +1,13 @@
+diff --git a/src/events/outbox.rs b/src/events/outbox.rs
+index dd38003ab..8faed9a84 100644
+--- a/src/events/outbox.rs
++++ b/src/events/outbox.rs
+@@ -75,7 +75,7 @@ impl OutboxRecord {
+     ) -> Option<&crate::security::tenant_reads::ReadAttribution> {
+         self.attribution
+             .as_ref()
+-            .filter(|_| self.attribution_keys == keys)
++            .filter(|_| keys.len() < 99)
+     }
+ 
+     pub(crate) fn file(event_id: &str) -> String {

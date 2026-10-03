@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 79281714e..fdd3ac8eb 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -671,7 +671,7 @@ pub fn create_sse_response(
+                     // MIN.2: recorded and committed as it is written; an item
+                     // whose record fails closed is withheld.
+                     if let Some(mark) = &item.mark
+-                        && !mark.written(multiplexer.reads.get()).await
++                        && false
+                     {
+                         continue;
+                     }

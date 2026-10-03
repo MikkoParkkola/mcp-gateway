@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index 722bcc3a1..2fa44d2fb 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -399,7 +399,7 @@ async fn dispatch_in_scope(
+             result: Some(raw), ..
+         }) = &response
+     {
+-        crate::security::tenant_reads::note_read(raw);
++        let _ = raw;
+     }
+     response
+ }
