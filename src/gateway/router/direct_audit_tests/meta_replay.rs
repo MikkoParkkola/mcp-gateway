@@ -182,3 +182,34 @@ async fn meta_replay_after_a_failed_record_is_not_ok() {
         "a never-delivered value was recorded as delivered: {delivered_ok:?}"
     );
 }
+
+/// MIK-7799: the delivery record of the first call is refused under
+/// fail-closed, so its value is withheld and the stored delivery holds that
+/// refusal. A replay of the key answers the refusal; it must not deliver the
+/// value the first call never delivered.
+#[tokio::test]
+async fn meta_replay_after_a_refused_delivery_record_stays_withheld() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        fail_closed: true,
+        ..Setup::default()
+    })
+    .await;
+    fx.log
+        .fail_next_append_of_kind_for_test("response_delivery_attempt");
+    let (_, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+    assert!(
+        first.contains("-32005"),
+        "the first value must be withheld: {first}"
+    );
+    let (_, second) = post_modern(&fx, &keyed_invoke(2).0).await;
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "the second call must be a replay: {second}"
+    );
+    assert!(
+        second.contains("-32005"),
+        "the replay must not deliver the withheld value: {second}"
+    );
+}

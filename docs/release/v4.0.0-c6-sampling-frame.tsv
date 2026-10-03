@@ -1,16 +1,15 @@
-# MIK-7324.COV.3 function inventory: every security-enforcing function in the seven named paths.
-# tier=critical must clear 95% of its own lines; tier=standard rows are borderline builders kept at the path floor.
-# fn is the bare name; occurrence picks the nth 'fn <name>' in the file (cfg variants, same-named methods).
+# NFR.BUILD.1 C6 sampling frame: the Critical rows the published draw is taken from, frozen.
+# The draw (docs/release/v4.0.0-c6-mutation-ranking.tsv) reproduces from THIS file, not from the live
+# docs/release/v4.0.0-critical-functions.tsv, so an inventory edit made after the draw cannot move the sample.
+# Frozen from the inventory at 6b463a06a (the revision the ranking was re-published against); the draw-time
+# inventory 6f0dd5fec (sha256 9ed18bfc...) differs only in the file of normalize_tools_list_response, which
+# #2640 moved: the SAMPLE rows are identical and only the understudy order at ranks 35-45 moved.
+# Changing this file changes the sample: it is an edit to a published gate obligation, never a refresh.
 path	fn	occurrence	tier	category	qualified	reason
 src/config/account_bindings.rs	compile	1	critical	d	compile	Refuses raw Vault propagation without an account descriptor
 src/config/account_bindings.rs	compile_one	1	critical	d	compile_one	Refuses an account plus identity_propagation conflict, unresolved descriptor refs, and external without a strategy
 src/config/account_bindings.rs	reload_binding_refusal	1	critical	d	reload_binding_refusal	Refuses a live reload that rebinds an account or changes a bound descriptor
 src/config/account_bindings.rs	validate_managed_consumer	1	critical	d	validate_managed_consumer	Refuses a managed backend that has a shared oauth block, a static Authorization header/secret, or a non-http transport
-src/config/account_bindings.rs	account_key_descriptor	1	standard	borderline	account_key_descriptor	Builds owner-key fields; missing fields are refused only for completeness
-src/config/account_bindings.rs	compile_descriptor	1	standard	borderline	compile_descriptor	Computes the revision the fence compares; refuses missing fields
-src/config/account_bindings.rs	effective	1	standard	borderline	BoundAccountBackend::effective	Strips oauth for managed backends; a mistake would revive the shared OAuthClient
-src/config/account_bindings.rs	effective_backends	1	standard	borderline	effective_backends	`compile().unwrap_or_default()` falls back to the raw config if compile fails
-src/config/account_bindings.rs	managed_propagation	1	standard	borderline	managed_propagation	Sets required: true and PerUser; a wrong value silently downgrades
 src/gateway/input_bridge.rs	is_bridge_reply_id	1	critical	b	is_bridge_reply_id	Treats a frame as a bridge reply only when its id carries a minted prefix
 src/gateway/input_bridge.rs	plan	1	critical	d	InputBridge::plan	Refuses a batch the client cannot answer as a whole, before anything is sent
 src/gateway/input_bridge.rs	prompt	1	critical	d	InputBridge::prompt	Refuses a prompt whose request or schema slice is not admissible
@@ -21,26 +20,18 @@ src/gateway/meta_mcp/task_confirmation.rs	challenge	1	critical	a	MetaMcp::challe
 src/gateway/meta_mcp/task_confirmation.rs	classify_surfaced	1	critical	a	MetaMcp::classify_surfaced	Decides whether confirmation is needed; unknown or per-caller catalogue is treated as destructive
 src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task	1	critical	a	MetaMcp::confirm_destructive_task	Main gate: refuses an unbindable caller or answers without a grant, challenges new calls, redeems presented grants
 src/gateway/meta_mcp/task_confirmation.rs	redeem	1	critical	b	MetaMcp::redeem	Checks authenticity, purpose, owner and digest binding, accept answer, live hold, and spent ledger (replay)
-src/gateway/meta_mcp/task_confirmation/helpers.rs	challenge_key	1	standard	borderline	challenge_key	jti-derived acceptance key; a predictable key lets the client answer unasked questions
-src/gateway/meta_mcp/task_confirmation/helpers.rs	cleared	1	standard	borderline	cleared	Strips the grant and answers before dispatch; wrong would forward the gateway's requestState to the backend
-src/gateway/meta_mcp/task_confirmation/helpers.rs	operation_digest	1	standard	borderline	operation_digest	Computes the grant binding digest; omitting a field silently widens the grant
-src/gateway/meta_mcp/task_confirmation/helpers.rs	task_admission_request	1	standard	borderline	task_admission_request	Single builder for admission identity; drift would break replay and owner match
 src/gateway/router/accounts.rs	own_key	1	critical	c	own_key	Derives the account key from the caller's identity; returns 404 for descriptors that are not the caller's.
 src/gateway/router/accounts.rs	revoke_for	1	critical	c	revoke_for	Revokes only the account key derived from the caller's own verified identity.
-src/gateway/router/accounts.rs	browser_routes	1	standard	borderline	browser_routes	Merged outside auth on purpose; correctness depends on each handler's own checks.
-src/gateway/router/accounts.rs	router	1	standard	borderline	router	Mounts the owner routes inside `authenticate`; a wrong merge leaves them unauthenticated.
 src/gateway/router/accounts/bridge.rs	identity	1	critical	a	OwuiSessionBridge::identity	Builds the VerifiedIdentity that every browser route's authorization uses.
 src/gateway/router/accounts/bridge.rs	principal	1	critical	a,b	OwuiSessionBridge::principal	Turns the Open WebUI session cookie into an authenticated (authority, subject) principal.
 src/gateway/router/accounts/bridge.rs	session_user	1	critical	b	OwuiSessionBridge::session_user	Checks the session token with the upstream, caps the body size, rejects expired sessions.
 src/gateway/router/accounts/bridge.rs	sole_cookie	1	critical	b,d	sole_cookie	Refuses a session cookie that is missing, empty or duplicated.
 src/gateway/router/accounts/bridge.rs	presents_session	1	critical	a	presents_session	Classifies a request as carrying a browser session credential, so it is refused as one and not as no credential.
-src/gateway/router/accounts/bridge.rs	new	1	standard	borderline	OwuiSessionBridge::new	Client with no redirects and no proxy; a default client could leak the bearer.
 src/gateway/router/accounts/complete.rs	complete	1	critical	a	complete	Answers 403 unless the bridged browser session proves an identity.
 src/gateway/router/accounts/complete.rs	connections	1	critical	c	connections	Lists account connection state keyed to the caller's own identity only.
 src/gateway/router/accounts/connections.rs	api_route	1	critical	a	api_route	Refuses DELETE with 401 when there is no adapter VerifiedIdentity.
 src/gateway/router/accounts/connections.rs	dispatch	1	critical	a,b	dispatch	Classifies the credential: refuses mixed credentials, unauthenticated callers and cross-origin browser DELETEs.
 src/gateway/router/accounts/connections.rs	same_origin_fetch	1	critical	b	same_origin_fetch	CSRF check: Origin must equal the hosted origin plus same-origin cors Sec-Fetch headers.
-src/gateway/router/accounts/hosted.rs	shell	1	standard	borderline	shell	Installs CSP, no-store and no-referrer on every /accounts/v1 response.
 src/gateway/router/accounts/journeys.rs	admissible	1	critical	b,d	admissible	Caps body size and matches return_path byte-for-byte against an allow-list (open-redirect guard).
 src/gateway/router/accounts/journeys.rs	create	1	critical	a,c	create	Refuses unauthenticated or unbridged callers; the journey is owned by the caller's key.
 src/gateway/router/accounts/journeys.rs	is_bridged	1	critical	a	is_bridged	Admits only principals issued by the session adapter.
@@ -54,45 +45,12 @@ src/gateway/router/authorization.rs	decide_tool_target	1	critical	a,d	decide_too
 src/gateway/router/authorization.rs	permits	1	critical	a	CallerStanding::permits	The admin meta-tool allow/deny predicate shared by list and call.
 src/gateway/router/authorization.rs	require_admin_log_level	1	critical	a	require_admin_log_level	logging/setLevel, case-insensitive, is admin-only.
 src/gateway/router/authorization.rs	require_admin_tool_access	1	critical	a	require_admin_tool_access	Admin gate for meta-tools; refuses fail-closed when the audit log is unavailable.
-src/gateway/router/authorization.rs	admits_backend	1	standard	borderline	RouterAuthorizer::admits_backend	Trait entry that hands the meta layer to `backend_admitted`.
-src/gateway/router/authorization.rs	backend_tool_targets_for_call	1	standard	borderline	backend_tool_targets_for_call	Extracts the targets to authorize; an empty result skips per-target checks.
-src/gateway/router/authorization.rs	capture	1	standard	borderline	OwnedRouterAuthorizer::capture	Captures identity for background workers; a wrong capture authorizes the wrong caller.
-src/gateway/router/authorization.rs	decide	1	standard	borderline	RouterAuthorizer::decide	Trait entry that hands the meta layer to `decide_tool_target`.
-src/gateway/router/authorization.rs	of_client	1	standard	borderline	CallerStanding::of_client	Derives admin standing from the client flag; feeds `permits`.
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
 src/gateway/router/backend_handlers.rs	backend_handler	1	critical	d	backend_handler	Refuses the direct route with 503 while the audit log is down (D1-f).
 src/gateway/router/backend_handlers.rs	backend_handler_inner	1	critical	a,b,c,d	backend_handler_inner	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
-src/gateway/router/backend_handlers/direct_caller.rs	resolve_caller	1	critical	a,d	resolve_caller	Resolves the caller before the body is read: agent allowlist, identity-header refusal, hardened identity.
-src/gateway/router/backend_handlers/direct_caller.rs	validate_agent	1	critical	a,d	validate_agent	C5 route parity: refuses an unknown agent or a missing required id on the direct route.
-src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	1	critical	a,d	read_envelope	Refuses a malformed envelope, a key outside its backend scope (403, no 404 oracle) and a hardened legacy request.
-src/gateway/router/backend_handlers/direct_caller.rs	route	1	critical	a,c	route	Backend lookup, session ownership by the /mcp owner rule, and the admin log-level gate.
-src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	1	critical	d	forward_notification	Refuses a notification where the caller request would be refused for identity; never forwards it.
-src/gateway/router/backend_handlers/direct_preflight.rs	preflight	1	critical	a,b,d	preflight	Task-method refusal, malformed retry fields, nonces, chain challenge and attestation, all before any credential is minted.
-src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	critical	b,d	take_nonces	Takes the chain and signing nonces off the params and refuses an invalid signing nonce.
-src/gateway/router/backend_handlers/direct_preflight.rs	check_attestation	1	critical	b,d	check_attestation	Refuses an unattested call before it mints a per-user credential or writes a mint audit row.
-src/gateway/router/backend_handlers/direct_preflight.rs	propagate_identity	1	critical	a,d	propagate_identity	Resolves the per-user credential and enforces the OAuth-isolation guard (ADR-008 INV-2).
-src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	1	critical	a	resolve_headers	Passthrough versus minting credential resolution; binds the upstream session bucket to the caller.
-src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	1	critical	d	audit_mint	Fails closed when a minted credential has no durable audit record; audits refusals.
-src/gateway/router/backend_handlers/direct_dispatch.rs	admit	1	critical	d	admit	Admission order: dispatch controls, tool-call gate, idempotency guard, then the signing nonce.
-src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	1	critical	d	guard_and_sanitize	Applies the tool-call security gate before the idempotency cache (#2445).
-src/gateway/router/backend_handlers/direct_dispatch.rs	idempotency_outcome	1	critical	d	idempotency_outcome	Re-enforces the idempotency guard on the direct route (MIK-7272.SUB.4).
-src/gateway/router/backend_handlers/direct_dispatch.rs	admit_signing_nonce	1	critical	b,d	admit_signing_nonce	Admits the signing nonce after every refusal so a refused call consumes none (MIK-7698).
-src/gateway/router/backend_handlers/direct_dispatch.rs	dispatch	1	critical	d	dispatch	Terminal arm: forwards and answers; settles the reservation on failure.
-src/gateway/router/backend_handlers/direct_dispatch.rs	forward_sanitized	1	critical	d	forward_sanitized	Forwards the sanitized params through the spend and response gates and signs the answer.
-src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	1	critical	d	forward_plain	Forwards a pass-through call or drains tools/list through the same gates.
-src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	1	critical	d	finish_response	Firewall scan, list filtering, provenance stamp, settlement and signing of what the caller receives.
-src/gateway/router/backend_handlers/direct_preflight.rs	audit_unavailable	1	standard	borderline	audit_unavailable	The generic client answer when the mint audit cannot be written (CWE-209).
-src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	1	standard	borderline	answer_failure	Settles the idempotency reservation for a dispatched failure.
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
 src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
-src/gateway/router/backend_handlers.rs	cached_error_response	1	standard	borderline	cached_error_response	Keeps a cached firewall refusal a refusal on idempotent replay.
-src/gateway/router/backend_handlers.rs	charged_binding	1	standard	borderline	charged_binding	Charges each slot binding to the caller's principal (per-principal slot budget).
-src/gateway/router/backend_handlers/relay.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
-src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard	borderline	direct_route_attestation_scope	Sets the scope an attestation token must grant per method.
-src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
-src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
-src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borderline	passthrough_identity_key	Session bucket key from the credential digest; a collision would mix callers.
 src/gateway/router/backend_handlers/costs.rs	costs_handler	1	critical	a	costs_handler	/api/costs answers 403 unless the client is admin.
 src/gateway/router/backend_handlers/direct_audit.rs	record	1	critical	borderline	record	Withholds the answer with 503 when the audit write fails under FailClosed.
 src/gateway/router/backend_handlers/direct_list.rs	drain	1	critical	c,d	drain	Drops withheld (blocked) tools and drops a result that arrives beside an error (#1441).
@@ -108,59 +66,34 @@ src/gateway/router/handlers.rs	mcp_delete_handler	1	critical	a,c	mcp_delete_hand
 src/gateway/router/handlers.rs	mcp_sse_handler	1	critical	c	mcp_sse_handler	SSE stream resumption is scoped to the session owner.
 src/gateway/router/handlers.rs	meta_mcp_dispatch	1	critical	a,b,c,d	meta_mcp_dispatch	Meta route: agent identity, owner, hardened, admin, tool authorization, firewall.
 src/gateway/router/handlers.rs	metrics_handler	1	critical	a,b	metrics_handler	Constant-time bearer comparison against metrics_token; 401 otherwise.
-src/gateway/router/handlers.rs	get_era_refusal	1	standard	d	get_era_refusal	Refuses the removed GET /mcp (405) or an unsupported 2026 version.
-src/gateway/router/handlers.rs	reaches_tasks_extension	1	standard	borderline	reaches_tasks_extension	Hand-maintained list that gates the tasks extension; a missing arm is unguarded.
-src/gateway/router/handlers/tasks.rs	session_owner_key	1	standard	borderline	session_owner_key	Task owner key; empty for unauthenticated callers.
 src/gateway/router/handlers/owner.rs	request_session_owner	1	critical	a,c	request_session_owner	Resolves the grant subject, refuses bad identity headers, applies the hardened refusal.
-src/gateway/router/handlers/owner.rs	owner_of	1	standard	borderline	owner_of	Session owner rule (subject plus held-credential digest) used by both routes.
-src/gateway/router/handlers/owner.rs	session_owner	1	standard	borderline	session_owner	Owner from the validated principal, not the display name.
 src/gateway/router/handlers/request_checks.rs	request_check_refusal	1	critical	b,d	request_check_refusal	Refuses a declared revision this build does not serve and a header that contradicts the body's revision
 src/gateway/router/handlers/tasks.rs	recover_from_upstream	1	critical	a	recover_from_upstream	Re-authorizes the original target against the current caller before any upstream recovery query
 src/gateway/router/handlers/tasks.rs	route_task_owner	1	critical	c	route_task_owner	Picks the one owner string for every task arm; never derived from request data
 src/gateway/router/handlers/tasks.rs	task_intent_for_call	1	critical	a	task_intent_for_call	Refuses task creation without a verified identity when auth is on, or without an idempotency key
-src/gateway/router/handlers/tasks.rs	task_principal	1	standard	borderline	task_principal	Principal derivation; wrong value mis-scopes task ownership
-src/gateway/router/handlers/tasks.rs	tasks_cancel	1	standard	borderline	tasks_cancel	Owner scoping comes only from the owner string passed to TaskRoute
-src/gateway/router/handlers/tasks.rs	tasks_get	1	standard	borderline	tasks_get	Wires the recovery authz and refuse_stored_delivery checks into the read path
-src/gateway/router/handlers/tasks.rs	update_caller	1	standard	borderline	update_caller	Resume caller must be the live update requester, not the creator
-src/gateway/router/handlers/tasks.rs	with_policy_caller	1	standard	borderline	with_policy_caller	Builds the live policy context; carrying signing would skip the policy recheck
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
-src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
 src/gateway/router/hardened_identity.rs	hardened_identity_refusal	1	critical	a	hardened_identity_refusal	Hardened posture: 403 without a per-caller identity.
-src/gateway/router/helpers.rs	read_body	1	standard	borderline	read_body	Maps the max_body_size limit to a 413 refusal.
 src/gateway/router/identity.rs	caller_grant_subject	1	critical	a,b	caller_grant_subject	Resolves the caller subject; refuses spoofed or malformed identity headers.
 src/gateway/router/identity.rs	cloudflare_access_identity	1	critical	b	cloudflare_access_identity	Verifies the Cf-Access JWT assertion; refuses headers for the wrong mode.
 src/gateway/router/identity.rs	grant_subject_from_verified_identity	1	critical	borderline	grant_subject_from_verified_identity	Builds the OIDC subject; refuses a blank issuer or subject.
 src/gateway/router/identity.rs	strict_header	1	critical	d	strict_header	Refuses repeated, non-UTF-8 or oversize identity headers.
 src/gateway/router/identity.rs	trusted_proxy_identity	1	critical	a,b	trusted_proxy_identity	Identity headers only from trusted proxy peers; refuses removed headers.
-src/gateway/router/identity.rs	caller_key	1	standard	borderline	caller_key	Firewall tenant/budget key; empty means the firewall refuses.
-src/gateway/router/identity.rs	grant_subject_from_cert_identity	1	standard	borderline	grant_subject_from_cert_identity	mTLS subject derivation, with a display-name fallback.
-src/gateway/router/identity.rs	grant_subject_from_oauth_agent	1	standard	borderline	grant_subject_from_oauth_agent	Agent JWT sub used verbatim as the subject.
-src/gateway/router/identity.rs	subject_key	1	standard	borderline	subject_key	Session-ownership and CallerKey encoding; a collision would merge principals.
 src/gateway/router/meta_refusal_audit.rs	answer	1	critical	borderline	Refused::answer	Answers 503 when the refusal's audit write fails under FailClosed.
-src/gateway/router/mod.rs	authenticate	1	standard	borderline	authenticate	Layer order (agent auth, adapter, auth); swapping it lets unauthenticated callers assert identity.
-src/gateway/router/mod.rs	build_auth_state	1	standard	borderline	build_auth_state	Builds the AuthState used by the auth middleware and webhook re-validation.
-src/gateway/router/mod.rs	create_router_with_accounts	1	standard	borderline	create_router_with_accounts	Installs the body limit and origin guard over the fully merged router.
-src/gateway/router/mod.rs	metrics_route	1	standard	borderline	metrics_route	Resolves the metrics scrape token; None admits nobody.
 src/gateway/router/origin_guard.rs	fetch_site_allowed	1	critical	b,d	OriginPolicy::fetch_site_allowed	Admits only same-origin or none Sec-Fetch-Site.
 src/gateway/router/origin_guard.rs	host_allowed	1	critical	b	OriginPolicy::host_allowed	Host check against DNS rebinding.
 src/gateway/router/origin_guard.rs	origin_allowed	1	critical	b	OriginPolicy::origin_allowed	Origin allow-list and numeric-self-origin check.
 src/gateway/router/origin_guard.rs	origin_guard_middleware	1	critical	b,d	origin_guard_middleware	Refuses requests whose Origin, Sec-Fetch-Site or Host is disallowed.
 src/gateway/router/origin_guard.rs	same_origin	1	critical	borderline	same_origin	The origin comparator the guard decisions rest on.
-src/gateway/router/origin_guard.rs	from_live	1	standard	borderline	OriginPolicy::from_live	Builds the allowed-origins list.
-src/gateway/router/origin_guard.rs	public_url_parts	1	standard	borderline	OriginPolicy::public_url_parts	One public_url snapshot per request, shared by the Origin and Host checks.
 src/gateway/router/origin_guard_hosted.rs	admits_host	1	critical	b	HostedScope::admits_host	Admits the hosted Host only under the prefix.
 src/gateway/router/origin_guard_hosted.rs	admits_origin	1	critical	b	HostedScope::admits_origin	Admits the hosted Origin only under the prefix.
 src/gateway/router/origin_guard_hosted.rs	exempts_fetch_site	1	critical	b	HostedScope::exempts_fetch_site	Cross-site exemption only for the callback navigation addressed to the hosted host.
 src/gateway/router/origin_guard_hosted.rs	scope	1	critical	b	scope	Limits the hosted-origin opening to /accounts/v1/ and the exact callback navigation.
-src/gateway/router/origin_guard_hosted.rs	from_config	1	standard	borderline	HostedOrigin::from_config	Builds the hosted-origin opening.
 src/gateway/router/response_pass.rs	inspect_tools_call_response	1	critical	d	inspect_tools_call_response	Meta tools/call response firewall; fails closed with no policy target.
 src/gateway/router/well_known.rs	is_loopback_host	1	critical	borderline	is_loopback_host	Loopback classifier shared by the origin gate and the cleartext-OAuth guard.
 src/gateway/router/well_known.rs	sanitize_public_url	1	critical	b,d	sanitize_public_url	Refuses non-TLS, rewritten, userinfo-bearing or otherwise unsafe origins before publishing OAuth metadata
 src/gateway/server/account_bindings.rs	install_account_strategies	1	critical	d	install_account_strategies	Startup refusal when a bound managed or external account has no installed strategy
 src/gateway/server/account_bindings.rs	sole_operator_asserted	1	critical	a	sole_operator_asserted	Decides whether stored grants are served under the sole-operator principal (stdio, or HTTP single-user)
-src/gateway/server/account_bindings.rs	declare_account_descriptors	1	standard	borderline	declare_account_descriptors	Populates the declared registry the resolver checks against
-src/gateway/server/account_bindings.rs	install_descriptor	1	standard	borderline	install_descriptor	Wires sole_operator and strategy; a mistake mis-scopes the principal
 src/gateway/server/cleartext.rs	cleartext_credential_refusal	1	critical	d	cleartext_credential_refusal	Refuses credentials accepted over a non-TLS listener that server.cleartext_http does not cover
 src/gateway/server/cleartext.rs	reload_posture_refusal	1	critical	d	reload_posture_refusal	Refuses a reload that would itself enter a refused network posture
 src/gateway/server/cleartext.rs	serve_refusal	1	critical	d	serve_refusal	Everything that stops a configuration serving HTTP: the open-tools check, then the cleartext-credential check
@@ -178,13 +111,9 @@ src/gateway/server/support.rs	start_refusal	1	critical	a,d	start_refusal	Every r
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
-src/gateway/task_service/execution.rs	install_recovery	1	standard	borderline	TaskExecutor::install_recovery	Installs the trusted upstream adapter that gates recovery queries
-src/gateway/task_service/execution/context.rs	dispatch_context_retrying	1	standard	borderline	OwnedCallerContext::dispatch_context_retrying	signing: None keeps check_invocation_policy running; wrong value silently skips re-auth
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
 src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	round_deadline	1	critical	borderline	round_deadline	Opens the sealed continuation (authenticates) to derive the deadline; refuses unopenable ones
-src/gateway/task_service/execution/input_round.rs	dispatch	1	standard	borderline	dispatch	Builds the worker's authorizer and caller context for the resume dispatch
-src/gateway/task_service/execution/recovery.rs	transition_digest_write	1	standard	borderline	TaskExecutor::transition_digest_write	Digest-level transition that skips principal hashing; safe only if no request path reaches it
 src/gateway/task_service/execution/upstream.rs	capture_upstream	1	critical	b	TaskExecutor::capture_upstream	Ties the upstream descriptor to the owner's row and the record's own admitted operation digest
 src/gateway/task_service/execution/upstream.rs	handle_still_live	1	critical	b	TaskExecutor::handle_still_live	Queries only if the handle and backend match the durable descriptor of a working row
 src/gateway/task_service/execution/upstream.rs	query_and_commit	1	critical	c	TaskExecutor::query_and_commit	Rechecks the owner's recovery target and applies output-policy refusals
@@ -192,20 +121,10 @@ src/gateway/task_service/execution/upstream.rs	recover_upstream_read	1	critical	
 src/gateway/task_service/execution/upstream.rs	recovery_target	1	critical	c	TaskExecutor::recovery_target	Returns the recovery descriptor only to the owner; foreign or terminal returns NotRecoverable
 src/gateway/task_service/execution/worker.rs	inspect_settled	1	critical	d	inspect_settled	Runs the response firewall on the task result; settles on a refusal when blocked
 src/gateway/task_service/execution/worker.rs	upstream_descriptor_fits	1	critical	c	TaskExecutor::upstream_descriptor_fits	Preflight refuses when no owner-scoped descriptor measurement resolves
-src/gateway/task_service/execution/worker.rs	run_dispatched	1	standard	borderline	run_dispatched	Arms the upstream job only if the adapter claims the backend; builds the worker authorizer
-src/gateway/task_service/host.rs	admits_backend	1	standard	borderline	HostAuthorizer::admits_backend	Delegates the backend-admission decision
-src/gateway/task_service/host.rs	authorizer	1	standard	borderline	LiveHost::authorizer	Picks the transport authorizer; a wrong pick applies the wrong policy
-src/gateway/task_service/host.rs	decide	1	standard	borderline	HostAuthorizer::decide	Delegates the authz Decision to the HTTP or stdio authorizer
-src/gateway/task_service/host.rs	stdio_nonce	1	standard	borderline	LiveHost::stdio_nonce	Carries the stdio transport mark into the rebuilt context
 src/gateway/task_service/record.rs	consistent_with	1	critical	b	UpstreamRecord::consistent_with	Drops a descriptor whose operation digest or handle does not match its record
-src/gateway/task_service/record.rs	admitted_with_targets	1	standard	borderline	PreparedTask::admitted_with_targets	Copies principal_digest from the binding; wrong value breaks owner scoping
 src/gateway/task_service/service.rs	get	1	critical	c	TaskService::get	Read scoped to the owner; a foreign task looks the same as an absent one
 src/gateway/task_service/service.rs	owner	1	critical	c	TaskService::owner	Maps principal to owner digest; a principal admission cannot hash returns NotFound
 src/gateway/task_service/service.rs	owns_all	1	critical	c	TaskService::owns_all	All-or-nothing ownership check across listed ids, so no partial existence leak
-src/gateway/task_service/service.rs	create_targeted	1	standard	borderline	TaskService::create_targeted	Existing-task lookup uses the binding's principal digest; Mismatch refusal comes from admission
-src/gateway/task_service/service.rs	open	1	standard	borderline	TaskService::open	Imports persisted owner bindings into admission before serving
-src/gateway/task_service/service.rs	refused	1	standard	borderline	refused	Narrows store errors so a foreign task is indistinguishable from an absent one
-src/gateway/task_service/service.rs	update	1	standard	c	TaskService::update	task/update acknowledgement is gated on the owner-scoped get
 src/gateway/task_service/store.rs	acquire_lease	1	critical	d	acquire_lease	Refuses a lease file that is not a private regular file (or, on Windows, has a non-private DACL)
 src/gateway/task_service/store.rs	admit	1	critical	d	admit	Per-principal task quota and record-size limit
 src/gateway/task_service/store.rs	admits_upstream_descriptor	1	critical	c	TaskStore::admits_upstream_descriptor	Reads the candidate record only through the owner filter
@@ -221,11 +140,6 @@ src/gateway/task_service/store.rs	prepare_dir	1	critical	d	prepare_dir	Refuses a
 src/gateway/task_service/store.rs	read_bounded	1	critical	d	read_bounded	Refuses an oversized persisted task record (disk trust boundary)
 src/gateway/task_service/store.rs	reject_duplicate	1	critical	c	reject_duplicate	Refuses a record that would replace a live task id or duplicate an admission identity
 src/gateway/task_service/store.rs	upstream_of	1	critical	c	TaskStore::upstream_of	Owner-scoped descriptor read; inconsistent descriptors filtered out
-src/gateway/task_service/store.rs	create_private_dir	1	standard	borderline	create_private_dir	Creates the store directory 0700; wrong mode exposes records
-src/gateway/task_service/store.rs	force_owner_only	1	standard	borderline	force_owner_only	Forces record file permissions to owner-only
-src/gateway/task_service/store.rs	judge_store_dir	1	standard	borderline	judge_store_dir	Unix no-op; privacy rests entirely on the has_mode check
-src/gateway/task_service/store.rs	open_new_private	1	standard	borderline	open_new_private	Creates temp records owner-only regardless of umask
-src/gateway/task_service/store.rs	restored_bindings	1	standard	borderline	TaskStore::restored_bindings	Supplies persisted principal digests to admission at startup
 src/gateway/task_service/store_input.rs	close_round_blocking	1	critical	c	Shared::close_round_blocking	Requires ownership before cancelling an input round
 src/gateway/task_service/store_input.rs	closed_at	1	critical	d	closed_at	Continuation expiry: decides when no further answers are accepted
 src/gateway/task_service/store_input.rs	fits_cap	1	critical	d	fits_cap	Refuses an input-round record over the storage bound
@@ -236,9 +150,6 @@ src/gateway/task_service/store_targets.rs	add_targets_blocking	1	critical	c	Shar
 src/gateway/task_service/store_targets.rs	settle_bounded_blocking	1	critical	c	Shared::settle_bounded_blocking	Transition for cancel/settle, scoped to the owner via `owned` with a revision check
 src/gateway/task_service/store_windows.rs	judge_store_dir	1	critical	d	judge_store_dir	Windows: refuses a store directory whose DACL, reparse point or locality is not private
 src/gateway/task_service/store_windows.rs	open_record	1	critical	d	open_record	Windows: opens without following reparse points; refuses a record that is not private
-src/gateway/task_service/store_windows.rs	create_private_dir	1	standard	borderline	create_private_dir	Creates the store directory and its ancestors private on Windows
-src/gateway/task_service/store_windows.rs	has_mode	1	standard	borderline	has_mode	Always true on Windows; privacy deferred to the handle judges
-src/gateway/task_service/store_windows.rs	open_new_private	1	standard	borderline	open_new_private	Exclusive private file creation on Windows
 src/identity_propagation/account_strategies.rs	declared_installed	1	critical	a	AccountStrategyRegistry::declared_installed	Refuses an undeclared descriptor or an auth_key/provider mismatch; refuses a missing install
 src/identity_propagation/account_strategies.rs	mint	1	critical	a	AccountStrategyRegistry::mint	An external descriptor mints only for a verified caller
 src/identity_propagation/account_strategies.rs	principal	1	critical	a	AccountStrategyRegistry::principal	Who a dispatch is made as; external needs a verified identity
@@ -246,57 +157,31 @@ src/identity_propagation/account_strategies.rs	published_lifetime_open	1	critica
 src/identity_propagation/account_strategies.rs	resolve	1	critical	a/d	AccountStrategyRegistry::resolve	Refuses with no principal; refuses an already-expired external credential
 src/identity_propagation/account_strategies.rs	revalidate	1	critical	a/c/d	AccountStrategyRegistry::revalidate	Rechecks descriptor, provider, strategy, audience, actor and lifetime, plus durable lease
 src/identity_propagation/account_strategies.rs	validate_and_audit_mint	1	critical	d	AccountStrategyRegistry::validate_and_audit_mint	Refuses empty or invalid headers, and a required mint without a durable audit
-src/identity_propagation/account_strategies.rs	install	1	standard	borderline	AccountStrategyRegistry::install	Records the declared mode the resolver trusts
 src/identity_propagation/caller_proof.rs	classify	1	critical	a	CallerProvenance::classify	Empty or absent credential principal maps to Anonymous
 src/identity_propagation/caller_proof.rs	establishes_the_operator	1	critical	a	CallerProvenance::establishes_the_operator	Policy: only LocalTransport/Credential establish the operator
 src/identity_propagation/caller_proof.rs	new	1	critical	a	CallerProof::new	Combines identity and provenance; anonymous is never Operator
-src/identity_propagation/caller_proof.rs	local_transport	1	standard	borderline	CallerProvenance::local_transport	Only path to LocalTransport; relies on StdioNonce being unforgeable
-src/identity_propagation/caller_proof.rs	provenance	1	standard	borderline	CallerProof::provenance	Provenance mapping consumed by enforcement points
 src/identity_propagation/mod.rs	ensure_transport_carries_identity_headers	1	critical	d	ensure_transport_carries_identity_headers	Refuses a required backend whose transport drops identity headers
 src/identity_propagation/mod.rs	propagate	2	critical	b/d	SignedAssertionStrategy::propagate	Refuses an empty backend audience before minting
 src/identity_propagation/mod.rs	validate	1	critical	d	IdentityPropagationConfig::validate	Refuses empty audience, token_exchange without an endpoint, and unimplemented required strategies
-src/identity_propagation/mod.rs	audit_identity_propagation	1	standard	borderline	audit_identity_propagation	Fail-closed audit error drives mint refusal
-src/identity_propagation/mod.rs	cache_binding	1	standard	borderline	cache_binding	Per-user/audience isolation key; collision would leak across users
-src/identity_propagation/mod.rs	identity_binding_prefix	1	standard	borderline	identity_binding_prefix	Revocation eviction prefix; a mistake leaves revoked sessions cached
-src/identity_propagation/mod.rs	mint	1	standard	borderline	SignedAssertionStrategy::mint	Sets aud, exp and jti claims of the assertion
-src/identity_propagation/mod.rs	new	1	standard	borderline	SignedAssertionStrategy::new	TTL clamp bounding the replay window
-src/identity_propagation/mod.rs	sign_es256_jwt	1	standard	borderline	sign_es256_jwt	Signing path; wrong alg/key breaks verification trust
 src/identity_propagation/token_exchange.rs	cached	1	critical	d	TokenExchangeStrategy::cached	Expired cached exchanged token treated as absent
 src/identity_propagation/token_exchange.rs	exchange	1	critical	d	TokenExchangeStrategy::exchange	Refuses a non-2xx, unparsable or empty access_token response from the token-exchange endpoint (STS)
 src/identity_propagation/token_exchange.rs	propagate	1	critical	b/d	TokenExchangeStrategy::propagate	Refuses empty audience or missing endpoint; cache isolated per subject/audience/endpoint/scope
-src/identity_propagation/token_exchange.rs	default_http_client	1	standard	borderline	default_http_client	https_only client; a downgrade would allow plaintext token exchange
-src/identity_propagation/token_exchange.rs	exchange_cache_key	1	standard	borderline	exchange_cache_key	Widened isolation key (endpoint and scope)
-src/identity_propagation/token_exchange.rs	mint_client_assertion	1	standard	borderline	TokenExchangeStrategy::mint_client_assertion	RFC 7523 client authentication assertion
 src/oauth/callback.rs	handle_callback	1	critical	b	handle_callback	OAuth state (CSRF) check; refuses a mismatch or a missing code
-src/oauth/callback.rs	start_callback_server	1	standard	borderline	start_callback_server	Binds loopback only; holds expected_state
 src/oauth/client/destination.rs	check_advertised_endpoints	1	critical	d	OAuthClient::check_advertised_endpoints	Refuses discovered token/registration endpoints the policy denies
 src/oauth/client/destination.rs	check_destination	1	critical	d	OAuthClient::check_destination	Refuses OAuth URLs whose literal host the destination policy denies
 src/oauth/client/destination.rs	hop	1	critical	d	hop	Redirect hop SSRF literal check plus hop budget
-src/oauth/client/destination.rs	http_client	1	standard	borderline	http_client	Installs the redirect policy enforcing hop()
 src/oauth/client/mod.rs	authorize	1	critical	b	OAuthClient::authorize	Issuer check enforced before redeeming the authorization code
 src/oauth/client/mod.rs	credential_key	1	critical	c	OAuthClient::credential_key	Credentials keyed by issuer; refuses before the issuer is known
 src/oauth/client/mod.rs	drop_credentials_from_other_issuer	1	critical	c	OAuthClient::drop_credentials_from_other_issuer	Drops token and registered client_id when the issuer changes
 src/oauth/client/mod.rs	get_token	1	critical	b	get_token	Reuses a cached credential only while it is unexpired
 src/oauth/client/mod.rs	has_valid_token	1	critical	b	has_valid_token	Decides whether a cached credential is still valid
 src/oauth/client/mod.rs	validate_issuer	1	critical	b	validate_issuer	RFC 9207: a present iss must exactly equal the recorded issuer
-src/oauth/client/mod.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
-src/oauth/client/mod.rs	generate_pkce	1	standard	borderline	generate_pkce	PKCE verifier randomness and S256 derivation
-src/oauth/client/mod.rs	generate_state	1	standard	borderline	generate_state	CSRF state randomness
-src/oauth/client/mod.rs	initialize	1	standard	borderline	OAuthClient::initialize	Orchestrates destination and issuer checks before keeping metadata
-src/oauth/client/mod.rs	storage_key	1	standard	borderline	storage_key	Issuer-keyed credential storage
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
-src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private
-src/oauth/storage.rs	save	1	standard	borderline	TokenStorage::save	Atomic 0600 write of the token file
 src/oauth/token_file.rs	read	1	critical	d	read	Refuses a token file whose mode lets other users read it
 src/personal_accounts/commit.rs	claim_forced_refresh	1	critical	b	claim_forced_refresh	Checks the live grant version; one forced refresh per claim
 src/personal_accounts/commit.rs	refresh_tokens	1	critical	d	refresh_tokens	Refuses version rollback; CAS refuses non-Connected (revoked) grants
 src/personal_accounts/commit.rs	remove_unreferenced	1	critical	d	remove_unreferenced	Path-traversal guard via accepted_basename before unlink
-src/personal_accounts/commit.rs	fence_expected_version	1	standard	borderline	fence_expected_version	CAS fence writing ReconnectRequired
-src/personal_accounts/commit.rs	open_private	1	standard	borderline	open_private	create_new with mode 0600 for store files
-src/personal_accounts/commit.rs	restate	1	standard	borderline	restate	Writes the tombstone and clears the record pointer
-src/personal_accounts/commit.rs	revoke	1	standard	borderline	revoke	Durable revocation write that later refusals depend on
-src/personal_accounts/commit.rs	write_manifest	1	standard	borderline	write_manifest	Poisons the slot after a post-rename failure (fail closed)
 src/personal_accounts/config.rs	decode_key	1	critical	d	decode_key	Store key must decode to exactly 32 bytes
 src/personal_accounts/config.rs	forbid_external_strategy	1	critical	d	forbid_external_strategy	Refuses external_strategy on non-external modes
 src/personal_accounts/config.rs	resolve	1	critical	d	resolve	Refuses bad schema/deployment, unsafe or nested dirs, and non-reference keys
@@ -305,17 +190,12 @@ src/personal_accounts/config.rs	validate_descriptors	1	critical	d	validate_descr
 src/personal_accounts/config.rs	validate_directory	1	critical	d	validate_directory	Refuses relative paths and `..` components
 src/personal_accounts/config.rs	validate_external	1	critical	d	validate_external	Only signed_assertion/token_exchange, and required: true
 src/personal_accounts/config.rs	validate_managed	1	critical	d	validate_managed	HTTPS endpoints/issuer/redirect, reference-only secret, explicit resource flag
-src/personal_accounts/config.rs	adapter_header_names	1	standard	borderline	adapter_header_names	Lets a refusing runtime recognize configured headers
-src/personal_accounts/config.rs	validate_adapter_gateway_material_separation	1	standard	borderline	validate_adapter_gateway_material_separation	Wrapper; skipped when the store is disabled
-src/personal_accounts/config.rs	validate_adapter_gateway_reference_separation	1	standard	borderline	validate_adapter_gateway_reference_separation	Wrapper invoking the structural separation check
 src/personal_accounts/config/adapters.rs	resolve_material	1	critical	d	resolve_material	Secret ≥32 bytes; no reuse with store keys or other adapters
 src/personal_accounts/config/adapters.rs	validate	1	critical	d	validate	Adapter issuer literal, non-empty allowlist, unique id, positive lifetime
 src/personal_accounts/config/adapters.rs	validate_header	1	critical	d	validate_header	Refuses reserved identity/credential headers, case-insensitive
 src/personal_accounts/config/adapters.rs	validate_no_gateway_material_reuse	1	critical	d	validate_no_gateway_material_reuse	Constant-time refusal of adapter secret bytes equal to gateway credential bytes
 src/personal_accounts/config/adapters.rs	validate_no_gateway_reference_alias	1	critical	d	validate_no_gateway_reference_alias	Refuses an adapter secret that names a gateway credential's variable or file
 src/personal_accounts/config/adapters.rs	validate_secret_ref	1	critical	d	validate_secret_ref	Refuses literal secrets and relative file: paths
-src/personal_accounts/config/adapters.rs	resolve_runtime_secrets	1	standard	borderline	resolve_runtime_secrets	Only path to adapter HMAC material
-src/personal_accounts/config/adapters.rs	resolve_secrets	1	standard	borderline	resolve_secrets	Wrapper over resolve_material
 src/personal_accounts/config/journey.rs	validate	1	critical	d	validate	Hosted journey rules: one session bridge, origin, paths, keys, descriptors
 src/personal_accounts/config/journey.rs	validate_key_ids	1	critical	d	validate_key_ids	Refuses hosted key ids outside the length and character rules; they become journey-record key identifiers
 src/personal_accounts/config/journey.rs	validate_managed_descriptors	1	critical	b	validate_managed_descriptors	redirect_uri must equal the hosted callback URI
@@ -324,10 +204,8 @@ src/personal_accounts/config/journey.rs	validate_return_paths	1	critical	d	valid
 src/personal_accounts/config/journey.rs	validate_session	1	critical	d	validate_session	user_endpoint must be https or loopback http, with no userinfo
 src/personal_accounts/config/references.rs	resolve_key	1	critical	d	resolve_key	Refuses a literal store key or an unresolved key reference
 src/personal_accounts/consent.rs	commit_if_unchanged_locked	1	critical	d	commit_if_unchanged_locked	Fences a stale consent so it cannot overwrite a later grant or revoke
-src/personal_accounts/consent.rs	commit_grant_if_unchanged	1	standard	borderline	PersonalAccountStore::commit_grant_if_unchanged	Single lock acquisition around the CAS (TOCTOU guard)
 src/personal_accounts/identity.rs	account_key	1	critical	a/c	account_key	Refuses with no principal; binds the five-field owner key
 src/personal_accounts/identity.rs	eq	1	critical	a	Principal::eq	Principal match on authority and subject only
-src/personal_accounts/identity.rs	parts	1	standard	borderline	Principal::parts	The single source of authority/subject for owner keys
 src/personal_accounts/journey/callback.rs	admit	1	critical	b/d	admit	State, replay, expiry and binding checks; mismatch terminates the journey
 src/personal_accounts/journey/callback.rs	admit_callback	1	critical	b	PersonalAccountStore::admit_callback	Callback admission checks under the lock
 src/personal_accounts/journey/callback.rs	admitted	1	critical	d	admitted	Refuses a journey record with no owner principal
@@ -346,33 +224,20 @@ src/personal_accounts/journey/limits.rs	admit_start	1	critical	d	Rates::admit_st
 src/personal_accounts/journey/limits.rs	inside	1	critical	c	inside	Scopes rate-window events to the requested principal and live window
 src/personal_accounts/journey/limits.rs	wait	1	critical	d	wait	Decides whether a rate window has capacity
 src/personal_accounts/journey/mod.rs	digests_equal	1	critical	b	digests_equal	Constant-time digest equality for state, binding and owner
-src/personal_accounts/journey/mod.rs	keyed_digest	1	standard	borderline	keyed_digest	HKDF+HMAC used by state/binding verification
-src/personal_accounts/journey/mod.rs	principal_digest	1	standard	borderline	principal_digest	Principal key used for owner-scoped status/supersede
-src/personal_accounts/journey/mod.rs	random_secret	1	standard	borderline	random_secret	256-bit state/binding/verifier randomness
-src/personal_accounts/journey/offer.rs	offer_journey	1	standard	borderline	PersonalAccountStore::offer_journey	Reuse limited to own predecessors
 src/personal_accounts/journey/ops.rs	arm	1	critical	a/c	arm	Owner-digest match (constant-time); only pending or unconsumed-started journeys
 src/personal_accounts/journey/ops.rs	journey_status_owned	1	critical	c	PersonalAccountStore::journey_status_owned	Status only for the owning principal; others get NotFound
 src/personal_accounts/journey/ops.rs	predecessors	1	critical	c	predecessors	Supersede/reuse scoped to the same principal and account
 src/personal_accounts/journey/ops.rs	start_journey	1	critical	a	PersonalAccountStore::start_journey	Owner digest checked by arm before secrets are armed
 src/personal_accounts/journey/ops.rs	within_caps	1	critical	d	within_caps	Field caps refused before store access
-src/personal_accounts/journey/ops.rs	finish_journey	1	standard	borderline	PersonalAccountStore::finish_journey	Terminal records never rewritten
-src/personal_accounts/journey/ops.rs	mint	1	standard	borderline	mint	Mints secrets and their digests under the current key
 src/personal_accounts/journey/persist.rs	read_journeys	1	critical	b	read_journeys	AEAD-authenticates journeys.json; unknown key id refuses
-src/personal_accounts/journey/persist.rs	journey_transition_with_authority	1	standard	borderline	PersonalAccountStore::journey_transition_with_authority	Sweep runs before every operation; poisons on failure
-src/personal_accounts/journey/persist.rs	seal_journeys	1	standard	borderline	seal_journeys	AEAD seal bound to instance and epoch
 src/personal_accounts/journey/sweep.rs	sweep	1	critical	d	sweep	Expires active journeys past their deadline
-src/personal_accounts/journey/sweep.rs	terminate	1	standard	borderline	JourneyRecord::terminate	Clears verifier, binding and owner on terminal states
 src/personal_accounts/migration.rs	seed_expiry	1	critical	d	seed_expiry	Refuses expired credentials without a refresh token
-src/personal_accounts/migration_entry.rs	account_key	1	standard	borderline	account_key	Migrated grants are keyed to SoleOperator
-src/personal_accounts/migration_entry.rs	migrate_backend	1	standard	borderline	migrate_backend	Orchestrates source, issuer and client-id checks, then an Absent-guarded commit
 src/personal_accounts/migration_precondition.rs	check_issuer	1	critical	b	check_issuer	Attested issuer must equal the destination; endpoint origin must agree
 src/personal_accounts/migration_precondition.rs	recover_client_id	1	critical	b	recover_client_id	Refuses migration when the recorded client identity contradicts the destination
-src/personal_accounts/migration_revision.rs	descriptor_revision	1	standard	borderline	descriptor_revision	Fingerprint the descriptor fence compares
 src/personal_accounts/migration_source.rs	private_to	1	critical	d	private_to	Exact mode/owner verdict
 src/personal_accounts/migration_source.rs	privately_owned	1	critical	d	privately_owned	Unix: mode 0600 and owned by the effective uid
 src/personal_accounts/migration_source.rs	read_legacy_source	1	critical	d	read_legacy_source	Refuses symlinks, non-regular files and non-private/foreign-owned sources
 src/personal_accounts/mod.rs	fields	1	critical	d	AccountKey::fields	Refuses empty or oversized account-key fields
-src/personal_accounts/mod.rs	digest	1	standard	borderline	AccountKey::digest	Owner-scoping hash for every store operation
 src/personal_accounts/offline_migration.rs	resolve_legacy_backend_name	1	critical	c	resolve_legacy_backend_name	Refuses ambiguous or unbound backend to prevent wrong-credential migration
 src/personal_accounts/provider.rs	accept_metadata	1	critical	b	accept_metadata	Exact issuer/endpoint equality with config; endpoints must be https
 src/personal_accounts/provider.rs	discover	1	critical	b	discover	Terminal on certificate/redirect failures; the issuer document must be accepted
@@ -381,22 +246,13 @@ src/personal_accounts/provider.rs	is_https_with_host	1	critical	d	is_https_with_
 src/personal_accounts/provider.rs	map_token_response	1	critical	d	PersonalOAuthRefresh::map_token_response	invalid_grant maps to reconnect; refuses a missing expires_in
 src/personal_accounts/provider.rs	refresh_inner	1	critical	b	PersonalOAuthRefresh::refresh_inner	Account issuer/resource must equal the descriptor; pinned endpoint only
 src/personal_accounts/provider.rs	resolve	2	critical	d	EnvSecrets::resolve	Refuses literal (non env:/file:) client secrets
-src/personal_accounts/provider.rs	bootstrap	1	standard	borderline	PersonalOAuthRefresh::bootstrap	Eager metadata pinning; no lazy discovery
-src/personal_accounts/provider.rs	client_authentication	1	standard	borderline	PersonalOAuthRefresh::client_authentication	Client secret resolved only for a pinned endpoint
 src/personal_accounts/provider/grant_flow.rs	managed	1	critical	d	PersonalOAuthRefresh::managed	Refuses non-managed or unpinned accounts before any HTTP
 src/personal_accounts/provider/grant_flow.rs	revoke_token	1	critical	d	PersonalOAuthRefresh::revoke_token	Token sent only to a configured and pinned revocation endpoint
-src/personal_accounts/provider/grant_flow.rs	authorize_url	1	standard	borderline	PersonalOAuthRefresh::authorize_url	Pinned authorization endpoint; state and challenge
-src/personal_accounts/provider/grant_flow.rs	code_challenge_s256	1	standard	borderline	code_challenge_s256	PKCE S256 derivation
-src/personal_accounts/provider/grant_flow.rs	exchange_code	1	standard	borderline	PersonalOAuthRefresh::exchange_code	redirect_uri from the descriptor; pinned token endpoint
 src/personal_accounts/provider/http.rs	guard	1	critical	d	guard	Refuses URL userinfo and SSRF IP literals
 src/personal_accounts/provider/http.rs	read_bounded	1	critical	d	read_bounded	Refuses a provider response over MAX_BODY_BYTES
 src/personal_accounts/provider/http.rs	send	1	critical	d	send	Refuses any 3xx redirect as terminal
-src/personal_accounts/provider/http.rs	classify	1	standard	borderline	classify	Defaults transport errors to terminal (fail closed)
-src/personal_accounts/provider/http.rs	strict_builder	1	standard	borderline	strict_builder	No redirects, https_only, no_proxy, pinning DNS resolver
 src/personal_accounts/refusal.rs	offer_data	1	critical	b	offer_data	Forwards connect-offer keys only under the per-process seal
 src/personal_accounts/refusal.rs	upstream_rejection	1	critical	b	upstream_rejection	Accepts a rejection mark only with the per-process seal
-src/personal_accounts/refusal.rs	mark_rejection	1	standard	borderline	mark_rejection	Attaches the provenance seal
-src/personal_accounts/refusal.rs	offer_error	1	standard	borderline	offer_error	Attaches the provenance seal
 src/personal_accounts/service.rs	apply	1	critical	a	AccountService::apply	Scope check: refuses a refresh that broadens granted scopes
 src/personal_accounts/service.rs	connected	1	critical	d	AccountService::connected	Refuses Revoked, ReconnectRequired and Absent states
 src/personal_accounts/service.rs	expired	1	critical	d	expired	An unreadable clock counts as expired: refresh, never serve
@@ -404,7 +260,6 @@ src/personal_accounts/service.rs	fence_after_invalid_grant	1	critical	d	AccountS
 src/personal_accounts/service.rs	refresh_after_rejection	1	critical	b	refresh_after_rejection	Refuses stale leases; provider refresh only through the single-use claim
 src/personal_accounts/service.rs	refresh_if_expired	1	critical	d	AccountService::refresh_if_expired	Serves only an unexpired grant; invalid_grant fences
 src/personal_accounts/service.rs	release	1	critical	a/d	AccountService::release	Whole-lease recheck against current authority before release
-src/personal_accounts/service.rs	lease_of	1	standard	borderline	lease_of	Defines the fields compared by the whole-lease recheck
 src/personal_accounts/storage.rs	accepted_basename	1	critical	d	accepted_basename	Record pointer must be `<own digest>-<hex>.json` (no traversal)
 src/personal_accounts/storage.rs	check_token_header	1	critical	b	check_token_header	AAD must bind schema and key_id
 src/personal_accounts/storage.rs	connected_record	1	critical	b	connected_record	SHA-256 pin, AEAD with account AAD, version must match manifest
@@ -421,34 +276,18 @@ src/personal_accounts/storage.rs	require_empty	1	critical	d	require_empty	Initia
 src/personal_accounts/storage.rs	validate_config	1	critical	d	validate_config	Key sizes, current key present, store/authority dirs disjoint
 src/personal_accounts/storage.rs	validate_path	1	critical	d	validate_path	Absolute paths, no symlinks or dot components
 src/personal_accounts/storage.rs	validate_record	1	critical	d	validate_record	Refuses malformed record tokens, versions and scope order
-src/personal_accounts/storage.rs	claim_store	1	standard	borderline	claim_store	Exclusive locks on both store roots
-src/personal_accounts/storage.rs	initialize	1	standard	borderline	initialize	Orchestrates validation, private dirs, empty roots, seal
-src/personal_accounts/storage.rs	open_nofollow	1	standard	borderline	open_nofollow	O_NOFOLLOW open for store files
-src/personal_accounts/storage.rs	seal_bytes	1	standard	borderline	seal_bytes	Fresh random nonce per AES-GCM seal
-src/personal_accounts/storage.rs	seal_token	1	standard	borderline	seal_token	Seals with a header check and record validation
-src/personal_accounts/storage.rs	token_aad	1	standard	borderline	token_aad	Binds the account and store epoch into the record AAD
 src/personal_accounts/storage_windows.rs	create_directory	1	critical	d	create_directory	Windows: refuses symlink/non-dir; creates private
 src/personal_accounts/storage_windows.rs	not_private	1	critical	d	not_private	Windows: non-regular file or non-private DACL
 src/personal_accounts/storage_windows.rs	private_directory	1	critical	d	private_directory	Windows: directory must pass the DACL privacy judgement
-src/personal_accounts/storage_windows.rs	open_nofollow	1	standard	borderline	open_nofollow	Windows: open without following a reparse point
 src/personal_accounts/vault.rs	fence_changed_descriptor	1	critical	d	VaultStrategy::fence_changed_descriptor	Refuses grants stored under another descriptor revision
 src/personal_accounts/vault.rs	prepare	1	critical	b/c	VaultStrategy::prepare	Audience must equal the descriptor resource; owner key; fenced release
 src/personal_accounts/vault.rs	principal	1	critical	a	VaultStrategy::principal	Sole-operator only if asserted AND the caller established the operator
 src/personal_accounts/vault.rs	recheck	1	critical	d	VaultStrategy::recheck	Durable custody release recheck; retired lease refuses
 src/personal_accounts/vault.rs	recheck	2	critical	a/d	ManagedLease::recheck	Refuses if the installed vault was replaced
-src/personal_accounts/vault.rs	cache_binding	1	standard	borderline	cache_binding	Per-grant cache isolation key
 src/personal_accounts/worker_callback.rs	admit_journey	1	critical	b/d	CustodyHandle::admit_journey	Caps, then state-located journey, binding admission
 src/personal_accounts/worker_callback.rs	invalid_grant	1	critical	a/d	invalid_grant	Refuses missing scopes, non-bearer tokens, offline without a refresh token
 src/personal_accounts/worker_callback.rs	pre_exchange	1	critical	b	CustodyHandle::pre_exchange	Provider error, iss mismatch, config change, single-use consume
 src/personal_accounts/worker_callback.rs	run_callback	1	critical	d	CustodyHandle::run_callback	Aborts and revokes on bad grant or audit failure
-src/personal_accounts/worker_callback.rs	grant_of	1	standard	borderline	grant_of	Owner key rebuilt from the admitted journey
-src/transport/command_split.rs	join_command	1	standard	borderline	join_command	Selects the host join rule set
-src/transport/command_split.rs	join_command_unix	1	standard	d	join_command_unix	shlex try_join; refuses arguments that cannot be quoted (NUL)
-src/transport/command_split.rs	join_command_windows	1	standard	d	join_command_windows	Refuses NUL arguments; quotes so the split round-trips exactly
-src/transport/command_split.rs	split_command	1	standard	borderline	split_command	Selects the host rule set used by every spawn site
-src/transport/command_split.rs	split_command_unix	1	standard	d	split_command_unix	POSIX split; refuses invalid or unterminated quoting (None)
-src/transport/command_split.rs	split_command_windows	1	standard	d	split_command_windows	CommandLineToArgvW split; refuses an unterminated quote and does not truncate argv
-src/transport/http/client.rs	build	1	standard	borderline	build	Installs the redirect policy and pinned DNS client; getting it wrong silently disables both.
 src/transport/http/extra_headers.rs	merge_extra_headers	1	critical	borderline	merge_extra_headers	Withholds the static credential when the caller's credential value is invalid (#2292).
 src/transport/http/mod.rs	build_mcp_headers	1	critical	c	HttpTransport::build_mcp_headers	Picks MCP-Session-Id from the caller's identity bucket only.
 src/transport/http/mod.rs	establish_sse_connection	1	critical	borderline	HttpTransport::establish_sse_connection	64 KiB handshake cap (defence-in-depth against a misbehaving backend).

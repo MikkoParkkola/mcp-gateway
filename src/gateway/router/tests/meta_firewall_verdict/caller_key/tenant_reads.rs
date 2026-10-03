@@ -278,6 +278,45 @@ async fn concurrent_stateless_and_two_sessions_one_key() {
     );
 }
 
+/// MIK-7799: a judged POST answer is one record, not two. The verdict rides
+/// the answer's own `response_delivery_attempt` record; no standalone
+/// `tenant_read` event is written for it.
+#[tokio::test]
+async fn a_judged_answer_is_one_record() {
+    let (observe, _store, log_dir) = logged_router().await;
+    let who = caller();
+    let (a, _, body) = send(&observe, call_with(&who, true, None, 0, &reading(A))).await;
+    assert_eq!(a, Delivered, "{body}");
+    let (b, _, body) = send(&observe, call_with(&who, true, None, 1, &reading(B))).await;
+    assert_eq!(b, Delivered, "observe never withholds: {body}");
+    let lines = log_lines(&log_dir);
+    let records: Vec<Value> = lines
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let of = |event: &str| {
+        records
+            .iter()
+            .filter(|r| record_field(r, "event") == Some(event))
+            .count()
+    };
+    assert_eq!(
+        of("tenant_read"),
+        0,
+        "no standalone tenant_read event for a POST answer: {lines:#?}"
+    );
+    let b_hash = hash_argument(&json!(B));
+    let carrying = records.iter().find(|r| {
+        record_field(r, "event") == Some("response_delivery_attempt")
+            && record_field(r, "cross_tenant_read") == Some("flagged")
+    });
+    let carrying = carrying.unwrap_or_else(|| panic!("a flagged delivery record: {lines:#?}"));
+    assert!(
+        carrying.to_string().contains(&b_hash),
+        "the delivery record names the B tenant: {carrying}"
+    );
+}
+
 /// Row 2b: A on `/mcp`, then B on `/mcp/{name}`, same key. The two routes
 /// hold different `Firewall` instances; the history is the process's.
 #[tokio::test]
