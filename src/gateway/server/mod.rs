@@ -3044,7 +3044,8 @@ impl Gateway {
                 chain_nonce: chain_nonce.as_deref(),
             },
         ).await;
-        meta_mcp.commit_relay_receipts(&response);
+        // COLLUDE.1: the receipts staged here are recorded by the caller once
+        // the answer has been judged (`judge_and_commit`).
         if let Some(execution) = execution {
             execution.complete_delivery(&response, signing_context.as_ref());
         }
