@@ -649,3 +649,21 @@ async fn verification_posts_are_rate_limited_per_host() {
     assert_eq!(error(&last)["code"], -32013, "{last}");
     assert_eq!(error(&last)["data"]["limit"], "verifications");
 }
+
+/// T22 (EVENTS.4), floor clause: against the default 60 s `min_ttl`, a
+/// `ttlMs` of 1000 is raised to the floor, not honoured and not refused.
+#[tokio::test]
+async fn a_ttl_below_the_floor_is_raised_to_it() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, json!({})).await;
+    let mut p = params(&rx.url, "whsec_placeholder", json!({"repo": "floor"}));
+    p["delivery"]["secret"] = json!(whsec(32));
+    p["ttlMs"] = json!(1000);
+    let answer = gw.rpc(Some(ALICE), "events/subscribe", p).await;
+    about(
+        refresh_before(&answer),
+        60,
+        "1000 ms against the 60 s floor",
+    );
+}
