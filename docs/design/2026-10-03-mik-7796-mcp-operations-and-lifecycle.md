@@ -44,7 +44,7 @@ resolves.
 
 | ID | Defect | Fix | Failing test |
 |----|--------|-----|--------------|
-| L1 | A call that cloned its definition before an unload starts a child after it | Backend reconciles after every MCP call: if the capability is no longer loaded, stop its children | unload between clone and call: child count 0 after the call |
+| L1 | A call that cloned its definition before an unload starts a child after it (and runs a stale or quarantined definition) | Revocable generation: the executor keeps a per-capability generation, bumped on unload, reload and quarantine. The backend reads it when it clones the definition and carries it on the execution context; `acquire` refuses a call whose generation is not current, before any child starts or tool is invoked. A call already past `acquire` is stopped by the forced eviction on unload | stale call after unload never starts a child and never reaches the tool |
 | L2 | `discard` after a timeout removes whatever child now sits under the key | Each child has a generation; `discard` removes only the matching one | timed-out call must not remove a replacement child |
 | L3 | A changed `provider.timeout` keeps the old child | Child records the timeout; a different one restarts it | acquire with a new timeout returns a new child |
 | L4 | `last_used` set at acquire only, so a long call counts as idle | Set `last_used` when the lease ends | long call, then sweep: child stays |
@@ -60,15 +60,19 @@ no behaviour change for other capabilities).
 `gateway_invoke`, which is already task-dispatchable, so a caller runs the slow operation as a task. Inside the
 call the executor needs a bounded wait:
 
-- `ToolCall.wait: Option<WaitStep>` with `{ tool, arguments, until: { field, present: true }, interval_ms
-  (200..=5000, default 1000), max_wait_s }`. After the main call, poll `tool` until the result has `field`, the
-  per-call deadline passes, or `max_wait_s` (never above the provider timeout) passes. A timeout is an error
-  naming the wait, not a silent success.
+- `ToolCall.wait: Option<WaitStep>` with `{ tool, arguments, until: { field, equals }, interval_ms
+  (200..=5000, default 1000), max_wait_s }`. After the main call, poll `tool` until the result's `field` equals
+  `equals`, the per-call deadline passes, or `max_wait_s` (never above the provider timeout) passes. A poll that
+  returns a tool error or no match counts as not ready (the server answers an absent or unfinished binary
+  with an error), never aborts the wait. A timeout is an error naming the wait, not a silent success.
+  For pyghidra the poll is `list_project_binaries`, matching the imported file, until `analysis_complete`
+  is true; the matching program name is returned for later operations.
 - Operations (read-only): `import` (`import_binary`, wait on `list_project_binary_metadata` for the binary),
   `list_binaries`, `decompile` (`decompile_function`), `xrefs` (`list_xrefs`), `search_symbols`
   (`search_symbols_by_name`), `search_strings`, `imports`, `exports`, `callgraph` (`gen_callgraph`),
-  `metadata`. Mutating tools (rename, set comment/type/prototype, delete) are not exposed, so `read_only: true`
-  holds. `binary_path` carries `path_root: projects`.
+  `metadata`. Mutating tools (rename, set comment/type/prototype, delete) are not exposed. `import` changes the
+  project, so the capability is `read_only: false`, `destructive: false`, and both response caches are off
+  (`cache.strategy: none`): imports change state and child eviction discards it. `binary_path` carries `path_root: projects`.
 - Verification: tool names and argument names are checked against the server's `tools/list` snapshot in a test
   (a mapped tool that the snapshot lacks fails it). A real Ghidra is not available in CI; this is stated in the
   PR.
