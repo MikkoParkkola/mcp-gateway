@@ -1,0 +1,46 @@
+name: Perf arms
+
+# Throwaway branch only (never merged). Proves the mimalloc allocator builds on
+# the release rows that PR CI does not run: static x86_64 musl and the Docker
+# builder stage.
+on:
+  push:
+    branches: ["throwaway/perf-arms-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  musl:
+    name: x86_64 musl static build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.98.0
+          targets: x86_64-unknown-linux-musl
+      - name: Build and run
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools
+          cargo build --release --locked --target x86_64-unknown-linux-musl --bin mcp-gateway
+          f=target/x86_64-unknown-linux-musl/release/mcp-gateway
+          file "$f"
+          "$f" --version
+  docker-builder:
+    name: Docker builder stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the builder stage
+        run: docker build --target builder -t mcp-gateway-builder-probe .
+      - name: Run the built binary
+        run: docker run --rm mcp-gateway-builder-probe /app/target/release/mcp-gateway --version
