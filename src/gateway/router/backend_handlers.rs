@@ -721,3 +721,6 @@ mod idempotency_settlement_tests;
 
 #[cfg(test)]
 mod direct_route_scope_tests;
+
+#[cfg(test)]
+mod direct_admission_edge_tests;
