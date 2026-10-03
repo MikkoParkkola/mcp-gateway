@@ -129,7 +129,7 @@ impl ProcessCommand {
             Self::new("openpencil-mcp", &[]),
             Self::new("pact-mcp", &[]),
             Self::new("pyghidra-mcp", &[]),
-            // The analyzer pin keeps tool descriptions on this machine.
+            // Static analyzers only: nothing leaves this machine.
             Self::new("skill-scanner", &["scan"]),
         ]
     }
