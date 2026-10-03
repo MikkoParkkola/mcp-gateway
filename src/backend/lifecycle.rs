@@ -392,6 +392,9 @@ impl Backend {
                     self.config.timeout,
                     protocol_version.clone(),
                 );
+                if let Some(bytes) = self.config.max_frame_bytes {
+                    transport.set_max_frame_bytes(bytes);
+                }
                 transport.start().await?;
                 transport
             }

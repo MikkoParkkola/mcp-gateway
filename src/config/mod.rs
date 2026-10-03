@@ -778,6 +778,7 @@ impl Config {
         self.idempotency.validate()?;
         self.validate_backend_runtime_profiles()?;
         self.validate_stop_when_idle_ownership()?;
+        self.validate_max_frame_bytes()?;
         self.control_plane.role_mapping.validate()?;
         self.validate_identity_propagation()?;
         flagged_tools::validate_flagged_tool_pins(&self.backends)?;
@@ -1209,6 +1210,33 @@ impl Config {
         Ok(())
     }
 
+    /// `max_frame_bytes` applies to a stdio backend only, within the allowed range.
+    ///
+    /// # Errors
+    ///
+    /// A validation error naming the backend.
+    fn validate_max_frame_bytes(&self) -> Result<()> {
+        use crate::transport::{CEILING_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
+        for (name, backend) in &self.backends {
+            let Some(bytes) = backend.max_frame_bytes else {
+                continue;
+            };
+            if !matches!(backend.transport, TransportConfig::Stdio { .. }) {
+                return Err(Error::ConfigValidation(format!(
+                    "backends.{name}.max_frame_bytes is only valid for a stdio backend (one \
+                     declared with a `command`)"
+                )));
+            }
+            if !(MIN_MAX_FRAME_BYTES..=CEILING_MAX_FRAME_BYTES).contains(&bytes) {
+                return Err(Error::ConfigValidation(format!(
+                    "backends.{name}.max_frame_bytes must be between {MIN_MAX_FRAME_BYTES} and \
+                     {CEILING_MAX_FRAME_BYTES} bytes"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// `stop_when_idle_for` is meaningful only where the gateway OWNS the backend
     /// process - a backend declared with a `command`, which the gateway spawned
     /// and can therefore stop and restart.
@@ -1625,6 +1653,11 @@ pub struct BackendConfig {
     /// behaviour.
     #[serde(default, with = "humantime_serde::option")]
     pub stop_when_idle_for: Option<Duration>,
+    /// Longest single JSON-RPC message, in bytes, this stdio backend may send
+    /// (one newline-terminated line). `None` means 16 MiB. Valid only for a
+    /// backend the gateway starts with a `command`; between 64 KiB and 1 GiB.
+    #[serde(default)]
+    pub max_frame_bytes: Option<usize>,
     /// Request timeout for this backend.
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
@@ -1700,6 +1733,7 @@ impl Default for BackendConfig {
             enabled: true,
             transport: TransportConfig::default(),
             stop_when_idle_for: None,
+            max_frame_bytes: None,
             timeout: Duration::from_secs(30),
             env: HashMap::new(),
             headers: HashMap::new(),

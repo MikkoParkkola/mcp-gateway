@@ -82,6 +82,7 @@ const KNOWN_BACKEND_KEYS: &[&str] = &[
     "description",
     "enabled",
     "stop_when_idle_for",
+    "max_frame_bytes",
     "timeout",
     "env",
     "headers",

@@ -5,14 +5,18 @@
 
 use tokio::io::BufReader;
 
-use super::{MAX_FRAME_BYTES, read_frame};
+use super::{DEFAULT_MAX_FRAME_BYTES as MAX_FRAME_BYTES, read_frame};
 
 async fn frames(input: &[u8]) -> Vec<std::io::Result<Option<String>>> {
+    frames_within(input, MAX_FRAME_BYTES).await
+}
+
+async fn frames_within(input: &[u8], max: usize) -> Vec<std::io::Result<Option<String>>> {
     let mut reader = BufReader::new(input);
     let mut buf = Vec::new();
     let mut out = Vec::new();
     loop {
-        let next = read_frame(&mut reader, &mut buf).await;
+        let next = read_frame(&mut reader, &mut buf, max).await;
         let stop = !matches!(next, Ok(Some(_)));
         out.push(next);
         if stop {
@@ -136,4 +140,25 @@ async fn dropping_a_live_transport_takes_its_descendants_with_it() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     assert!(!alive, "descendant {pid} outlived a dropped transport");
+}
+
+#[tokio::test]
+async fn a_configured_larger_limit_accepts_what_the_default_refuses() {
+    let mut input = vec![b'x'; MAX_FRAME_BYTES + 1024];
+    input.push(b'\n');
+    assert!(frames(&input).await[0].is_err(), "the default refuses it");
+    let got = frames_within(&input, MAX_FRAME_BYTES + 2048).await;
+    assert_eq!(
+        got[0].as_ref().unwrap().as_ref().map(String::len),
+        Some(MAX_FRAME_BYTES + 1024),
+        "a configured larger limit is honoured"
+    );
+}
+
+#[tokio::test]
+async fn a_configured_smaller_limit_refuses_a_frame_the_default_accepts() {
+    let mut input = vec![b'x'; 70_000];
+    input.push(b'\n');
+    assert!(frames(&input).await[0].is_ok());
+    assert!(frames_within(&input, 65_536).await[0].is_err());
 }
