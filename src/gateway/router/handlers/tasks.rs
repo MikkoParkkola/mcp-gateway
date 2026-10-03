@@ -507,6 +507,11 @@ struct TaskFrameSource {
     verified_identity: Option<VerifiedIdentity>,
     input_capabilities: Declared,
     session_id: Option<String>,
+    /// The principal the stream was opened as. The credential is re-resolved
+    /// at delivery by the listener's own precedence (a dashboard session
+    /// before a bearer), which the HTTP middleware does not share; a reader
+    /// who now resolves to anyone else is sent task id and status only.
+    principal: Option<String>,
     /// An agent-JWT caller's scopes were read from the token when the stream
     /// opened and nothing re-validates that token afterwards, so such a reader
     /// is sent task id and status only. Everything else re-resolves at delivery.
@@ -530,6 +535,7 @@ pub(super) fn task_frames(
         verified_identity: caller.verified_identity.cloned(),
         input_capabilities: caller.input_capabilities,
         session_id: caller.session_id.map(str::to_owned),
+        principal: caller.client.map(|client| client.principal.clone()),
         status_only: caller.oauth_agent_identity.is_some(),
     })
 }
@@ -547,7 +553,13 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         let stored = notification
             .pointer("/params/taskId")
             .and_then(Value::as_str)
-            .filter(|_| !self.status_only)
+            .filter(|_| {
+                !self.status_only
+                    && self
+                        .principal
+                        .as_ref()
+                        .is_none_or(|opened_as| *opened_as == reader.principal)
+            })
             .and_then(|id| self.state.tasks.get(&self.owner, id).ok());
         let live = RecoveryCaller {
             client: Some(reader),
