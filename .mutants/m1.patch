@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index 16663e4c3..773902124 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -355,7 +355,7 @@ pub(super) async fn forward_notification(
+             caller.proof(),
+             // The credential's slot principal, as the request arm charges it,
+             // not the display label two credentials can share (MIK-7885).
+-            caller.slot.as_deref(),
++            caller.proven.as_deref(),
+         )
+         .await
+     else {
