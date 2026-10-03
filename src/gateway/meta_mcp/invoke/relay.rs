@@ -291,41 +291,74 @@ impl MetaMcp {
         #[cfg(feature = "firewall")]
         let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
         #[cfg(feature = "firewall")]
-        if let (Some(caller), Some(fw)) = (
-            caller.as_ref(),
-            self.firewall.as_ref().filter(|fw| fw.relay_active()),
-        ) {
-            use crate::security::firewall::{FirewallAction, RelayCaller};
-            let who = RelayCaller::new(&caller.key, caller.keyed);
-            let verdict = fw.check_relay(who, &backend.name, method, &params, ("", &caller.name));
-            if verdict.action == FirewallAction::Warn {
-                tracing::warn!(server = %backend.name, method, "Firewall: relay observed");
-            }
-            if !verdict.allowed {
-                let desc = verdict
-                    .findings
-                    .first()
-                    .map_or("", |f| f.description.as_str());
-                return crate::protocol::JsonRpcResponse::error(
-                    Some(id),
-                    -32002,
-                    format!("Relay detection blocked: {desc}"),
-                );
+        {
+            if let Some(refusal) =
+                self.catalogue_refusal(caller.as_ref(), &backend.name, method, &params, &id)
+            {
+                return refusal;
             }
         }
         let response =
             Self::forward_for_caller(id, backend, method, params, credential, empty).await;
         #[cfg(feature = "firewall")]
-        if let (Some(caller), Some(result)) = (caller, response.result.as_ref())
-            && response.error.is_none()
-            && self.relay_active()
         {
-            let target = (backend.name.as_str(), method);
-            let recorded = self.recorded_prompt(target, Some(&caller.name), "catalogue", result);
-            let who = RelayKey::new(&caller.key, caller.keyed);
-            self.stage_relay_receipt(who, target, &recorded);
+            self.stage_catalogue_result(caller, (&backend.name, method), &response);
         }
         response
+    }
+}
+
+#[cfg(feature = "firewall")]
+impl MetaMcp {
+    /// The `-32002` answer when a catalogue read's forwarded `params` carry
+    /// what another caller was delivered, under `block`; `None` otherwise.
+    fn catalogue_refusal(
+        &self,
+        caller: Option<&CatalogueCaller>,
+        backend: &str,
+        method: &str,
+        params: &Value,
+        id: &crate::protocol::RequestId,
+    ) -> Option<crate::protocol::JsonRpcResponse> {
+        use crate::security::firewall::{FirewallAction, RelayCaller};
+        let (caller, fw) = (
+            caller?,
+            self.firewall.as_ref().filter(|fw| fw.relay_active())?,
+        );
+        let who = RelayCaller::new(&caller.key, caller.keyed);
+        let verdict = fw.check_relay(who, backend, method, params, ("", &caller.name));
+        if verdict.action == FirewallAction::Warn {
+            tracing::warn!(server = backend, method, "Firewall: relay observed");
+        }
+        if verdict.allowed {
+            return None;
+        }
+        let desc = verdict
+            .findings
+            .first()
+            .map_or("", |f| f.description.as_str());
+        Some(crate::protocol::JsonRpcResponse::error(
+            Some(id.clone()),
+            -32002,
+            format!("Relay detection blocked: {desc}"),
+        ))
+    }
+
+    /// Stage a delivered catalogue result as a delivery from `backend:method`.
+    fn stage_catalogue_result(
+        &self,
+        caller: Option<CatalogueCaller>,
+        target: (&str, &str),
+        response: &crate::protocol::JsonRpcResponse,
+    ) {
+        let (Some(caller), Some(result)) = (caller, response.result.as_ref()) else {
+            return;
+        };
+        if response.error.is_some() || !self.relay_active() {
+            return;
+        }
+        let recorded = self.recorded_prompt(target, Some(&caller.name), "catalogue", result);
+        self.stage_relay_receipt(RelayKey::new(&caller.key, caller.keyed), target, &recorded);
     }
 }
 

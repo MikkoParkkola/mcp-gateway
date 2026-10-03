@@ -62,7 +62,11 @@ pub(super) async fn dispatch(
         keyed: true,
         name: "stdio".to_owned(),
     };
-    relay::as_caller(operator, dispatch_catalogue(meta, method, id, params)).await
+    relay::as_caller(
+        operator,
+        Box::pin(dispatch_catalogue(meta, method, id, params)),
+    )
+    .await
 }
 
 async fn dispatch_catalogue(

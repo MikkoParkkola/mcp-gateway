@@ -2142,6 +2142,24 @@ mod session_tests;
 #[path = "handlers_session_subject_tests.rs"]
 mod session_subject_tests;
 
+/// The caller a `prompts/get` or `resources/read` runs for, keyed as the same
+/// caller's `tools/call` is: the key the grant, certificate or API key names,
+/// else the unkeyed session bucket.
+fn catalogue_caller(
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    cert_identity: Option<&CertIdentity>,
+    client: Option<&AuthenticatedClient>,
+    session_id: &str,
+) -> CatalogueCaller {
+    let key = super::identity::caller_key(grant_subject, cert_identity, client);
+    let keyed = !key.is_empty();
+    CatalogueCaller {
+        key: if keyed { key } else { session_id.to_owned() },
+        keyed,
+        name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
+    }
+}
+
 #[cfg(test)]
 mod cacheable_field_tests {
     use super::{CACHEABLE_METHODS, build_modern_response};
@@ -2196,23 +2214,5 @@ mod cacheable_field_tests {
 
         assert!(body["result"].get("ttlMs").is_none(), "{body}");
         assert!(body["result"].get("cacheScope").is_none(), "{body}");
-    }
-}
-
-/// The caller a `prompts/get` or `resources/read` runs for, keyed as the same
-/// caller's `tools/call` is: the key the grant, certificate or API key names,
-/// else the unkeyed session bucket.
-fn catalogue_caller(
-    grant_subject: Option<&crate::identity_grants::GrantSubject>,
-    cert_identity: Option<&CertIdentity>,
-    client: Option<&AuthenticatedClient>,
-    session_id: &str,
-) -> CatalogueCaller {
-    let key = super::identity::caller_key(grant_subject, cert_identity, client);
-    let keyed = !key.is_empty();
-    CatalogueCaller {
-        key: if keyed { key } else { session_id.to_owned() },
-        keyed,
-        name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
     }
 }
