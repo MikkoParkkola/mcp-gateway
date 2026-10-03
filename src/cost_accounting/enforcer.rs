@@ -600,3 +600,7 @@ mod tests {
         assert_eq!(action, None);
     }
 }
+
+#[cfg(test)]
+#[path = "enforcer_atomic_tests.rs"]
+mod atomic_tests;
