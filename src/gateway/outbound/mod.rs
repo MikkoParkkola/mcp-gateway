@@ -134,6 +134,12 @@ impl OutboundFrame {
         self.key.as_deref().is_none_or(|key| key == destination)
     }
 
+    /// Commit as a sink would on writing it (tests only).
+    #[cfg(test)]
+    pub(crate) fn commit_for_test(&self) {
+        self.written();
+    }
+
     /// The sink wrote this frame: refresh its tenants' last-seen time. The
     /// pending reservation is released when the last copy goes.
     fn written(&self) {
