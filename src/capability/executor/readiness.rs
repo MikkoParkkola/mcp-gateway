@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use super::super::AuthConfig;
+use super::super::{AuthConfig, CapabilityDefinition};
 use super::CapabilityExecutor;
 
 /// The environment variable an `auth.key` names, in each spelling
@@ -63,4 +63,21 @@ impl CapabilityExecutor {
         });
         (!logged_in).then(|| format!("a {provider} login"))
     }
+
+    /// The line `mcp-gateway cap list` prints for `cap`: name, description and
+    /// auth type, then `off: needs <KEY>` when [`Self::missing_credential`]
+    /// says the gateway would not list it. One rule, shared with `tools/list`.
+    #[must_use]
+    pub fn list_line(&self, cap: &CapabilityDefinition) -> String {
+        let auth_info = if cap.auth.required {
+            format!(" [{}]", cap.auth.auth_type)
+        } else {
+            String::new()
+        };
+        format!("  {} - {}{}", cap.name, cap.description, auth_info)
+    }
 }
+
+#[cfg(test)]
+#[path = "readiness_list_tests.rs"]
+mod list_tests;
