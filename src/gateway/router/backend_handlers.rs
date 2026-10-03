@@ -47,7 +47,7 @@ struct BackendAuthContext<'a> {
 #[cfg(feature = "firewall")]
 mod relay;
 #[cfg(feature = "firewall")]
-use relay::{direct_control_identity, record_direct_delivery, relay_refusal};
+use relay::{direct_control_identity, relay_refusal, stage_direct_delivery};
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
 /// request arriving at the direct backend endpoint.
@@ -505,7 +505,7 @@ async fn backend_handler_inner(
     direct_dispatch::dispatch(scope, &envelope, (&preflight, &propagation), admitted).await
 }
 
-/// Sign when `nonce` is `Some`, then record what is delivered: a refusal records nothing.
+/// Sign when `nonce` is `Some`, then stage what is delivered: a refusal stages nothing.
 #[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
 fn sign_and_record(
     state: &AppState,
@@ -518,7 +518,7 @@ fn sign_and_record(
         state.meta_mcp.sign_direct_delivery(response, nonce);
     }
     #[cfg(feature = "firewall")]
-    record_direct_delivery(state, auth, server, tool, response.result.as_ref());
+    stage_direct_delivery(state, auth, server, tool, response.result.as_ref());
 }
 
 /// #1962: run a backend dispatch with the reservation armed, so a caller
