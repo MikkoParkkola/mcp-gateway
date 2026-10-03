@@ -369,6 +369,46 @@ impl EventsHub {
             .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
             .await;
         services.audit_evictions(evicted.unwrap_or_default()).await;
+        if let Settle::Dead { reason, .. } = outcome {
+            self.dead_lettered(services, record, reason).await;
+        }
+    }
+
+    /// The governance record of a dead letter (design 3.7).
+    pub(super) async fn dead_lettered(
+        &self,
+        services: &Services,
+        record: &OutboxRecord,
+        reason: DeadReason,
+    ) {
+        // Only a dead letter that exists: a cancelled occurrence settles nothing.
+        let buried = self
+            .store
+            .dead_letter_by_id(&record.event_id)
+            .is_some_and(|dead| dead.record.created_at == record.created_at);
+        if !buried {
+            return;
+        }
+        let host = self
+            .store
+            .get(&record.subscription_id)
+            .and_then(|s| url::Url::parse(&s.url).ok())
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .unwrap_or_default();
+        services
+            .audit_lifecycle(
+                &super::governance::Lifecycle {
+                    action: "events.dead_letter",
+                    subscription_id: &record.subscription_id,
+                    event_name: &record.name,
+                    callback_host: &host,
+                    detail: reason.as_str(),
+                    event_id: Some(&record.event_id),
+                    ok: false,
+                },
+                None,
+            )
+            .await;
     }
 }
 
@@ -400,6 +440,7 @@ impl Ctx<'_> {
             callback_host: &self.host,
             status,
             body_sha256: "",
+            firewall: self.record.firewall.as_deref().unwrap_or("unrecorded"),
             delivered: false,
             cross_tenant_read: None,
         }

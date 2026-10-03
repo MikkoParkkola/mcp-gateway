@@ -2,9 +2,11 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """NFR.BUILD.1 C6 sampler: hash-ordered Critical rows per named path.
-usage: c6_mutation_sample.py NONCE [INVENTORY] -> prints every Critical row
-ranked within its path as rank, status, path, file, qualified, occurrence,
-reason; the first QUOTA[path] ranks are SAMPLE, later ranks understudies."""
+usage: c6_mutation_sample.py NONCE [FRAME] -> prints every Critical row of the
+frame ranked within its path as rank, status, path, file, qualified,
+occurrence, reason; the first QUOTA[path] ranks are SAMPLE, later ranks
+understudies. FRAME defaults to the frozen sampling frame, never the live
+inventory: the draw must not move when the inventory is edited."""
 import sys, hashlib
 P = {"startup": ["src/gateway/server/"], "OAuth": ["src/oauth/"],
      "HTTP dispatch": ["src/transport/http/", "src/gateway/router/"],
@@ -13,7 +15,7 @@ P = {"startup": ["src/gateway/server/"], "OAuth": ["src/oauth/"],
      "tasks": ["src/gateway/task_service/", "src/gateway/router/handlers/tasks.rs", "src/gateway/meta_mcp/task_confirmation"],
      "account paths": ["src/personal_accounts/", "src/gateway/server/account_bindings.rs", "src/config/account_bindings.rs", "src/identity_propagation/"]}
 QUOTA = {"account paths": 16, "HTTP dispatch": 16}  # others 8 (bridge has 4)
-nonce, inv = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "docs/release/v4.0.0-critical-functions.tsv")
+nonce, inv = sys.argv[1], (sys.argv[2] if len(sys.argv) > 2 else "docs/release/v4.0.0-c6-sampling-frame.tsv")
 by = {}
 for line in open(inv, encoding="utf-8"):
     f = line.rstrip("\n").split("\t")

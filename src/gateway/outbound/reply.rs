@@ -32,6 +32,16 @@ pub(crate) async fn judged_reply(
     OutboundReply(super::emit_http(response, log).await)
 }
 
+/// [`judged_reply`], also saying whether the answer went out as built (`false`:
+/// a failed read record replaced it): what a relay receipt may follow.
+pub(crate) async fn judged_reply_checked(
+    response: Response,
+    log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+) -> (OutboundReply, bool) {
+    let (response, written) = super::emit_http_checked(response, log).await;
+    (OutboundReply(response), written)
+}
+
 /// A response whose frames are judged one by one by a stream judge (the
 /// listen stream, the GET session stream, the POST-SSE stream).
 pub(crate) fn stream_reply(response: Response) -> OutboundReply {

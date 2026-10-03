@@ -114,15 +114,18 @@ impl EventsHub {
         let mut body: Value =
             serde_json::from_slice(&bytes).map_err(|_| ReplayRefusal::Unavailable)?;
         let mut data = body["data"].take();
+        let before = data.clone();
         let subject = Subject {
             event_id,
             principal: &sub.principal,
             backend: &dead.record.backend,
             name: &dead.record.name,
         };
-        if services.scan(&mut data, &subject) == Scan::Block {
+        let scan = services.scan(&mut data, &subject);
+        if scan == Scan::Block {
             return Err(ReplayRefusal::FirewallBlocked);
         }
+        let verdict = services.firewall_verdict(scan, data != before);
         body["data"] = data;
         let bytes = serde_json::to_vec(&body).map_err(|_| ReplayRefusal::Unavailable)?;
         if bytes.len() > MAX_BODY {
@@ -137,6 +140,7 @@ impl EventsHub {
             state: OutboxState::Pending,
             last_status: None,
             dead_as: None,
+            firewall: Some(verdict.to_owned()),
             ..dead.record.clone()
         };
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);
@@ -147,6 +151,24 @@ impl EventsHub {
         {
             Some(Revived::Written) => {
                 self.runtime.wake.notify_one();
+                let host = url::Url::parse(&sub.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_owned))
+                    .unwrap_or_default();
+                services
+                    .audit_lifecycle(
+                        &super::governance::Lifecycle {
+                            action: "events.replay",
+                            subscription_id: &sub.id,
+                            event_name: &dead.record.name,
+                            callback_host: &host,
+                            detail: "replayed",
+                            event_id: Some(event_id),
+                            ok: true,
+                        },
+                        None,
+                    )
+                    .await;
                 Ok(())
             }
             Some(Revived::NoSubscription) => Err(ReplayRefusal::SubscriptionGone),
