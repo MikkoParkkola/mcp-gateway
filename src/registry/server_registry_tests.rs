@@ -187,7 +187,7 @@ fn the_init_starter_set_is_exactly_the_no_login_ready_servers() {
     // engine at gateway start (src/gateway/server/warmstart.rs).
     assert_eq!(
         names(RegistryEntry::default_enabled),
-        ["context7", "memory", "sequential-thinking"]
+        ["context7", "memory", "sequential-thinking", "time"]
     );
 }
 
@@ -195,7 +195,7 @@ fn the_init_starter_set_is_exactly_the_no_login_ready_servers() {
 fn every_server_that_can_reach_any_address_is_classified_on_purpose() {
     assert_eq!(
         names(|e| matches!(e.reach, Reach::Arbitrary { .. })),
-        ["fetch", "playwright"]
+        ["chrome-devtools", "fetch", "git", "playwright"]
     );
     assert!(
         all()

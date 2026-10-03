@@ -96,6 +96,7 @@ mod prompt_cache;
 mod protocol;
 mod resources;
 pub(crate) mod response_security;
+pub(crate) use response_security::error_response_preserving_status;
 #[cfg(test)]
 mod response_security_tests;
 mod search;
@@ -330,71 +331,6 @@ impl<'a> MetaMcpCallerContext<'a> {
     }
 }
 
-/// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
-/// status when the error is an authorization refusal.
-///
-/// The refusal already knows its status; every other error does not carry one
-/// and gets the caller's default. The status rides in the error's optional
-/// `data` because that is the only channel that survives this conversion —
-/// `JsonRpcResponse` has no status of its own, and re-deriving one at the HTTP
-/// boundary from the JSON-RPC code cannot work: eight of the nine refusal
-/// branches emit the generic `-32600`, and `-32003` already means something
-/// else elsewhere.
-fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
-    let mut response = match error {
-        crate::Error::ResponseFirewallRefused => JsonRpcResponse::delivery_refusal_error(
-            Some(id),
-            error.to_rpc_code(),
-            &error.to_string(),
-        ),
-        _ => JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
-    };
-    if let Some(ref mut rpc_error) = response.error {
-        // Written unconditionally, so this function is the sole authority on
-        // the field. `JsonRpcResponse::error` starts it at `None` and nothing
-        // else in the gateway writes it today, but a future path that forwarded
-        // a backend's error data could otherwise hand a backend the power to
-        // choose the gateway's HTTP status. Assigning both arms closes that
-        // without depending on the audit staying true.
-        rpc_error.data = match error {
-            crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
-                crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
-            })),
-            // D1-f: the log is down, not the caller wrong. 503 so an operator
-            // and a load balancer read it as unavailability.
-            crate::Error::AuditUnavailable => Some(serde_json::json!({
-                crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
-            })),
-            // A gateway-authored refusal may carry a recovery payload the
-            // client needs: MRTR.9 names the capability an input request would
-            // have required and MRTR.9a the mode, which is the difference
-            // between a client that can fix its declaration and retry and one
-            // that only sees prose. Named keys only, never the whole object:
-            // `invoke_tool` puts a *backend's* error data into this variant, and
-            // forwarding it wholesale would hand a backend the status field.
-            crate::Error::JsonRpc {
-                data: Some(data), ..
-            } => {
-                let forwarded: serde_json::Map<String, serde_json::Value> = [
-                    invoke::REQUIRED_CAPABILITIES_DATA_KEY,
-                    invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
-                ]
-                .into_iter()
-                .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
-                .collect();
-                // `None` rather than `{}`: a backend error carrying none of these
-                // keys leaves `data` absent exactly as when one key was forwarded.
-                (!forwarded.is_empty()).then_some(serde_json::Value::Object(forwarded))
-            }
-            _ => None,
-        };
-        // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
-        rpc_error.data =
-            crate::personal_accounts::refusal::offer_data(error).or(rpc_error.data.take());
-    }
-    response
-}
-
 /// Meta-MCP handler — the central dispatcher for all gateway meta-tools.
 // Independent, unrelated switches on a long-lived handler. A state machine
 // over their product would have more states than the struct has fields.
@@ -595,6 +531,9 @@ pub struct MetaMcp {
     /// Zero overhead when `None` — no allocation or I/O on the hot path.
     pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
 
+    /// MIK-7116.MIN.2: auditor of withheld frames, built on first use.
+    rejection_audit: std::sync::OnceLock<Arc<crate::gateway::outbound::RejectionAudit>>,
+
     /// Response-side anomaly screening action mode (issue #133, D2).
     ///
     /// When `true`, responses with HIGH/CRITICAL inspection findings are blocked
@@ -738,6 +677,7 @@ impl MetaMcp {
             claim_capture: None,
             require_nonce: false,
             transparency_logger: None,
+            rejection_audit: std::sync::OnceLock::new(),
             response_inspection_action_mode: false,
             response_contract: None,
             attestation_validator: None,
@@ -1767,16 +1707,7 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && self.admits_backend(&cap.name, scope, session_id)
         {
-            let mut caps = cap.list_capabilities();
-            caps.retain(|c| {
-                self.may_invoke(&cap.name, &c.name, scope, session_id)
-                    .is_ok()
-            });
-            for c in &mut caps {
-                c.metadata
-                    .chains_with
-                    .retain(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok());
-            }
+            let caps = self.guide_capabilities(&cap, scope, session_id);
             let routing = build_routing_instructions(&caps, &cap.name);
             if !routing.is_empty() {
                 instructions.push_str(&routing);
@@ -2682,6 +2613,10 @@ mod account_entry_point_authz_tests;
 #[path = "search_ranking_authz_tests.rs"]
 mod search_ranking_authz_tests;
 
+#[cfg(test)]
+#[path = "search_login_gate_tests.rs"]
+mod search_login_gate_tests;
+
 /// Whether the peer behind `backend` has had `method` removed from under it
 /// (MIK-7217, OUTBOUND.1).
 ///
@@ -2782,3 +2717,7 @@ mod session_cleanup_tests;
 #[cfg(test)]
 #[path = "session_inflight_tests.rs"]
 mod session_inflight_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "dispatch_reads_tests.rs"]
+mod dispatch_reads_tests;

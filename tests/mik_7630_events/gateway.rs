@@ -15,6 +15,9 @@ const IO_TIMEOUT: Duration = Duration::from_secs(30);
 pub const ALICE: &str = "events-test-alice-key-0123456789abcdef";
 pub const BOB: &str = "events-test-bob-key-0123456789abcdef00";
 pub const CAROL: &str = "events-test-carol-key-0123456789abcdef";
+/// An API key with admin standing (the dead-letter routes) and no backend a
+/// subscription could use.
+pub const ADMIN: &str = "events-test-admin-key-0123456789abcdef0";
 pub const EVENT: &str = "webhook.github.push.received";
 
 /// A webhook-only capability whose `push` route opts into an MCP event.
@@ -46,6 +49,12 @@ fn key(name: &str, key: &str, backends: &[&str]) -> Value {
     })
 }
 
+fn admin_key(name: &str, key_text: &str, backends: &[&str]) -> Value {
+    let mut admin = key(name, key_text, backends);
+    admin["admin"] = json!(true);
+    admin
+}
+
 /// A config with auth on, the `github` capability under backend `hooks`, and
 /// `events` merged over the supplied object.
 pub fn config(root: &Path, events: &Value) -> Value {
@@ -69,6 +78,7 @@ pub fn config(root: &Path, events: &Value) -> Value {
             key("alice", ALICE, &["hooks"]),
             key("bob", BOB, &["other"]),
             key("carol", CAROL, &["hooks"]),
+            admin_key("admin", ADMIN, &["admin-only"]),
         ]},
         "capabilities": {"enabled": true, "name": "hooks",
             "directories": [caps.to_string_lossy()]},
@@ -252,6 +262,9 @@ impl Gateway {
     /// A modern `/mcp` request as `api_key` (none = no credential).
     pub async fn rpc(&self, api_key: Option<&str>, method: &str, params: Value) -> Value {
         let mut params = params;
+        let name = (method == "tools/call")
+            .then(|| params["name"].as_str().map(str::to_owned))
+            .flatten();
         params["_meta"] = json!({
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
             "io.modelcontextprotocol/clientCapabilities": {},
@@ -264,6 +277,9 @@ impl Gateway {
             .header("mcp-protocol-version", "2026-07-28")
             .header("mcp-method", method)
             .json(&body);
+        if let Some(name) = name {
+            request = request.header("mcp-name", name);
+        }
         if let Some(key) = api_key {
             request = request.bearer_auth(key);
         }
@@ -273,6 +289,42 @@ impl Gateway {
             .unwrap_or_else(|e| panic!("POST /mcp: {e}; logs={}", self.logs()));
         let text = response.text().await.expect("body");
         serde_json::from_str(&text).unwrap_or_else(|e| panic!("non-JSON answer {e}: {text}"))
+    }
+
+    /// One request to the admin HTTP API as `api_key`: the status and the JSON
+    /// body (the raw text when it is not JSON).
+    pub async fn admin(&self, api_key: Option<&str>, method: &str, path: &str) -> (u16, Value) {
+        let method = reqwest::Method::from_bytes(method.as_bytes()).expect("HTTP method");
+        let mut request = self.client.request(method, format!("{}{path}", self.url));
+        if let Some(key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        let response = request
+            .send()
+            .await
+            .unwrap_or_else(|e| panic!("{path}: {e}; logs={}", self.logs()));
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        (
+            status,
+            serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        )
+    }
+
+    /// `tools/call` of meta-tool `tool` as `api_key`: the document the tool
+    /// put in its content text.
+    pub async fn tool_call(&self, api_key: &str, tool: &str, arguments: Value) -> Value {
+        let answer = self
+            .rpc(
+                Some(api_key),
+                "tools/call",
+                json!({"name": tool, "arguments": arguments}),
+            )
+            .await;
+        let text = answer["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{tool} answers content text: {answer}"));
+        serde_json::from_str(text).unwrap_or_else(|e| panic!("{tool} document {e}: {text}"))
     }
 
     /// `events/list` names visible to `api_key`, polled until `want` shows up

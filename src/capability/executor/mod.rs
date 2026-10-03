@@ -26,6 +26,7 @@ pub mod graphql;
 pub mod jsonrpc;
 mod params;
 mod process;
+mod readiness;
 pub mod rest;
 mod xml;
 
@@ -338,6 +339,7 @@ impl CapabilityExecutor {
                     .await?;
                 (response, protocol_config.protocol_name())
             };
+        let read = crate::security::tenant_reads::note_read(&response);
 
         // Apply response transform pipeline if configured
         let response = {
@@ -358,8 +360,8 @@ impl CapabilityExecutor {
             "Capability executed successfully"
         );
 
-        if let Some(ref cache_key) = cache_key {
-            self.cache.set(cache_key, &response, capability.cache.ttl);
+        if let Some(key) = &cache_key {
+            self.cache.set(key, &response, read, capability.cache.ttl);
         }
 
         Ok(response)

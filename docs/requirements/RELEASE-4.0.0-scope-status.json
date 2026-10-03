@@ -1313,7 +1313,7 @@
       "stage": "graded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.2). Audited at release tip e83b5fd5a. PARTIAL. TenantGuard refuses a principal past max_tenants_per_window distinct tenants in a window (tenant_guard.rs:55-65, default 3, off by default), keyed on the principal (MIK-7116.TENANT.1), with refusal tests in tests/mik_7116_tenant_acs.rs:29-228. With the limit at 1 that blocks an A-then-B pattern, but it counts tenant ids in request arguments, not sensitive data attributed on the response, and the allowed read is not audited (see MIN.1). 4.0.0 delivers this in observe mode (Warn, per MIN.4); blocking by default stays behind the ticket's kill gate MIN.KILL (decision mik_7116_min_kill_gate)."
+      "note": "2026-10-02 (lead ruling): UNGRADED until the compile-time route typing PR merges (one outbound last hop, judge_frame the only frame constructor). The runtime verdict ships in #2640; the typing follows as a separate 4.0 PR so #2640's review is not reopened. Also next in 4.0: fold the tenant_read record into the delivery record (opt-in keyed mode with the transparency log costs +82 us/call; NFR.WORKLOAD.1). E1 (MIK-7630 event deliveries) waits for #2651.\n\n--- prior note follows ---\nAdded 2026-09-29 under operator chat ruling C1 (Linear MIK-7116, milestone v4.0.0; AC MIK.MCPGW.MIN.2). Audited at release tip e83b5fd5a. PARTIAL. TenantGuard refuses a principal past max_tenants_per_window distinct tenants in a window (tenant_guard.rs:55-65, default 3, off by default), keyed on the principal (MIK-7116.TENANT.1), with refusal tests in tests/mik_7116_tenant_acs.rs:29-228. With the limit at 1 that blocks an A-then-B pattern, but it counts tenant ids in request arguments, not sensitive data attributed on the response, and the allowed read is not audited (see MIN.1). 4.0.0 delivers this in observe mode (Warn, per MIN.4); blocking by default stays behind the ticket's kill gate MIN.KILL (decision mik_7116_min_kill_gate)."
     },
     {
       "id": "MIK-7116.MIN.4",
@@ -1635,11 +1635,14 @@
     },
     {
       "id": "MIK-7630.EVENTS.4",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T22's TTL clause requests 1000 ms against a 1 s floor, so the upward clamp to min_ttl is not exercised; stays pending under MIK-7783."
+      "evidence": [
+        "tests/mik_7630_events_subscribe.rs",
+        "tests/mik_7630_events_delivery_lifecycle.rs"
+      ],
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783). T22 subscribe half (tests/mik_7630_events_subscribe.rs:316): ttlMs absent, above max_ttl, null and 1000 against a 1 s floor, persistence across a restart, the expiry sweep on load; floor clause (tests/mik_7630_events_subscribe.rs:656): ttlMs 1000 against the default 60 s floor is raised to it; T22 delivery half (tests/mik_7630_events_delivery_lifecycle.rs:60): an event is delivered after a restart with no re-subscribe and no new verification. No red run: the floor test pins a clause the I2 code already met (it ran green on its own branch, CI run 37061836780). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.EVENTS.5",
@@ -1726,7 +1729,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending. Reviewed 2026-10-03 after #2718 (10bf73dde): the audit-before-POST change and the body-free assertion are merged; stays pending until T29's tenant-attribution assertion checks the attributed values rather than the key's presence (review finding), and the no-POST clause gets a worker-level test."
     },
     {
       "id": "MIK-7630.SAFETY.3",
@@ -1746,11 +1749,17 @@
     },
     {
       "id": "MIK-7630.SAFETY.5",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the delivery rows pass, but T28 substitutes a 0.01 budget for 0 and does not assert the budget-ledger charge attempt; stays pending under MIK-7783."
+      "evidence": [
+        "tests/mik_7630_events_subscribe.rs",
+        "tests/mik_7630_events_delivery_safety.rs",
+        "tests/mik_7630_events_delivery_store.rs",
+        "src/events/rate.rs",
+        "src/events/store_pending_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7783 and MIK-7791). T26 (tests/mik_7630_events_subscribe.rs:443) and T51 (:498) subscription caps; T48 (:626) verification posts per host; T45 (tests/mik_7630_events_delivery_store.rs:172) outbox caps; T27 (tests/mik_7630_events_delivery_safety.rs:283) delay not drop with throttled reported from the bucket and the waiting deliveries (src/events/rate.rs burst_then_paced_and_reports_empty; src/events/store_pending_tests.rs has_due_sees_a_pending_record_behind_one_in_flight); T28 (tests/mik_7630_events_delivery_safety.rs:324) a refused budget dead-letters budget and leaves an audit record status budget (a refused check records no spend), :347 a delivery is charged against the key budget (1.5 budget, 1.0 charge: the first posts, the second dead-letters), :369 a zero per-key budget is no limit as for tool calls. No red run for the added tests (they pin clauses already met; run 37061836780 and 37062145389 ran them green on their branches). Mutants H1, H2, T1, T2 and C1 RED (C1 on the final head). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.SAFETY.6",
@@ -1766,11 +1775,15 @@
     },
     {
       "id": "MIK-7630.RELIABLE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but retry_window is not capped at 15 minutes (MIK-7784); stays pending."
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs",
+        "src/events/worker_tests.rs",
+        "src/config/features/events.rs"
+      ],
+      "note": "Graded 2026-10-03 at 10bf73dde (PR #2718, MIK-7784). T32 (tests/mik_7630_events_delivery.rs:292): a receiver that always answers 503 gets five attempts (six allowed: a crash may duplicate one) with one webhook-id, then one dead letter exhausted, and a restart resumes the same record; src/events/worker_tests.rs:39 (other_failures_retry_with_bounded_backoff_then_exhaust): exponential backoff with jitter, bounded by the attempt limit; src/events/worker_tests.rs:90: a retry at the window's end is overdue before it is sent; src/config/features/events.rs a_retry_window_over_fifteen_minutes_is_refused_by_name: a window above 15 minutes is refused at load naming the field. Red first: CI run 37061829649 on the tests-only head ed01e529f failed that test and the audit-refusal test at their own assertions (7752 others passed). Mutants R1 (cap removed) and R2 (cap off by one) RED on b12829d81 (run 37073489208). Green: CI run 37075490955 at head c137cf2a4 (Tests, Clippy, Windows, macOS, feature checks), merged as 10bf73dde (PR #2718). Reviews: gpt and grok on each part and on the delta after bot threads (SHIP after fixes); eight bot threads answered FIXED."
     },
     {
       "id": "MIK-7630.RELIABLE.2",

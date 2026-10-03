@@ -59,6 +59,9 @@ mod support;
 /// COLLUDE.1 M9: a task's relay receipt is committed at settlement.
 #[cfg(feature = "firewall")]
 mod relay_settlement;
+/// COLLUDE.1 M15: an upstream task's result is a relay source.
+#[cfg(feature = "firewall")]
+mod relay_upstream;
 
 /// D3-a: grant decision records at the route.
 mod grant_decision_tasks;

@@ -18,6 +18,9 @@ pub(crate) struct Caller {
     /// The canonical principal; `None` when the call is not authenticated
     /// (or authentication is off).
     pub principal: Option<String>,
+    /// The caller key the read verdict judges this caller's frames under;
+    /// `None` when the verdict is off or the caller has no identity.
+    pub read_key: Option<String>,
     /// The credential the caller presented.
     pub credential: Credential,
     /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
@@ -77,6 +80,35 @@ impl EventsHub {
             .map(EventDescriptor::to_wire)
             .collect();
         Ok(json!({ "events": events }))
+    }
+
+    /// Catalogue entries a keyword search finds (a case-insensitive
+    /// substring of name or description), for the callers `visible` admits,
+    /// as `gateway_search` entries (design §3.9, §18), at most `limit`.
+    pub(crate) fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        visible: impl Fn(&Visibility) -> bool,
+    ) -> Vec<Value> {
+        let query = query.to_lowercase();
+        self.catalogue()
+            .iter()
+            .filter(|d| visible(&d.scope))
+            .filter(|d| {
+                d.name.to_lowercase().contains(&query)
+                    || d.description.to_lowercase().contains(&query)
+            })
+            .take(limit)
+            .map(|d| {
+                json!({
+                    "kind": "event",
+                    "name": d.name,
+                    "description": d.description,
+                    "inputSchema": d.input_schema,
+                })
+            })
+            .collect()
     }
 
     /// The visible descriptor called `name`; invisible and missing are one
@@ -306,6 +338,7 @@ impl EventsHub {
             api_key: caller.credential.api_key.clone(),
             credential_kind: Some(caller.credential.kind),
             credential_principal: Some(caller.credential.principal.clone()),
+            read_key: caller.read_key.clone(),
             binding: caller.credential.binding.clone(),
             legacy_api_key_name: None,
             url: url.as_str().to_owned(),
