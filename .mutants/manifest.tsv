@@ -1,0 +1,6 @@
+head_sha	727fa16ff45d285358e94347b72fe384dcfe9a5d
+# #2757 direct receipts after the read verdict
+R1	linux	r1.patch	--lib -- direct_read_records_no_receipt
+R2	linux	r2.patch	--lib -- direct_read_records_no_receipt
+R3	linux	r3.patch	--lib -- an_audit_withheld_direct_read
+R6	linux	r6.patch	--lib -- a_read_record_failure_leaves_no_direct_receipt
