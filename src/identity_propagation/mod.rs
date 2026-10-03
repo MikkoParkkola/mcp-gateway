@@ -46,7 +46,7 @@ mod caller_proof;
 mod token_exchange;
 
 pub(crate) use account_strategies::{
-    AccountCredential, AccountStrategyRegistry, InstalledAccount, PreparedAccountCredential,
+    AccountCredential, AccountStrategyRegistry, InstalledAccount, Minter, PreparedAccountCredential,
 };
 pub(crate) use caller_proof::{CallerProof, CallerProvenance};
 pub use token_exchange::TokenExchangeStrategy;
@@ -284,33 +284,25 @@ impl IdentityPropagationConfig {
                     .to_string(),
             ));
         }
-        // Signed-assertion, passthrough, token-exchange and vault are
-        // implemented; a required backend configured for any other strategy
-        // must fail closed, not silently run without propagation.
+        // Every strategy kind is implemented (signed-assertion, passthrough,
+        // token-exchange, vault), so a required backend has no unimplemented
+        // strategy to refuse here. The match has no wildcard on purpose: a new
+        // kind does not compile until someone decides, here, whether a
+        // required backend may use it or must fail closed (IDP.2) rather than
+        // silently run without propagation.
         //
         // `Vault` joined the list when managed personal-account custody became
         // the strategy behind it: a `personal_managed` descriptor compiles to
         // this kind, and the gateway installs a per-backend vault strategy
         // whose custody handle is claimed before Serving. A vault config that
-        // reaches dispatch without that installation still refuses — at the
-        // resolver, which is where "no strategy is configured" is decided —
-        // rather than being downgraded here.
-        if self.required
-            && !matches!(
-                self.strategy,
-                PropagationStrategyKind::SignedAssertion
-                    | PropagationStrategyKind::Passthrough
-                    | PropagationStrategyKind::TokenExchange
-                    | PropagationStrategyKind::Vault
-            )
-        {
-            return Err(PropagationError::Misconfigured(format!(
-                "strategy {:?} is not implemented yet; a required backend cannot fall back \
-                 (IDP.2). Use signed_assertion or track the strategy's ticket.",
-                self.strategy
-            )));
+        // reaches dispatch without that installation still refuses, at the
+        // resolver, which is where "no strategy is configured" is decided.
+        match self.strategy {
+            PropagationStrategyKind::SignedAssertion
+            | PropagationStrategyKind::Passthrough
+            | PropagationStrategyKind::TokenExchange
+            | PropagationStrategyKind::Vault => Ok(()),
         }
-        Ok(())
     }
 }
 
