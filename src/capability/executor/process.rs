@@ -93,11 +93,14 @@ impl CapabilityExecutor {
         admit(&self.process_policy, capability, process)?;
         let params = &with_schema_defaults(params, &capability.schema.input);
         match process {
+            // Boxed: these futures nest the whole stdio transport, and an
+            // unboxed chain overflows rustc's auto-trait recursion limit on
+            // Windows (grant_audit's Box::pin of the invoke future).
             ProcessConfig::Cli(config) => {
-                self.execute_cli(capability, config, params, context).await
+                Box::pin(self.execute_cli(capability, config, params, context)).await
             }
             ProcessConfig::Mcp(config) => {
-                self.execute_mcp(capability, config, params, context).await
+                Box::pin(self.execute_mcp(capability, config, params, context)).await
             }
         }
     }

@@ -531,7 +531,15 @@ impl CapabilityExecutor {
 
         let body = self.handle_response(response, config).await?;
         match &config.save_file {
-            Some(spec) => save_file::save(spec, &body, params, &self.process_policy.files).await,
+            Some(spec) => {
+                Box::pin(save_file::save(
+                    spec,
+                    &body,
+                    params,
+                    &self.process_policy.files,
+                ))
+                .await
+            }
             None => Ok(body),
         }
     }
