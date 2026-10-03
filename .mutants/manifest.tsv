@@ -1,0 +1,4 @@
+head_sha	4bc670a8d53ca2f288b8ce9e12f4c8b5d10fe729
+# #2768 meta HTTP receipts after the last replacer
+H1	linux	h1.patch	--lib -- meta_read_record_failure
+H2	linux	h2.patch	--lib -- meta_tenant_withheld
