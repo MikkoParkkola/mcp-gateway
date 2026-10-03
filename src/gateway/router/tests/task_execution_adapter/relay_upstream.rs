@@ -126,14 +126,14 @@ async fn upstream_task_result_is_a_relay_source() {
         Duration::from_secs(60),
     ));
     backend.set_transport_for_test(Arc::new(Peer));
-    assert!(state.backends.register(backend));
-    assert!(state.task_executor.install_recovery(Arc::new(Recovery)));
+    std::assert!(state.backends.register(backend));
+    std::assert!(state.task_executor.install_recovery(Arc::new(Recovery)));
 
     let created = post(&state, "key-a", task_invoke(1, "relay-upstream", json!({}))).await;
     let id = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &id).await;
-    assert_eq!(status_of(&settled), "completed", "base: {settled}");
-    assert!(
+    std::assert_eq!(status_of(&settled), "completed", "base: {settled}");
+    std::assert!(
         settled.to_string().contains("orchard"),
         "base: the upstream answer settled the task: {settled}"
     );
@@ -152,7 +152,7 @@ async fn upstream_task_result_is_a_relay_source() {
         if answer["error"]["code"] == -32002 {
             return;
         }
-        assert!(
+        std::assert!(
             tokio::time::Instant::now() < deadline,
             "the upstream result was never recorded: {answer}"
         );
