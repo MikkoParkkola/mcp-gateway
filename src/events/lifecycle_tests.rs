@@ -388,6 +388,8 @@ async fn receiver() -> Receiver {
 /// signed POST to the subscriber's HTTPS receiver, through the unchanged core.
 #[tokio::test]
 async fn a_test_source_event_reaches_a_receiver() {
+    use base64::Engine as _;
+    use hmac::{KeyInit as _, Mac as _};
     let rx = receiver().await;
     let dir = tempfile::tempdir().expect("dir");
     let config = crate::config::EventsConfig {
@@ -431,20 +433,13 @@ async fn a_test_source_event_reaches_a_receiver() {
         !id.is_empty() && !timestamp.is_empty(),
         "id and timestamp present"
     );
-    let key = {
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD
-            .decode(whsec().trim_start_matches("whsec_"))
-            .expect("secret decodes")
-    };
-    use hmac::{KeyInit as _, Mac as _};
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(whsec().trim_start_matches("whsec_"))
+        .expect("secret decodes");
     let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&key).expect("key");
     mac.update(format!("{id}.{timestamp}.").as_bytes());
     mac.update(&posts[0].1);
-    let expected = {
-        use base64::Engine as _;
-        base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
-    };
+    let expected = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
     assert!(
         signatures
             .split(' ')
