@@ -1,0 +1,4 @@
+head_sha	9281ef158cd8b5cc529a48a01647853f3a868d07
+# #2795 one relay refusal message
+M1	linux	m1.patch	--lib -- a_relay_is_refused_before_dispatch
+M2	linux	m2.patch	--lib -- collusion_direct_tests
