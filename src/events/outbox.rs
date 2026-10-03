@@ -34,6 +34,16 @@ pub(crate) struct OutboxRecord {
     /// Hashed tenant attribution of `data` (MIN.1), fixed at fan-out.
     #[serde(default)]
     pub tenants: Vec<String>,
+    /// What `data` named before the event firewall redacted it (MIN.2 E1),
+    /// fixed at fan-out for the read verdict at delivery. Absent on older
+    /// records: they count as unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<crate::security::tenant_reads::ReadAttribution>,
+    /// The `arg_keys` `attribution` was taken under: after a policy change
+    /// it names tenants the new keys might see differently, so it counts
+    /// only while they match.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attribution_keys: Vec<String>,
     /// Attempts started so far.
     pub attempt: u32,
     pub next_attempt_at: DateTime<Utc>,
@@ -58,6 +68,16 @@ impl OutboxRecord {
             .ok()
     }
 
+    /// The attribution, while the policy it was taken under still holds.
+    pub(crate) fn attribution_under(
+        &self,
+        keys: &[String],
+    ) -> Option<&crate::security::tenant_reads::ReadAttribution> {
+        self.attribution
+            .as_ref()
+            .filter(|_| self.attribution_keys == keys)
+    }
+
     pub(crate) fn file(event_id: &str) -> String {
         format!("{event_id}.json")
     }
@@ -72,6 +92,8 @@ pub(crate) enum DeadReason {
     Exhausted,
     FirewallBlocked,
     Budget,
+    /// The cross-tenant read verdict withheld it (MIN.2 E1).
+    Tenant,
 }
 
 impl DeadReason {
@@ -82,6 +104,7 @@ impl DeadReason {
             Self::Exhausted => "exhausted",
             Self::FirewallBlocked => "firewall_blocked",
             Self::Budget => "budget",
+            Self::Tenant => "tenant",
         }
     }
 }

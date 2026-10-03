@@ -240,17 +240,15 @@ async fn a_rotated_static_bearer_stops_delivery() {
 /// T25 (SAFETY.3): each delivery is a read by the subscription principal in
 /// MIN.2's per-principal window. Tenants come from `repo` (`arg_keys`).
 /// Alice receives a tenant `t1` event, then a `t2` event that crosses the
-/// cross-tenant threshold: observe mode delivers both and the second's audit
-/// record carries `cross_tenant: "would_block"`.
+/// cross-tenant threshold: observe mode delivers both and the second's
+/// attempt record carries `cross_tenant_read: "flagged"`.
 /// Substitutions: the T1 history is seeded by a T1 event delivery instead of
 /// a tool call (the fixture has no tenant-attributed backend tool), and the
-/// block-mode clause (dead letter `tenant`) is not written: MIN.2 ships in
-/// observe mode only (operator ruling C3) and this tree has no block switch.
+/// block-mode clause (dead letter `tenant`) is the next test.
 /// Assumption: I2 counts every event delivery as a sensitive read (design
 /// §3.7, "each delivery is treated as a read"); MIN.2 records only sensitive
 /// reads, so without that the row cannot go green.
 #[tokio::test]
-#[ignore = "needs MIN.2 ReadHistory; un-ignored by the MIN.2 E1 conversion (MIK-7116 test 2v)"]
 async fn tenant_guard_applies_to_event_payloads() {
     let root = tempfile::tempdir().expect("root");
     let rx = Receiver::start(root.path()).await;
@@ -270,10 +268,29 @@ async fn tenant_guard_applies_to_event_payloads() {
     let flagged = wait_until(DEADLINE, || {
         delivery::audit_mentioning(&root_path, &second)
             .iter()
-            .any(|r| r["cross_tenant"] == "would_block")
+            .any(|r| r["cross_tenant_read"] == "flagged")
     })
     .await;
     assert!(flagged, "the cross-tenant delivery is flagged in the audit");
+}
+
+/// T25, block mode (MIK-7116 test 2v): the second tenant's delivery is
+/// withheld and dead-lettered `tenant`; the first still arrived.
+#[tokio::test]
+async fn tenant_guard_blocks_a_cross_tenant_event_delivery() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["security"]["firewall"] =
+        json!({"tenant_guard": {"arg_keys": ["repo"], "cross_tenant_reads": "block"}});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-25c", "t1").await;
+    events_at_least(&rx, 1).await;
+    fire(&gw, "d-25d", "t2").await;
+    dead_with_reason(root.path(), "tenant").await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(rx.events().len(), 1, "the cross-tenant event is not sent");
 }
 
 /// T27 (SAFETY.5): over the per-subscription rate, delivery is delayed, not
