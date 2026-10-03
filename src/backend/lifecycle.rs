@@ -16,7 +16,6 @@ use tracing::{debug, info, warn};
 use super::pool::{PoolKey, PooledEntry};
 use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
-use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
 use crate::transport::{HttpTransport, Transport};
 use crate::{Error, Result};
@@ -378,14 +377,18 @@ impl Backend {
             .stopped_when_idle
             .store(false, std::sync::atomic::Ordering::SeqCst);
 
+        let listen: Option<super::listen::ListenHandle>;
         let transport: Arc<dyn Transport> = match &self.config.transport {
             TransportConfig::Stdio {
                 command,
                 cwd,
                 protocol_version,
             } => {
-                self.start_stdio_transport(command, cwd.as_ref(), protocol_version.as_ref())
-                    .await?
+                let transport = self
+                    .start_stdio_transport(command, cwd.as_ref(), protocol_version.as_ref())
+                    .await?;
+                listen = Some(super::listen::handle_of(&transport));
+                transport
             }
             TransportConfig::Http {
                 http_url,
@@ -436,14 +439,18 @@ impl Backend {
                     .await
                     .unwrap_or(crate::protocol::era::Era::Legacy);
                 transport.finish_startup(era).await?;
+                listen = Some(super::listen::handle_of(&transport));
                 transport
             }
             TransportConfig::WebSocket {
                 ws_url,
                 protocol_version,
             } => {
-                self.start_websocket(ws_url, protocol_version.clone())
-                    .await?
+                let transport = self
+                    .start_websocket(ws_url, protocol_version.clone())
+                    .await?;
+                listen = Some(super::listen::handle_of(&transport));
+                transport
             }
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { a2a_url, .. } => {
@@ -480,69 +487,13 @@ impl Backend {
             let _ = transport.close().await;
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
+        *entry.listen.write() = listen;
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()
         // would create infinite async recursion
 
         Ok(transport)
-    }
-
-    /// Create OAuth client if OAuth is configured for this backend
-    pub(super) fn create_oauth_client(&self, resource_url: &str) -> Result<Option<OAuthClient>> {
-        let oauth_config = match &self.config.oauth {
-            Some(cfg) if cfg.enabled => cfg,
-            _ => return Ok(None),
-        };
-
-        // F3 sink-side guard. Config::validate() rejects this pairing at load,
-        // but programmatic `Backend::new*()` and hot-reload `apply_patch()` build
-        // backends from a raw BackendConfig without revalidating. Enforce again
-        // here -- the last chokepoint before an OAuth client is created -- so an
-        // enabled backend OAuth client is never spun up alongside
-        // identity_propagation. The backend OAuth persists a gateway-held token
-        // during initialize(), authenticating the transport session as the
-        // gateway before any per-request per-user override, silently defeating
-        // per-user propagation. Fail closed at the sink.
-        if self.config.identity_propagation.is_some() {
-            return Err(Error::ConfigValidation(format!(
-                "backend '{}' cannot combine identity_propagation with its own enabled oauth \
-                 client: the backend oauth persists a gateway-held token during initialize(), \
-                 authenticating the transport session as the gateway before the per-request \
-                 credential override -- silently defeating per-user propagation (F3).",
-                self.name
-            )));
-        }
-
-        info!(backend = %self.name, "Initializing OAuth client");
-
-        let http_client = crate::oauth::client::destination::http_client(self.destination())?;
-
-        // Get or create token storage
-        let storage = Arc::new(
-            TokenStorage::default_location()
-                .map_err(|e| Error::OAuth(format!("Failed to create token storage: {e}")))?,
-        );
-
-        // Create OAuth client
-        let oauth = OAuthClient::with_destination(
-            self.destination(),
-            http_client,
-            self.name.clone(),
-            resource_url.to_string(),
-            oauth_config.scopes.clone(),
-            storage,
-            OAuthClientConfig {
-                client_id: oauth_config.client_id.clone(),
-                client_secret: oauth_config.client_secret.clone(),
-                callback_host: oauth_config.callback_host.clone(),
-                callback_port: oauth_config.callback_port,
-                callback_path: oauth_config.callback_path.clone(),
-                token_refresh_buffer_secs: oauth_config.token_refresh_buffer_secs,
-            },
-        );
-
-        Ok(Some(oauth))
     }
 
     pub(super) fn resolve_stdio_runtime_launch(

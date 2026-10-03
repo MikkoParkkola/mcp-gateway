@@ -122,3 +122,30 @@ async fn a_pending_report_does_not_outlive_its_backend() {
     tokio::time::sleep(QUIET * 2).await;
     assert!(events.try_recv().is_err(), "no event for a removed backend");
 }
+
+/// A `resource_updated` subscription hears only its own URI; the list-changed
+/// kinds carry no URI and match every subscriber.
+#[test]
+fn a_resource_update_matches_only_its_uri() {
+    let source = backend_source::BackendSource {
+        names: Arc::new(Vec::new),
+        upstream: None,
+    };
+    let event = |name: &str, data: serde_json::Value| fanout::SourceEvent {
+        kind: types::SourceKind::BackendNotification,
+        name: name.to_owned(),
+        backend: "x".to_owned(),
+        scope: types::Visibility::Backend("x".to_owned()),
+        upstream_id: "id".to_owned(),
+        occurred_at: chrono::Utc::now(),
+        data,
+    };
+    let updated = event(
+        "backend.x.resource_updated",
+        serde_json::json!({"uri": "b"}),
+    );
+    assert!(!source.matches("p", &serde_json::json!({"uri": "a"}), &updated));
+    assert!(source.matches("p", &serde_json::json!({"uri": "b"}), &updated));
+    let listed = event("backend.x.resources_changed", serde_json::json!({}));
+    assert!(source.matches("p", &serde_json::json!({}), &listed));
+}

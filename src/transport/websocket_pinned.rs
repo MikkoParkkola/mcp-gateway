@@ -44,7 +44,7 @@ impl super::WebSocketTransport {
         timeout: Duration,
         protocol_version: Option<String>,
         destination: DestinationPolicy,
-    ) -> Result<Arc<dyn super::Transport>> {
+    ) -> Result<Arc<Self>> {
         let transport = Self::build(url, headers.clone(), timeout, protocol_version, destination);
         // Boxed: the TLS upgrade future is large, and inlining it would grow
         // every future that can start a backend (clippy::large_futures).
