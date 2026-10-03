@@ -1084,6 +1084,8 @@ jobs:
       # OWASP self-assessment may cite only paths and tests that still exist.
       - name: Check the OWASP self-assessment cites the current tree
         run: python3 scripts/dev/test_check_owasp_citations.py
+      - name: Test the EVENTS.8 evidence script (a wrong run must FAIL)
+        run: python3 scripts/dev/test_events8_run.py
 
   registry-packages:
     name: Built-in server registry is pinned (MIK-7787)
