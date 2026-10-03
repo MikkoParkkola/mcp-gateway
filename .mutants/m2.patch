@@ -1,0 +1,18 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index cc3534178..7febd982e 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -333,9 +333,10 @@ impl MetaMcp {
+             status: 403,
+             message,
+         };
+-        Some(super::super::response_security::error_response_preserving_status(
+-            id.clone(),
+-            &refusal,
++        Some(crate::protocol::JsonRpcResponse::error(
++            Some(id.clone()),
++            -32002,
++            refusal.to_string(),
+         ))
+     }
+ 

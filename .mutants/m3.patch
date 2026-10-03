@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index cc3534178..df0fec897 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -633,7 +633,6 @@ impl MetaMcp {
+         // The form the caller is handed: the reserved chain and scope metadata
+         // are stripped at delivery, so the receipt must not describe them.
+         let mut recorded = prompt.clone();
+-        crate::security::signature_chain::strip_chain(&mut recorded);
+         crate::protocol::cacheable::clamp_delivered_scope(&mut recorded);
+         let Some(verdict) = classified.get("_context_integrity") else {
+             return recorded;

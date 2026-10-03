@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index cc3534178..0f367fe9c 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -324,7 +324,7 @@ impl MetaMcp {
+             who,
+             (backend, method),
+             params,
+-            (&caller.session, &caller.name),
++            ("", &caller.name),
+         )?;
+         // The same error `tools/call` refuses with, so the route stamps the
+         // same HTTP status (MIK-7832).
