@@ -224,9 +224,9 @@ async fn every_delivery_attempt_writes_one_attributed_audit_record() {
         let tenants = record["tenants"].as_array().expect("tenants array");
         assert!(
             !tenants.is_empty()
-                && tenants
-                    .iter()
-                    .all(|t| t.as_str().is_some_and(|h| !h.contains("canary"))),
+                && tenants.iter().all(|t| t
+                    .as_str()
+                    .is_some_and(|h| h.len() >= 8 && !h.contains("canary"))),
             "tenant attribution: {text}"
         );
     }
