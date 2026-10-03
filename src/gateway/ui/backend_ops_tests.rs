@@ -478,7 +478,6 @@ mod stop_when_idle_ui_tests {
             "owned",
             BackendUpdate {
                 stop_when_idle_for: Some(Some(Duration::from_secs(300))),
-                max_frame_bytes: None,
                 ..Default::default()
             },
         )
@@ -494,7 +493,6 @@ mod stop_when_idle_ui_tests {
             "owned",
             BackendUpdate {
                 stop_when_idle_for: Some(None),
-                max_frame_bytes: None,
                 ..Default::default()
             },
         )
@@ -513,7 +511,6 @@ mod stop_when_idle_ui_tests {
             "external",
             BackendUpdate {
                 stop_when_idle_for: Some(Some(Duration::from_secs(300))),
-                max_frame_bytes: None,
                 ..Default::default()
             },
         )
