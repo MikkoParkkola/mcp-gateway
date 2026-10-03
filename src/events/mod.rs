@@ -42,6 +42,7 @@ use parking_lot::RwLock;
 
 #[cfg(feature = "webui")]
 pub(crate) use admin::{ReplayRefusal, is_dead_reason};
+pub(crate) use fanout::CatalogueScan;
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
@@ -62,6 +63,8 @@ pub(crate) struct EventsHub {
     verify_limit: limiter::HostLimiter,
     sources: RwLock<Vec<Arc<dyn EventSource>>>,
     runtime: runtime::Runtime,
+    /// Held while the catalogue changes or is read to delete from it.
+    catalogue_gate: parking_lot::Mutex<()>,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -112,6 +115,7 @@ impl EventsHub {
             ),
             sources: RwLock::new(Vec::new()),
             runtime: runtime::Runtime::new(config, store_dir),
+            catalogue_gate: parking_lot::Mutex::new(()),
         }))
     }
 

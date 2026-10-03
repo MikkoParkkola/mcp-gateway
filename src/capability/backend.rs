@@ -155,7 +155,7 @@ pub struct CapabilityBackend {
     /// they may be set in either order at startup. Read by
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
-    initial_scan: std::sync::atomic::AtomicBool,
+    initial_scan: std::sync::atomic::AtomicU8,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -181,7 +181,7 @@ impl CapabilityBackend {
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
-            initial_scan: std::sync::atomic::AtomicBool::new(true), // see initial_scan.rs
+            initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
         }
     }
 
