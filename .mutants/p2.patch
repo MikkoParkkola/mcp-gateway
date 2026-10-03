@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_notify.rs b/src/gateway/meta_mcp/task_notify.rs
+index c52e912be..0e3e8d7aa 100644
+--- a/src/gateway/meta_mcp/task_notify.rs
++++ b/src/gateway/meta_mcp/task_notify.rs
+@@ -50,7 +50,7 @@ impl MetaMcp {
+                 super::grant_audit::slot_result(self.transparency_logger.as_ref(), async {
+                     let withheld = stored.is_none_or(refused);
+                     let params = match stored {
+-                        Some(task) if !withheld => serde_json::to_value(task.task.wire()).ok(),
++                        Some(task) => serde_json::to_value(task.task.wire()).ok(),
+                         _ => None,
+                     };
+                     let frame = match params {

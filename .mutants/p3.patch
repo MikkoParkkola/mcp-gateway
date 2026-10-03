@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_notify.rs b/src/gateway/meta_mcp/task_notify.rs
+index c52e912be..49f4088ca 100644
+--- a/src/gateway/meta_mcp/task_notify.rs
++++ b/src/gateway/meta_mcp/task_notify.rs
+@@ -71,7 +71,7 @@ impl MetaMcp {
+                     let delivered = self
+                         .record_notification_delivery_attempt(&frame, &correlation)
+                         .await;
+-                    Ok(delivered.then_some((frame, withheld)))
++                    Ok(Some((frame, withheld)))
+                 })
+                 .await
+                 .ok()

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 5d06eca44..2dc73a8f3 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -668,7 +668,7 @@ pub fn subscription_stream(
+                         Some(frames) if is_task_notification(&published.notification) => {
+                             let reader = listener.current_client().await;
+                             let Some(frame) = frames
+-                                .frame(&published.notification, &subscription, reader.as_ref())
++                                .frame(&published.notification, &subscription, None)
+                                 .await
+                             else {
+                                 // The frame could not be delivered auditably.
