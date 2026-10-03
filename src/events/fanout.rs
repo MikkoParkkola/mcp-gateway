@@ -30,6 +30,7 @@ pub(crate) struct SourceEvent {
     pub scope: Visibility,
     /// The owner's digest, for sources whose occurrences belong to one owner;
     /// carried so fan-out needs no read of the record the source describes.
+    #[allow(dead_code, reason = "scaffold: matching on it lands with the fix")]
     pub owner: Option<String>,
     /// Stable per occurrence (design §3.6).
     pub upstream_id: String,
