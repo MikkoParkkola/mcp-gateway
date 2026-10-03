@@ -1895,22 +1895,45 @@ async fn meta_mcp_dispatch(
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
     };
-    response = (state.meta_mcp)
-        .finalize_response_after_inspection(response, &delivery, delivery_inspection)
-        .await;
-    if let Some(execution) = execution {
-        execution.complete_delivery(&response, signing_context.as_ref());
-    }
-    // MIN.2: judged on the finalized answer, then recorded; nothing changes
-    // the content after this, and the sink commits when the body is read.
+    let response = (state.meta_mcp).finalize_content(response, &delivery, delivery_inspection);
+    // The finalized answer, kept for the stored delivery before the judge can
+    // replace what is written; cloned only when an execution stores it.
+    let finalized = execution.as_ref().map(|_| response.clone());
+    // MIN.2: judged on the finalized answer. Its verdict rides the answer's
+    // own delivery record (MIK-7799), not a record of its own; nothing
+    // changes the content after this, and the sink commits when the body is
+    // read.
     let hidden = crate::gateway::outbound::noted_reads();
-    let frame = crate::gateway::outbound::answer(
+    let mut frame = crate::gateway::outbound::answer(
         read_guard.as_deref(),
         read_key.as_deref(),
         response,
         request.get("params"),
         hidden.as_ref(),
     );
+    let read_fields = frame.take_record_fields();
+    let logged = (state.meta_mcp)
+        .record_delivery_of(
+            frame
+                .response()
+                .expect("an answer frame stays an answer through its replacements"),
+            &delivery.correlation,
+            read_fields,
+        )
+        .await;
+    let finalized = if logged {
+        finalized
+    } else {
+        // The log refused the record: the answer is withheld, and the stored
+        // delivery holds that refusal too.
+        let refusal =
+            crate::gateway::meta_mcp::MetaMcp::audit_unavailable_refusal(frame.answer_id());
+        frame = frame.replaced_by(refusal.clone());
+        finalized.map(|_| refusal)
+    };
+    if let (Some(execution), Some(finalized)) = (execution, finalized) {
+        execution.complete_delivery(&finalized, signing_context.as_ref());
+    }
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");

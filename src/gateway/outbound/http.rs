@@ -99,7 +99,7 @@ pub(crate) fn to_http(
     let pending = frame
         .assessment()
         .map(|a| a.record_fields(frame.key.as_deref()))
-        .filter(|fields| !fields.is_empty());
+        .filter(|fields| !fields.is_empty() && !frame.record_taken);
     let held_id = pending.as_ref().map(|_| frame.answer_id());
     let mut response = match frame.ticket {
         None => match frame.payload {
