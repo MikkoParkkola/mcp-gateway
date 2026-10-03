@@ -237,3 +237,69 @@ fn webhooks_off_withdraws_even_after_a_partial_scan() {
 
     assert!(hub.store.subscriptions().is_empty(), "withdrawn");
 }
+
+/// MIK-7891: a startup reconcile that fails to remove a subscription says so
+/// on every attempt, and finishes once the removal can succeed.
+#[cfg(unix)]
+#[test]
+fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    hub.store
+        .admit(
+            subscription("backend.gone.tools_changed"),
+            true,
+            caps,
+            chrono::Duration::zero(),
+            Utc::now(),
+            super::super::tail_policy(&config),
+        )
+        .expect("io")
+        .expect("admitted");
+    // The removal deletes a file in this directory, so it cannot succeed.
+    let subs = dir.path().join("subs");
+    std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(0o500)).expect("lock");
+    if std::fs::File::create(subs.join("probe")).is_ok() {
+        eprintln!("skipped: the directory mode does not bind this user");
+        return;
+    }
+
+    let records = crate::test_log_capture::records(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let unlock = subs.clone();
+            let task = tokio::spawn({
+                let hub = Arc::clone(&hub);
+                async move {
+                    hub.reconcile_until_done(
+                        CatalogueScan::Complete,
+                        std::time::Duration::from_millis(20),
+                    )
+                    .await;
+                }
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            std::fs::set_permissions(&unlock, std::fs::Permissions::from_mode(0o700))
+                .expect("unlock");
+            tokio::time::timeout(std::time::Duration::from_secs(10), task)
+                .await
+                .expect("the reconcile finishes once the removal can succeed")
+                .expect("task");
+        });
+    });
+
+    assert!(
+        crate::test_log_capture::count(&records, "WARN", "startup reconcile could not remove") >= 1,
+        "a failed attempt is logged: {records:?}"
+    );
+    assert!(hub.store.subscriptions().is_empty(), "then withdrawn");
+}
