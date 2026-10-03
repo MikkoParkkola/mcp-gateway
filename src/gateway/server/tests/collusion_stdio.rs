@@ -377,6 +377,11 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
         .collect();
     assert_eq!(answers.len(), 2, "{answers:?}");
     assert!(
+        answers[0].get("error").is_none(),
+        "base: the earlier read is delivered: {}",
+        answers[0]
+    );
+    assert!(
         answers[1].get("error").is_none(),
         "the operator's own earlier copy must excuse the send: {}",
         answers[1]
