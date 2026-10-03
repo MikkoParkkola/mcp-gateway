@@ -1,0 +1,5 @@
+head_sha	c5f78e50d098119192d9f26f13f65635538e4734
+# MIK-7886 stdio hardened signing mutants
+A1	linux	a1.patch	--lib stdio_hardened_signing
+B1	linux	b1.patch	--lib stdio_hardened_signing
+C1	linux	c1.patch	--lib stdio_hardened_signing

@@ -1,0 +1,15 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index 18b16487f..23527804a 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -1006,9 +1006,7 @@ impl Gateway {
+                 std::time::Duration::from_secs(signing.replay_window),
+                 signing.require_nonce,
+             );
+-            meta_mcp_builder.set_signing_scope(super::meta_mcp::signing::SigningScope::of(
+-                self.config.security.posture,
+-            ));
++            let _ = self.config.security.posture;
+         }
+         let security = &self.config.security;
+         if let Some(chain) = &security.signature_chain {
