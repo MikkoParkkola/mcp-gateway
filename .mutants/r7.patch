@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index 18f9b2e4e..5e37c0a64 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -619,7 +619,7 @@ impl CapabilityExecutor {
+                 // A successful result may carry an injected credential the
+                 // server echoed (MIK-7882): the same removal as an error, whole.
+                 .map(|mut value| {
+-                    super::cli::redact_value(&mut value, &env_values);
++                    super::cli::redact_value(&mut value, &[]);
+                     value
+                 })
+                 .map_err(|error| match error {

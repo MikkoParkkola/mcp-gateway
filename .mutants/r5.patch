@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index 894a40b2c..f46ffaafe 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -410,7 +410,7 @@ fn match_starts(text: &[u8], needle: &[u8], mut each: impl FnMut(usize)) {
+         }
+         if k == needle.len() {
+             each(i + 1 - k);
+-            k = fail[k - 1];
++            k = 0;
+         }
+     }
+ }
