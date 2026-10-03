@@ -1,0 +1,5 @@
+head_sha	e5408043899b8049644d62c9ea911d154fa6b33f
+# MIK-7853 mutants
+M1	linux	m1.patch	--lib gateway::streaming::session_ownership_tests
+M2	linux	m2.patch	--lib gateway::streaming::session_ownership_tests
+M3	linux	m3.patch	--lib gateway::streaming::session_ownership_tests
