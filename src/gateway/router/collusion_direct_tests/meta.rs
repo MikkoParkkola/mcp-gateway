@@ -265,7 +265,7 @@ async fn meta_cache_hit_recorded() {
     // without a backend call and so without an egress to check. The added
     // space changes the cache key and leaves the fingerprints alone.
     let relay = format!("{PROSE} ");
-    assert_meta_refused(&fx, &meta_send(&fx, Some("a"), &relay).await, 1);
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }
 
 /// M10: an unkeyed meta egress is refused under `block`.
