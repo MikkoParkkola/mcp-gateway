@@ -19,6 +19,7 @@ use tracing::debug;
 use super::sse_decoder::SseDecoder;
 use super::{HeaderMode, HttpTransport, finalise_modern_headers, with_modern_meta};
 use crate::protocol::{JsonRpcMessage, RequestId};
+use crate::security::http_diagnostics::safe_request_error;
 use crate::transport::upstream_tap::{
     FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote, classify_response,
     listen_filter, project,
@@ -67,7 +68,7 @@ impl HttpTransport {
             .timeout(STREAM_TIMEOUT)
             .send()
             .await
-            .map_err(|e| Error::Transport(format!("listen: {e}")))?;
+            .map_err(|e| safe_request_error("listen", &e))?;
         if !response.status().is_success() {
             return Err(Error::Transport(format!(
                 "listen refused: HTTP {}",
@@ -111,7 +112,7 @@ impl HttpTransport {
             .timeout(STREAM_TIMEOUT)
             .send()
             .await
-            .map_err(|e| Error::Transport(format!("session stream: {e}")))?;
+            .map_err(|e| safe_request_error("session stream", &e))?;
         if !response.status().is_success() {
             return Ok(Err(response.status().as_u16()));
         }
