@@ -129,6 +129,7 @@ impl ProcessCommand {
             Self::new("openpencil-mcp", &[]),
             Self::new("pact-mcp", &[]),
             Self::new("pyghidra-mcp", &[]),
+            Self::new("mcp-scanner", &["--analyzers", "yara", "remote"]),
             // Static analyzers only: nothing leaves this machine.
             Self::new("skill-scanner", &["scan"]),
         ]
