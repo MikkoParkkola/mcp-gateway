@@ -435,6 +435,34 @@ const STAGES: [&str; 7] = [
     "admit(",
 ];
 
+/// The dispatch is the orchestrator's tail expression: its answer is returned
+/// as it is, so nothing runs after it and nothing can refuse it. It is the
+/// whole final statement (the one before it is complete, ending in `;` or `}`),
+/// so a wrapper such as `match x { _ => dispatch(..).await }` does not qualify.
+fn dispatch_is_the_tail(body: &str) -> bool {
+    let Some(at) = body.rfind("direct_dispatch::dispatch(") else {
+        return false;
+    };
+    let before = body[..at].trim_end();
+    let tail = body[at..].trim_end();
+    (before.ends_with(';') || before.ends_with('}'))
+        && tail.ends_with(".await\n}")
+        && !tail.contains(';')
+}
+
+#[test]
+fn t8_the_tail_check_rejects_a_wrapped_or_followed_dispatch() {
+    let tail = "{\n    let a = 1;\n    direct_dispatch::dispatch(scope, x).await\n}";
+    assert!(dispatch_is_the_tail(tail));
+    let wrapped =
+        "{\n    let a = 1;\n    match a { _ => direct_dispatch::dispatch(scope, x).await }\n}";
+    assert!(!dispatch_is_the_tail(wrapped));
+    let followed = "{\n    let r = direct_dispatch::dispatch(scope, x).await;\n    r\n}";
+    assert!(!dispatch_is_the_tail(followed));
+    let mapped = "{\n    let a = 1;\n    direct_dispatch::dispatch(scope, x).await.map(f)\n}";
+    assert!(!dispatch_is_the_tail(mapped));
+}
+
 /// T8, order: the orchestrator calls every stage, in the order that carries
 /// the refusal precedence (scope before lookup, attestation before the mint,
 /// the notification arm between routing and preflight), and every stage is
@@ -450,16 +478,9 @@ fn t8_the_direct_route_calls_its_stages_in_order() {
         });
         from += at + stage.len();
     }
-    // The dispatch is the orchestrator's tail expression: its answer is
-    // returned as it is, so nothing runs after it and nothing can refuse it.
-    let at = body[from..]
-        .find("direct_dispatch::dispatch(")
-        .map(|i| from + i)
-        .expect("the terminal dispatch is not called after admit");
-    let tail = body[at..].trim_end();
     assert!(
-        tail.ends_with(".await\n}") && !tail.contains(';'),
-        "the terminal dispatch is not the orchestrator's tail expression: {tail}"
+        dispatch_is_the_tail(body),
+        "the terminal dispatch is not the orchestrator's tail expression"
     );
     let scanned = DIRECT_ROUTE.concat();
     for stage in STAGES {
