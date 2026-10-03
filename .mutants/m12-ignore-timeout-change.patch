@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index 49f82c301..453714559 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -104,7 +104,7 @@ impl McpChildren {
+             )));
+         }
+         if map.get(&key).is_some_and(|child| {
+-            child.config != *config || child.env_fp != env_fp || child.timeout != timeout
++            child.config != *config || child.env_fp != env_fp
+         }) && let Some(old) = map.remove(&key)
+         {
+             stale.push(old);

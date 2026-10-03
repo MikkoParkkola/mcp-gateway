@@ -1,0 +1,15 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index 49f82c301..7e25db23f 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -421,7 +421,9 @@ async fn wait_ready(
+         .await;
+         // A dead or broken transport ends the wait now; only the server's own
+         // "not there yet" answers (tool errors) count as not ready.
+-        if let Ok(Err(e @ (Error::Transport(_) | Error::TransportPermanent(_)))) = &poll {
++        if let Ok(Err(e @ (Error::Transport(_) | Error::TransportPermanent(_)))) = &poll
++            && false
++        {
+             return Err(Error::Transport(format!("wait aborted: {e}")));
+         }
+         if let Ok(Ok(result)) = poll

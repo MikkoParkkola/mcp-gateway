@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index 49f82c301..580ef31dc 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -431,7 +431,7 @@ async fn wait_ready(
+                 .and_then(|items| {
+                     items.iter().find(|item| {
+                         wanted.iter().all(|(f, v)| item.get(*f) == Some(v))
+-                            && item.get(&wait.until.field) == Some(&wait.until.equals)
++                            && true
+                     })
+                 })
+         {

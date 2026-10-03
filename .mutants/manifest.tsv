@@ -1,0 +1,9 @@
+head_sha	c51d1208d89ddfe561e74598c3a3d61bf20b3267
+m10-no-generation-check	linux	m10-no-generation-check.patch	--lib -- capability::executor::mcp::tests
+m11-discard-any-child	linux	m11-discard-any-child.patch	--lib -- capability::executor::mcp::tests
+m12-ignore-timeout-change	linux	m12-ignore-timeout-change.patch	--lib -- capability::executor::mcp::tests
+m13-no-idle-refresh	linux	m13-no-idle-refresh.patch	--lib -- capability::executor::mcp::tests
+m14-keep-pending-calls	linux	m14-keep-pending-calls.patch	--lib -- capability::executor::mcp::tests
+m15-skip-requires	linux	m15-skip-requires.patch	--lib -- capability::executor::mcp::tests
+m16-wait-ignores-ready-field	linux	m16-wait-ignores-ready-field.patch	--lib -- capability::executor::mcp::tests
+m17-wait-polls-dead-server	linux	m17-wait-polls-dead-server.patch	--lib -- capability::executor::mcp::tests
