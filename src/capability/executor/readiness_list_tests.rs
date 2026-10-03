@@ -31,7 +31,10 @@ fn cap(name: &str, key: &str) -> crate::capability::CapabilityDefinition {
 fn a_capability_whose_key_is_missing_is_marked_off_and_names_the_key() {
     let (_dir, executor) = executor_holding("MIK7787_PRESENT=x\n");
     let line = executor.list_line(&cap("gone", "env:MIK7787_ABSENT_KEY"));
-    assert_eq!(line, "  gone - Keyed [bearer] off: needs MIK7787_ABSENT_KEY");
+    assert_eq!(
+        line,
+        "  gone - Keyed [bearer] off: needs MIK7787_ABSENT_KEY"
+    );
 }
 
 #[test]
