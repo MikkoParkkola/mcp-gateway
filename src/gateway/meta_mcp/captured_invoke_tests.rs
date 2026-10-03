@@ -1,0 +1,210 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-7810: `gateway_invoke` decides on the backend it captured at the start
+//! of the credential stage, not on whatever the registry holds under that name
+//! when a later check runs. A reload that swaps the backend while the mint is
+//! awaited must not change which backend's rules (the OAuth-isolation guard)
+//! apply, nor which backend the call is dispatched through.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use serde_json::{Value, json};
+
+use crate::backend::{Backend, BackendRegistry};
+use crate::config::{BackendConfig, FailsafeConfig, OAuthConfig};
+use crate::gateway::authz::AllowAll;
+use crate::gateway::meta_mcp::{Authentication, MetaMcp, MetaMcpCallerContext};
+use crate::identity_propagation::{
+    BackendDescriptor, IdentityPropagation, IdentityPropagationConfig, PropagatedCredential,
+    PropagationError, PropagationStrategyKind, SessionMode,
+};
+use crate::key_server::oidc::VerifiedIdentity;
+use crate::protocol::RequestId;
+use crate::security::audit::CredentialKind;
+use crate::transport::Transport;
+
+/// Answers `tools/list` and every `tools/call`, counting the calls it served.
+struct Counting(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl Transport for Counting {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/list" {
+            return Ok(crate::protocol::JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}),
+            ));
+        }
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Swaps the registered backend while the credential is being minted (a config
+/// reload landing in the await), then fails the mint, so the optional
+/// propagation falls back to the static credential and the call carries on.
+struct SwapDuringMint {
+    registry: Arc<BackendRegistry>,
+    replacement: Arc<Backend>,
+}
+
+#[async_trait::async_trait]
+impl IdentityPropagation for SwapDuringMint {
+    async fn propagate(
+        &self,
+        _identity: &VerifiedIdentity,
+        _backend: &BackendDescriptor,
+    ) -> Result<PropagatedCredential, PropagationError> {
+        assert!(self.registry.remove("alpha"), "alpha was registered");
+        assert!(
+            self.registry.register(Arc::clone(&self.replacement)),
+            "the reload registers the replacement"
+        );
+        Err(PropagationError::Refuse("the mint failed".to_string()))
+    }
+}
+
+fn backend(config: BackendConfig, served: &Arc<AtomicUsize>) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        "alpha",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(Counting(Arc::clone(served))));
+    backend
+}
+
+fn optional_propagation() -> BackendConfig {
+    BackendConfig {
+        identity_propagation: Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "alpha".to_string(),
+            required: false,
+            session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        }),
+        ..BackendConfig::default()
+    }
+}
+
+fn shared_login() -> BackendConfig {
+    BackendConfig {
+        oauth: Some(OAuthConfig {
+            enabled: true,
+            scopes: vec![],
+            client_id: None,
+            client_secret: None,
+            callback_host: None,
+            callback_port: None,
+            callback_path: None,
+            token_refresh_buffer_secs: 300,
+            shared_account: false,
+        }),
+        ..BackendConfig::default()
+    }
+}
+
+/// The captured backend has no gateway-held login, so the multi-user guard
+/// passes for it and the call is served by it. The replacement the reload
+/// registered mid-mint does hold one. Mutant: the guard (or the dispatch)
+/// looked up by name judges or reaches the replacement: the call is refused as
+/// if the shared login were the captured backend's, or it is served by the
+/// replacement's transport.
+#[tokio::test]
+async fn a_reload_during_the_mint_does_not_change_the_backend_a_call_is_judged_or_served_by() {
+    let (captured_calls, replacement_calls) =
+        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(
+        registry.register(backend(optional_propagation(), &captured_calls)),
+        "registration"
+    );
+    let meta = MetaMcp::new(Arc::clone(&registry));
+    meta.set_multi_user(true);
+    meta.set_identity_propagation(Arc::new(SwapDuringMint {
+        registry: Arc::clone(&registry),
+        replacement: backend(shared_login(), &replacement_calls),
+    }));
+
+    let identity = VerifiedIdentity {
+        subject: "alice".to_string(),
+        email: "alice@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp.example.invalid".to_string(),
+    };
+    let actor = identity.stable_actor_id();
+    let principal = crate::gateway::auth::principal_of(&actor);
+    let context = MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: Some(principal.as_str()),
+        authentication: Authentication::Authenticated,
+        credential_kind: CredentialKind::OidcBearer,
+        is_modern: false,
+        protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
+        authorizer: &AllowAll,
+        api_key_name: Some(actor.as_str()),
+        agent_id: None,
+        agent_declared: None,
+        grant_subject: Some(crate::identity_grants::GrantSubject::new(
+            "https://idp.example.invalid",
+            "alice",
+            None,
+        )),
+        stdio_nonce: None,
+        caller_key: None,
+        verified_identity: Some(&identity),
+        is_admin: false,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        task: None,
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+    };
+
+    let answer = meta
+        .invoke_tool(
+            &json!({"server": "alpha", "tool": "read", "arguments": {}}),
+            None,
+            &context,
+        )
+        .await;
+
+    assert!(
+        answer.is_ok(),
+        "the captured backend has no shared login: the reload must not refuse its call: {answer:?}"
+    );
+    assert_eq!(
+        (
+            captured_calls.load(Ordering::SeqCst),
+            replacement_calls.load(Ordering::SeqCst)
+        ),
+        (1, 0),
+        "the call must be served by the backend it was judged on"
+    );
+}

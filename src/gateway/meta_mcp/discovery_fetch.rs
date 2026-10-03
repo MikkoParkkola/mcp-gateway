@@ -291,3 +291,7 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "captured_backend_tests.rs"]
 mod captured_backend_tests;
+
+#[cfg(test)]
+#[path = "captured_invoke_tests.rs"]
+mod captured_invoke_tests;
