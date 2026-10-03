@@ -307,7 +307,6 @@ fn reopen_tail(
     hw: Option<&HighWater>,
     now: u64,
 ) -> io::Result<(Recovered, bool)> {
-    let below = |tail: u64| hw.is_some_and(|h| tail < h.counter);
     match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
             let (counter, hash, event, v) = record_head(&line)?;
@@ -318,13 +317,13 @@ fn reopen_tail(
                 std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
                 segments::sync_dir(path)?;
                 let sealed = segments::list_segments(path)?;
-                let carry = lost_from(newest_finding(&sealed, config)?, below(counter), counter);
+                let behind = contradicted(path, &sealed, hw, counter, &hash)?;
+                let carry = lost_from(newest_finding(&sealed, config)?, behind, counter);
                 let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
-                Ok((state, below(counter)))
+                Ok((state, behind))
             } else {
                 let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
-                let below_mark =
-                    hw.is_some_and(|h| h.segment_seq == resumed.seg.seq && counter < h.counter);
+                let below_mark = contradicted(path, sealed, hw, counter, &resumed.last_entry_hash)?;
                 Ok((resumed, below_mark))
             }
         }
@@ -344,11 +343,11 @@ fn reopen_after_seal(
     hw: Option<&HighWater>,
     now: u64,
 ) -> io::Result<(Recovered, bool)> {
-    let tail = match sealed.last() {
-        Some(segment) => seal_of(segment)?.map_or(0, |(counter, _)| counter),
-        None => 0,
+    let (tail, tail_hash) = match sealed.last() {
+        Some(segment) => seal_of(segment)?.unwrap_or_default(),
+        None => (0, String::new()),
     };
-    let below_mark = hw.is_some_and(|h| tail < h.counter);
+    let below_mark = contradicted(path, sealed, hw, tail, &tail_hash)?;
     let carry = lost_from(newest_finding(sealed, config)?, below_mark, tail);
     let state = open_after_seal(path, config, sealed, hw, now, carry)?;
     Ok((state, below_mark))
@@ -363,6 +362,59 @@ fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
     } else {
         carry
     }
+}
+
+/// Whether the newest surviving record `(counter, hash)` contradicts the
+/// authenticated mark `hw` (MIK-7884). Counters are global and monotone across
+/// segments and `.hwm` is written after its record, so an honest tail is never
+/// below the mark, in any segment, and at the mark's counter it is the mark's
+/// record. A tail behind the mark lost committed records (or is an older file
+/// restored); one at the mark with another hash was replaced. Either way
+/// re-minting `.hwm` from it would launder the change, signed log or not.
+pub(super) fn contradicts(hw: Option<&HighWater>, counter: u64, hash: &str) -> bool {
+    hw.is_some_and(|h| counter < h.counter || (counter == h.counter && hash != h.entry_hash))
+}
+
+/// [`contradicts`], and, when the tail is ahead of the mark, whether the
+/// record the mark names is still there as the mark recorded it (MIK-7884).
+/// A restart that repaired a torn suffix, or a mark that lags its record by a
+/// crash, leaves the tail ahead of a record that may have been replaced; the
+/// next append would carry the replacement forward unnoticed.
+fn contradicted(
+    path: &Path,
+    sealed: &[Segment],
+    hw: Option<&HighWater>,
+    counter: u64,
+    hash: &str,
+) -> io::Result<bool> {
+    let Some(h) = hw else {
+        return Ok(false);
+    };
+    if contradicts(hw, counter, hash) {
+        return Ok(true);
+    }
+    if counter == h.counter {
+        return Ok(false);
+    }
+    // The mark's record is the newest one when the mark was written: in the
+    // active file, or at the end of the sealed segment the mark names.
+    let named = sealed.iter().find(|s| s.seq == h.segment_seq);
+    for file in std::iter::once(path).chain(named.map(|s| s.path.as_path())) {
+        let text = match std::fs::read_to_string(file) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        let at_mark = text
+            .lines()
+            .filter_map(|line| record_head(line).ok())
+            .find(|(c, ..)| *c == h.counter);
+        if let Some((_, found, _, _)) = at_mark {
+            return Ok(found != h.entry_hash);
+        }
+    }
+    // Neither file holds the record the mark names.
+    Ok(true)
 }
 
 /// An active file whose last record is an ordinary record.
@@ -393,9 +445,9 @@ fn resume_active(
     };
     // The log committed to how far it got: a truncated tail must not let new
     // records reuse the lost counters, so verify reports the gap (2.13).
-    let counter = hw
-        .filter(|h| h.segment_seq == seq)
-        .map_or(counter, |h| h.counter.max(counter));
+    // Counters are global across segments, so the mark bounds them whatever
+    // segment it names: a restored older file must not reuse them (MIK-7884).
+    let counter = hw.map_or(counter, |h| h.counter.max(counter));
     let file = OpenOptions::new()
         .append(true)
         .open(path)
@@ -596,7 +648,12 @@ fn repair_torn_tail(
             extra.push((TORN_COMMITTED, true.into()));
         }
         let fields = housekeeping(EV_TORN, &extra);
-        write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
+        // Above the mark when it is further ahead than the one line dropped,
+        // so a restored older file's repair record reuses no committed counter.
+        let at = hw
+            .filter(|h| h.counter > pred_counter + 1)
+            .map_or(pred_counter + 1, |h| h.counter + 1);
+        write_synced(&mut file, config, fields, at, &pred_hash)?;
     }
     Ok(Some(pred_counter + 1))
 }
