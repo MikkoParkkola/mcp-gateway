@@ -140,7 +140,14 @@ impl Transport for NotifyingBackend {
 
 /// [`router`] in observe mode with a transparency log on the Meta-MCP.
 async fn logged_router() -> (axum::Router, tempfile::TempDir, tempfile::TempDir) {
-    let (state, store) = split_state(CrossTenantReads::Observe, 3600).await;
+    logged_router_in(CrossTenantReads::Observe).await
+}
+
+/// [`logged_router`] in `mode`.
+async fn logged_router_in(
+    mode: CrossTenantReads,
+) -> (axum::Router, tempfile::TempDir, tempfile::TempDir) {
+    let (state, store) = split_state(mode, 3600).await;
     let log_dir = tempfile::tempdir().expect("a log directory");
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -314,6 +321,58 @@ async fn a_judged_answer_is_one_record() {
     assert!(
         carrying.to_string().contains(&b_hash),
         "the delivery record names the B tenant: {carrying}"
+    );
+}
+
+/// MIN.2 text: a test proves the block fires and that audit entries exist for
+/// both the read and the block. Block mode with a log: A's read is delivered
+/// and its record names tenant A with no verdict; B's read is withheld and
+/// its record names tenant B with `cross_tenant_read: blocked`.
+#[tokio::test]
+async fn a_block_leaves_audit_entries_for_the_read_and_the_block() {
+    let (block, _store, log_dir) = logged_router_in(CrossTenantReads::Block).await;
+    let who = caller();
+    let (a, _, body) = send(&block, call_with(&who, true, None, 0, &reading(A))).await;
+    assert_eq!(a, Delivered, "the first tenant is ordinary: {body}");
+    let (b, _, body) = send(&block, call_with(&who, true, None, 1, &reading(B))).await;
+    assert_ne!(b, Delivered, "the block fires: {body}");
+    let records: Vec<Value> = log_lines(&log_dir)
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let naming = |tenant: &str| -> Vec<&Value> {
+        let hash = hash_argument(&json!(tenant));
+        records
+            .iter()
+            .filter(|r| {
+                record_field(r, "event") == Some("response_delivery_attempt")
+                    && r.to_string().contains(&hash)
+            })
+            .collect()
+    };
+    let read = naming(A);
+    assert_eq!(
+        read.len(),
+        1,
+        "one audit entry for the A read: {records:#?}"
+    );
+    assert_eq!(
+        record_field(read[0], "cross_tenant_read"),
+        None,
+        "the read within the rule carries no verdict: {}",
+        read[0]
+    );
+    let verdict = naming(B);
+    assert_eq!(
+        verdict.len(),
+        1,
+        "one audit entry for the block: {records:#?}"
+    );
+    assert_eq!(
+        record_field(verdict[0], "cross_tenant_read"),
+        Some("blocked"),
+        "{}",
+        verdict[0]
     );
 }
 
