@@ -1,0 +1,13 @@
+diff --git a/src/events/lifecycle.rs b/src/events/lifecycle.rs
+index 67cee3532..1c117d399 100644
+--- a/src/events/lifecycle.rs
++++ b/src/events/lifecycle.rs
+@@ -124,7 +124,7 @@ impl EventsHub {
+         // One attempt per key per replay, even when several rows hold it.
+         let mut tried = HashSet::new();
+         for (key, principal, name, arguments) in self.live_keys() {
+-            if started.contains(&key) || !tried.insert(key.clone()) {
++            if started.contains(&key) || { let _ = tried.insert(key.clone()); false } {
+                 continue;
+             }
+             let Some(source) = self.source_of_kind(key.0) else {
