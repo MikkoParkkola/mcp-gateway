@@ -477,6 +477,7 @@ mod tests {
                 enabled: true,
                 transport,
                 stop_when_idle_for: Some(Duration::from_secs(1)),
+                max_frame_bytes: Some(1 << 20),
                 timeout: Duration::from_secs(1),
                 env: one(),
                 headers: one(),
