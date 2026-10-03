@@ -224,6 +224,13 @@ impl super::super::MetaMcp {
         self.chain_receive(backend.chain_policy(), result, challenge, slot)
     }
 
+    /// Whether `backend`, the one a call was judged on, is chained: its answer
+    /// is bound to one challenge, so it is never served from the cache (D7).
+    /// Never a lookup by name: a reload may have answered it differently.
+    pub(crate) fn is_chained(&self, backend: Option<&crate::backend::Backend>) -> bool {
+        self.chain_signer.is_some() && backend.is_some_and(|b| b.chain_policy().0 != ChainMode::Off)
+    }
+
     /// The chain mode of `server`: `Off` for a name not registered, a
     /// capability backend, or a gateway with no chain identity of its own.
     pub(crate) fn chain_mode_of(&self, server: &str) -> ChainMode {
