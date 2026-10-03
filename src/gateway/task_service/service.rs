@@ -161,11 +161,6 @@ impl TaskService {
         }
     }
 
-    /// The owner digest of task `id`, while its row exists.
-    pub(crate) fn owner_digest_of(&self, id: &str) -> Option<String> {
-        self.store.owner_digest_of(id)
-    }
-
     pub(crate) fn get(&self, principal: &str, id: &str) -> Result<CommittedTask, ServiceError> {
         self.store
             .get(self.owner(principal)?.as_digest(), id)

@@ -511,18 +511,17 @@ impl TaskExecutor {
     /// changed something: a dedupe, a no-op or a failed commit never gets here,
     /// so a listener never learns of a transition that did not happen.
     pub(super) fn published(&self, outcome: &WriteOutcome, task_id: &str) {
-        let (status, changed_at) = match outcome {
+        let (status, changed_at, owner) = match outcome {
             WriteOutcome::Create(CreateOutcome::Created { task, .. })
-            | WriteOutcome::Transitioned(task) => (task.task.status(), task.task.last_updated_at()),
+            | WriteOutcome::Transitioned(task) => (
+                task.task.status(),
+                task.task.last_updated_at(),
+                task.owner_digest.clone(),
+            ),
             WriteOutcome::Create(_) => return,
         };
         if let Some(hook) = self.publication_hook.get() {
-            hook(
-                task_id,
-                status,
-                changed_at,
-                self.service.owner_digest_of(task_id),
-            );
+            hook(task_id, status, changed_at, Some(owner));
         }
         tracing::debug!(
             task_id,
