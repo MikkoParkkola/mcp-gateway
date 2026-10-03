@@ -389,6 +389,12 @@ fn alternatives_violations(
         let Some(alternatives) = schema.get(keyword).and_then(Value::as_array) else {
             continue;
         };
+        // A branch this reader does not understand (an enum, a type, a nested
+        // combinator) would count as always satisfied and make a valid call
+        // look ambiguous: leave such a list alone, as before it was read.
+        if !alternatives.iter().all(alternative_is_supported) {
+            continue;
+        }
         let satisfied = alternatives
             .iter()
             .filter(|alternative| alternative_holds(alternative, arguments))
@@ -412,6 +418,41 @@ fn alternatives_violations(
             format!("provide {rule}: {}", names.join(", ")),
         ));
     }
+}
+
+/// The shapes [`alternative_holds`] reads: `required`, and `properties` whose
+/// entries only pin a `const`; titles and descriptions are ignored.
+fn alternative_is_supported(alternative: &Value) -> bool {
+    let Some(object) = alternative.as_object() else {
+        return false;
+    };
+    object.iter().all(|(key, value)| match key.as_str() {
+        "required" | "title" | "description" => true,
+        "properties" => value.as_object().is_some_and(|properties| {
+            properties.values().all(|property| {
+                property.as_object().is_some_and(|keys| {
+                    keys.keys()
+                        .all(|k| matches!(k.as_str(), "const" | "title" | "description"))
+                })
+            })
+        }),
+        _ => false,
+    })
+}
+
+/// The input schema a client is shown: without `anyOf`, `oneOf` or `allOf` at
+/// its root. Some clients refuse a whole request when a tool's schema has one
+/// there; the gateway still enforces them on every call, and the capability's
+/// description says what is required.
+#[must_use]
+pub(crate) fn advertised_input_schema(schema: &Value) -> Value {
+    let mut shown = schema.clone();
+    if let Some(object) = shown.as_object_mut() {
+        for keyword in ["anyOf", "oneOf", "allOf"] {
+            object.remove(keyword);
+        }
+    }
+    shown
 }
 
 /// An alternative holds when every `required` parameter is present and not

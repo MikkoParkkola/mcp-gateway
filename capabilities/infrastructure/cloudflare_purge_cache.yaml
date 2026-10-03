@@ -1,7 +1,7 @@
-sha256: c6278b3eadd5754e45cfdeec64f8711fc60b9d7db5158e1f40ac36e86ff76794
+sha256: 59ddb4ac364ff5a689b910e6379589b3b660410588698a7a5c02d4b72dca5b10
 fulcrum: '1.0'
 name: cloudflare_purge_cache
-description: 'Purge a zone''s cache: everything, or the listed files.'
+description: 'Purge a zone''s cache: everything, or the listed files. Give exactly one of purge_everything (true) or files.'
 schema:
   input:
     type: object

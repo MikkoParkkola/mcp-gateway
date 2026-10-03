@@ -118,3 +118,38 @@ fn one_of_compares_the_coerced_value_not_the_typed_one() {
     let off = validate_arguments(&json!({ "zone": "z", "everything": "false" }), &schema);
     assert!(!off.is_valid(), "a string false selects nothing");
 }
+
+/// A branch the reader does not understand leaves the whole list alone: it must
+/// not count as always satisfied and make a valid call look ambiguous.
+#[test]
+fn a_list_with_an_unsupported_branch_is_left_alone() {
+    let schema = json!({
+        "type": "object",
+        "properties": { "kind": { "type": "string" }, "a": { "type": "string" } },
+        "oneOf": [
+            { "properties": { "kind": { "enum": ["x", "y"] } } },
+            { "required": ["a"] }
+        ]
+    });
+    assert!(validate_arguments(&json!({ "kind": "x", "a": "1" }), &schema).is_valid());
+}
+
+/// The schema a client is shown has no root combinator; the one that is
+/// enforced still has.
+#[test]
+fn the_advertised_schema_has_no_root_combinators_and_the_enforced_one_keeps_them() {
+    let shown = advertised_input_schema(&purge_schema());
+    for keyword in ["oneOf", "anyOf", "allOf"] {
+        assert!(
+            shown.get(keyword).is_none(),
+            "{keyword} advertised: {shown}"
+        );
+    }
+    assert_eq!(shown["required"], json!(["zone"]));
+    assert!(purge_schema().get("oneOf").is_some());
+    // Nested combinators are not the root's business.
+    let nested = advertised_input_schema(
+        &json!({ "type": "object", "properties": { "p": { "oneOf": [{ "type": "string" }] } } }),
+    );
+    assert!(nested["properties"]["p"].get("oneOf").is_some());
+}

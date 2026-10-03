@@ -114,3 +114,46 @@ fn only_path_parameters_get_their_schema_default() {
     let effective = super::with_path_defaults(config, &schema, &nulled);
     assert_eq!(effective["ruleset_phase"], "http_request_firewall_custom");
 }
+
+/// What the gateway lists for the Cloudflare capabilities carries no root
+/// `oneOf`/`anyOf` (some clients reject the whole request over one), yet the
+/// call is still refused, and the description names the rule.
+#[test]
+fn the_listed_cloudflare_schemas_hide_the_combinators_and_the_description_names_the_rule() {
+    let purge = shipped("cloudflare_purge_cache");
+    let tool = purge.to_mcp_tool();
+    assert!(
+        tool.input_schema.get("oneOf").is_none(),
+        "{}",
+        tool.input_schema
+    );
+    assert!(
+        tool.description
+            .as_deref()
+            .unwrap_or_default()
+            .contains("exactly one of"),
+        "{:?}",
+        tool.description
+    );
+    assert!(!valid(&purge, &json!({ "zone_id": "z" })));
+
+    let update = shipped("cloudflare_update_dns_record");
+    let tool = update.to_mcp_tool();
+    assert!(
+        tool.input_schema.get("anyOf").is_none(),
+        "{}",
+        tool.input_schema
+    );
+    assert!(
+        tool.description
+            .as_deref()
+            .unwrap_or_default()
+            .contains("at least one field"),
+        "{:?}",
+        tool.description
+    );
+    assert!(!valid(
+        &update,
+        &json!({ "zone_id": "z", "dns_record_id": "r" })
+    ));
+}

@@ -1,7 +1,7 @@
-sha256: ded5d70805d48816d9b0933324093cc7a9289f252d1e2df9bfd75cca8600f0ad
+sha256: cbccf2a539a10d26ad94a51f66d8b450e6c7f993dc4fb0c15c5fae53022c9355
 fulcrum: '1.0'
 name: cloudflare_update_dns_record
-description: Update fields of a DNS record (PATCH).
+description: Update fields of a DNS record (PATCH). Give at least one field to change besides the IDs.
 schema:
   input:
     type: object
