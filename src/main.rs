@@ -11,6 +11,9 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},

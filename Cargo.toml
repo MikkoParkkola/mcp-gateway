@@ -125,6 +125,7 @@ resolver = "2"
 
 
 [dependencies]
+mimalloc = { version = "0.1", default-features = false }
 # Async runtime
 tokio = { version = "1.52", features = ["full", "tracing"] }
 
