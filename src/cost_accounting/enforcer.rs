@@ -249,7 +249,7 @@ impl DeferredLog {
                 "Tool approaching daily budget limit"
             ),
             Self::Global { spent, limit } => {
-                tracing::warn!(spent, limit, "Global daily spend approaching limit")
+                tracing::warn!(spent, limit, "Global daily spend approaching limit");
             }
             Self::Key { key, spent, limit } => tracing::warn!(
                 key = key.as_str(),

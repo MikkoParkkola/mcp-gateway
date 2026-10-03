@@ -816,6 +816,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
 
 #[async_trait::async_trait]
 impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
+    #[allow(clippy::too_many_lines)]
     async fn invoke(
         &self,
         retry_params: Value,
@@ -3267,8 +3268,10 @@ impl MetaMcp {
     /// backend call per round, and a budget checked only at the first would let
     /// a backend that keeps asking spend past the operator's limit.
     ///
-    /// Returns the warnings to inject post-dispatch; blocks with JSON-RPC
-    /// -32003 carrying the enforcer's own reason.
+    /// Returns the [`dispatch_guards::Admission`]: the warnings to inject
+    /// post-dispatch and the reservation on the call's cost, to be kept until
+    /// the spend is recorded. Blocks with JSON-RPC -32003 carrying the
+    /// enforcer's own reason.
     #[cfg(feature = "cost-governance")]
     fn admit_spend(
         &self,
