@@ -3,6 +3,8 @@
 //! Backend OAuth client construction, split out of `lifecycle.rs` to keep
 //! that file from growing.
 
+use std::sync::Arc;
+
 use tracing::info;
 
 use super::Backend;

@@ -53,7 +53,7 @@ pub(super) struct ProgressRegistrationGuard<'a> {
     /// `false` when the token was already registered to a live call. The
     /// guard still exists -- construction has no failure mode the request
     /// path can act on -- but it owns nothing and must retire nothing.
-    owns_registration: bool,
+    pub(super) owns_registration: bool,
 }
 
 impl<'a> ProgressRegistrationGuard<'a> {

@@ -16,7 +16,6 @@ use tracing::{debug, info, warn};
 use super::pool::{PoolKey, PooledEntry};
 use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
-use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
 use crate::transport::{HttpTransport, StdioTransport, Transport, isolated_package_manager_env};
 use crate::{Error, Result};
