@@ -3588,7 +3588,7 @@ capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
 
 ## 128. Google Workspace capabilities run through gws
 
-**Startup:** no notice; the `gws_*` capabilities are served and run `gws` when called
+**Startup:** no notice, the `gws_*` capabilities are served and run `gws` when called
 
 These capabilities loaded in 3.x but never ran. Each is now pinned and runs one `gws` subcommand with structured arguments. Their input schemas were rewritten to the parameters the tool accepts, and defaults declared in a schema now fill missing parameters.
 
@@ -3596,7 +3596,7 @@ These capabilities loaded in 3.x but never ran. Each is now pinned and runs one 
 
 ## 129. cloudflare_manage is replaced by Cloudflare REST capabilities
 
-**Startup:** no notice; `cloudflare_manage` no longer appears in the catalogue
+**Startup:** no notice, `cloudflare_manage` no longer appears in the catalogue
 
 The MCP package it declared was never published, so it could not run. Eleven REST capabilities (DNS records, WAF rules, R2 buckets and objects, and zone and account listings) replace it, one HTTP method per file.
 
@@ -3604,7 +3604,7 @@ The MCP package it declared was never published, so it could not run. Eleven RES
 
 ## 130. metacognition_verify is removed
 
-**Startup:** no notice; `metacognition_verify` no longer appears in the catalogue
+**Startup:** no notice, `metacognition_verify` no longer appears in the catalogue
 
 It depended on a tool that is not published, so it could not run on any other machine.
 
@@ -3612,7 +3612,7 @@ It depended on a tool that is not published, so it could not run on any other ma
 
 ## 131. Two network-reaching CLI capabilities are held
 
-**Startup:** no notice; the capabilities load and refuse at call time
+**Startup:** no notice, the capabilities load and refuse at call time
 
 A child process can follow a redirect or a DNS rebind to a private address, and the gateway cannot stop it from outside. Until the tool refuses private addresses at connect time (MIK-7788), `trawl_extract` and `cisco_scanner` `scan_mcp_server` return `not executable`.
 
@@ -3620,7 +3620,7 @@ A child process can follow a redirect or a DNS rebind to a private address, and 
 
 ## 132. Attachment capabilities save to a configured directory and return Google's field names
 
-**Startup:** no notice; `gmail_save_attachment` refuses until `capabilities.files.downloads` is set
+**Startup:** no notice, `gmail_save_attachment` refuses until `capabilities.files.downloads` is set
 
 The embedded script that wrote a caller-chosen path is gone. A declarative `save_file` step decodes the payload, accepts one portable file name, never overwrites or follows a link, writes mode 0600, and stops at `downloads_quota_bytes` (default 1 GiB). The saved path is returned, never the bytes.
 
