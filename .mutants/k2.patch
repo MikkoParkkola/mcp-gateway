@@ -1,0 +1,13 @@
+diff --git a/src/events/backend_source.rs b/src/events/backend_source.rs
+index 489275b07..94367db25 100644
+--- a/src/events/backend_source.rs
++++ b/src/events/backend_source.rs
+@@ -136,7 +136,7 @@ impl EventSource for BackendSource {
+             return;
+         };
+         if let Some((backend, interest)) = interest_of(name, arguments) {
+-            up.listeners.remove(backend, &interest);
++            let _ = (backend, &interest);
+         }
+     }
+ }
