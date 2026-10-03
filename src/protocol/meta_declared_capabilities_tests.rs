@@ -36,8 +36,7 @@ fn a_neighbouring_capability_is_carried_under_its_own_name() {
     // The names must stay distinguishable: collapsing them to one bit is
     // what MRTR.9's per-method refusal cannot be built on.
     for cap in ["sampling", "roots"] {
-        let shape =
-            classify_request(Some(&modern_params(&json!({cap: {}}))), Some("2026-07-28"));
+        let shape = classify_request(Some(&modern_params(&json!({cap: {}}))), Some("2026-07-28"));
         assert!(shape.declared_capabilities().has(cap), "{cap}");
     }
 }
