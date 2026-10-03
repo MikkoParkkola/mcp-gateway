@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 9a185b524..fca04111d 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -193,7 +193,6 @@ impl DispatchNotes {
+     /// a gate noted it is the peer's own answer, an `error` (MIK-7735).
+     fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
+         match (self.outcome(outcome), self.refusal) {
+-            (AuditOutcome::Denied(code), None) => AuditOutcome::Error(code),
+             (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
+                 AuditOutcome::Denied(code)
+             }

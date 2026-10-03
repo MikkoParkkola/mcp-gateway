@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index f4993b092..bf616c249 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -595,7 +595,7 @@ impl MetaMcp {
+         // The store is process memory, so this build wrote every entry; facts
+         // are absent only when the first run wrote no record. Derive them from
+         // the replayed response then, where a wrapped tool error reads as `ok`.
+-        let facts = if let Some(facts) = audit {
++        let facts = if let Some(facts) = audit.filter(|_| false) {
+             facts
+         } else {
+             let result = match (&replay.result, &replay.error) {

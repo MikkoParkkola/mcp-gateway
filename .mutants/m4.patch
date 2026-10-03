@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index f4993b092..6cf07e307 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -610,7 +610,6 @@ impl MetaMcp {
+             // reads a bare `-32001`/`-32004` as a gateway refusal: with no stored
+             // class, that is a peer's answer as likely as a refusal (MIK-7735).
+             let outcome = match outcome {
+-                AuditOutcome::Denied(code) => AuditOutcome::Error(code),
+                 other => other,
+             };
+             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))

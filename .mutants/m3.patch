@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/admission.rs b/src/gateway/meta_mcp/admission.rs
+index 9dc6429ad..657118aa4 100644
+--- a/src/gateway/meta_mcp/admission.rs
++++ b/src/gateway/meta_mcp/admission.rs
+@@ -167,7 +167,7 @@ impl ReplayAudit {
+         match self.outcome {
+             StoredOutcome::Ok => AuditOutcome::Ok,
+             StoredOutcome::ToolError => AuditOutcome::ToolError,
+-            StoredOutcome::Denied(code) => AuditOutcome::Denied(code),
++            StoredOutcome::Denied(code) => AuditOutcome::Error(code),
+             StoredOutcome::Invalid(code) => AuditOutcome::Invalid(code),
+             StoredOutcome::Error(code) => AuditOutcome::Error(code),
+         }
