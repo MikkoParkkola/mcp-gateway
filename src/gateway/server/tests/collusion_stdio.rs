@@ -190,7 +190,7 @@ fn judged_stdio(
             rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
             collusion: CollusionConfig {
                 action: CollusionAction::Block,
-                sources: vec!["alpha:read".to_string()],
+                sources: vec!["alpha:*".to_string()],
                 ..CollusionConfig::default()
             },
             tenant_guard: TenantGuardConfig {

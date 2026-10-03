@@ -8,7 +8,10 @@ use super::*;
 
 /// The direct fixture, its Meta-MCP replaced by one holding the router's
 /// firewall, idempotency, and `cache` when a row reads the response cache.
-async fn meta_fixture(setup: Setup, cache: Option<Arc<crate::cache::ResponseCache>>) -> Fixture {
+pub(super) async fn meta_fixture(
+    setup: Setup,
+    cache: Option<Arc<crate::cache::ResponseCache>>,
+) -> Fixture {
     let mut fx = fixture(setup).await;
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
     let ttl = Duration::from_secs(600);

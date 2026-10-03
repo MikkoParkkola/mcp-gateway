@@ -6,6 +6,7 @@
 //! `prompts/get` arguments, a `resources/read` URI or a `tools/call`, on both
 //! the meta route (`/mcp`) and the direct route (`/mcp/alpha`).
 
+use super::meta::meta_fixture;
 use super::*;
 
 /// POST one JSON-RPC `method` to `path` as bearer `who`; the status and body.
@@ -134,7 +135,7 @@ async fn resource_read_then_prompt_argument(route: Route) {
 
 /// A gets a prompt; B sends its text through a `tools/call`.
 async fn prompt_result_then_tool_call(route: Route) {
-    let fx = fixture(setup()).await;
+    let fx = fixture_for(route).await;
     get_prompt(&fx, route, "a").await;
     let relay = call("send", &json!({"text": PROSE}), None, None);
     let (status, body) = fx.call(Some("b"), &relay).await;
@@ -147,13 +148,15 @@ async fn prompt_result_then_tool_call(route: Route) {
     assert_eq!(fx.sends(), 0, "the relay reached the backend");
 }
 
-/// A reads a resource; B sends its text as the `uri` of `resources/read`.
-async fn resource_read_then_uri(route: Route) {
+/// A reads a resource; B sends its text as the `uri` of `resources/read`. Only
+/// the direct route forwards a URI no backend lists: the meta route resolves the
+/// URI against the backends' catalogues first, so it cannot carry content.
+async fn resource_read_then_uri() {
     let fx = fixture(setup()).await;
-    read_resource(&fx, route, "a").await;
+    read_resource(&fx, Route::Direct, "a").await;
     let forwarded = fx.catalogue();
     let params = json!({"uri": format!("res://orchard?q={PROSE}")});
-    let (_, body) = rpc(&fx, route.path(), "b", "resources/read", &params).await;
+    let (_, body) = rpc(&fx, Route::Direct.path(), "b", "resources/read", &params).await;
     let code = envelope(&body)["error"]["code"].clone();
     assert_eq!(code, -32002, "relay not refused: {body}");
     assert_eq!(fx.catalogue(), forwarded, "the backend was called");
@@ -180,11 +183,6 @@ async fn direct_prompt_result_then_tool_call_is_refused() {
 }
 
 #[tokio::test]
-async fn meta_resource_read_then_uri_is_refused() {
-    resource_read_then_uri(Route::Meta).await;
-}
-
-#[tokio::test]
 async fn direct_resource_read_then_uri_is_refused() {
-    resource_read_then_uri(Route::Direct).await;
+    resource_read_then_uri().await;
 }
