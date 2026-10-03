@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index 57f21910c..3cd19e9e3 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -569,7 +569,7 @@ impl MetaMcp {
+             let mut receipts = receipts.borrow_mut();
+             let staged = std::mem::take(&mut *receipts);
+             #[cfg(feature = "firewall")]
+-            if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
++            if let ([one, _], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
+                 && let Some(digest) = fw.delivery_digest(&one.server, &one.tool, delivered)
+             {
+                 // A redaction can drop the classification marker with the

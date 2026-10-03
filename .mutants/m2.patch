@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index 57f21910c..24ea2cb8f 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -574,7 +574,7 @@ impl MetaMcp {
+             {
+                 // A redaction can drop the classification marker with the
+                 // text; what the call was judged sensitive for stays so.
+-                let digest = digest.keeping_sensitivity_of(&one.digest);
++                let digest = digest;
+                 receipts.push(Receipt {
+                     key: one.key.clone(),
+                     keyed: one.keyed,
