@@ -1578,7 +1578,8 @@ impl Gateway {
                 )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
-                .with_stop(reload_stop),
+                .with_stop(reload_stop)
+                .with_capabilities(meta_mcp.get_capabilities()),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
