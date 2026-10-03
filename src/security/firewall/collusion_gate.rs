@@ -29,6 +29,16 @@ pub enum CollusionAction {
     Block,
 }
 
+/// One `allowed_flows` entry: content delivered by a `source` tool may leave
+/// through an `egress` tool without being a relay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedFlow {
+    /// `server:tool` glob of the tool that delivered the content.
+    pub source: String,
+    /// `server:tool` glob of the tool the content leaves through.
+    pub egress: String,
+}
+
 /// `security.firewall.collusion`: verbatim cross-principal relay detection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -45,6 +55,8 @@ pub struct CollusionConfig {
     pub sources: Vec<String>,
     /// `server:tool` globs whose arguments are never checked.
     pub non_egress: Vec<String>,
+    /// `{source, egress}` glob pairs whose flow is expected collaboration.
+    pub allowed_flows: Vec<AllowedFlow>,
 }
 
 impl Default for CollusionConfig {
@@ -57,6 +69,7 @@ impl Default for CollusionConfig {
             common_principals: params.common_principals,
             sources: Vec::new(),
             non_egress: Vec::new(),
+            allowed_flows: Vec::new(),
         }
     }
 }

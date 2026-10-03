@@ -4,7 +4,9 @@
 
 use serde_json::json;
 
-use super::{CollusionAction, CollusionConfig, RECORD_CAP, RelayCaller, Walk, capped, text_of};
+use super::{
+    AllowedFlow, CollusionAction, CollusionConfig, RECORD_CAP, RelayCaller, Walk, capped, text_of,
+};
 use crate::config::Config;
 use crate::security::firewall::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallConfig, FirewallVerdict, ScanType,
@@ -269,4 +271,115 @@ fn the_configured_thresholds_reach_the_detector() {
         egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
         "text two principals hold is common at common_principals: 2"
     );
+}
+
+fn flow(source: &str, egress: &str) -> AllowedFlow {
+    AllowedFlow {
+        source: source.to_string(),
+        egress: egress.to_string(),
+    }
+}
+
+/// An egress through `server:tool` carrying [`PROSE`], sent by `bob`.
+fn egress_via(fw: &Firewall, (server, tool): (&str, &str)) -> FirewallVerdict {
+    let params = json!({"name": tool, "arguments": {"text": PROSE}});
+    fw.check_relay(
+        RelayCaller::Keyed("bob"),
+        server,
+        tool,
+        &params,
+        ("s", "bob"),
+    )
+}
+
+/// Row 13: an allowlisted flow passes under `observe` and `block`; the same
+/// content through any other egress, or from any other source, is still a relay.
+#[test]
+fn allowed_flow_not_flagged() {
+    for action in [CollusionAction::Observe, CollusionAction::Block] {
+        let (fw, _dir) = observing(|c| {
+            c.action = action;
+            c.allowed_flows = vec![flow("alpha:read", "beta:send")];
+        });
+        delivered(&fw, "alice");
+        let allowed = egress_via(&fw, ("beta", "send"));
+        assert!(
+            allowed.allowed && allowed.findings.is_empty(),
+            "{action:?}: {allowed:?}"
+        );
+        let other = egress_via(&fw, ("alpha", "send"));
+        assert_eq!(
+            other.findings.len(),
+            1,
+            "{action:?}: another egress is a relay"
+        );
+        let (fw, _dir) = observing(|c| {
+            c.action = action;
+            c.allowed_flows = vec![flow("gamma:read", "beta:send")];
+        });
+        delivered(&fw, "alice");
+        let other_source = egress_via(&fw, ("beta", "send"));
+        assert_eq!(
+            other_source.findings.len(),
+            1,
+            "{action:?}: another source is a relay"
+        );
+    }
+}
+
+/// Globs match: one entry covers every tool its patterns name.
+#[test]
+fn allowed_flow_globs_match() {
+    let (fw, _dir) = observing(|c| c.allowed_flows = vec![flow("alpha:*", "b*:send_*")]);
+    delivered(&fw, "alice");
+    assert!(egress_via(&fw, ("beta", "send_doc")).findings.is_empty());
+    assert_eq!(egress_via(&fw, ("beta", "post")).findings.len(), 1);
+}
+
+/// `allowed_flows` is checked at load like the other globs, and holds at most
+/// 64 entries (one bit each).
+#[test]
+fn allowed_flows_are_checked_at_load() {
+    let bad = "    collusion:\n      action: observe\n      allowed_flows:\n        - {source: \"a:[\", egress: \"b:*\"}\n";
+    let err = load(bad).expect_err("bad source glob").to_string();
+    assert!(
+        err.contains("security.firewall.collusion.allowed_flows"),
+        "{err}"
+    );
+    let bad = "    collusion:\n      action: observe\n      allowed_flows:\n        - {source: \"a:*\", egress: \"b:[\"}\n";
+    assert!(load(bad).is_err(), "bad egress glob");
+    let many: String = (0..65)
+        .map(|i| format!("        - {{source: \"a:{i}\", egress: \"b:*\"}}\n"))
+        .collect();
+    let many = format!("    collusion:\n      action: observe\n      allowed_flows:\n{many}");
+    assert!(load(&many).is_err(), "65 entries");
+    let ok = "    collusion:\n      action: observe\n      allowed_flows:\n        - {source: \"a:*\", egress: \"b:*\"}\n";
+    load(ok).expect("a valid entry loads");
+    let off = "    collusion:\n      action: off\n      allowed_flows:\n        - {source: \"a:[\", egress: \"b:[\"}\n";
+    load(off).expect("action off loads whatever the rest holds");
+}
+
+/// The metric: every reported relay increments
+/// `mcp_gateway_collusion_relay_total` under its action label.
+#[cfg(feature = "metrics")]
+#[test]
+fn a_reported_relay_increments_the_metric() {
+    crate::metrics::install();
+    let count = |action: &str| -> u64 {
+        let line = format!("mcp_gateway_collusion_relay_total{{action=\"{action}\"}} ");
+        crate::metrics::render()
+            .lines()
+            .find_map(|l| l.strip_prefix(&line).and_then(|v| v.trim().parse().ok()))
+            .unwrap_or(0)
+    };
+    for (action, label) in [
+        (CollusionAction::Observe, "observe"),
+        (CollusionAction::Block, "block"),
+    ] {
+        let (fw, _dir) = observing(|c| c.action = action);
+        delivered(&fw, "alice");
+        let before = count(label);
+        let _ = egress(&fw, RelayCaller::Keyed("bob"));
+        assert!(count(label) > before, "{label}: not counted");
+    }
 }
