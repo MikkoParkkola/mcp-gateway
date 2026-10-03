@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/dispatch_guards.rs b/src/gateway/meta_mcp/invoke/dispatch_guards.rs
+index 1fa8b89ae..cbf9df8ae 100644
+--- a/src/gateway/meta_mcp/invoke/dispatch_guards.rs
++++ b/src/gateway/meta_mcp/invoke/dispatch_guards.rs
+@@ -48,7 +48,7 @@ impl Admission {
+     ) -> Self {
+         Self {
+             warnings,
+-            _hold: hold,
++            _hold: hold.filter(|_| false),
+         }
+     }
+ }

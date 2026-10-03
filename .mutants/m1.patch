@@ -1,0 +1,13 @@
+diff --git a/src/cost_accounting/enforcer.rs b/src/cost_accounting/enforcer.rs
+index c6be057ec..3e3d28862 100644
+--- a/src/cost_accounting/enforcer.rs
++++ b/src/cost_accounting/enforcer.rs
+@@ -455,7 +455,7 @@ impl BudgetEnforcer {
+         }
+ 
+         let hold = (!blocked).then(|| {
+-            pending.add(tool_name, api_key_name, cost_micro);
++            pending.add(tool_name, api_key_name, 0);
+             Arc::new(SpendHold {
+                 ledger: Arc::clone(&self.ledger),
+                 tool: tool_name.to_string(),

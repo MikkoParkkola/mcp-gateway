@@ -1,0 +1,13 @@
+diff --git a/src/cost_accounting/enforcer.rs b/src/cost_accounting/enforcer.rs
+index c6be057ec..1741fa294 100644
+--- a/src/cost_accounting/enforcer.rs
++++ b/src/cost_accounting/enforcer.rs
+@@ -206,7 +206,7 @@ pub(crate) struct SpendHold {
+ #[cfg(feature = "cost-governance")]
+ impl Drop for SpendHold {
+     fn drop(&mut self) {
+-        locked(&self.ledger).release(&self.tool, self.key.as_deref(), self.micro);
++        locked(&self.ledger).release(&self.tool, self.key.as_deref(), 0);
+     }
+ }
+ 

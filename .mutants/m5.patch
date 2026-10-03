@@ -1,0 +1,13 @@
+diff --git a/src/cost_accounting/enforcer.rs b/src/cost_accounting/enforcer.rs
+index c6be057ec..6a6320e06 100644
+--- a/src/cost_accounting/enforcer.rs
++++ b/src/cost_accounting/enforcer.rs
+@@ -398,7 +398,7 @@ impl BudgetEnforcer {
+         // Check 2: global daily limit
+         if !blocked && let Some(limit) = self.config.budgets.daily {
+             #[allow(clippy::cast_precision_loss)]
+-            let current_usd = (self.global_daily.current() + pending.global) as f64 / 1_000_000.0;
++            let current_usd = self.global_daily.current() as f64 / 1_000_000.0;
+             let projected = current_usd + cost;
+ 
+             if let Some(action) = self.evaluate_alerts(projected, limit) {
