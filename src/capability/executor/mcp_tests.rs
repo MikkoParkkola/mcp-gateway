@@ -5,7 +5,6 @@
 //! and every child (and its descendants) stops when it is evicted.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -307,27 +306,26 @@ async fn unloading_stops_a_child_even_while_a_call_is_in_flight() {
     drop(lease);
 }
 
-fn ctx_with_epoch(epoch: u64) -> CapabilityExecutionContext {
+fn ctx_with_generation(generation: u64) -> CapabilityExecutionContext {
     CapabilityExecutionContext {
-        policy_epoch: Some(epoch),
+        mcp_generation: Some(generation),
         ..caller("alice")
     }
 }
 
 #[tokio::test]
 async fn a_call_from_before_an_unload_never_starts_a_child() {
-    let epoch = Arc::new(std::sync::atomic::AtomicU64::new(7));
-    let executor = CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch));
+    let executor = CapabilityExecutor::new();
     let cap = capability();
     let say = json!({"operation": "say", "text": "x"});
-    let stale = ctx_with_epoch(7);
-    // The unload: the epoch moves on, then the children are evicted.
-    epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
+    // The backend read the generation with the definition, then the unload ran.
+    let stale = ctx_with_generation(executor.mcp_generation());
+    executor.bump_mcp_generation();
     executor.stop_unloaded_mcp(&|name| name != cap.name);
     let err = call(&executor, &cap, say.clone(), &stale).await;
     assert!(err.is_err(), "a stale call is refused: {err:?}");
     assert_eq!(executor.mcp_children.len(), 0, "and starts no child");
-    let fresh = ctx_with_epoch(8);
+    let fresh = ctx_with_generation(executor.mcp_generation());
     call(&executor, &cap, say, &fresh).await.unwrap();
 }
 

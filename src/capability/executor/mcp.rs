@@ -58,6 +58,9 @@ pub(crate) struct McpChildren {
     map: Mutex<HashMap<(String, String), Child>>,
     sweeping: AtomicBool,
     next_id: std::sync::atomic::AtomicU64,
+    /// Bumped on every unload, reload and quarantine; see
+    /// `CapabilityExecutionContext::mcp_generation`.
+    generation: std::sync::atomic::AtomicU64,
 }
 
 /// Decrements a child's in-flight count when a call ends, however it ends.
@@ -85,7 +88,7 @@ impl McpChildren {
         config: &McpConfig,
         principal: &str,
         (env_fp, timeout): (u64, Duration),
-        epoch_current: impl Fn() -> bool,
+        epoch_current: impl Fn(u64) -> bool,
         start: impl FnOnce() -> Result<(Arc<Backend>, Workdir)>,
     ) -> Result<Lease> {
         let key = (capability.name.clone(), principal.to_owned());
@@ -94,7 +97,7 @@ impl McpChildren {
         // Under the map lock: an unload bumps the epoch and then evicts under
         // this same lock, so a call from before the unload either gets its child
         // evicted or is refused here; none starts one that outlives the unload.
-        if !epoch_current() {
+        if !epoch_current(self.generation()) {
             return Err(Error::Config(format!(
                 "capability '{}' changed while this call was starting; retry",
                 capability.name
@@ -199,6 +202,16 @@ impl McpChildren {
                 children.evict(IDLE_STOP, &|_| true);
             }
         });
+    }
+
+    /// The current revocation generation.
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
+    /// Revoke every call that read an earlier generation.
+    pub(crate) fn bump_generation(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Stop one caller's child (a call on it timed out, so it may be wedged).
@@ -378,6 +391,7 @@ async fn wait_ready(
     backend: &Backend,
     wait: &crate::capability::definition::WaitStep,
     params: &Value,
+    call_ends: Instant,
 ) -> Result<Value> {
     let args = arguments(wait.arguments.as_ref(), params)?;
     let mut wanted = Vec::with_capacity(wait.until.matches.len());
@@ -390,11 +404,22 @@ async fn wait_ready(
         })?;
         wanted.push((field.as_str(), value));
     }
-    let limit = Duration::from_secs(wait.max_wait_s);
+    // Absolute: the configured wait, cut short by what is left of the call's own
+    // deadline (less a second), so running out here is the non-evicting wait
+    // timeout and never the outer timeout that discards the child.
+    let ends = (Instant::now() + Duration::from_secs(wait.max_wait_s)).min(
+        call_ends
+            .checked_sub(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now),
+    );
     let interval = Duration::from_millis(wait.interval_ms);
-    let started = Instant::now();
     loop {
-        if let Ok(result) = call_tool(backend, &wait.tool, args.clone()).await
+        let poll = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(ends),
+            call_tool(backend, &wait.tool, args.clone()),
+        )
+        .await;
+        if let Ok(Ok(result)) = poll
             && let Some(found) = result
                 .get(&wait.until.array)
                 .and_then(Value::as_array)
@@ -407,11 +432,10 @@ async fn wait_ready(
         {
             return Ok(found.clone());
         }
-        if started.elapsed() + interval > limit {
-            return Err(Error::BackendTimeout(format!(
-                "not finished within {} s; call again to keep waiting",
-                wait.max_wait_s
-            )));
+        if Instant::now() + interval >= ends {
+            return Err(Error::BackendTimeout(
+                "not finished within the wait; call again to keep waiting".to_string(),
+            ));
         }
         tokio::time::sleep(interval).await;
     }
@@ -518,21 +542,19 @@ impl CapabilityExecutor {
         // One deadline for the whole call, writes included: a server that stops
         // reading its stdin must not hold its slot (and so its eviction) forever.
         let deadline = Duration::from_secs(capability.primary_provider().map_or(30, |p| p.timeout));
-        let snapshot = context.policy_epoch;
+        let generation = context.mcp_generation;
         let lease = self.mcp_children.acquire(
             capability,
             config,
             &principal,
             (env_fp, deadline),
-            || {
-                self.policy_epoch_now()
-                    .is_none_or(|now| snapshot.is_none_or(|s| s == now))
-            },
+            |current| generation.is_none_or(|g| g == current),
             || self.start_mcp(capability, config),
         )?;
         let backend = lease.backend;
         let _busy = lease.busy;
         let child_id = lease.id;
+        let call_ends = Instant::now() + deadline;
         let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
             if let Some(prepare) = prepare {
@@ -561,7 +583,7 @@ impl CapabilityExecutor {
             let result = call_tool(&backend, tool, args).await?;
             match wait {
                 Some(wait) => {
-                    let ready = wait_ready(&backend, wait, &params).await?;
+                    let ready = wait_ready(&backend, wait, &params, call_ends).await?;
                     Ok(json!({ "result": result, "ready": ready }))
                 }
                 None => Ok(result),

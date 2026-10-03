@@ -166,11 +166,14 @@ impl CapabilityExecutor {
         self
     }
 
-    /// The shared policy epoch now, when one is attached.
-    pub(crate) fn policy_epoch_now(&self) -> Option<u64> {
-        self.policy_epoch
-            .as_ref()
-            .map(|e| e.load(std::sync::atomic::Ordering::Acquire))
+    /// The MCP revocation generation now.
+    pub(crate) fn mcp_generation(&self) -> u64 {
+        self.mcp_children.generation()
+    }
+
+    /// Revoke calls that read an earlier generation (unload, reload, quarantine).
+    pub(crate) fn bump_mcp_generation(&self) {
+        self.mcp_children.bump_generation();
     }
 
     /// Advance the shared epoch after a capability-registry mutation is visible.

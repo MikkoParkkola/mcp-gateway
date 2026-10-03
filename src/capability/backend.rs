@@ -229,6 +229,7 @@ impl CapabilityBackend {
             // Published, and the lock still held: no reader can observe the
             // removal under the old epoch.
             self.executor.bump_policy_epoch();
+            self.executor.bump_mcp_generation();
             true
         } else {
             false
@@ -393,6 +394,7 @@ impl CapabilityBackend {
             let mut caps = self.capabilities.write();
             caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
+            self.executor.bump_mcp_generation();
             self.executor
                 .stop_unloaded_mcp(&|name| caps.index.contains_key(name));
         }
@@ -462,6 +464,14 @@ impl CapabilityBackend {
         self.capabilities.read().get(name).cloned()
     }
 
+    /// The definition and the MCP revocation generation, read under one lock so
+    /// an unload cannot fall between them.
+    fn get_with_generation(&self, name: &str) -> Option<(CapabilityDefinition, u64)> {
+        let caps = self.capabilities.read();
+        let generation = self.executor.mcp_generation();
+        caps.get(name).cloned().map(|def| (def, generation))
+    }
+
     /// List all capability names in insertion order.
     pub fn list(&self) -> Vec<String> {
         self.capabilities
@@ -502,14 +512,15 @@ impl CapabilityBackend {
         &self,
         name: &str,
         arguments: Value,
-        context: CapabilityExecutionContext,
+        mut context: CapabilityExecutionContext,
     ) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
 
         // O(1) lookup; clone releases the read lock before the async executor call.
-        let capability = self
-            .get(name)
+        let (capability, generation) = self
+            .get_with_generation(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
+        context.mcp_generation = Some(generation);
         validate_personal_capability_identity(&capability, &context)?;
 
         let multi_user = self.multi_user.load(std::sync::atomic::Ordering::Relaxed);

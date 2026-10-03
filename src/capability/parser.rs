@@ -182,7 +182,7 @@ fn validate_mcp_operations(capability: &CapabilityDefinition) -> Result<()> {
                         WAIT_INTERVAL_MS.end()
                     ));
                 }
-                if wait.max_wait_s == 0 || wait.max_wait_s + 10 > timeout {
+                if wait.max_wait_s == 0 || wait.max_wait_s > timeout.saturating_sub(10) {
                     return refuse(format!(
                         "wait max_wait_s must be above 0 and at most the provider timeout \
                          ({timeout} s) minus 10 s"
