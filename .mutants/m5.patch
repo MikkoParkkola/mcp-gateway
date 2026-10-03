@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/backend_handlers/relay.rs b/src/gateway/router/backend_handlers/relay.rs
+index 6e14d5243..fe654e0b6 100644
+--- a/src/gateway/router/backend_handlers/relay.rs
++++ b/src/gateway/router/backend_handlers/relay.rs
+@@ -142,9 +142,6 @@ pub(super) fn stage_direct_catalogue(
+     };
+     // Classifying the text is the cost; with relay detection off nothing is
+     // staged, so skip it (MIK-7832).
+-    if !state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
+-        return;
+-    }
+     let caller_name = auth.client.map(|c| c.name.as_str());
+     let recorded =
+         state

@@ -1,0 +1,12 @@
+diff --git a/src/gateway/router/backend_handlers/relay.rs b/src/gateway/router/backend_handlers/relay.rs
+index 6e14d5243..a61c371f0 100644
+--- a/src/gateway/router/backend_handlers/relay.rs
++++ b/src/gateway/router/backend_handlers/relay.rs
+@@ -80,6 +80,7 @@ pub(super) fn relay_refusal(
+ /// `params` without `_meta.progressToken`; `None` when it carries none.
+ fn without_progress_token(params: &Value) -> Option<Value> {
+     params.pointer("/_meta/progressToken")?;
++    return None;
+     let mut copy = params.clone();
+     copy.get_mut("_meta")?.as_object_mut()?.remove("progressToken");
+     Some(copy)
