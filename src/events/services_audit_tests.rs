@@ -26,6 +26,7 @@ fn attempt() -> Attempt<'static> {
         status: "sending",
         body_sha256: "",
         delivered: false,
+        cross_tenant_read: None,
     }
 }
 
