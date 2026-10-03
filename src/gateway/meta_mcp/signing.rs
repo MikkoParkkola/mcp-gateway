@@ -93,6 +93,7 @@ fn captured(value: Option<Value>) -> CapturedNonce {
 impl SigningInvocationContext {
     /// Move protocol metadata out of the raw request. Invalid nonce values are
     /// dropped here without copying them; policy still decides before refusal.
+    #[cfg(test)]
     pub(crate) fn capture(request: &mut Value) -> Self {
         Self::capture_scoped(request, SigningScope::InvokeOnly)
     }
@@ -321,6 +322,10 @@ impl super::MetaMcpCallerContext<'_> {
 impl super::MetaMcp {
     pub(crate) fn signing_enabled(&self) -> bool {
         self.message_signer.is_some()
+    }
+
+    pub(crate) fn signing_scope(&self) -> SigningScope {
+        self.signing_scope
     }
 
     /// Whether [`Self::handle_tools_call`] refuses `tool_name` before the tool
