@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index 49f82c301..95d696346 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -219,7 +219,7 @@ impl McpChildren {
+         let key = (capability.to_owned(), principal.to_owned());
+         let mut map = self.map.lock();
+         // Only the child that timed out: a newer one under the same key stays.
+-        let gone = if map.get(&key).is_some_and(|child| child.id == id) {
++        let gone = if map.get(&key).is_some_and(|child| child.id == child.id) {
+             map.remove(&key)
+         } else {
+             None

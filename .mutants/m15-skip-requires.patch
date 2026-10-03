@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index 49f82c301..98c23f445 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -355,7 +355,7 @@ fn select<'a>(config: &'a McpConfig, params: &Value) -> Result<Selected<'a>> {
+         // Before a child is acquired: a call that cannot work spends no process.
+         if let Some(missing) = requires
+             .iter()
+-            .find(|name| params.get(name.as_str()).is_none_or(Value::is_null))
++            .find(|_| false)
+         {
+             return Err(Error::json_rpc(
+                 INVALID_PARAMS,

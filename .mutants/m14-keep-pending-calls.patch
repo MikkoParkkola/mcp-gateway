@@ -1,0 +1,12 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 441b0581b..b84606f17 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -281,7 +281,6 @@ impl StdioTransport {
+                 transport.connected.store(false, Ordering::Relaxed);
+                 // The stream is over: wake every waiting call now (its receiver
+                 // sees a closed channel) instead of at its request timeout.
+-                transport.pending.clear();
+             }
+             debug!("Stdio reader task ended");
+         });
