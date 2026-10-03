@@ -1,0 +1,5 @@
+head_sha	71a10aa2c49654ed52b485c007afde4ab03b4f05
+# #2795 one relay refusal message
+M1	linux	m1.patch	--lib -- a_relay_is_refused_before_dispatch
+M2	linux	m2.patch	--lib -- collusion_direct_tests
+M3	linux	m3.patch	--lib -- an_observed_relay_warns_with_server_and_tool_fields

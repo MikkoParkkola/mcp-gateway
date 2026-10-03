@@ -1,0 +1,14 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index 7e15504cd..38f804f7d 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -357,9 +357,6 @@ impl Firewall {
+         audit: (&str, &str),
+     ) -> Option<String> {
+         let verdict = self.check_relay(caller, server, tool, params, audit);
+-        if verdict.action == FirewallAction::Warn {
+-            tracing::warn!(server, tool, "Firewall: relay observed");
+-        }
+         if verdict.allowed {
+             return None;
+         }

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index 7e15504cd..532f5e7b0 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -367,7 +367,7 @@ impl Firewall {
+             .findings
+             .first()
+             .map_or("", |f| f.description.as_str());
+-        Some(format!("Relay detection blocked: {desc}"))
++        Some(format!("Blocked: {desc}"))
+     }
+ 
+     /// Record `result` as delivered to `caller` from `server:tool`. Call it
