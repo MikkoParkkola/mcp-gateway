@@ -15,6 +15,17 @@ use crate::protocol::era::Era;
 use crate::transport::upstream_tap::UpstreamListen;
 use crate::{Error, Result};
 
+/// A weak, stream-capable view of one slot's transport.
+pub(crate) type ListenHandle = Weak<dyn UpstreamListen>;
+
+/// The handle for `transport`, as the slot stores it.
+pub(super) fn handle_of<T: UpstreamListen + 'static>(
+    transport: &std::sync::Arc<T>,
+) -> ListenHandle {
+    let strong: std::sync::Arc<dyn UpstreamListen> = transport.clone();
+    std::sync::Arc::downgrade(&strong)
+}
+
 /// While held, the idle reaper leaves the shared slot's transport alone
 /// without the idle clock moving (design §5, D5).
 pub(crate) struct ListenLease(#[allow(dead_code, reason = "held for its Drop")] ActivityGuard);

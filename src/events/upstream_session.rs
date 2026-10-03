@@ -117,7 +117,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     };
     let started = Instant::now();
     let modern = target.era == Some(Era::Modern);
-    let mut state = State::new(shared, modern);
+    let mut state = State::new(shared, if modern { Era::Modern } else { Era::Legacy });
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
     state.read_snapshot(backend, false).await;
@@ -223,7 +223,7 @@ struct Pending {
 
 struct State<'a> {
     shared: &'a Arc<Shared>,
-    modern: bool,
+    era: Era,
     current: Option<(FrameStream, Requested)>,
     pending: Option<Pending>,
     acked: bool,
@@ -239,11 +239,11 @@ struct State<'a> {
 }
 
 impl<'a> State<'a> {
-    fn new(shared: &'a Arc<Shared>, modern: bool) -> Self {
+    fn new(shared: &'a Arc<Shared>, era: Era) -> Self {
         let now = Instant::now();
         Self {
             shared,
-            modern,
+            era,
             current: None,
             pending: None,
             acked: false,
@@ -372,7 +372,7 @@ impl<'a> State<'a> {
 
     /// Legacy: one `resources/subscribe` or `unsubscribe` per URI change.
     async fn sync_legacy(&mut self, backend: &Backend) {
-        if self.modern || self.resource_interest_unsupported {
+        if self.era == Era::Modern || self.resource_interest_unsupported {
             return;
         }
         let want: BTreeSet<String> = requested(self.shared).uris.into_iter().collect();

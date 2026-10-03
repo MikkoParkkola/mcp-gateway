@@ -378,7 +378,7 @@ impl Backend {
             .stopped_when_idle
             .store(false, std::sync::atomic::Ordering::SeqCst);
 
-        let listen: Option<std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>>;
+        let listen: Option<super::listen::ListenHandle>;
         let transport: Arc<dyn Transport> = match &self.config.transport {
             TransportConfig::Stdio {
                 command,
@@ -394,8 +394,7 @@ impl Backend {
                     protocol_version.clone(),
                 );
                 transport.start().await?;
-                listen = Some(Arc::downgrade(&transport)
-                    as std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>);
+                listen = Some(super::listen::handle_of(&transport));
                 transport
             }
             TransportConfig::Http {
@@ -447,8 +446,7 @@ impl Backend {
                     .await
                     .unwrap_or(crate::protocol::era::Era::Legacy);
                 transport.finish_startup(era).await?;
-                listen = Some(Arc::downgrade(&transport)
-                    as std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>);
+                listen = Some(super::listen::handle_of(&transport));
                 transport
             }
             TransportConfig::WebSocket {
@@ -458,8 +456,7 @@ impl Backend {
                 let transport = self
                     .start_websocket(ws_url, protocol_version.clone())
                     .await?;
-                listen = Some(Arc::downgrade(&transport)
-                    as std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>);
+                listen = Some(super::listen::handle_of(&transport));
                 transport
             }
             #[cfg(feature = "a2a")]
