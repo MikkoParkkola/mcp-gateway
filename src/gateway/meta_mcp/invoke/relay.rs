@@ -246,11 +246,121 @@ tokio::task_local! {
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
 /// (finalize included) and a task's execution. Dropping the scope discards
-/// what was staged; only [`MetaMcp::commit_relay_receipts`] records.
+/// what was staged; only a commit records.
 pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output {
     RELAY_RECEIPTS
         .scope(RefCell::new(Vec::new()), delivery)
         .await
+}
+
+/// Who a catalogue read (`prompts/get`, `resources/read`) runs for, keyed as
+/// `tools/call` keys the same caller (COLLUDE.1 x MIK-7765).
+#[derive(Clone)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+pub(crate) struct CatalogueCaller {
+    /// The relay key: the HTTP caller key, the stdio operator, or a session.
+    pub(crate) key: String,
+    /// Whether `key` is a real identity (an unkeyed key is refused under block).
+    pub(crate) keyed: bool,
+    /// The caller's display name, for the audit record.
+    pub(crate) name: String,
+}
+
+tokio::task_local! {
+    /// The caller of the catalogue read in flight; absent outside a route.
+    static CATALOGUE_CALLER: CatalogueCaller;
+}
+
+/// Run `read`, a catalogue handler, for `who`.
+pub(crate) async fn as_caller<F: std::future::Future>(who: CatalogueCaller, read: F) -> F::Output {
+    CATALOGUE_CALLER.scope(who, read).await
+}
+
+impl MetaMcp {
+    /// Forward a catalogue read to `backend` under `credential`, inside relay
+    /// detection: the forwarded params are an egress (`-32002` under `block`
+    /// when they carry what another caller was delivered), and the answer is
+    /// staged as a delivery from `backend:method`.
+    pub(in crate::gateway::meta_mcp) async fn forward_catalogue(
+        &self,
+        id: crate::protocol::RequestId,
+        backend: &crate::backend::Backend,
+        (method, params): (&str, Value),
+        credential: super::super::caller_forward::ForwardCredential,
+        empty: Value,
+    ) -> crate::protocol::JsonRpcResponse {
+        #[cfg(feature = "firewall")]
+        let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
+        #[cfg(feature = "firewall")]
+        {
+            if let Some(refusal) =
+                self.catalogue_refusal(caller.as_ref(), &backend.name, method, &params, &id)
+            {
+                return refusal;
+            }
+        }
+        let response =
+            Self::forward_for_caller(id, backend, method, params, credential, empty).await;
+        #[cfg(feature = "firewall")]
+        {
+            self.stage_catalogue_result(caller, (&backend.name, method), &response);
+        }
+        response
+    }
+}
+
+#[cfg(feature = "firewall")]
+impl MetaMcp {
+    /// The `-32002` answer when a catalogue read's forwarded `params` carry
+    /// what another caller was delivered, under `block`; `None` otherwise.
+    fn catalogue_refusal(
+        &self,
+        caller: Option<&CatalogueCaller>,
+        backend: &str,
+        method: &str,
+        params: &Value,
+        id: &crate::protocol::RequestId,
+    ) -> Option<crate::protocol::JsonRpcResponse> {
+        use crate::security::firewall::{FirewallAction, RelayCaller};
+        let (caller, fw) = (
+            caller?,
+            self.firewall.as_ref().filter(|fw| fw.relay_active())?,
+        );
+        let who = RelayCaller::new(&caller.key, caller.keyed);
+        let verdict = fw.check_relay(who, backend, method, params, ("", &caller.name));
+        if verdict.action == FirewallAction::Warn {
+            tracing::warn!(server = backend, method, "Firewall: relay observed");
+        }
+        if verdict.allowed {
+            return None;
+        }
+        let desc = verdict
+            .findings
+            .first()
+            .map_or("", |f| f.description.as_str());
+        Some(crate::protocol::JsonRpcResponse::error(
+            Some(id.clone()),
+            -32002,
+            format!("Relay detection blocked: {desc}"),
+        ))
+    }
+
+    /// Stage a delivered catalogue result as a delivery from `backend:method`.
+    fn stage_catalogue_result(
+        &self,
+        caller: Option<CatalogueCaller>,
+        target: (&str, &str),
+        response: &crate::protocol::JsonRpcResponse,
+    ) {
+        let (Some(caller), Some(result)) = (caller, response.result.as_ref()) else {
+            return;
+        };
+        if response.error.is_some() || !self.relay_active() {
+            return;
+        }
+        let recorded = self.recorded_prompt(target, Some(&caller.name), "catalogue", result);
+        self.stage_relay_receipt(RelayKey::new(&caller.key, caller.keyed), target, &recorded);
+    }
 }
 
 /// Receipts staged by one delivery whose recording waits for the frame's
@@ -289,6 +399,65 @@ impl StagedReceipts {
         }
         #[cfg(not(feature = "firewall"))]
         let _ = delivered;
+    }
+}
+
+tokio::task_local! {
+    /// Whether the HTTP answer being built delivers a result.
+    static RELAY_DELIVERS: std::cell::Cell<bool>;
+}
+
+/// Run an HTTP `delivery` inside a receipt collector and hand what it staged to
+/// the response as [`DeferredReceipts`]: `emit_http`, the last step that can
+/// replace the answer, records them. With relay detection off nothing is
+/// collected.
+pub(crate) async fn collecting_http<F, R>(
+    meta: std::sync::Arc<MetaMcp>,
+    delivery: F,
+) -> axum::response::Response
+where
+    F: std::future::Future<Output = R>,
+    R: axum::response::IntoResponse,
+{
+    if !meta.relay_active() {
+        return delivery.await.into_response();
+    }
+    let ((mut response, answered), staged) = meta
+        .collecting_staged(RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
+            let response = delivery.await.into_response();
+            (response, RELAY_DELIVERS.with(std::cell::Cell::get))
+        }))
+        .await;
+    response
+        .extensions_mut()
+        .insert(DeferredReceipts::new(staged, answered));
+    response
+}
+
+/// Receipts an HTTP answer carries to the last step that can still replace it
+/// (the grant slot, the read record): `emit_http` records them only when the
+/// answer goes out as built. A replacement is a new response and carries
+/// none, so a replaced answer records nothing. `eligible`: the answer
+/// delivers a result.
+#[derive(Clone)]
+pub(crate) struct DeferredReceipts {
+    staged: std::sync::Arc<parking_lot::Mutex<Option<StagedReceipts>>>,
+    eligible: bool,
+}
+
+impl DeferredReceipts {
+    pub(crate) fn new(staged: StagedReceipts, eligible: bool) -> Self {
+        Self {
+            staged: std::sync::Arc::new(parking_lot::Mutex::new(Some(staged))),
+            eligible,
+        }
+    }
+
+    /// Record what was staged when the answer went out as built.
+    pub(crate) fn commit(&self, written: bool) {
+        if let Some(staged) = self.staged.lock().take() {
+            staged.commit(written && self.eligible);
+        }
     }
 }
 
@@ -368,10 +537,15 @@ impl MetaMcp {
         }
     }
 
-    /// Record every staged receipt, when `response` is a delivered result
-    /// rather than an error or a delivery refusal.
-    pub(crate) fn commit_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
-        self.commit_staged_relay(response.error.is_none() && !response.delivery_refusal);
+    /// Mark whether the answer being built delivers a result (no error, no
+    /// delivery refusal): what [`collecting_http`] hands `emit_http`.
+    #[allow(
+        clippy::unused_self,
+        reason = "the call sits beside the other relay steps on the Meta-MCP"
+    )]
+    pub(crate) fn settle_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
+        let delivers = response.error.is_none() && !response.delivery_refusal;
+        let _ = RELAY_DELIVERS.try_with(|flag| flag.set(delivers));
     }
 
     /// Record every staged receipt when `delivered`; drop them either way.

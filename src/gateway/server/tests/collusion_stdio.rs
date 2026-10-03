@@ -52,6 +52,29 @@ impl crate::transport::Transport for Alpha {
                 .collect();
             return Ok(JsonRpcResponse::success(id, json!({ "tools": tools })));
         }
+        // The catalogue: one resource and one prompt, both answering `read`'s text.
+        let text = self.read.lock().clone();
+        match method {
+            "resources/list" => {
+                let listed = json!({"resources": [{"uri": "res://orchard", "name": "orchard"}]});
+                return Ok(JsonRpcResponse::success(id, listed));
+            }
+            "prompts/list" => {
+                return Ok(JsonRpcResponse::success(
+                    id,
+                    json!({"prompts": [{"name": "orchard"}]}),
+                ));
+            }
+            "resources/read" => {
+                let doc = json!({"contents": [{"uri": "res://orchard", "text": text}]});
+                return Ok(JsonRpcResponse::success(id, doc));
+            }
+            "prompts/get" => {
+                let message = json!({"role": "user", "content": {"type": "text", "text": text}});
+                return Ok(JsonRpcResponse::success(id, json!({"messages": [message]})));
+            }
+            _ => {}
+        }
         let send = params.as_ref().is_some_and(|p| p["name"] == "send");
         if send {
             self.sends.fetch_add(1, Ordering::SeqCst);
@@ -167,7 +190,7 @@ fn judged_stdio(
             rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
             collusion: CollusionConfig {
                 action: CollusionAction::Block,
-                sources: vec!["alpha:read".to_string()],
+                sources: vec!["alpha:*".to_string()],
                 ..CollusionConfig::default()
             },
             tenant_guard: TenantGuardConfig {
@@ -455,4 +478,89 @@ async fn stdio_audit_withheld_batch_item_records_no_receipt() {
     assert!(!http_relay_refused(&firewall, &note), "no receipt");
     assert!(batch_read_delivers(&meta, &reads, &cell, &note).await);
     assert!(http_relay_refused(&firewall, &note), "control: a receipt");
+}
+
+/// Text only the operator's catalogue read delivers.
+const THIRD: &str = "The lighthouse log for the outer skerry notes the oil used per night, the \
+    lamp glass cleaned after each storm, the supply boat's missed visits in the autumn gales, and \
+    a list of the gulls that nest on the gallery rail. It ends with a remark about the stuck door.";
+
+/// MIK-7765: over stdio the catalogue is relay-checked, and the operator is
+/// the one principal `tools/call` keys. An HTTP caller's `resources/read`
+/// text, sent as `prompts/get` arguments, is refused; the operator's own
+/// `resources/read` copy excuses it and refuses an HTTP caller's relay.
+#[tokio::test]
+async fn stdio_catalogue_is_inside_relay_detection() {
+    let (meta, firewall, cell) = judged_stdio(None);
+    let policy = Arc::new(crate::security::ToolPolicy::default());
+    let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig::default(),
+    ));
+    let rpc = |method: &str, params: Value| {
+        let request = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
+        let (meta, policy, mtls) = (Arc::clone(&meta), Arc::clone(&policy), Arc::clone(&mtls));
+        async move {
+            super::super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-7765")
+                .await
+                .expect("a request is answered")
+        }
+    };
+    *cell.lock() = PROSE.to_string();
+
+    // An HTTP caller was delivered OTHER through `resources/read`.
+    let delivered = json!({"contents": [{"uri": "res://orchard", "text": OTHER}]});
+    firewall.record_delivery(
+        RelayCaller::Keyed("http-caller"),
+        "alpha",
+        "resources/read",
+        &delivered,
+    );
+    let relay = rpc(
+        "prompts/get",
+        json!({"name": "alpha/orchard", "arguments": {"topic": OTHER}}),
+    )
+    .await;
+    assert_eq!(relay["error"]["code"], -32002, "relay not refused: {relay}");
+    let clean = rpc(
+        "prompts/get",
+        json!({"name": "alpha/orchard", "arguments": {"topic": "harbour"}}),
+    )
+    .await;
+    assert!(clean.get("error").is_none(), "control: {clean}");
+
+    // One operator across methods: a `tools/call` copy of PROSE excuses the
+    // operator's `prompts/get` arguments carrying it (keyed as tools/call is).
+    let tool_read = rpc(
+        "tools/call",
+        json!({"name": "gateway_invoke",
+               "arguments": {"server": "alpha", "tool": "read", "arguments": {}}}),
+    )
+    .await;
+    assert!(tool_read.get("error").is_none(), "base: {tool_read}");
+    let own = rpc(
+        "prompts/get",
+        json!({"name": "alpha/orchard", "arguments": {"topic": PROSE}}),
+    )
+    .await;
+    assert!(
+        own.get("error").is_none(),
+        "the operator's own copy excuses it: {own}"
+    );
+
+    // The operator's own `resources/read` of THIRD is a delivery to the operator.
+    *cell.lock() = THIRD.to_string();
+    let read = rpc("resources/read", json!({"uri": "res://orchard"})).await;
+    assert!(read.get("error").is_none(), "base: {read}");
+    let params = json!({"name": "send", "arguments": {"text": THIRD}});
+    let sent = firewall.check_relay(
+        RelayCaller::Keyed("http-caller"),
+        "alpha",
+        "send",
+        &params,
+        ("s", "http"),
+    );
+    assert!(
+        !sent.allowed,
+        "the operator's catalogue read records a receipt"
+    );
 }
