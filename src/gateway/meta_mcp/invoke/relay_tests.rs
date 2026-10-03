@@ -269,6 +269,286 @@ async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
     assert!(relayed(), "control: a delivered answer records its receipt");
 }
 
+/// A second ordinary paragraph, unrelated to [`PROSE`].
+const OTHER_PROSE: &str = "Minutes of the harbour committee: the dredging contract moves to the \
+    spring tender, the ferry timetable keeps its Sunday gap, and the pilot boat needs a new \
+    engine mount before the first autumn gale. Two residents asked about the lighting on the \
+    east pier and were told the quote arrives after the council recess.";
+
+/// A meta with a Block-mode relay detector over `alpha:*`.
+fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    (Arc::new(meta), firewall)
+}
+
+/// Whether `bob` sending `text` through `alpha:send` is refused as a relay.
+fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
+    let params = json!({"name": "send", "arguments": {"text": text}});
+    !firewall
+        .check_relay(
+            RelayCaller::Keyed("bob"),
+            "alpha",
+            "send",
+            &params,
+            ("s", "bob"),
+        )
+        .allowed
+}
+
+fn text_result(text: &str) -> Value {
+    json!({"content": [{"type": "text", "text": text}]})
+}
+
+/// MIK-7887 AC2: a redaction that changes part of a delivered result drops
+/// only the text that was removed. The text the caller still got keeps its
+/// receipt, so relaying it is still caught.
+#[tokio::test]
+async fn a_redaction_keeps_the_receipt_for_the_text_still_delivered() {
+    let (meta, firewall) = relay_meta();
+    let both = text_result(&format!("{PROSE} {OTHER_PROSE}"));
+    let delivered = text_result(PROSE);
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
+            let snapshot = meta.relay_snapshot(&both);
+            meta.restage_if_changed(snapshot, Some(&delivered));
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "delivered text lost its receipt"
+    );
+    assert!(
+        !relayed_by_bob(&firewall, OTHER_PROSE),
+        "redacted text kept a receipt"
+    );
+}
+
+/// MIK-7887: with several staged receipts (a plan) a change cannot be
+/// attributed to one of them, so they are dropped, as before.
+#[tokio::test]
+async fn a_redaction_over_several_receipts_drops_them() {
+    let (meta, firewall) = relay_meta();
+    let both = text_result(PROSE);
+    let ((), staged) = meta
+        .collecting_staged(async {
+            let alice = RelayKey::new("alice", true);
+            meta.stage_relay_receipt(alice, ("alpha", "send"), &both);
+            meta.stage_relay_receipt(alice, ("alpha", "other"), &text_result(OTHER_PROSE));
+            let snapshot = meta.relay_snapshot(&both);
+            meta.restage_if_changed(snapshot, Some(&text_result("changed")));
+        })
+        .await;
+    staged.commit(true);
+    assert!(!relayed_by_bob(&firewall, PROSE));
+    assert!(!relayed_by_bob(&firewall, OTHER_PROSE));
+}
+
+/// MIK-7887: an unchanged result keeps every staged receipt.
+#[tokio::test]
+async fn an_unchanged_result_keeps_its_receipts() {
+    let (meta, firewall) = relay_meta();
+    let value = text_result(PROSE);
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &value);
+            let snapshot = meta.relay_snapshot(&value);
+            meta.restage_if_changed(snapshot, Some(&value.clone()));
+        })
+        .await;
+    staged.commit(true);
+    assert!(relayed_by_bob(&firewall, PROSE));
+}
+
+/// A stored task, one recorded call, ended as `end` says.
+fn stored_task(
+    end: impl FnOnce(&mut crate::gateway::task_service::Task),
+) -> crate::gateway::task_service::CommittedTask {
+    let mut task = crate::gateway::task_service::Task::create("gateway_invoke");
+    end(&mut task);
+    crate::gateway::task_service::CommittedTask {
+        task,
+        revision: 1,
+        targets: vec![crate::gateway::task_service::Target {
+            server: "alpha".to_owned(),
+            tool: "send".to_owned(),
+        }],
+        targets_recorded: true,
+        output_free: false,
+        owner_digest: String::new(),
+    }
+}
+
+/// MIK-7887 AC1 (seat review): the error is classified like a pending
+/// prompt, so a sensitive one needs no `sources` rule.
+#[tokio::test]
+async fn a_failed_task_error_is_receipted_by_its_classification() {
+    // No `sources` rule: the error is receipted, and it is sensitive only if
+    // the classification of its text says so; PROSE is ordinary text, so the
+    // control is a non-relay.
+    let (meta, firewall) = classified_only_meta();
+    let stored = stored_task(|task| {
+        task.fail(crate::protocol::JsonRpcError {
+            code: -32042,
+            message: PROSE.to_owned(),
+            data: None,
+        });
+    });
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        !relayed_by_bob(&firewall, PROSE),
+        "ordinary error text is not sensitive without a rule"
+    );
+}
+
+/// MIK-7887 AC1: reading a failed task hands the reader the backend's own
+/// error, so the read renews a receipt for it, as a completed task's does. A
+/// failure only the gateway wrote (`output_free`) delivers nothing to receipt.
+#[tokio::test]
+async fn reading_a_failed_task_receipts_the_backend_error() {
+    use crate::protocol::JsonRpcError;
+    for (output_free, expect_receipt) in [(false, true), (true, false)] {
+        let (meta, firewall) = relay_meta();
+        let mut stored = stored_task(|task| {
+            task.fail(JsonRpcError {
+                code: -32042,
+                message: PROSE.to_owned(),
+                data: None,
+            });
+        });
+        stored.output_free = output_free;
+        let ((), staged) = meta
+            .collecting_staged(async {
+                meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
+            })
+            .await;
+        staged.commit(true);
+        assert_eq!(
+            relayed_by_bob(&firewall, PROSE),
+            expect_receipt,
+            "output_free: {output_free}"
+        );
+    }
+}
+
+/// A Block-mode detector with NO `sources` rule: only the classification
+/// verdict carried by a result makes it sensitive.
+fn classified_only_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    (Arc::new(meta), firewall)
+}
+
+/// MIK-7887 (seat review): a rebuild from the redacted copy keeps the
+/// sensitivity the original delivery was judged to have, even when the
+/// redaction removed the classification marker.
+#[tokio::test]
+async fn a_redaction_keeps_the_sensitivity_verdict_of_the_delivery() {
+    let (meta, firewall) = classified_only_meta();
+    let marker = json!({"classification": {"data_classes": ["personal_data"]}});
+    let mut classified = text_result(&format!("{PROSE} {OTHER_PROSE}"));
+    classified["_context_integrity"] = marker;
+    let delivered = text_result(PROSE);
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &classified);
+            let snapshot = meta.relay_snapshot(&classified);
+            meta.restage_if_changed(snapshot, Some(&delivered));
+        })
+        .await;
+    staged.commit(true);
+    assert!(relayed_by_bob(&firewall, PROSE), "the verdict was lost");
+}
+
+/// A client channel whose send ends as scripted; `Hang` never answers.
+enum Scripted {
+    Reply(Result<Value, crate::gateway::input_bridge::DeliveryError>),
+    Hang,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for Scripted {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
+        match self {
+            Self::Reply(reply) => reply.clone(),
+            Self::Hang => std::future::pending().await,
+        }
+    }
+}
+
+/// MIK-7887 AC3 (withdrawn as a code change, pinned as behaviour): a bridged
+/// prompt is receipted when it is handed to the client channel, before the
+/// reply, so a second caller cannot relay it during the wait and a client that
+/// never answers (the bridge drops the send at its timeout) was still shown
+/// it. The cost, stated in the design doc: a send that finds no session leaves
+/// a receipt for a prompt nobody saw.
+#[tokio::test]
+async fn a_bridged_prompt_is_receipted_at_hand_off() {
+    use crate::gateway::input_bridge::{ClientChannel as _, DeliveryError};
+    let cases = [
+        Scripted::Reply(Ok(json!({"action": "accept"}))),
+        Scripted::Reply(Err(DeliveryError::Declined {
+            action: "decline".into(),
+        })),
+        Scripted::Hang,
+    ];
+    for inner in cases {
+        let (meta, firewall) = relay_meta();
+        let channel = RecordingChannel {
+            inner: &inner,
+            meta: &meta,
+            who: RelayKey::new("alice", true),
+            target: ("alpha", "send"),
+            api_key_name: None,
+            trace_id: "t",
+        };
+        let send = channel.send_request(
+            "s",
+            "1",
+            "elicitation/create",
+            Some(json!({"message": PROSE})),
+        );
+        // Dropped at the bridge's timeout, or answered: recorded either way,
+        // and already recorded while the reply was pending.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(50), send).await;
+        assert!(relayed_by_bob(&firewall, PROSE));
+    }
+}
+
 /// The relay check and the dispatch read one builder: every field a
 /// backend receives beside `arguments` is in it.
 #[test]
