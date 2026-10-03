@@ -450,7 +450,7 @@ async fn a_wait_that_runs_out_says_so_and_keeps_the_child() {
 
 fn probe_with(operation: &str) -> String {
     format!(
-        r#"name: mcp_probe2
+        r"name: mcp_probe2
 description: probe
 schema:
   input:
@@ -470,7 +470,7 @@ providers:
         tools:
           op:
 {operation}
-"#,
+",
         python = python(),
     )
 }
