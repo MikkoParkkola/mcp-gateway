@@ -455,3 +455,28 @@ async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
         assert_eq!(record["error_code"], json!(-32001), "{label}: {record}");
     }
 }
+
+/// MIK-7735. With no stored class (the first run wrote no record) the replay
+/// derives one from the delivered error, which carries a code and no
+/// provenance: it must not claim a gateway denial for a bare `-32001`.
+#[tokio::test]
+async fn a_replayed_error_with_no_stored_class_is_not_claimed_as_a_denial() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta(Ok(ok_result()), &dir);
+    let who = api_key_caller();
+    let delivered =
+        crate::protocol::JsonRpcResponse::error(Some(RequestId::Number(1)), -32001, "peer says no");
+    let _ = meta
+        .audit_replay(
+            "gateway_invoke",
+            &args(),
+            None,
+            &context(&AllowAll, &who),
+            delivered,
+            None,
+        )
+        .await;
+    let record = only_record(&dir);
+    assert_eq!(record["outcome"], json!("error"), "{record}");
+    assert_eq!(record["error_code"], json!(-32001), "{record}");
+}
