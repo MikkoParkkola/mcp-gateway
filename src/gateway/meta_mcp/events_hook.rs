@@ -19,35 +19,35 @@ impl MetaMcp {
     /// once the startup scan has registered its routes. Called after the
     /// hub is installed and started.
     ///
-    /// `directories` are the configured capability directories, `~` expanded:
-    /// one that cannot be read makes the scan partial, and a partial scan
-    /// withdraws nothing.
-    pub(crate) fn reconcile_events_after_scan(&self, directories: Vec<std::path::PathBuf>) {
+    /// A directory the startup scan failed to load makes the scan partial,
+    /// and a partial scan withdraws nothing.
+    pub(crate) fn reconcile_events_after_scan(&self) {
         let Some(hub) = self.events().cloned() else {
             return;
         };
         let capabilities = self.get_capabilities();
         tokio::spawn(async move {
-            if let Some(capabilities) = capabilities {
+            if let Some(capabilities) = &capabilities {
                 while !capabilities.initial_scan_complete() {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
+            // The loader's own outcome, read once the scan is over.
+            let scan = if capabilities
+                .as_ref()
+                .is_none_or(|c| c.initial_scan_loaded_every_directory())
+            {
+                crate::events::CatalogueScan::Complete
+            } else {
+                crate::events::CatalogueScan::Partial
+            };
             // Disk work, off the async workers; a removal that failed is
             // retried, the worker held meanwhile.
             loop {
                 let hub = Arc::clone(&hub);
-                let directories = directories.clone();
-                if tokio::task::spawn_blocking(move || {
-                    let scan = if directories.iter().all(|d| std::fs::read_dir(d).is_ok()) {
-                        crate::events::Scan::Complete
-                    } else {
-                        crate::events::Scan::Partial
-                    };
-                    hub.reconcile_catalogue(scan)
-                })
-                .await
-                .unwrap_or(false)
+                if tokio::task::spawn_blocking(move || hub.reconcile_catalogue(scan))
+                    .await
+                    .unwrap_or(false)
                 {
                     break;
                 }

@@ -148,7 +148,7 @@ fn reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked(
             .load(std::sync::atomic::Ordering::Acquire)
     );
 
-    assert!(hub.reconcile_catalogue(Scan::Complete));
+    assert!(hub.reconcile_catalogue(CatalogueScan::Complete));
 
     let left: Vec<String> = hub
         .store
@@ -192,7 +192,7 @@ fn a_partial_scan_keeps_every_subscription() {
         .expect("io")
         .expect("admitted");
 
-    assert!(hub.reconcile_catalogue(Scan::Partial));
+    assert!(hub.reconcile_catalogue(CatalogueScan::Partial));
 
     assert_eq!(hub.store.subscriptions().len(), 1, "kept");
     assert!(

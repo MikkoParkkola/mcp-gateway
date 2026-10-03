@@ -52,7 +52,7 @@ const PROVENANCE_KEY: &str = "io.github.mikkoparkkola/provenance";
 /// scan. A partial scan builds a partial catalogue, which proves nothing about
 /// a route's absence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Scan {
+pub(crate) enum CatalogueScan {
     Complete,
     Partial,
 }
@@ -189,11 +189,11 @@ impl EventsHub {
     /// Before this the catalogue is partial, so nothing is withdrawn and
     /// nothing is sent (MIK-7772). `false`, with the worker still held, when
     /// a removal failed: the caller retries.
-    pub(crate) fn reconcile_catalogue(&self, scan: Scan) -> bool {
+    pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
         // Held through the snapshot and the withdrawal, so a capability reload
         // cannot restore a route in between and lose its subscriptions.
         let _gate = self.catalogue_lock();
-        if scan == Scan::Partial {
+        if scan == CatalogueScan::Partial {
             tracing::warn!(
                 "events: a capability directory could not be read at startup; stored \
                  subscriptions are kept and reconciled at the next complete start"

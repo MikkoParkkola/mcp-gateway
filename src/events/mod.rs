@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-pub(crate) use fanout::Scan;
+pub(crate) use fanout::CatalogueScan;
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
