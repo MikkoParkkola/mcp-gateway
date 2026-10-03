@@ -14,7 +14,7 @@ enable the capability. Requests with a missing or wrong `X-Desktop-Signature` he
 ## Mac side (`~/.hammerspoon/init.lua`)
 
 ```lua
-local GATEWAY = "http://127.0.0.1:" .. (os.getenv("MCP_GATEWAY_PORT") or "8080") .. "/webhooks/desktop/events"
+local GATEWAY = "http://127.0.0.1:" .. (os.getenv("MCP_GATEWAY_PORT") or "39400") .. "/webhooks/desktop/events"
 local SECRET = os.getenv("DESKTOP_EVENT_SECRET") or hs.settings.get("desktop_event_secret")
 
 local function send(app, kind, title, bundle)

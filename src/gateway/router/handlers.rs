@@ -29,6 +29,7 @@ use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
+use crate::gateway::outbound::{OutboundReply, gateway_reply, judged_reply, stream_reply};
 use crate::gateway::session_id::session_fp;
 use crate::gateway::session_lifecycle;
 use crate::gateway::streaming::create_sse_response;
@@ -186,21 +187,21 @@ pub(super) async fn mcp_sse_handler(
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
     extensions: axum::http::Extensions,
-) -> impl IntoResponse {
+) -> OutboundReply {
     let client = client.map(|axum::Extension(c)| c);
 
     // Before the streaming and Accept checks, and before any session work: a
     // refusal that ran later would mint a session per refused caller and
     // overwrite the resumption point of whoever owns the id it presented.
     if let Some(refusal) = get_era_refusal(&state, &headers) {
-        return refusal;
+        return gateway_reply(refusal);
     }
     // The owner the POST that minted the session used, so a subject resumes
     // its own stream and nobody else's.
     let (subject, owner) =
         match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
             Ok(resolved) => resolved,
-            Err(refusal) => return refusal,
+            Err(refusal) => return gateway_reply(refusal),
         };
     // MIN.2: the caller this stream writes to, keyed as on POST (H7, §4.2).
     let read_key = state
@@ -216,13 +217,12 @@ pub(super) async fn mcp_sse_handler(
         .filter(|key| !key.is_empty());
     // Check if streaming is enabled
     if !state.streaming_config.enabled {
-        return build_http_error_response(
+        return gateway_reply(build_http_error_response(
             None,
             -32600,
             "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
             StatusCode::METHOD_NOT_ALLOWED,
-        )
-        .into_response();
+        ));
     }
 
     // Check Accept header - must accept text/event-stream
@@ -232,13 +232,12 @@ pub(super) async fn mcp_sse_handler(
         .unwrap_or("");
 
     if !accept.contains("text/event-stream") {
-        return build_http_error_response(
+        return gateway_reply(build_http_error_response(
             None,
             -32600,
             "Must accept text/event-stream for SSE notifications",
             StatusCode::NOT_ACCEPTABLE,
-        )
-        .into_response();
+        ));
     }
 
     let existing_session_id = session_id_header(&headers).map(String::from);
@@ -258,7 +257,7 @@ pub(super) async fn mcp_sse_handler(
             held,
         ) {
             Some(resumed) => resumed,
-            None => return super::hardened_elicitation::refusal().into_response(),
+            None => return gateway_reply(super::hardened_elicitation::refusal()),
         }
     } else {
         state.multiplexer.get_or_create_session_id_scoped(
@@ -297,15 +296,14 @@ pub(super) async fn mcp_sse_handler(
             // Add session ID header to response
             let mut response = sse.into_response();
             attach_session_header(response.headers_mut(), &session_id);
-            response
+            stream_reply(response)
         }
-        None => build_http_error_response(
+        None => gateway_reply(build_http_error_response(
             None,
             -32603,
             "Failed to create SSE stream",
             StatusCode::INTERNAL_SERVER_ERROR,
-        )
-        .into_response(),
+        )),
     }
 }
 
@@ -316,7 +314,7 @@ pub(super) async fn mcp_delete_handler(
     client: Option<axum::Extension<AuthenticatedClient>>,
     headers: HeaderMap,
     extensions: axum::http::Extensions,
-) -> impl IntoResponse {
+) -> OutboundReply {
     let client = client.map(|axum::Extension(c)| c);
     // Public paths may reach this handler without a validated identity even
     // when authentication is enabled. Their shared anonymous owner is not a
@@ -326,17 +324,17 @@ pub(super) async fn mcp_delete_handler(
             .as_ref()
             .is_some_and(|c| c.authenticated && !c.principal.is_empty())
     {
-        return crate::gateway::middleware::bearer_unauthorized_response(
+        return gateway_reply(crate::gateway::middleware::bearer_unauthorized_response(
             "Session termination requires an authenticated credential.",
-        );
+        ));
     }
     let session_id = session_id_header(&headers);
     let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
         Ok((_, owner)) => owner,
-        Err(refusal) => return refusal,
+        Err(refusal) => return gateway_reply(refusal),
     };
 
-    match session_id {
+    let status = match session_id {
         Some(id) if state.multiplexer.remove_session_for(id, &owner) => {
             let session = session_fp(id);
             info!(session_id = %session, "Session terminated by client");
@@ -352,8 +350,8 @@ pub(super) async fn mcp_delete_handler(
             StatusCode::NOT_FOUND
         }
         None => StatusCode::BAD_REQUEST,
-    }
-    .into_response()
+    };
+    gateway_reply(status)
 }
 
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
@@ -450,7 +448,7 @@ pub(super) async fn health_handler(
 pub(super) async fn meta_mcp_handler(
     state: State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
-) -> axum::response::Response {
+) -> OutboundReply {
     let offers_event_stream = http_request
         .headers()
         .get(axum::http::header::ACCEPT)
@@ -488,7 +486,7 @@ pub(super) async fn meta_mcp_handler(
         ));
         let (scoped, rx) =
             crate::transport::notification_sink::scope_judged(dispatch, Arc::clone(&judge));
-        crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await
+        stream_reply(crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await)
     } else {
         // Still scoped, and still drained alongside: `publish` sheds on a full
         // sink, and a client that did not offer a stream must not make a
@@ -496,7 +494,7 @@ pub(super) async fn meta_mcp_handler(
         let (response, _notifications) =
             crate::transport::notification_sink::collect(dispatch).await;
         // The answer's read record, written after every late replacer.
-        crate::gateway::outbound::emit_http(response, logger.as_ref()).await
+        judged_reply(response, logger.as_ref()).await
     }
 }
 
