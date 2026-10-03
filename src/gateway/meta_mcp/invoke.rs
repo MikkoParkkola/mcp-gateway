@@ -2904,7 +2904,8 @@ impl MetaMcp {
     ) -> Result<(Vec<(String, String)>, Option<String>)> {
         // Identity-only by construction; production reads pass a proof (#2231).
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
-        self.resolve_propagation_credential_held(server, caller)
+        let backend = self.backends.get(server);
+        self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
             .map(|(headers, cache_binding, _)| (headers, cache_binding))
     }
@@ -2913,23 +2914,16 @@ impl MetaMcp {
     /// keeping the managed lease for the direct route's post-dispatch 401 site
     /// (A11-e′). The direct route passes its classified proof, so the sole
     /// operator is served there as on `gateway_invoke` (#2190).
-    pub(crate) async fn resolve_propagation_credential_held(
-        &self,
-        server: &str,
-        caller: CallerProof<'_>,
-    ) -> Result<HeldCredential> {
-        let backend = self.backends.get(server);
-        self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
-            .await
-    }
-
-    /// [`Self::resolve_propagation_credential_held`] against the backend the
-    /// caller already holds. A route that captured the instance it will
-    /// dispatch through must resolve against THAT instance: a name lookup here
-    /// can return a replacement registered by a reload in between, and the
-    /// credential rules of one backend would then apply to a request sent
-    /// through another (MIK-7804). `None` is a backend the registry does not
-    /// hold, as a name miss always was.
+    /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,
+    /// keeping the managed lease for the direct route's post-dispatch 401 site
+    /// (A11-e'), against the backend the caller already holds. A route that
+    /// captured the instance it will dispatch through must resolve against THAT
+    /// instance: a name lookup can return a replacement registered by a reload
+    /// in between, and the credential rules of one backend would then apply to
+    /// a request sent through another (MIK-7804). `None` is a backend the
+    /// registry does not hold, as a name miss always was. The direct route
+    /// passes its classified proof, so the sole operator is served there as on
+    /// `gateway_invoke` (#2190).
     pub(crate) async fn resolve_propagation_credential_held_for(
         &self,
         server: &str,

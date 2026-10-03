@@ -123,13 +123,19 @@ impl MetaMcp {
         self.principal_for(backend, caller).is_some()
     }
 
-    fn principal_for<'a>(
+    /// Who the resolver would resolve `backend`'s credential for, if anyone.
+    ///
+    /// THE ONE LOOKUP both the resolver and every short-circuit ahead of it
+    /// use, so a gate can never pick a different descriptor than the mint. It
+    /// reads the instance in hand, never the registry by name: a reload can
+    /// register a replacement under the same name, and the descriptor of one
+    /// backend must not decide for a request sent through another (MIK-7804).
+    pub(super) fn principal_for<'a>(
         &self,
         backend: &crate::backend::Backend,
         caller: crate::identity_propagation::CallerProof<'a>,
     ) -> Option<crate::personal_accounts::identity::Principal<'a>> {
-        let descriptor_id = backend.account_descriptor_id().map(str::to_owned);
-        self.caller_principal(descriptor_id.as_deref(), caller)
+        self.caller_principal(backend.account_descriptor_id(), caller)
     }
 }
 
