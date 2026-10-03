@@ -252,6 +252,33 @@ impl Services {
         Scan::Pass
     }
 
+    /// The firewall the read verdict judges deliveries on: the gateway's own,
+    /// so an event shares the caller's read history with its answers.
+    pub(crate) fn guard(&self) -> Option<&crate::gateway::outbound::Guard> {
+        #[cfg(feature = "firewall")]
+        {
+            self.firewall.as_deref()
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            None
+        }
+    }
+
+    /// The `arg_keys` an attribution is taken under now.
+    pub(crate) fn attribution_keys(&self) -> Vec<String> {
+        crate::gateway::outbound::attribution_keys(self.guard())
+    }
+
+    /// What `data` names before the event firewall redacts it (MIN.2 E1);
+    /// `None` when the verdict is off.
+    pub(crate) fn attribute(
+        &self,
+        data: &Value,
+    ) -> Option<crate::security::tenant_reads::ReadAttribution> {
+        crate::gateway::outbound::raw_attribution(self.guard(), data)
+    }
+
     /// The hashed tenants `data` names (MIN.1 attribution), sorted.
     pub(crate) fn tenants(&self, data: &Value) -> Vec<String> {
         #[cfg(feature = "firewall")]
@@ -316,6 +343,8 @@ pub(crate) struct Attempt<'a> {
     pub status: &'a str,
     pub body_sha256: &'a str,
     pub delivered: bool,
+    /// The read verdict on this delivery (MIN.2), when it had one.
+    pub cross_tenant_read: Option<crate::security::tenant_reads::ReadVerdict>,
 }
 
 impl Services {
@@ -405,6 +434,9 @@ impl Services {
         fields.insert("outcome_of_attempt".into(), attempt.number.into());
         fields.insert("status".into(), attempt.status.into());
         fields.insert("delivered".into(), attempt.delivered.into());
+        if let Some(verdict) = attempt.cross_tenant_read {
+            fields.insert("cross_tenant_read".into(), json!(verdict));
+        }
         let envelope = crate::security::audit::AuditEnvelope {
             outcome: if attempt.delivered {
                 crate::security::audit::AuditOutcome::Ok

@@ -68,7 +68,6 @@
 935 src/trust/mod.rs
 908 src/gateway/meta_mcp_helpers_tests.rs
 900 src/identity_grants.rs
-888 src/gateway/meta_mcp/search.rs
 874 src/personal_accounts/provider/provider_tests.rs
 857 src/mtls/cert_manager.rs
 852 src/protocol/types.rs

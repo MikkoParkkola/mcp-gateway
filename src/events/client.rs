@@ -130,7 +130,24 @@ impl CallbackClient {
         body: Vec<u8>,
         read: ReadBody,
     ) -> Result<Answer, CallbackFailure> {
-        self.check_literal(url)?;
+        self.post_tracked(url, subscription_id, webhook_id, keys, body, read)
+            .await
+            .map_err(|(failure, _)| failure)
+    }
+
+    /// [`Self::post`], and with a failure whether it came before any byte of
+    /// the request could be written (a refused literal, DNS, connect or TLS
+    /// failure), so a caller can tell a body that never left the process.
+    pub(crate) async fn post_tracked(
+        &self,
+        url: &url::Url,
+        subscription_id: &str,
+        webhook_id: &str,
+        keys: &[&[u8]],
+        body: Vec<u8>,
+        read: ReadBody,
+    ) -> Result<Answer, (CallbackFailure, bool)> {
+        self.check_literal(url).map_err(|failure| (failure, true))?;
         let timestamp = chrono::Utc::now().timestamp().to_string();
         let signature = sign(keys, webhook_id, &timestamp, &body);
         let mut response = self
@@ -144,7 +161,7 @@ impl CallbackClient {
             .body(body)
             .send()
             .await
-            .map_err(|e| classify(&e))?;
+            .map_err(|e| (classify(&e), e.is_connect()))?;
         let status = response.status();
         let retry_after = response
             .headers()
@@ -159,9 +176,9 @@ impl CallbackClient {
         if read == ReadBody::Discard || !status.is_success() {
             return Ok(answer);
         }
-        while let Some(chunk) = response.chunk().await.map_err(|e| classify(&e))? {
+        while let Some(chunk) = response.chunk().await.map_err(|e| (classify(&e), false))? {
             if answer.body.len() + chunk.len() > MAX_READ {
-                return Err(CallbackFailure::ChallengeFailed);
+                return Err((CallbackFailure::ChallengeFailed, false));
             }
             answer.body.extend_from_slice(&chunk);
         }

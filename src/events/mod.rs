@@ -49,6 +49,7 @@ pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
 pub(crate) use services::{LiveCredentials, Services};
+pub(crate) use types::CallbackFailure;
 pub(crate) use types::{RpcError, Visibility};
 pub(crate) use webhook_source::Inbound;
 
