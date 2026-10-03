@@ -450,9 +450,16 @@ fn t8_the_direct_route_calls_its_stages_in_order() {
         });
         from += at + stage.len();
     }
+    // The dispatch is the orchestrator's tail expression: its answer is
+    // returned as it is, so nothing runs after it and nothing can refuse it.
+    let at = body[from..]
+        .find("direct_dispatch::dispatch(")
+        .map(|i| from + i)
+        .expect("the terminal dispatch is not called after admit");
+    let tail = body[at..].trim_end();
     assert!(
-        body[from..].contains("dispatch("),
-        "the terminal dispatch is not called last"
+        tail.ends_with(".await\n}") && !tail.contains(';'),
+        "the terminal dispatch is not the orchestrator's tail expression: {tail}"
     );
     let scanned = DIRECT_ROUTE.concat();
     for stage in STAGES {
