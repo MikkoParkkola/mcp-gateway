@@ -15,6 +15,18 @@ impl MetaMcp {
         let _ = self.events.set(hub);
     }
 
+    /// The backend registry, for the events backend source's catalogue.
+    pub(crate) fn events_backend_registry(&self) -> Arc<crate::backend::BackendRegistry> {
+        Arc::clone(&self.backends)
+    }
+
+    /// Backend `backend`'s tool set changed: an event, when events are on.
+    pub(crate) fn events_tools_changed(&self, backend: &str) {
+        if let Some(hub) = self.events() {
+            hub.backend_tools_changed(backend);
+        }
+    }
+
     /// Reconcile the hub's stored subscriptions with the capability catalogue
     /// once the startup scan has registered its routes. Called after the
     /// hub is installed and started.

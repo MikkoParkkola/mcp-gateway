@@ -106,6 +106,7 @@ mod hardened_elicitation_tests;
 mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
+mod judged_answer;
 #[cfg(test)]
 mod log_level_admin_tests;
 #[cfg(test)]
@@ -275,6 +276,7 @@ impl AppState {
             crate::gateway::subscription_registry::tools_list_changed(),
             backend,
         );
+        self.meta_mcp.events_tools_changed(backend);
     }
 }
 

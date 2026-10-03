@@ -168,9 +168,28 @@ pub(crate) struct ReadHistory {
     principals: DashMap<String, Principal>,
     /// Source of fresh unread tenants: each unread frame is its own.
     unread: AtomicU64,
+    /// Test clock: milliseconds added to `Instant::now()` (MIN.4 corpus).
+    #[cfg(test)]
+    skew_ms: AtomicU64,
 }
 
 impl ReadHistory {
+    /// The history's clock.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn now(&self) -> Instant {
+        let now = Instant::now();
+        #[cfg(test)]
+        let now = now + Duration::from_millis(self.skew_ms.load(Ordering::Relaxed));
+        now
+    }
+
+    /// Move this history's clock forward (tests only).
+    #[cfg(test)]
+    pub(crate) fn advance_for_test(&self, by: Duration) {
+        let ms = u64::try_from(by.as_millis()).unwrap_or(u64::MAX);
+        self.skew_ms.fetch_add(ms, Ordering::Relaxed);
+    }
+
     /// A fresh history behind the `Arc` every holder shares.
     pub(crate) fn shared() -> Arc<Self> {
         Arc::new(Self::default())
@@ -187,7 +206,7 @@ impl ReadHistory {
         window: Duration,
         refuse_over: bool,
     ) -> Option<Reservation> {
-        let now = Instant::now();
+        let now = self.now();
         let mut hashes: Vec<String> = attribution.tenants.iter().cloned().collect();
         if attribution.uninspected {
             let n = self.unread.fetch_add(1, Ordering::Relaxed);
@@ -271,7 +290,7 @@ impl ReadTicket {
         let Some(mut principal) = inner.history.principals.get_mut(&inner.key) else {
             return;
         };
-        let now = Instant::now();
+        let now = inner.history.now();
         for hash in &inner.hashes {
             principal.committed.insert(hash.clone(), now);
         }

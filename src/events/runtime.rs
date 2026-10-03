@@ -25,7 +25,7 @@ use super::{EventSource, EventsHub};
 pub(crate) struct Runtime {
     queue: mpsc::Sender<SourceEvent>,
     /// Taken by [`EventsHub::start`]; `None` once the pipeline runs.
-    intake: Mutex<Option<mpsc::Receiver<SourceEvent>>>,
+    pub(super) intake: Mutex<Option<mpsc::Receiver<SourceEvent>>>,
     /// Wakes the worker: a record was written or a subscription reactivated.
     pub wake: Notify,
     pub seen: Seen,
@@ -98,6 +98,9 @@ impl EventsHub {
         });
         let hub = Arc::clone(self);
         tokio::spawn(async move { hub.deliver_forever(&services).await });
+        // After a restart the upstream state is rebuilt from the store.
+        let hub = Arc::clone(self);
+        tokio::spawn(async move { hub.replay_starts().await });
     }
 
     /// Whether a caller holding API key `key` may still see `backend` under
