@@ -134,8 +134,10 @@ async fn start(root: &std::path::Path, rx: &Receiver, cfg: Value) -> Gateway {
 }
 
 fn sub_params(name: &str, url: &str, arguments: Value) -> Value {
-    json!({"name": name, "arguments": arguments,
-        "delivery": {"mode": "webhook", "url": url, "secret": whsec(32)}})
+    let mut params = json!({"name": name,
+        "delivery": {"mode": "webhook", "url": url, "secret": whsec(32)}});
+    params["arguments"] = arguments;
+    params
 }
 
 async fn subscribe(gw: &Gateway, key: &str, name: &str, url: &str, args: Value) -> Value {
@@ -252,20 +254,20 @@ async fn start_task(gw: &Gateway, key: &str, idem: &str) -> String {
         .to_owned()
 }
 
-/// T40 (SOURCE.2): settlement is an owner-only event carrying no result.
-#[tokio::test]
-async fn settled_tasks_become_events_for_their_owner_only() {
-    let root = tempfile::tempdir().expect("root");
-    // With auth on, task creation needs a verified caller identity, which an
-    // API key does not carry: the owners are two delegated OIDC bearers.
-    let issuer = issuer::Issuer::start(root.path()).await;
-    let rx = Receiver::start(root.path()).await;
+/// A gateway whose two task owners are delegated OIDC bearers: with auth on,
+/// task creation needs a verified caller identity, which an API key does not
+/// carry. Returns the gateway, receiver, mock backend and the two tokens.
+async fn two_owner_gateway(
+    root: &std::path::Path,
+) -> (Gateway, Receiver, Mock, String, String, issuer::Issuer) {
+    let issuer = issuer::Issuer::start(root).await;
+    let rx = Receiver::start(root).await;
     let mock = Mock::start().await;
     let (alice, bob) = (
         issuer.mint("events-subject-a", EMAIL_A),
         issuer.mint("events-subject-b", EMAIL_B),
     );
-    let mut cfg = config_with_mock(root.path(), &mock);
+    let mut cfg = config_with_mock(root, &mock);
     let policies: Vec<Value> = [EMAIL_A, EMAIL_B]
         .iter()
         .map(|email| {
@@ -280,7 +282,7 @@ async fn settled_tasks_become_events_for_their_owner_only() {
         "policies": policies,
     });
     // One trust file for both TLS peers the child talks to.
-    let bundle = root.path().join("ca-bundle.pem");
+    let bundle = root.join("ca-bundle.pem");
     let pem = |p: &std::path::Path| std::fs::read_to_string(p).expect("CA pem");
     std::fs::write(
         &bundle,
@@ -288,8 +290,16 @@ async fn settled_tasks_become_events_for_their_owner_only() {
     )
     .expect("bundle");
     let bundle_path = bundle.to_string_lossy().into_owned();
-    let gw = Gateway::start_with_env(root.path(), cfg, &[("SSL_CERT_FILE", &bundle_path)]).await;
+    let gw = Gateway::start_with_env(root, cfg, &[("SSL_CERT_FILE", &bundle_path)]).await;
     gw.event_names(Some(ALICE), Some("task.settled")).await;
+    (gw, rx, mock, alice, bob, issuer)
+}
+
+/// T40 (SOURCE.2): settlement is an owner-only event carrying no result.
+#[tokio::test]
+async fn settled_tasks_become_events_for_their_owner_only() {
+    let root = tempfile::tempdir().expect("root");
+    let (gw, rx, mock, alice, bob, _issuer) = two_owner_gateway(root.path()).await;
     let (a_tok, b_tok) = (alice.as_str(), bob.as_str());
     let task_a = start_task(&gw, a_tok, "i4-a").await;
     let alice_all = sub_id(&subscribe(&gw, a_tok, "task.settled", &rx.url, json!({})).await);

@@ -124,6 +124,7 @@ async fn events_methods_are_not_found_when_disabled_and_never_proxied() {
         assert!(
             name.starts_with("webhook.")
                 || name.starts_with("backend.mock.")
+                || name.starts_with("backend.hooks.")
                 || name == "task.settled",
             "a gateway-derived name only, got {name}"
         );
