@@ -61,6 +61,7 @@ pub(super) async fn dispatch(
         key: crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
         keyed: true,
         name: "stdio".to_owned(),
+        session: "stdio".to_owned(),
     };
     relay::as_caller(
         operator,

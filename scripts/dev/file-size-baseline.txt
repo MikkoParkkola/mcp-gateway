@@ -6,7 +6,6 @@
 6056 src/gateway/meta_mcp/invoke.rs
 5364 src/gateway/server/mod.rs
 3893 src/gateway/router/tests.rs
-2853 src/transport/http/tests.rs
 2668 src/gateway/meta_mcp/mod.rs
 2348 tests/mik_7272_task_1_acs.rs
 2219 src/config/tests.rs
@@ -19,7 +18,6 @@
 1972 src/gateway/auth.rs
 1920 src/transport/http/mod.rs
 1888 src/backend/tests.rs
-1818 src/control_plane/store.rs
 1631 src/security/firewall/mod.rs
 1617 tests/mik_7272_sub2b_acs.rs
 1603 src/protocol_revision_telemetry.rs
@@ -35,7 +33,6 @@
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
 1180 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1179 src/identity_propagation/mod.rs
-1175 src/trust/lab.rs
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
 1141 src/gateway/task_service/store.rs
 1138 tests/mik_7214_header_9_acs.rs
