@@ -18,6 +18,9 @@ mod gateway;
 #[path = "task_upstream_recovery_sdk/issuer.rs"]
 #[allow(dead_code, reason = "shared fixture; this binary uses a subset")]
 mod issuer;
+#[path = "task_upstream_recovery_sdk/pins.rs"]
+#[allow(dead_code, reason = "shared fixture; this binary uses a subset")]
+mod pins;
 #[path = "mik_7630_events/receiver.rs"]
 #[allow(dead_code, reason = "shared receiver; each binary uses a subset")]
 mod receiver;
