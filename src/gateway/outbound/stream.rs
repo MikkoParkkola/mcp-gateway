@@ -93,6 +93,7 @@ impl StreamJudge {
 
     /// A read that cannot be attributed: `Some` only when this stream
     /// attributes reads.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     fn unattributed_read(&self) -> Option<ReadAttribution> {
         #[cfg(feature = "firewall")]
         {

@@ -8,7 +8,10 @@ use super::*;
 
 /// The direct fixture, its Meta-MCP replaced by one holding the router's
 /// firewall, idempotency, and `cache` when a row reads the response cache.
-async fn meta_fixture(setup: Setup, cache: Option<Arc<crate::cache::ResponseCache>>) -> Fixture {
+pub(super) async fn meta_fixture(
+    setup: Setup,
+    cache: Option<Arc<crate::cache::ResponseCache>>,
+) -> Fixture {
     let mut fx = fixture(setup).await;
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
     let ttl = Duration::from_secs(600);
@@ -372,4 +375,59 @@ async fn meta_allowed_flow_not_refused() {
     let fx = meta_fixture(setup, None).await;
     meta_read(&fx, Some("a")).await;
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+}
+
+/// MIK-7800 (pin): on the meta route a read whose delivery record the log
+/// refuses under `fail-closed` is replaced before the receipts commit (the
+/// record is written inside the dispatch since MIK-7799): B sending A's text
+/// is not refused; the next read is audited, delivered and recorded.
+#[tokio::test]
+async fn meta_read_record_failure_leaves_no_receipt() {
+    use crate::security::TransparencyLogger;
+    use crate::security::audit::AuditFailurePolicy;
+    use crate::security::transparency_log::TransparencyLogConfig;
+    let mut fx = meta_fixture(
+        Setup {
+            tenants: true,
+            ..Setup::default()
+        },
+        None,
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "rv".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log")
+        .with_failure_policy(AuditFailurePolicy::FailClosed),
+    );
+    let state = Arc::get_mut(&mut fx.state).expect("state is unique");
+    Arc::get_mut(&mut state.meta_mcp)
+        .expect("meta is unique")
+        .enable_transparency_log(Arc::clone(&log));
+    let text = format!("{{\"customer_id\":\"t1\",\"note\":\"{PROSE}\"}}");
+    fx.answer_read(Read::Text(text.clone()));
+    let args = invoke("read", &json!({}));
+    log.fail_next_append_for_test();
+    let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        body.contains("-32005"),
+        "base: the failed read record withholds the read: {body}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &text).await, 1);
+    let (_, delivered) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        envelope(&delivered).get("error").is_none(),
+        "control: the audited read is delivered: {delivered}"
+    );
+    let relay = format!("{text} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
 }

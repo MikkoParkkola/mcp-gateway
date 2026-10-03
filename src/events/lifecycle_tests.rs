@@ -112,9 +112,18 @@ fn url(principal: &str) -> String {
 /// Seed a verified `(principal, url)` through a row of another event type,
 /// so the subscribe under test needs no callback POST.
 fn seed_verified(hub: &EventsHub, config: &crate::config::EventsConfig, principal: &str) {
+    seed_verified_at(hub, config, principal, &url(principal));
+}
+
+fn seed_verified_at(
+    hub: &EventsHub,
+    config: &crate::config::EventsConfig,
+    principal: &str,
+    callback: &str,
+) {
     let row: Subscription = serde_json::from_value(json!({
         "v": 1, "id": format!("seed_{principal}"), "principal": principal,
-        "url": url(principal), "name": "seed", "arguments": {}, "secret": "whsec_x",
+        "url": callback, "name": "seed", "arguments": {}, "secret": "whsec_x",
         "previous_secret": null, "previous_until": null,
         "granted_at": chrono::Utc::now(), "expires_at": null, "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null
@@ -138,8 +147,12 @@ fn seed_verified(hub: &EventsHub, config: &crate::config::EventsConfig, principa
 }
 
 async fn subscribe(hub: &Arc<EventsHub>, principal: &str) {
+    subscribe_at(hub, principal, &url(principal)).await;
+}
+
+async fn subscribe_at(hub: &Arc<EventsHub>, principal: &str, callback: &str) {
     let params = json!({"name": NAME, "arguments": {"k": "v"}, "delivery": {
-        "mode": "webhook", "url": url(principal), "secret": whsec()}});
+        "mode": "webhook", "url": callback, "secret": whsec()}});
     hub.subscribe(&caller(principal), Some(&params))
         .await
         .unwrap_or_else(|e| panic!("subscribe {principal}: {e:?}"));
@@ -306,5 +319,174 @@ async fn a_source_refusal_at_fan_out_ends_the_subscription() {
         probe.last.load(Ordering::SeqCst),
         1,
         "its upstream work stopped"
+    );
+}
+
+/// The posts a receiver has received: the headers and body of each.
+type Posts = Arc<parking_lot::Mutex<Vec<(axum::http::HeaderMap, Vec<u8>)>>>;
+
+/// One HTTPS receiver with its own CA: the posts it got.
+struct Receiver {
+    url: String,
+    root: reqwest::Certificate,
+    got: Posts,
+}
+
+async fn receiver() -> Receiver {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let ca = crate::mtls::CertGenerator::init_ca(&crate::mtls::CaParams {
+        cn: "events lifecycle test CA",
+        validity_days: 1,
+    })
+    .expect("CA");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("non-blocking");
+    let addr = listener.local_addr().expect("addr");
+    let leaf_key = rcgen::KeyPair::generate().expect("leaf key");
+    let mut leaf = rcgen::CertificateParams::default();
+    let mut dn = rcgen::DistinguishedName::new();
+    dn.push(rcgen::DnType::CommonName, "127.0.0.1");
+    leaf.distinguished_name = dn;
+    leaf.subject_alt_names = vec![rcgen::SanType::IpAddress(addr.ip())];
+    let ca_key = rcgen::KeyPair::from_pem(&ca.key_pem).expect("CA key");
+    let issuer = rcgen::Issuer::from_ca_cert_pem(&ca.cert_pem, ca_key).expect("issuer");
+    let leaf_pem = leaf.signed_by(&leaf_key, &issuer).expect("leaf").pem();
+    let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+        leaf_pem.into_bytes(),
+        leaf_key.serialize_pem().into_bytes(),
+    )
+    .await
+    .expect("tls");
+    let got = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&got);
+    let app = axum::Router::new().route(
+        "/hook",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                let sink = Arc::clone(&sink);
+                async move {
+                    sink.lock().push((headers, body.to_vec()));
+                    axum::http::StatusCode::OK
+                }
+            },
+        ),
+    );
+    tokio::spawn(async move {
+        let _ = axum_server::from_tcp_rustls(listener, tls)
+            .expect("listener")
+            .serve(app.into_make_service())
+            .await;
+    });
+    Receiver {
+        url: format!("https://{addr}/hook"),
+        root: reqwest::Certificate::from_pem(ca.cert_pem.as_bytes()).expect("root"),
+        got,
+    }
+}
+
+/// T41, delivery clause: a test-only source's event leaves the gateway as a
+/// signed POST to the subscriber's HTTPS receiver, through the unchanged core.
+#[tokio::test]
+async fn a_test_source_event_reaches_a_receiver() {
+    use base64::Engine as _;
+    use hmac::{KeyInit as _, Mac as _};
+    let rx = receiver().await;
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".to_owned()],
+        // A first attempt lost to a loaded runner is retried within the wait.
+        retry_base: std::time::Duration::from_millis(200),
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open_trusting(&config, dir.path(), rx.root.clone()).expect("hub");
+    let probe = Arc::new(Probe::default());
+    hub.register_source(probe.clone());
+    seed_verified_at(&hub, &config, "p1", &rx.url);
+    subscribe_at(&hub, "p1", &rx.url).await;
+    // Delivery needs the audit trail it promises (MIK-7802): a real log.
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::TransparencyLogConfig {
+                enabled: true,
+                path: dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..crate::security::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("audit log"),
+    );
+    hub.start(Services {
+        audit: Some(log),
+        ..services()
+    });
+    assert!(hub.reconcile_catalogue(fanout::CatalogueScan::Complete));
+    hub.emit(event());
+    for _ in 0..600 {
+        if !rx.got.lock().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let posts = rx.got.lock().clone();
+    let state = |sub: &str| -> String {
+        std::fs::read_dir(dir.path().join(sub))
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                    .map(|t| {
+                        let v: Value = serde_json::from_str(&t).unwrap_or_default();
+                        format!(
+                            "state={} attempt={} last_status={} dead_as={}",
+                            v["state"], v["attempt"], v["last_status"], v["dead_as"]
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        posts.len(),
+        1,
+        "one delivery to the receiver; outbox: [{}] dead: [{}]",
+        state("outbox"),
+        state("dead")
+    );
+    let body: Value = serde_json::from_slice(&posts[0].1).expect("json body");
+    assert_eq!(body["name"], NAME);
+    // Verified here with an independent HMAC over id.timestamp.body under
+    // the subscriber's secret, not with the gateway's own signer.
+    let header = |name: &str| {
+        posts[0]
+            .0
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let (id, timestamp, signatures) = (
+        header("webhook-id"),
+        header("webhook-timestamp"),
+        header("webhook-signature"),
+    );
+    assert!(
+        !id.is_empty() && !timestamp.is_empty(),
+        "id and timestamp present"
+    );
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(whsec().trim_start_matches("whsec_"))
+        .expect("secret decodes");
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&key).expect("key");
+    mac.update(format!("{id}.{timestamp}.").as_bytes());
+    mac.update(&posts[0].1);
+    let expected = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
+    assert!(
+        signatures
+            .split(' ')
+            .any(|part| part.strip_prefix("v1,") == Some(expected.as_str())),
+        "the POST is signed under the subscriber's secret: {signatures}"
     );
 }

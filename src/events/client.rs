@@ -51,12 +51,33 @@ impl CallbackClient {
     /// # Errors
     /// The TLS backend failed to initialise.
     pub(crate) fn new(allowed: Vec<(IpAddr, u8)>) -> crate::Result<Self> {
-        let http = reqwest::Client::builder()
+        Self::build(allowed, None)
+    }
+
+    /// As [`Self::new`], also trusting `root`: a test receiver's own CA, so a
+    /// row can deliver over TLS without a process-wide trust file.
+    #[cfg(test)]
+    pub(crate) fn trusting(
+        allowed: Vec<(IpAddr, u8)>,
+        root: reqwest::Certificate,
+    ) -> crate::Result<Self> {
+        Self::build(allowed, Some(root))
+    }
+
+    fn build(
+        allowed: Vec<(IpAddr, u8)>,
+        root: Option<reqwest::Certificate>,
+    ) -> crate::Result<Self> {
+        let mut builder = reqwest::Client::builder()
             .no_proxy()
             .dns_resolver(PinningResolver::new(SystemResolver).with_allowed(allowed.clone()))
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TOTAL_TIMEOUT)
+            .timeout(TOTAL_TIMEOUT);
+        if let Some(root) = root {
+            builder = builder.add_root_certificate(root);
+        }
+        let http = builder
             .build()
             .map_err(|e| crate::Error::Config(format!("events callback client: {e}")))?;
         Ok(Self { http, allowed })

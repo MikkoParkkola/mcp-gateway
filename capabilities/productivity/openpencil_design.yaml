@@ -1,4 +1,4 @@
-sha256: bf55e0283d26cc290e4f34cf0d638fde05486e64af8ae05ed1c4e528725a6920
+sha256: 01d45cda43edf73d3943908a131efc8663f722b040c20df85c521d9e807b00cc
 fulcrum: "1.0"
 name: openpencil_design
 description: >
@@ -77,10 +77,14 @@ providers:
         param: operation
         tools:
           open_file:
+            requires:
+            - file_path
             tool: open_file
             arguments:
               path: '{file_path}'
           create_node:
+            requires:
+            - node_type
             tool: create_shape
             arguments:
               type: '{node_type}'
@@ -89,10 +93,14 @@ providers:
               width: 100
               height: 100
           query_nodes:
+            requires:
+            - query
             tool: query_nodes
             arguments:
               selector: '{query}'
           export_png:
+            requires:
+            - node_id
             tool: export_image
             arguments:
               ids:
@@ -100,6 +108,8 @@ providers:
               format: png
               scale: '{scale}'
           export_svg:
+            requires:
+            - node_id
             tool: export_svg
             arguments:
               ids:
@@ -107,6 +117,8 @@ providers:
           list_components:
             tool: get_components
           set_auto_layout:
+            requires:
+            - node_id
             tool: set_layout
             arguments:
               id: '{node_id}'

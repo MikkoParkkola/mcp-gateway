@@ -282,6 +282,9 @@ impl StdioTransport {
             let _ = eof_tx.send(true);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
+                // The stream is over: wake every waiting call now (its receiver
+                // sees a closed channel) instead of at its request timeout.
+                transport.pending.clear();
                 // The listener's receivers see `Closed` at once.
                 transport.taps.clear();
             }

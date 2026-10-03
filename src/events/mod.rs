@@ -50,6 +50,8 @@ use parking_lot::RwLock;
 #[cfg(feature = "webui")]
 pub(crate) use admin::{ReplayRefusal, is_dead_reason};
 pub(crate) use fanout::CatalogueScan;
+#[cfg(feature = "webui")]
+pub(crate) use governance::Actor;
 pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
@@ -153,11 +155,26 @@ impl EventsHub {
     /// The store directory cannot be created or read, or the client fails
     /// to build.
     pub(crate) fn open(config: &EventsConfig, store_dir: &Path) -> crate::Result<Arc<Self>> {
-        let allowed: Vec<(IpAddr, u8)> = config
-            .callback_allow_private
-            .iter()
-            .filter_map(|c| crate::config::parse_cidr(c))
-            .collect();
+        let client = client::CallbackClient::new(allowed_networks(config))?;
+        Self::open_with(config, store_dir, client)
+    }
+
+    /// As [`Self::open`], trusting `root` for callback TLS (tests only).
+    #[cfg(test)]
+    pub(crate) fn open_trusting(
+        config: &EventsConfig,
+        store_dir: &Path,
+        root: reqwest::Certificate,
+    ) -> crate::Result<Arc<Self>> {
+        let client = client::CallbackClient::trusting(allowed_networks(config), root)?;
+        Self::open_with(config, store_dir, client)
+    }
+
+    fn open_with(
+        config: &EventsConfig,
+        store_dir: &Path,
+        client: client::CallbackClient,
+    ) -> crate::Result<Arc<Self>> {
         let store = store::Store::open(store_dir, chrono::Utc::now(), tail_policy(config))
             .map_err(|e| {
                 crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
@@ -165,7 +182,7 @@ impl EventsHub {
         Ok(Arc::new(Self {
             config: config.clone(),
             store: Arc::new(store),
-            client: client::CallbackClient::new(allowed)?,
+            client,
             verify_limit: limiter::HostLimiter::new(
                 config.verification_per_host_per_minute,
                 MAX_TRACKED_HOSTS,
@@ -231,6 +248,14 @@ impl EventsHub {
     pub(crate) fn capability(&self) -> Option<serde_json::Value> {
         (!self.catalogue().is_empty()).then(|| serde_json::json!({ "listChanged": true }))
     }
+}
+
+fn allowed_networks(config: &EventsConfig) -> Vec<(IpAddr, u8)> {
+    config
+        .callback_allow_private
+        .iter()
+        .filter_map(|c| crate::config::parse_cidr(c))
+        .collect()
 }
 
 fn tail_policy(config: &EventsConfig) -> store::TailPolicy {
