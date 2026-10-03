@@ -13,7 +13,7 @@
 # exclusion is the same one MIK-7478's fail-fast check uses.
 set -euo pipefail
 
-CEILING=44
+CEILING=43
 LIMIT=800
 
 # Count .rs files under $1 whose length exceeds LIMIT, skipping test sources.

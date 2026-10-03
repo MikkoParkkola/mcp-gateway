@@ -2537,7 +2537,7 @@ impl Gateway {
                         request,
                         session_id,
                         &protocol_telemetry_sink,
-                        reads.guard(),
+                        &reads,
                     )),
                     &writer,
                     &reads,
@@ -2545,8 +2545,11 @@ impl Gateway {
                 .await;
                 Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    let frame = reads.batch(responses);
-                    drop(writer.send(frame.await).await);
+                    drop(
+                        writer
+                            .send(crate::gateway::outbound::StdioReads::batch_of(responses))
+                            .await,
+                    );
                 }
                 continue;
             }
@@ -2610,8 +2613,8 @@ impl Gateway {
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
                 async move {
-                    let (response, hidden) = Self::dispatch_streaming_notifications(
-                        Box::pin(Self::dispatch_single_with_sink(
+                    let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_single_staged(
                             &meta_mcp,
                             &tool_policy,
                             &mtls_policy,
@@ -2639,9 +2642,14 @@ impl Gateway {
                     // was processed, however long the queue was full.
                     let params = params.flatten();
                     let response = match response {
-                        Some(value) => {
-                            Some(reads.answer(value, params.as_ref(), hidden.as_ref()).await)
-                        }
+                        Some(value) => Some(
+                            Self::judge_and_commit(
+                                &reads,
+                                (value, params.as_ref(), hidden.as_ref()),
+                                staged,
+                            )
+                            .await,
+                        ),
                         None => None,
                     };
                     if let Some(response) = response
@@ -2818,13 +2826,26 @@ impl Gateway {
         }
     }
 
-    /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,
-    /// which spans dispatch and finalize (COLLUDE.1 §13.3). With relay
-    /// detection off there is nothing to collect, and no box to allocate.
-    #[allow(
-        clippy::large_futures,
-        reason = "the unboxed arm is the dispatch as it ran before the collector"
-    )]
+    /// Judge one finalized stdio answer, then record the receipts its dispatch
+    /// staged, only when the frame as written delivers a result: a read the
+    /// judge withholds, or an audit failure replaces, leaves none.
+    async fn judge_and_commit(
+        reads: &crate::gateway::outbound::StdioReads,
+        (value, params, hidden): (
+            serde_json::Value,
+            Option<&serde_json::Value>,
+            Option<&crate::security::tenant_reads::ReadAttribution>,
+        ),
+        staged: crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+    ) -> crate::gateway::outbound::OutboundFrame {
+        let frame = reads.answer(value, params, hidden).await;
+        staged.commit(frame.delivers_result());
+        frame
+    }
+
+    /// [`Self::dispatch_single_staged`] recording the receipts straight away,
+    /// for a caller that judges no frame (a test).
+    #[cfg(test)]
     async fn dispatch_single_with_sink(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
@@ -2833,12 +2854,42 @@ impl Gateway {
         client: StdioClient<'_>,
         sink: &StdioTelemetry,
     ) -> Option<serde_json::Value> {
+        let (answer, staged) =
+            Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client, sink)
+                .await;
+        // No frame is judged here: the receipts follow the answer as built.
+        staged.commit(answer.as_ref().is_some_and(|a| a.get("error").is_none()));
+        answer
+    }
+
+    /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,
+    /// which spans dispatch and finalize (COLLUDE.1 §13.3), returning what it
+    /// staged: the caller records it after the answer's read verdict. With
+    /// relay detection off there is nothing to collect, and no box to allocate.
+    #[allow(
+        clippy::large_futures,
+        reason = "the unboxed arm is the dispatch as it ran before the collector"
+    )]
+    async fn dispatch_single_staged(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        request: serde_json::Value,
+        client: StdioClient<'_>,
+        sink: &StdioTelemetry,
+    ) -> (
+        Option<serde_json::Value>,
+        crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+    ) {
         let dispatch =
             Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink);
         if meta_mcp.relay_active() {
-            return crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(dispatch)).await;
+            return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
         }
-        dispatch.await
+        (
+            dispatch.await,
+            crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
+        )
     }
 
     #[expect(
@@ -2997,7 +3048,8 @@ impl Gateway {
                 chain_nonce: chain_nonce.as_deref(),
             },
         ).await;
-        meta_mcp.commit_relay_receipts(&response);
+        // COLLUDE.1: the receipts staged here are recorded by the caller once
+        // the answer has been judged (`judge_and_commit`).
         if let Some(execution) = execution {
             execution.complete_delivery(&response, signing_context.as_ref());
         }

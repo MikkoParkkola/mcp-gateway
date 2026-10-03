@@ -437,6 +437,26 @@ fn validate_property(
             }
         }
 
+        // Array size constraints.
+        if let Some(items) = coerced.as_array() {
+            if let Some(max) = prop_schema.get("maxItems").and_then(Value::as_u64)
+                && (items.len() as u64) > max
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must have at most {max} items"),
+                ));
+            }
+            if let Some(min) = prop_schema.get("minItems").and_then(Value::as_u64)
+                && (items.len() as u64) < min
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must have at least {min} items"),
+                ));
+            }
+        }
+
         // String length constraints.
         if let Some(s) = coerced.as_str() {
             let len = s.chars().count();
@@ -446,6 +466,17 @@ fn validate_property(
                 violations.push(ValidationViolation::new(
                     name,
                     format!("must be at least {min_len} characters long"),
+                ));
+            }
+            // `pattern` is unanchored, as in JSON Schema. A pattern that does not
+            // compile refuses every value: a guard that cannot be read must not
+            // be skipped.
+            if let Some(pattern) = prop_schema.get("pattern").and_then(Value::as_str)
+                && !regex::Regex::new(pattern).is_ok_and(|re| re.is_match(s))
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must match the pattern {pattern}"),
                 ));
             }
             if let Some(max_len) = prop_schema.get("maxLength").and_then(Value::as_u64)

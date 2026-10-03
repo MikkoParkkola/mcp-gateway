@@ -1,4 +1,4 @@
-sha256: a497d8f3ea54287284daf8e83004c8087ffb9da09e345ce268878a6ac49f185c
+sha256: 2a0d21c769161dc7231c3b7ba7bd84bee0425ed148f9e8610dd2928fd6e847d8
 fulcrum: "1.0"
 name: calendar_get_attachment
 description: >
@@ -33,19 +33,19 @@ schema:
         items:
           type: object
           properties:
-            file_url:
+            fileUrl:
               type: string
               description: URL to the attached file (usually a Google Drive link)
             title:
               type: string
               description: Attachment title/filename
-            mime_type:
+            mimeType:
               type: string
               description: MIME type of the attachment
-            icon_link:
+            iconLink:
               type: string
               description: URL to the attachment icon
-            file_id:
+            fileId:
               type: string
               description: Google Drive file ID (use with drive_download to fetch content)
         description: List of attachments on the event (Drive file references)
@@ -62,22 +62,9 @@ providers:
       headers:
         Authorization: "Bearer {access_token}"
         Accept: "application/json"
-      response_transform: |
-        attachments = data.get("attachments", [])
-        return {
-            "id": data.get("id"),
-            "summary": data.get("summary"),
-            "attachments": [
-                {
-                    "file_url": a.get("fileUrl"),
-                    "title": a.get("title"),
-                    "mime_type": a.get("mimeType"),
-                    "icon_link": a.get("iconLink"),
-                    "file_id": a.get("fileId")
-                }
-                for a in attachments
-            ]
-        }
+
+transform:
+  project: [id, summary, attachments]
 
 cache:
   strategy: exact
@@ -100,7 +87,7 @@ metadata:
   notes: |
     Google Calendar attachments are NOT inline binary data. They are references
     to Google Drive files. The workflow to download a calendar attachment is:
-    1. calendar_get_attachment -> get file_id from attachments list
-    2. drive_download(file_id=file_id) -> get actual file content
+    1. calendar_get_attachment -> get fileId from attachments list
+    2. drive_download(file_id=fileId) -> get actual file content
     The event must have been created with supportsAttachments=true for
     attachments to be present in the response.

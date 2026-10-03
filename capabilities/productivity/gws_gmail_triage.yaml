@@ -1,4 +1,4 @@
-sha256: e8361afed5b84454241d9ad594d88b838aedd680f6b8ce82293d071243df09ca
+sha256: f67ed77206155394d75ea1a39f706e9b522839cc7b1ccd8aafbc25d7fccbb211
 fulcrum: "1.0"
 name: gws_gmail_triage
 description: Triage Gmail messages by modifying labels. Add or remove labels such as INBOX, UNREAD, STARRED, IMPORTANT, SPAM, TRASH.
@@ -9,21 +9,21 @@ schema:
     properties:
       messageId:
         type: string
-        description: "Gmail message ID to modify"
+        description: Gmail message ID to modify
       addLabels:
-        type: string
-        description: "Comma-separated label IDs to add (e.g., STARRED, IMPORTANT)"
-        examples:
-          - "STARRED"
-          - "IMPORTANT,STARRED"
+        type: array
+        items:
+          type: string
+        maxItems: 50
+        description: Label IDs to add
       removeLabels:
-        type: string
-        description: "Comma-separated label IDs to remove (e.g., UNREAD, INBOX)"
-        examples:
-          - "UNREAD"
-          - "INBOX,UNREAD"
+        type: array
+        items:
+          type: string
+        maxItems: 50
+        description: Label IDs to remove
     required:
-      - messageId
+    - messageId
   output:
     type: object
     properties:
@@ -42,14 +42,19 @@ providers:
     config:
       command: gws
       args:
-        - gmail
-        - users
-        - messages
-        - modify
-        - "--params"
-        - '{"userId": "me", "id": "{messageId}"}'
-        - "--json"
-        - '{"addLabelIds": ["{addLabels}"], "removeLabelIds": ["{removeLabels}"]}'
+      - gmail
+      - users
+      - messages
+      - modify
+      - json: --params=
+        value:
+          userId: me
+          id: '{messageId}'
+      - json: --json=
+        value:
+          addLabelIds: '{addLabels}'
+          removeLabelIds: '{removeLabels}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -57,8 +62,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s gmail"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/gmail.modify
 
 metadata:
   category: productivity

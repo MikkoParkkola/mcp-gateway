@@ -5,7 +5,7 @@
     "minimum": 9,
     "readme_benchmark": 11
   },
-  "capability_count": 127,
+  "capability_count": 137,
   "startup_benchmark": {
     "command": "hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'",
     "mean_ms": 8.0,
