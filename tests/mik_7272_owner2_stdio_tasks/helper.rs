@@ -52,7 +52,6 @@ pub async fn bound<F: std::future::Future>(fut: F) -> Option<F::Output> {
     loop {
         tokio::select! {
             biased;
-            out = &mut fut => return Some(out),
             () = tokio::time::sleep(TICK) => {
                 // A gap between two looks far longer than a look takes means
                 // the whole machine stood still (a paused VM, a starved
@@ -67,6 +66,7 @@ pub async fn bound<F: std::future::Future>(fut: F) -> Option<F::Output> {
                     return None;
                 }
             }
+            out = &mut fut => return Some(out),
         }
     }
 }
