@@ -137,7 +137,10 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
     };
     match opened {
-        Ok(stream) => state.current = Some((stream, first)),
+        Ok(stream) => {
+            state.opened = Instant::now();
+            state.current = Some((stream, first));
+        }
         Err(Refused::Unsupported) => return Outcome::Unsupported,
         Err(Refused::Expired) => return failed(),
         Err(Refused::Failed(error)) => {
@@ -298,7 +301,17 @@ impl<'a> State<'a> {
             return;
         }
         match backend.read_resource_snapshot(fresh).await {
-            Ok(read) => {
+            Ok(mut read) => {
+                // A watched URI missing from a cached list is confirmed by a
+                // read that bypasses the cache before anything is revoked.
+                let watched = requested(self.shared).uris;
+                if !fresh
+                    && read.complete
+                    && watched.iter().any(|u| !read.uris.contains(u))
+                    && let Ok(again) = backend.read_resource_snapshot(true).await
+                {
+                    read = again;
+                }
                 let (complete, listed) = (read.complete, read.uris.clone());
                 self.shared.snapshot.lock().read(read.uris, read.complete);
                 if complete && let Some(hub) = hub.upgrade() {
@@ -382,7 +395,10 @@ impl<'a> State<'a> {
             let want = requested(self.shared);
             let have = self.current.as_ref().map(|(_, r)| r.clone());
             if self.pending.is_none() && have.as_ref() != Some(&want) && now >= self.retry_open_at {
-                match open(handle, true, want.clone()).await {
+                let opened = tokio::time::timeout(OPEN_LIMIT, open(handle, true, want.clone()))
+                    .await
+                    .unwrap_or(Err(Refused::Expired));
+                match opened {
                     Ok(stream) => {
                         self.pending = Some(Pending {
                             stream,

@@ -49,18 +49,17 @@ impl UpstreamListen for StdioTransport {
             Some(listen_filter(requested.kinds, &requested.uris)),
         )?;
         let rx = self.taps.listen(&id_value, requested);
-        let message = serde_json::to_string(&json!({
-            "jsonrpc": "2.0", "id": id, "method": "subscriptions/listen", "params": params,
-        }))
-        .map_err(crate::Error::from)?;
-        if let Err(error) = self.write_message(&message).await {
-            self.taps.forget(&id_value);
-            return Err(error.into());
-        }
+        // Installed before the write: a cancelled open still forgets the tap
+        // and tells the peer.
         let guard = CancelListen {
             transport: Arc::downgrade(&self),
             id: id_value,
         };
+        let message = serde_json::to_string(&json!({
+            "jsonrpc": "2.0", "id": id, "method": "subscriptions/listen", "params": params,
+        }))
+        .map_err(crate::Error::from)?;
+        self.write_message(&message).await?;
         Ok(FrameStream::guarded(rx, guard))
     }
 
