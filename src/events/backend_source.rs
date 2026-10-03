@@ -199,6 +199,7 @@ pub(super) struct Debounce {
 
 impl EventsHub {
     /// Offer `backend.<x>.tools_changed` for the backends `names` lists.
+    #[cfg(test)]
     pub(crate) fn install_backend_source(self: &Arc<Self>, names: BackendNames) {
         self.register_source(Arc::new(BackendSource {
             names,

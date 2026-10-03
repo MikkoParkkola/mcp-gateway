@@ -125,7 +125,11 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     match opened {
         Ok(stream) => state.current = Some((stream, requested(shared))),
         Err(Refused::Unsupported) => return Outcome::Unsupported,
-        Err(_) => return failed(),
+        Err(Refused::Expired) => return failed(),
+        Err(Refused::Failed(error)) => {
+            debug!(backend = %shared.name, %error, "upstream listener: stream refused");
+            return failed();
+        }
     }
     state.sync_legacy(backend).await;
     let mut tick = tokio::time::interval(TICK);

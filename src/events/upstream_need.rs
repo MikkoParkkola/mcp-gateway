@@ -146,6 +146,7 @@ impl Coalescer {
     }
 
     /// When the next window closes, if any is open.
+    #[cfg(test)]
     pub(crate) fn next(&self) -> Option<Instant> {
         self.open.values().min().copied()
     }

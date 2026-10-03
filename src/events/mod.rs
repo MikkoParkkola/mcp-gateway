@@ -35,10 +35,6 @@ mod task_source;
 mod types;
 mod upstream;
 mod upstream_listener;
-#[allow(
-    dead_code,
-    reason = "MIK-7630 I5: driven by the listener once I4's source hooks land"
-)]
 mod upstream_need;
 mod upstream_session;
 mod webhook_source;

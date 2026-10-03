@@ -415,7 +415,7 @@ def handle(frame):
     if m == "server/discover" and modern:
         reply(i, {"resultType": "complete", "supportedVersions": ["2026-07-28"], "capabilities": CAPS,
                   "serverInfo": {"name": "peer", "version": "0"}})
-    elif m == "initialize" and not modern:
+    elif m == "initialize":  # the gateway always handshakes a stdio child first
         reply(i, {"protocolVersion": "2025-06-18", "capabilities": CAPS, "serverInfo": {"name": "peer", "version": "0"}})
     elif m == "subscriptions/listen" and modern and "io.modelcontextprotocol/protocolVersion" in p.get("_meta", {}):
         listens[i] = p

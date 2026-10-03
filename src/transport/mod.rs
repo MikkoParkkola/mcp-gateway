@@ -6,10 +6,6 @@ mod command_split;
 mod http;
 pub(crate) mod notification_sink;
 mod stdio;
-#[allow(
-    dead_code,
-    reason = "MIK-7630 I5: wired into the listener once I4's source hooks land"
-)]
 pub(crate) mod upstream_tap;
 pub mod websocket;
 #[cfg(test)]

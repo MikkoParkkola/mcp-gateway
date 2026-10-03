@@ -136,6 +136,7 @@ impl HttpTransport {
             tokio::select! {
                 () = read => {}
                 () = cancel.cancelled() => {}
+                () = tx.closed() => {}
             }
         });
         Ok(Ok(rx))
