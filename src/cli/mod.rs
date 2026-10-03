@@ -29,6 +29,7 @@
 
 pub mod completion;
 pub mod dashboard_link;
+pub mod events;
 pub mod identity;
 pub mod invoke;
 pub mod output;
@@ -313,6 +314,8 @@ pub enum Command {
 
     /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
     DashboardLink(dashboard_link::DashboardLinkArgs),
+    /// Administer MCP Events: list and replay dead-lettered deliveries
+    Events(events::EventsArgs),
 
     /// Lint capability YAMLs against agent-UX best practices
     ///
