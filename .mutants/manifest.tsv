@@ -1,0 +1,4 @@
+head_sha	2922820895de59f1b03e3ec33407bd27fbb83224
+# batch 3 for #2749: the two survivors of batch 1, with their new tests
+S1	linux	p1.patch	--lib -- a_call_the_tool_gate_refuses_does_not_spend_its_nonce
+S3	linux	p3.patch	--lib -- a_shared_personal_login_refuses_a_request_on_a_multi_user_gateway

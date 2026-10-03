@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_preflight.rs b/src/gateway/router/backend_handlers/direct_preflight.rs
+index 818101925..1abf46579 100644
+--- a/src/gateway/router/backend_handlers/direct_preflight.rs
++++ b/src/gateway/router/backend_handlers/direct_preflight.rs
+@@ -400,7 +400,7 @@ pub(super) async fn propagate_identity(
+     // served the shared token.
+     if let Err(e) = state
+         .meta_mcp
+-        .enforce_oauth_isolation(name, !propagation.headers.is_empty())
++        .enforce_oauth_isolation(name, true)
+     {
+         return Err(build_http_error_response(
+             Some(id.clone()),

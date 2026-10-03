@@ -1,0 +1,15 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 2583c7e6e..8d7a4d250 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -206,9 +206,9 @@ pub(super) async fn admit<'a>(
+         sanitized: None,
+         idem_reservation: None,
+     };
++    admit_signing_nonce(scope, preflight)?;
+     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
+     let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
+-    admit_signing_nonce(scope, preflight)?;
+     match guarded {
+         Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
+             crate::gateway::meta_mcp::invoke::audit::note_cached();
