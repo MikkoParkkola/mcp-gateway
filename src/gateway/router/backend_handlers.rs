@@ -8,7 +8,6 @@ use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -429,7 +428,7 @@ pub(super) async fn backend_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     request: axum::http::Request<axum::body::Body>,
-) -> impl IntoResponse {
+) -> crate::gateway::outbound::OutboundReply {
     // Track in-flight request for graceful drain
     let _inflight_permit = state.inflight.acquire().await;
 
@@ -440,11 +439,13 @@ pub(super) async fn backend_handler(
         && log.admit().await.is_err()
     {
         let error = crate::Error::AuditUnavailable;
-        return bodiless_accepted(build_http_error_response(
-            None,
-            error.to_rpc_code(),
-            error.to_string(),
-            StatusCode::SERVICE_UNAVAILABLE,
+        return crate::gateway::outbound::gateway_reply(bodiless_accepted(
+            build_http_error_response(
+                None,
+                error.to_rpc_code(),
+                error.to_string(),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
         ));
     }
 
