@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/task_notify.rs b/src/gateway/meta_mcp/task_notify.rs
+index d95ca59ec..033aef383 100644
+--- a/src/gateway/meta_mcp/task_notify.rs
++++ b/src/gateway/meta_mcp/task_notify.rs
+@@ -111,6 +111,6 @@ impl MetaMcp {
+             .record_notification_delivery_attempt(sent, &correlation)
+             .await;
+         pending.staged.record(self, delivered && !pending.withheld);
+-        delivered
++        true
+     }
+ }

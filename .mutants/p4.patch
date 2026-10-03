@@ -1,0 +1,21 @@
+diff --git a/src/gateway/meta_mcp/response_security.rs b/src/gateway/meta_mcp/response_security.rs
+index 41c56e157..509fa7c2e 100644
+--- a/src/gateway/meta_mcp/response_security.rs
++++ b/src/gateway/meta_mcp/response_security.rs
+@@ -341,13 +341,9 @@ impl super::MetaMcp {
+         frame: &serde_json::Value,
+         correlation: &ResponseCorrelation<'_>,
+     ) -> bool {
+-        self.record_delivery_attempt(
+-            Ok(frame.clone()),
+-            crate::security::audit::AuditOutcome::Ok,
+-            "notification_delivered",
+-            correlation,
+-        )
+-        .await
++        let _ = correlation;
++        let _ = frame;
++        true
+     }
+ 
+     async fn record_delivery_attempt(
