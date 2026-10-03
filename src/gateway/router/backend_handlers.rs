@@ -451,7 +451,8 @@ async fn dispatch_in_scope(
 ///
 /// Every `tasks/*` method, in any letter case, because a backend that matches
 /// names loosely acts on a case variant as the real method; plus
-/// `subscriptions/listen` naming `taskIds`. KEEP IN STEP with
+/// `subscriptions/listen` naming `taskIds`, at the params root or under
+/// `notifications`. KEEP IN STEP with
 /// `reaches_tasks_extension` in `router/handlers.rs`: a task-reaching method
 /// added there and not here is forwarded here without an owner check.
 /// The one intended difference: `tools/call` carrying `task` still forwards;
@@ -461,7 +462,7 @@ fn is_task_method(method: &str, params: Option<&Value>) -> bool {
         .get(..6)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("tasks/"))
         || (method.eq_ignore_ascii_case("subscriptions/listen")
-            && params.is_some_and(|p| p.get("taskIds").is_some()))
+            && params.is_some_and(crate::protocol::subscriptions::names_task_ids))
 }
 
 /// Backend handler (POST /mcp/{name})

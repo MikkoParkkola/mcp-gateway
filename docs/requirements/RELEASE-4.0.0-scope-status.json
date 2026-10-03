@@ -1141,11 +1141,20 @@
     },
     {
       "id": "GH1945.COLLUDE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Pending. Today's ASI10 controls bound one gateway's behaviour (kill switch and error budgets, src/kill_switch/; cost budgets; attestation scope); firewall anomaly scoring is inert (#1756) and is not evidence. Tracked in #1945. Decision row 24 in RELEASE-4.0.0-operator-decisions.md (maintainer decision under delegated authority, two independent reviews)."
+      "evidence": [
+        "src/security/firewall/collusion_tests.rs",
+        "src/security/firewall/collusion_gate_tests.rs",
+        "src/gateway/router/collusion_direct_tests.rs",
+        "src/gateway/router/collusion_direct_tests/meta.rs",
+        "src/gateway/meta_mcp/collusion_bridge_tests.rs",
+        "src/gateway/meta_mcp/invoke/relay_tests.rs",
+        "src/gateway/router/tests/task_execution_adapter/relay_settlement.rs",
+        "docs/design/2026-09-28-asi10-verbatim-relay.md"
+      ],
+      "note": "Graded 2026-10-03. Direct route merged in #2644 (squash 6f0dd5fec), meta route in #2678 (squash 734eb228a). Clause coverage. Opt-in: CollusionAction defaults to Off (src/security/firewall/collusion_gate.rs:24-25); off records and checks nothing (collusion_tests.rs:412, collusion_direct_tests.rs:658). Reported under observe: gate verdict is Warn with one digest-only finding, audited (collusion_gate_tests.rs:229); direct route lets it through (collusion_direct_tests.rs:370); meta route lets it through and audits it (meta_mcp/invoke/relay_tests.rs:164, added by the grading PR). Refused under block: direct route (collusion_direct_tests.rs:342), meta route (collusion_direct_tests/meta.rs:126; bridged retry round collusion_bridge_tests.rs:186; bridged prompt :231, :266; modern retry :313; task settlement and task reads relay_settlement.rs:100,193). Both routes share one detector (src/gateway/server/collusion_share_tests.rs:12). One principal never flags itself: collusion_tests.rs:261; direct collusion_direct_tests.rs:470; meta collusion_direct_tests/meta.rs:261 (own copy excuses the reader). Relays outside the window are not flagged: collusion_tests.rs:273; meta collusion_direct_tests/meta.rs:210 (a send after the receipt expired goes through, base assertion at :222). ASI10 stays PARTIAL: docs/OWASP_AGENTIC_AI_COMPLIANCE.md:23 and the follow-up list name prompt and resource reads (MIK-7765) as uncovered. Mutants, judged per row: direct route runs 37020519860 (11 RED, one equivalent mutant removed) and 37033883010 (5/5 RED); meta route run 37047875543 on c9caab9e4: R1-R7 and R10-R13 RED; R8 survived there, re-run 37057688784 RED; final head aeb7529b0 run 37069692040: R8 RED, R10 RED, R14 RED. Named untested residual: R9 (upstream task result never staged, worker.rs) has no test, tracked as MIK-7790. It is not a clause of the criterion text: the criterion names the meta and direct routes, sensitivity, self-exemption and the window, and R9 is one internal staging point of the task path, whose settlement and read paths are pinned by R7 and R14. Other limits, accepted in the reviewed design: multi-step replays renew nothing (design 13.3 item 3), prompts/get and resources/read are not covered (MIK-7765), and a credential flipping to empty between the check and secret injection leaves one value unchecked."
     },
     {
       "id": "GH1625.BOTREVIEW.1",
@@ -1688,7 +1697,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope; exclusions: decision mik_7630_events_source1_exclusions."
     },
     {
       "id": "MIK-7630.SOURCE.2",
@@ -1956,6 +1965,20 @@
         "docs/design/2026-10-01-mik-7630-mcp-events.md",
         "docs/design/2026-10-01-mik-7630-event-sources-4.0.1.md",
         "docs/requirements/RELEASE-4.0.0-operator-decisions.md"
+      ]
+    },
+    {
+      "id": "mik_7630_events_source1_exclusions",
+      "status": "resolved",
+      "resolved": "2026-10-02",
+      "authority": "lead interim ruling under the operator's standing instruction to decide with gpt-review and grok-review (2026-10-02); not an operator approval receipt",
+      "selection": "MIK-7630.SOURCE.1 names three exclusions: A2A backends, HTTP backends on the legacy SSE-handshake path, and backends reached with an identity-propagated or per-user credential. A subscription to backend.<name>.resource_updated, resources_changed or prompts_changed on one is refused with -32014 and a named data.reason (a2a_transport, sse_handshake_transport, identity_propagation, per_user_credential); it is never silently empty. SOURCE.1 stays pending until the upstream listener ships and is graded against the amended text.",
+      "rationale": "Identity-propagated and per-user backends answer under one principal's credential, so a shared listener would deliver one user's change to another; the handshake path and A2A carry no listen stream the gateway can hold open without a behaviour change. The operator fleet has 0 of 34 backends on the handshake path, 0 A2A and 0 identity-propagating.",
+      "consequence": "The 4.0.0 gate for SOURCE.1 covers the 2026-07-28 HTTP, streamable HTTP and stdio backends. The refusals are listed in docs/release/v4.0.0-supported-matrix.md and UPGRADING-4.0 item 128.",
+      "evidence": [
+        "docs/design/2026-10-01-mik-7630-mcp-events.md",
+        "docs/release/v4.0.0-supported-matrix.md",
+        "tests/mik_7630_events_refusal.rs"
       ]
     }
   ]
