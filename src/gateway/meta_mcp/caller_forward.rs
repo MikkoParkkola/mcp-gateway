@@ -97,11 +97,11 @@ impl MetaMcp {
         };
         // A caller no principal is found for needs no mint, so its verdict is
         // judged first: a request refused anyway writes no identity audit record.
-        if self.principal_for_server(&backend.name, caller).is_none() {
+        if self.principal_for(backend, caller).is_none() {
             isolation(None)?;
         }
         let credential = if backend.identity_propagation_config().is_some() {
-            self.resolve_propagation_credential_held(&backend.name, caller)
+            self.resolve_propagation_credential_held_for(&backend.name, Some(backend), caller)
                 .await
                 .map(|(headers, binding, _lease)| (headers, binding))
                 .map_err(|e| {
