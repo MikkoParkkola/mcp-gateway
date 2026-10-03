@@ -167,3 +167,4 @@ RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
     chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
 
 USER gateway
+# image-cve probe: confirm the release-line tip passes the full-variant trivy gate (throwaway, never merged)
