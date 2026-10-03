@@ -19,6 +19,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
 CODES = {}
+REFRESH = set()
+CLIENTS = {}  # client_id -> registered redirect_uris
 
 
 class Shim(BaseHTTPRequestHandler):
@@ -89,6 +91,7 @@ class Shim(BaseHTTPRequestHandler):
         if not uris or not all(self.redirect_ok(u) for u in uris):
             return self.send_json(400, {"error": "invalid_redirect_uri"})
         client = "c-" + secrets.token_urlsafe(12)
+        CLIENTS[client] = list(uris)
         self.evidence(kind="oauth", step="register")
         self.send_json(201, {"client_id": client, "redirect_uris": uris,
                              "token_endpoint_auth_method": "none",
@@ -106,11 +109,15 @@ class Shim(BaseHTTPRequestHandler):
     def authorize(self):
         q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
         uri = q.get("redirect_uri", "")
+        resource = q.get("resource")
+        if uri not in CLIENTS.get(q.get("client_id", ""), []) \
+                or (resource is not None and resource != self.origin() + "/mcp"):
+            return self.send_json(400, {"error": "invalid_request"})
         if q.get("response_type") != "code" or not self.redirect_ok(uri) \
                 or q.get("code_challenge_method") != "S256" or not q.get("code_challenge"):
             return self.send_json(400, {"error": "invalid_request"})
         code = secrets.token_urlsafe(24)
-        CODES[code] = (q["code_challenge"], uri, q.get("client_id"), time.time())
+        CODES[code] = (q["code_challenge"], uri, q.get("client_id"), time.time(), resource)
         self.evidence(kind="oauth", step="authorize")
         back = {"code": code}
         if "state" in q:
@@ -124,10 +131,14 @@ class Shim(BaseHTTPRequestHandler):
     def token(self):
         f = {k: v[0] for k, v in parse_qs(self.body().decode()).items()}
         if f.get("grant_type") == "refresh_token":
+            if f.get("refresh_token") not in REFRESH:
+                return self.send_json(400, {"error": "invalid_grant"})
             self.evidence(kind="oauth", step="refresh")
             return self.token_reply()
         entry = CODES.pop(f.get("code", ""), None)
-        if not entry or time.time() - entry[3] > 120 or f.get("redirect_uri") != entry[1]:
+        if not entry or time.time() - entry[3] > 120 or f.get("redirect_uri") != entry[1] \
+                or f.get("client_id") != entry[2] \
+                or (f.get("resource") is not None and f.get("resource") != entry[4]):
             return self.send_json(400, {"error": "invalid_grant"})
         digest = base64.urlsafe_b64encode(
             hashlib.sha256(f.get("code_verifier", "").encode()).digest()).rstrip(b"=").decode()
@@ -137,8 +148,10 @@ class Shim(BaseHTTPRequestHandler):
         self.token_reply()
 
     def token_reply(self):
+        refresh = "r-" + secrets.token_urlsafe(16)
+        REFRESH.add(refresh)
         self.send_json(200, {"access_token": self.cfg.api_key, "token_type": "Bearer",
-                             "expires_in": 3600, "refresh_token": "r-" + secrets.token_urlsafe(16)})
+                             "expires_in": 3600, "refresh_token": refresh})
 
     def proxy(self, verb, path):
         data = self.body()

@@ -11,8 +11,9 @@
 Everything lives under --dir (default ~/events8-run). It never touches the
 live gateway: separate ports, separate HOME, separate store. Stdlib only.
 """
-import argparse, hashlib, hmac, json, os, re, secrets, signal, subprocess, sys, time
+import argparse, hashlib, hmac, json, os, re, secrets, shutil, signal, socket, subprocess, sys, time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 GW_PORT, SHIM_PORT = 39561, 39560
@@ -103,55 +104,89 @@ def cmd_up(a):
     sys.stdout.reconfigure(line_buffering=True)
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
     d = Path(a.dir).expanduser()
+    for port in (GW_PORT, SHIM_PORT):
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                sys.exit(f"port {port} is already in use; stop the previous run first")
+    if d.exists() and any(d.iterdir()):
+        if not state_path(d).exists():
+            sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
+        for old in d.iterdir():  # a previous run's files only: the run starts clean
+            shutil.rmtree(old) if old.is_dir() else old.unlink()
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o700)
+    state_path(d).write_text("{}")  # marks the directory as ours
     key = "events8-" + secrets.token_hex(24)
     secret = secrets.token_hex(24)
     cfg = write_config(d, key)
     env = {"PATH": os.environ["PATH"], "HOME": str(d), "EVENTS8_WEBHOOK_SECRET": secret,
            "MCP_GATEWAY_TEST_HOME_DIR": str(d)}
-    gw = subprocess.Popen([a.gateway, "--config", str(cfg), "serve"], env=env,
-                          stdout=open(d / "gateway.log", "w"), stderr=subprocess.STDOUT)
-    if not wait_http(f"http://127.0.0.1:{GW_PORT}/health"):
-        gw.kill()
-        sys.exit("gateway did not come up; see " + str(d / "gateway.log"))
-    tunnel, public = start_tunnel(d)
-    shim = subprocess.Popen([sys.executable, str(SCRIPTS / "mcp_events_oauth_shim.py"),
-                             "--port", str(SHIM_PORT), "--upstream", str(GW_PORT),
-                             "--public", public, "--api-key", key, "--log", str(d / "shim.jsonl")])
-    state = {"public": public, "webhook_secret": secret, "started": time.time(),
-             "pids": [gw.pid, tunnel.pid, shim.pid]}
-    state_path(d).write_text(json.dumps(state))
-    state_path(d).chmod(0o600)
-    if not wait_http(f"http://127.0.0.1:{SHIM_PORT}/.well-known/oauth-protected-resource"):
-        sys.exit("shim did not come up")
-    if not wait_http(public + "/.well-known/oauth-protected-resource", 120):
-        sys.exit("the tunnel URL does not answer yet; see " + str(d / "tunnel.log"))
-    print(f"CONNECTOR URL (ChatGPT, OAuth, no client id needed): {public}/mcp")
-    print(f"evidence directory: {d}")
-    print("leave this running; Ctrl-C ends the run and closes the tunnel")
+    children = []
+
+    def alive(name, proc):
+        if proc.poll() is not None:
+            sys.exit(f"{name} exited early; see the logs in {d}")
+
     try:
+        gw = subprocess.Popen([a.gateway, "--config", str(cfg), "serve"], env=env,
+                              stdout=open(d / "gateway.log", "w"), stderr=subprocess.STDOUT)
+        children.append(gw)
+        if not wait_http(f"http://127.0.0.1:{GW_PORT}/health"):
+            sys.exit("gateway did not come up; see " + str(d / "gateway.log"))
+        alive("gateway", gw)
+        tunnel, public = start_tunnel(d)
+        children.append(tunnel)
+        shim = subprocess.Popen([sys.executable, str(SCRIPTS / "mcp_events_oauth_shim.py"),
+                                 "--port", str(SHIM_PORT), "--upstream", str(GW_PORT),
+                                 "--public", public, "--api-key", key,
+                                 "--log", str(d / "shim.jsonl")])
+        children.append(shim)
+        state = {"public": public, "webhook_secret": secret, "started": time.time(),
+                 "pids": [c.pid for c in children]}
+        state_path(d).write_text(json.dumps(state))
+        state_path(d).chmod(0o600)
+        if not wait_http(f"http://127.0.0.1:{SHIM_PORT}/.well-known/oauth-protected-resource"):
+            sys.exit("shim did not come up")
+        for name, proc in (("gateway", gw), ("tunnel", tunnel), ("shim", shim)):
+            alive(name, proc)
+        if not wait_http(public + "/.well-known/oauth-protected-resource", 120):
+            sys.exit("the tunnel URL does not answer yet; see " + str(d / "tunnel.log"))
+        print(f"CONNECTOR URL (ChatGPT, OAuth, no client id needed): {public}/mcp")
+        print(f"evidence directory: {d}")
+        print("leave this running; Ctrl-C ends the run and closes the tunnel")
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:
         pass
     finally:
-        for p in (shim, tunnel, gw):
+        for p in children:
             p.terminate()
 
 
 def cmd_fire(a):
     d = Path(a.dir).expanduser()
     st = json.loads(state_path(d).read_text())
+    sub_rows = [r for r in lines(d / "shim.jsonl") if r.get("rpc") and "events/subscribe" in r["rpc"]
+                and r.get("status") == 200 and r.get("result_has_id") and r.get("error_code") is None]
+    if not sub_rows:
+        sys.exit("no accepted events/subscribe yet: subscribe in the ChatGPT chat first")
+    ref = a.ref or "refs/heads/events8-" + secrets.token_hex(3)
+    delivery = "events8-" + secrets.token_hex(6)
     body = json.dumps({"action": "opened", "repository": {"full_name": a.repo},
-                       "ref": a.ref}).encode()
+                       "ref": ref}).encode()
     sig = "sha256=" + hmac.new(st["webhook_secret"].encode(), body, hashlib.sha256).hexdigest()
     req = urllib.request.Request(
         f"http://127.0.0.1:{GW_PORT}/webhooks/github/push", data=body, method="POST",
         headers={"content-type": "application/json", "X-Hub-Signature-256": sig,
-                 "X-GitHub-Delivery": "events8-" + secrets.token_hex(6)})
+                 "X-GitHub-Delivery": delivery})
     with urllib.request.urlopen(req, timeout=10) as r:
-        print("inbound signed webhook answered", r.status)
+        status = r.status
+    (d / "fire.json").write_text(json.dumps({
+        "ts": time.time(), "signed": True, "signature_header": "X-Hub-Signature-256",
+        "delivery_id": delivery, "ref": ref, "repo": a.repo, "status": status,
+        "body_sha256": hashlib.sha256(body).hexdigest()}, indent=1))
+    print("inbound signed webhook answered", status)
+    print("ChatGPT should now report this ref:", ref)
 
 
 def lines(path):
@@ -181,35 +216,64 @@ def first(rows, test, after=-1):
     return None
 
 
+def epoch(row):
+    if "ts" in row:
+        return row["ts"]
+    text = re.sub(r"(\.\d{6})\d+", r"\1", str(row.get("timestamp", "")).replace("Z", "+00:00"))
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
 def cmd_evidence(a):
     d = Path(a.dir).expanduser()
-    shim, audit = lines(d / "shim.jsonl"), lines(d / "audit.jsonl")
-    rpc = lambda m: (lambda r: r.get("kind") == "http" and m in (r.get("rpc") or []) and r["status"] < 300)
-    act = lambda name, **kw: (lambda r: has(r, "action", name) and all(has(r, k, v) for k, v in kw.items()))
-    checks = [
-        ("oauth token issued", shim, lambda r: r.get("step") == "token"),
-        ("server/discover or initialize", shim, lambda r: rpc("server/discover")(r) or rpc("initialize")(r)),
-        ("events/list", shim, rpc("events/list")),
-        ("events/subscribe answered with an id", shim,
-         lambda r: rpc("events/subscribe")(r) and r.get("result_has_id")),
-        ("verification handshake passed (gateway audit)", audit, act("events.verification", detail="verified", outcome="ok")),
-        ("signed delivery accepted 2xx (gateway audit)", audit, act("events.delivery_outcome", delivered=True)),
-        ("events/unsubscribe answered", shim, rpc("events/unsubscribe")),
-    ]
-    results, ok, pos = [], True, {}
-    for name, rows, test in checks:
-        key = id(rows)
-        i = first(rows, test, pos.get(key, -1))
-        results.append({"check": name, "pass": i is not None})
-        ok &= i is not None
-        if i is not None:
-            pos[key] = i
+    st = json.loads(state_path(d).read_text())
+    start = st.get("started", 0)
+    shim = [r for r in lines(d / "shim.jsonl") if r.get("ts", 0) >= start]
+    audit = [r for r in lines(d / "audit.jsonl") if (epoch(r) or 0) >= start]
+    fire = json.loads((d / "fire.json").read_text()) if (d / "fire.json").exists() else {}
+
+    def rpc(m):
+        return lambda r: (r.get("kind") == "http" and m in (r.get("rpc") or [])
+                          and r.get("status") == 200 and r.get("error_code") is None)
+
+    def act(name, **kw):
+        return lambda r: has(r, "action", name) and all(has(r, k, v) for k, v in kw.items())
+
+    results, ok, last, sub_id = [], True, 0.0, None
+
+    def step(name, rows, test, newer=True):
+        nonlocal ok, last, sub_id
+        hit = next((r for r in rows if test(r) and (not newer or (epoch(r) or 0) >= last - 1)), None)
+        good = hit is not None
+        if good:
+            last = max(last, epoch(hit) or 0)
+        ok &= good
+        results.append({"check": name, "pass": good})
+        return hit
+
+    step("oauth token issued", shim, lambda r: r.get("step") == "token")
+    step("server/discover or initialize", shim, lambda r: rpc("server/discover")(r) or rpc("initialize")(r))
+    step("events/list", shim, rpc("events/list"))
+    ver = step("verification handshake passed (gateway audit)", audit,
+               act("events.verification", detail="verified", outcome="ok"))
+    step("events/subscribe answered with an id", shim,
+         lambda r: rpc("events/subscribe")(r) and r.get("result_has_id"))
+    sub_id = (ver or {}).get("subscription_id")
+    step("signed inbound webhook accepted (fire.json)", [fire] if fire else [],
+         lambda r: r.get("signed") and r.get("status") == 200 and (r.get("ts", 0) >= last - 1))
+    step("signed delivery accepted 2xx for the same subscription (gateway audit)", audit,
+         lambda r: has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)
+         and bool(sub_id) and has(r, "subscription_id", sub_id))
+    step("events/unsubscribe answered", shim, rpc("events/unsubscribe"))
     for r in results:
         print("PASS" if r["pass"] else "FAIL", r["check"])
     print("AUTOMATED CHECKS:", "PASS" if ok else "FAIL",
-          "- also paste ChatGPT's chat reply (it must state the pushed ref)")
-    (d / "evidence.json").write_text(json.dumps({"checks": results, "pass": ok,
-                                                 "shim_rows": len(shim), "audit_rows": len(audit)}, indent=1))
+          "- also send ChatGPT's chat reply (it must state the ref in fire.json)")
+    (d / "evidence.json").write_text(json.dumps({
+        "checks": results, "pass": ok, "fire_ref": fire.get("ref"),
+        "shim_rows": len(shim), "audit_rows": len(audit)}, indent=1))
     return 0 if ok else 1
 
 
@@ -221,7 +285,7 @@ def main():
     up.add_argument("--gateway", required=True)
     fire = sub.add_parser("fire")
     fire.add_argument("--repo", default="demo/repo")
-    fire.add_argument("--ref", default="refs/heads/main")
+    fire.add_argument("--ref", default=None, help="default: a fresh ref per run")
     sub.add_parser("evidence")
     a = p.parse_args()
     return {"up": cmd_up, "fire": cmd_fire, "evidence": cmd_evidence}[a.cmd](a)

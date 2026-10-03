@@ -4,8 +4,11 @@
 "An end-to-end test drives a signed inbound webhook to a filtered subscription and a receiver that verifies every signature, and one ChatGPT run over a tunnel completes subscribe, verification, delivery and unsubscribe (MIK-7630 AC 7)."
 
 The automated half is the CI test `end_to_end_with_a_signature_checking_receiver`
-(`tests/mik_7630_events_delivery.rs`). This runbook is the ChatGPT half. It
-grades nothing; the grader reads the evidence it produces.
+(`tests/mik_7630_events_delivery.rs`); its inbound POST is unsigned (the
+fixture sets `require_signature: false`). This run is also the signed inbound
+leg: the gateway here requires `X-Hub-Signature-256`, and `fire` records a
+receipt (`fire.json`). The runbook grades nothing; the grader reads the
+evidence it produces.
 
 ## What is automated, and what is not
 
@@ -39,7 +42,10 @@ python3 scripts/dev/events8_run.py up --gateway target/release/mcp-gateway
 
 You should see `CONNECTOR URL (ChatGPT, OAuth, no client id needed):
 https://<random>.trycloudflare.com/mcp`. Leave it running. (If the lead started
-it on Spark, take the URL from them and skip this step.) Evidence lands in
+it on Spark, take the URL from them and skip this step; steps 4 and 5 then run
+on Spark over SSH, in the same account, because `fire` and `evidence` read the
+run directory and talk to the gateway on 127.0.0.1.) Terminal B must be on the
+same machine and use the same `--dir` as terminal A. Evidence lands in
 `~/events8-run/`.
 
 **2. Connect ChatGPT.** In ChatGPT, create a plugin (or developer-mode
@@ -58,8 +64,10 @@ its ref."
 python3 scripts/dev/events8_run.py fire
 ```
 
-It prints `inbound signed webhook answered 200`. Within seconds ChatGPT's chat
-should state the ref `refs/heads/main`. Copy that reply.
+It refuses until ChatGPT's subscribe was accepted. Then it prints
+`inbound signed webhook answered 200` and `ChatGPT should now report this
+ref: refs/heads/events8-<hex>` (a fresh ref per run). Within seconds
+ChatGPT's chat should state that ref. Copy the reply.
 
 **5. Unsubscribe, then capture.** Send: "Stop monitoring that." Then, in
 terminal B:
@@ -68,10 +76,12 @@ terminal B:
 python3 scripts/dev/events8_run.py evidence
 ```
 
-It prints seven PASS lines and `AUTOMATED CHECKS: PASS`. Press Ctrl-C in
+It prints eight PASS lines and `AUTOMATED CHECKS: PASS`; a stale or
+out-of-order log, an error answer, or a delivery for another subscription
+fails. Press Ctrl-C in
 terminal A to close the tunnel. Send back: `~/events8-run/evidence.json`,
-`~/events8-run/shim.jsonl`, `~/events8-run/audit.jsonl`, and ChatGPT's
-reply from step 4.
+`fire.json`, `shim.jsonl`, `audit.jsonl` from the same directory, and
+ChatGPT's reply from step 4.
 
 ## Reading the result
 
@@ -83,9 +93,10 @@ delivery and unsubscribe. The grader reads, in order:
 | OAuth token issued; `server/discover`; `events/list` | `shim.jsonl` (method names and statuses only) |
 | `events/subscribe` answered with an `id` | `shim.jsonl` |
 | Verification handshake passed (`events.verification`, `detail: verified`) | `audit.jsonl` |
-| Signed delivery accepted 2xx (`events.delivery_outcome`, `delivered: true`) | `audit.jsonl` |
+| Signed inbound webhook accepted (status 200, body hash, delivery id, ref) | `fire.json` |
+| Signed delivery accepted 2xx for that subscription (`events.delivery_outcome`, `delivered: true`) | `audit.jsonl` |
 | `events/unsubscribe` answered | `shim.jsonl` |
-| ChatGPT told you the pushed ref | your pasted reply |
+| ChatGPT told you the ref in `fire.json` | your pasted reply |
 
 The files hold no tokens, signing secrets, callback paths or bodies (the audit
 log carries hashes and a callback host). A failed check names what to rerun:
