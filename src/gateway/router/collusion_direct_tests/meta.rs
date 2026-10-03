@@ -373,3 +373,57 @@ async fn meta_allowed_flow_not_refused() {
     meta_read(&fx, Some("a")).await;
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
+
+/// MIK-7800: on the meta route a receipt follows the read record `emit_http`
+/// writes last, which can still replace the answer. With that write failing
+/// under `fail-closed`, B sending A's text is not refused; the next read is
+/// audited, delivered and recorded (the control).
+#[tokio::test]
+async fn meta_read_record_failure_leaves_no_receipt() {
+    use crate::security::TransparencyLogger;
+    use crate::security::audit::AuditFailurePolicy;
+    use crate::security::transparency_log::TransparencyLogConfig;
+    let mut fx = meta_fixture(
+        Setup {
+            tenants: true,
+            ..Setup::default()
+        },
+        None,
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "rv".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log")
+        .with_failure_policy(AuditFailurePolicy::FailClosed),
+    );
+    Arc::get_mut(&mut fx.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    let text = format!("{{\"customer_id\":\"t1\",\"note\":\"{PROSE}\"}}");
+    fx.answer_read(Read::Text(text.clone()));
+    let args = invoke("read", &json!({}));
+    log.fail_next_append_of_kind_for_test("tenant_read");
+    let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        body.contains("-32005"),
+        "base: the failed read record withholds the read: {body}"
+    );
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &text).await, 1);
+    let (_, delivered) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        envelope(&delivered).get("error").is_none(),
+        "control: the audited read is delivered: {delivered}"
+    );
+    let relay = format!("{text} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+}
