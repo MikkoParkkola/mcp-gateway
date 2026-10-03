@@ -108,6 +108,7 @@ fn backend_for(url: &str) -> Backend {
             protocol_version: None,
         },
         stop_when_idle_for: None,
+        max_frame_bytes: None,
         timeout: Duration::from_secs(10),
         env: HashMap::default(),
         headers: HashMap::default(),

@@ -40,6 +40,7 @@ mod pool;
 mod registry;
 mod repin;
 mod status;
+mod stdio_start;
 
 impl Backend {
     /// This backend's signature chain policy (ASI07 inc3, design D1): the

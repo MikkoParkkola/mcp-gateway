@@ -3835,6 +3835,7 @@ fn meta_with_backend(url: &str, timeout: Duration) -> MetaMcp {
             protocol_version: None,
         },
         stop_when_idle_for: None,
+        max_frame_bytes: None,
         timeout: Duration::from_secs(5),
         ..BackendConfig::default()
     };
@@ -3988,6 +3989,7 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
                 protocol_version: None,
             },
             stop_when_idle_for: None,
+            max_frame_bytes: None,
             timeout: Duration::from_secs(5),
             ..BackendConfig::default()
         };
@@ -4432,6 +4434,7 @@ async fn meta_with_echo_hidden_by_a_stale_cache(url: &str) -> MetaMcp {
             protocol_version: None,
         },
         stop_when_idle_for: None,
+        max_frame_bytes: None,
         timeout: Duration::from_secs(5),
         ..BackendConfig::default()
     };

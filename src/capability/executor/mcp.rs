@@ -492,6 +492,7 @@ impl CapabilityExecutor {
             timeout: Duration::from_secs(capability.primary_provider().map_or(30, |p| p.timeout)),
             env,
             stop_when_idle_for: Some(IDLE_STOP),
+            max_frame_bytes: None,
             ..BackendConfig::default()
         };
         let name = format!("capability:{}", capability.name);

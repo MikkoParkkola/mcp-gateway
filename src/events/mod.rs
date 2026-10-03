@@ -21,6 +21,7 @@ mod backend_source;
 mod client;
 mod dedupe;
 mod fanout;
+mod governance;
 mod lifecycle;
 mod limiter;
 mod outbox;

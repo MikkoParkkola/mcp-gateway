@@ -104,6 +104,7 @@ impl Fixture {
             },
             // No reaper: an idle sweep mid-test would restart the peer and re-probe it.
             stop_when_idle_for: None,
+            max_frame_bytes: None,
             timeout: Duration::from_secs(30),
             env: HashMap::default(),
             headers: HashMap::default(),

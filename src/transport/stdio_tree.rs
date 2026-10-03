@@ -42,21 +42,27 @@ pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
     })
 }
 
-/// Longest JSON-RPC frame a stdio peer may send (16 MiB). Without a bound, a
-/// peer that never sends a newline grows the gateway's buffer without limit.
-pub(crate) const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+/// Default longest JSON-RPC frame a stdio peer may send (16 MiB). Without a
+/// bound, a peer that never sends a newline grows the gateway's buffer without
+/// limit. A backend raises or lowers it with `max_frame_bytes`.
+pub const DEFAULT_MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+/// Smallest `max_frame_bytes` a backend may ask for (64 KiB).
+pub const MIN_MAX_FRAME_BYTES: usize = 64 * 1024;
+/// Largest `max_frame_bytes` a backend may ask for (1 GiB).
+pub const CEILING_MAX_FRAME_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Read one newline-terminated frame (without its `\n` or `\r\n`).
 /// `Ok(None)` at end of stream; an error for a frame over
-/// [`MAX_FRAME_BYTES`] or one that is not UTF-8.
+/// `max` bytes or one that is not UTF-8.
 pub(super) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
     reader: &mut R,
     frame: &mut Vec<u8>,
+    max: usize,
 ) -> std::io::Result<Option<String>> {
     frame.clear();
     // Room for the longest allowed frame plus its `\r\n`; a longer line is cut
     // here and refused below once the terminator is trimmed.
-    let limit = u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX) + 2;
+    let limit = u64::try_from(max).unwrap_or(u64::MAX) + 2;
     let read = reader.take(limit).read_until(b'\n', frame).await?;
     if read == 0 {
         return Ok(None);
@@ -67,10 +73,12 @@ pub(super) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
             frame.pop();
         }
     }
-    if frame.len() > MAX_FRAME_BYTES {
+    if frame.len() > max {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("stdio frame over {MAX_FRAME_BYTES} bytes"),
+            format!(
+                "stdio frame over {max} bytes; raise this backend's max_frame_bytes if the response is legitimate"
+            ),
         ));
     }
     String::from_utf8(std::mem::take(frame))

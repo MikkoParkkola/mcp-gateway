@@ -17,7 +17,7 @@ use super::pool::{PoolKey, PooledEntry};
 use super::{Backend, RestartOutcome};
 use crate::config::{BackendConfig, RuntimeConfig, TransportConfig};
 use crate::runtime::{RuntimeLaunchCommand, RuntimeLaunchMode, RuntimePlan, RuntimeProviderKind};
-use crate::transport::{HttpTransport, StdioTransport, Transport, isolated_package_manager_env};
+use crate::transport::{HttpTransport, Transport};
 use crate::{Error, Result};
 
 /// Consecutive unserved probe answers the gateway tolerates before it treats
@@ -384,15 +384,9 @@ impl Backend {
                 cwd,
                 protocol_version,
             } => {
-                let launch = self.resolve_stdio_runtime_launch(command)?;
-                let transport = StdioTransport::new(
-                    &launch.command,
-                    isolated_package_manager_env(&self.name, &launch.command, launch.env),
-                    cwd.clone(),
-                    self.config.timeout,
-                    protocol_version.clone(),
-                );
-                transport.start().await?;
+                let transport = self
+                    .start_stdio_transport(command, cwd.as_ref(), protocol_version.as_ref())
+                    .await?;
                 listen = Some(super::listen::handle_of(&transport));
                 transport
             }
