@@ -1155,6 +1155,25 @@ mod wire {
             "the same payload `.4` asserts, on the subscription path: {body}"
         );
     }
+
+    /// MIK-7778: the tasks extension names the filter under `notifications`,
+    /// and the gate must refuse it there exactly as it refuses the root form.
+    #[tokio::test]
+    async fn ac_task_1_13_an_undeclared_nested_task_filter_is_refused() {
+        let (status, body) = post(
+            "key-a",
+            modern(
+                3,
+                "subscriptions/listen",
+                json!({ "notifications": { "taskIds": [TASK_ID] } }),
+                false,
+            ),
+        )
+        .await;
+
+        assert_eq!(body["error"]["code"], -32021, "{body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
 }
 
 #[path = "mik_7272_task_1_acs/dispatch.rs"]
