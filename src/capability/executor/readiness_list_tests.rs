@@ -202,3 +202,32 @@ fn an_unreadable_token_file_does_not_list_the_capability() {
     crate::gateway::test_helpers::write_owner_only(&path, "{not json").unwrap();
     assert!(off(&executor, false));
 }
+
+#[test]
+fn a_cached_expired_refreshable_token_is_no_login_and_endpoints_are_judged_apart() {
+    let (_dir, _storage, cached) = executor_with_storage();
+    cached
+        .oauth_tokens
+        .read()
+        .insert("mik7856".to_string(), token(-3600, true));
+    assert!(off(&cached, true), "the cache is never refreshed");
+
+    let (_dir, storage, shared) = executor_with_storage();
+    storage
+        .save("mik7856", "mik7856", &token(-3600, true))
+        .unwrap();
+    let (no_endpoint, with_endpoint) = (oauth_cap(false), oauth_cap(true));
+    let mut seen = std::collections::HashMap::new();
+    for _ in 0..2 {
+        assert!(
+            shared
+                .missing_credential(&no_endpoint.auth, &mut seen)
+                .is_some()
+        );
+        assert!(
+            shared
+                .missing_credential(&with_endpoint.auth, &mut seen)
+                .is_none()
+        );
+    }
+}

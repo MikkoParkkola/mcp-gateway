@@ -55,22 +55,27 @@ impl CapabilityExecutor {
         }
         let provider = auth.key.strip_prefix("oauth:")?;
         let refreshable = auth.token_endpoint.is_some();
-        let logged_in = *oauth_seen.entry(provider.to_string()).or_insert_with(|| {
-            // The rule `fetch_oauth_token` runs: a token that has not expired,
-            // or an expired one with a refresh token and an endpoint to use it
-            // at. A file that cannot be read or parsed is no login.
-            let usable = |token: &crate::oauth::TokenInfo| {
-                !token.is_expired() || (refreshable && token.refresh_token.is_some())
-            };
-            self.oauth_tokens
+        // The answer depends on whether this capability can refresh, so the
+        // memo is per provider and per endpoint presence.
+        let memo = format!("{provider}\0{refreshable}");
+        let logged_in = *oauth_seen.entry(memo).or_insert_with(|| {
+            // The rule `fetch_oauth_token` runs: an unexpired cached or stored
+            // token, or an expired stored one with a refresh token and an
+            // endpoint to use it at (the cache is never refreshed). A file that
+            // cannot be read or parsed is no login.
+            let cached = self
+                .oauth_tokens
                 .read()
                 .get(provider)
-                .is_some_and(|t| usable(&t))
+                .is_some_and(|t| !t.is_expired());
+            cached
                 || self
                     .token_storage
                     .as_ref()
                     .and_then(|storage| storage.load(provider, provider))
-                    .is_some_and(|token| usable(&token))
+                    .is_some_and(|token| {
+                        !token.is_expired() || (refreshable && token.refresh_token.is_some())
+                    })
         });
         (!logged_in).then(|| format!("a {provider} login"))
     }
