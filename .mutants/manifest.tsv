@@ -1,0 +1,6 @@
+head_sha	6ec417204d9a33befc96b44ce29a5a29f439a08e
+# batch 1 for #2734 (accounts router rows)
+A1	linux	a1.patch	--lib -- create_refuses_before_custody_and_maps_what_custody_answers
+A2	linux	a2.patch	--lib -- status_maps_every_custody_answer_to_its_refusal
+A3	linux	a3.patch	--lib -- an_offer_custody_limits_or_cannot_make_keeps_the_refusal
+A4	linux	a4.patch	--lib -- create_refuses_before_custody_and_maps_what_custody_answers

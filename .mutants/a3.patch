@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/offer.rs b/src/gateway/router/accounts/offer.rs
+index 3c267f16a..2339402c3 100644
+--- a/src/gateway/router/accounts/offer.rs
++++ b/src/gateway/router/accounts/offer.rs
+@@ -92,7 +92,7 @@ impl ConnectOffers {
+                 | JourneyRefusal::CapacityExceeded { retry_after },
+             ))) => (
+                 text.clone(),
+-                json!({"retryable": true, "retry_after": retry_after}),
++                json!({"retryable": false, "retry_after": retry_after}),
+             ),
+             _ => return None,
+         };
