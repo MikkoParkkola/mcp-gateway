@@ -289,6 +289,37 @@ impl StagedReceipts {
     }
 }
 
+tokio::task_local! {
+    /// Whether the HTTP answer being built delivers a result.
+    static RELAY_DELIVERS: std::cell::Cell<bool>;
+}
+
+/// Run an HTTP `delivery` inside a receipt collector and hand what it staged to
+/// the response as [`DeferredReceipts`]: `emit_http`, the last step that can
+/// replace the answer, records them. With relay detection off nothing is
+/// collected.
+pub(crate) async fn collecting_http<F>(
+    meta: std::sync::Arc<MetaMcp>,
+    delivery: F,
+) -> axum::response::Response
+where
+    F: std::future::Future<Output = axum::response::Response>,
+{
+    if !meta.relay_active() {
+        return delivery.await;
+    }
+    let ((mut response, delivers), staged) = meta
+        .collecting_staged(RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
+            let response = delivery.await;
+            (response, RELAY_DELIVERS.with(std::cell::Cell::get))
+        }))
+        .await;
+    response
+        .extensions_mut()
+        .insert(DeferredReceipts::new(staged, delivers));
+    response
+}
+
 /// Receipts an HTTP answer carries to the last step that can still replace it
 /// (the grant slot, the read record): `emit_http` records them only when the
 /// answer goes out as built. A replacement is a new response and carries
@@ -392,17 +423,11 @@ impl MetaMcp {
         }
     }
 
-    /// Take every staged receipt out of the collector, for a delivery that
-    /// records them once its answer is final ([`DeferredReceipts`]).
-    pub(crate) fn take_staged_relay(&self) -> StagedReceipts {
-        let receipts = RELAY_RECEIPTS
-            .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
-            .unwrap_or_default();
-        StagedReceipts {
-            #[cfg(feature = "firewall")]
-            fw: self.firewall.clone(),
-            receipts,
-        }
+    /// Mark whether the answer being built delivers a result (no error, no
+    /// delivery refusal): what [`collecting_http`] hands `emit_http`.
+    pub(crate) fn settle_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
+        let delivers = response.error.is_none() && !response.delivery_refusal;
+        let _ = RELAY_DELIVERS.try_with(|flag| flag.set(delivers));
     }
 
     /// Record every staged receipt when `delivered`; drop them either way.
