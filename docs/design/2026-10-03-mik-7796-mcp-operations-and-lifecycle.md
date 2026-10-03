@@ -49,10 +49,9 @@ resolves.
 | L3 | A changed `provider.timeout` keeps the old child | Child records the timeout; a different one restarts it | acquire with a new timeout returns a new child |
 | L4 | `last_used` set at acquire only, so a long call counts as idle | Set `last_used` when the lease ends | long call, then sweep: child stays |
 | L5 | Stdio reader failure leaves pending calls waiting for their timeout | Drop all pending senders when the reader ends | pending call errors at once after an oversized frame |
-| L6 | API-key callers without a verified identity share the operator child on a single-user gateway | Principal includes the authenticated key id when present | two key ids get two children |
+| L6 | API-key callers without an identity binding cannot use MCP capabilities on a multi-user gateway | Not a sharing defect: `principal()` refuses an unidentified caller whenever `auth.enabled` is true and `auth.single_user` is not set (`implies_multi_user`), so nothing is shared. Kept as a refusal and documented: MCP capabilities need identity propagation or OIDC on a multi-user gateway; a solo operator sets `auth.single_user: true` | existing test `an_unidentified_caller_is_refused_on_a_multi_user_gateway` |
 
-L6 needs the key id on the execution context; if the context lacks it, the dispatch path adds it (named field,
-no behaviour change for other capabilities).
+L6 is a documented refusal, not a code change: carrying the credential principal into isolation would need a new field on the dispatch path and is a feature, tracked separately if wanted.
 
 ## 3. pyghidra mapping (decision D4: slow call runs as a task, with a bounded wait inside)
 
