@@ -356,7 +356,7 @@ fn success_redaction_keeps_json_valid_and_does_not_truncate() {
 
 #[test]
 fn two_keys_that_collapse_to_the_marker_both_survive() {
-    let mut value = json!({"aSECRETb": 1, "SECRET": 2});
+    let mut value = json!({"[redacted]": 1, "SECRET": 2});
     super::super::cli::redact_value(&mut value, &["SECRET".to_owned()]);
     assert_eq!(value.as_object().unwrap().len(), 2, "{value}");
 }
