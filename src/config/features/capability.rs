@@ -123,13 +123,13 @@ impl ProcessCommand {
     pub fn shipped() -> Vec<Self> {
         vec![
             Self::new("gws", &[]),
-            // Not `trawl`: held until it refuses private addresses at dial
-            // time (MIK-7788); an operator accepting that lists it.
+            // Not `trawl` and not `mcp-scanner remote`: both are held until
+            // they refuse private addresses at dial time (MIK-7788); an
+            // operator accepting that lists them.
             Self::new("openpencil-mcp", &[]),
             Self::new("pact-mcp", &[]),
             Self::new("pyghidra-mcp", &[]),
             // The analyzer pin keeps tool descriptions on this machine.
-            Self::new("mcp-scanner", &["--analyzers", "yara", "remote"]),
             Self::new("skill-scanner", &["scan"]),
         ]
     }
