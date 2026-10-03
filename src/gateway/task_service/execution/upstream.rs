@@ -20,7 +20,7 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use super::settlement::{backend_output, strip_http_status};
-use super::{CommitFailure, TaskExecutor, TaskWrite, UpstreamAnswer, UpstreamHandle, WriteOutcome};
+use super::{CommitFailure, TaskExecutor, TransitionWrite, UpstreamAnswer, UpstreamHandle};
 use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, with_dispatch_scope};
 use crate::gateway::task_service::record::UpstreamRecord;
 use crate::gateway::task_service::store::StoreError;
@@ -312,7 +312,7 @@ impl TaskExecutor {
         // recovery that did not land.
         let event = settle(event, notes).await;
         match self
-            .commit(TaskWrite::Recover {
+            .commit_transition(TransitionWrite::Recover {
                 owner_digest,
                 id,
                 revision,
@@ -320,12 +320,10 @@ impl TaskExecutor {
             })
             .await
         {
-            Ok(WriteOutcome::Transitioned(_)) => Ok(RecoveredRead::Settled),
+            Ok(_) => Ok(RecoveredRead::Settled),
             // Another writer settled it first. The committed record is the
             // honest answer and this read simply serves it.
-            Ok(WriteOutcome::Create(_)) | Err(CommitFailure::RevisionConflict) => {
-                Ok(RecoveredRead::Retained)
-            }
+            Err(CommitFailure::RevisionConflict) => Ok(RecoveredRead::Retained),
             Err(_) => Err(RecoveryRefusal::Unavailable),
         }
     }

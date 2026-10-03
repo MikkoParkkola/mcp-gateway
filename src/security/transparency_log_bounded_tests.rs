@@ -95,16 +95,16 @@ async fn stall_parks_one_blocking_thread() {
         let l = Arc::clone(&l);
         async move { invocation(&l).await }
     });
-    for spins in 0.. {
-        if l.write_in_flight_for_test() {
-            break;
-        }
-        assert!(
-            spins < 1_000,
-            "the first write never reached the blocking pool"
-        );
-        tokio::time::sleep(Duration::from_millis(2)).await;
-    }
+    // Wait on the gate, not on a poll budget: `entered` means the blocking
+    // closure ran (and counted itself), however starved the runner is. The
+    // gate's own 60 s hang guard bounds the wait.
+    let held = Arc::clone(&release.0);
+    assert!(
+        tokio::task::spawn_blocking(move || held.wait_entered())
+            .await
+            .unwrap(),
+        "the first write never reached the blocking pool"
+    );
     // Twenty callers queue while the first write is still in the kernel.
     let waiting: Vec<_> = (0..20)
         .map(|_| {
