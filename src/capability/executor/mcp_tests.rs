@@ -6,8 +6,8 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
