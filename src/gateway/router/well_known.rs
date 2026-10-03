@@ -38,12 +38,12 @@
 //! effect. `public_url` *is* read live, so a `public_url`-only reload is
 //! reflected immediately.
 //!
-//! `authorization_servers` is deliberately left empty: RFC 9728 defines it as
-//! the OAuth authorization-server issuer identifiers a client resolves via
-//! `/.well-known/oauth-authorization-server` (RFC 8414). This gateway does not
-//! yet publish RFC 8414 metadata, so naming any issuer here would break client
-//! discovery. It is omitted from the serialized document (RFC 9728 §3.2) until
-//! the gateway serves authorization-server metadata.
+//! `authorization_servers` names the OIDC issuers of an enabled key server with
+//! `delegated_bearer` on: those are the authorization servers whose tokens the
+//! MCP routes accept, so a standards-following client learns
+//! where to sign in. It stays empty, and is omitted (RFC 9728 section 3.2),
+//! when no issuer token is accepted: the gateway itself serves no RFC 8414
+//! authorization-server metadata, so naming itself would break discovery.
 
 use std::sync::Arc;
 
@@ -204,6 +204,29 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
     bind_origin.map(ToString::to_string)
 }
 
+/// The authorization servers whose tokens this gateway accepts as bearers
+/// (RFC 9728 section 2): the OIDC issuers of an enabled key server with
+/// `delegated_bearer` on, in configured order, blank and repeated ones
+/// dropped. Empty otherwise, and then omitted from the document: an
+/// exchange-only key server accepts no issuer token on the MCP routes, and the
+/// gateway itself serves no authorization-server metadata.
+fn authorization_servers(config: &Config) -> Vec<String> {
+    let key_server = &config.key_server;
+    if !(key_server.enabled && key_server.delegated_bearer) {
+        return Vec::new();
+    }
+    let mut issuers: Vec<String> = Vec::new();
+    for provider in &key_server.oidc {
+        // Exactly as configured: the token check compares the `iss` claim to
+        // this string, so a client must be sent the same identifier.
+        let issuer = provider.issuer.as_str();
+        if !issuer.trim().is_empty() && !issuers.iter().any(|seen| seen == issuer) {
+            issuers.push(issuer.to_string());
+        }
+    }
+    issuers
+}
+
 /// Build RFC 9728 protected-resource metadata, or `None` when no honest
 /// `resource` identifier is available (see module docs).
 #[must_use]
@@ -214,9 +237,7 @@ pub fn build_protected_resource_metadata(
     let resource = resolve_resource_origin(config, bind_origin)?;
     Some(ProtectedResourceMetadata {
         resource,
-        // Empty until the gateway serves RFC 8414 authorization-server metadata;
-        // see module docs. Omitted from the serialized document when empty.
-        authorization_servers: Vec::new(),
+        authorization_servers: authorization_servers(config),
         bearer_methods_supported: vec!["header".to_string()],
         scopes_supported: Vec::new(),
     })
@@ -334,14 +355,91 @@ mod tests {
     }
 
     #[test]
-    fn authorization_servers_empty_until_rfc8414_metadata_served() {
+    fn authorization_servers_empty_without_a_delegated_issuer() {
         let mut config = config_with_host("gw.internal", 9000);
         config.server.public_url = Some("https://gw.internal:9000".to_string());
         let meta = build_protected_resource_metadata(&config, None).unwrap();
         assert!(
             meta.authorization_servers.is_empty(),
-            "must not name an authorization server the gateway does not publish RFC 8414 metadata for"
+            "the default config accepts no issuer token and the gateway serves no authorization-server metadata of its own, so it names none"
         );
+    }
+
+    fn config_with_issuers(enabled: bool, delegated: bool, issuers: &[&str]) -> Config {
+        let mut config = config_with_host("gw.internal", 9000);
+        config.server.public_url = Some("https://gw.internal:9000".to_string());
+        config.key_server.enabled = enabled;
+        config.key_server.delegated_bearer = delegated;
+        config.key_server.oidc = issuers
+            .iter()
+            .map(|issuer| {
+                serde_json::from_value(serde_json::json!({
+                    "issuer": issuer,
+                    "audiences": ["gateway-client"],
+                }))
+                .unwrap()
+            })
+            .collect();
+        config
+    }
+
+    /// RFC 9728 section 2: the metadata names the authorization servers whose
+    /// tokens the resource accepts. A gateway that takes an OIDC issuer's
+    /// bearer tokens (`key_server.delegated_bearer`) names that issuer.
+    #[test]
+    fn configured_delegated_issuers_are_advertised() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://idp.corp.internal",
+                "https://login.corp.internal/tenant",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        assert_eq!(
+            meta.authorization_servers,
+            [
+                "https://idp.corp.internal",
+                "https://login.corp.internal/tenant"
+            ],
+            "a client must be able to find where to sign in"
+        );
+        let json = serde_json::to_value(&meta).unwrap();
+        assert_eq!(
+            json["authorization_servers"][0],
+            "https://idp.corp.internal"
+        );
+    }
+
+    /// The issuer is named only when its tokens are accepted as bearers: an
+    /// exchange-only key server (`delegated_bearer: false`) or a disabled one
+    /// accepts none, so naming it would send clients to a dead end.
+    #[test]
+    fn issuers_are_not_advertised_unless_their_tokens_are_accepted() {
+        for (enabled, delegated) in [(true, false), (false, true), (false, false)] {
+            let config = config_with_issuers(enabled, delegated, &["https://idp.corp.internal"]);
+            let meta = build_protected_resource_metadata(&config, None).unwrap();
+            assert!(
+                meta.authorization_servers.is_empty(),
+                "enabled={enabled} delegated_bearer={delegated}"
+            );
+        }
+    }
+
+    #[test]
+    fn advertised_issuers_are_unique_and_never_blank() {
+        let config = config_with_issuers(
+            true,
+            true,
+            &[
+                "https://idp.corp.internal",
+                "  ",
+                "https://idp.corp.internal",
+            ],
+        );
+        let meta = build_protected_resource_metadata(&config, None).unwrap();
+        assert_eq!(meta.authorization_servers, ["https://idp.corp.internal"]);
     }
 
     #[test]
