@@ -1,0 +1,5 @@
+head_sha	3a05d9543c3f143c1830789f793c026c69245852
+# MIK-7824 cap list mutants
+A1	linux	a1.patch	--test cap_list_config
+B1	linux	b1.patch	--test cap_list_config
+C1	linux	c1.patch	--test cap_list_config
