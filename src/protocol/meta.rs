@@ -51,6 +51,15 @@ pub const KEY_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
 /// `_meta` key: who the server says it is, on every result.
 pub const KEY_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 
+/// The value under [`KEY_SERVER_INFO`]. One builder, so a result that skips
+/// the response shaper still names the server the same way.
+pub(crate) fn server_info() -> Value {
+    serde_json::json!({
+        "name": "mcp-gateway",
+        "version": env!("CARGO_PKG_VERSION"),
+    })
+}
+
 /// The protocol fields a modern request carries.
 #[derive(Debug, Clone)]
 pub struct RequestFields {
