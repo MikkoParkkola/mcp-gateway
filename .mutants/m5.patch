@@ -1,0 +1,16 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 018cee7eb..a8a3ae805 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -1820,10 +1820,7 @@ impl MetaMcp {
+         }
+         // A chained backend's answer is bound to one challenge: no cache (D7).
+         // Judged on the captured backend, like the dispatch it protects.
+-        let chained = self.chain_signer.is_some()
+-            && backend
+-                .as_deref()
+-                .is_some_and(|b| b.chain_policy().0 != crate::config::ChainMode::Off);
++        let chained = self.chain_mode_of(server) != crate::config::ChainMode::Off;
+         if !want_full
+             && !chained
+             && protocol_revision.is_some()

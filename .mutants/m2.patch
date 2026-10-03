@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 018cee7eb..58ecfea7a 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -3144,7 +3144,8 @@ impl MetaMcp {
+             Err(e) => refuse(format!("credential minting failed: {e}"))
+                 .await
+                 .map_err(|refused| {
+-                    let account_id = backend.and_then(|b| b.account_descriptor_id());
++                    let account_id = self.backends.get(server).and_then(|b| b.account_descriptor_id().map(str::to_owned));
++                    let account_id = account_id.as_deref();
+                     crate::personal_accounts::refusal::mark(refused, &e, account_id)
+                 }),
+         }

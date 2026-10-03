@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 018cee7eb..e6baedb55 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -3564,7 +3564,8 @@ impl MetaMcp {
+ 
+         // The backend the call was judged on, not a second lookup by name a
+         // reload may have answered differently (MIK-7810). None: not found.
+-        let backend = captured.ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
++        let _ = captured;
++        let backend = self.backends.get(server).ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+ 
+         // A "did you mean?" hint off THIS CALLER'S slot (MIK-7334.CATALOGUE.1):
+         // the shared one holds a catalogue this caller was never shown once a
