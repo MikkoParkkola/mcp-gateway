@@ -81,21 +81,18 @@ fn reaches_tasks_extension(method: &str, params: Option<&Value>) -> bool {
     match method {
         "tools/call" => params.is_some_and(|p| p.get("task").is_some()),
         "tasks/get" | "tasks/update" | "tasks/cancel" => true,
-        "subscriptions/listen" => params.is_some_and(|p| p.get("taskIds").is_some()),
+        "subscriptions/listen" => {
+            params.is_some_and(crate::protocol::subscriptions::names_task_ids)
+        }
         _ => false,
     }
 }
 
-/// The task ids a `subscriptions/listen` names, if it names any.
+/// The task ids a `subscriptions/listen` names, if it names any, in either
+/// placement.
 fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
     params
-        .and_then(|p| p.get("taskIds"))
-        .and_then(Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(|id| id.as_str().map(String::from))
-                .collect()
-        })
+        .map(crate::protocol::subscriptions::named_task_ids)
         .unwrap_or_default()
 }
 
@@ -445,7 +442,10 @@ pub(super) async fn meta_mcp_handler(
     let logger = state.meta_mcp.transparency_logger.clone();
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
         logger,
-        Box::pin(meta_mcp_dispatch(state, http_request)),
+        // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
+        Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting(
+            meta_mcp_dispatch(state, http_request),
+        )),
     );
 
     if offers_event_stream {
@@ -945,7 +945,16 @@ async fn meta_mcp_dispatch(
             if let Some(map) = params.as_mut().and_then(Value::as_object_mut) {
                 map.entry("notifications").or_insert_with(|| json!({}));
                 if !caller_holds_ids {
+                    // Both placements: a copy left standing would opt the
+                    // stream into a task the caller does not own.
                     map.insert("taskIds".into(), json!([]));
+                    if let Some(filter) = map
+                        .get_mut("notifications")
+                        .and_then(Value::as_object_mut)
+                        .filter(|filter| filter.contains_key("taskIds"))
+                    {
+                        filter.insert("taskIds".into(), json!([]));
+                    }
                 }
             }
         }
@@ -1666,6 +1675,8 @@ async fn meta_mcp_dispatch(
             if call_response.discovery_inspected {
                 delivery_inspection = DeliveryInspection::AlreadyInspected;
             } else {
+                let snapshot = (call_response.result.as_ref())
+                    .and_then(|result| state.meta_mcp.relay_snapshot(result));
                 delivery_inspection = super::response_pass::inspect_tools_call_response(
                     state.firewall.as_deref(),
                     &mut call_response,
@@ -1677,6 +1688,9 @@ async fn meta_mcp_dispatch(
                         external_tool: &external_tool,
                     },
                 );
+                // A redaction changed the delivery: its staged receipts go.
+                let delivered = call_response.result.as_ref();
+                crate::gateway::meta_mcp::invoke::relay::discard_if_changed(snapshot, delivered);
             }
 
             call_response
@@ -1830,6 +1844,7 @@ async fn meta_mcp_dispatch(
     response = (state.meta_mcp)
         .finalize_response_after_inspection(response, &delivery, delivery_inspection)
         .await;
+    state.meta_mcp.commit_relay_receipts(&response);
     if let Some(execution) = execution {
         execution.complete_delivery(&response, signing_context.as_ref());
     }

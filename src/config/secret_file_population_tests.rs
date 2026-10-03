@@ -61,6 +61,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "trust report input/output; no secret",
     ),
     (
+        "src/commands/trust/baseline.rs",
+        "TrustLab baseline and registry manifest files; no secret",
+    ),
+    (
+        "src/commands/trust/lab.rs",
+        "TrustLab active-fixture spec input; no secret",
+    ),
+    (
         "src/commands/upgrade.rs",
         "version stamp, 3.x pattern notice and config backup (fs::copy keeps the mode)",
     ),

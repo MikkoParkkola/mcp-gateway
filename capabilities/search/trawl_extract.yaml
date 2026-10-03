@@ -1,4 +1,4 @@
-sha256: b136673f56286d0bbb20a0e8aabc4fe84299b231fe5bb481fa2f44e6bce12a85
+sha256: 7a02bb9c3a5e3495300c3c033e8becf5a533f1de25a14168a8f2e91b75d5ac40
 fulcrum: "1.0"
 name: trawl_extract
 description: Structured web data extraction using LLM-derived CSS selectors. Extracts tables, lists, and repeating data from any webpage. Uses LLM once to derive strategy, then applies at speed. Self-healing when sites redesign.
@@ -10,35 +10,40 @@ schema:
       url:
         type: string
         description: URL of the page to extract data from
+        egress: true
+        format: uri
       fields:
         type: string
-        description: "Comma-separated field names to extract (e.g., 'name, price, rating, url')"
+        description: Comma-separated field names to extract (e.g., 'name, price, rating, url')
       query:
         type: string
-        description: "Optional: target a specific section of the page (e.g., 'Market Share' or 'Leaderboard')"
+        description: 'Optional: target a specific section of the page (e.g., ''Market Share'' or ''Leaderboard'')'
       format:
         type: string
         description: Output format
         default: json
-        enum: [json, jsonl, csv]
+        enum:
+        - json
+        - jsonl
+        - csv
       js:
         type: boolean
-        description: "Enable headless browser for JS-rendered pages (React, Next.js, Vue, etc.)"
+        description: Enable headless browser for JS-rendered pages (React, Next.js, Vue, etc.)
         default: false
       plan_only:
         type: boolean
-        description: "Show extraction plan without actually extracting data"
+        description: Show extraction plan without actually extracting data
         default: false
       no_cache:
         type: boolean
-        description: "Bypass strategy cache and re-derive extraction strategy"
+        description: Bypass strategy cache and re-derive extraction strategy
         default: false
       wait:
         type: string
-        description: "Extra wait time after DOM stabilization (e.g., '5s')"
+        description: Extra wait time after DOM stabilization (e.g., '5s')
     required:
-      - url
-      - fields
+    - url
+    - fields
 
 providers:
   primary:
@@ -46,16 +51,23 @@ providers:
     cost_per_call: 1
     timeout: 60
     config:
-      command: "trawl"
-      args_template: |
-        {{ url }}
-        --fields "{{ fields }}"
-        {% if query %}--query "{{ query }}"{% endif %}
-        --format {{ format | default: "json" }}
-        {% if js %}--js{% endif %}
-        {% if plan_only %}--plan{% endif %}
-        {% if no_cache %}--no-cache{% endif %}
-        {% if wait %}--wait {{ wait }}{% endif %}
+      command: trawl
+      args:
+      - --fields={fields}
+      - arg: --query={query}
+        if: query
+      - arg: --format={format}
+        if: format
+      - arg: --js={js}
+        if: js
+      - arg: --plan={plan_only}
+        if: plan_only
+      - arg: --no-cache={no_cache}
+        if: no_cache
+      - arg: --wait={wait}
+        if: wait
+      - --
+      - '{url}'
 
 metadata:
   read_only: true

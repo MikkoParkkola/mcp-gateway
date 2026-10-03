@@ -19,6 +19,8 @@ pub(crate) struct Services {
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<crate::security::firewall::Firewall>>,
     pub audit: Option<Arc<TransparencyLogger>>,
+    /// The provenance signer, when stamping is on.
+    pub provenance: Option<Arc<crate::attestation::BnautAttestationSigner>>,
     #[cfg(feature = "cost-governance")]
     pub budget: Option<(
         Arc<crate::cost_accounting::enforcer::BudgetEnforcer>,
@@ -178,6 +180,21 @@ impl Services {
         }
     }
 
+    /// The provenance receipt for one occurrence, as `_meta` carries it:
+    /// signed when stamping is on, the bare receipt otherwise (§3.6).
+    pub(crate) fn provenance(&self, backend: &str, name: &str) -> Value {
+        let receipt = crate::trust::RuntimeProvenanceReceipt::event(
+            backend,
+            name,
+            chrono::Utc::now().to_rfc3339(),
+        );
+        match &self.provenance {
+            Some(signer) => serde_json::to_value(receipt.sign(signer)),
+            None => serde_json::to_value(json!({ "receipt": receipt })),
+        }
+        .unwrap_or(Value::Null)
+    }
+
     /// Run the response firewall over `data`, redacting in place.
     #[cfg(feature = "firewall")]
     pub(crate) fn scan(&self, data: &mut Value, subject: &Subject<'_>) -> Scan {
@@ -259,6 +276,10 @@ impl Services {
     }
 }
 
+/// The status of the record written before a POST (SAFETY.2): the attempt is
+/// on record before its bytes leave; its outcome follows as its own record.
+pub(crate) const SENDING: &str = "sending";
+
 /// One delivery attempt, as the attributed audit record states it: never
 /// the body, the secret or the callback path.
 pub(crate) struct Attempt<'a> {
@@ -280,14 +301,19 @@ pub(crate) struct Attempt<'a> {
 
 impl Services {
     /// Write one MIN.1 attributed record for `attempt`, on the bounded
-    /// blocking pool. Best effort: a down log is logged, not fatal.
-    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) {
+    /// blocking pool.
+    ///
+    /// # Errors
+    ///
+    /// The log's refusal. A caller about to send writes this record first
+    /// and does not send when it fails (SAFETY.2).
+    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) -> std::io::Result<()> {
         use crate::security::audit::{
             AuditEnvelope, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
         };
         use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
         let Some(log) = &self.audit else {
-            return;
+            return Ok(());
         };
         let mut extra = Map::new();
         extra.insert("subscription_id".into(), attempt.subscription_id.into());
@@ -302,7 +328,7 @@ impl Services {
         let envelope = AuditEnvelope {
             trace_id: None,
             otel_trace_id: None,
-            outcome: if attempt.delivered {
+            outcome: if attempt.delivered || attempt.status == SENDING {
                 AuditOutcome::Ok
             } else {
                 AuditOutcome::Error(-32015)
@@ -340,8 +366,39 @@ impl Services {
                 )
             })
             .await;
-        if let Err(error) = written {
+        if let Err(error) = &written {
             tracing::warn!(%error, "events: delivery audit record not written");
+        }
+        written
+    }
+
+    /// How an attempt already recorded as [`SENDING`] ended. Best effort: the
+    /// attempt itself is on record, and the POST has been made.
+    pub(crate) async fn audit_outcome(&self, attempt: &Attempt<'_>) {
+        let Some(log) = &self.audit else {
+            return;
+        };
+        let mut fields = Map::new();
+        fields.insert("action".into(), "events.delivery_outcome".into());
+        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        fields.insert("event_id".into(), attempt.event_id.into());
+        fields.insert("subscription_id".into(), attempt.subscription_id.into());
+        fields.insert("outcome_of_attempt".into(), attempt.number.into());
+        fields.insert("status".into(), attempt.status.into());
+        fields.insert("delivered".into(), attempt.delivered.into());
+        let envelope = crate::security::audit::AuditEnvelope {
+            outcome: if attempt.delivered {
+                crate::security::audit::AuditOutcome::Ok
+            } else {
+                crate::security::audit::AuditOutcome::Error(-32015)
+            },
+            ..crate::security::audit::AuditEnvelope::gateway()
+        };
+        let written = log
+            .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
+            .await;
+        if let Err(error) = written {
+            tracing::warn!(%error, "events: delivery outcome audit record not written");
         }
     }
 
@@ -400,6 +457,7 @@ mod tests {
             #[cfg(feature = "firewall")]
             firewall: None,
             audit: None,
+            provenance: None,
             #[cfg(feature = "cost-governance")]
             budget: None,
             credentials: LiveCredentials::default(),
@@ -411,6 +469,21 @@ mod tests {
             name: name.to_owned(),
             principal: crate::gateway::auth::principal_of(secret),
         }
+    }
+
+    #[test]
+    fn the_receipt_is_signed_only_when_stamping_is_on() {
+        let bare = services(Vec::new()).provenance("hooks", "webhook.c.r.received");
+        assert_eq!(bare["receipt"]["subject_kind"], "event");
+        assert!(bare.get("signature").is_none());
+        let signer = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id");
+        let stamped = Services {
+            provenance: Some(Arc::new(signer)),
+            ..services(Vec::new())
+        }
+        .provenance("hooks", "webhook.c.r.received");
+        assert_eq!(stamped["receipt"]["backend_id"], "hooks");
+        assert!(stamped["signature"].as_str().is_some_and(|s| !s.is_empty()));
     }
 
     #[test]
@@ -670,3 +743,7 @@ mod tests {
         assert!(!open.admits_subscription(&session, "x").await, "logged out");
     }
 }
+
+#[cfg(test)]
+#[path = "services_audit_tests.rs"]
+mod audit_tests;
