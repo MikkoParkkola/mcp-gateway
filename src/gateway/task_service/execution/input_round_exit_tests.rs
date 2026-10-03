@@ -103,6 +103,16 @@ async fn a_resume_without_its_host_settles_the_task_interrupted() {
 
     assert!(flow.is_none(), "nothing is left to run after the settle");
     std::assert_ne!(status(&fx), TaskStatus::Working, "the task was settled");
+    let stored = fx.service.get(OWNER, &fx.id).expect("the owner reads it");
+    let result = stored
+        .task
+        .result()
+        .expect("the interrupted result is stored")
+        .to_string();
+    assert!(
+        result.contains("gateway_interrupted_before_dispatch"),
+        "settled as interrupted before dispatch, not as some other outcome: {result}"
+    );
 }
 
 /// A deadline that has not been reached lets the resume carry on; one that has
