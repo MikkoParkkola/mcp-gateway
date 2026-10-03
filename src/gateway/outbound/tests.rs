@@ -384,3 +384,119 @@ async fn a_restored_task_document_is_an_unattributed_read() {
     );
     drop(first);
 }
+
+/// A firewall judging `keys` instead of the default `customer_id`.
+fn firewall_with(mode: CrossTenantReads, keys: &[&str]) -> Firewall {
+    Firewall::from_config(
+        FirewallConfig {
+            tenant_guard: TenantGuardConfig {
+                enabled: false,
+                window_secs: 3600,
+                arg_keys: keys.iter().map(|k| (*k).to_string()).collect(),
+                cross_tenant_reads: mode,
+                ..TenantGuardConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    )
+}
+
+/// MIK-7883.SCAN.2: the scan reads the emitted document with its member
+/// names, not pieces. A configured key equal to a wrapper member that names
+/// another tenant is attributed and, under `block`, withheld: the `message` of
+/// a JSON-RPC error.
+#[test]
+fn the_message_member_of_an_error_is_scanned() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "message"]);
+    let _a = read_a(&fw);
+    let refused = JsonRpcResponse::error(Some(RequestId::Number(2)), -32000, B);
+    let frame = delivered(&fw, Some(KEY), Payload::Response(refused), None, None);
+    assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked));
+}
+
+/// MIK-7883.SCAN.2: the `method` of a notification.
+#[test]
+fn the_method_member_of_a_notification_is_scanned() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "method"]);
+    let _a = read_a(&fw);
+    let note = crate::protocol::JsonRpcNotification {
+        jsonrpc: "2.0".to_string(),
+        method: B.to_string(),
+        params: None,
+    };
+    match admit(&fw, Some(KEY), Payload::Notification(note), None) {
+        Admission::Blocked(evidence) => assert_eq!(evidence.verdict, ReadVerdict::Blocked),
+        Admission::Admitted(frame) => panic!("a notification naming B was admitted: {frame:?}"),
+    }
+}
+
+/// MIK-7883.SCAN.3, a proof-by-test pin (it passes before and after, so it is
+/// not a red test): the serialized response is clamped, so a `cacheScope`
+/// holding a tenant is scanned from the raw value, and the clamp's own `private`
+/// is never attributed: the evidence is exactly the original tenant.
+#[test]
+fn a_clamped_cache_scope_cannot_hide_a_tenant() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "cacheScope"]);
+    let _a = read_a(&fw);
+    for scope in [json!(B), json!({ "customer_id": B })] {
+        let b = JsonRpcResponse::success(
+            RequestId::Number(3),
+            json!({ "content": [], "cacheScope": scope }),
+        );
+        let frame = delivered(&fw, Some(KEY), Payload::Response(b), None, None);
+        assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked), "{scope}");
+        // Exactly B: the clamp's `private` is the gateway's own value, so it
+        // is no evidence and names no tenant.
+        let named = &frame.assessment().expect("judged").attribution.tenants;
+        let only_b: std::collections::BTreeSet<_> = [hash_argument(&json!(B))].into();
+        assert_eq!(named, &only_b, "{scope}");
+    }
+}
+
+/// MIK-7883.SCAN.3 admission side: with `cacheScope` configured as a key, a
+/// tenant reading its own value is admitted. The clamp's `private` would be a
+/// second, unownable tenant and refuse the owner under `block`.
+#[test]
+fn a_tenants_own_cache_scope_is_admitted() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "cacheScope"]);
+    let _a = read_a(&fw);
+    let own = JsonRpcResponse::success(
+        RequestId::Number(4),
+        json!({ "content": [], "cacheScope": A }),
+    );
+    let frame = delivered(&fw, Some(KEY), Payload::Response(own), None, None);
+    assert_eq!(frame.verdict(), None, "the owner's own value is admitted");
+}
+
+/// MIK-7883.SCAN.4: every payload variant has a scan row. The exhaustive
+/// match fails to compile when a variant is added, and each value-document
+/// row is exercised: a configured key at the document's top level naming B is
+/// attributed.
+#[test]
+fn every_payload_variant_has_a_scan_row() {
+    let doc = || json!({ "customer_id": B });
+    for payload in [
+        Payload::Answer(doc()),
+        Payload::Request(doc()),
+        Payload::Event(doc()),
+        Payload::Callback(doc()),
+    ] {
+        let fw = firewall(CrossTenantReads::Block);
+        let _a = read_a(&fw);
+        match admit(&fw, Some(KEY), payload, None) {
+            Admission::Blocked(_) => {}
+            Admission::Admitted(frame) => panic!("a payload naming B was admitted: {frame:?}"),
+        }
+    }
+    // The tripwire: a new `Payload` variant must be placed in a row here.
+    let classify = |p: &Payload| match p {
+        Payload::Response(_) | Payload::Notification(_) => "serialized document (SCAN.2)",
+        Payload::Answer(_) | Payload::Request(_) | Payload::Event(_) | Payload::Callback(_) => {
+            "value document"
+        }
+        Payload::Batch(_) => "items judged one by one",
+        Payload::Withheld => "nothing emitted",
+    };
+    assert_eq!(classify(&Payload::Withheld), "nothing emitted");
+}

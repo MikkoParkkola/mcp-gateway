@@ -332,3 +332,67 @@ async fn a_direct_backend_request_keeps_a_busy_session_from_the_reaper() {
         "a session used just now is not idle"
     );
 }
+
+/// MIK-7883.SCAN.1: a non-message event goes out as the whole tagged
+/// notification, `source` and `event_id` included, so the judge scans them.
+/// A configured `arg_keys` name equal to `source` that names another tenant
+/// is withheld under `block`; with no judge both pass (the control).
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_non_message_event_is_judged_with_its_wrapper_fields() {
+    use crate::gateway::outbound::{RejectionAudit, SessionJudge};
+    use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
+    use crate::security::firewall::{Firewall, FirewallConfig};
+
+    let note = |source: &str| TaggedNotification {
+        source: source.to_string(),
+        event_type: "notification".to_string(),
+        data: json!({"note": "x"}),
+        event_id: None,
+    };
+    let session = |judged: bool| {
+        let multiplexer = NotificationMultiplexer::new(
+            Arc::new(BackendRegistry::new()),
+            StreamingConfig::default(),
+        );
+        if judged {
+            let firewall = Firewall::from_config(
+                FirewallConfig {
+                    tenant_guard: TenantGuardConfig {
+                        enabled: false,
+                        window_secs: 3600,
+                        arg_keys: vec!["source".to_string()],
+                        cross_tenant_reads: CrossTenantReads::Block,
+                        ..TenantGuardConfig::default()
+                    },
+                    ..FirewallConfig::default()
+                },
+                None,
+            );
+            let judge = SessionJudge::new(
+                Some(Arc::new(firewall)),
+                Arc::new(RejectionAudit::new(None, 1)),
+                None,
+            )
+            .expect("the guard judges");
+            multiplexer.set_read_judge(judge);
+        }
+        let (id, rx) = multiplexer.get_or_create_session(Some("s"));
+        multiplexer.bind_session_reader(&id, "api_key:one".to_owned());
+        (multiplexer, id, rx)
+    };
+
+    let (plain, id, _rx) = session(false);
+    assert!(plain.send_to_session(&id, note("cust-a")), "control: first");
+    assert!(
+        plain.send_to_session(&id, note("cust-b")),
+        "control: second"
+    );
+
+    let (judged, id, _rx) = session(true);
+    assert!(judged.send_to_session(&id, note("cust-a")), "first read");
+    assert!(
+        !judged.send_to_session(&id, note("cust-b")),
+        "another tenant named by `source` must be withheld under block"
+    );
+}

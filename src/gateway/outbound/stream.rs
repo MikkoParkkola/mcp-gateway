@@ -233,13 +233,23 @@ impl SessionJudge {
     pub(crate) fn judge(
         &self,
         key: Option<&str>,
-        data: &serde_json::Value,
-        event_type: &str,
+        notification: &crate::gateway::streaming::TaggedNotification,
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
     ) -> Result<Option<StreamMark>, ()> {
         #[cfg(feature = "firewall")]
         {
-            match super::judge::admit_stream_item(&self.guard, key, data, event_type, hidden) {
+            // Only a non-message event goes out as the whole notification.
+            let wrapper = (notification.event_type != "message")
+                .then(|| serde_json::to_value(notification).ok())
+                .flatten();
+            let item = (notification.event_type.as_str(), wrapper.as_ref());
+            match super::judge::admit_stream_item(
+                &self.guard,
+                key,
+                &notification.data,
+                item,
+                hidden,
+            ) {
                 Admission::Admitted(frame) if frame.assessment.is_some() => {
                     Ok(Some(StreamMark(frame)))
                 }
@@ -252,7 +262,7 @@ impl SessionJudge {
         }
         #[cfg(not(feature = "firewall"))]
         {
-            let _ = (key, data, event_type, hidden);
+            let _ = (key, notification, hidden);
             Ok(None)
         }
     }
