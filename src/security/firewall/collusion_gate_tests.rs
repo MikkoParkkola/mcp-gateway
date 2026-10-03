@@ -400,70 +400,60 @@ fn a_keyless_egress_increments_the_unkeyed_metric() {
     assert!(count() > before, "not counted");
 }
 
-/// WARN-and-above log capture for the current thread. A process-wide
-/// registry keeps every callsite's interest open, so a warn is never filtered
-/// out by an interest cached on another thread before the scoped subscriber
-/// sees it.
-fn capture_warnings() -> (
-    tracing::subscriber::DefaultGuard,
-    std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-) {
-    use std::sync::{Arc, Mutex};
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    struct W(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for W {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    INTEREST.call_once(|| {
-        use tracing_subscriber::prelude::*;
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
+/// The observed-relay warnings `check` logs, as parsed records.
+fn observed_relay_warnings(
+    fw: &Firewall,
+    caller: &str,
+    text: &str,
+) -> (Option<String>, Vec<serde_json::Value>) {
+    let params = json!({"name": "send", "arguments": {"text": text}});
+    let mut message = None;
+    let records = crate::test_log_capture::records(|| {
+        message = fw.relay_block_message(
+            RelayCaller::Keyed(caller),
+            ("alpha", "send"),
+            &params,
+            ("direct:alpha", caller),
         );
     });
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let writer = Arc::clone(&buffer);
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_max_level(tracing::Level::WARN)
-        .with_writer(move || W(Arc::clone(&writer)))
-        .finish();
-    (tracing::subscriber::set_default(subscriber), buffer)
+    let warnings = records
+        .into_iter()
+        .filter(|r| r["fields"]["message"] == "Firewall: relay observed")
+        .collect();
+    (message, warnings)
 }
 
-/// Under `observe` a relay goes through and is logged once, as a warning that
-/// carries the `server` and `tool` it left through: the fields an operator's
-/// alert rule matches (every route logs the same ones).
+/// Under `observe` a relay goes through and is logged once, as a WARN whose
+/// fields are exactly `server` and `tool`: the names an operator's alert rule
+/// matches, the same on every route.
 #[test]
 fn an_observed_relay_warns_with_server_and_tool_fields() {
     let (fw, _dir) = observing(|_| {});
     delivered(&fw, "alice");
-    let (_guard, buffer) = capture_warnings();
-    let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    let message = fw.relay_block_message(
-        RelayCaller::Keyed("bob"),
-        ("alpha", "send"),
-        &params,
-        ("direct:alpha", "bob"),
-    );
+    let (message, warnings) = observed_relay_warnings(&fw, "bob", PROSE);
     assert_eq!(message, None, "observe lets the call go");
-    let logged = String::from_utf8_lossy(&buffer.lock().unwrap()).into_owned();
-    let lines: Vec<_> = logged
-        .lines()
-        .filter(|l| l.contains("Firewall: relay observed"))
-        .collect();
-    let [line] = lines.as_slice() else {
-        panic!("one relay warning, got: {logged:?}");
+    let [warning] = warnings.as_slice() else {
+        panic!("one relay warning, got: {warnings:?}");
     };
-    assert!(line.contains("WARN"), "{line}");
-    assert!(line.contains("server=\"alpha\""), "{line}");
-    assert!(line.contains("tool=\"send\""), "{line}");
-    assert!(!line.contains("orchard"), "content leaked: {line}");
+    assert_eq!(warning["level"], "WARN");
+    let fields = warning["fields"].as_object().expect("fields");
+    assert_eq!(fields["server"], "alpha", "{warning}");
+    assert_eq!(fields["tool"], "send", "{warning}");
+    assert_eq!(fields.len(), 3, "message, server, tool only: {warning}");
+}
+
+/// No relay, no warning; under `block` the call is refused, not warned about.
+#[test]
+fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
+    let (observe, _dir) = observing(|_| {});
+    delivered(&observe, "alice");
+    let (message, warnings) = observed_relay_warnings(&observe, "bob", "an unrelated short note");
+    assert_eq!((message, warnings.len()), (None, 0));
+
+    let (block, _dir) = observing(|c| c.action = CollusionAction::Block);
+    delivered(&block, "alice");
+    let (message, warnings) = observed_relay_warnings(&block, "bob", PROSE);
+    let message = message.expect("block refuses the relay");
+    assert!(message.starts_with("Relay detection blocked: "), "{message}");
+    assert!(warnings.is_empty(), "{warnings:?}");
 }
