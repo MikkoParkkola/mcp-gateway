@@ -746,6 +746,10 @@ fn is_task_notification(notification: &Value) -> bool {
 ///
 /// No resumability and no event ids — MCP 2026-07-28 removed both, so there is
 /// nothing for a client to resume from and nothing to number.
+// Eight inputs: each is a distinct stream concern (credential, filter, id, first
+// event, keep-alive, the delivery judge, the request params for the judge, the
+// per-reader task frames); bundling them would only rename the list.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn subscription_stream(
     mut listener: crate::gateway::subscription_registry::Listener,
     filter: crate::protocol::subscriptions::ListenRequest,
