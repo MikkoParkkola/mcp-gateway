@@ -1,0 +1,13 @@
+diff --git a/src/events/mod.rs b/src/events/mod.rs
+index 7a7bac39a..119f6eb36 100644
+--- a/src/events/mod.rs
++++ b/src/events/mod.rs
+@@ -187,7 +187,7 @@ impl EventsHub {
+             let hub = Arc::clone(self);
+             runtime.spawn(async move {
+                 match replaced {
+-                    Some(old) => hub.replace_source(old).await,
++                    Some(_) => hub.replay_starts().await,
+                     None => hub.replay_starts().await,
+                 }
+             });

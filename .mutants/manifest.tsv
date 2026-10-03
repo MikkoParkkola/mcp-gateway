@@ -1,0 +1,6 @@
+head_sha	4e67d97041b8bdd3b03fc2abfc8505abe547ba93
+K13	linux	K13.patch	--lib events::sources_tests::a_pending_report_does_not_outlive_its_backend
+K14	linux	K14.patch	--lib events::lifecycle_tests::a_replaced_source_hands_its_keys_over
+K15	linux	K15.patch	--lib events::lifecycle_tests::a_refused_replay_is_attempted_once_per_key
+K16	linux	K16.patch	--lib events::lifecycle_tests::a_source_refusal_at_fan_out_ends_the_subscription
+K17	linux	K17.patch	--lib events::lifecycle_tests::a_replaced_source_hands_its_keys_over

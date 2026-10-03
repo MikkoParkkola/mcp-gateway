@@ -1,0 +1,12 @@
+diff --git a/src/events/lifecycle.rs b/src/events/lifecycle.rs
+index 67cee3532..b0d20a467 100644
+--- a/src/events/lifecycle.rs
++++ b/src/events/lifecycle.rs
+@@ -157,7 +157,6 @@ impl EventsHub {
+                 .collect();
+             for key in keys {
+                 started.remove(&key);
+-                old.on_last_subscriber(&key.1).await;
+             }
+         }
+         self.replay_starts().await;

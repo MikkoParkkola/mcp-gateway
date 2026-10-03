@@ -1,0 +1,12 @@
+diff --git a/src/events/backend_source.rs b/src/events/backend_source.rs
+index 46eed37d0..987b7d65f 100644
+--- a/src/events/backend_source.rs
++++ b/src/events/backend_source.rs
+@@ -92,7 +92,6 @@ impl EventsHub {
+             && !source.offers(&event_name(backend))
+         {
+             // A report still waiting for its quiet period must not outlive the backend.
+-            self.debounce.latest.lock().remove(backend);
+             self.withdraw(&[event_name(backend)]);
+             self.reconcile_stops_in_background();
+             return;
