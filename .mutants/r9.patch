@@ -1,0 +1,15 @@
+diff --git a/src/gateway/task_service/execution/worker.rs b/src/gateway/task_service/execution/worker.rs
+index 366097938..b3f22b5e4 100644
+--- a/src/gateway/task_service/execution/worker.rs
++++ b/src/gateway/task_service/execution/worker.rs
+@@ -366,9 +366,7 @@ async fn follow_upstream_job(
+                     Ok(processed) => {
+                         let processed = backend_output(processed);
+                         let target = (job.server.as_str(), job.tool.as_str());
+-                        state
+-                            .meta_mcp()
+-                            .stage_upstream_result(relay, target, &processed);
++                        let _ = (relay, target);
+                         TaskTransition::Complete(processed)
+                     }
+                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
