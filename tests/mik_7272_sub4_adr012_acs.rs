@@ -246,7 +246,6 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
             protocol_version: None,
         },
         stop_when_idle_for: None,
-        max_frame_bytes: None,
         // Short enough that `Fault::Silence` reads as a backend timeout
         // without the suite waiting for one.
         timeout: Duration::from_millis(300),
