@@ -480,6 +480,11 @@ async fn stdio_audit_withheld_batch_item_records_no_receipt() {
     assert!(http_relay_refused(&firewall, &note), "control: a receipt");
 }
 
+/// Text only the operator's catalogue read delivers.
+const THIRD: &str = "The lighthouse log for the outer skerry notes the oil used per night, the \
+    lamp glass cleaned after each storm, the supply boat's missed visits in the autumn gales, and \
+    a list of the gulls that nest on the gallery rail. It ends with a remark about the stuck door.";
+
 /// MIK-7765: over stdio the catalogue is relay-checked, and the operator is
 /// the one principal `tools/call` keys. An HTTP caller's `resources/read`
 /// text, sent as `prompts/get` arguments, is refused; the operator's own
@@ -542,10 +547,11 @@ async fn stdio_catalogue_is_inside_relay_detection() {
         "the operator's own copy excuses it: {own}"
     );
 
-    // The operator's own `resources/read` of PROSE is a delivery to the operator.
+    // The operator's own `resources/read` of THIRD is a delivery to the operator.
+    *cell.lock() = THIRD.to_string();
     let read = rpc("resources/read", json!({"uri": "res://orchard"})).await;
     assert!(read.get("error").is_none(), "base: {read}");
-    let params = json!({"name": "send", "arguments": {"text": PROSE}});
+    let params = json!({"name": "send", "arguments": {"text": THIRD}});
     let sent = firewall.check_relay(
         RelayCaller::Keyed("http-caller"),
         "alpha",
