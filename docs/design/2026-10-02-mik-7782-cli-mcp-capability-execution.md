@@ -261,8 +261,8 @@ already served as a configured backend, so `McpConfig` has no `url`), with
    gws subcommand on purpose (they are the Google Workspace API, bounded by the caller's token), while
    `mcp-scanner [--analyzers, yara, remote]` admits only the remote scan with the local analyzer, never
    `stdio`, `config` or another analyzer. Defaults (commands of capabilities that execute after the §9
-   decisions): `gws []`, `openpencil-mcp []`, `pact-mcp []`, `pyghidra-mcp []`, `skill-scanner [scan]`,
-   `mcp-scanner [--analyzers, yara, remote]`. Not listed: `trawl` (held, D8: an operator who accepts
+   decisions): `gws []`, `openpencil-mcp []`, `pact-mcp []`, `pyghidra-mcp []`, `skill-scanner [scan]`.
+   Not listed: `trawl` and `mcp-scanner remote` (held, D8: an operator who accepts
    the egress residual lists it), `npx`, `axterminator` and `metacognition` (replaced or removed). A non-matching definition is refused at call time and reported by
    `cap validate`. Operators extend the list for their own capabilities.
 3. **Kill switch.** `capabilities.process_execution: enabled | disabled` (enum, default `enabled`, lead
@@ -297,6 +297,10 @@ already served as a configured backend, so `McpConfig` has no `url`), with
   with a message naming the key. Used by `gws_drive_upload.filePath` (`uploads`),
   `pyghidra_reverse.binary_path` (`uploads`), `pact_contracts.project_dir` and
   `openpencil_design.file_path` (`projects`), and `downloads` for §7.
+  Residual (MIK-7889, #2690): the check and the child's open are two steps, so a process that can write
+  inside any root can swap a checked path for a symlink in between. No other user may therefore write
+  to a root (`uploads`, `projects`, `downloads`) or to a directory above it; stated in docs. A
+  handle-based open is not possible for an arbitrary child.
 
 ### 6.3 Credentials and secrets (CWE-532)
 

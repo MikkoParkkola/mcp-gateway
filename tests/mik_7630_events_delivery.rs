@@ -76,6 +76,27 @@ async fn retries_keep_webhook_id_and_resign() {
     }
 }
 
+/// MIK-7889 (#2695): a subscription made with the static bearer keeps
+/// delivering while that bearer runs, so the full digest recorded at subscribe
+/// time and the running gateway's digest are wired to the same value.
+#[tokio::test]
+async fn a_static_bearer_subscription_keeps_delivering() {
+    const BEARER: &str = "static-bearer-7889-0123456789abcdef";
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery::delivery_config(root.path(), &json!({}));
+    cfg["auth"]["bearer_token"] = json!(BEARER);
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, BEARER, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-7889", "o/r").await;
+    let posts = events_at_least(&rx, 1).await;
+    assert_eq!(
+        posts.len(),
+        1,
+        "the bearer's subscription was not delivered"
+    );
+}
+
 /// The `_meta` key the gateway's provenance receipt rides under (§3.6).
 const PROVENANCE: &str = "io.github.mikkoparkkola/provenance";
 

@@ -72,7 +72,8 @@ async fn a_route_removed_while_down_takes_its_subscription_and_retry() {
     let root = gw.root().to_path_buf();
     assert!(
         wait_until(DEADLINE, || subs_on_disk(&root) == 0).await,
-        "the orphaned subscription is withdrawn after the scan"
+        "the orphaned subscription is withdrawn after the scan; {}",
+        gw.stall_report()
     );
     assert!(
         records(&root, "outbox").is_empty(),
@@ -95,7 +96,8 @@ async fn webhooks_off_withdraws_webhook_subscriptions() {
     let root = gw.root().to_path_buf();
     assert!(
         wait_until(DEADLINE, || subs_on_disk(&root) == 0).await,
-        "the webhook subscription is withdrawn"
+        "the webhook subscription is withdrawn; {}",
+        gw.stall_report()
     );
 }
 
@@ -136,7 +138,8 @@ async fn a_backend_removed_while_down_takes_its_subscription() {
     gw.restart().await;
     assert!(
         wait_until(DEADLINE, || subs_on_disk(&root) == 1).await,
-        "the removed backend's subscription is withdrawn, the webhook one kept"
+        "the removed backend's subscription is withdrawn, the webhook one kept; {}",
+        gw.stall_report()
     );
     let names = gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
     assert!(

@@ -105,6 +105,36 @@ endpoints above revoke tokens the gateway issued, and a raw provider token is
 not one of them. In delegated mode your only revocation lever is the identity
 provider, so keep provider token lifetimes short.
 
+### Connecting a remote MCP client (ChatGPT and similar)
+
+A client that signs in with OAuth, such as ChatGPT, finds the sign-in server
+from the gateway's protected-resource metadata
+(`GET /.well-known/oauth-protected-resource`, RFC 9728). With
+`key_server.enabled: true` and `key_server.delegated_bearer: true`, every
+`key_server.oidc[].issuer` is listed there in `authorization_servers`, in
+configured order. Without both settings the list is empty and left out, because
+the gateway then accepts no provider token on the MCP routes.
+
+```yaml
+server:
+  public_url: https://mcp.corp.internal    # the https origin clients connect to
+key_server:
+  enabled: true
+  delegated_bearer: true
+  oidc:
+    - issuer: https://idp.corp.internal
+      audiences: [<client id the provider puts in aud>]
+```
+
+Clients present the provider's JWT access token, so the provider must issue
+JWT access tokens whose `aud` is one of the `audiences` above, whose age is
+within `max_oidc_token_age_secs`, and for an identity that a
+`key_server.policies` rule grants access to. The provider must also let the client register (dynamic client registration or a
+client metadata document) and publish its metadata at the issuer; the gateway
+does not run an authorization server of its own. Check the result with
+`xh https://mcp.corp.internal/.well-known/oauth-protected-resource`: it shows
+`resource` (your `public_url`) and the issuer.
+
 ## 2. What they may reach
 
 Policy rules are first-match-wins. Each rule matches on identity and grants

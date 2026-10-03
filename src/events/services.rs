@@ -39,7 +39,21 @@ pub(crate) struct LiveCredentials {
     pub key_server: Option<Arc<crate::key_server::KeyServer>>,
     /// `principal_of` the resolved static bearer, when one is configured.
     pub bearer_principal: Option<String>,
+    /// The SHA-256 of the resolved static bearer (the full digest the
+    /// re-check compares; the principal above is only a log fingerprint).
+    pub bearer_sha256: Option<String>,
     pub dashboard: Option<Arc<crate::gateway::auth::DashboardBootstrap>>,
+}
+
+impl LiveCredentials {
+    /// The static-bearer pair for the running bearer: the log fingerprint and
+    /// the full digest the re-check compares.
+    pub(crate) fn static_bearer(bearer: Option<&str>) -> (Option<String>, Option<String>) {
+        (
+            bearer.map(crate::gateway::auth::principal_of),
+            bearer.map(|token| crate::hashing::sha256_hex(token.as_bytes())),
+        )
+    }
 }
 
 /// The firewall's judgement of one payload.
@@ -180,10 +194,18 @@ impl Services {
                             })
                         })
             }),
+            // A row from before the digest was kept: the log fingerprint is all it has.
             LiveBinding::StaticBearer => credentials
                 .bearer_principal
                 .as_deref()
                 .is_some_and(|live| sub.credential_principal.as_deref() == Some(live)),
+            LiveBinding::StaticBearerSha256 { bearer_sha256 } => {
+                use subtle::ConstantTimeEq as _;
+                credentials
+                    .bearer_sha256
+                    .as_deref()
+                    .is_some_and(|live| live.as_bytes().ct_eq(bearer_sha256.as_bytes()).into())
+            }
             LiveBinding::DashboardSession { session_sha256 } => {
                 credentials.dashboard.as_ref().is_some_and(|dashboard| {
                     let limits = crate::gateway::auth::SessionLimits::from(
