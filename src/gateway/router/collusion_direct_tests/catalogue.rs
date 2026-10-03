@@ -11,6 +11,16 @@ use super::*;
 
 /// POST one JSON-RPC `method` to `path` as bearer `who`; the status and body.
 async fn rpc(fx: &Fixture, path: &str, who: &str, method: &str, params: &Value) -> (u16, String) {
+    rpc_with(fx, (path, who, None), method, (params, &json!({}))).await
+}
+
+/// [`rpc`] on `session`, with `extra` merged into the request's `_meta`.
+async fn rpc_with(
+    fx: &Fixture,
+    (path, who, session): (&str, &str, Option<&str>),
+    method: &str,
+    (params, extra_meta): (&Value, &Value),
+) -> (u16, String) {
     let name = params
         .get("name")
         .or_else(|| params.get("uri"))
@@ -19,8 +29,13 @@ async fn rpc(fx: &Fixture, path: &str, who: &str, method: &str, params: &Value) 
     let mut body_params = params.clone();
     body_params["_meta"] = json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                                   "io.modelcontextprotocol/clientCapabilities": {}});
+    if let (Some(meta), Some(extra)) =
+        (body_params["_meta"].as_object_mut(), extra_meta.as_object())
+    {
+        meta.extend(extra.clone());
+    }
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": body_params});
-    let request = axum::http::Request::builder()
+    let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(path)
         .header("content-type", "application/json")
@@ -28,7 +43,11 @@ async fn rpc(fx: &Fixture, path: &str, who: &str, method: &str, params: &Value) 
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", method)
         .header("mcp-name", name)
-        .header("authorization", format!("Bearer {who}"))
+        .header("authorization", format!("Bearer {who}"));
+    if let Some(session) = session {
+        request = request.header("mcp-session-id", session);
+    }
+    let request = request
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     let response = create_router(Arc::clone(&fx.state))
@@ -228,4 +247,64 @@ async fn meta_classified_read_is_a_relay_source() {
 #[tokio::test]
 async fn direct_classified_read_is_a_relay_source() {
     classified_read_is_a_relay_source(Route::Direct).await;
+}
+
+/// MIK-7832.RELAY.1: under `observe` a relayed `prompts/get` argument goes
+/// through and is audited; two sessions must not share one audit session
+/// fingerprint, and each names its own.
+#[tokio::test]
+async fn meta_catalogue_relay_audit_names_the_callers_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("firewall-audit.ndjson");
+    let observe = Setup {
+        action: CollusionAction::Observe,
+        audit_log: Some(log.clone()),
+        ..setup()
+    };
+    let fx = meta_fixture(observe, None).await;
+    read_resource(&fx, Route::Meta, "a").await;
+    let params = json!({"name": Route::Meta.prompt(), "arguments": {"topic": PROSE}});
+    for session in ["sess-one", "sess-two"] {
+        let route = ("/mcp", "b", Some(session));
+        let (status, body) = rpc_with(&fx, route, "prompts/get", (&params, &json!({}))).await;
+        assert_eq!(status, 200, "observe lets the relay through: {body}");
+    }
+    let entries: Vec<Value> = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry.to_string().contains("collusion_relay"))
+        .collect();
+    let sessions: Vec<&Value> = entries.iter().map(|e| &e["session_id"]).collect();
+    let expected = [
+        json!(crate::gateway::session_id::session_fp("sess-one")),
+        json!(crate::gateway::session_id::session_fp("sess-two")),
+    ];
+    assert_eq!(sessions, expected.iter().collect::<Vec<_>>(), "{entries:?}");
+}
+
+/// MIK-7832.RELAY.2: a catalogue relay refusal on the meta route answers with
+/// the status a `tools/call` refusal does (403), not 200.
+#[tokio::test]
+async fn meta_catalogue_relay_refusal_carries_the_refusal_status() {
+    let fx = fixture_for(Route::Meta).await;
+    read_resource(&fx, Route::Meta, "a").await;
+    let relay = prompt_with(&fx, Route::Meta, "b", PROSE).await;
+    assert_catalogue_refused(&fx, &relay, 1);
+    assert_eq!(relay.0, 403, "{}", relay.1);
+}
+
+/// MIK-7832.RELAY.6: the direct route's relay scan skips the progress token,
+/// which the gateway substitutes and the caller did not send as content: a
+/// token equal to a delivered text is not a relay.
+#[tokio::test]
+async fn direct_relay_scan_skips_the_progress_token() {
+    let fx = fixture_for(Route::Direct).await;
+    read_resource(&fx, Route::Direct, "a").await;
+    let forwarded = fx.catalogue();
+    let params = json!({"name": Route::Direct.prompt(), "arguments": {"topic": "harbour"}});
+    let route = ("/mcp/alpha", "b", None);
+    let token = json!({"progressToken": PROSE});
+    let sent = rpc_with(&fx, route, "prompts/get", (&params, &token)).await;
+    assert_catalogue_sent(&fx, &sent, forwarded + 1);
 }

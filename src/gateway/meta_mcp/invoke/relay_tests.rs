@@ -288,3 +288,46 @@ fn outbound_params_carry_meta_and_retry_fields() {
     assert_eq!(params["requestState"], "state");
     assert_eq!(params["inputResponses"]["k1"]["roots"], json!([]));
 }
+
+/// MIK-7832.RELAY.3: the recorded copy is the form the caller is handed, so
+/// the reserved signature-chain member, which delivery strips, is not in it.
+#[test]
+fn a_recorded_catalogue_result_omits_the_reserved_chain_member() {
+    let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    let result = json!({
+        "contents": [{"uri": "res://orchard", "text": PROSE}],
+        "_meta": {crate::security::signature_chain::CHAIN_META: {"link": "reserved-chain-text"}},
+    });
+    let recorded = meta.recorded_prompt(("alpha", "resources/read"), None, "catalogue", &result);
+    assert!(
+        !recorded.to_string().contains("reserved-chain-text"),
+        "{recorded}"
+    );
+    assert!(
+        recorded.to_string().contains("orchard ledger"),
+        "{recorded}"
+    );
+}
+
+/// MIK-7832.RELAY.4: a string or array result has no member for the
+/// context-integrity verdict, so the verdict rides in a wrapper instead of
+/// being dropped.
+#[test]
+fn a_recorded_non_object_result_keeps_its_verdict() {
+    let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    for result in [
+        json!(format!("{PROSE} Contact: keeper@orchardcoop.fi")),
+        json!([format!("{PROSE} Contact: keeper@orchardcoop.fi")]),
+    ] {
+        let recorded =
+            meta.recorded_prompt(("alpha", "resources/read"), None, "catalogue", &result);
+        assert!(
+            recorded.get("_context_integrity").is_some(),
+            "verdict dropped: {recorded}"
+        );
+        assert!(
+            recorded.to_string().contains("orchard ledger"),
+            "{recorded}"
+        );
+    }
+}

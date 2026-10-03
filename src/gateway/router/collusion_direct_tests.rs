@@ -178,6 +178,8 @@ struct Setup {
     /// Tenant attribution on `customer_id` with `cross_tenant_reads: block`
     /// (MIN.2), so a read naming a second tenant is withheld.
     tenants: bool,
+    /// The firewall's audit log, for a row that reads its entries.
+    audit_log: Option<std::path::PathBuf>,
 }
 
 impl Default for Setup {
@@ -192,6 +194,7 @@ impl Default for Setup {
             allowed_flows: Vec::new(),
             rules: "[{match: \"*\", action: allow}]",
             tenants: false,
+            audit_log: None,
         }
     }
 }
@@ -240,6 +243,7 @@ async fn fixture(setup: Setup) -> Fixture {
     }));
     assert!(state_mut.backends.register(Arc::clone(&backend)));
     let config = FirewallConfig {
+        audit_log: setup.audit_log,
         // A rule may not soften a relay block.
         rules: serde_yaml::from_str(setup.rules).unwrap(),
         collusion: CollusionConfig {
