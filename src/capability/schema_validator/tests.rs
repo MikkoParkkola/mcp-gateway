@@ -630,3 +630,28 @@ fn a_pattern_that_does_not_compile_refuses_everything() {
         1
     );
 }
+
+#[test]
+fn array_size_limits_are_enforced() {
+    let schema = schema_with_props(
+        json!({"files": {"type": "array", "minItems": 1, "maxItems": 2}}),
+        &[],
+    );
+    assert!(
+        validate_arguments(&json!({"files": ["a"]}), &schema)
+            .violations
+            .is_empty()
+    );
+    assert_eq!(
+        validate_arguments(&json!({"files": []}), &schema)
+            .violations
+            .len(),
+        1
+    );
+    assert_eq!(
+        validate_arguments(&json!({"files": ["a", "b", "c"]}), &schema)
+            .violations
+            .len(),
+        1
+    );
+}
