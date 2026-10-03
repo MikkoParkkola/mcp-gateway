@@ -208,6 +208,22 @@ def has(node, key, value):
     return False
 
 
+def find(node, key):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key and isinstance(v, str):
+                return v
+            hit = find(v, key)
+            if hit:
+                return hit
+    elif isinstance(node, list):
+        for v in node:
+            hit = find(v, key)
+            if hit:
+                return hit
+    return None
+
+
 def first(rows, test, after=-1):
     for i, row in enumerate(rows):
         if i > after and test(row):
@@ -235,7 +251,8 @@ def cmd_evidence(a):
 
     def rpc(m):
         return lambda r: (r.get("kind") == "http" and m in (r.get("rpc") or [])
-                          and r.get("status") == 200 and r.get("error_code") is None)
+                          and r.get("status") == 200 and r.get("error_code") is None
+                          and r.get("reply_ok") is True and not r.get("parse_error"))
 
     def act(name, **kw):
         return lambda r: has(r, "action", name) and all(has(r, k, v) for k, v in kw.items())
@@ -279,12 +296,19 @@ def cmd_evidence(a):
     # handshake is not: the gateway reuses an earlier verified callback.
     sub_id = (sub or {}).get("result_id")
     sub_args = next((p["arguments"] for p in named("events/subscribe", sub or {})), {})
+    def first_seen(r):
+        # When the gateway first audited this event: a retried older event was seen before the fire.
+        ev = find(r, "event_id")
+        times = [epoch(a) or 0 for a in audit if ev and has(a, "event_id", ev)]
+        return min(times) if times else -1
+
     step("signed inbound webhook accepted (fire.json)", [fire] if fire else [],
          lambda r: r.get("signed") and r.get("status") == 200 and (r.get("ts", 0) >= last - 1))
     step("signed delivery accepted 2xx for the same subscription (gateway audit)", audit,
          lambda r: has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)
          and bool(sub_id) and has(r, "subscription_id", sub_id)
-         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1)
+         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1
+         and first_seen(r) >= fire.get("ts", 1e18) - 1)
     step("events/unsubscribe sent for the same event and arguments", shim,
                  lambda r: rpc("events/unsubscribe")(r) and any(
                      p.get("name") == EVENT and p.get("arguments") == sub_args and bool(sub_args)

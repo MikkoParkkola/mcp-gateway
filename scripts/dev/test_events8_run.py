@@ -24,7 +24,7 @@ REPO = "demo/repo"
 
 def shim_rows(sub_args, unsub_args, result_id=SUB):
     def http(ts, method, params=None, **kw):
-        row = {"kind": "http", "ts": ts, "status": 200, "error_code": None, "rpc": [method], **kw}
+        row = {"kind": "http", "ts": ts, "status": 200, "error_code": None, "reply_ok": True, "rpc": [method], **kw}
         if params is not None:
             row["rpc_params"] = [{"method": method, **params}]
         return row
@@ -39,11 +39,13 @@ def shim_rows(sub_args, unsub_args, result_id=SUB):
     ]
 
 
-def audit_rows(unsub_id=SUB, unsub_detail="removed"):
+def audit_rows(unsub_id=SUB, unsub_detail="removed", first_seen=T0 + 10.5):
     return [
+        {"ts": first_seen, "action": "events.delivery_attempt", "event_id": "ev-1", "subscription_id": SUB},
         {"ts": T0 + 4, "action": "events.verification", "detail": "verified", "outcome": "ok",
          "subscription_id": SUB},
-        {"ts": T0 + 11, "action": "events.delivery_outcome", "delivered": True, "subscription_id": SUB},
+        {"ts": T0 + 11, "action": "events.delivery_outcome", "delivered": True, "subscription_id": SUB,
+         "event_id": "ev-1"},
         {"ts": T0 + 21, "action": "events.unsubscribe", "subscription_id": unsub_id, "detail": unsub_detail},
     ]
 
@@ -95,7 +97,7 @@ class EvidenceTests(unittest.TestCase):
     def test_a_removal_logged_before_the_shim_response_still_passes(self):
         args = {"repo": REPO}
         audit = audit_rows()
-        audit[2]["ts"] = T0 + 15  # audit written 5 s before the shim logged the response at T0+20
+        audit[3]["ts"] = T0 + 15  # audit written 5 s before the shim logged the response at T0+20
         code, out = run_evidence(shim_rows(args, args), audit)
         self.assertEqual(code, 0, out)
 
@@ -108,6 +110,20 @@ class EvidenceTests(unittest.TestCase):
         rows.insert(3, earlier)
         code, out = run_evidence(rows, audit_rows())
         self.assertEqual(code, 0, out)
+
+    def test_a_malformed_reply_does_not_count_as_an_answer(self):
+        args = {"repo": REPO}
+        rows = shim_rows(args, args)
+        rows[-1].pop("reply_ok")
+        rows[-1]["parse_error"] = "ValueError"
+        code, out = run_evidence(rows, audit_rows())
+        self.assertEqual(code, 1, out)
+
+    def test_a_retried_older_delivery_does_not_count_for_this_fire(self):
+        # Delivered after the fire, but the event was first seen before it.
+        args = {"repo": REPO}
+        code, out = run_evidence(shim_rows(args, args), audit_rows(first_seen=T0 + 6))
+        self.assertEqual(code, 1, out)
 
     def test_an_unsubscribe_with_other_arguments_fails(self):
         code, out = run_evidence(shim_rows({"repo": REPO}, {"repo": "someone/else"}), audit_rows())
