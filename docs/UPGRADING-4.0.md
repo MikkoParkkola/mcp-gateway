@@ -3746,6 +3746,14 @@ With relay detection set to `block`, a `prompts/get` whose arguments, or a `reso
 
 **Action:** a client that reads the HTTP status of a meta-route catalogue read and treats 200 as "the call was answered" should handle 403 as a refusal and read the JSON-RPC error from the body, as it already does for a refused `tools/call`. A client that only reads the JSON-RPC body needs no change.
 
+## 140. A successful capability result loses the credentials the gateway injected
+
+**Startup:** no notice, the first successful `cli` or `mcp` capability call returns the redacted result
+
+A `cli` or `mcp` capability is started with credentials the gateway injects (an `env` value, or the resolved `token_env`). Before 4.0 a tool that echoed one of them in a successful result handed it to the caller. Now every string value and key of the result that contains an injected value has it replaced with `[redacted]`, and the rest of the document is unchanged; numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, and so on. With the `firewall` feature the credential scanner also runs on the result. Values the caller sent are left in place, since a tool legitimately returns them. The match is literal: a credential the child encodes (base64, URL escapes) or splits across values is not found, and without the `firewall` feature a credential the child reads from elsewhere is not recognised.
+
+**Action:** a capability whose tool must return an injected value can no longer do so through the result; read the value from its own source instead. A client that compares results byte for byte should expect `[redacted]` where an injected value used to appear.
+
 ## Upgrading from 3.5.x: a walkthrough
 
 This is the path CI rehearses on every change: `scripts/release/nfr_upgrade_1_rehearsal.sh`
