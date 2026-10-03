@@ -655,3 +655,42 @@ fn array_size_limits_are_enforced() {
         1
     );
 }
+
+// MIK-7845: a schema that opts in to extra fields must also KEEP them. The
+// validated output is what the caller receives, so dropping them turns
+// "tolerated" into "deleted".
+#[test]
+fn validate_output_keeps_the_extra_fields_it_tolerates() {
+    let mut schema = schema_with_props(
+        json!({ "web": { "type": "object" }, "answer": { "type": "string" } }),
+        &[],
+    );
+    schema["additionalProperties"] = json!(true);
+    let payload = json!({
+        "web": { "results": [] },
+        "answer": null,
+        "mixed": { "type": "mixed" },
+        "type": "search"
+    });
+    let result = validate_output(&payload, &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(
+        result.coerced, payload,
+        "nothing the upstream sent is dropped"
+    );
+}
+
+#[test]
+fn validate_output_still_coerces_declared_fields_when_extras_are_kept() {
+    let mut schema = schema_with_props(json!({ "count": { "type": "integer" } }), &[]);
+    schema["additionalProperties"] = json!(true);
+    let result = validate_output(&json!({ "count": "2", "extra": 1 }), &schema);
+    assert_eq!(result.coerced, json!({ "count": 2, "extra": 1 }));
+}
+
+#[test]
+fn closed_output_schemas_do_not_gain_extra_fields() {
+    let schema = schema_with_props(json!({ "count": { "type": "integer" } }), &[]);
+    let result = validate_output(&json!({ "count": 2 }), &schema);
+    assert_eq!(result.coerced, json!({ "count": 2 }));
+}
