@@ -41,8 +41,13 @@ struct Child {
     config: McpConfig,
     /// Fingerprint of the env values it was started with; a rotated one restarts it.
     env_fp: u64,
+    /// The provider timeout it runs under; a changed one restarts it.
+    timeout: Duration,
+    /// Which start this is, so a late `discard` cannot remove a newer child.
+    id: u64,
     in_flight: Arc<AtomicUsize>,
-    last_used: Instant,
+    /// Set at acquire and again when a call ends, so a long call is not idle.
+    last_used: Arc<Mutex<Instant>>,
     /// Dropped after the backend is stopped, removing the tree.
     _workdir: Workdir,
 }
@@ -52,15 +57,24 @@ struct Child {
 pub(crate) struct McpChildren {
     map: Mutex<HashMap<(String, String), Child>>,
     sweeping: AtomicBool,
+    next_id: std::sync::atomic::AtomicU64,
 }
 
 /// Decrements a child's in-flight count when a call ends, however it ends.
-pub(crate) struct InFlight(Arc<AtomicUsize>);
+pub(crate) struct InFlight(Arc<AtomicUsize>, Arc<Mutex<Instant>>);
 
 impl Drop for InFlight {
     fn drop(&mut self) {
+        *self.1.lock() = Instant::now();
         self.0.fetch_sub(1, Ordering::AcqRel);
     }
+}
+
+/// A child leased for one call.
+struct Lease {
+    backend: Arc<Backend>,
+    busy: InFlight,
+    id: u64,
 }
 
 impl McpChildren {
@@ -70,16 +84,25 @@ impl McpChildren {
         capability: &CapabilityDefinition,
         config: &McpConfig,
         principal: &str,
-        env_fp: u64,
+        (env_fp, timeout): (u64, Duration),
+        epoch_current: impl Fn() -> bool,
         start: impl FnOnce() -> Result<(Arc<Backend>, Workdir)>,
-    ) -> Result<(Arc<Backend>, InFlight)> {
+    ) -> Result<Lease> {
         let key = (capability.name.clone(), principal.to_owned());
         let mut stale = Vec::new();
         let mut map = self.map.lock();
-        if map
-            .get(&key)
-            .is_some_and(|child| child.config != *config || child.env_fp != env_fp)
-            && let Some(old) = map.remove(&key)
+        // Under the map lock: an unload bumps the epoch and then evicts under
+        // this same lock, so a call from before the unload either gets its child
+        // evicted or is refused here; none starts one that outlives the unload.
+        if !epoch_current() {
+            return Err(Error::Config(format!(
+                "capability '{}' changed while this call was starting; retry",
+                capability.name
+            )));
+        }
+        if map.get(&key).is_some_and(|child| {
+            child.config != *config || child.env_fp != env_fp || child.timeout != timeout
+        }) && let Some(old) = map.remove(&key)
         {
             stale.push(old);
         }
@@ -95,7 +118,7 @@ impl McpChildren {
                     .filter(|((cap, _), child)| {
                         *cap == capability.name && child.in_flight.load(Ordering::Acquire) == 0
                     })
-                    .min_by_key(|(_, child)| child.last_used)
+                    .min_by_key(|(_, child)| *child.last_used.lock())
                     .map(|(k, _)| k.clone());
                 let Some(victim) = victim else {
                     return Err(Error::RateLimited(format!(
@@ -113,19 +136,22 @@ impl McpChildren {
                     backend,
                     config: config.clone(),
                     env_fp,
+                    timeout,
+                    id: self.next_id.fetch_add(1, Ordering::Relaxed),
                     in_flight: Arc::new(AtomicUsize::new(0)),
-                    last_used: Instant::now(),
+                    last_used: Arc::new(Mutex::new(Instant::now())),
                     _workdir: workdir,
                 },
             );
         }
         let child = map.get_mut(&key).expect("present: inserted above");
-        child.last_used = Instant::now();
+        *child.last_used.lock() = Instant::now();
         child.in_flight.fetch_add(1, Ordering::AcqRel);
-        let lease = (
-            Arc::clone(&child.backend),
-            InFlight(Arc::clone(&child.in_flight)),
-        );
+        let lease = Lease {
+            backend: Arc::clone(&child.backend),
+            busy: InFlight(Arc::clone(&child.in_flight), Arc::clone(&child.last_used)),
+            id: child.id,
+        };
         drop(map);
         stop_all(stale);
         Ok(lease)
@@ -143,7 +169,7 @@ impl McpChildren {
                 // only when it has no call in flight.
                 !loaded(cap)
                     || (child.in_flight.load(Ordering::Acquire) == 0
-                        && now.duration_since(child.last_used) >= idle)
+                        && now.duration_since(*child.last_used.lock()) >= idle)
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -176,11 +202,16 @@ impl McpChildren {
     }
 
     /// Stop one caller's child (a call on it timed out, so it may be wedged).
-    fn discard(&self, capability: &str, principal: &str) {
-        let gone = self
-            .map
-            .lock()
-            .remove(&(capability.to_owned(), principal.to_owned()));
+    fn discard(&self, capability: &str, principal: &str, id: u64) {
+        let key = (capability.to_owned(), principal.to_owned());
+        let mut map = self.map.lock();
+        // Only the child that timed out: a newer one under the same key stays.
+        let gone = if map.get(&key).is_some_and(|child| child.id == id) {
+            map.remove(&key)
+        } else {
+            None
+        };
+        drop(map);
         stop_all(gone.into_iter().collect());
     }
 
@@ -192,9 +223,33 @@ impl McpChildren {
             .values()
             .map(|child| {
                 child.in_flight.fetch_add(1, Ordering::AcqRel);
-                InFlight(Arc::clone(&child.in_flight))
+                InFlight(Arc::clone(&child.in_flight), Arc::clone(&child.last_used))
             })
             .collect()
+    }
+
+    /// The id of the one child of `capability`, for tests.
+    #[cfg(test)]
+    pub(crate) fn id_for_test(&self, capability: &str) -> u64 {
+        let map = self.map.lock();
+        let (_, child) = map
+            .iter()
+            .find(|((cap, _), _)| cap == capability)
+            .expect("a child exists");
+        child.id
+    }
+
+    /// `discard` for the only caller used in tests.
+    #[cfg(test)]
+    pub(crate) fn discard_for_test(&self, capability: &str, id: u64) {
+        let principal = {
+            let map = self.map.lock();
+            map.keys()
+                .find(|(cap, _)| cap == capability)
+                .map(|(_, p)| p.clone())
+                .expect("a child exists")
+        };
+        self.discard(capability, &principal, id);
     }
 
     /// Live children, for tests.
@@ -383,15 +438,24 @@ impl CapabilityExecutor {
             env_values.hash(&mut hasher);
             hasher.finish()
         };
-        let (backend, _busy) =
-            self.mcp_children
-                .acquire(capability, config, &principal, env_fp, || {
-                    self.start_mcp(capability, config)
-                })?;
-
         // One deadline for the whole call, writes included: a server that stops
         // reading its stdin must not hold its slot (and so its eviction) forever.
         let deadline = Duration::from_secs(capability.primary_provider().map_or(30, |p| p.timeout));
+        let snapshot = context.policy_epoch;
+        let lease = self.mcp_children.acquire(
+            capability,
+            config,
+            &principal,
+            (env_fp, deadline),
+            || {
+                self.policy_epoch_now()
+                    .is_none_or(|now| snapshot.is_none_or(|s| s == now))
+            },
+            || self.start_mcp(capability, config),
+        )?;
+        let backend = lease.backend;
+        let _busy = lease.busy;
+        let child_id = lease.id;
         let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
             if let Some(prepare) = prepare {
@@ -424,7 +488,8 @@ impl CapabilityExecutor {
             // A server that did not answer in time may be wedged: stop it so the
             // next call starts a fresh one instead of timing out on the same.
             Err(_) => {
-                self.mcp_children.discard(&capability.name, &principal);
+                self.mcp_children
+                    .discard(&capability.name, &principal, child_id);
                 Err(Error::BackendTimeout("MCP call timed out".to_string()))
             }
             Ok(result) => result.map_err(|error| match error {

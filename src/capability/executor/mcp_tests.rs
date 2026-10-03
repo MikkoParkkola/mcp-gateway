@@ -5,6 +5,8 @@
 //! and every child (and its descendants) stops when it is evicted.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use std::sync::atomic::Ordering;
 
 use serde_json::{Value, json};
@@ -192,6 +194,7 @@ async fn the_prepare_step_binds_its_result_into_the_main_call() {
 #[tokio::test]
 async fn a_frame_over_the_limit_fails_the_call() {
     let executor = CapabilityExecutor::new();
+    let started = std::time::Instant::now();
     let err = call(
         &executor,
         &capability(),
@@ -200,6 +203,11 @@ async fn a_frame_over_the_limit_fails_the_call() {
     )
     .await;
     assert!(err.is_err(), "a 20 MiB frame must not be accepted");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "a broken stream wakes the waiting call at once, not at its 20 s timeout: {:?}",
+        started.elapsed()
+    );
 }
 
 #[cfg(unix)]
@@ -265,4 +273,82 @@ async fn unloading_stops_a_child_even_while_a_call_is_in_flight() {
         "unload does not wait for a busy child"
     );
     drop(lease);
+}
+
+fn ctx_with_epoch(epoch: u64) -> CapabilityExecutionContext {
+    CapabilityExecutionContext {
+        policy_epoch: Some(epoch),
+        ..caller("alice")
+    }
+}
+
+#[tokio::test]
+async fn a_call_from_before_an_unload_never_starts_a_child() {
+    let epoch = Arc::new(std::sync::atomic::AtomicU64::new(7));
+    let executor = CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch));
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    let stale = ctx_with_epoch(7);
+    // The unload: the epoch moves on, then the children are evicted.
+    epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
+    executor.stop_unloaded_mcp(&|name| name != cap.name);
+    let err = call(&executor, &cap, say.clone(), &stale).await;
+    assert!(err.is_err(), "a stale call is refused: {err:?}");
+    assert_eq!(executor.mcp_children.len(), 0, "and starts no child");
+    let fresh = ctx_with_epoch(8);
+    call(&executor, &cap, say, &fresh).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_late_discard_leaves_a_newer_child_alone() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    call(&executor, &cap, say, &caller("alice")).await.unwrap();
+    let current = executor.mcp_children.id_for_test(&cap.name);
+    executor
+        .mcp_children
+        .discard_for_test(&cap.name, current + 1000);
+    assert_eq!(
+        executor.mcp_children.len(),
+        1,
+        "another child's id removes nothing"
+    );
+    executor.mcp_children.discard_for_test(&cap.name, current);
+    assert_eq!(executor.mcp_children.len(), 0, "its own id removes it");
+}
+
+#[tokio::test]
+async fn a_changed_provider_timeout_restarts_the_child() {
+    let executor = CapabilityExecutor::new();
+    let mut cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    let first = call(&executor, &cap, say.clone(), &caller("alice"))
+        .await
+        .unwrap();
+    cap.providers.named.get_mut("primary").unwrap().timeout = 25;
+    let second = call(&executor, &cap, say, &caller("alice")).await.unwrap();
+    assert_ne!(
+        first["pid"], second["pid"],
+        "a new timeout starts a new child"
+    );
+}
+
+#[tokio::test]
+async fn a_long_call_does_not_count_as_idle_time() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    call(&executor, &cap, say, &caller("alice")).await.unwrap();
+    let lease = executor.mcp_children.hold_for_test("alice");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drop(lease);
+    executor
+        .mcp_children
+        .evict(Duration::from_millis(200), &|_| true);
+    assert_eq!(
+        executor.mcp_children.len(),
+        1,
+        "idleness counts from when the call ended"
+    );
 }

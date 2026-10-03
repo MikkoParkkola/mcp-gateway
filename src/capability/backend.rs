@@ -215,9 +215,8 @@ impl CapabilityBackend {
     /// to call `reload()` immediately afterwards, but this method is `pub` and
     /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
-        self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
         let mut caps = self.capabilities.write();
-        if let Some(&pos) = caps.index.get(name) {
+        let removed = if let Some(&pos) = caps.index.get(name) {
             caps.entries.remove(pos);
             caps.tools.remove(pos);
             caps.index.remove(name);
@@ -233,7 +232,12 @@ impl CapabilityBackend {
             true
         } else {
             false
-        }
+        };
+        drop(caps);
+        // After the epoch bump: a call that started before it is stopped here,
+        // and one that starts after it is refused at `acquire`.
+        self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
+        removed
     }
 
     /// Mark a capability as quarantined by a rug-pull event.

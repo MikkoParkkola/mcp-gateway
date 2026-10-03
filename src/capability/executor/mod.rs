@@ -166,6 +166,13 @@ impl CapabilityExecutor {
         self
     }
 
+    /// The shared policy epoch now, when one is attached.
+    pub(crate) fn policy_epoch_now(&self) -> Option<u64> {
+        self.policy_epoch
+            .as_ref()
+            .map(|e| e.load(std::sync::atomic::Ordering::Acquire))
+    }
+
     /// Advance the shared epoch after a capability-registry mutation is visible.
     pub(crate) fn bump_policy_epoch(&self) {
         if let Some(epoch) = &self.policy_epoch {
