@@ -1,13 +1,13 @@
 diff --git a/src/gateway/router/backend_handlers/direct_audit.rs b/src/gateway/router/backend_handlers/direct_audit.rs
-index a72e831b6..88ba51219 100644
+index 74342ce45..e29bc2e24 100644
 --- a/src/gateway/router/backend_handlers/direct_audit.rs
 +++ b/src/gateway/router/backend_handlers/direct_audit.rs
-@@ -186,7 +186,7 @@ async fn audited_call_judged(
-         crate::gateway::outbound::emit_http_checked(response, state.transparency_log.as_ref())
+@@ -188,7 +188,7 @@ async fn audited_call_judged(
+         crate::gateway::outbound::judged_reply_checked(response, state.transparency_log.as_ref())
              .await;
      #[cfg(feature = "firewall")]
 -    super::relay::commit_direct_receipts(&state, delivers && written);
 +    super::relay::commit_direct_receipts(&state, delivers);
      #[cfg(not(feature = "firewall"))]
      let _ = (delivers, written);
-     response
+     reply
