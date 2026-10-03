@@ -301,19 +301,21 @@ tokio::task_local! {
 /// the response as [`DeferredReceipts`]: `emit_http`, the last step that can
 /// replace the answer, records them. With relay detection off nothing is
 /// collected.
-pub(crate) async fn collecting_http<F>(
+pub(crate) async fn collecting_http<F, R>(
     meta: std::sync::Arc<MetaMcp>,
     delivery: F,
 ) -> axum::response::Response
 where
-    F: std::future::Future<Output = axum::response::Response>,
+    F: std::future::Future<Output = R>,
+    R: axum::response::IntoResponse,
 {
+    use axum::response::IntoResponse;
     if !meta.relay_active() {
-        return delivery.await;
+        return delivery.await.into_response();
     }
     let ((mut response, delivers), staged) = meta
         .collecting_staged(RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
-            let response = delivery.await;
+            let response = delivery.await.into_response();
             (response, RELAY_DELIVERS.with(std::cell::Cell::get))
         }))
         .await;
