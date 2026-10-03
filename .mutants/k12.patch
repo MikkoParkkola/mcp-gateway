@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_need.rs b/src/events/upstream_need.rs
+index 212600526..f5400f74e 100644
+--- a/src/events/upstream_need.rs
++++ b/src/events/upstream_need.rs
+@@ -99,7 +99,7 @@ impl Need {
+     /// asked upstream for URI interest too, but emitted only for this.
+     pub(crate) fn emits(&self, kind: NoteKind, uri: Option<&str>) -> bool {
+         match kind {
+-            NoteKind::ResourcesChanged => self.resources_changed > 0,
++            NoteKind::ResourcesChanged => true,
+             NoteKind::PromptsChanged => self.prompts_changed > 0,
+             NoteKind::ResourceUpdated => uri.is_some_and(|u| self.uris.contains_key(u)),
+         }
