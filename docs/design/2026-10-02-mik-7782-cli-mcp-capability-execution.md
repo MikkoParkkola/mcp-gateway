@@ -261,8 +261,8 @@ already served as a configured backend, so `McpConfig` has no `url`), with
    gws subcommand on purpose (they are the Google Workspace API, bounded by the caller's token), while
    `mcp-scanner [--analyzers, yara, remote]` admits only the remote scan with the local analyzer, never
    `stdio`, `config` or another analyzer. Defaults (commands of capabilities that execute after the §9
-   decisions): `gws []`, `openpencil-mcp []`, `pact-mcp []`, `pyghidra-mcp []`, `skill-scanner [scan]`,
-   `mcp-scanner [--analyzers, yara, remote]`. Not listed: `trawl` (held, D8: an operator who accepts
+   decisions): `gws []`, `openpencil-mcp []`, `pact-mcp []`, `pyghidra-mcp []`, `skill-scanner [scan]`.
+   Not listed: `trawl` and `mcp-scanner remote` (held, D8: an operator who accepts
    the egress residual lists it), `npx`, `axterminator` and `metacognition` (replaced or removed). A non-matching definition is refused at call time and reported by
    `cap validate`. Operators extend the list for their own capabilities.
 3. **Kill switch.** `capabilities.process_execution: enabled | disabled` (enum, default `enabled`, lead
