@@ -132,3 +132,7 @@ impl Backend {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "listen_tests.rs"]
+mod tests;
