@@ -97,7 +97,7 @@ impl MetaMcp {
     ) -> Option<crate::Error> {
         #[cfg(feature = "firewall")]
         {
-            use crate::security::firewall::{FirewallAction, RelayCaller};
+            use crate::security::firewall::RelayCaller;
             let fw = self.firewall.as_ref().filter(|fw| fw.relay_active())?;
             let capability = self
                 .get_capabilities()
@@ -114,22 +114,12 @@ impl MetaMcp {
                 outbound_params(tool, arguments, meta, key, egress.retry)
             };
             let caller = RelayCaller::new(who.key, who.keyed);
-            let verdict = fw.check_relay(caller, server, tool, &params, audit);
-            if verdict.action == FirewallAction::Warn {
-                tracing::warn!(server, tool, "Firewall: relay observed");
-            }
-            if verdict.allowed {
-                return None;
-            }
-            let desc = verdict
-                .findings
-                .first()
-                .map_or("", |f| f.description.as_str());
-            Some(crate::Error::Forbidden {
-                code: -32002,
-                status: 403,
-                message: format!("Relay detection blocked: {desc}"),
-            })
+            fw.relay_block_message(caller, (server, tool), &params, audit)
+                .map(|message| crate::Error::Forbidden {
+                    code: -32002,
+                    status: 403,
+                    message,
+                })
         }
         #[cfg(not(feature = "firewall"))]
         {
@@ -321,27 +311,17 @@ impl MetaMcp {
         params: &Value,
         id: &crate::protocol::RequestId,
     ) -> Option<crate::protocol::JsonRpcResponse> {
-        use crate::security::firewall::{FirewallAction, RelayCaller};
+        use crate::security::firewall::RelayCaller;
         let (caller, fw) = (
             caller?,
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
-        let verdict = fw.check_relay(who, backend, method, params, ("", &caller.name));
-        if verdict.action == FirewallAction::Warn {
-            tracing::warn!(server = backend, method, "Firewall: relay observed");
-        }
-        if verdict.allowed {
-            return None;
-        }
-        let desc = verdict
-            .findings
-            .first()
-            .map_or("", |f| f.description.as_str());
+        let message = fw.relay_block_message(who, (backend, method), params, ("", &caller.name))?;
         Some(crate::protocol::JsonRpcResponse::error(
             Some(id.clone()),
             -32002,
-            format!("Relay detection blocked: {desc}"),
+            message,
         ))
     }
 

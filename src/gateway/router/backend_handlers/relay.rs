@@ -6,11 +6,10 @@
 
 use axum::http::StatusCode;
 use serde_json::Value;
-use tracing::warn;
 
 use super::{AppState, BackendAuthContext, BackendRejection, backend_security_error_with_status};
 use crate::protocol::RequestId;
-use crate::security::firewall::{Firewall, FirewallAction, RelayCaller};
+use crate::security::firewall::{Firewall, RelayCaller};
 
 /// The key the direct route's per-caller firewall controls score on: the
 /// caller's `CallerKey`, as on the meta route, so one caller has one budget on
@@ -61,21 +60,12 @@ pub(super) fn relay_refusal(
 ) -> Option<BackendRejection> {
     let (key, keyed) = direct_caller(auth, session_id);
     let caller = RelayCaller::new(&key, keyed);
-    let verdict = fw.check_relay(caller, backend, tool, params, (session_id, caller_name));
-    if verdict.action == FirewallAction::Warn {
-        warn!(backend = %backend, tool = %tool, "Firewall: relay observed");
-    }
-    if verdict.allowed {
-        return None;
-    }
-    let desc = verdict
-        .findings
-        .first()
-        .map_or("", |f| f.description.as_str());
+    let message =
+        fw.relay_block_message(caller, (backend, tool), params, (session_id, caller_name))?;
     Some(backend_security_error_with_status(
         id,
         -32002,
-        &format!("Relay detection blocked: {desc}"),
+        &message,
         StatusCode::FORBIDDEN,
     ))
 }
