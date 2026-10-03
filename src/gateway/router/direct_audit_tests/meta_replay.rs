@@ -109,6 +109,33 @@ async fn meta_replay_of_a_failure_keeps_its_outcome() {
     }
 }
 
+/// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
+/// refusal, not the gateway's: the first execution and its replay both
+/// record `error`, with the peer's code, never `denied`.
+#[tokio::test]
+async fn meta_replay_of_a_peer_refusal_code_is_an_error_not_a_denial() {
+    for code in [-32001, -32004] {
+        let fx = fixture(Setup {
+            auth: Some(key_for_alpha(None)),
+            backend_error: Some(code),
+            ..Setup::default()
+        })
+        .await;
+        let (status, first) = post_modern(&fx, &keyed_invoke(1).0).await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        let (status, second) = post_modern(&fx, &keyed_invoke(2).0).await;
+        assert_eq!(status, StatusCode::OK, "{second}");
+        assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{second}");
+
+        let all = invocations(&fx);
+        assert_eq!(all.len(), 2, "{code}: {all:?}");
+        for record in &all {
+            assert_eq!(record["outcome"], "error", "{code}: {record}");
+            assert_eq!(record["error_code"], code, "{code}: {record}");
+        }
+    }
+}
+
 /// MIK-7116.MIN.1 T31. A meta replay is a cached delivery: its record names
 /// the delivered value's tenants (hashed) and says no backend ran for it.
 /// Attribution reads the firewall's `arg_keys`, so the cell needs the feature.

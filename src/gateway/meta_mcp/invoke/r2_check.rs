@@ -38,7 +38,10 @@ impl MetaMcp {
     /// is the slot's failsafe refusing that list.
     pub(super) async fn undeclared_key_refusal(
         &self,
-        server: &str,
+        // The backend the call was judged on (MIK-7810), never a second lookup
+        // by name: a reload between the two must not send this caller's
+        // headers to a replacement.
+        (server, backend): (&str, Option<&std::sync::Arc<crate::backend::Backend>>),
         tool: &str,
         arguments: &Value,
         identity_key: Option<&str>,
@@ -51,7 +54,7 @@ impl MetaMcp {
         {
             return Ok(None);
         }
-        let Some(backend) = self.backends.get(server) else {
+        let Some(backend) = backend else {
             return Ok(None);
         };
         let text = backend
