@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_notify.rs b/src/gateway/meta_mcp/task_notify.rs
+index 87b9311ab..30540c717 100644
+--- a/src/gateway/meta_mcp/task_notify.rs
++++ b/src/gateway/meta_mcp/task_notify.rs
+@@ -63,7 +63,7 @@ impl MetaMcp {
+                         }),
+                         None => notification.clone(),
+                     };
+-                    Ok((subscription.tag(frame), withheld))
++                    Ok((frame, withheld))
+                 })
+                 .await
+                 .ok();
