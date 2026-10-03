@@ -123,14 +123,9 @@ pub(crate) struct PooledEntry {
     /// A mutex, held across each record and its flag change, so a warm-up's
     /// check-then-reset cannot interleave with a request failure.
     pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
-
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
-    /// The events listener's handle on this slot's transport (MIK-7630 I5
-    /// design §4, ruling B). A `Weak`, so the slot's strong count stays one
-    /// and a restart's close-after-last-owner wait is unchanged.
-    pub(crate) listen: parking_lot::RwLock<
-        Option<std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>>,
-    >,
+    /// The events listener's weak handle on the transport (I5 §4).
+    pub(crate) listen: RwLock<Option<super::listen::ListenHandle>>,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
     /// A `PerUser` slot's admission (#2300); dropped with the entry.
@@ -183,12 +178,10 @@ impl ActivityGuard {
         }
     }
 
-    /// The slot this lease holds.
-    ///
-    /// The metadata path reads its cache through this rather than looking the
-    /// slot up a second time, so the cache it fills and the transport it is
-    /// holding open are the same object by construction rather than by two
-    /// lookups agreeing (MIK-7334.CATALOGUE.1 §3.1).
+    /// The slot this lease holds. The metadata path reads its cache through
+    /// this rather than looking the slot up a second time, so the cache it
+    /// fills and the transport it holds open are the same object by
+    /// construction, not by two lookups agreeing (MIK-7334.CATALOGUE.1 §3.1).
     pub(super) fn entry(&self) -> &Arc<PooledEntry> {
         &self.entry
     }
@@ -196,9 +189,8 @@ impl ActivityGuard {
 
 impl Drop for ActivityGuard {
     fn drop(&mut self) {
-        // Touch on the way out too: a long CLIENT request should leave the slot
-        // looking used as of its COMPLETION, not its start. Internal leases skip
-        // this so they never defer the idle deadline.
+        // Touch on exit: a long CLIENT request leaves the slot used as of its
+        // completion. Internal leases skip it, so they never defer idling.
         if self.touch_on_drop {
             self.entry.touch();
         }
@@ -223,7 +215,7 @@ impl PooledEntry {
             request_failed_since_close: parking_lot::Mutex::new(false),
 
             resources_cache: CachedMetadata::new(),
-            listen: parking_lot::RwLock::new(None),
+            listen: RwLock::new(None),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
             identity_lease: None,

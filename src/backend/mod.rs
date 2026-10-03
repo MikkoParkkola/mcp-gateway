@@ -34,6 +34,7 @@ mod lifecycle;
 mod list_drain;
 pub(crate) mod listen;
 mod metadata;
+mod oauth_client;
 mod ops;
 mod pool;
 mod registry;
