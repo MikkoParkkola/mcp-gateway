@@ -277,13 +277,14 @@ impl EventSource for WebhooksOn {
 async fn startup_reconcile_withdraws_absent_backends_on_a_partial_scan() {
     let (hub, _dir) = hub();
     hub.register_source(Arc::new(WebhooksOn));
-    hub.install_backend_source(Arc::new(|| vec!["kept".to_owned()]));
+    hub.install_backend_source(Arc::new(|| vec!["kept".to_owned(), "k.d".to_owned()]));
     let config = crate::config::EventsConfig::default();
     for (id, name) in [
         ("sub_gone", "backend.gone.tools_changed"),
         ("sub_kept", "backend.kept.tools_changed"),
         ("sub_kept_resource", "backend.kept.resource_updated"),
         ("sub_gone_resource", "backend.gone.resource_updated"),
+        ("sub_dotted", "backend.k.d.resource_updated"),
         ("sub_hook", "webhook.cap.route.received"),
     ] {
         let row: records::Subscription = serde_json::from_value(serde_json::json!({
@@ -319,7 +320,7 @@ async fn startup_reconcile_withdraws_absent_backends_on_a_partial_scan() {
     left.sort();
     assert_eq!(
         left,
-        ["sub_hook", "sub_kept", "sub_kept_resource"],
+        ["sub_dotted", "sub_hook", "sub_kept", "sub_kept_resource"],
         "only the absent backend's goes"
     );
 }
