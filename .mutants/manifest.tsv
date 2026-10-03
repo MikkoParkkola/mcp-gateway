@@ -1,0 +1,7 @@
+head_sha	c388579e1dfcc0966dd05fb2fd9c180b13848995
+# #2846 judge scans the emitted document
+M1	linux	m1.patch	--lib -- the_message_member_of_an_error_is_scanned
+M2	linux	m2.patch	--lib -- a_non_message_event_is_judged_with_its_wrapper_fields
+M3	linux	m3.patch	--lib -- a_clamped_cache_scope_cannot_hide_a_tenant
+M4	linux	m4.patch	--lib -- every_payload_variant_has_a_scan_row
+M5	linux	m5.patch	--lib -- every_payload_variant_has_a_scan_row

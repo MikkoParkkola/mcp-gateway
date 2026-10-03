@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index b8171db9e..4f0864d4d 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -89,7 +89,7 @@ fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
+         // before this body was built: rescanning it would read a redaction
+         // marker as a tenant of its own. The envelope is scanned with its
+         // member names, so a configured key at its root still counts.
+-        Payload::Callback(doc) => guard.scan_document(doc, &["data"]),
++        Payload::Callback(doc) => guard.scan_document(doc, &["data", "customer_id"]),
+         Payload::Batch(items) => {
+             let mut all = ReadAttribution::default();
+             for item in items.iter().filter_map(OutboundFrame::assessment) {

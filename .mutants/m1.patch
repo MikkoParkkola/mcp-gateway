@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index b8171db9e..2e45e949b 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -101,7 +101,7 @@ fn scan(guard: &TenantGuard, payload: &Payload) -> ReadAttribution {
+     };
+     // The emitted document with its member names: a configured key equal to a
+     // wrapper member (`message`, `method`) is matched here, not above.
+-    if let Some(document) = emitted_document(payload) {
++    if let Some(document) = emitted_document(payload).filter(|_| false) {
+         let (more, unread) = guard.scan_document(&document, &["jsonrpc", "id"]);
+         tenants.extend(more);
+         uninspected |= unread;

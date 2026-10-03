@@ -1,0 +1,15 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index b8171db9e..46e50a3c8 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -51,8 +51,8 @@ fn emitted_document(payload: &Payload) -> Option<Value> {
+     match payload {
+         Payload::Response(response) => {
+             let mut document = serde_json::to_value(response).ok()?;
+-            if let (Some(slot), Some(raw)) = (document.get_mut("result"), &response.result) {
+-                *slot = raw.clone();
++            if let (Some(slot), Some(raw)) = (document.get_mut("result"), &response.result.as_ref().filter(|_| false)) {
++                *slot = (*raw).clone();
+             }
+             let raw_data = response.error.as_ref().and_then(|e| e.data.as_ref());
+             if let (Some(slot), Some(raw)) = (document.pointer_mut("/error/data"), raw_data) {
