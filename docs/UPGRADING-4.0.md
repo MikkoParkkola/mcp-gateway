@@ -162,6 +162,7 @@ backend" and "fails a capability file" first.**
 | 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
 | 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
+| 138 | `mcp_gateway::key_server::oidc::OidcError` gained three variants (`InsecureIssuer`, `InsecureFetch`, `ClientUnavailable`) and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles | Add the three arms, or end the `match` with a wildcard arm |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3717,6 +3718,14 @@ The embedded script that wrote a caller-chosen path is gone. A declarative `save
 Through 3.x the gateway read a stdio backend's output line by line with no ceiling, so a peer that never sent a newline could grow its memory without bound. A message (one line) over 16 MiB now fails the call and stops that backend's process; the error names the backend setting.
 
 **Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid only on a backend declared with a `command`.
+
+## 138. `OidcError` gained three variants
+
+**Startup:** no notice, a library API change rather than a change to running behaviour
+
+`mcp_gateway::key_server::oidc::OidcError` is a public enum, and it is not `#[non_exhaustive]`. Since 3.5.x it has three new variants, all unit variants with no payload because the refused URL is never echoed (it can carry userinfo, a path or a query): `InsecureIssuer` (a provider issuer that is cleartext and off this machine), `InsecureFetch` (a discovery or JWKS fetch that names such a URL) and `ClientUnavailable` (the HTTP client could not be built at startup). A `match` on `OidcError` that lists every variant and has no wildcard arm no longer compiles. The gateway binary and its configuration are not affected.
+
+**Action:** an embedder that matches on `OidcError` adds the three arms, or ends the `match` with `_ =>`. Treat all three as a refusal of the token or the provider, the same as `InsecureJwksUri`.
 
 ## Upgrading from 3.5.x: a walkthrough
 
