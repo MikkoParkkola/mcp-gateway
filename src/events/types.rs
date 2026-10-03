@@ -60,6 +60,16 @@ impl RpcError {
         )
     }
 
+    /// `-32014` for an upstream-notification event `name` its backend cannot
+    /// offer, naming why (I5 design §11 D2/D3).
+    pub(crate) fn unsupported_backend_events(name: &str, reason: &'static str) -> Self {
+        Self::new(
+            -32014,
+            "Unsupported",
+            Some(json!({ "feature": "backendEvents", "value": name, "reason": reason })),
+        )
+    }
+
     /// `-32015` with one of the [`CallbackFailure`] categories.
     pub(crate) fn callback(reason: CallbackFailure) -> Self {
         Self::new(
@@ -108,8 +118,8 @@ impl CallbackFailure {
 
 /// What produced an event. 4.0.1 kinds are reserved so records written now
 /// parse later (design §4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code, reason = "the later sources land in I4 and 4.0.1")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code, reason = "the 4.0.1 sources are reserved kinds")]
 pub(crate) enum SourceKind {
     Webhook,
     BackendNotification,
@@ -135,7 +145,7 @@ impl SourceKind {
 
 /// Who may see an event type.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code, reason = "Owner and Operator scopes land with I4 and 4.0.1")]
+#[allow(dead_code, reason = "the Operator scope lands with 4.0.1")]
 pub(crate) enum Visibility {
     /// Callers admitted to this backend.
     Backend(String),
@@ -143,6 +153,17 @@ pub(crate) enum Visibility {
     Owner,
     /// Operator standing.
     Operator,
+}
+
+impl Visibility {
+    /// The backend a credential must be granted to receive this scope, if
+    /// any: owner-scoped events need only a live credential.
+    pub(crate) fn grant_backend(&self) -> Option<&str> {
+        match self {
+            Self::Backend(backend) => Some(backend),
+            Self::Owner | Self::Operator => None,
+        }
+    }
 }
 
 /// One event type in the catalogue.

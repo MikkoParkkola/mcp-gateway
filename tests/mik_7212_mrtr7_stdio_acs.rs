@@ -24,14 +24,12 @@
 //!
 //! The stagings that rows 323 and 324 depend on — a backend slow enough to put
 //! a question beside the `initialize` response, and a frame large enough that
-//! an unlocked writer can be caught interleaving — cannot be shown to work
-//! while `InputBridge::run` has no production caller. The bridge itself is
-//! implemented and its rounds are driven green through trait fakes in the
-//! sibling file, but nothing on a transport calls it, so no bridged request is
-//! written to the pipe at all and the ordering and the framing are both
-//! unobservable. Each staging removes a known reason its row could not fail;
-//! neither is yet evidence that the row now can. Re-check both against the
-//! first wired bridge.
+//! an unlocked writer can be caught interleaving — need a bridged request to
+//! reach the pipe. `InputBridge::run` has a production caller
+//! (`run_input_bridge` in `src/gateway/meta_mcp/invoke.rs`), so the staging
+//! is no longer blocked on a missing caller. Each staging removes a known
+//! reason its row could not fail; neither is yet evidence that the row now
+//! can. Re-check both against a bridged call.
 //!
 //! Row 308 wants a legacy client **on an SSE session** to receive its
 //! `elicitation/create` on its own connection. No row covers that: this file

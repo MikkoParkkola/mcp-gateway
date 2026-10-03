@@ -427,3 +427,60 @@ async fn a_refused_notification_leaves_the_client_breaker_untouched() {
         Some(crate::failsafe::CircuitState::Open)
     );
 }
+
+/// POST `method` (a caller-data request, not a notification) to `/mcp/ledger`
+/// anonymously; returns the status and the body.
+async fn request(gw: &Gateway, method: &str) -> (StatusCode, Value) {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/ledger")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "id": 3, "method": method, "params": {} }).to_string(),
+        ))
+        .unwrap();
+    let response = gw.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+
+fn shared_login() -> BackendConfig {
+    let oauth = crate::config::OAuthConfig {
+        enabled: true,
+        scopes: vec![],
+        client_id: None,
+        client_secret: None,
+        callback_host: None,
+        callback_port: None,
+        callback_path: None,
+        token_refresh_buffer_secs: 300,
+        shared_account: false,
+    };
+    BackendConfig {
+        oauth: Some(oauth),
+        ..BackendConfig::default()
+    }
+}
+
+/// ADR-008 INV-2 on the direct route: a request that would ride a shared
+/// personal login on a multi-user gateway is refused, as the notification above
+/// is. Mutant: telling the guard a per-user credential was resolved when none
+/// was lets the request forward on the shared token. The single-user control
+/// shows the refusal belongs to the multi-user guard, not the request.
+#[tokio::test]
+async fn a_shared_personal_login_refuses_a_request_on_a_multi_user_gateway() {
+    let single = gateway(shared_login(), false).await;
+    let (status, body) = request(&single, "resources/list").await;
+    assert_eq!(status, StatusCode::OK, "control: {body}");
+    assert_eq!(
+        single.seen(),
+        vec![("shared", "resources/list".to_string())]
+    );
+
+    let multi = gateway(shared_login(), true).await;
+    let (status, body) = request(&multi, "resources/list").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body.get("error").is_some(), "{body}");
+    assert_eq!(multi.seen(), vec![], "the refused request reached a slot");
+}

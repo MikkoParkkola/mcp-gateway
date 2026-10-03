@@ -36,6 +36,8 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         api_key: None,
         credential_kind: None,
         credential_principal: None,
+        read_key: None,
+        binding: None,
         legacy_api_key_name: None,
         url: format!("https://h/{id}"),
         name: "e".into(),
@@ -59,8 +61,11 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         subscription_id: sub.into(),
         name: "e".into(),
         backend: "b".into(),
+        owner_scoped: false,
         body_b64: "e30=".into(),
         tenants: Vec::new(),
+        attribution: None,
+        attribution_keys: Vec::new(),
         attempt: 0,
         next_attempt_at: now,
         first_attempt_at: None,
@@ -528,4 +533,142 @@ fn an_old_answer_does_not_settle_a_later_occurrence() {
         matches!(store.claim("a", later).expect("io"), Claim::Ready(_)),
         "the later occurrence is still pending"
     );
+}
+
+#[test]
+fn a_revocation_decided_on_an_old_row_spares_a_rebound_one() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let refused = store.get("s1").expect("stored");
+    // A refresh re-binds the same id to another credential.
+    let mut rebound = sub("s1", now);
+    rebound.credential_principal = Some("another".into());
+    store
+        .admit(rebound, true, CAPS, chrono::Duration::zero(), now, TAIL)
+        .expect("io")
+        .expect("admitted");
+    let same = |row: &Subscription| row.credential_principal == refused.credential_principal;
+    assert!(!store.remove_where("s1", now, TAIL, same).expect("io"));
+    assert!(store.get("s1").is_some(), "the rebound row survives");
+}
+
+/// An attribution counts only while the `arg_keys` it was taken under are
+/// still the policy; after a change the record reads as unattributed.
+#[test]
+fn attribution_counts_only_under_its_own_keys() {
+    let mut r = record("a", "s1", Utc::now());
+    r.attribution = Some(crate::security::tenant_reads::ReadAttribution::default());
+    r.attribution_keys = vec!["repo".to_owned()];
+    assert!(r.attribution_under(&["repo".to_owned()]).is_some());
+    assert!(
+        r.attribution_under(&["repo".to_owned(), "org".to_owned()])
+            .is_none()
+    );
+    assert!(r.attribution_under(&[]).is_none());
+}
+
+#[test]
+fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
+    use super::Revived;
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let roomy = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    for (event, owner) in [("e1", "s1"), ("e2", "gone"), ("e3", "s1")] {
+        store
+            .dead_letter(record(event, owner, now), DeadReason::Gone, now, ROOMY)
+            .expect("io");
+    }
+    let fresh = |event: &str, owner: &str| record(event, owner, now);
+    let stale = now + chrono::Duration::seconds(1);
+    assert_eq!(
+        store
+            .revive("e1", stale, fresh("e1", "s1"), roomy, || now)
+            .expect("io"),
+        Revived::Missing,
+        "a dead letter buried again since the scan is not revived"
+    );
+    assert_eq!(
+        store
+            .revive("e2", now, fresh("e2", "gone"), roomy, || now)
+            .expect("io"),
+        Revived::NoSubscription
+    );
+    let later = now + chrono::Duration::hours(2);
+    assert_eq!(
+        store
+            .revive("e1", now, fresh("e1", "s1"), roomy, || later)
+            .expect("io"),
+        Revived::NoSubscription,
+        "an expired subscription takes no replay before its sweep"
+    );
+    store.enqueue(record("e3", "s1", now), roomy).expect("io");
+    assert_eq!(
+        store
+            .revive("e3", now, fresh("e3", "s1"), roomy, || now)
+            .expect("io"),
+        Revived::AlreadyPending,
+        "a record already pending under the id is not a replay"
+    );
+    store
+        .settle("e3", now, Settle::Delivered, now, ROOMY)
+        .expect("io");
+    let full = OutboxCaps {
+        global: 0,
+        per_subscription: 0,
+    };
+    assert_eq!(
+        store
+            .revive("e3", now, fresh("e3", "s1"), full, || now)
+            .expect("io"),
+        Revived::Full
+    );
+    assert_eq!(
+        store.dead_summaries().len(),
+        3,
+        "every refusal keeps its letter"
+    );
+    assert_eq!(
+        store
+            .revive("e1", now, fresh("e1", "s1"), roomy, || now)
+            .expect("io"),
+        Revived::Written
+    );
+    let left: Vec<String> = store
+        .dead_summaries()
+        .into_iter()
+        .map(|d| d.event_id)
+        .collect();
+    assert_eq!(left, ["e2", "e3"], "only the revived letter left dead/");
+    assert!(!dir.path().join("dead/e1.json").exists(), "and its file");
+    let due = store.due(now, &HashSet::new()).expect("io");
+    assert_eq!(due.ready.len(), 1);
+    assert_eq!(due.ready[0].event_id, "e1");
+    assert_eq!(due.ready[0].attempt, 0);
+}
+
+/// MIK-7791: a record waits behind the one on the wire, and is due.
+#[test]
+fn has_due_sees_a_pending_record_behind_one_in_flight() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1", "s2"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    assert!(!store.has_due("s1", now), "nothing queued");
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    store.enqueue(record("b", "s1", now), caps).expect("io");
+    let mut later = record("c", "s2", now);
+    later.next_attempt_at = now + chrono::Duration::hours(1);
+    store.enqueue(later, caps).expect("io");
+    assert!(matches!(store.claim("a", now), Ok(Claim::Ready(_))));
+    assert!(store.has_due("s1", now), "b waits behind a");
+    assert!(!store.has_due("s2", now), "c is not due yet");
+    assert!(!store.has_due("gone", now));
 }

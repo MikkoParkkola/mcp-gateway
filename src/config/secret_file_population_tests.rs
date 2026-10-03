@@ -30,6 +30,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "capability YAML; public definitions",
     ),
     (
+        "src/capability/executor/save_file.rs",
+        "writes a fetched attachment, create-new at 0600 under the downloads root; reads none",
+    ),
+    (
         "src/chains/checkpoint.rs",
         "chain checkpoints; no secret, not a trust decision",
     ),
@@ -59,6 +63,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/commands/trust.rs",
         "trust report input/output; no secret",
+    ),
+    (
+        "src/commands/trust/baseline.rs",
+        "TrustLab baseline and registry manifest files; no secret",
+    ),
+    (
+        "src/commands/trust/lab.rs",
+        "TrustLab active-fixture spec input; no secret",
     ),
     (
         "src/commands/upgrade.rs",

@@ -652,6 +652,7 @@ fn replay_facts_round_trip_and_older_records_decode() {
             response: response.clone(),
             chain: StoredChain::NotEligible,
             audit: Some(ReplayAudit::new(outcome, Some("sha256:x".to_string()))),
+            read: None,
         };
         let bytes = serde_json::to_vec(&stored).unwrap();
         let (_, audit) = stored_response(&bytes).expect("decodes");
@@ -673,4 +674,82 @@ fn replay_facts_round_trip_and_older_records_decode() {
             .1
             .is_none()
     );
+}
+
+/// MIK-7116.MIN.2 row 14, stored-delivery half: a replay restores the first
+/// execution's reading into the read scope; a record without one is unread.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_replay_restores_the_stored_reading() {
+    use crate::security::firewall::tenant_guard::TenantGuardConfig;
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    use crate::security::tenant_reads::{ReadAttribution, with_read_scope};
+
+    let fw = std::sync::Arc::new(Firewall::from_config(
+        FirewallConfig {
+            tenant_guard: TenantGuardConfig {
+                arg_keys: vec!["customer_id".to_string()],
+                ..TenantGuardConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let response = serde_json::to_value(JsonRpcResponse::success(
+        RequestId::Number(1),
+        serde_json::json!({ "note": "x" }),
+    ))
+    .unwrap();
+    let b = ReadAttribution::of([String::from("cust-b")].into(), false);
+    let stored = StoredDelivery {
+        response: response.clone(),
+        chain: StoredChain::NotEligible,
+        audit: None,
+        read: Some(b.clone()),
+    };
+    let bytes = serde_json::to_vec(&stored).unwrap();
+    let (_, restored) = with_read_scope(std::sync::Arc::clone(&fw), async {
+        stored_response(&bytes)
+    })
+    .await;
+    assert_eq!(restored, b, "the replay restores the stored reading");
+
+    let bare = serde_json::to_vec(&response).unwrap();
+    let (_, restored) = with_read_scope(fw, async { stored_response(&bare) }).await;
+    assert!(restored.uninspected, "a record without a reading is unread");
+}
+
+/// A refused round (a relay caught mid-exchange) withdraws its dispatch: the
+/// refusal is not retained under the key, unless an earlier step of the same
+/// execution acted, whose protection stays.
+#[test]
+fn a_withdrawn_dispatch_frees_the_key_unless_an_earlier_step_acted() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let policy = MutablePolicy::new(SECOND);
+    let retry = RetryFields {
+        idempotency_key: Some("withdraw-key".into()),
+        ..RetryFields::default()
+    };
+    let mut caller = context(&policy, &retry);
+    caller.is_modern = false;
+    let args = json!({"state":"triage"});
+    let refusal_body = JsonRpcResponse::success(RequestId::Number(1), json!({"isError": true}));
+
+    for (marks, replays) in [(1, false), (2, true)] {
+        let Ok(SyncAdmission::Owned(owner)) = admit(&meta, &caller, "gateway_set_state", &args, 1)
+        else {
+            panic!("the key must be free for the first call");
+        };
+        for _ in 0..marks {
+            owner.mark_dispatched();
+        }
+        owner.withdraw_dispatch();
+        owner.complete_delivery(&refusal_body, None);
+        let again = admit(&meta, &caller, "gateway_set_state", &args, 2);
+        assert_eq!(
+            matches!(again, Ok(SyncAdmission::Replay(..))),
+            replays,
+            "marks={marks}: wrong retention after one withdrawal"
+        );
+    }
 }

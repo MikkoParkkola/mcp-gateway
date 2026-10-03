@@ -23,7 +23,9 @@ use super::dispatch_in_scope;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
-use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::protocol::{JsonRpcResponse, RequestId, Tool};
+use crate::trust::project_tool_descriptors_trust_cards;
+use tracing::warn;
 
 /// Pages drained before the route reports the catalogue as too long. Defined
 /// from the one shared cap (MIK 7570 PAGING.1 design §2.C) so this route and
@@ -169,6 +171,56 @@ pub(super) fn retain_invocable(
             .emit(crate::gateway::authz::Emit::Silent)
             .is_ok()
     });
+}
+
+/// Fill missing MCP tool annotation hints on direct backend `tools/list`
+/// responses before returning them to clients.
+pub(super) fn normalize_tools_list_response(
+    backend: &crate::backend::Backend,
+    response: &mut JsonRpcResponse,
+) {
+    let backend_name = backend.name.as_str();
+    if response.error.is_some() {
+        // Never forward an unjudged list beside an error (#1441).
+        response.result = None;
+        return;
+    }
+
+    let Some(result) = response.result.as_mut() else {
+        return;
+    };
+    let Some(tools_value) = result.get_mut("tools") else {
+        return;
+    };
+
+    let Some(items) = tools_value.as_array() else {
+        warn!(backend = %backend_name, "Backend tools/list result is not an array");
+        return;
+    };
+
+    // Element by element: one unparseable descriptor must not forward the
+    // whole list verbatim (a bypass). It is dropped, since it cannot be judged
+    // and would disclose a name the caller may not invoke (A3).
+    let mut tools = Vec::with_capacity(items.len());
+    for item in items {
+        match serde_json::from_value::<Tool>(item.clone()) {
+            Ok(tool) => tools.push(tool),
+            Err(e) => {
+                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized; dropped");
+            }
+        }
+    }
+
+    backend.prepare_judged_tools(&mut tools);
+
+    let server_id = format!("backend:{backend_name}");
+    let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
+
+    // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
+    // upstream sibling key or cursor could name a withheld tool (A3). The
+    // projected descriptors are already JSON values, so building the result
+    // has no failure arm to fall through to the unjudged original.
+    *result = crate::trust::tools_list_result_with_trust_cards(tools);
 }
 
 #[cfg(test)]

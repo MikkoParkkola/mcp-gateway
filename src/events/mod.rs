@@ -9,9 +9,19 @@
 //! only: webhook mode needs an authenticated principal, which a stdio
 //! session does not carry.
 
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "dead-letter administration is served by the web UI router"
+    )
+)]
+mod admin;
+mod backend_source;
 mod client;
 mod dedupe;
 mod fanout;
+mod lifecycle;
 mod limiter;
 mod outbox;
 mod rate;
@@ -21,12 +31,14 @@ mod rpc;
 mod runtime;
 mod services;
 mod store;
+mod task_source;
 mod types;
 #[allow(
     dead_code,
     reason = "MIK-7630 I5: driven by the listener once I4's source hooks land"
 )]
 mod upstream_need;
+mod upstream;
 mod webhook_source;
 mod worker;
 
@@ -36,11 +48,15 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-pub(crate) use records::{ApiKeyRef, Credential};
+#[cfg(feature = "webui")]
+pub(crate) use admin::{ReplayRefusal, is_dead_reason};
+pub(crate) use fanout::CatalogueScan;
+pub(crate) use records::{ApiKeyRef, Credential, LiveBinding};
 pub(crate) use reload::refresh_webhooks;
 pub(crate) use rpc::Caller;
-pub(crate) use services::Services;
-pub(crate) use types::RpcError;
+pub(crate) use services::{LiveCredentials, Services};
+pub(crate) use types::CallbackFailure;
+pub(crate) use types::{RpcError, Visibility};
 pub(crate) use webhook_source::Inbound;
 
 use crate::config::EventsConfig;
@@ -55,17 +71,66 @@ pub(crate) struct EventsHub {
     verify_limit: limiter::HostLimiter,
     sources: RwLock<Vec<Arc<dyn EventSource>>>,
     runtime: runtime::Runtime,
+    /// Sources' started lifecycle keys; see [`lifecycle`].
+    lifecycle: lifecycle::Started,
+    debounce: backend_source::Debounce,
+    /// Held while the catalogue changes or is read to delete from it.
+    catalogue_gate: parking_lot::Mutex<()>,
 }
 
 /// One producer of events (design §4). The core knows sources only through
-/// this trait. `authorize` and the lifecycle hooks join with I4.
+/// this trait; crate-private, so a source is added inside the crate and the
+/// public surface does not widen (I4 build notes).
+#[async_trait::async_trait]
 pub(crate) trait EventSource: Send + Sync {
     /// What kind of producer this is.
     fn kind(&self) -> types::SourceKind;
     /// The event types this source offers now.
     fn descriptors(&self) -> Vec<EventDescriptor>;
+    /// Whether this source offers event type `name`.
+    fn offers(&self, name: &str) -> bool {
+        self.descriptors().iter().any(|d| d.name == name)
+    }
+    /// May `principal` hold this subscription? Called at subscribe and at
+    /// every fan-out. The default admits: visibility is the catalogue's.
+    async fn authorize(
+        &self,
+        _principal: &str,
+        _name: &str,
+        _arguments: &serde_json::Value,
+    ) -> Result<(), RpcError> {
+        Ok(())
+    }
     /// Whether an occurrence matches a subscription's `arguments`.
-    fn matches(&self, arguments: &serde_json::Value, event: &fanout::SourceEvent) -> bool;
+    fn matches(
+        &self,
+        principal: &str,
+        arguments: &serde_json::Value,
+        event: &fanout::SourceEvent,
+    ) -> bool;
+    /// What the core refcounts upstream work on: by default the event name
+    /// and canonical arguments, shared across principals.
+    fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &serde_json::Value) -> String {
+        String::from_utf8(
+            serde_json_canonicalizer::to_vec(&serde_json::json!([name, arguments]))
+                .unwrap_or_default(),
+        )
+        .unwrap_or_default()
+    }
+    /// The first live subscription for `key` appeared. A refusal fails that
+    /// subscribe with the refusal's code.
+    async fn on_first_subscriber(
+        &self,
+        _key: &str,
+        _principal: &str,
+        _name: &str,
+        _arguments: &serde_json::Value,
+    ) -> Result<(), RpcError> {
+        Ok(())
+    }
+    /// The last subscription for `key` went away (unsubscribe, expiry,
+    /// revocation or withdrawal).
+    async fn on_last_subscriber(&self, _key: &str) {}
 }
 
 /// Distinct callback hosts the verification limiter tracks before it sheds
@@ -105,14 +170,41 @@ impl EventsHub {
             ),
             sources: RwLock::new(Vec::new()),
             runtime: runtime::Runtime::new(config, store_dir),
+            lifecycle: lifecycle::Started::default(),
+            debounce: backend_source::Debounce::default(),
+            catalogue_gate: parking_lot::Mutex::new(()),
         }))
     }
 
-    /// Attach the webhook registry whose `event:` routes are a source.
-    pub(crate) fn set_webhook_registry(&self, registry: Arc<parking_lot::RwLock<WebhookRegistry>>) {
+    /// Register `source`, replacing any earlier source of the same kind. Its
+    /// descriptors join the catalogue; lifecycle hooks follow (I4).
+    pub(crate) fn register_source(self: &Arc<Self>, source: Arc<dyn EventSource>) {
         let mut sources = self.sources.write();
-        sources.retain(|source| source.kind() != types::SourceKind::Webhook);
-        sources.push(Arc::new(webhook_source::WebhookSource { registry }));
+        let position = sources.iter().position(|s| s.kind() == source.kind());
+        let replaced = position.map(|at| sources.remove(at));
+        sources.push(source);
+        drop(sources);
+        // A source joining a running hub starts what the store already holds;
+        // one it replaces first stops what it had started.
+        if self.runtime.services.get().is_some()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let hub = Arc::clone(self);
+            runtime.spawn(async move {
+                match replaced {
+                    Some(old) => hub.replace_source(old).await,
+                    None => hub.replay_starts().await,
+                }
+            });
+        }
+    }
+
+    /// Attach the webhook registry whose `event:` routes are a source.
+    pub(crate) fn set_webhook_registry(
+        self: &Arc<Self>,
+        registry: Arc<parking_lot::RwLock<WebhookRegistry>>,
+    ) {
+        self.register_source(Arc::new(webhook_source::WebhookSource { registry }));
     }
 
     /// Take one verification slot for `host`.
@@ -146,3 +238,11 @@ fn tail_policy(config: &EventsConfig) -> store::TailPolicy {
         max_per_principal: config.max_verified_tail_per_principal,
     }
 }
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "sources_tests.rs"]
+mod sources_tests;

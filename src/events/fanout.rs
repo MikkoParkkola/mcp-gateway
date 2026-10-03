@@ -14,7 +14,7 @@ use super::EventsHub;
 use super::outbox::{DeadReason, Enqueued, OutboxRecord, OutboxState};
 use super::records::Subscription;
 use super::services::{Scan, Services, Subject};
-use super::types::SourceKind;
+use super::types::{SourceKind, Visibility};
 
 /// The draft's SHOULD ceiling on a delivery body (design §6.5).
 pub(crate) const MAX_BODY: usize = 262_144;
@@ -26,6 +26,8 @@ pub(crate) struct SourceEvent {
     pub name: String,
     /// The backend whose visibility gates the occurrence.
     pub backend: String,
+    /// Who may receive this occurrence: a backend's callers, or the owner.
+    pub scope: Visibility,
     /// Stable per occurrence (design §3.6).
     pub upstream_id: String,
     pub occurred_at: DateTime<Utc>,
@@ -44,14 +46,29 @@ pub(crate) fn event_id(kind: SourceKind, upstream_id: &str, subscription_id: &st
     format!("evt_{}", &hex::encode(hasher.finalize())[..32])
 }
 
-/// The delivery body: exactly the protocol fields and the source's data.
-pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value) -> Vec<u8> {
+/// The `_meta` key the gateway's provenance receipt rides under: inside the
+/// signed body, outside `payloadSchema` (design §3.6).
+const PROVENANCE_KEY: &str = "io.github.mikkoparkkola/provenance";
+
+/// Whether every configured capability directory was read by the startup
+/// scan. A partial scan builds a partial catalogue, which proves nothing about
+/// a route's absence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogueScan {
+    Complete,
+    Partial,
+}
+
+/// The delivery body: exactly the protocol fields, the source's data and
+/// the provenance receipt in `_meta`.
+pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: &Value) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "eventId": event_id,
         "name": event.name,
         "timestamp": event.occurred_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "data": data,
         "cursor": null,
+        "_meta": { PROVENANCE_KEY: receipt },
     }))
     .unwrap_or_default()
 }
@@ -68,12 +85,29 @@ impl EventsHub {
             .subscriptions()
             .into_iter()
             .filter(|s| s.name == event.name && s.live(now))
-            .filter(|s| source.matches(&s.arguments, event))
+            .filter(|s| source.matches(&s.principal, &s.arguments, event))
             .collect();
         for sub in matching {
-            if !services.admits_subscription(&sub, &event.backend) {
-                self.revoke(&sub.id).await;
+            if !services
+                .admits_subscription(&sub, event.scope.grant_backend())
+                .await
+            {
+                self.revoke(&sub).await;
                 continue;
+            }
+            match source
+                .authorize(&sub.principal, &sub.name, &sub.arguments)
+                .await
+            {
+                Ok(()) => {}
+                // The source no longer lets the principal hold this: the
+                // subscription ends, so its upstream work can stop.
+                Err(refusal) if refusal.code == -32012 => {
+                    self.revoke(&sub).await;
+                    continue;
+                }
+                // Anything else (a store hiccup) skips this occurrence only.
+                Err(_) => continue,
             }
             self.offer(services, event, &sub).await;
         }
@@ -86,6 +120,10 @@ impl EventsHub {
         let mut data = event.data.clone();
         // Attribution before redaction (MIN.2 row E1): what the source named.
         let tenants = services.tenants(&data);
+        // Wrapped as the delivered envelope carries it, so an `arg_keys` entry
+        // named `data` still binds the value to its key.
+        let attribution = services.attribute(&json!({ "data": &data }));
+        let attribution_keys = services.attribution_keys();
         let scan = services.scan(
             &mut data,
             &Subject {
@@ -95,7 +133,12 @@ impl EventsHub {
                 name: &event.name,
             },
         );
-        let bytes = body(&id, event, &data);
+        let bytes = body(
+            &id,
+            event,
+            &data,
+            &services.provenance(&event.backend, &event.name),
+        );
         let now = Utc::now();
         let record = OutboxRecord {
             v: 1,
@@ -103,7 +146,10 @@ impl EventsHub {
             subscription_id: sub.id.clone(),
             name: event.name.clone(),
             backend: event.backend.clone(),
+            owner_scoped: event.scope == Visibility::Owner,
             tenants,
+            attribution,
+            attribution_keys,
             body_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             attempt: 0,
             next_attempt_at: now,
@@ -145,31 +191,98 @@ impl EventsHub {
     /// Delete every subscription to an event type a reload removed; their
     /// pending records go with them (design §9). Synchronous, inside the
     /// reload, so a later reload that restores the type cannot interleave.
-    pub(crate) fn withdraw(&self, names: &[String]) {
+    ///
+    /// `false` when a subscription could not be removed.
+    pub(crate) fn withdraw(&self, names: &[String]) -> bool {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
+        let mut all_removed = true;
         for sub in self.store.subscriptions() {
             if names.contains(&sub.name)
                 && let Err(error) = self.store.remove(&sub.id, now, tail)
             {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
+                all_removed = false;
             }
         }
+        all_removed
     }
 
-    /// Delete a subscription whose principal lost access; its pending
-    /// records go with it (F9).
-    /// `false` when the store could not record the removal.
-    pub(super) async fn revoke(self: &Arc<Self>, id: &str) -> bool {
+    /// Once the startup capability scan has registered the webhook routes:
+    /// delete the subscriptions to webhook event types the catalogue no
+    /// longer offers (a route removed while the gateway was down, or webhooks
+    /// turned off), their pending records with them, and let the worker start.
+    /// Before this the catalogue is partial, so nothing is withdrawn and
+    /// nothing is sent (MIK-7772). `false`, with the worker still held, when
+    /// a removal failed: the caller retries.
+    pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
+        // Held through the snapshot and the withdrawal, so a capability reload
+        // cannot restore a route in between and lose its subscriptions.
+        let _gate = self.catalogue_lock();
+        // With webhooks off no route can come back, so a partial capability
+        // scan proves nothing about them: their catalogue is complete (empty).
+        let webhooks_on = self
+            .sources
+            .read()
+            .iter()
+            .any(|source| source.kind() == SourceKind::Webhook);
+        if scan == CatalogueScan::Partial && webhooks_on {
+            tracing::warn!(
+                "events: a capability directory could not be read at startup; stored \
+                 subscriptions are kept and reconciled at the next complete start"
+            );
+            return self.release_worker();
+        }
+        let offered: std::collections::HashSet<String> =
+            self.catalogue().into_iter().map(|d| d.name).collect();
+        let gone: Vec<String> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .map(|sub| sub.name)
+            .filter(|name| {
+                name.starts_with(super::webhook_source::NAME_PREFIX) && !offered.contains(name)
+            })
+            .collect();
+        if !self.withdraw(&gone) {
+            return false;
+        }
+        self.release_worker()
+    }
+
+    /// Reconciliation is over: the delivery worker may start.
+    fn release_worker(&self) -> bool {
+        self.runtime
+            .reconciled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.runtime.wake.notify_one();
+        true
+    }
+
+    /// Serializes startup reconciliation with capability reloads.
+    pub(crate) fn catalogue_lock(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.catalogue_gate.lock()
+    }
+
+    /// Delete subscription `refused`, the snapshot the access check refused,
+    /// with its pending records (F9), unless a refresh has since re-bound it
+    /// to another credential.
+    pub(super) async fn revoke(self: &Arc<Self>, refused: &Subscription) {
         let tail = super::tail_policy(&self.config);
-        let id = id.to_owned();
+        let snapshot = refused.clone();
         let removed = self
-            .blocking(move |store| store.remove(&id, Utc::now(), tail))
+            .blocking(move |store| {
+                store.remove_where(&snapshot.id, Utc::now(), tail, |row| {
+                    row.credential_principal == snapshot.credential_principal
+                        && row.binding == snapshot.binding
+                        && row.api_key == snapshot.api_key
+                })
+            })
             .await;
         if removed == Some(true) {
             tracing::info!("events: subscription revoked, access no longer granted");
+            self.reconcile_stops().await;
         }
-        removed.is_some()
     }
 }
 

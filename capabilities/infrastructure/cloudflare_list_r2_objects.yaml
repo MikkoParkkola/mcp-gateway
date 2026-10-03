@@ -1,0 +1,61 @@
+sha256: 3edca1f6b52e564a02a2227db878c070edcbca2178f8692ceb31cc621d5529d1
+fulcrum: '1.0'
+name: cloudflare_list_r2_objects
+description: List objects in an R2 bucket.
+schema:
+  input:
+    type: object
+    properties:
+      account_id:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+$'
+        description: Cloudflare account ID
+      bucket_name:
+        type: string
+        pattern: '^[A-Za-z0-9_-]+$'
+        description: R2 bucket name
+      prefix:
+        type: string
+        description: Key prefix filter
+    required:
+    - account_id
+    - bucket_name
+  output:
+    type: object
+    properties:
+      success:
+        type: boolean
+      result: {}
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 30
+    config:
+      base_url: https://api.cloudflare.com/client/v4
+      path: /accounts/{account_id}/r2/buckets/{bucket_name}/objects
+      method: GET
+      headers:
+        Authorization: Bearer {env.CLOUDFLARE_API_TOKEN}
+        Content-Type: application/json
+      params:
+        prefix: '{prefix}'
+cache:
+  strategy: none
+  ttl: 0
+auth:
+  required: true
+  type: bearer
+  key: env:CLOUDFLARE_API_TOKEN
+  header: Authorization
+  prefix: Bearer
+  description: Create an API token at https://dash.cloudflare.com/profile/api-tokens with the permissions
+    this operation needs.
+metadata:
+  category: infrastructure
+  tags:
+  - cloudflare
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  docs: https://developers.cloudflare.com/api/

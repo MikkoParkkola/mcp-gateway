@@ -19,7 +19,9 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::idempotency::IdempotencyCache;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
+use crate::security::firewall::{
+    AllowedFlow, CollusionAction, CollusionConfig, Firewall, FirewallConfig,
+};
 use crate::transport::Transport;
 
 /// Ordinary prose, long enough for several fingerprints, with nothing any
@@ -42,6 +44,8 @@ enum Read {
     Injected,
     /// Both a result and an error, as a non-conformant backend may send.
     Both,
+    /// [`PROSE`] as a tool-level failure: a result with `isError: true`.
+    IsError,
     /// A result carrying a backend-supplied context-integrity verdict.
     Classified(&'static str),
     /// [`PROSE`] plus an email address the gateway classifies as personal
@@ -93,6 +97,10 @@ impl Transport for Alpha {
                 r.result = Some(text_result(PROSE));
                 r
             }
+            Read::IsError => JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": PROSE}], "isError": true}),
+            ),
             Read::ForgedPublic => {
                 let mut result = text_result(&format!("{PROSE} Contact: keeper@orchardcoop.fi"));
                 result["_context_integrity"] =
@@ -133,10 +141,14 @@ struct Setup {
     window_secs: u64,
     sources: Vec<String>,
     non_egress: Vec<String>,
+    allowed_flows: Vec<AllowedFlow>,
     /// Firewall rules (YAML). The default wildcard `allow` must not soften a
     /// relay block; a `block` rule on `read` makes a response finding a
     /// refusal where that is the stimulus.
     rules: &'static str,
+    /// Tenant attribution on `customer_id` with `cross_tenant_reads: block`
+    /// (MIN.2), so a read naming a second tenant is withheld.
+    tenants: bool,
 }
 
 impl Default for Setup {
@@ -148,7 +160,9 @@ impl Default for Setup {
             window_secs: 600,
             sources: vec!["alpha:read".to_string()],
             non_egress: Vec::new(),
+            allowed_flows: Vec::new(),
             rules: "[{match: \"*\", action: allow}]",
+            tenants: false,
         }
     }
 }
@@ -202,7 +216,17 @@ async fn fixture(setup: Setup) -> Fixture {
             window_secs: setup.window_secs,
             sources: setup.sources,
             non_egress: setup.non_egress,
+            allowed_flows: setup.allowed_flows,
             ..CollusionConfig::default()
+        },
+        tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
+            arg_keys: if setup.tenants {
+                vec!["customer_id".to_string()]
+            } else {
+                Vec::new()
+            },
+            cross_tenant_reads: crate::security::firewall::tenant_guard::CrossTenantReads::Block,
+            ..Default::default()
         },
         ..FirewallConfig::default()
     };
@@ -679,5 +703,31 @@ async fn a_forged_public_verdict_is_replaced_by_the_gateways_own() {
             .is_some_and(|c| c.contains(&json!("personal_data"))),
         "the gateway's classification must replace the forged one: {answer}"
     );
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+}
+
+mod meta;
+
+/// Row 13: an allowlisted flow is not refused under `block`; the same content
+/// from a source outside the entry still is.
+#[tokio::test]
+async fn an_allowed_flow_is_not_refused() {
+    let flow = |source: &str| AllowedFlow {
+        source: source.to_string(),
+        egress: "alpha:send".to_string(),
+    };
+    let allowed = Setup {
+        allowed_flows: vec![flow("alpha:read")],
+        ..Setup::default()
+    };
+    let fx = fixture(allowed).await;
+    fx.read(Some("a")).await;
+    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    let other = Setup {
+        allowed_flows: vec![flow("alpha:other")],
+        ..Setup::default()
+    };
+    let fx = fixture(other).await;
+    fx.read(Some("a")).await;
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
 }

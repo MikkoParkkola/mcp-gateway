@@ -29,15 +29,38 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<JsonRpcResponse> {
-        if !matches!(
-            stored.task.status(),
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::InputRequired
-        ) {
+        if !stored.serves_backend_output() {
             return None;
         }
-        self.authorize_stored(stored, attestation, session, caller)
-            .err()
-            .map(|error| error_response_preserving_status(id.clone(), &error))
+        let refused = self
+            .authorize_stored(stored, attestation, session, caller)
+            .err();
+        // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
+        // renews the reader's receipt; the delivery owner commits it.
+        if refused.is_none()
+            && self.relay_active()
+            && let [target] = stored.targets.as_slice()
+        {
+            let who = caller.relay_caller(session);
+            let to = (target.server.as_str(), target.tool.as_str());
+            match stored.task.status() {
+                TaskStatus::Completed => {
+                    if let Some(result) = stored.backend_result() {
+                        self.stage_relay_receipt(who, to, result);
+                    }
+                }
+                TaskStatus::InputRequired => {
+                    if let Some(requests) = stored.task.input_requests() {
+                        let prompt = serde_json::Value::Object(requests.clone());
+                        let key = caller.api_key_name;
+                        let recorded = self.recorded_prompt(to, key, "tasks/get", &prompt);
+                        self.stage_relay_receipt(who, to, &recorded);
+                    }
+                }
+                _ => {}
+            }
+        }
+        refused.map(|error| error_response_preserving_status(id.clone(), &error))
     }
 
     fn authorize_stored(
@@ -47,10 +70,6 @@ impl MetaMcp {
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
-        if stored.output_free {
-            // Only the gateway's own bounded error: no backend output to judge.
-            return Ok(());
-        }
         if stored.targets.is_empty() {
             // A recording gateway's empty list means nothing was dispatched.
             // An older row's empty list means it has no upstream descriptor to

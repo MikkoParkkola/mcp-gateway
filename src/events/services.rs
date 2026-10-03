@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value, json};
 
-use super::records::{ApiKeyRef, Subscription};
+use super::records::{ApiKeyRef, LiveBinding, Subscription};
 use crate::config_reload::LiveConfig;
 use crate::security::TransparencyLogger;
 
@@ -19,11 +19,27 @@ pub(crate) struct Services {
     #[cfg(feature = "firewall")]
     pub firewall: Option<Arc<crate::security::firewall::Firewall>>,
     pub audit: Option<Arc<TransparencyLogger>>,
+    /// The provenance signer, when stamping is on.
+    pub provenance: Option<Arc<crate::attestation::BnautAttestationSigner>>,
     #[cfg(feature = "cost-governance")]
     pub budget: Option<(
         Arc<crate::cost_accounting::enforcer::BudgetEnforcer>,
         Arc<crate::cost_accounting::registry::CostRegistry>,
     )>,
+    /// What the credentials that are not API keys are re-checked against.
+    pub credentials: LiveCredentials,
+}
+
+/// The live authorities behind the credentials that are not API keys (design
+/// F9, MIK-7769). The key server and the static bearer are fixed at startup
+/// (`key_server` is a restart-required section), exactly as the request path
+/// sees them.
+#[derive(Default)]
+pub(crate) struct LiveCredentials {
+    pub key_server: Option<Arc<crate::key_server::KeyServer>>,
+    /// `principal_of` the resolved static bearer, when one is configured.
+    pub bearer_principal: Option<String>,
+    pub dashboard: Option<Arc<crate::gateway::auth::DashboardBootstrap>>,
 }
 
 /// The firewall's judgement of one payload.
@@ -54,6 +70,12 @@ impl Services {
     /// an API key has no live scope to re-read, so its subscribe-time check
     /// stands.
     pub(crate) fn admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
+        self.admits_grant(key, Some(backend))
+    }
+
+    /// As [`Self::admits`]; `None` asks only that the key be live, for
+    /// owner-scoped events that need no backend grant.
+    fn admits_grant(&self, key: Option<&ApiKeyRef>, backend: Option<&str>) -> bool {
         let Some(key) = key else {
             return true;
         };
@@ -71,13 +93,125 @@ impl Services {
                     .and_then(crate::config::parse_api_key_digest)
                     .is_some_and(|digest| hex::encode(&digest[..6]) == key.principal)
             })
-            .is_some_and(|k| k.backends.iter().any(|b| b == "*" || b == backend))
+            .is_some_and(|k| {
+                backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
+            })
     }
 
-    /// [`Self::admits`] for a stored subscription. One stored before keys
-    /// were bound to their secret is refused.
-    pub(crate) fn admits_subscription(&self, sub: &Subscription, backend: &str) -> bool {
-        sub.legacy_api_key_name.is_none() && self.admits(sub.api_key.as_ref(), backend)
+    /// Whether stored subscription `sub` may still receive an event of
+    /// `backend`: the check fan-out and every delivery attempt run. An API
+    /// key is re-read from live config; any other credential must still be
+    /// live where it was issued (design F9). A row stored before keys were
+    /// bound to their secret, or a bound kind without its binding, is
+    /// refused.
+    pub(crate) async fn admits_subscription(
+        &self,
+        sub: &Subscription,
+        backend: Option<&str>,
+    ) -> bool {
+        use crate::security::audit::CredentialKind as Kind;
+        match sub.credential_kind {
+            None | Some(Kind::ApiKey) => {
+                sub.legacy_api_key_name.is_none()
+                    && sub.api_key.is_some()
+                    && self.admits_grant(sub.api_key.as_ref(), backend)
+            }
+            // No credential was presented: authentication is off.
+            Some(Kind::None | Kind::LocalTransport) => true,
+            Some(kind) => match &sub.binding {
+                // The binding must be the one this kind is re-checked by.
+                Some(binding) if binding.kind() == kind => {
+                    self.binding_live(binding, sub, backend).await
+                }
+                _ => false,
+            },
+        }
+    }
+
+    async fn binding_live(
+        &self,
+        binding: &LiveBinding,
+        sub: &Subscription,
+        backend: Option<&str>,
+    ) -> bool {
+        let credentials = &self.credentials;
+        match binding {
+            LiveBinding::KeyServerToken { jti } => match &credentials.key_server {
+                Some(ks) => ks.store.live_jti(jti).await,
+                None => false,
+            },
+            LiveBinding::OidcBearer {
+                issuer,
+                subject,
+                email,
+                groups,
+                issued_at,
+                provider_sha256,
+            } => credentials.key_server.as_ref().is_some_and(|ks| {
+                let identity = crate::key_server::oidc::VerifiedIdentity {
+                    subject: subject.clone(),
+                    email: email.clone(),
+                    name: None,
+                    groups: groups.clone(),
+                    issuer: issuer.clone(),
+                };
+                // The provider must still accept what it accepted, and the
+                // bearer must still be young enough for the running max age.
+                let provider_same = provider_sha256.is_some()
+                    && crate::gateway::auth::live::provider_fingerprint(ks, issuer)
+                        == *provider_sha256;
+                let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(u64::MAX);
+                // The verifier requires `iat`, so a binding without one is
+                // refused rather than exempt.
+                let young = issued_at
+                    .is_some_and(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
+                ks.config.delegated_bearer
+                    && provider_same
+                    && young
+                    && ks
+                        .policy
+                        .resolve_scopes(
+                            &identity,
+                            &crate::key_server::policy::RequestedScopes::default(),
+                        )
+                        .is_ok_and(|scopes| {
+                            backend.is_none_or(|backend| {
+                                scopes.backends.iter().any(|b| b == "*" || b == backend)
+                            })
+                        })
+            }),
+            LiveBinding::StaticBearer => credentials
+                .bearer_principal
+                .as_deref()
+                .is_some_and(|live| sub.credential_principal.as_deref() == Some(live)),
+            LiveBinding::DashboardSession { session_sha256 } => {
+                credentials.dashboard.as_ref().is_some_and(|dashboard| {
+                    let limits = crate::gateway::auth::SessionLimits::from(
+                        &self.live.get().auth.dashboard_session,
+                    );
+                    dashboard.live_digest(
+                        session_sha256,
+                        crate::gateway::auth::Now::read(),
+                        &limits,
+                    )
+                })
+            }
+        }
+    }
+
+    /// The provenance receipt for one occurrence, as `_meta` carries it:
+    /// signed when stamping is on, the bare receipt otherwise (§3.6).
+    pub(crate) fn provenance(&self, backend: &str, name: &str) -> Value {
+        let receipt = crate::trust::RuntimeProvenanceReceipt::event(
+            backend,
+            name,
+            chrono::Utc::now().to_rfc3339(),
+        );
+        match &self.provenance {
+            Some(signer) => serde_json::to_value(receipt.sign(signer)),
+            None => serde_json::to_value(json!({ "receipt": receipt })),
+        }
+        .unwrap_or(Value::Null)
     }
 
     /// Run the response firewall over `data`, redacting in place.
@@ -116,6 +250,37 @@ impl Services {
     pub(crate) fn scan(&self, data: &mut Value, subject: &Subject<'_>) -> Scan {
         let _ = (self, data, subject);
         Scan::Pass
+    }
+
+    /// The firewall the read verdict judges deliveries on: the gateway's own,
+    /// so an event shares the caller's read history with its answers.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(clippy::unused_self, reason = "only the firewall build reads self")
+    )]
+    pub(crate) fn guard(&self) -> Option<&crate::gateway::outbound::Guard> {
+        #[cfg(feature = "firewall")]
+        {
+            self.firewall.as_deref()
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            None
+        }
+    }
+
+    /// The `arg_keys` an attribution is taken under now.
+    pub(crate) fn attribution_keys(&self) -> Vec<String> {
+        crate::gateway::outbound::attribution_keys(self.guard())
+    }
+
+    /// What `data` names before the event firewall redacts it (MIN.2 E1);
+    /// `None` when the verdict is off.
+    pub(crate) fn attribute(
+        &self,
+        data: &Value,
+    ) -> Option<crate::security::tenant_reads::ReadAttribution> {
+        crate::gateway::outbound::raw_attribution(self.guard(), data)
     }
 
     /// The hashed tenants `data` names (MIN.1 attribution), sorted.
@@ -161,6 +326,10 @@ impl Services {
     }
 }
 
+/// The status of the record written before a POST (SAFETY.2): the attempt is
+/// on record before its bytes leave; its outcome follows as its own record.
+pub(crate) const SENDING: &str = "sending";
+
 /// One delivery attempt, as the attributed audit record states it: never
 /// the body, the secret or the callback path.
 pub(crate) struct Attempt<'a> {
@@ -178,18 +347,25 @@ pub(crate) struct Attempt<'a> {
     pub status: &'a str,
     pub body_sha256: &'a str,
     pub delivered: bool,
+    /// The read verdict on this delivery (MIN.2), when it had one.
+    pub cross_tenant_read: Option<crate::security::tenant_reads::ReadVerdict>,
 }
 
 impl Services {
     /// Write one MIN.1 attributed record for `attempt`, on the bounded
-    /// blocking pool. Best effort: a down log is logged, not fatal.
-    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) {
+    /// blocking pool.
+    ///
+    /// # Errors
+    ///
+    /// The log's refusal. A caller about to send writes this record first
+    /// and does not send when it fails (SAFETY.2).
+    pub(crate) async fn audit_attempt(&self, attempt: &Attempt<'_>) -> std::io::Result<()> {
         use crate::security::audit::{
             AuditEnvelope, AuditOutcome, AuditWho, InvocationRoute, InvocationTarget,
         };
         use crate::security::transparency_log::{CorrelationKey, CorrelationSource};
         let Some(log) = &self.audit else {
-            return;
+            return Ok(());
         };
         let mut extra = Map::new();
         extra.insert("subscription_id".into(), attempt.subscription_id.into());
@@ -204,7 +380,7 @@ impl Services {
         let envelope = AuditEnvelope {
             trace_id: None,
             otel_trace_id: None,
-            outcome: if attempt.delivered {
+            outcome: if attempt.delivered || attempt.status == SENDING {
                 AuditOutcome::Ok
             } else {
                 AuditOutcome::Error(-32015)
@@ -242,8 +418,42 @@ impl Services {
                 )
             })
             .await;
-        if let Err(error) = written {
+        if let Err(error) = &written {
             tracing::warn!(%error, "events: delivery audit record not written");
+        }
+        written
+    }
+
+    /// How an attempt already recorded as [`SENDING`] ended. Best effort: the
+    /// attempt itself is on record, and the POST has been made.
+    pub(crate) async fn audit_outcome(&self, attempt: &Attempt<'_>) {
+        let Some(log) = &self.audit else {
+            return;
+        };
+        let mut fields = Map::new();
+        fields.insert("action".into(), "events.delivery_outcome".into());
+        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+        fields.insert("event_id".into(), attempt.event_id.into());
+        fields.insert("subscription_id".into(), attempt.subscription_id.into());
+        fields.insert("outcome_of_attempt".into(), attempt.number.into());
+        fields.insert("status".into(), attempt.status.into());
+        fields.insert("delivered".into(), attempt.delivered.into());
+        if let Some(verdict) = attempt.cross_tenant_read {
+            fields.insert("cross_tenant_read".into(), json!(verdict));
+        }
+        let envelope = crate::security::audit::AuditEnvelope {
+            outcome: if attempt.delivered {
+                crate::security::audit::AuditOutcome::Ok
+            } else {
+                crate::security::audit::AuditOutcome::Error(-32015)
+            },
+            ..crate::security::audit::AuditEnvelope::gateway()
+        };
+        let written = log
+            .append_bounded(move |log| log.append_event(fields, &envelope).map(|_| ()))
+            .await;
+        if let Err(error) = written {
+            tracing::warn!(%error, "events: delivery outcome audit record not written");
         }
     }
 
@@ -271,89 +481,9 @@ impl Services {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{ApiKeyConfig, ApiKeyKind, Config, api_key_digest_spec};
+#[path = "services_tests.rs"]
+mod tests;
 
-    fn key(
-        name: &str,
-        secret: &str,
-        expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> ApiKeyConfig {
-        ApiKeyConfig {
-            key: None,
-            key_sha256: Some(api_key_digest_spec(secret.as_bytes())),
-            expires_at,
-            name: name.to_owned(),
-            rate_limit: 0,
-            backends: vec!["x".to_owned()],
-            allowed_tools: None,
-            denied_tools: None,
-            admin: false,
-            kind: ApiKeyKind::Shared,
-        }
-    }
-
-    fn services(keys: Vec<ApiKeyConfig>) -> Services {
-        let mut config = Config::default();
-        config.auth.api_keys = keys;
-        Services {
-            live: Arc::new(LiveConfig::new(config)),
-            #[cfg(feature = "firewall")]
-            firewall: None,
-            audit: None,
-            #[cfg(feature = "cost-governance")]
-            budget: None,
-        }
-    }
-
-    fn presented(name: &str, secret: &str) -> ApiKeyRef {
-        ApiKeyRef {
-            name: name.to_owned(),
-            principal: crate::gateway::auth::principal_of(secret),
-        }
-    }
-
-    #[test]
-    fn the_live_key_must_match_by_secret_be_unexpired_and_grant_the_backend() {
-        let alice = presented("alice", "s1");
-        assert!(services(vec![key("alice", "s1", None)]).admits(Some(&alice), "x"));
-        assert!(
-            !services(vec![key("alice", "s1", None)]).admits(Some(&alice), "y"),
-            "backend not granted"
-        );
-        assert!(
-            !services(vec![key("alice", "s2", None)]).admits(Some(&alice), "x"),
-            "replaced under the same name"
-        );
-        let past = chrono::Utc::now() - chrono::Duration::seconds(1);
-        assert!(
-            !services(vec![key("alice", "s1", Some(past))]).admits(Some(&alice), "x"),
-            "expired"
-        );
-        assert!(!services(Vec::new()).admits(Some(&alice), "x"), "removed");
-        assert!(
-            services(Vec::new()).admits(None, "x"),
-            "no API key to re-read"
-        );
-    }
-
-    #[test]
-    fn a_subscription_stored_with_a_bare_key_name_is_refused() {
-        let stored = serde_json::json!({
-            "v": 1, "id": "s", "principal": "p", "api_key_name": "alice",
-            "url": "https://h/x", "name": "e", "arguments": {}, "secret": "whsec_x",
-            "previous_secret": null, "previous_until": null,
-            "granted_at": "2026-10-01T00:00:00Z", "expires_at": null, "active": true,
-            "failed_since": null, "last_delivery_at": null, "last_error": null
-        });
-        let sub: Subscription = serde_json::from_value(stored).expect("loads");
-        let live = services(vec![key("alice", "s1", None)]);
-        assert!(!live.admits_subscription(&sub, "x"));
-        let rewritten = serde_json::to_value(&sub).expect("serialises");
-        assert!(
-            rewritten.get("api_key_name").is_none(),
-            "never written back"
-        );
-    }
-}
+#[cfg(test)]
+#[path = "services_audit_tests.rs"]
+mod audit_tests;

@@ -242,6 +242,12 @@ impl Task {
         u64::try_from(age_ms).is_ok_and(|age_ms| age_ms >= ttl_ms)
     }
 
+    /// When the record last changed: the settle time once it is terminal.
+    #[must_use]
+    pub(crate) const fn last_updated_at(&self) -> DateTime<Utc> {
+        self.wire.last_updated_at
+    }
+
     /// A flat public protocol projection; no private model history is exposed.
     #[must_use]
     pub fn wire(&self) -> impl Serialize + '_ {

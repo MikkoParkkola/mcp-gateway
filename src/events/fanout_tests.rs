@@ -18,11 +18,14 @@ fn body_carries_only_protocol_fields_and_data() {
         kind: SourceKind::Webhook,
         name: "webhook.c.r.received".into(),
         backend: "hooks".into(),
+        scope: Visibility::Backend("hooks".into()),
         upstream_id: "x".into(),
         occurred_at: Utc::now(),
         data: json!({"event_type": "t", "fields": {}}),
     };
-    let body: Value = serde_json::from_slice(&body("evt_1", &event, &event.data)).expect("json");
+    let receipt = json!({"receipt": {"subject_kind": "event"}});
+    let body: Value =
+        serde_json::from_slice(&body("evt_1", &event, &event.data, &receipt)).expect("json");
     let mut keys: Vec<&str> = body
         .as_object()
         .expect("object")
@@ -30,7 +33,11 @@ fn body_carries_only_protocol_fields_and_data() {
         .map(String::as_str)
         .collect();
     keys.sort_unstable();
-    assert_eq!(keys, ["cursor", "data", "eventId", "name", "timestamp"]);
+    assert_eq!(
+        keys,
+        ["_meta", "cursor", "data", "eventId", "name", "timestamp"]
+    );
+    assert_eq!(body["_meta"], json!({ PROVENANCE_KEY: receipt }));
     assert_eq!(body["cursor"], Value::Null);
 }
 
@@ -77,4 +84,155 @@ fn withdraw_deletes_only_the_removed_types() {
         .map(|s| s.id)
         .collect();
     assert_eq!(left, ["b"]);
+}
+
+fn subscription(name: &str) -> super::super::records::Subscription {
+    let now = Utc::now();
+    super::super::records::Subscription {
+        v: 1,
+        id: format!("sub_{name}"),
+        principal: "p".into(),
+        api_key: None,
+        credential_kind: None,
+        credential_principal: None,
+        binding: None,
+        legacy_api_key_name: None,
+        read_key: None,
+        url: "https://h/cb".into(),
+        name: name.into(),
+        arguments: json!({}),
+        secret: "whsec_x".into(),
+        previous_secret: None,
+        previous_until: None,
+        granted_at: now,
+        expires_at: Some(now + chrono::Duration::hours(1)),
+        active: true,
+        failed_since: None,
+        last_delivery_at: None,
+        last_error: None,
+    }
+}
+
+/// MIK-7772: opening the hub withdraws nothing, because the catalogue is
+/// partial until the capability scan has run; reconciling afterwards deletes
+/// the subscriptions to webhook event types no source offers, and only those.
+#[test]
+fn reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let (now, tail) = (Utc::now(), super::super::tail_policy(&config));
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    for name in ["webhook.gone.route.received", "task.settled"] {
+        hub.store
+            .admit(
+                subscription(name),
+                true,
+                caps,
+                chrono::Duration::zero(),
+                now,
+                tail,
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        2,
+        "open reconciles nothing"
+    );
+    assert!(
+        !hub.runtime
+            .reconciled
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+
+    assert!(hub.reconcile_catalogue(CatalogueScan::Complete));
+
+    let left: Vec<String> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .map(|s| s.name)
+        .collect();
+    assert_eq!(
+        left,
+        ["task.settled"],
+        "only the unoffered webhook type went"
+    );
+    assert!(
+        hub.runtime
+            .reconciled
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+}
+
+/// MIK-7772: a partial scan proves nothing about a route's absence, so it
+/// withdraws nothing, and still lets the worker start.
+#[test]
+fn a_partial_scan_keeps_every_subscription() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let (now, tail) = (Utc::now(), super::super::tail_policy(&config));
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    hub.store
+        .admit(
+            subscription("webhook.gone.route.received"),
+            true,
+            caps,
+            chrono::Duration::zero(),
+            now,
+            tail,
+        )
+        .expect("io")
+        .expect("admitted");
+
+    hub.set_webhook_registry(std::sync::Arc::new(parking_lot::RwLock::new(
+        crate::gateway::WebhookRegistry::new(crate::config::WebhookConfig::default()),
+    )));
+
+    assert!(hub.reconcile_catalogue(CatalogueScan::Partial));
+
+    assert_eq!(hub.store.subscriptions().len(), 1, "kept");
+    assert!(
+        hub.runtime
+            .reconciled
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+}
+
+/// With webhooks off no route can return, so even a partial scan withdraws
+/// the stored webhook subscriptions (MIK-7772).
+#[test]
+fn webhooks_off_withdraws_even_after_a_partial_scan() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let (now, tail) = (Utc::now(), super::super::tail_policy(&config));
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    hub.store
+        .admit(
+            subscription("webhook.gone.route.received"),
+            true,
+            caps,
+            chrono::Duration::zero(),
+            now,
+            tail,
+        )
+        .expect("io")
+        .expect("admitted");
+
+    assert!(hub.reconcile_catalogue(CatalogueScan::Partial));
+
+    assert!(hub.store.subscriptions().is_empty(), "withdrawn");
 }

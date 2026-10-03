@@ -96,3 +96,91 @@ fn a_current_row_keeps_recorded_targets_over_its_descriptor() {
     record.targets = vec![recorded.clone()];
     assert_eq!(CommittedTask::of(task, &record).targets, vec![recorded]);
 }
+
+/// MIK-7116.MIN.2 round 8: a row serves backend output when it holds a
+/// result, a backend error or a backend's input requests, unless it holds
+/// only the gateway's own failure. Read attribution and the stored-delivery
+/// check both key on this one answer.
+#[test]
+fn a_row_serves_backend_output_by_status() {
+    use crate::protocol::JsonRpcError;
+    use crate::protocol::mrtr::InputRequired;
+    use crate::protocol::tasks::TaskTransition;
+
+    let committed = |task: Task, output_free: bool| CommittedTask {
+        task,
+        revision: 1,
+        targets: Vec::new(),
+        targets_recorded: true,
+        output_free,
+    };
+    let working = Task::create("t");
+    let mut completed = working.clone();
+    completed.complete(json!({"content": []}));
+    let mut failed = working.clone();
+    failed.fail(JsonRpcError {
+        code: -32000,
+        message: "backend".into(),
+        data: None,
+    });
+    let mut asking = working.clone();
+    asking
+        .transition(
+            TaskTransition::RequireInput(InputRequired {
+                requests: vec![("q".into(), json!({"method": "roots/list"}))],
+                request_state: None,
+            }),
+            chrono::Utc::now(),
+        )
+        .expect("a legal round");
+    let mut cancelled = working.clone();
+    cancelled
+        .transition(TaskTransition::Cancel, chrono::Utc::now())
+        .expect("a legal cancel");
+
+    assert!(
+        !committed(working, false).serves_backend_output(),
+        "working"
+    );
+    assert!(
+        !committed(cancelled, false).serves_backend_output(),
+        "cancelled"
+    );
+    assert!(
+        committed(completed, false).serves_backend_output(),
+        "completed"
+    );
+    assert!(
+        committed(asking, false).serves_backend_output(),
+        "input_required"
+    );
+    assert!(
+        committed(failed.clone(), false).serves_backend_output(),
+        "failed"
+    );
+    assert!(
+        !committed(failed, true).serves_backend_output(),
+        "gateway-only failure"
+    );
+}
+
+/// A completed row's stored result is backend output, unless it is the
+/// gateway's own interrupted or abandoned sentence (or the row is output-free).
+#[test]
+fn a_gateway_authored_result_is_not_backend_output() {
+    use crate::protocol::tasks::TaskTransition;
+    let complete = |result: serde_json::Value, output_free: bool| {
+        let mut task = Task::create("gateway_invoke");
+        task.transition(TaskTransition::Complete(result), chrono::Utc::now())
+            .expect("a working task completes");
+        let mut record = row(&task, TARGET_VERSION, None);
+        record.output_free = output_free;
+        CommittedTask::of(task, &record)
+    };
+    let backend = json!({"content": [{"type": "text", "text": "rows"}], "isError": false});
+    assert!(complete(backend.clone(), false).backend_result().is_some());
+    assert!(complete(backend, true).backend_result().is_none());
+    let own = json!({"content": [], "isError": true,
+                     "_meta": {(super::EXECUTION_OUTCOME_KEY): "interrupted"}});
+    assert!(complete(own, false).backend_result().is_none());
+}

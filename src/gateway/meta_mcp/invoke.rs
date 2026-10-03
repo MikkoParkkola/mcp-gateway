@@ -98,7 +98,7 @@ use super::super::meta_mcp_helpers::{
 use super::super::recovery::{ErrorCategory, RecoveryContext, attach_recovery, recovery_for};
 use super::super::trace;
 use super::MetaMcp;
-use super::prompt_cache::{CacheKeyDeriver, build_outbound_meta, extract_cached_tokens};
+use super::prompt_cache::{CacheKeyDeriver, extract_cached_tokens};
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
@@ -107,6 +107,7 @@ pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
+pub(crate) mod cache_reads;
 pub(super) use bridge_settle::arm_for_dispatch;
 pub(super) use bridge_settle::classify_bridged_dispatch_error;
 use bridge_settle::{arm, refuse_if_killed};
@@ -116,11 +117,13 @@ use r2_check::miss_with_hint;
 mod account_mint;
 
 use super::support::{
-    MetaMcpInvoker, augment_with_predictions, augment_with_provenance, augment_with_trace,
-    idempotency_key_for, response_cache_key_for, strip_backend_provenance,
+    MetaMcpInvoker, augment_with_predictions, augment_with_trace, idempotency_key_for,
+    response_cache_key_for,
 };
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 mod output_shape;
+mod provenance_stamp;
+pub(crate) mod relay;
 pub(super) use output_shape::enforce_output_schema;
 use output_shape::{apply_validated_output, extract_output_validation_target};
 
@@ -775,6 +778,9 @@ struct BridgeDispatcher<'a> {
     /// #1962: the call's idempotency reservation, held here for the exchange
     /// so each round can arm it around its dispatch.
     reservation: &'a parking_lot::Mutex<Option<IdempotencyReservation>>,
+    /// COLLUDE.1: who a round's relay check keys on, and its refusal slot.
+    relay: relay::RelayKey<'a>,
+    relay_refused: &'a parking_lot::Mutex<Option<Error>>,
 }
 
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
@@ -882,6 +888,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 .map(str::to_owned),
             input_responses: retry_params.get("inputResponses").cloned(),
         };
+        self.refuse_relaying_round(&outbound)?;
         // #1962: armed for the dispatch, so a dropped exchange settles the key.
         arm(self.reservation, true);
         let dispatched = self
@@ -1217,96 +1224,30 @@ impl MetaMcp {
             // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
             let traced =
                 Box::pin(self.invoke_tool_traced(args, session_id, caller, &trace_id_clone));
-            let (result, notes) = audit::with_dispatch_scope(traced).await;
+            // MIN.2: read in a scope of its own, counted for the request only
+            // when the call delivered (design §4.4).
+            let ((result, notes), reading) = crate::security::tenant_reads::with_dispatch_reads(
+                audit::with_dispatch_scope(traced),
+            )
+            .await;
+            let responded = notes.responded();
             // Single delivery boundary: unwrap the guard-sealed result.
             let (result, source, upstream) = match result.map(GuardedValue::into_parts) {
                 Ok((value, source, upstream)) => (Ok(value), source, upstream),
                 Err(error) => (Err(error), crate::protocol::ChainSource::NotEligible, None),
             };
             // One record per call, refusals and failures included (D1-d).
-            let audited =
-                self.audit_invocation(args, session_id, caller, &trace_id_clone, result, notes);
-            audited.await.map(|value| (value, source, upstream))
+            let audited = self
+                .audit_invocation(args, session_id, caller, &trace_id_clone, result, notes)
+                .await;
+            // Only a delivered call counts: its own reading, and the tenants its
+            // arguments name when a backend answered it, with or without a log.
+            if audited.is_ok() {
+                self.note_delivered_reading(args, reading, responded);
+            }
+            audited.map(|value| (value, source, upstream))
         })
         .await
-    }
-
-    /// Stamp a signed runtime-provenance receipt into `value._meta` when
-    /// provenance stamping is enabled (MIK-6905). No-op when the signer is
-    /// absent, so payloads stay byte-identical with the feature off.
-    ///
-    /// `backend_ok` is derived from the result's `isError` flag so cache hits
-    /// carrying a stored error are reported honestly.
-    ///
-    /// When shadow claim capture is also enabled (MIK-6908, rung 3.1), this
-    /// is the single chokepoint both the meta and direct-route call paths
-    /// funnel through, so a call whose receipt carries a `call_id` is
-    /// shadow-captured here alongside the derived claim. A `call_id`-less
-    /// receipt (no trace scope active) is skipped rather than captured
-    /// un-joinable — consistent with `score_corpus`'s mis-join contract,
-    /// which treats a missing join key as unscoreable, not as evidence.
-    ///
-    /// `client_claim` is the MIK-6914 Option B claim-under-test — an untrusted
-    /// typed claim the caller supplied for this call. When present it is
-    /// captured verbatim as the claim under scrutiny; when absent, capture
-    /// falls back to the honest `Claim::Succeeded` floor. It is never used as
-    /// the ground-truth leg (that is the receipt's extractor-observed
-    /// `row_count`).
-    fn maybe_stamp_provenance(
-        &self,
-        mut value: Value,
-        server: &str,
-        tool: &str,
-        api_key_name: Option<&str>,
-        cache: crate::trust::CacheOutcome,
-        client_claim: Option<&crate::trust::ClientClaim>,
-    ) -> Value {
-        // Only this gateway may put a signature chain on a result (ASI07).
-        crate::security::signature_chain::strip_chain(&mut value);
-        let Some(ref signer) = self.provenance_signer else {
-            // Stamping off: any `_meta.provenance` is backend-injected. Strip
-            // it so it cannot pass as a gateway receipt (MIK-6909).
-            return strip_backend_provenance(value);
-        };
-        let backend_ok = !value
-            .get("isError")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let (stamped, signed_receipt) =
-            augment_with_provenance(value, signer, server, tool, api_key_name, cache, backend_ok);
-        if let Some(sink) = &self.claim_capture
-            && let Some(call_id) = signed_receipt.receipt.call_id.clone()
-        {
-            let claim = crate::trust::derive_claim(client_claim);
-            sink.capture(call_id, claim, signed_receipt);
-        }
-        stamped
-    }
-
-    /// Stamp provenance onto a direct per-backend route result (the
-    /// `/mcp/{name}` passthrough, which bypasses the meta chokepoint — rung 3).
-    ///
-    /// Tagged [`CacheOutcome::Bypass`] because the direct route never consults
-    /// the meta response cache. No-op when stamping is disabled, so the
-    /// passthrough stays byte-identical with the feature off.
-    #[must_use]
-    pub fn stamp_direct_result(
-        &self,
-        result: Value,
-        backend_id: &str,
-        tool: &str,
-        api_key_name: Option<&str>,
-    ) -> Value {
-        self.maybe_stamp_provenance(
-            result,
-            backend_id,
-            tool,
-            api_key_name,
-            crate::trust::CacheOutcome::Bypass,
-            // The direct passthrough carries no gateway-parsed `_claim`
-            // directive, so there is no client claim-under-test here.
-            None,
-        )
     }
 
     /// The post-dispatch response gates a backend result must pass before any
@@ -1348,7 +1289,7 @@ impl MetaMcp {
         mut result: Value,
     ) -> Result<(Value, super::response_security::GateEffect)> {
         crate::security::signature_chain::strip_chain(&mut result);
-        let mut result = audit::noted_response(self, result);
+        let (mut result, raw_read) = audit::noted_response(self, result);
         self.apply_response_contract_gate(server, tool, trace_id, &mut result)?;
 
         // === POST-INVOKE: Response content inspection (issue #133, D2) ===
@@ -1399,7 +1340,10 @@ impl MetaMcp {
             }
         }
 
-        Ok(self.apply_context_integrity(server, tool, api_key_name, trace_id, result))
+        let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
+        // MIN.2: past every gate, so this dispatch's raw reading counts.
+        crate::security::tenant_reads::note_attribution(raw_read);
+        Ok(delivered)
     }
 
     /// The response contract gate (issue #133, D1), split out of
@@ -1773,6 +1717,11 @@ impl MetaMcp {
                 }
                 GuardOutcome::CachedResult(cached) => {
                     debug!(server, tool, key, trace_id, "Idempotency cache hit");
+                    self.stage_relay_receipt(
+                        caller.relay_caller(session_id),
+                        (server, tool),
+                        &cached,
+                    );
                     if let Some(ref stats) = self.stats {
                         stats.record_cache_hit();
                     }
@@ -1881,9 +1830,11 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && let Some(cached) = cache.get(&cache_key)
+            && let Some((cached, read)) = cache.get_read(&cache_key)
         {
+            cache_reads::restore(read.as_ref());
             debug!(server, tool, trace_id, "Cache hit");
+            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &cached);
             if let Some(ref stats) = self.stats {
                 stats.record_cache_hit();
             }
@@ -1896,7 +1847,7 @@ impl MetaMcp {
             // Terminal state on the response-cache-hit return: settle through
             // the reservation, or its `Drop` would remove what was just stored.
             if let Some(reservation) = idem_reservation.as_mut() {
-                reservation.complete(&cached);
+                reservation.complete_read(&cached, read);
             }
             let predictions =
                 self.record_and_predict(session_id, arm_key, &tool_key, caller.scope());
@@ -2010,6 +1961,14 @@ impl MetaMcp {
                 }
             };
 
+        let egress = relay::Egress {
+            arguments: &arguments,
+            inbound_meta: args.get("_meta"),
+            prompt_cache_key: prompt_cache_key.as_deref(),
+            retry: &outbound_retry,
+        };
+        let reservation = idem_reservation.as_mut();
+        self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
         if let Some(execution) = caller.execution {
             execution.mark_dispatched();
         }
@@ -2222,6 +2181,8 @@ impl MetaMcp {
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
             let account_refusal = parking_lot::Mutex::new(None);
+            let relay_refused = parking_lot::Mutex::new(None);
+            let recording = self.recording_channel(caller, session_id, (server, tool), trace_id);
             let held = parking_lot::Mutex::new(idem_reservation.take());
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
@@ -2248,8 +2209,10 @@ impl MetaMcp {
                     managed: caller_credential.managed.as_ref(),
                     account_refusal: &account_refusal,
                     reservation: &held,
+                    relay: caller.relay_caller(session_id),
+                    relay_refused: &relay_refused,
                 },
-                caller.channel,
+                &recording,
                 session,
                 caller.input_capabilities,
                 pending,
@@ -2260,6 +2223,18 @@ impl MetaMcp {
             // across that arm's awaits and make this future non-Send.
             let mut parked = account_refusal.into_inner();
             idem_reservation = held.into_inner();
+            // A relay refusal answers first, before the parked and generic arms.
+            if let Some(refused) = relay_refused.into_inner() {
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
+                }
+                // The outer lease was marked before round one; this refusal
+                // is no result of a call that acted, so it is not retained.
+                if let Some(execution) = caller.execution {
+                    execution.withdraw_dispatch();
+                }
+                return Err(refused);
+            }
             match bridged {
                 Ok(completed) => {
                     // The exchange finished, so the backend has now acted and
@@ -2466,6 +2441,7 @@ impl MetaMcp {
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;
+        self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.
         let (source, upstream) = super::response_security::chain_after_gates(
             effect,
@@ -2540,13 +2516,18 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && cache.set(&cache_key, result.clone(), self.default_cache_ttl)
+            && cache.set_read(
+                &cache_key,
+                result.clone(),
+                self.dispatch_reading(args),
+                self.default_cache_ttl,
+            )
         {
             debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
         }
 
         if let Some(reservation) = idem_reservation.as_mut()
-            && reservation.complete(&result)
+            && reservation.complete_read(&result, self.dispatch_reading(args))
         {
             debug!(
                 server,
@@ -3572,13 +3553,8 @@ impl MetaMcp {
         // Build request params. `_meta` is one object, so one writer owns it:
         // the caller's propagable trace context and this hop's cache key are
         // merged, or the field is absent entirely (design §3.4a).
-        let mut params = json!({ "name": tool, "arguments": arguments });
-        if let Some(meta) = build_outbound_meta(inbound_meta, prompt_cache_key)
-            && let Value::Object(map) = &mut params
-        {
-            map.insert("_meta".to_string(), meta);
-        }
-        outbound_retry.apply(&mut params);
+        let (meta, key) = (inbound_meta, prompt_cache_key);
+        let mut params = relay::outbound_params(tool, arguments, meta, key, outbound_retry);
         // ASI07 inc3: a chained backend gets this dispatch's own challenge.
         let chained = backend.chain_policy();
         let challenge = self.chain_challenge(chained.0, &mut params)?;

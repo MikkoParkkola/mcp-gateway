@@ -34,20 +34,35 @@ impl Transport for AnnotatedBackend {
 }
 
 pub(super) async fn fixture(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
-    let (mut state, store) = fixture_state(&two_principal_auth()).await;
+    fixture_with(mock, crate::config::Config::default(), |_| {}).await
+}
+
+/// [`fixture`] under `config`, with `meta` applied to the surfaced-tool
+/// `MetaMcp` while it is still exclusively owned (signing goes in here).
+pub(super) async fn fixture_with(
+    mock: &Arc<MockBackend>,
+    config: crate::config::Config,
+    meta: impl FnOnce(&mut MetaMcp),
+) -> (Arc<AppState>, tempfile::TempDir) {
+    let (mut state, store) =
+        crate::gateway::router::tests::test_router_app_state_with_auth_and_config(
+            &two_principal_auth(),
+            config,
+        )
+        .await;
     let inner = Arc::get_mut(&mut state).expect("fixture is not shared yet");
-    inner.meta_mcp = Arc::new(
-        MetaMcp::new(Arc::clone(&inner.backends)).with_surfaced_tools(vec![
-            crate::config::SurfacedToolConfig {
-                server: BACKEND.into(),
-                tool: DESTRUCTIVE.into(),
-            },
-            crate::config::SurfacedToolConfig {
-                server: BACKEND.into(),
-                tool: TOOL.into(),
-            },
-        ]),
-    );
+    let mut surfaced = MetaMcp::new(Arc::clone(&inner.backends)).with_surfaced_tools(vec![
+        crate::config::SurfacedToolConfig {
+            server: BACKEND.into(),
+            tool: DESTRUCTIVE.into(),
+        },
+        crate::config::SurfacedToolConfig {
+            server: BACKEND.into(),
+            tool: TOOL.into(),
+        },
+    ]);
+    meta(&mut surfaced);
+    inner.meta_mcp = Arc::new(surfaced);
     let backend = Arc::new(Backend::new(
         BACKEND,
         BackendConfig {

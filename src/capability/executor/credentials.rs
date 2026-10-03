@@ -185,7 +185,7 @@ impl CapabilityExecutor {
     ///
     /// Answers from the DECLARED catalogue and never mints: asking this question
     /// must not consume a custody lease.
-    fn account_is_shared(&self, account: &str) -> bool {
+    pub(super) fn account_is_shared(&self, account: &str) -> bool {
         self.account_strategies().is_some_and(|registry| {
             registry
                 .declared(account)
@@ -435,7 +435,7 @@ impl CapabilityExecutor {
                 Error::Config(format!(
                     "OAuth refresh request to '{}' failed: {}",
                     crate::security::sanitize::redact_url_for_diagnostics(token_endpoint),
-                    super::redact_url(e)
+                    super::client::redact_url(e)
                 ))
             })?;
 
@@ -449,7 +449,7 @@ impl CapabilityExecutor {
         let resp: RefreshTokenResponse = response.json().await.map_err(|e| {
             Error::Config(format!(
                 "Failed to parse OAuth refresh response for '{provider}': {}",
-                super::redact_url(e)
+                super::client::redact_url(e)
             ))
         })?;
 
@@ -612,32 +612,30 @@ mod tests {
         CapabilityExecutionContext::default()
     }
 
-    fn executor_with_storage(storage: Arc<TokenStorage>) -> CapabilityExecutor {
+    fn executor_with(token_storage: Option<Arc<TokenStorage>>) -> CapabilityExecutor {
         CapabilityExecutor {
             client: reqwest::Client::new(),
             cache: ResponseCache::new(),
-            token_storage: Some(storage),
+            token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: super::super::process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
+    fn executor_with_storage(storage: Arc<TokenStorage>) -> CapabilityExecutor {
+        executor_with(Some(storage))
+    }
+
     fn executor_no_storage() -> CapabilityExecutor {
-        CapabilityExecutor {
-            client: reqwest::Client::new(),
-            cache: ResponseCache::new(),
-            token_storage: None,
-            oauth_tokens: RwLock::new(DashMap::new()),
-            secret_resolver: Arc::new(SecretResolver::new()),
-            health: crate::failsafe::HealthTracker::new("test"),
-            env: Arc::new(crate::config::LiveEnv::default()),
-            policy_epoch: None,
-            account_strategies: None,
-        }
+        executor_with(None)
     }
 
     fn now_secs() -> u64 {

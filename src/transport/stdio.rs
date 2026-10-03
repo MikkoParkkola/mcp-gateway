@@ -16,9 +16,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
+use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -32,6 +33,10 @@ use crate::protocol::{
 };
 use crate::{Error, Result};
 
+#[path = "stdio_cache.rs"]
+mod cache;
+pub use cache::isolated_package_manager_env;
+
 #[cfg(unix)]
 const FALLBACK_EXEC_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 #[cfg(windows)]
@@ -39,7 +44,10 @@ const FALLBACK_EXEC_PATH: &str = r"C:\Windows\System32;C:\Windows";
 #[cfg(not(any(unix, windows)))]
 const FALLBACK_EXEC_PATH: &str = "";
 
-fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, String>) {
+pub(crate) fn configure_child_environment(
+    cmd: &mut Command,
+    backend_env: &HashMap<String, String>,
+) {
     cmd.env_clear();
 
     let path = std::env::var_os("PATH").unwrap_or_else(|| OsString::from(FALLBACK_EXEC_PATH));
@@ -78,14 +86,10 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
     }
 }
 
-#[path = "stdio_cache.rs"]
-mod cache;
-pub use cache::isolated_package_manager_env;
-
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
     /// Child process
-    child: Mutex<Option<Child>>,
+    child: Mutex<Option<Box<dyn ChildWrapper>>>,
     /// Pending requests waiting for response
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Request ID counter
@@ -192,29 +196,19 @@ impl StdioTransport {
             cmd.current_dir(cwd);
         }
 
-        let mut child = cmd.spawn().map_err(|e| match e.kind() {
-            // A command path that does not exist, or a file that is not
-            // executable. No amount of waiting fixes either, and warm-start
-            // retries transport failures indefinitely -- so before this, a
-            // typo in a backend command was respawned once a minute for the
-            // life of the process with no indication the config was wrong.
-            std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
-                Error::TransportPermanent(format!("Failed to spawn: {e}"))
-            }
-            _ => Error::Transport(format!("Failed to spawn: {e}")),
-        })?;
+        let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
-            .stdin
+            .stdin()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stdin".to_string()))?;
 
         let stdout = child
-            .stdout
+            .stdout()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stdout".to_string()))?;
         let stderr = child
-            .stderr
+            .stderr()
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
@@ -240,10 +234,11 @@ impl StdioTransport {
         let transport = Arc::downgrade(self);
         tokio::spawn(async move {
             debug!("Reader task started");
-            let mut reader = BufReader::new(stdout).lines();
+            let mut reader = BufReader::new(stdout);
+            let mut frame = Vec::new();
 
             loop {
-                match reader.next_line().await {
+                match read_frame(&mut reader, &mut frame).await {
                     Ok(Some(line)) => {
                         let line_len = line.len();
                         debug!(line_len, "Received line from stdout");
@@ -260,7 +255,14 @@ impl StdioTransport {
                         break;
                     }
                     Err(e) => {
+                        // Includes a frame over MAX_FRAME_BYTES: the stream
+                        // cannot be resynchronised, so it is treated as gone.
                         error!(error = %e, "Error reading from stdout");
+                        if let Some(transport) = transport.upgrade()
+                            && let Some(child) = transport.child.lock().await.as_mut()
+                        {
+                            let _ = child.start_kill();
+                        }
                         break;
                     }
                 }
@@ -519,7 +521,8 @@ impl StdioTransport {
     /// peer *request* is refused, because routing one to a pending caller would
     /// answer that caller with a frame carrying neither `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
-        debug!(line_len = line.len(), "Parsing response");
+        let line_len = line.len();
+        debug!(line_len, "Parsing response");
         let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
@@ -750,12 +753,18 @@ impl Transport for StdioTransport {
 
         // Kill child process
         if let Some(ref mut child) = *self.child.lock().await {
-            let _ = child.kill().await;
+            let _ = Box::into_pin(child.kill()).await;
         }
 
         Ok(())
     }
 }
+
+#[path = "stdio_tree.rs"]
+mod tree;
+#[cfg(test)]
+use tree::MAX_FRAME_BYTES;
+use tree::{read_frame, spawn_in_own_tree};
 
 #[path = "stdio_early_exit.rs"]
 mod early_exit;
@@ -767,6 +776,10 @@ mod tests;
 #[cfg(test)]
 #[path = "stdio_tap_tests.rs"]
 mod tap_tests;
+
+#[cfg(test)]
+#[path = "stdio_frame_tests.rs"]
+mod frame_tests;
 
 // Unix-only: the fake backend is a `sh` script.
 #[cfg(all(test, unix))]

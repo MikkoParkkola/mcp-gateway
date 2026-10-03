@@ -15,7 +15,7 @@ use crate::config::{AuthConfig, StreamingConfig};
 use crate::gateway::auth::live::held_credential;
 use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
 use crate::gateway::proxy::ProxyManager;
-use crate::gateway::streaming::{NotificationMultiplexer, TaggedNotification};
+use crate::gateway::streaming::{NotificationMultiplexer, SessionFrame};
 use crate::key_server::{KeyServer, TemporaryToken};
 
 const AUTH_ON: &str = "enabled: true
@@ -55,7 +55,7 @@ fn open_session(
     mux: &NotificationMultiplexer,
     id: &str,
     bearer: Option<&str>,
-) -> Receiver<TaggedNotification> {
+) -> Receiver<SessionFrame> {
     let held = bearer.and_then(|b| {
         let mut headers = axum::http::HeaderMap::new();
         let value = format!("Bearer {b}").parse().unwrap();
@@ -95,7 +95,7 @@ fn temporary_token(backends: &[&str]) -> TemporaryToken {
     }
 }
 
-fn assert_told(rx: &mut Receiver<TaggedNotification>, who: &str) {
+fn assert_told(rx: &mut Receiver<SessionFrame>, who: &str) {
     let frame = rx
         .try_recv()
         .unwrap_or_else(|e| panic!("{who} must be told: {e:?}"));

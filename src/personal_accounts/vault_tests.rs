@@ -728,3 +728,44 @@ fn a_reconsented_grant_gets_a_new_binding() {
     assert!(before.contains(&old.generation), "{before}");
     assert_ne!(before, binding_for(renewed));
 }
+
+/// Mutant: a backend expecting another audience is minted for, or a principal
+/// whose key cannot be built is minted for, before custody is consulted.
+#[test]
+fn prepare_refuses_a_wrong_audience_and_an_unbindable_principal_before_custody() {
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed_sole_operator(tmp.path());
+
+    block_on(async {
+        let (vault, refreshes) = strategy(tmp.path(), true);
+        let mut elsewhere = backend();
+        elsewhere.audience = "https://other.invalid/".into();
+        let refused = vault.prepare(Principal::SoleOperator, &elsewhere).await;
+        assert!(
+            matches!(refused, Err(PropagationError::Misconfigured(_))),
+            "{refused:?}"
+        );
+
+        let mut nameless = identity();
+        nameless.subject = String::new();
+        let refused = vault
+            .prepare(Principal::Verified(&nameless), &backend())
+            .await;
+        // The identity-binding refusal specifically: custody also refuses an
+        // invalid key, with the same variant but its own text.
+        let Err(PropagationError::Refuse(why)) = refused else {
+            panic!("an unbindable principal must be refused: {refused:?}");
+        };
+        assert!(why.starts_with("account identity binding refused"), "{why}");
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0, "custody was not asked");
+
+        // Positive control: the same strategy and backend mint for the operator.
+        vault
+            .prepare(Principal::SoleOperator, &backend())
+            .await
+            .expect("control: the seeded grant leases");
+    });
+}
+
+#[path = "vault_revalidate_tests.rs"]
+mod revalidate;

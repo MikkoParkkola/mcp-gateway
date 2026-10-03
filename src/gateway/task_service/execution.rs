@@ -133,6 +133,10 @@ pub(crate) enum WriteOutcome {
     Transitioned(CommittedTask),
 }
 
+/// A callback told of each committed task transition.
+pub(crate) type PublicationHook =
+    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>) + Send + Sync>;
+
 /// The one owner of a committed task record.
 ///
 /// A `begin` accepts a handoff, spawns the future that commits and dispatches
@@ -157,6 +161,8 @@ pub struct TaskExecutor {
     /// the second would find a revision that moved.
     query_gate: tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
+    /// Told of every committed transition (the events source), once installed.
+    publication_hook: std::sync::OnceLock<PublicationHook>,
     /// Cancelled once, by a shutdown whose drain ran out; every worker runs
     /// under it ([`Self::spawn_worker`]).
     shutdown: tokio_util::sync::CancellationToken,
@@ -178,8 +184,15 @@ impl TaskExecutor {
             recovery: std::sync::OnceLock::new(),
             query_gate: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             observer: Mutex::new(None),
+            publication_hook: std::sync::OnceLock::new(),
             shutdown: tokio_util::sync::CancellationToken::new(),
         })
+    }
+
+    /// Install the callback told of each committed transition with the task
+    /// id, its new status and its last-change time. Write-once.
+    pub(crate) fn on_publication(&self, hook: PublicationHook) -> bool {
+        self.publication_hook.set(hook).is_ok()
     }
 
     pub(crate) fn recovery(&self) -> Option<&Arc<dyn UpstreamRecovery>> {
@@ -397,6 +410,9 @@ impl TaskExecutor {
     /// Spawn a task worker under the shutdown token. Every worker goes through
     /// here, so none can outlive a shutdown that cancelled the rest.
     fn spawn_worker(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
+        // COLLUDE.1: every worker collects its relay receipts on its own
+        // task; task-locals do not cross `tokio::spawn`.
+        let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
         tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
     }
 
@@ -495,11 +511,14 @@ impl TaskExecutor {
     /// changed something: a dedupe, a no-op or a failed commit never gets here,
     /// so a listener never learns of a transition that did not happen.
     pub(super) fn published(&self, outcome: &WriteOutcome, task_id: &str) {
-        let status = match outcome {
+        let (status, changed_at) = match outcome {
             WriteOutcome::Create(CreateOutcome::Created { task, .. })
-            | WriteOutcome::Transitioned(task) => task.task.status(),
+            | WriteOutcome::Transitioned(task) => (task.task.status(), task.task.last_updated_at()),
             WriteOutcome::Create(_) => return,
         };
+        if let Some(hook) = self.publication_hook.get() {
+            hook(task_id, status, changed_at);
+        }
         tracing::debug!(
             task_id,
             kind = "durable",

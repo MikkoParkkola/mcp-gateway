@@ -205,20 +205,50 @@ async fn revoked_access_stops_delivery_at_the_next_attempt() {
     assert_eq!(error(&refresh)["code"], -32011, "{refresh}");
 }
 
+/// Design F9 (MIK-7769): a subscription made with the static bearer stops at
+/// the next event once the gateway runs with another bearer, and is deleted.
+#[tokio::test]
+async fn a_rotated_static_bearer_stops_delivery() {
+    const OLD: &str = "events-test-static-bearer-old-0123456789";
+    const NEW: &str = "events-test-static-bearer-new-0123456789";
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["auth"]["bearer_token"] = json!(OLD);
+    let mut gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, OLD, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-f9a", "o/r").await;
+    events_at_least(&rx, 1).await;
+
+    let mut rotated = gw.config().clone();
+    rotated["auth"]["bearer_token"] = json!(NEW);
+    gw.rewrite_config(rotated);
+    gw.restart().await;
+    let before = rx.events().len();
+    fire(&gw, "d-f9b", "o/r").await;
+    let root_path = root.path().to_path_buf();
+    let gone = wait_until(DEADLINE, || records(&root_path, "subs").is_empty()).await;
+    assert!(gone, "the old bearer's subscription is deleted");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(
+        rx.events().len(),
+        before,
+        "nothing reaches the old bearer's callback"
+    );
+}
+
 /// T25 (SAFETY.3): each delivery is a read by the subscription principal in
 /// MIN.2's per-principal window. Tenants come from `repo` (`arg_keys`).
 /// Alice receives a tenant `t1` event, then a `t2` event that crosses the
-/// cross-tenant threshold: observe mode delivers both and the second's audit
-/// record carries `cross_tenant: "would_block"`.
+/// cross-tenant threshold: observe mode delivers both and the second's
+/// attempt record carries `cross_tenant_read: "flagged"`.
 /// Substitutions: the T1 history is seeded by a T1 event delivery instead of
 /// a tool call (the fixture has no tenant-attributed backend tool), and the
-/// block-mode clause (dead letter `tenant`) is not written: MIN.2 ships in
-/// observe mode only (operator ruling C3) and this tree has no block switch.
+/// block-mode clause (dead letter `tenant`) is the next test.
 /// Assumption: I2 counts every event delivery as a sensitive read (design
 /// §3.7, "each delivery is treated as a read"); MIN.2 records only sensitive
 /// reads, so without that the row cannot go green.
 #[tokio::test]
-#[ignore = "needs MIN.2 ReadHistory; un-ignored by the MIN.2 E1 conversion (MIK-7116 test 2v)"]
 async fn tenant_guard_applies_to_event_payloads() {
     let root = tempfile::tempdir().expect("root");
     let rx = Receiver::start(root.path()).await;
@@ -238,10 +268,29 @@ async fn tenant_guard_applies_to_event_payloads() {
     let flagged = wait_until(DEADLINE, || {
         delivery::audit_mentioning(&root_path, &second)
             .iter()
-            .any(|r| r["cross_tenant"] == "would_block")
+            .any(|r| r["cross_tenant_read"] == "flagged")
     })
     .await;
     assert!(flagged, "the cross-tenant delivery is flagged in the audit");
+}
+
+/// T25, block mode (MIK-7116 test 2v): the second tenant's delivery is
+/// withheld and dead-lettered `tenant`; the first still arrived.
+#[tokio::test]
+async fn tenant_guard_blocks_a_cross_tenant_event_delivery() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["security"]["firewall"] =
+        json!({"tenant_guard": {"arg_keys": ["repo"], "cross_tenant_reads": "block"}});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-25c", "t1").await;
+    events_at_least(&rx, 1).await;
+    fire(&gw, "d-25d", "t2").await;
+    dead_with_reason(root.path(), "tenant").await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(rx.events().len(), 1, "the cross-tenant event is not sent");
 }
 
 /// T27 (SAFETY.5): over the per-subscription rate, delivery is delayed, not
@@ -263,7 +312,16 @@ async fn per_subscription_rate_limit_delays_not_drops() {
         fire(&gw, &format!("d-27-{n}"), "o/r").await;
     }
     events_at_least(&rx, 10).await;
-    let status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
+    // A refreshed bucket reads false for the instant before the next take
+    // spends it again; with records still waiting, it converges on true.
+    let mut status = json!(null);
+    for _ in 0..100 {
+        status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
+        if status["throttled"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     assert_eq!(status["throttled"], true, "{status}");
     let posts = events_at_least(&rx, 20).await;
     assert_eq!(posts.len(), 20, "every event delivered once");
@@ -274,10 +332,11 @@ async fn per_subscription_rate_limit_delays_not_drops() {
 }
 
 /// T28 (SAFETY.5): with cost governance on, a delivery that alice's key
-/// budget cannot cover is dead-lettered `budget` and never posted. A budget
-/// of 0.01 against a 1.0 charge stands in for "0" (a zero limit divides by
-/// zero in the alert percentage). The ledger clause is not asserted: a
-/// refused check records no spend in `costs.json`.
+/// budget cannot cover is dead-lettered `budget` and never posted, and the
+/// refused attempt is on the audit log with status `budget`. A refused
+/// check records no spend, so that audit record, not the ledger, is the
+/// operator-visible evidence. A zero limit is "no limit" in cost governance
+/// (`evaluate_alerts`), so the budget here is 0.01 against a 1.0 charge.
 #[tokio::test]
 async fn budget_refusal_dead_letters_with_reason_budget() {
     let root = tempfile::tempdir().expect("root");
@@ -290,4 +349,51 @@ async fn budget_refusal_dead_letters_with_reason_budget() {
     dead_with_reason(root.path(), "budget").await;
     tokio::time::sleep(SETTLE).await;
     assert!(rx.events().is_empty(), "a refused budget sends nothing");
+    let refused: Vec<Value> = audit_records(root.path())
+        .into_iter()
+        .filter(|r| r["status"] == "budget")
+        .collect();
+    assert_eq!(refused.len(), 1, "one audit record for the refused attempt");
+}
+
+/// T28, charge clause: a delivery is charged through cost governance. A key
+/// budget of 1.5 against a 1.0 charge covers the first delivery and not the
+/// second: the first is posted and spends, the second is dead-lettered
+/// `budget`.
+#[tokio::test]
+async fn a_delivery_is_charged_against_the_key_budget() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({"cost_per_delivery_usd": 1.0}));
+    cfg["cost_governance"] = json!({"enabled": true, "budgets": {"per_key": {"alice": 1.5}}});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-28c-1", "o/r").await;
+    events_at_least(&rx, 1).await;
+    fire(&gw, "d-28c-2", "o/r").await;
+    dead_with_reason(root.path(), "budget").await;
+    tokio::time::sleep(SETTLE).await;
+    assert_eq!(
+        rx.events().len(),
+        1,
+        "the charged delivery posted, the next did not"
+    );
+}
+
+/// T28, zero clause: a zero per-key budget is no limit, as for a tool call,
+/// so the delivery is posted.
+#[tokio::test]
+async fn a_zero_key_budget_is_no_limit() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({"cost_per_delivery_usd": 1.0}));
+    cfg["cost_governance"] = json!({"enabled": true, "budgets": {"per_key": {"alice": 0.0}}});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-28z", "o/r").await;
+    events_at_least(&rx, 1).await;
+    assert!(
+        dead_letters(root.path()).is_empty(),
+        "nothing dead-lettered"
+    );
 }

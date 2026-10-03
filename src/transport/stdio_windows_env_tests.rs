@@ -26,6 +26,8 @@ const DUMP_ENV: &str = "MCP_GATEWAY_TEST_WINDOWS_ENV_DUMP";
 const PARENT_SECRET_ENV: &str = "MCP_GATEWAY_TEST_WINDOWS_PARENT_SECRET";
 const PARENT_SECRET: &str = "dummy-windows-parent-secret-must-not-reach-backend";
 const DUMP_PREFIX: &str = "MCPGW_CHILD_ENV=";
+/// Set by an instrumented binary's own profile runtime, never inherited here.
+const PROFILE_RUNTIME_INIT_KEY: &str = "__LLVM_PROFILE_RT_INIT_ONCE";
 const SCENARIO: &str = "transport::stdio::tests::windows_env::windows_child_environment_scenario";
 const DUMP: &str = "transport::stdio::tests::windows_env::windows_child_environment_dump";
 
@@ -201,7 +203,12 @@ async fn windows_child_environment_scenario() {
 /// Keys are upper-cased because Windows names are case-insensitive (`Path`
 /// and `PATH` are one variable). Names starting with `=` are skipped: those
 /// are the per-drive working-directory entries (`=C:`) a process keeps for
-/// itself, not state it was given.
+/// itself, not state it was given. `__LLVM_PROFILE_RT_INIT_ONCE` is skipped for
+/// the same reason: under coverage, this binary's own profile runtime sets it
+/// at startup (compiler-rt `InstrProfilingFile.c`, `truncateCurrentFile`). It
+/// was not handed over by the gateway, and reporting it failed this test under
+/// llvm-cov alone. On Windows, a failing test target writes no profile, because
+/// libtest exits through `ExitProcess` and skips the runtime's `atexit` write.
 #[test]
 fn windows_child_environment_dump() {
     if std::env::var_os(DUMP_ENV).is_none() {
@@ -214,7 +221,7 @@ fn windows_child_environment_dump() {
                 v.to_string_lossy().into_owned(),
             )
         })
-        .filter(|(k, _)| !k.starts_with('='))
+        .filter(|(k, _)| !k.starts_with('=') && k != PROFILE_RUNTIME_INIT_KEY)
         .collect();
     println!(
         "{DUMP_PREFIX}{}",

@@ -1,4 +1,4 @@
-sha256: 17f1be5d4ecb6bc84108cac16f3cd6aafb369b3ced57c1d1e8298ac72f6c022d
+sha256: a19592a143ea4e4a7284a2792f8cf2e5d488b4e82dc713173f538fd742533a0c
 fulcrum: "1.0"
 name: gws_drive_upload
 description: Upload a file to Google Drive. Supports setting the file name, parent folder, and MIME type.
@@ -9,22 +9,16 @@ schema:
     properties:
       filePath:
         type: string
-        description: "Local file path to upload"
+        path_root: uploads
+        description: File to upload, inside capabilities.files.uploads
       name:
         type: string
-        description: "File name in Drive (defaults to local file name)"
+        description: File name in Drive (defaults to local file name)
       parentId:
         type: string
-        description: "Parent folder ID in Drive (omit for root)"
-      mimeType:
-        type: string
-        description: "MIME type of the file (auto-detected if omitted)"
-        examples:
-          - "application/pdf"
-          - "text/plain"
-          - "application/vnd.google-apps.document"
+        description: Parent folder ID in Drive (omit for root)
     required:
-      - filePath
+    - filePath
   output:
     type: object
     properties:
@@ -45,17 +39,15 @@ providers:
     config:
       command: gws
       args:
-        - drive
-        - files
-        - "+upload"
-        - "--file"
-        - "{filePath}"
-        - "--name"
-        - "{name}"
-        - "--parent"
-        - "{parentId}"
-        - "--mime-type"
-        - "{mimeType}"
+      - drive
+      - +upload
+      - arg: --name={name}
+        if: name
+      - arg: --parent={parentId}
+        if: parentId
+      - --
+      - '{filePath}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -63,8 +55,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s drive"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/drive.file
 
 metadata:
   category: productivity

@@ -18,6 +18,9 @@ pub(crate) struct Caller {
     /// The canonical principal; `None` when the call is not authenticated
     /// (or authentication is off).
     pub principal: Option<String>,
+    /// The caller key the read verdict judges this caller's frames under;
+    /// `None` when the verdict is off or the caller has no identity.
+    pub read_key: Option<String>,
     /// The credential the caller presented.
     pub credential: Credential,
     /// Of the backends the catalogue scopes to ([`EventsHub::scope_backends`]),
@@ -28,15 +31,18 @@ pub(crate) struct Caller {
 impl Caller {
     fn sees(&self, hub: &EventsHub, descriptor: &EventDescriptor) -> bool {
         match &descriptor.scope {
-            Visibility::Backend(backend) => {
-                self.visible_backends.contains(backend)
-                    && hub.live_admits(self.credential.api_key.as_ref(), backend)
-            }
+            Visibility::Backend(backend) => self.sees_backend(hub, backend),
             // Owner-scoped types (task events, I4) are listed to anyone who
             // can own a record; operator types land in 4.0.1.
             Visibility::Owner => self.principal.is_some(),
             Visibility::Operator => false,
         }
+    }
+
+    /// Whether this caller may see event types scoped to `backend`.
+    fn sees_backend(&self, hub: &EventsHub, backend: &str) -> bool {
+        self.visible_backends.contains(backend)
+            && hub.live_admits(self.credential.api_key.as_ref(), backend)
     }
 }
 
@@ -51,6 +57,7 @@ impl EventsHub {
                 Visibility::Backend(backend) => Some(backend),
                 _ => None,
             })
+            .chain(self.ineligible_backends().into_keys())
             .collect();
         backends.sort();
         backends.dedup();
@@ -75,13 +82,69 @@ impl EventsHub {
         Ok(json!({ "events": events }))
     }
 
+    /// Catalogue entries a keyword search finds (a case-insensitive
+    /// substring of name or description), for the callers `visible` admits,
+    /// as `gateway_search` entries (design §3.9, §18), at most `limit`.
+    pub(crate) fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        visible: impl Fn(&Visibility) -> bool,
+    ) -> Vec<Value> {
+        let query = query.to_lowercase();
+        self.catalogue()
+            .iter()
+            .filter(|d| visible(&d.scope))
+            .filter(|d| {
+                d.name.to_lowercase().contains(&query)
+                    || d.description.to_lowercase().contains(&query)
+            })
+            .take(limit)
+            .map(|d| {
+                json!({
+                    "kind": "event",
+                    "name": d.name,
+                    "description": d.description,
+                    "inputSchema": d.input_schema,
+                })
+            })
+            .collect()
+    }
+
     /// The visible descriptor called `name`; invisible and missing are one
     /// answer, so the catalogue cannot be probed (design §7.4).
+    ///
+    /// The one exception: an upstream-notification event of a backend the
+    /// caller may see but which cannot offer it is refused with the reason
+    /// (I5 design §11 D2/D3), so the subscription is never silently dead.
     fn visible(&self, caller: &Caller, name: &str) -> Result<EventDescriptor, RpcError> {
-        self.catalogue()
+        if let Some(found) = self
+            .catalogue()
             .into_iter()
             .find(|d| d.name == name && caller.sees(self, d))
-            .ok_or_else(RpcError::not_found)
+        {
+            return Ok(found);
+        }
+        let refusal = super::upstream::parse_name(name)
+            .filter(|(backend, _)| caller.sees_backend(self, backend))
+            .and_then(|(backend, _)| self.ineligible_backends().remove(backend))
+            .map(|reason| RpcError::unsupported_backend_events(name, reason.as_str()));
+        Err(refusal.unwrap_or_else(RpcError::not_found))
+    }
+
+    /// The configured backends that cannot offer upstream-notification
+    /// events, under the live config; none while that source is off.
+    fn ineligible_backends(
+        &self,
+    ) -> std::collections::BTreeMap<String, super::upstream::Ineligible> {
+        let Some(services) = self.runtime.services.get() else {
+            return std::collections::BTreeMap::new();
+        };
+        if !self.config.sources.backend_notifications {
+            return std::collections::BTreeMap::new();
+        }
+        let multi_user = super::upstream::multi_user(services.live.running());
+        super::upstream::ineligible_backends(&services.live.get(), multi_user)
     }
 }
 
@@ -242,6 +305,11 @@ impl EventsHub {
             None => return Err(RpcError::invalid("delivery.mode")),
         }
         let arguments = checked_arguments(&descriptor, params.get("arguments"))?;
+        if let Some(source) = self.source_offering(&descriptor.name) {
+            source
+                .authorize(&principal, &descriptor.name, &arguments)
+                .await?;
+        }
         let url = callback_url(delivery.get("url"))?;
         let secret = delivery
             .get("secret")
@@ -275,6 +343,8 @@ impl EventsHub {
             api_key: caller.credential.api_key.clone(),
             credential_kind: Some(caller.credential.kind),
             credential_principal: Some(caller.credential.principal.clone()),
+            read_key: caller.read_key.clone(),
+            binding: caller.credential.binding.clone(),
             legacy_api_key_name: None,
             url: url.as_str().to_owned(),
             name: descriptor.name.clone(),
@@ -298,17 +368,15 @@ impl EventsHub {
             if !verified {
                 self.challenge(&url, &id, &key).await?;
             }
-            let attempt = record.clone();
-            let fresh = !verified;
-            match blocking(self, move |store| {
-                store.admit(attempt, fresh, caps, grace, now, tail)
-            })
-            .await?
-            {
+            let outcome = self
+                .commit_started(&record, !verified, (caps, grace, tail), now)
+                .await;
+            match outcome? {
                 Ok(()) => {
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
-                    let throttled = self.runtime.rates.throttled(&id);
+                    let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
+                        && self.store.has_due(&id, Utc::now());
                     return Ok(subscribe_answer(
                         &id,
                         expires_at,
@@ -321,6 +389,39 @@ impl EventsHub {
             }
         }
         Err(RpcError::internal())
+    }
+
+    /// Start the source's upstream work for the subscription (when it is the
+    /// first of its key) and commit it, under one lifecycle lock: a stop for
+    /// another key cannot land between them (lifecycle.rs). A commit that
+    /// fails undoes the start it made.
+    async fn commit_started(
+        self: &Arc<Self>,
+        record: &Subscription,
+        fresh: bool,
+        (caps, grace, tail): (Caps, chrono::Duration, super::store::TailPolicy),
+        now: DateTime<Utc>,
+    ) -> Result<Result<(), CapHit>, RpcError> {
+        let attempt = record.clone();
+        let mut started = self.lifecycle.lock().await;
+        let begun = self
+            .start_key(
+                &mut started,
+                &record.principal,
+                &record.name,
+                &record.arguments,
+            )
+            .await?;
+        let outcome = blocking(self, move |store| {
+            store.admit(attempt, fresh, caps, grace, now, tail)
+        })
+        .await;
+        if !matches!(outcome, Ok(Ok(())))
+            && let Some(key) = begun
+        {
+            self.undo_start(&mut started, key).await;
+        }
+        outcome
     }
 
     /// Challenge the callback once: literal check, per-host limit, then the
@@ -362,6 +463,7 @@ impl EventsHub {
         let tail = super::tail_policy(&self.config);
         let removed = id.clone();
         blocking(self, move |store| store.remove(&removed, Utc::now(), tail)).await?;
+        self.reconcile_stops().await;
         // A concurrent unsubscribe of the same key waits too. An attempt
         // still busy at the bound is not acknowledged as stopped.
         if self.settled(&id).await {
