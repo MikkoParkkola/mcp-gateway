@@ -163,7 +163,8 @@ backend" and "fails a capability file" first.**
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
 | 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
 | 138 | `mcp_gateway::key_server::oidc::OidcError` gained three variants (`InsecureIssuer`, `InsecureFetch`, `ClientUnavailable`) and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles | Add the three arms, or end the `match` with a wildcard arm |
-| 139 | `RuntimeProvenanceReceipt::backend_ok` is now `Option<bool>`, and an event receipt carries none (the JSON has no `backend_ok` field). Before, an event receipt claimed `true`, which nothing had observed | An embedder that reads or builds the field uses `Some(..)`; a verifier reads `subject_kind` first and treats a missing `backend_ok` as not observed. Receipts already stored still read |
+| 139 | A relay refusal of a catalogue read (`prompts/get`, `resources/read`) on the meta route now answers HTTP 403, as a `tools/call` relay refusal does; before it was HTTP 200 with the error in the body | A client that branches on the HTTP status of a refused catalogue read should treat 403 as a refusal; the JSON-RPC error (`-32002`) is unchanged |
+| 140 | `RuntimeProvenanceReceipt::backend_ok` is now `Option<bool>`, and an event receipt carries none (the JSON has no `backend_ok` field). Before, an event receipt claimed `true`, which nothing had observed | An embedder that reads or builds the field uses `Some(..)`; a verifier reads `subject_kind` first and treats a missing `backend_ok` as not observed. Receipts already stored still read |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3590,8 +3591,12 @@ REST with an empty URL. It now runs the command, under these rules:
   area, with a cleared environment plus the names the capability lists, and is killed with every
   process it started when it times out or its output passes the cap.
 - A parameter that names a file must resolve inside the configured `capabilities.files.<root>`; no root
-  is configured by default. A parameter that names a network destination makes the capability refuse
-  to run, because the gateway cannot confine where a child process connects.
+  is configured by default. The check canonicalizes the path, then the child opens it: a local process
+  that can write inside a root can swap a path for a symlink between the two, so no other user (by
+  owner, group or ACL) may write to a root (`uploads`, `projects`, `downloads`) or to any directory
+  above it. A parameter that names a
+  network destination makes the capability refuse to run, because the gateway cannot confine where a
+  child process connects.
 
 **Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
 capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
@@ -3733,7 +3738,15 @@ Through 3.x the gateway read a stdio backend's output line by line with no ceili
 
 **Action:** an embedder that matches on `OidcError` adds the three arms, or ends the `match` with `_ =>`. Treat all three as a refusal of the token or the provider, the same as `InsecureJwksUri`.
 
-## 139. `backend_ok` on a provenance receipt is optional
+## 139. A catalogue relay refusal answers HTTP 403 on the meta route
+
+**Startup:** no notice, the status changes for a refused catalogue read from the first request
+
+With relay detection set to `block`, a `prompts/get` whose arguments, or a `resources/read` whose URI, carry content another caller was delivered is refused with JSON-RPC error `-32002`. On the meta route that refusal used to travel as HTTP 200 with the error in the body, while the same refusal of a `tools/call` answered 403. Both now answer 403. The JSON-RPC error code and message are unchanged, and the direct route already answered 403.
+
+**Action:** a client that reads the HTTP status of a meta-route catalogue read and treats 200 as "the call was answered" should handle 403 as a refusal and read the JSON-RPC error from the body, as it already does for a refused `tools/call`. A client that only reads the JSON-RPC body needs no change.
+
+## 140. `backend_ok` on a provenance receipt is optional
 
 **Startup:** no notice, a library API and receipt-format change rather than a change to running behaviour
 

@@ -208,6 +208,22 @@ def has(node, key, value):
     return False
 
 
+def find(node, key):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == key and isinstance(v, str):
+                return v
+            hit = find(v, key)
+            if hit:
+                return hit
+    elif isinstance(node, list):
+        for v in node:
+            hit = find(v, key)
+            if hit:
+                return hit
+    return None
+
+
 def first(rows, test, after=-1):
     for i, row in enumerate(rows):
         if i > after and test(row):
@@ -235,7 +251,8 @@ def cmd_evidence(a):
 
     def rpc(m):
         return lambda r: (r.get("kind") == "http" and m in (r.get("rpc") or [])
-                          and r.get("status") == 200 and r.get("error_code") is None)
+                          and r.get("status") == 200 and r.get("error_code") is None
+                          and r.get("reply_ok") is True and not r.get("parse_error"))
 
     def act(name, **kw):
         return lambda r: has(r, "action", name) and all(has(r, k, v) for k, v in kw.items())
@@ -257,16 +274,49 @@ def cmd_evidence(a):
     step("events/list", shim, rpc("events/list"))
     ver = step("verification handshake passed (gateway audit)", audit,
                act("events.verification", detail="verified", outcome="ok"))
-    step("events/subscribe answered with an id", shim,
-         lambda r: rpc("events/subscribe")(r) and r.get("result_has_id"))
-    sub_id = (ver or {}).get("subscription_id")
+    def named(method, r):
+        return [p for p in r.get("rpc_params") or [] if p.get("method") == method]
+
+    def subscribed(r):
+        # The subscription the criterion is about: this event, filtered to the repo fired at.
+        return (rpc("events/subscribe")(r) and bool(r.get("result_id")) and any(
+            p.get("name") == EVENT and fire.get("repo") and (p.get("arguments") or {}).get("repo") == fire["repo"]
+            for p in named("events/subscribe", r)))
+
+    # Several subscribes may be filtered to the repo (ChatGPT retries): take the
+    # one whose delivery the gateway audited, else the first, so a later complete
+    # chain is not rejected for an earlier incomplete one.
+    delivered = {r.get("subscription_id") for r in audit
+                 if has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)}
+    sub = step("events/subscribe answered with an id for this event and repo", shim,
+               lambda r: subscribed(r) and r.get("result_id") in delivered) \
+        if any(subscribed(r) and r.get("result_id") in delivered for r in shim) else \
+        step("events/subscribe answered with an id for this event and repo", shim, subscribed)
+    # Delivery and removal are bound to THIS subscription's id. The verification
+    # handshake is not: the gateway reuses an earlier verified callback.
+    sub_id = (sub or {}).get("result_id")
+    sub_args = next((p["arguments"] for p in named("events/subscribe", sub or {})), {})
+    def first_seen(r):
+        # When the gateway first audited this event: a retried older event was seen before the fire.
+        ev = find(r, "event_id")
+        times = [epoch(a) or 0 for a in audit if ev and has(a, "event_id", ev)]
+        return min(times) if times else -1
+
     step("signed inbound webhook accepted (fire.json)", [fire] if fire else [],
          lambda r: r.get("signed") and r.get("status") == 200 and (r.get("ts", 0) >= last - 1))
     step("signed delivery accepted 2xx for the same subscription (gateway audit)", audit,
          lambda r: has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)
          and bool(sub_id) and has(r, "subscription_id", sub_id)
-         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1)
-    step("events/unsubscribe answered", shim, rpc("events/unsubscribe"))
+         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1
+         and first_seen(r) >= fire.get("ts", 1e18) - 1)
+    step("events/unsubscribe sent for the same event and arguments", shim,
+                 lambda r: rpc("events/unsubscribe")(r) and any(
+                     p.get("name") == EVENT and p.get("arguments") == sub_args and bool(sub_args)
+                     for p in named("events/unsubscribe", r)))
+    step("gateway removed that subscription (gateway audit)", audit,
+         lambda r: has(r, "action", "events.unsubscribe") and has(r, "detail", "removed")
+         and bool(sub_id) and has(r, "subscription_id", sub_id)
+         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1, newer=False)
     for r in results:
         print("PASS" if r["pass"] else "FAIL", r["check"])
     print("AUTOMATED CHECKS:", "PASS" if ok else "FAIL",
