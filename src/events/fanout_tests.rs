@@ -96,6 +96,7 @@ fn subscription(name: &str) -> super::super::records::Subscription {
         credential_principal: None,
         binding: None,
         legacy_api_key_name: None,
+        read_key: None,
         url: "https://h/cb".into(),
         name: name.into(),
         arguments: json!({}),

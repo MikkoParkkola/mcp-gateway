@@ -142,6 +142,7 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
         credential_principal: None,
         binding: None,
         legacy_api_key_name: None,
+        read_key: None,
         url: format!("https://127.0.0.1:{port}/cb"),
         name: "webhook.c.r.received".into(),
         arguments: serde_json::json!({}),
@@ -183,6 +184,8 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
         state: OutboxState::Pending,
         last_status: None,
         dead_as: None,
+        attribution: None,
+        attribution_keys: Vec::new(),
     };
     let caps = OutboxCaps {
         global: 10,
@@ -213,6 +216,8 @@ fn queued_event(hub: &EventsHub, event_id: &str) {
         state: OutboxState::Pending,
         last_status: None,
         dead_as: None,
+        attribution: None,
+        attribution_keys: Vec::new(),
     };
     let caps = OutboxCaps {
         global: 10,
