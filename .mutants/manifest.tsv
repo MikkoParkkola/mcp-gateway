@@ -1,0 +1,8 @@
+head_sha	f4404d5987d686a8b6013ebcb64232d1bf93db06
+# #2731 relay allowlist and metric
+R1	linux	r1.patch	--lib -- allowed_flow
+R2	linux	r2.patch	--lib -- allowed_flow
+R3	linux	r3.patch	--lib -- allowed_flow
+R4	linux	r4.patch	--lib -- a_reported_relay_increments_the_metric
+R5	linux	r5.patch	--lib -- a_keyless_egress_increments_the_unkeyed_metric
+R6	linux	r6.patch	--lib -- allowed_flows_are_checked_at_load

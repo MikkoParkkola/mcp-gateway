@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index eb61a811f..8108e8288 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -391,7 +391,7 @@ impl Firewall {
+             return;
+         };
+         let source = format!("{server}:{tool}");
+-        let flows = self.relay.source_flows(&source);
++        let flows = 0;
+         detector.record_delivery_flows_at(
+             &source,
+             caller.key(),

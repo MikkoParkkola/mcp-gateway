@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index eb61a811f..3eb492481 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -307,7 +307,7 @@ impl Firewall {
+             _ => detector
+                 .check_egress_flows_at(
+                     caller.key(),
+-                    (&target, self.relay.egress_flows(&target)),
++                    (&target, 0),
+                     &text_of(params, Walk::Egress),
+                     Instant::now(),
+                 )
