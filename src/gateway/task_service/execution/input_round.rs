@@ -440,7 +440,23 @@ struct Resume {
 
 /// The same call again, with the sealed continuation and every accepted
 /// answer, through the same funnel and the same settlement as the first.
-async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
+async fn resume(resume: Resume, cancel_rx: watch::Receiver<bool>) {
+    // Every early exit below is a `?` or a returned expression: `None` is "the
+    // round was settled or closed here, nothing left to run".
+    let _ = resume_flow(resume, cancel_rx).await;
+}
+
+/// A host that is gone settles the task interrupted: the call cannot run.
+async fn settle_interrupted(
+    executor: &TaskExecutor,
+    (principal, id, revision): (&str, &str, u64),
+) -> Option<()> {
+    let event = TaskTransition::Complete(interrupted_before_dispatch());
+    executor.settle_cas(principal, id, revision, event).await;
+    None
+}
+
+async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Option<()> {
     let Resume {
         handoff,
         slot,
@@ -455,19 +471,15 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     // create path.
     let _handoff = handoff;
     let _slot = slot;
+    let ids = (principal.as_str(), id.as_str(), revision);
     let Some(state) = owned.host().upgrade() else {
-        let event = TaskTransition::Complete(interrupted_before_dispatch());
-        executor.settle_cas(&principal, &id, revision, event).await;
-        return;
+        return settle_interrupted(&executor, ids).await;
     };
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    let ids = (principal.as_str(), id.as_str(), revision);
     let reached = deadline.is_some_and(|d| unix_secs(executor.service.store.now()) >= d);
-    if executor.close_when(ids, deadline, reached).await {
-        return;
-    }
+    executor.proceed_unless_late(ids, deadline, reached).await?;
     let call = TaskCall {
         tool: round.tool,
         arguments: round.arguments,
@@ -476,22 +488,19 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
         round.request_state,
         Some(Value::Object(round.accepted_inputs)),
     );
-    let Some(response) = dispatch(&state, &owned, &call, &retry, &mut cancel_rx).await else {
-        return;
-    };
+    let response = dispatch(&state, &owned, &call, &retry, &mut cancel_rx).await?;
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
     let expired = deadline.is_some_and(|d| {
         rejected_after_expiry(&response, d, unix_secs(executor.service.store.now()))
     });
-    if executor.close_when(ids, deadline, expired).await {
-        return;
-    }
+    executor.proceed_unless_late(ids, deadline, expired).await?;
     let response = inspect_settled(&state, &call, &id, response);
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;
+    Some(())
 }
 
 /// When a parked round stops taking answers (#2429): the sealed
@@ -543,20 +552,20 @@ fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
 
 impl TaskExecutor {
     /// Close the round as the sweep would when `late` and it has a deadline:
-    /// the one place both late checks of a resume close it. Reports whether it
-    /// did.
-    async fn close_when(
+    /// the one place both late checks of a resume close it. `Some` means carry
+    /// on; `None` means the round was closed here.
+    async fn proceed_unless_late(
         &self,
         (principal, id, revision): (&str, &str, u64),
         deadline: Option<u64>,
         late: bool,
-    ) -> bool {
+    ) -> Option<()> {
         let Some(deadline) = deadline.filter(|_| late) else {
-            return false;
+            return Some(());
         };
         self.close_late_round(principal, id, revision, deadline)
             .await;
-        true
+        None
     }
 
     /// Close a resumed round that met its deadline. A write that fails for any

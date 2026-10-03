@@ -279,6 +279,7 @@ impl TaskExecutor {
         if is_terminal(current.task.status()) {
             return Ok(current);
         }
+        self.notify_observer(CommitStage::CancelRetry, id).await;
         match self
             .commit_transition(TransitionWrite::Cancel {
                 principal,
