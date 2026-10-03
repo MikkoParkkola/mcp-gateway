@@ -1,0 +1,13 @@
+diff --git a/src/commands/cap.rs b/src/commands/cap.rs
+index 1532c4523..8b87b47e2 100644
+--- a/src/commands/cap.rs
++++ b/src/commands/cap.rs
+@@ -175,7 +175,7 @@ fn list_executor(
+             ));
+             Ok(CapabilityExecutor::for_listing(&evaluated.config, env))
+         }
+-        Err(e) => Err((load_path.unwrap_or_default(), e)),
++        Err(_) => Ok(CapabilityExecutor::new()),
+     }
+ }
+ 

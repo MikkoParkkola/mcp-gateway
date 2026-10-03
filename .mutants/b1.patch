@@ -1,0 +1,14 @@
+diff --git a/src/commands/cap.rs b/src/commands/cap.rs
+index 1532c4523..c3d9359e5 100644
+--- a/src/commands/cap.rs
++++ b/src/commands/cap.rs
+@@ -173,7 +173,8 @@ fn list_executor(
+                 evaluated.overlay,
+                 evaluated.env_paths,
+             ));
+-            Ok(CapabilityExecutor::for_listing(&evaluated.config, env))
++            let _ = env;
++            Ok(CapabilityExecutor::new())
+         }
+         Err(e) => Err((load_path.unwrap_or_default(), e)),
+     }

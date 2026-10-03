@@ -1,0 +1,13 @@
+diff --git a/src/commands/cap.rs b/src/commands/cap.rs
+index 1532c4523..a50850a47 100644
+--- a/src/commands/cap.rs
++++ b/src/commands/cap.rs
+@@ -184,7 +184,7 @@ async fn cap_list(directory: std::path::PathBuf, config: Option<&std::path::Path
+         Ok(executor) => executor,
+         Err((path, e)) => {
+             eprintln!("❌ Failed to load config {}: {e}", path.display());
+-            return ExitCode::FAILURE;
++            return ExitCode::SUCCESS;
+         }
+     };
+     let path = directory.to_string_lossy();
