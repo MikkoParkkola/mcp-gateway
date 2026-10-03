@@ -1,4 +1,4 @@
-sha256: 9bb262b5f6db602ffa53e8ebe74c5bd8f94802a4a7742e02e6902fc41fe61c1c
+sha256: b177f9edca31e7b26463906b3979a6ded231660701563b57b5e23b617c0efdbb
 fulcrum: "1.0"
 name: sentry_list_issues
 description: |
@@ -26,8 +26,9 @@ schema:
         type: string
         description: Time window, e.g. "24h", "14d"
         default: "14d"
-      per_page:
+      limit:
         type: integer
+        description: Issues to return (1-100)
         default: 25
         minimum: 1
         maximum: 100
@@ -35,8 +36,10 @@ schema:
       - organization
   output:
     type: array
+    description: Issues, newest first.
     items:
       type: object
+      additionalProperties: true
 
 providers:
   primary:
@@ -47,13 +50,11 @@ providers:
       base_url: https://sentry.io
       path: /api/0/organizations/{organization}/issues/
       method: GET
-      static_params:
-        per_page: "25"
       params:
         query: "{query}"
         project: "{project}"
         statsPeriod: "{statsPeriod}"
-        per_page: "{per_page}"
+        limit: "{limit}"
 
 cache:
   strategy: exact
@@ -64,7 +65,7 @@ auth:
   type: bearer
   key: "env:SENTRY_AUTH_TOKEN"
   description: >
-    Create a user auth token with event:read and org:read at
+    Create a user auth token with event:read at
     https://sentry.io/settings/account/api/auth-tokens/ and set
     SENTRY_AUTH_TOKEN. EU-region organizations (de.sentry.io) are not covered.
 
