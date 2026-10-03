@@ -721,17 +721,34 @@ pub fn create_sse_response(
 /// notification: the full task state, re-authorized for that reader.
 ///
 /// `None` withholds the frame. `reader` is the listener's credential
-/// re-resolved just now (`None` when it no longer authenticates), so a role
-/// revoked since the stream opened is not honoured from a stale snapshot.
+/// re-resolved just now, so a role revoked since the stream opened is not
+/// honoured from a stale snapshot.
 #[async_trait::async_trait]
 pub trait TaskFrames: Send + Sync {
-    /// The tagged frame to send, or `None` to withhold it.
+    /// The frame to send, built but not yet on record as delivered.
     async fn frame(
         &self,
         notification: &Value,
         subscription: &crate::protocol::subscriptions::SubscriptionId,
-        reader: Option<&crate::gateway::auth::AuthenticatedClient>,
-    ) -> Option<Value>;
+        reader: &crate::gateway::auth::AuthenticatedClient,
+    ) -> Option<TaskFrame>;
+}
+
+/// A task frame built for one reader.
+pub struct TaskFrame {
+    /// The tagged frame.
+    pub frame: Value,
+    /// It carries a stored task's output, which is a read of stored data.
+    pub restored_output: bool,
+    /// Records the delivery once the stream's own gates have passed.
+    pub delivery: Box<dyn TaskFrameDelivery>,
+}
+
+/// The bookkeeping of a task frame that is about to be written.
+#[async_trait::async_trait]
+pub trait TaskFrameDelivery: Send {
+    /// Record `sent` as delivered; `false` withholds it.
+    async fn delivered(self: Box<Self>, sent: &Value) -> bool;
 }
 
 fn is_task_notification(notification: &Value) -> bool {
@@ -802,7 +819,7 @@ pub(crate) fn subscription_stream(
                     // A task notification is built for THIS reader at delivery
                     // (full state, re-authorized); every other kind is the
                     // published value, tagged.
-                    let tagged = match &task_frames {
+                    let (tagged, task) = match &task_frames {
                         Some(frames) if is_task_notification(&published.notification) => {
                             // Resolved again for this frame: a credential that
                             // stopped authenticating since `delivery()` passed
@@ -811,29 +828,46 @@ pub(crate) fn subscription_stream(
                                 warn!("subscription listener's credential no longer authenticates; closing");
                                 break;
                             };
-                            let Some(frame) = frames
-                                .frame(&published.notification, &subscription, Some(&reader))
+                            let Some(built) = frames
+                                .frame(&published.notification, &subscription, &reader)
                                 .await
                             else {
-                                // The frame could not be delivered auditably.
-                                // Closing makes the gap visible; re-subscribing
-                                // recovers, as for a lag.
+                                // A grant decision on the way could not be
+                                // written. Closing makes the gap visible;
+                                // re-subscribing recovers, as for a lag.
                                 warn!("task notification withheld; closing so the client re-subscribes");
                                 graceful = false;
                                 break;
                             };
-                            frame
+                            (built.frame.clone(), Some(built))
                         }
-                        _ => subscription.tag(published.notification),
+                        _ => (subscription.tag(published.notification), None),
                     };
                     // MIN.2 (H8): judged for the listener's caller, recorded,
                     // and committed as it is written; withheld when blocked.
-                    let Some(frame) = judge.judge_document(tagged) else {
+                    // Stored task output is judged as a read of stored data.
+                    let sent = task.as_ref().map(|_| tagged.clone());
+                    let judged = if task.as_ref().is_some_and(|task| task.restored_output) {
+                        judge.judge_restored_document(tagged)
+                    } else {
+                        judge.judge_document(tagged)
+                    };
+                    let Some(frame) = judged else {
                         continue;
                     };
-                    if let Some(data) = sse_data(&judge.record(frame).await) {
-                        yield Ok(Event::default().event("message").data(data));
+                    let Some(data) = sse_data(&judge.record(frame).await) else {
+                        continue;
+                    };
+                    // Only a frame that is about to go out is on the delivery
+                    // record, and its relay receipts count only then.
+                    if let (Some(task), Some(sent)) = (task, sent)
+                        && !task.delivery.delivered(&sent).await
+                    {
+                        warn!("task notification could not be recorded; closing so the client re-subscribes");
+                        graceful = false;
+                        break;
                     }
+                    yield Ok(Event::default().event("message").data(data));
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
