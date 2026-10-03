@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 05143a5f0..a831dec4f 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -215,7 +215,7 @@ impl TenantGuard {
+         for text in texts {
+             self.decode_response(text, 0, &mut scan);
+         }
+-        (scan.tenants.into_iter().collect(), scan.uninspected)
++        (scan.tenants.into_iter().collect(), false)
+     }
+ 
+     /// MIN.2: [`Self::scan_frame`] over a whole document but its top-level

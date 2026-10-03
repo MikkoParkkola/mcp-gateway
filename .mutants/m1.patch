@@ -1,0 +1,15 @@
+diff --git a/src/security/firewall/tenant_guard.rs b/src/security/firewall/tenant_guard.rs
+index 05143a5f0..10b9c7cc8 100644
+--- a/src/security/firewall/tenant_guard.rs
++++ b/src/security/firewall/tenant_guard.rs
+@@ -212,9 +212,7 @@ impl TenantGuard {
+         for value in values {
+             self.walk_response(value, 0, &mut scan);
+         }
+-        for text in texts {
+-            self.decode_response(text, 0, &mut scan);
+-        }
++        let _ = texts;
+         (scan.tenants.into_iter().collect(), scan.uninspected)
+     }
+ 

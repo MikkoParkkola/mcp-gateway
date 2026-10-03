@@ -1,0 +1,14 @@
+diff --git a/src/security/tenant_reads.rs b/src/security/tenant_reads.rs
+index d59b112ff..41caee43f 100644
+--- a/src/security/tenant_reads.rs
++++ b/src/security/tenant_reads.rs
+@@ -209,7 +209,8 @@ impl ReadHistory {
+         let mut hashes: Vec<String> = attribution.tenants.iter().cloned().collect();
+         if attribution.uninspected {
+             let n = self.unread.fetch_add(1, Ordering::Relaxed);
+-            hashes.push(format!("?unread-{n}"));
++            let _ = n;
++            hashes.push("?unread".to_string());
+         }
+         if !self.principals.contains_key(key) && self.principals.len() >= MAX_PRINCIPALS {
+             self.principals.retain(|_, p| {

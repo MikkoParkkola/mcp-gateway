@@ -1,0 +1,15 @@
+diff --git a/src/gateway/outbound/judge.rs b/src/gateway/outbound/judge.rs
+index e1d3f53e4..8a9b3dc91 100644
+--- a/src/gateway/outbound/judge.rs
++++ b/src/gateway/outbound/judge.rs
+@@ -201,9 +201,7 @@ pub(crate) fn admit(
+     };
+     let block = mode == CrossTenantReads::Block;
+     let mut attribution = scan(guard, &payload);
+-    if let Some(hidden) = hidden {
+-        attribution.extend(hidden);
+-    }
++    let _ = hidden;
+     let (assessment, ticket) = assess(firewall, guard, block, key, attribution);
+     if withholds(assessment.verdict, block) {
+         return Admission::Blocked(RejectionEvidence {
