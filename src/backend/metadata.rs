@@ -607,7 +607,7 @@ impl Backend {
                 method: "resources/list",
                 kind: "resources",
                 list_key: "resources",
-                truncated_flag: None,
+                truncated_flag: Some(resources_truncated_flag),
                 cooldown: false,
                 stale_hit: false,
             },
@@ -755,6 +755,11 @@ pub(super) struct ListFamily {
     /// admission, so a caller waiting inside the fill does not retry a
     /// failure the cooldown already covers, and it stamps that on failure.
     stale_hit: bool,
+}
+
+/// The resources family's truncated flag (the events listener's snapshot).
+fn resources_truncated_flag(entry: &super::pool::PooledEntry) -> &AtomicBool {
+    &entry.resources_truncated
 }
 
 /// The tools family's truncated flag; the other three families keep their

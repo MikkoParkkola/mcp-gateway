@@ -33,11 +33,9 @@
 1329 tests/openwebui_adapter_config.rs
 1285 src/gateway/meta_mcp/authz_tests.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
-1257 src/oauth/storage.rs
 1246 src/backend/lifecycle.rs
 1180 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1179 src/identity_propagation/mod.rs
-1178 src/commands/upgrade.rs
 1175 src/trust/lab.rs
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
 1141 src/gateway/task_service/store.rs

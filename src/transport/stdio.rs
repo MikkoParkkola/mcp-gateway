@@ -121,6 +121,8 @@ pub struct StdioTransport {
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
     /// How the last start ended if the child died before `initialize` (#526).
     start: early_exit::StartState,
+    /// Upstream-notification taps of the events listener (MIK-7630 I5).
+    pub(crate) taps: super::upstream_tap::Taps,
     /// Longest frame the reader accepts; set before `start`.
     max_frame_bytes: AtomicUsize,
 }
@@ -152,6 +154,7 @@ impl StdioTransport {
             protocol_version: RwLock::new(protocol_version),
             progress_destinations: dashmap::DashMap::new(),
             start: early_exit::StartState::default(),
+            taps: super::upstream_tap::Taps::default(),
             max_frame_bytes: AtomicUsize::new(DEFAULT_MAX_FRAME_BYTES),
         })
     }
@@ -282,6 +285,8 @@ impl StdioTransport {
                 // The stream is over: wake every waiting call now (its receiver
                 // sees a closed channel) instead of at its request timeout.
                 transport.pending.clear();
+                // The listener's receivers see `Closed` at once.
+                transport.taps.clear();
             }
             debug!("Stdio reader task ended");
         });
@@ -483,6 +488,15 @@ impl StdioTransport {
     // over stdio; a per-request stream is what would carry them, and stdio has
     // none. Named as a design event in the SUB.2b note rather than papered over.
     fn capture_notification(&self, notification: JsonRpcNotification) {
+        // The listener's taps first: a frame tagged with a live listen, or
+        // one of the three resource/prompt notifications while a legacy tap
+        // is open. Never progress, so the route below is unchanged.
+        if self
+            .taps
+            .notification(&notification.method, notification.params.as_ref())
+        {
+            return;
+        }
         // Note the asymmetry with the outgoing side: a request carries the
         // token under `params._meta`, a `notifications/progress` carries it as
         // a direct member of `params`.
@@ -540,6 +554,12 @@ impl StdioTransport {
             }
         };
 
+        if let Some(ref id) = response.id
+            && self.taps.response_to(id, response.result.as_ref())
+        {
+            // A listen is never a pending request (design §4).
+            return Ok(());
+        }
         if let Some(ref id) = response.id {
             let key = id.to_string();
             let pending_count = self.pending.len();
@@ -590,29 +610,6 @@ impl StdioTransport {
     fn next_id(&self) -> RequestId {
         RequestId::Number(self.request_id.fetch_add(1, Ordering::Relaxed) as i64)
     }
-}
-
-/// A progress token is a string or a number on the wire; the capture map is
-/// keyed by its string form so both spellings of one token agree.
-fn progress_token_string(token: &Value) -> Option<String> {
-    match token {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
-/// The caller's progress token as an outgoing request carries it.
-///
-/// Note the asymmetry with `capture_notification`: a request carries the token
-/// under `params._meta`, while an incoming `notifications/progress` carries it
-/// as a direct member of `params`. Reading the wrong shape here leaves the
-/// stdio leg dead while the HTTP one still looks green.
-fn request_progress_token(params: Option<&Value>) -> Option<String> {
-    params
-        .and_then(|p| p.get("_meta"))
-        .and_then(|meta| meta.get("progressToken"))
-        .and_then(progress_token_string)
 }
 
 /// Keep a progress-token registration alive exactly as long as its request,
@@ -764,9 +761,19 @@ use tree::{read_frame, spawn_in_own_tree};
 #[path = "stdio_early_exit.rs"]
 mod early_exit;
 
+#[path = "stdio_listen.rs"]
+mod listen;
+#[path = "stdio_progress.rs"]
+mod progress;
+use progress::{progress_token_string, request_progress_token};
+
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stdio_tap_tests.rs"]
+mod tap_tests;
 
 #[cfg(test)]
 #[path = "stdio_frame_tests.rs"]

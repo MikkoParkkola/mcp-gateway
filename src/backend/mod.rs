@@ -32,7 +32,9 @@ mod identity_slots;
 mod input_keys;
 mod lifecycle;
 mod list_drain;
+pub(crate) mod listen;
 mod metadata;
+mod oauth_client;
 mod ops;
 mod pool;
 mod registry;
@@ -250,7 +252,7 @@ impl Backend {
         &self,
         ws_url: &str,
         protocol_version: Option<String>,
-    ) -> crate::Result<Arc<dyn crate::transport::Transport>> {
+    ) -> crate::Result<Arc<crate::transport::websocket::WebSocketTransport>> {
         crate::transport::websocket::WebSocketTransport::start_with_destination(
             ws_url,
             &self.config.headers,

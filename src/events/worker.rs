@@ -157,6 +157,28 @@ impl EventsHub {
             self.settle(services, &record, retry).await;
             return;
         }
+        // The source's own verdict, every attempt (design §3.2 step 7): a
+        // resource that left the backend's catalogue is not delivered.
+        let refused = match self.source_offering(&sub.name) {
+            Some(source) => source
+                .authorize(&sub.principal, &sub.name, &sub.arguments)
+                .await
+                .is_err_and(|e| e.code == -32012),
+            None => false,
+        };
+        if refused {
+            services
+                .audit_attempt(&ctx.attempt("access_revoked"))
+                .await
+                .ok();
+            self.revoke(&sub).await;
+            let retry = Settle::Retry {
+                next: Utc::now() + REFUSAL_RETRY,
+                status: "access_revoked",
+            };
+            self.settle(services, &record, retry).await;
+            return;
+        }
         // A record a crash or a long suspension carried past its bounds is
         // dead before it is sent again, never after (§6.5).
         if let Some(reason) = record.dead_as {
