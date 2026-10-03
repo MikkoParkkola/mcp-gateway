@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_replay.rs b/src/gateway/meta_mcp/task_replay.rs
+index f283fd81b..7afcc4f8f 100644
+--- a/src/gateway/meta_mcp/task_replay.rs
++++ b/src/gateway/meta_mcp/task_replay.rs
+@@ -123,7 +123,7 @@ impl MetaMcp {
+                     self.stage_relay_receipt(who, to, &recorded);
+                 }
+             }
+-            TaskStatus::Failed => {
++            TaskStatus::Cancelled => {
+                 // The backend's own error is what the reader is handed.
+                 if let Some(error) = stored.task.error()
+                     && let Ok(error) = serde_json::to_value(error)

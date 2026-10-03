@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_replay.rs b/src/gateway/meta_mcp/task_replay.rs
+index f283fd81b..985c71275 100644
+--- a/src/gateway/meta_mcp/task_replay.rs
++++ b/src/gateway/meta_mcp/task_replay.rs
+@@ -106,7 +106,7 @@ impl MetaMcp {
+         let [target] = stored.targets.as_slice() else {
+             return;
+         };
+-        if !self.relay_active() || !stored.serves_backend_output() {
++        if !self.relay_active() {
+             return;
+         }
+         let to = (target.server.as_str(), target.tool.as_str());
