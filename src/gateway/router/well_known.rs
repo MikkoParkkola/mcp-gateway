@@ -40,7 +40,7 @@
 //!
 //! `authorization_servers` names the OIDC issuers of an enabled key server with
 //! `delegated_bearer` on: those are the authorization servers whose tokens the
-//! MCP routes accept, so a standards-following client (ChatGPT, for one) learns
+//! MCP routes accept, so a standards-following client learns
 //! where to sign in. It stays empty, and is omitted (RFC 9728 section 3.2),
 //! when no issuer token is accepted: the gateway itself serves no RFC 8414
 //! authorization-server metadata, so naming itself would break discovery.
