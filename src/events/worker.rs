@@ -45,6 +45,8 @@ impl EventsHub {
                 let held = self.store.live_subscription_ids(Utc::now());
                 self.runtime.rates.retain(&held);
                 self.runtime.failures.retain(&held);
+                // Expiry removes subscriptions without a call of its own.
+                self.reconcile_stops().await;
             }
             let wait = self.dispatch(services, &slots).await;
             tokio::select! {
@@ -137,7 +139,8 @@ impl EventsHub {
                 .unwrap_or_default()
                 .to_owned(),
         };
-        if !services.admits_subscription(&sub, &record.backend).await {
+        let grant = (!record.owner_scoped).then_some(record.backend.as_str());
+        if !services.admits_subscription(&sub, grant).await {
             services
                 .audit_attempt(&ctx.attempt("access_revoked"))
                 .await
