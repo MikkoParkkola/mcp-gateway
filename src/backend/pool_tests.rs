@@ -1664,8 +1664,8 @@ done
         tokio::spawn(async move { backend.ensure_started().await })
     };
 
-    // Wait for the child's pid; it then blocks on a release file, created only
-    // once stop() is under way, so the start is in flight when shutdown begins.
+    // The child blocks on a release file written once stop() has set its latch,
+    // so the start is in flight when shutdown begins.
     let deadline = std::time::Instant::now() + Duration::from_millis(2500);
     while !std::fs::read_to_string(&pidfile).is_ok_and(|pid| !pid.trim().is_empty())
         && std::time::Instant::now() < deadline
@@ -1686,8 +1686,11 @@ done
     assert!(alive(), "precondition: the racing start's child is running");
 
     let release = dir.path().join("release");
+    let gate = Arc::clone(&backend);
     tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        while !gate.replaced_transport_cleanups.lock().stopping {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         std::fs::write(release, "").expect("release the child");
     });
     backend.stop().await.expect("stop");
