@@ -748,9 +748,14 @@ fn capability_catalog_docs_match_current_inventory() {
     );
     assert!(
         community_registry.contains(&format!(
-            "exact tracked inventory is currently {} YAMLs, of which {} held",
+            "exact tracked inventory is currently {} YAMLs, of which {} {} held",
             claims.capability_count + claims.held_capabilities.len(),
-            claims.held_capabilities.len()
+            claims.held_capabilities.len(),
+            if claims.held_capabilities.len() == 1 {
+                "is"
+            } else {
+                "are"
+            }
         )),
         "community registry docs should mention the canonical exact YAML inventory"
     );

@@ -229,7 +229,7 @@ impl CapabilityBackend {
             // Published, and the lock still held: no reader can observe the
             // removal under the old epoch.
             self.executor.bump_policy_epoch();
-            self.executor.bump_mcp_generation();
+            self.executor.bump_mcp_generation(name);
             true
         } else {
             false
@@ -392,9 +392,13 @@ impl CapabilityBackend {
         // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
+            let kept: std::collections::HashSet<&str> =
+                admitted.iter().map(|c| c.name.as_str()).collect();
+            for gone in caps.index.keys().filter(|n| !kept.contains(n.as_str())) {
+                self.executor.bump_mcp_generation(gone);
+            }
             caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
-            self.executor.bump_mcp_generation();
             self.executor
                 .stop_unloaded_mcp(&|name| caps.index.contains_key(name));
         }
@@ -468,7 +472,7 @@ impl CapabilityBackend {
     /// an unload cannot fall between them.
     fn get_with_generation(&self, name: &str) -> Option<(CapabilityDefinition, u64)> {
         let caps = self.capabilities.read();
-        let generation = self.executor.mcp_generation();
+        let generation = self.executor.mcp_generation(name);
         caps.get(name).cloned().map(|def| (def, generation))
     }
 

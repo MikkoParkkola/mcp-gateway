@@ -60,7 +60,7 @@ pub(crate) struct McpChildren {
     next_id: std::sync::atomic::AtomicU64,
     /// Bumped on every unload, reload and quarantine; see
     /// `CapabilityExecutionContext::mcp_generation`.
-    generation: std::sync::atomic::AtomicU64,
+    generations: Mutex<HashMap<String, u64>>,
 }
 
 /// Decrements a child's in-flight count when a call ends, however it ends.
@@ -97,7 +97,7 @@ impl McpChildren {
         // Under the map lock: an unload bumps the epoch and then evicts under
         // this same lock, so a call from before the unload either gets its child
         // evicted or is refused here; none starts one that outlives the unload.
-        if !epoch_current(self.generation()) {
+        if !epoch_current(self.generation(&capability.name)) {
             return Err(Error::Config(format!(
                 "capability '{}' changed while this call was starting; retry",
                 capability.name
@@ -204,14 +204,22 @@ impl McpChildren {
         });
     }
 
-    /// The current revocation generation.
-    pub(crate) fn generation(&self) -> u64 {
-        self.generation.load(Ordering::Acquire)
+    /// The current revocation generation of one capability.
+    pub(crate) fn generation(&self, capability: &str) -> u64 {
+        self.generations
+            .lock()
+            .get(capability)
+            .copied()
+            .unwrap_or(0)
     }
 
-    /// Revoke every call that read an earlier generation.
-    pub(crate) fn bump_generation(&self) {
-        self.generation.fetch_add(1, Ordering::AcqRel);
+    /// Revoke the calls of one capability that read an earlier generation.
+    pub(crate) fn bump_generation(&self, capability: &str) {
+        *self
+            .generations
+            .lock()
+            .entry(capability.to_owned())
+            .or_insert(0) += 1;
     }
 
     /// Stop one caller's child (a call on it timed out, so it may be wedged).
@@ -439,7 +447,7 @@ async fn wait_ready(
         }
         if Instant::now() + interval >= ends {
             return Err(Error::BackendTimeout(
-                "not finished within the wait; call again to keep waiting".to_string(),
+                "not finished within the wait; poll again to keep waiting".to_string(),
             ));
         }
         tokio::time::sleep(interval).await;

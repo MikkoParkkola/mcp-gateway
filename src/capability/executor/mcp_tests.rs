@@ -333,13 +333,13 @@ async fn a_call_from_before_an_unload_never_starts_a_child() {
     let cap = capability();
     let say = json!({"operation": "say", "text": "x"});
     // The backend read the generation with the definition, then the unload ran.
-    let stale = ctx_with_generation(executor.mcp_generation());
-    executor.bump_mcp_generation();
+    let stale = ctx_with_generation(executor.mcp_generation(&cap.name));
+    executor.bump_mcp_generation(&cap.name);
     executor.stop_unloaded_mcp(&|name| name != cap.name);
     let err = call(&executor, &cap, say.clone(), &stale).await;
     assert!(err.is_err(), "a stale call is refused: {err:?}");
     assert_eq!(executor.mcp_children.len(), 0, "and starts no child");
-    let fresh = ctx_with_generation(executor.mcp_generation());
+    let fresh = ctx_with_generation(executor.mcp_generation(&cap.name));
     call(&executor, &cap, say, &fresh).await.unwrap();
 }
 
@@ -532,4 +532,14 @@ async fn a_server_that_dies_during_a_wait_ends_it_at_once() {
         "a dead server is not polled for the whole wait: {:?}",
         started.elapsed()
     );
+}
+
+#[tokio::test]
+async fn unloading_one_capability_does_not_refuse_a_call_to_another() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    let before = ctx_with_generation(executor.mcp_generation(&cap.name));
+    executor.bump_mcp_generation("some_other_capability");
+    call(&executor, &cap, say, &before).await.unwrap();
 }
