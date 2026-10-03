@@ -1,0 +1,7 @@
+head_sha	1f71957bdb3e22cd326ae7d2ff59d3c6ac2a576a
+# MIK-7888 mutants
+M1	linux	m1.patch	--lib capability::executor::secret_tests
+M2	linux	m2.patch	--lib capability::executor::secret_tests
+M3	linux	m3.patch	--lib capability::executor::secret_tests
+M4	linux	m4.patch	--lib secret_injection::flip_tests
+M5	linux	m5.patch	--lib capability::executor::secret_tests
