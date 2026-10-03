@@ -309,11 +309,10 @@ where
     F: std::future::Future<Output = R>,
     R: axum::response::IntoResponse,
 {
-    use axum::response::IntoResponse;
     if !meta.relay_active() {
         return delivery.await.into_response();
     }
-    let ((mut response, delivers), staged) = meta
+    let ((mut response, answered), staged) = meta
         .collecting_staged(RELAY_DELIVERS.scope(std::cell::Cell::new(false), async {
             let response = delivery.await.into_response();
             (response, RELAY_DELIVERS.with(std::cell::Cell::get))
@@ -321,7 +320,7 @@ where
         .await;
     response
         .extensions_mut()
-        .insert(DeferredReceipts::new(staged, delivers));
+        .insert(DeferredReceipts::new(staged, answered));
     response
 }
 
@@ -430,6 +429,10 @@ impl MetaMcp {
 
     /// Mark whether the answer being built delivers a result (no error, no
     /// delivery refusal): what [`collecting_http`] hands `emit_http`.
+    #[allow(
+        clippy::unused_self,
+        reason = "the call sits beside the other relay steps on the Meta-MCP"
+    )]
     pub(crate) fn settle_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
         let delivers = response.error.is_none() && !response.delivery_refusal;
         let _ = RELAY_DELIVERS.try_with(|flag| flag.set(delivers));
