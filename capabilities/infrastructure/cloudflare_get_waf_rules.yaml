@@ -1,4 +1,4 @@
-sha256: fcb3477bc2d5c5d6adc5298b9c40971ee61908eb329f18414abf08f9473ca23f
+sha256: f7ef97a0725100c6bc3157da543bc3c092098fa86da20fd6b0576e4212c20729
 fulcrum: '1.0'
 name: cloudflare_get_waf_rules
 description: Read a zone's entry-point ruleset for a phase (WAF custom rules by default).
@@ -20,6 +20,7 @@ schema:
         - http_ratelimit
     required:
     - zone_id
+    - ruleset_phase
   output:
     type: object
     properties:
