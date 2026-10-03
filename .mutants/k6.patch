@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index f65b98e10..ced58c9a5 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -158,7 +158,7 @@ impl UpstreamListeners {
+     pub(crate) async fn authorize_uri(&self, backend: &str, uri: &str) -> Result<(), RpcError> {
+         if self.has_snapshot(backend) {
+             return match self.verdict(backend, uri) {
+-                Verdict::Revoke => Err(RpcError::forbidden()),
++                Verdict::Revoke => Ok(()),
+                 Verdict::Deliver | Verdict::Skip => Ok(()),
+             };
+         }

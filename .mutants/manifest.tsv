@@ -1,0 +1,9 @@
+head_sha	ae9ad9c8c2f82702273cbf966af7457d16e96d4c
+# batch 2 for #2767 (survivors of batch 1, unit rows)
+K1	linux	k1.patch	--lib -- events::upstream_need
+K3	linux	k3.patch	--lib -- events::sources_tests
+K4	linux	k4.patch	--lib -- events::upstream_session
+K5	linux	k5.patch	--lib -- events::upstream_need
+K6	linux	k6.patch	--lib -- events::upstream_listener
+K11	linux	k11.patch	--lib -- events::upstream_session
+K12	linux	k12.patch	--lib -- events::upstream_need
