@@ -1,0 +1,13 @@
+diff --git a/src/gateway/outbound/http.rs b/src/gateway/outbound/http.rs
+index c9c7101df..84ef67ae2 100644
+--- a/src/gateway/outbound/http.rs
++++ b/src/gateway/outbound/http.rs
+@@ -59,7 +59,7 @@ pub(crate) async fn emit_http_checked(
+     let (response, written) = emit_pending(response, log).await;
+     // The answer went out as built, or a failed read record replaced it.
+     if let Some(receipts) = receipts {
+-        receipts.commit(written);
++        receipts.commit(true);
+     }
+     (response, written)
+ }

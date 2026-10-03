@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index d2603f64e..da3342c8a 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -1921,7 +1921,7 @@ async fn meta_mcp_dispatch(
+     // (the last replacers) have let it through: a read either replaces leaves none.
+     let receipts = state.meta_mcp.relay_active().then(|| {
+         let staged = state.meta_mcp.take_staged_relay();
+-        let eligible = response.error.is_none() && !response.delivery_refusal;
++        let eligible = true;
+         crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(staged, eligible)
+     });
+ 
