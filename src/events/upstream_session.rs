@@ -309,11 +309,13 @@ impl<'a> State<'a> {
                 // A watched URI missing from a cached list is confirmed by a
                 // read that bypasses the cache before anything is revoked.
                 let watched = requested(self.shared).uris;
-                if !fresh
-                    && read.complete
-                    && watched.iter().any(|u| !read.uris.contains(u))
-                    && let Ok(again) = backend.read_resource_snapshot(true).await
-                {
+                if !fresh && read.complete && watched.iter().any(|u| !read.uris.contains(u)) {
+                    // A failed confirmation decides nothing: keep the previous
+                    // snapshot and try again later.
+                    let Ok(again) = backend.read_resource_snapshot(true).await else {
+                        self.snapshot_retry_at = Instant::now() + SNAPSHOT_RETRY;
+                        return;
+                    };
                     read = again;
                 }
                 let (complete, listed) = (read.complete, read.uris.clone());
@@ -407,10 +409,10 @@ impl<'a> State<'a> {
                         self.pending = Some(Pending {
                             stream,
                             requested: want,
-                            since: now,
+                            since: Instant::now(),
                         });
                     }
-                    Err(_) => self.retry_open_at = now + Duration::from_secs(5),
+                    Err(_) => self.retry_open_at = Instant::now() + Duration::from_secs(5),
                 }
             }
         } else {
