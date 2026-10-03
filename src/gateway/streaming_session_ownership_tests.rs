@@ -164,8 +164,10 @@ fn the_reaper_removes_an_unopened_session() {
 /// MIK-7853.RACE.1: a session is visible before its channel opens, so streams
 /// may subscribe to it at once. Every one of them must join the one channel:
 /// a subscriber left on a channel nobody sends to would never see a frame.
-/// Entered through the production resume path, which subscribes after the
-/// store lock is released.
+/// Every stream reaches the channel through `ClientSession::subscribe`; the
+/// GET handler calls it under the store's shared read lock, so streams meet
+/// there at once. The resume call used here subscribes after its lock is
+/// released, which leaves the same contention.
 #[test]
 fn streams_subscribing_at_once_to_an_unopened_session_share_one_channel() {
     const STREAMS: usize = 8;
