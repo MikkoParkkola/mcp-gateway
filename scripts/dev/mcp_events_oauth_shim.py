@@ -178,7 +178,7 @@ class Shim(BaseHTTPRequestHandler):
                              'oauth-protected-resource"' % self.origin())
         self.end_headers()
         out = b""
-        while chunk := resp.read(4096 if stream else 1 << 20):
+        while chunk := (resp.read1(65536) if stream else resp.read(1 << 20)):
             self.wfile.write(chunk)
             self.wfile.flush()
             if len(out) < (1 << 20):

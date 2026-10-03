@@ -81,7 +81,7 @@ def wait_http(url, seconds=60):
     return False
 
 
-def start_tunnel(d):
+def start_tunnel(d, children):
     log = d / "tunnel.log"
     # An explicit empty config: a default ~/.cloudflared or /etc/cloudflared
     # config.yml would otherwise supply its own ingress and answer 404.
@@ -90,13 +90,13 @@ def start_tunnel(d):
         ["cloudflared", "tunnel", "--config", str(d / "cloudflared-empty.yml"),
          "--no-autoupdate", "--url", f"http://127.0.0.1:{SHIM_PORT}"],
         stdout=subprocess.DEVNULL, stderr=open(log, "w"))
+    children.append(proc)
     end = time.time() + 60
     while time.time() < end:
         m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", log.read_text())
         if m:
             return proc, m.group(0)
         time.sleep(0.5)
-    proc.kill()
     sys.exit("no tunnel URL from cloudflared; see " + str(log))
 
 
@@ -134,8 +134,7 @@ def cmd_up(a):
         if not wait_http(f"http://127.0.0.1:{GW_PORT}/health"):
             sys.exit("gateway did not come up; see " + str(d / "gateway.log"))
         alive("gateway", gw)
-        tunnel, public = start_tunnel(d)
-        children.append(tunnel)
+        tunnel, public = start_tunnel(d, children)
         shim = subprocess.Popen([sys.executable, str(SCRIPTS / "mcp_events_oauth_shim.py"),
                                  "--port", str(SHIM_PORT), "--upstream", str(GW_PORT),
                                  "--public", public, "--log", str(d / "shim.jsonl")],
@@ -265,7 +264,8 @@ def cmd_evidence(a):
          lambda r: r.get("signed") and r.get("status") == 200 and (r.get("ts", 0) >= last - 1))
     step("signed delivery accepted 2xx for the same subscription (gateway audit)", audit,
          lambda r: has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)
-         and bool(sub_id) and has(r, "subscription_id", sub_id))
+         and bool(sub_id) and has(r, "subscription_id", sub_id)
+         and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1)
     step("events/unsubscribe answered", shim, rpc("events/unsubscribe"))
     for r in results:
         print("PASS" if r["pass"] else "FAIL", r["check"])
@@ -273,6 +273,7 @@ def cmd_evidence(a):
           "- also send ChatGPT's chat reply (it must state the ref in fire.json)")
     (d / "evidence.json").write_text(json.dumps({
         "checks": results, "pass": ok, "fire_ref": fire.get("ref"),
+        "subscription_id": sub_id, "fire_ts": fire.get("ts"), "last_ts": last,
         "shim_rows": len(shim), "audit_rows": len(audit)}, indent=1))
     return 0 if ok else 1
 
