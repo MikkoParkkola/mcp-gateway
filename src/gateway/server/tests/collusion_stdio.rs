@@ -292,12 +292,12 @@ async fn batch_read_delivers(
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let call = |id: u64, tool: &str, arguments: Value| {
+    let rpc = |id: u64, tool: &str, arguments: Value| {
         json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
                "params": {"name": "gateway_invoke",
                           "arguments": {"server": "alpha", "tool": tool, "arguments": arguments}}})
     };
-    let batch = json!([call(1, "read", json!({}))]);
+    let batch = json!([rpc(1, "read", json!({}))]);
     let frames = Gateway::dispatch_batch_read(
         meta,
         &policy,
@@ -352,14 +352,14 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let call = |id: u64, tool: &str, arguments: Value| {
+    let rpc = |id: u64, tool: &str, arguments: Value| {
         json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
                "params": {"name": "gateway_invoke",
                           "arguments": {"server": "alpha", "tool": tool, "arguments": arguments}}})
     };
     let batch = json!([
-        call(1, "read", json!({})),
-        call(2, "send", json!({"text": PROSE}))
+        rpc(1, "read", json!({})),
+        rpc(2, "send", json!({"text": PROSE}))
     ]);
     let frames = Gateway::dispatch_batch_read(
         &meta,
