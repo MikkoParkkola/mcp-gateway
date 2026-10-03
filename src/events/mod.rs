@@ -33,12 +33,12 @@ mod services;
 mod store;
 mod task_source;
 mod types;
+mod upstream;
 #[allow(
     dead_code,
     reason = "MIK-7630 I5: driven by the listener once I4's source hooks land"
 )]
 mod upstream_need;
-mod upstream;
 mod webhook_source;
 mod worker;
 

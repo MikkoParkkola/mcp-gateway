@@ -43,6 +43,7 @@ use crate::security::http_diagnostics::{
 use crate::security::ssrf::DestinationPolicy;
 use crate::{Error, Result};
 use extra_headers::merge_extra_headers;
+pub(super) use modern_meta::with_modern_meta as modern_listen_params;
 use modern_meta::{
     TASK_CAPABILITY_METHODS, finalise_modern_headers, is_era_probe, with_modern_meta,
     with_task_capability_meta,

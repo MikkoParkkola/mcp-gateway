@@ -378,6 +378,7 @@ impl Backend {
             .stopped_when_idle
             .store(false, std::sync::atomic::Ordering::SeqCst);
 
+        let listen: Option<std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>>;
         let transport: Arc<dyn Transport> = match &self.config.transport {
             TransportConfig::Stdio {
                 command,
@@ -393,6 +394,8 @@ impl Backend {
                     protocol_version.clone(),
                 );
                 transport.start().await?;
+                listen = Some(Arc::downgrade(&transport)
+                    as std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>);
                 transport
             }
             TransportConfig::Http {
@@ -444,14 +447,20 @@ impl Backend {
                     .await
                     .unwrap_or(crate::protocol::era::Era::Legacy);
                 transport.finish_startup(era).await?;
+                listen = Some(Arc::downgrade(&transport)
+                    as std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>);
                 transport
             }
             TransportConfig::WebSocket {
                 ws_url,
                 protocol_version,
             } => {
-                self.start_websocket(ws_url, protocol_version.clone())
-                    .await?
+                let transport = self
+                    .start_websocket(ws_url, protocol_version.clone())
+                    .await?;
+                listen = Some(Arc::downgrade(&transport)
+                    as std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>);
+                transport
             }
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { a2a_url, .. } => {
@@ -488,6 +497,7 @@ impl Backend {
             let _ = transport.close().await;
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
+        *entry.listen.write() = listen;
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()

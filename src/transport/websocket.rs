@@ -295,14 +295,15 @@ impl WebSocketTransport {
         timeout: Duration,
         protocol_version: Option<String>,
     ) -> Result<Arc<dyn Transport>> {
-        Self::start_with_destination(
+        let started = Self::start_with_destination(
             url,
             headers,
             timeout,
             protocol_version,
             DestinationPolicy::Configured,
         )
-        .await
+        .await?;
+        Ok(started)
     }
 
     /// Connect to the WebSocket server and initialise the MCP session.
@@ -696,6 +697,8 @@ fn connect_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[path = "websocket_listen.rs"]
+mod listen;
 #[path = "websocket_progress.rs"]
 mod progress;
 use progress::{ProgressRegistration, route_progress};

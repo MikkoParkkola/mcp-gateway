@@ -125,6 +125,12 @@ pub(crate) struct PooledEntry {
     pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
 
     pub(crate) resources_cache: CachedMetadata<Vec<crate::protocol::Resource>>,
+    /// The events listener's handle on this slot's transport (MIK-7630 I5
+    /// design §4, ruling B). A `Weak`, so the slot's strong count stays one
+    /// and a restart's close-after-last-owner wait is unchanged.
+    pub(crate) listen: parking_lot::RwLock<
+        Option<std::sync::Weak<dyn crate::transport::upstream_tap::UpstreamListen>>,
+    >,
     pub(crate) resource_templates_cache: CachedMetadata<Vec<crate::protocol::ResourceTemplate>>,
     pub(crate) prompts_cache: CachedMetadata<Vec<crate::protocol::Prompt>>,
     /// A `PerUser` slot's admission (#2300); dropped with the entry.
@@ -217,6 +223,7 @@ impl PooledEntry {
             request_failed_since_close: parking_lot::Mutex::new(false),
 
             resources_cache: CachedMetadata::new(),
+            listen: parking_lot::RwLock::new(None),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),
             identity_lease: None,

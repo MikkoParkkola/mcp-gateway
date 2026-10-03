@@ -315,6 +315,62 @@ impl Taps {
     }
 }
 
+/// The notes of one open listen or unsolicited stream. Dropping it ends the
+/// stream upstream: the guard cancels what the transport opened.
+pub(crate) struct FrameStream {
+    pub rx: tokio::sync::mpsc::Receiver<UpstreamNote>,
+    _guard: Option<Box<dyn std::any::Any + Send + Sync>>,
+}
+
+impl FrameStream {
+    pub(crate) fn new(rx: tokio::sync::mpsc::Receiver<UpstreamNote>) -> Self {
+        Self { rx, _guard: None }
+    }
+
+    pub(crate) fn guarded(
+        rx: tokio::sync::mpsc::Receiver<UpstreamNote>,
+        guard: impl std::any::Any + Send + Sync,
+    ) -> Self {
+        Self {
+            rx,
+            _guard: Some(Box::new(guard)),
+        }
+    }
+}
+
+/// Why a transport could not open a stream.
+#[derive(Debug)]
+pub(crate) enum Refused {
+    /// The peer offers no such stream (405, or this era has none): not worth
+    /// a fast retry.
+    Unsupported,
+    /// The session expired (404); the next attempt re-establishes it.
+    Expired,
+    Failed(crate::Error),
+}
+
+impl From<crate::Error> for Refused {
+    fn from(error: crate::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// What the events listener needs of a transport (design §4, ruling B): a
+/// crate-private side trait, so the public `Transport` is unchanged.
+/// `self: Arc<Self>` lets a stream's guard hold a `Weak` of the transport,
+/// which never counts toward the strong count a restart waits on.
+#[async_trait::async_trait]
+pub(crate) trait UpstreamListen: Send + Sync {
+    /// Open a modern `subscriptions/listen` for `requested`.
+    async fn listen(
+        self: std::sync::Arc<Self>,
+        requested: Requested,
+    ) -> Result<FrameStream, Refused>;
+
+    /// The legacy peer's out-of-request notifications.
+    async fn unsolicited(self: std::sync::Arc<Self>) -> Result<FrameStream, Refused>;
+}
+
 #[cfg(test)]
 #[path = "upstream_tap_tests.rs"]
 mod tests;

@@ -20,7 +20,8 @@ use super::sse_decoder::SseDecoder;
 use super::{HeaderMode, HttpTransport, finalise_modern_headers, with_modern_meta};
 use crate::protocol::{JsonRpcMessage, RequestId};
 use crate::transport::upstream_tap::{
-    Requested, TAP_CAPACITY, UpstreamNote, classify_response, listen_filter, project,
+    FrameStream, Refused, Requested, TAP_CAPACITY, UpstreamListen, UpstreamNote, classify_response,
+    listen_filter, project,
 };
 use crate::{Error, Result};
 
@@ -138,6 +139,27 @@ impl HttpTransport {
             }
         });
         Ok(Ok(rx))
+    }
+}
+
+#[async_trait::async_trait]
+impl UpstreamListen for HttpTransport {
+    async fn listen(
+        self: std::sync::Arc<Self>,
+        requested: Requested,
+    ) -> std::result::Result<FrameStream, Refused> {
+        Ok(FrameStream::new(self.open_listen(requested).await?))
+    }
+
+    async fn unsolicited(self: std::sync::Arc<Self>) -> std::result::Result<FrameStream, Refused> {
+        match self.open_session_stream().await? {
+            Ok(rx) => Ok(FrameStream::new(rx)),
+            Err(405) => Err(Refused::Unsupported),
+            Err(404) => Err(Refused::Expired),
+            Err(status) => Err(Refused::Failed(Error::Transport(format!(
+                "session stream refused: HTTP {status}"
+            )))),
+        }
     }
 }
 

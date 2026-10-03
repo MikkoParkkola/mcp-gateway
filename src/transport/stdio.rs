@@ -769,6 +769,9 @@ use tree::{read_frame, spawn_in_own_tree};
 #[path = "stdio_early_exit.rs"]
 mod early_exit;
 
+#[path = "stdio_listen.rs"]
+mod listen;
+
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
 mod tests;

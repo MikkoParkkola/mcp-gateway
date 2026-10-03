@@ -107,7 +107,7 @@ pub(super) fn modern_header_value(
 /// or an `_meta` that is not an object, cannot carry the required keys, and the
 /// alternatives are worse than failing — overwriting destroys caller data, and
 /// sending unchanged means a real modern peer answers `-32602` after the fact.
-pub(super) fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Option<Value>> {
+pub(crate) fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Option<Value>> {
     let mut params = match params {
         None => serde_json::Map::new(),
         Some(Value::Object(map)) => map,
