@@ -25,12 +25,12 @@ fn python() -> String {
         .to_string()
 }
 
-fn capability() -> CapabilityDefinition {
+fn capability_yaml() -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cap_exec/fake_mcp.py")
         .display()
         .to_string();
-    let yaml = format!(
+    format!(
         r#"name: mcp_probe
 description: MCP probe.
 schema:
@@ -113,8 +113,11 @@ providers:
               bind: {{ binary_name: program_name }}
 "#,
         python = python(),
-    );
-    parse_capability(&yaml).expect("probe parses")
+    )
+}
+
+fn capability() -> CapabilityDefinition {
+    parse_capability(&capability_yaml()).expect("probe parses")
 }
 
 fn caller(subject: &str) -> CapabilityExecutionContext {
@@ -542,4 +545,50 @@ async fn unloading_one_capability_does_not_refuse_a_call_to_another() {
     let before = ctx_with_generation(executor.mcp_generation(&cap.name));
     executor.bump_mcp_generation("some_other_capability");
     call(&executor, &cap, say, &before).await.unwrap();
+}
+
+/// MIK-7870.RELOAD.2 and .3: a call read its definition and generation, then a
+/// reload swapped in an EDITED definition of the same capability; the call
+/// reaches acquire with the pre-edit generation and is refused, while a call
+/// that reads after the reload runs.
+#[tokio::test]
+async fn a_call_that_read_the_pre_edit_definition_is_refused_after_reload() {
+    use crate::capability::CapabilityBackend;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("probe.yaml");
+    std::fs::write(&file, capability_yaml()).unwrap();
+    let executor = std::sync::Arc::new(CapabilityExecutor::new());
+    let backend = CapabilityBackend::new("t", std::sync::Arc::clone(&executor));
+    backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+
+    // The call's read: definition, then generation.
+    let stale_def = backend.get("mcp_probe").unwrap();
+    let stale = ctx_with_generation(executor.mcp_generation("mcp_probe"));
+
+    // The interleaved reload edits the capability.
+    std::fs::write(
+        &file,
+        capability_yaml().replace("MCP probe.", "MCP probe, edited."),
+    )
+    .unwrap();
+    backend.reload().await.unwrap();
+
+    let say = json!({"operation": "say", "text": "x"});
+    let err = call(&executor, &stale_def, say.clone(), &stale)
+        .await
+        .expect_err("a pre-edit call is refused at acquire");
+    assert!(
+        err.to_string()
+            .contains("changed while this call was starting"),
+        "refused by the generation check, not by a failed spawn: {err}"
+    );
+    assert_eq!(executor.mcp_children.len(), 0, "and starts no child");
+
+    let fresh_def = backend.get("mcp_probe").unwrap();
+    let fresh = ctx_with_generation(executor.mcp_generation("mcp_probe"));
+    call(&executor, &fresh_def, say, &fresh).await.unwrap();
 }
