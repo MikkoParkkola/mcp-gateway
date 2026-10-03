@@ -72,7 +72,7 @@ impl MetaMcp {
         out["total"] = shown.into();
         out["total_available"] = (out["total_available"].as_u64().unwrap_or(0) + found).into();
         // Suggestions are for an empty answer only.
-        if let Some(object) = out.as_object_mut() {
+        if let Some(object) = out.as_object_mut().filter(|_| shown > 0) {
             object.remove("suggestions");
         }
     }
