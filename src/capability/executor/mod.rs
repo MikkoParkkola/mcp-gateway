@@ -172,7 +172,7 @@ impl CapabilityExecutor {
     }
 
     /// Revoke the calls of one capability that read an earlier generation
-    /// (unload, removal on reload, quarantine).
+    /// (unload, removal or edit on reload, quarantine).
     pub(crate) fn bump_mcp_generation(&self, capability: &str) {
         self.mcp_children.bump_generation(capability);
     }

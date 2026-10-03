@@ -691,3 +691,77 @@ mod login_gate {
         assert_eq!(names(backend.get_tools()), ["late"]);
     }
 }
+
+// ── MIK-7870: a reload revokes the in-flight calls of an EDITED capability ──
+
+fn mcp_probe_yaml(description: &str) -> String {
+    format!(
+        r"name: mcp_probe
+description: {description}
+schema:
+  input:
+    type: object
+    properties:
+      text:
+        type: string
+providers:
+  primary:
+    service: mcp
+    timeout: 20
+    config:
+      command: /nonexistent/never-started
+      args: []
+      transport: stdio
+      tool_selector:
+        param: operation
+        tools:
+          say: {{ tool: echo, arguments: {{ message: x }} }}
+"
+    )
+}
+
+async fn loaded_mcp_backend(dir: &std::path::Path) -> CapabilityBackend {
+    std::fs::write(dir.join("probe.yaml"), mcp_probe_yaml("first")).unwrap();
+    let backend = make_backend();
+    backend
+        .load_from_directory(dir.to_str().unwrap())
+        .await
+        .unwrap();
+    backend
+}
+
+/// MIK-7870.RELOAD.1: an edited, retained capability gets a new generation;
+/// an untouched one keeps its own (no spurious revocation).
+#[tokio::test]
+async fn reloading_an_edited_capability_bumps_its_mcp_generation() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let backend = loaded_mcp_backend(dir.path()).await;
+    let before = backend.executor.mcp_generation("mcp_probe");
+
+    backend.reload().await.unwrap();
+    assert_eq!(
+        backend.executor.mcp_generation("mcp_probe"),
+        before,
+        "an unchanged definition is not revoked by a reload"
+    );
+
+    std::fs::write(dir.path().join("probe.yaml"), mcp_probe_yaml("edited")).unwrap();
+    backend.reload().await.unwrap();
+    assert_ne!(
+        backend.executor.mcp_generation("mcp_probe"),
+        before,
+        "an edited definition must be revoked"
+    );
+}
+
+/// The pre-existing arm of the same revocation: a removed capability is
+/// revoked too.
+#[tokio::test]
+async fn reloading_a_removed_capability_bumps_its_mcp_generation() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let backend = loaded_mcp_backend(dir.path()).await;
+    let before = backend.executor.mcp_generation("mcp_probe");
+    std::fs::remove_file(dir.path().join("probe.yaml")).unwrap();
+    backend.reload().await.unwrap();
+    assert_ne!(backend.executor.mcp_generation("mcp_probe"), before);
+}
