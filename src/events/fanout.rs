@@ -95,13 +95,19 @@ impl EventsHub {
                 self.revoke(&sub).await;
                 continue;
             }
-            if source
+            match source
                 .authorize(&sub.principal, &sub.name, &sub.arguments)
                 .await
-                .is_err()
             {
-                tracing::debug!(subscription = %sub.id, "events: source no longer authorizes this subscription");
-                continue;
+                Ok(()) => {}
+                // The source no longer lets the principal hold this: the
+                // subscription ends, so its upstream work can stop.
+                Err(refusal) if refusal.code == -32012 => {
+                    self.revoke(&sub).await;
+                    continue;
+                }
+                // Anything else (a store hiccup) skips this occurrence only.
+                Err(_) => continue,
             }
             self.offer(services, event, &sub).await;
         }

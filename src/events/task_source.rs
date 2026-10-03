@@ -75,9 +75,14 @@ impl EventSource for TaskSource {
         _name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        match arguments.get("taskId").and_then(Value::as_str) {
-            Some(task_id) if !self.owns(principal, task_id) => Err(RpcError::forbidden()),
-            _ => Ok(()),
+        let Some(task_id) = arguments.get("taskId").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        match self.service.get(principal, task_id) {
+            Ok(_) => Ok(()),
+            Err(crate::gateway::task_service::ServiceError::NotFound) => Err(RpcError::forbidden()),
+            // The store could not answer: not a verdict on ownership.
+            Err(_) => Err(RpcError::internal()),
         }
     }
 

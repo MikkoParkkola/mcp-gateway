@@ -20,6 +20,8 @@ const NAME: &str = "probe.thing";
 struct Probe {
     first: AtomicUsize,
     last: AtomicUsize,
+    refuse_start: std::sync::atomic::AtomicBool,
+    deny: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
@@ -40,6 +42,13 @@ impl EventSource for Probe {
     fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
         true
     }
+    async fn authorize(&self, _p: &str, _n: &str, _a: &Value) -> Result<(), RpcError> {
+        if self.deny.load(Ordering::SeqCst) {
+            Err(RpcError::forbidden())
+        } else {
+            Ok(())
+        }
+    }
     async fn on_first_subscriber(
         &self,
         _key: &str,
@@ -48,6 +57,9 @@ impl EventSource for Probe {
         _arguments: &Value,
     ) -> Result<(), RpcError> {
         self.first.fetch_add(1, Ordering::SeqCst);
+        if self.refuse_start.load(Ordering::SeqCst) {
+            return Err(RpcError::forbidden());
+        }
         Ok(())
     }
     async fn on_last_subscriber(&self, _key: &str) {
@@ -211,5 +223,88 @@ async fn a_test_source_plugs_in_without_core_changes() {
         again.first.load(Ordering::SeqCst),
         1,
         "replayed once by start"
+    );
+}
+
+fn event() -> SourceEvent {
+    SourceEvent {
+        kind: SourceKind::RestWatch,
+        name: NAME.into(),
+        backend: "probe".into(),
+        scope: Visibility::Owner,
+        upstream_id: "u2".into(),
+        occurred_at: chrono::Utc::now(),
+        data: json!({}),
+    }
+}
+
+/// Several rows holding one key, with the source refusing the start: one
+/// attempt per replay, not one per row.
+#[tokio::test]
+async fn a_refused_replay_is_attempted_once_per_key() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let probe = Arc::new(Probe::default());
+    hub.register_source(probe.clone());
+    for p in ["p1", "p2", "p3"] {
+        seed_verified(&hub, &config, p);
+        subscribe(&hub, p).await;
+    }
+    drop(hub);
+    let hub = EventsHub::open(&config, dir.path()).expect("reopened");
+    let again = Arc::new(Probe::default());
+    again.refuse_start.store(true, Ordering::SeqCst);
+    hub.register_source(again.clone());
+    hub.replay_starts().await;
+    assert_eq!(again.first.load(Ordering::SeqCst), 1, "once for the key");
+}
+
+/// Replacing a source stops what the old one started and starts the new.
+#[tokio::test]
+async fn a_replaced_source_hands_its_keys_over() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.start(services());
+    let old = Arc::new(Probe::default());
+    hub.register_source(old.clone());
+    seed_verified(&hub, &config, "p1");
+    subscribe(&hub, "p1").await;
+    assert_eq!(old.first.load(Ordering::SeqCst), 1);
+    let new = Arc::new(Probe::default());
+    hub.register_source(new.clone());
+    for _ in 0..100 {
+        if new.first.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(old.last.load(Ordering::SeqCst), 1, "old source stopped");
+    assert_eq!(new.first.load(Ordering::SeqCst), 1, "new source started");
+}
+
+/// A source that stops authorizing a subscription ends it, and with it the
+/// upstream work.
+#[tokio::test]
+async fn a_source_refusal_at_fan_out_ends_the_subscription() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let probe = Arc::new(Probe::default());
+    hub.register_source(probe.clone());
+    seed_verified(&hub, &config, "p1");
+    subscribe(&hub, "p1").await;
+    probe.deny.store(true, Ordering::SeqCst);
+    hub.fan_out(&services(), &event()).await;
+    assert_eq!(outbox_files(dir.path()), 0, "nothing queued");
+    assert!(
+        hub.store.subscriptions().iter().all(|s| s.name != NAME),
+        "the subscription is gone"
+    );
+    assert_eq!(
+        probe.last.load(Ordering::SeqCst),
+        1,
+        "its upstream work stopped"
     );
 }

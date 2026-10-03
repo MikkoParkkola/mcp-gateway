@@ -107,3 +107,18 @@ async fn a_removed_backend_withdraws_its_subscriptions() {
         "withdrawn with the backend"
     );
 }
+
+/// A report still waiting when its backend leaves is not sent.
+#[tokio::test(start_paused = true)]
+async fn a_pending_report_does_not_outlive_its_backend() {
+    let (hub, _dir) = hub();
+    let mut events = drain(&hub);
+    let names = Arc::new(parking_lot::Mutex::new(vec!["x".to_owned()]));
+    let live = Arc::clone(&names);
+    hub.install_backend_source(Arc::new(move || live.lock().clone()));
+    hub.backend_tools_changed("x");
+    names.lock().clear();
+    hub.backend_tools_changed("x");
+    tokio::time::sleep(QUIET * 2).await;
+    assert!(events.try_recv().is_err(), "no event for a removed backend");
+}

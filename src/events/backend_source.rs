@@ -91,6 +91,8 @@ impl EventsHub {
         if let Some(source) = self.source(SourceKind::BackendNotification)
             && !source.offers(&event_name(backend))
         {
+            // A report still waiting for its quiet period must not outlive the backend.
+            self.debounce.latest.lock().remove(backend);
             self.withdraw(&[event_name(backend)]);
             self.reconcile_stops_in_background();
             return;

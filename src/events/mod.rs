@@ -175,15 +175,22 @@ impl EventsHub {
     /// descriptors join the catalogue; lifecycle hooks follow (I4).
     pub(crate) fn register_source(self: &Arc<Self>, source: Arc<dyn EventSource>) {
         let mut sources = self.sources.write();
-        sources.retain(|s| s.kind() != source.kind());
+        let position = sources.iter().position(|s| s.kind() == source.kind());
+        let replaced = position.map(|at| sources.remove(at));
         sources.push(source);
         drop(sources);
-        // A source joining a running hub starts what the store already holds.
+        // A source joining a running hub starts what the store already holds;
+        // one it replaces first stops what it had started.
         if self.runtime.services.get().is_some()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
             let hub = Arc::clone(self);
-            runtime.spawn(async move { hub.replay_starts().await });
+            runtime.spawn(async move {
+                match replaced {
+                    Some(old) => hub.replace_source(old).await,
+                    None => hub.replay_starts().await,
+                }
+            });
         }
     }
 

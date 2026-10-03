@@ -121,8 +121,10 @@ impl EventsHub {
     /// the same way. A refusal leaves the key unstarted for the next replay.
     pub(crate) async fn replay_starts(&self) {
         let mut started = self.lifecycle.lock().await;
+        // One attempt per key per replay, even when several rows hold it.
+        let mut tried = HashSet::new();
         for (key, principal, name, arguments) in self.live_keys() {
-            if started.contains(&key) {
+            if started.contains(&key) || !tried.insert(key.clone()) {
                 continue;
             }
             let Some(source) = self.source_of_kind(key.0) else {
@@ -140,6 +142,25 @@ impl EventsHub {
                 }
             }
         }
+    }
+
+    /// A source of kind `old.kind()` was replaced: stop what the old one
+    /// started and start what the new one now holds.
+    pub(super) async fn replace_source(&self, old: Arc<dyn EventSource>) {
+        {
+            let mut started = self.lifecycle.lock().await;
+            let kind = old.kind();
+            let keys: Vec<_> = started
+                .iter()
+                .filter(|(k, _)| *k == kind)
+                .cloned()
+                .collect();
+            for key in keys {
+                started.remove(&key);
+                old.on_last_subscriber(&key.1).await;
+            }
+        }
+        self.replay_starts().await;
     }
 
     /// Run [`Self::reconcile_stops`] from synchronous code (a reload).
