@@ -14,7 +14,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "evaluation tool input; not a gateway file",
     ),
     (
-        "src/capability/backend.rs",
+        "src/capability/backend_rug_pull.rs",
         "capability YAML; public definitions",
     ),
     (
