@@ -375,6 +375,7 @@ impl super::MetaMcp {
             outcome,
             "transport_finalized",
             correlation,
+            read,
         )
         .await
     }
@@ -391,6 +392,7 @@ impl super::MetaMcp {
             crate::security::audit::AuditOutcome::Ok,
             "notification_delivered",
             correlation,
+            None,
         )
         .await
     }
@@ -401,6 +403,7 @@ impl super::MetaMcp {
         outcome: crate::security::audit::AuditOutcome,
         stage: &str,
         correlation: &ResponseCorrelation<'_>,
+        read: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> bool {
         use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditWho};
 
