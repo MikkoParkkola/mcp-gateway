@@ -401,6 +401,13 @@ source = "src/security/caller_identity.rs"
 probe = "none"
 reason = "config-gated on `security.caller_identity.mode`, off by default, and the refusals run in `src/gateway/router/identity.rs`; a probe cannot tell `off` from absent, and cannot pose as a trusted proxy peer"
 
+[[control]]
+id = "cross-tenant-read-verdict"
+description = "with tenant_guard.arg_keys set, a frame naming a second tenant for one caller_key inside the window is flagged (observe) or withheld (block); MIK-7116.MIN.2"
+source = "src/security/tenant_reads.rs"
+probe = "none"
+reason = "config-gated on tenant_guard.arg_keys and cross_tenant_reads, unset and observe by default; a probe cannot tell an unconfigured install from an absent control, and the negative half needs two tenants' data on a live install"
+
 # --- build-time ---
 
 [[control]]

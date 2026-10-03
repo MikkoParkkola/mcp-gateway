@@ -153,6 +153,37 @@ pub(crate) struct ResponseDeliveryContext<'a> {
 }
 
 impl super::MetaMcp {
+    /// A read judge for one stream written to `key` (MIK-7116.MIN.2).
+    pub(crate) fn stream_judge(
+        &self,
+        guard: Option<std::sync::Arc<crate::gateway::outbound::Guard>>,
+        key: Option<String>,
+    ) -> crate::gateway::outbound::StreamJudge {
+        let judge = crate::gateway::outbound::StreamJudge::new(
+            guard,
+            self.rejection_audit(),
+            self.transparency_logger.clone(),
+        );
+        if let Some(key) = key {
+            judge.bind(key);
+        }
+        judge
+    }
+
+    /// The stdio transport's read judge, over this Meta-MCP's firewall
+    /// (MIK-7116.MIN.2).
+    pub(crate) fn stdio_reads(&self) -> crate::gateway::outbound::StdioReads {
+        #[cfg(feature = "firewall")]
+        let guard = self.firewall.clone();
+        #[cfg(not(feature = "firewall"))]
+        let guard = None;
+        crate::gateway::outbound::StdioReads::new(
+            guard,
+            self.rejection_audit(),
+            self.transparency_logger.clone(),
+        )
+    }
+
     /// Complete all output mutations before recording the attempted response.
     pub(crate) async fn finalize_response_for_delivery(
         &self,
@@ -615,3 +646,94 @@ mod delivery_tests;
 #[cfg(test)]
 #[path = "chain_emission_tests.rs"]
 mod chain_emission_tests;
+
+impl super::MetaMcp {
+    /// The process's bounded auditor of withheld frames (MIK-7116.MIN.2).
+    pub(crate) fn rejection_audit(&self) -> Arc<crate::gateway::outbound::RejectionAudit> {
+        Arc::clone(self.rejection_audit.get_or_init(|| {
+            Arc::new(crate::gateway::outbound::RejectionAudit::new(
+                self.transparency_logger.clone(),
+                crate::gateway::outbound::REJECTION_AUDIT_PERMITS,
+            ))
+        }))
+    }
+
+    /// The transparency log, if enabled.
+    pub(crate) fn transparency_log(&self) -> Option<&Arc<crate::security::TransparencyLogger>> {
+        self.transparency_logger.as_ref()
+    }
+}
+
+/// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
+/// status when the error is an authorization refusal.
+///
+/// The refusal already knows its status; every other error does not carry one
+/// and gets the caller's default. The status rides in the error's optional
+/// `data` because that is the only channel that survives this conversion —
+/// `JsonRpcResponse` has no status of its own, and re-deriving one at the HTTP
+/// boundary from the JSON-RPC code cannot work: eight of the nine refusal
+/// branches emit the generic `-32600`, and `-32003` already means something
+/// else elsewhere.
+pub(crate) fn error_response_preserving_status(
+    id: crate::protocol::RequestId,
+    error: &crate::Error,
+) -> crate::protocol::JsonRpcResponse {
+    let mut response = match error {
+        crate::Error::ResponseFirewallRefused => {
+            crate::protocol::JsonRpcResponse::delivery_refusal_error(
+                Some(id),
+                error.to_rpc_code(),
+                &error.to_string(),
+            )
+        }
+        _ => crate::protocol::JsonRpcResponse::error(
+            Some(id),
+            error.to_rpc_code(),
+            error.to_string(),
+        ),
+    };
+    if let Some(ref mut rpc_error) = response.error {
+        // Written unconditionally, so this function is the sole authority on
+        // the field. `JsonRpcResponse::error` starts it at `None` and nothing
+        // else in the gateway writes it today, but a future path that forwarded
+        // a backend's error data could otherwise hand a backend the power to
+        // choose the gateway's HTTP status. Assigning both arms closes that
+        // without depending on the audit staying true.
+        rpc_error.data = match error {
+            crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
+                crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
+            })),
+            // D1-f: the log is down, not the caller wrong. 503 so an operator
+            // and a load balancer read it as unavailability.
+            crate::Error::AuditUnavailable => Some(serde_json::json!({
+                crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
+            })),
+            // A gateway-authored refusal may carry a recovery payload the
+            // client needs: MRTR.9 names the capability an input request would
+            // have required and MRTR.9a the mode, which is the difference
+            // between a client that can fix its declaration and retry and one
+            // that only sees prose. Named keys only, never the whole object:
+            // `invoke_tool` puts a *backend's* error data into this variant, and
+            // forwarding it wholesale would hand a backend the status field.
+            crate::Error::JsonRpc {
+                data: Some(data), ..
+            } => {
+                let forwarded: serde_json::Map<String, serde_json::Value> = [
+                    super::invoke::REQUIRED_CAPABILITIES_DATA_KEY,
+                    super::invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
+                ]
+                .into_iter()
+                .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
+                .collect();
+                // `None` rather than `{}`: a backend error carrying none of these
+                // keys leaves `data` absent exactly as when one key was forwarded.
+                (!forwarded.is_empty()).then_some(serde_json::Value::Object(forwarded))
+            }
+            _ => None,
+        };
+        // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
+        rpc_error.data =
+            crate::personal_accounts::refusal::offer_data(error).or(rpc_error.data.take());
+    }
+    response
+}

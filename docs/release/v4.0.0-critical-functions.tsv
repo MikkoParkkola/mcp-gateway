@@ -62,7 +62,7 @@ src/gateway/router/authorization.rs	of_client	1	standard	borderline	CallerStandi
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
 src/gateway/router/backend_handlers.rs	backend_handler	1	critical	d	backend_handler	Refuses the direct route with 503 while the audit log is down (D1-f).
 src/gateway/router/backend_handlers.rs	backend_handler_inner	1	critical	a,b,c,d	backend_handler_inner	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
-src/gateway/router/backend_handlers.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
+src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
 src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
 src/gateway/router/backend_handlers.rs	cached_error_response	1	standard	borderline	cached_error_response	Keeps a cached firewall refusal a refusal on idempotent replay.

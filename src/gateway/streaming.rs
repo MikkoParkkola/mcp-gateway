@@ -29,6 +29,7 @@ use crate::backend::BackendRegistry;
 use crate::config::StreamingConfig;
 use crate::gateway::auth::AuthState;
 use crate::gateway::auth::live::{Audience, Delivery, HeldCredential, delivery};
+use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_data, sse_message};
 use crate::gateway::session_id::{SessionId, SessionOwner, session_fp};
 use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
@@ -46,6 +47,35 @@ pub struct TaggedNotification {
     pub event_id: Option<String>,
 }
 
+/// One session's copy of a [`TaggedNotification`] on its stream, with the
+/// cross-tenant read judgement made for that session's caller when it was
+/// queued (MIK-7116.MIN.2, H7). The stream commits it when it writes it; a
+/// copy dropped unwritten (a lagging subscriber) commits nothing.
+#[derive(Debug, Clone)]
+pub struct SessionFrame {
+    note: TaggedNotification,
+    /// Boxed: every session's ring buffer holds `buffer_size` of these up
+    /// front, so the verdict-off default pays one pointer per slot, not a
+    /// whole judged frame.
+    mark: Option<Box<crate::gateway::outbound::StreamMark>>,
+}
+
+impl std::ops::Deref for SessionFrame {
+    type Target = TaggedNotification;
+
+    fn deref(&self) -> &TaggedNotification {
+        &self.note
+    }
+}
+
+impl SessionFrame {
+    /// The notification, without its judgement.
+    #[must_use]
+    pub fn into_inner(self) -> TaggedNotification {
+        self.note
+    }
+}
+
 /// Client session state
 #[derive(Debug)]
 struct ClientSession {
@@ -55,9 +85,12 @@ struct ClientSession {
     /// session never holds a receiver, and a broadcast send with no receiver
     /// delivers nothing, so it never needs the channel's buffer
     /// (NFR.WORKLOAD.1).
-    tx: OnceLock<broadcast::Sender<TaggedNotification>>,
+    tx: OnceLock<broadcast::Sender<SessionFrame>>,
     /// Capacity the sender opens with.
     capacity: usize,
+    /// The `caller_key` this session's stream writes to, bound when the
+    /// stream opens (MIK-7116.MIN.2); every queued copy is judged for it.
+    read_key: RwLock<Option<String>>,
     /// Last event ID received (for resumability)
     last_event_id: RwLock<Option<String>>,
     /// Subscribed backends
@@ -84,11 +117,11 @@ struct ClientSession {
 
 impl ClientSession {
     /// The sender, opened now if nothing has needed it yet.
-    fn sender(&self) -> &broadcast::Sender<TaggedNotification> {
+    fn sender(&self) -> &broadcast::Sender<SessionFrame> {
         self.tx.get_or_init(|| broadcast::channel(self.capacity).0)
     }
 
-    fn subscribe(&self) -> broadcast::Receiver<TaggedNotification> {
+    fn subscribe(&self) -> broadcast::Receiver<SessionFrame> {
         self.sender().subscribe()
     }
 
@@ -100,8 +133,8 @@ impl ClientSession {
     /// receiver, so it refuses exactly as an open one with none would.
     fn send(
         &self,
-        notification: TaggedNotification,
-    ) -> std::result::Result<usize, broadcast::error::SendError<TaggedNotification>> {
+        notification: SessionFrame,
+    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
         match self.tx.get() {
             Some(tx) => tx.send(notification),
             None => Err(broadcast::error::SendError(notification)),
@@ -145,6 +178,9 @@ pub struct NotificationMultiplexer {
     event_counter: std::sync::atomic::AtomicU64,
     /// The live authorizer scoped delivery asks; unset means no delivery.
     authorizer: RwLock<Option<AuthState>>,
+    /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
+    /// unset when the verdict is off, which is the plain fast path.
+    reads: std::sync::OnceLock<crate::gateway::outbound::SessionJudge>,
 }
 
 impl NotificationMultiplexer {
@@ -161,7 +197,65 @@ impl NotificationMultiplexer {
             config,
             event_counter: std::sync::atomic::AtomicU64::new(1),
             authorizer: RwLock::new(None),
+            reads: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Install the cross-tenant read judge (once; the router does it).
+    pub(crate) fn set_read_judge(&self, judge: crate::gateway::outbound::SessionJudge) {
+        let _ = self.reads.set(judge);
+    }
+
+    /// Whether session streams are judged at all.
+    pub(crate) fn judges_reads(&self) -> bool {
+        self.reads.get().is_some()
+    }
+
+    /// Bind the caller session `session_id`'s stream writes to.
+    pub(crate) fn bind_session_reader(&self, session_id: &str, key: String) {
+        if let Some(session) = self.sessions.read().get(session_id) {
+            *session.read_key.write() = Some(key);
+        }
+    }
+
+    /// Queue one copy of `notification` on `session`'s stream, judged for
+    /// the session's caller. `false` when it is withheld or nobody is
+    /// listening; a session with no open stream is not judged at all.
+    fn enqueue(
+        &self,
+        session: &ClientSession,
+        notification: TaggedNotification,
+        hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
+    ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+        // No open stream: nothing to deliver, so nothing to judge, and nothing
+        // is sent either, so a stream that subscribes meanwhile cannot get an
+        // unjudged copy (a send with no receiver delivers nothing anyway).
+        if session.tx.get().is_none_or(|tx| tx.receiver_count() == 0) {
+            return Err(broadcast::error::SendError(SessionFrame {
+                note: notification,
+                mark: None,
+            }));
+        }
+        let key = session.read_key.read().clone();
+        let key = key.as_deref();
+        let mark = match self.reads.get() {
+            None => None,
+            Some(judge) => {
+                match judge.judge(key, &notification.data, &notification.event_type, hidden) {
+                    Ok(mark) => mark.map(Box::new),
+                    Err(()) => {
+                        return Err(broadcast::error::SendError(SessionFrame {
+                            note: notification,
+                            mark: None,
+                        }));
+                    }
+                }
+            }
+        };
+        session.send(SessionFrame {
+            note: notification,
+            mark,
+        })
     }
 
     /// Install the authorizer that scoped delivery re-validates sessions against.
@@ -253,7 +347,7 @@ impl NotificationMultiplexer {
     pub fn get_or_create_session(
         &self,
         session_id: Option<&str>,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
+    ) -> (String, broadcast::Receiver<SessionFrame>) {
         self.get_or_create_session_for(session_id, &SessionOwner::Anonymous)
     }
 
@@ -269,7 +363,7 @@ impl NotificationMultiplexer {
         &self,
         session_id: Option<&str>,
         owner: &SessionOwner,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
+    ) -> (String, broadcast::Receiver<SessionFrame>) {
         let session = self.open_session_for(session_id, owner);
         (session.id.expose_secret().to_string(), session.subscribe())
     }
@@ -306,6 +400,7 @@ impl NotificationMultiplexer {
             id: id.clone(),
             tx: OnceLock::new(),
             capacity: self.config.buffer_size,
+            read_key: RwLock::new(None),
             last_event_id: RwLock::new(None),
             subscribed_backends: RwLock::new(Vec::new()),
             last_active: RwLock::new(Instant::now()),
@@ -316,13 +411,16 @@ impl NotificationMultiplexer {
         session
     }
 
-    /// Create or resume a session for `owner`, holding the credential it presented.
+    /// Create or resume a session for `owner`, holding the credential it
+    /// presented, and subscribe to it (tests; the GET handler binds the
+    /// stream's caller before it subscribes).
+    #[cfg(test)]
     pub(crate) fn get_or_create_session_scoped(
         &self,
         session_id: Option<&str>,
         owner: &SessionOwner,
         credential: Option<HeldCredential>,
-    ) -> (String, broadcast::Receiver<TaggedNotification>) {
+    ) -> (String, broadcast::Receiver<SessionFrame>) {
         let session = self.open_session_scoped(session_id, owner, credential);
         (session.id.expose_secret().to_string(), session.subscribe())
     }
@@ -353,7 +451,7 @@ impl NotificationMultiplexer {
     /// Test seam: an anonymous session under a chosen id, which production
     /// never creates (every production id is minted, F9).
     #[cfg(test)]
-    pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<TaggedNotification> {
+    pub(crate) fn seed_session(&self, id: &str) -> broadcast::Receiver<SessionFrame> {
         self.insert_session(&mut self.sessions.write(), id, SessionOwner::Anonymous)
             .subscribe()
     }
@@ -367,6 +465,20 @@ impl NotificationMultiplexer {
         notification: &TaggedNotification,
         backend: &str,
     ) -> usize {
+        self.broadcast_to_backend_raw(notification, backend, None)
+            .await
+    }
+
+    /// [`Self::broadcast_to_backend`] for an item transformed from a raw
+    /// inbound value (a webhook body): each copy is also judged on what
+    /// `raw` named before the transform dropped it (MIK-7116.MIN.2, §4.4).
+    pub(crate) async fn broadcast_to_backend_raw(
+        &self,
+        notification: &TaggedNotification,
+        backend: &str,
+        raw: Option<&Value>,
+    ) -> usize {
+        let hidden = raw.and_then(|raw| self.reads.get().and_then(|judge| judge.raw(raw)));
         let Some(authorizer) = self.authorizer.read().clone() else {
             return 0;
         };
@@ -383,7 +495,11 @@ impl NotificationMultiplexer {
         for (session, credential) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
-            if verdict == Delivery::Deliver && session.send(notification.clone()).is_ok() {
+            if verdict == Delivery::Deliver
+                && self
+                    .enqueue(&session, notification.clone(), hidden.as_ref())
+                    .is_ok()
+            {
                 reached += 1;
             }
         }
@@ -447,7 +563,7 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            match session.send(notification) {
+            match self.enqueue(session, notification, None) {
                 Ok(_) => true,
                 Err(e) => {
                     debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
@@ -464,7 +580,7 @@ impl NotificationMultiplexer {
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let _ = session.send(notification.clone());
+            let _ = self.enqueue(session, notification.clone(), None);
         }
     }
 
@@ -543,6 +659,7 @@ pub fn create_sse_response(
 
     let mut rx = session.subscribe();
     let session_id_owned = session_id;
+    drop(sessions);
 
     // Create the stream with owned data
     let stream = stream! {
@@ -553,7 +670,15 @@ pub fn create_sse_response(
 
         loop {
             match rx.recv().await {
-                Ok(notification) => {
+                Ok(item) => {
+                    // MIN.2: recorded and committed as it is written; an item
+                    // whose record fails closed is withheld.
+                    if let Some(mark) = &item.mark
+                        && !mark.written(multiplexer.reads.get()).await
+                    {
+                        continue;
+                    }
+                    let notification = &item.note;
                     // MCP-standard events (event_type == "message") send raw
                     // JSON-RPC as data so compliant clients (e.g. Claude Code)
                     // can parse them as server-to-client requests.
@@ -564,7 +689,7 @@ pub fn create_sse_response(
                     } else {
                         Event::default()
                             .event(&notification.event_type)
-                            .data(serde_json::to_string(&notification).unwrap_or_default())
+                            .data(serde_json::to_string(notification).unwrap_or_default())
                     };
 
                     // Add event ID if present
@@ -600,22 +725,31 @@ pub fn create_sse_response(
 ///
 /// No resumability and no event ids — MCP 2026-07-28 removed both, so there is
 /// nothing for a client to resume from and nothing to number.
-pub fn subscription_stream(
+pub(crate) fn subscription_stream(
     mut listener: crate::gateway::subscription_registry::Listener,
     filter: crate::protocol::subscriptions::ListenRequest,
     subscription: crate::protocol::subscriptions::SubscriptionId,
-    acknowledgement: &Value,
+    acknowledgement: Value,
     keep_alive_interval: Duration,
+    judge: StreamJudge,
+    request_params: Option<Value>,
 ) -> axum::response::Response {
     use crate::gateway::subscription_registry::delivers;
-
-    let ack = serde_json::to_string(acknowledgement).unwrap_or_default();
 
     let stream = stream! {
         // The acknowledgement rides the stream it opens, so a client has one
         // thing to read rather than a body and then a stream.
         // Annotated because this function erases the stream into a
         // `Response`, so nothing else pins the error type.
+        // MIN.2: the acknowledgement is a document the stream writes like any
+        // other, so it is judged and recorded first; one withheld, or one its
+        // record replaced, ends the stream before it opens.
+        let Some(frame) = judge.judge_acknowledgement(acknowledgement, request_params.as_ref()) else {
+            return;
+        };
+        let Some(ack) = sse_data(&judge.record(frame).await) else {
+            return;
+        };
         yield Ok::<_, Infallible>(Event::default().event("message").data(ack));
 
         let mut graceful = true;
@@ -640,9 +774,14 @@ pub fn subscription_stream(
                         }
                     }
                     let tagged = subscription.tag(published.notification);
-                    yield Ok(Event::default()
-                        .event("message")
-                        .data(tagged.to_string()));
+                    // MIN.2 (H8): judged for the listener's caller, recorded,
+                    // and committed as it is written; withheld when blocked.
+                    let Some(frame) = judge.judge_document(tagged) else {
+                        continue;
+                    };
+                    if let Some(data) = sse_data(&judge.record(frame).await) {
+                        yield Ok(Event::default().event("message").data(data));
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
@@ -664,8 +803,11 @@ pub fn subscription_stream(
         // The server ended the subscription (a client that hangs up drops the
         // stream and never gets here). A lagged stream just closes: the
         // abrupt end is the specification's non-graceful signal.
-        if graceful {
-            yield Ok(Event::default().event("message").data(subscription.graceful_end().to_string()));
+        if graceful
+            && let Some(frame) = judge.judge_document(subscription.graceful_end())
+            && let Some(end) = sse_data(&judge.record(frame).await)
+        {
+            yield Ok(Event::default().event("message").data(end));
         }
     };
 
@@ -690,9 +832,11 @@ mod session_ownership_tests;
 /// producer of the decorated result to drift from the first. `MIK-7272.SUB.2b`.
 pub(crate) async fn request_scoped_event_stream(
     response: axum::response::Response,
-    notifications: Vec<crate::protocol::JsonRpcNotification>,
+    notifications: Vec<OutboundFrame>,
+    judge: Arc<StreamJudge>,
 ) -> axum::response::Response {
     use axum::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
+    use futures::StreamExt as _;
 
     // `subscriptions/listen` already answered with a stream of its own, and a
     // refusal that never reached the dispatch has no result to frame.
@@ -706,23 +850,22 @@ pub(crate) async fn request_scoped_event_stream(
     }
 
     let (mut parts, body) = response.into_parts();
-    let Ok(result_frame) = axum::body::to_bytes(body, usize::MAX).await else {
-        // The body is in memory already; a read that fails here has no result
-        // left to send, and inventing one would be worse than the plain error.
-        return (parts, axum::body::Body::empty()).into_response();
-    };
-
-    let mut sse = String::new();
-    for notification in &notifications {
-        if let Ok(frame) = serde_json::to_string(notification) {
-            sse.push_str("event: message\ndata: ");
-            sse.push_str(&frame);
-            sse.push_str("\n\n");
+    // Lazy, frame by frame: each notification is committed, and the answer's
+    // body read (which commits its reservation, MIK-7116.MIN.2 F3), only as
+    // the client reads this stream, never while it is being built.
+    let sse = stream! {
+        for frame in notifications {
+            if let Some(event) = sse_message(&judge.record(frame).await) {
+                yield Ok::<_, Infallible>(axum::body::Bytes::from(event));
+            }
         }
-    }
-    sse.push_str("event: message\ndata: ");
-    sse.push_str(&String::from_utf8_lossy(&result_frame));
-    sse.push_str("\n\n");
+        yield Ok(axum::body::Bytes::from_static(b"event: message\ndata: "));
+        let mut result = body.into_data_stream();
+        while let Some(Ok(chunk)) = result.next().await {
+            yield Ok(chunk);
+        }
+        yield Ok(axum::body::Bytes::from_static(b"\n\n"));
+    };
 
     parts.headers.insert(
         CONTENT_TYPE,
@@ -735,7 +878,7 @@ pub(crate) async fn request_scoped_event_stream(
     // The re-framed body is a different length; a stale one truncates it.
     parts.headers.remove(CONTENT_LENGTH);
 
-    (parts, axum::body::Body::from(sse)).into_response()
+    (parts, axum::body::Body::from_stream(sse)).into_response()
 }
 
 /// One SSE frame carrying `data`, in the `event: message` shape both arms use.
@@ -791,7 +934,8 @@ async fn terminal_frame(response: axum::response::Response) -> String {
 /// always takes the buffered arm. `MIK-7272.SUB.2b`.
 pub(crate) async fn first_event_wins_stream<F>(
     dispatch: F,
-    mut rx: tokio::sync::mpsc::Receiver<crate::protocol::JsonRpcNotification>,
+    mut rx: tokio::sync::mpsc::Receiver<OutboundFrame>,
+    judge: Arc<StreamJudge>,
 ) -> axum::response::Response
 where
     F: Future<Output = axum::response::Response> + Send + 'static,
@@ -803,26 +947,27 @@ where
         biased;
         Some(notification) = rx.recv() => notification,
         response = &mut dispatch => {
+            let response = judge.emit(response).await;
             // Nothing was published; the sender is gone, so try_recv only
             // confirms that. Hand the finished response to the buffered arm.
             let mut drained = Vec::new();
             while let Ok(notification) = rx.try_recv() {
                 drained.push(notification);
             }
-            return request_scoped_event_stream(response, drained).await;
+            return request_scoped_event_stream(response, drained, judge).await;
         }
     };
 
     let body = stream! {
-        if let Ok(frame) = serde_json::to_string(&first) {
-            yield Ok::<_, Infallible>(message_frame(&frame));
+        if let Some(event) = sse_message(&judge.record(first).await) {
+            yield Ok::<_, Infallible>(event);
         }
         loop {
             tokio::select! {
                 biased;
                 Some(notification) = rx.recv() => {
-                    if let Ok(frame) = serde_json::to_string(&notification) {
-                        yield Ok(message_frame(&frame));
+                    if let Some(event) = sse_message(&judge.record(notification).await) {
+                        yield Ok(event);
                     }
                 }
                 response = &mut dispatch => {
@@ -830,11 +975,11 @@ where
                     // so a notification published as dispatch resolved is not
                     // overtaken by the result it preceded.
                     while let Ok(notification) = rx.try_recv() {
-                        if let Ok(frame) = serde_json::to_string(&notification) {
-                            yield Ok(message_frame(&frame));
+                        if let Some(event) = sse_message(&judge.record(notification).await) {
+                            yield Ok(event);
                         }
                     }
-                    yield Ok(terminal_frame(response).await);
+                    yield Ok(terminal_frame(judge.emit(response).await).await);
                     break;
                 }
             }
