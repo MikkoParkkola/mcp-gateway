@@ -1,0 +1,5 @@
+head_sha	6cc7c0780320a1fa5948adc4f094c0222370d570
+# MIK-7845 mutants
+M1	linux	m1.patch	--lib capability::schema_validator::tests::validate_output
+M2	linux	m2.patch	--lib capability::schema_validator::tests::validate_output
+M3	linux	m3.patch	--lib capability::executor::catalogue_tests

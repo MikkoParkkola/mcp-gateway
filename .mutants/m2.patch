@@ -1,0 +1,13 @@
+diff --git a/src/capability/schema_validator/mod.rs b/src/capability/schema_validator/mod.rs
+index 13b0b70bd..380eca9ba 100644
+--- a/src/capability/schema_validator/mod.rs
++++ b/src/capability/schema_validator/mod.rs
+@@ -390,7 +390,7 @@ pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidatio
+         && let (Some(sent), Some(kept)) = (result.as_object(), verdict.coerced.as_object_mut())
+     {
+         for (key, value) in sent {
+-            kept.entry(key.clone()).or_insert_with(|| value.clone());
++            kept.insert(key.clone(), value.clone());
+         }
+     }
+     verdict

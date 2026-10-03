@@ -1,0 +1,13 @@
+diff --git a/src/capability/schema_validator/mod.rs b/src/capability/schema_validator/mod.rs
+index 13b0b70bd..a935f0975 100644
+--- a/src/capability/schema_validator/mod.rs
++++ b/src/capability/schema_validator/mod.rs
+@@ -385,7 +385,7 @@ pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidatio
+     // What is tolerated is kept: the validated output is what the caller
+     // receives, so a field the schema does not enumerate (and a declared one the
+     // upstream sent as null) stays in it instead of being dropped.
+-    if allows_extra
++    if false
+         && verdict.is_valid()
+         && let (Some(sent), Some(kept)) = (result.as_object(), verdict.coerced.as_object_mut())
+     {
