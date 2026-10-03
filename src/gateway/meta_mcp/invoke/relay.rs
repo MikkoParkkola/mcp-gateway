@@ -246,7 +246,7 @@ tokio::task_local! {
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches
 /// (finalize included) and a task's execution. Dropping the scope discards
-/// what was staged; only [`MetaMcp::commit_relay_receipts`] records.
+/// what was staged; only a commit records.
 pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output {
     RELAY_RECEIPTS
         .scope(RefCell::new(Vec::new()), delivery)
@@ -286,6 +286,33 @@ impl StagedReceipts {
         }
         #[cfg(not(feature = "firewall"))]
         let _ = delivered;
+    }
+}
+
+/// Receipts an HTTP answer carries to the last step that can still replace it
+/// (the grant slot, the read record): `emit_http` records them only when the
+/// answer goes out as built. A replacement is a new response and carries
+/// none, so a replaced answer records nothing. `eligible`: the answer
+/// delivers a result.
+#[derive(Clone)]
+pub(crate) struct DeferredReceipts {
+    staged: std::sync::Arc<parking_lot::Mutex<Option<StagedReceipts>>>,
+    eligible: bool,
+}
+
+impl DeferredReceipts {
+    pub(crate) fn new(staged: StagedReceipts, eligible: bool) -> Self {
+        Self {
+            staged: std::sync::Arc::new(parking_lot::Mutex::new(Some(staged))),
+            eligible,
+        }
+    }
+
+    /// Record what was staged when the answer went out as built.
+    pub(crate) fn commit(&self, written: bool) {
+        if let Some(staged) = self.staged.lock().take() {
+            staged.commit(written && self.eligible);
+        }
     }
 }
 
@@ -365,10 +392,17 @@ impl MetaMcp {
         }
     }
 
-    /// Record every staged receipt, when `response` is a delivered result
-    /// rather than an error or a delivery refusal.
-    pub(crate) fn commit_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
-        self.commit_staged_relay(response.error.is_none() && !response.delivery_refusal);
+    /// Take every staged receipt out of the collector, for a delivery that
+    /// records them once its answer is final ([`DeferredReceipts`]).
+    pub(crate) fn take_staged_relay(&self) -> StagedReceipts {
+        let receipts = RELAY_RECEIPTS
+            .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
+            .unwrap_or_default();
+        StagedReceipts {
+            #[cfg(feature = "firewall")]
+            fw: self.firewall.clone(),
+            receipts,
+        }
     }
 
     /// Record every staged receipt when `delivered`; drop them either way.

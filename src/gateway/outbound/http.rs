@@ -53,6 +53,21 @@ pub(crate) async fn emit_http_checked(
     mut response: axum::response::Response,
     log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
 ) -> (axum::response::Response, bool) {
+    let receipts = response
+        .extensions_mut()
+        .remove::<crate::gateway::meta_mcp::invoke::relay::DeferredReceipts>();
+    let (response, written) = emit_pending(response, log).await;
+    // The answer went out as built, or a failed read record replaced it.
+    if let Some(receipts) = receipts {
+        receipts.commit(written);
+    }
+    (response, written)
+}
+
+async fn emit_pending(
+    mut response: axum::response::Response,
+    log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+) -> (axum::response::Response, bool) {
     let Some(PendingRecord(fields)) = response.extensions_mut().remove::<PendingRecord>() else {
         return (response, true);
     };

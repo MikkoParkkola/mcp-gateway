@@ -1916,9 +1916,14 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
-    // COLLUDE.1: receipts record only an answer that was delivered, so they
-    // follow the judge: a read it withheld leaves none.
-    state.meta_mcp.commit_relay_receipts(response);
+    // COLLUDE.1: receipts record only an answer that was delivered. They ride
+    // on the response to `emit_http`, after the grant slot and the read record
+    // (the last replacers) have let it through: a read either replaces leaves none.
+    let receipts = state.meta_mcp.relay_active().then(|| {
+        let staged = state.meta_mcp.take_staged_relay();
+        let eligible = response.error.is_none() && !response.delivery_refusal;
+        crate::gateway::meta_mcp::invoke::relay::DeferredReceipts::new(staged, eligible)
+    });
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
@@ -1963,9 +1968,26 @@ async fn meta_mcp_dispatch(
         // A stateless client has no handshake in which to learn who answered,
         // so every result says. And it holds no session, so it is sent no
         // session header — the legacy path below keeps both unchanged.
-        return crate::gateway::outbound::to_http(frame, status, "");
+        return with_receipts(
+            crate::gateway::outbound::to_http(frame, status, ""),
+            receipts,
+        );
     }
-    crate::gateway::outbound::to_http(frame, status, &session_id)
+    with_receipts(
+        crate::gateway::outbound::to_http(frame, status, &session_id),
+        receipts,
+    )
+}
+
+/// `response`, carrying the receipts its answer owes `emit_http`.
+fn with_receipts(
+    mut response: axum::response::Response,
+    receipts: Option<crate::gateway::meta_mcp::invoke::relay::DeferredReceipts>,
+) -> axum::response::Response {
+    if let Some(receipts) = receipts {
+        response.extensions_mut().insert(receipts);
+    }
+    response
 }
 
 /// Build a response for a request written against 2026-07-28.
