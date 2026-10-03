@@ -3259,9 +3259,11 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   `${VAR}` reference resolves) or the gateway refuses to start. Every successful `tools/call`
   result whose nonce was admitted, on `/mcp`, on `/mcp/{backend}` and over `serve --stdio`,
   carries the v2 `_signature`. Over stdio the posture is the one the process started with, and
-  every `tools/call`, not only `gateway_invoke`, needs its nonce and is signed; a stdio caller
+  every `tools/call`, not only `gateway_invoke`, is signed when its nonce is admitted, and
+  needs one when `require_nonce` is true (with it false, a call that sends no nonce is not
+  replay-checked, as on HTTP); a stdio caller
   is still the operator who spawned the process (SECURITY.md), so signing there proves the
-  answer's origin and stops a replayed request, it does not change who may call. Its nonce is
+  answer's origin and stops a replayed nonce, it does not change who may call. Its nonce is
   `params._meta["io.mcp-gateway/nonce"]` (`gateway_invoke` keeps `arguments.nonce`; sending both
   is refused `-32602`). A nonce is admitted once, before dispatch, in one replay store for both
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed

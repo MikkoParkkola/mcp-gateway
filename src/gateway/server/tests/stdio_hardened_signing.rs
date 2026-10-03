@@ -78,6 +78,9 @@ fn hardened_stdio_admits_a_non_invoke_tool_call_once() {
             first.get("error").is_none(),
             "a fresh nonce is admitted: {first}"
         );
+        let signature = &first["result"]["_signature"];
+        assert_eq!(signature["version"], 2, "the answer is signed: {first}");
+        assert_eq!(signature["nonce"], "stdio-hardened-nonce-0001", "{first}");
         let again = dispatch(
             &fixture,
             list_servers("again", Some("stdio-hardened-nonce-0001")),
@@ -95,6 +98,10 @@ fn standard_stdio_leaves_a_non_invoke_tool_call_unsigned() {
         assert!(
             response.get("error").is_none(),
             "under standard only gateway_invoke is nonce-checked: {response}"
+        );
+        assert!(
+            response["result"].get("_signature").is_none(),
+            "under standard the answer is not signed: {response}"
         );
     });
 }
