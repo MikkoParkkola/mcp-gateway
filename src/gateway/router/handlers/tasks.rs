@@ -512,9 +512,10 @@ struct TaskFrameSource {
     /// before a bearer), which the HTTP middleware does not share; a reader
     /// who now resolves to anyone else is sent task id and status only.
     principal: Option<String>,
-    /// An agent-JWT caller's scopes were read from the token when the stream
-    /// opened and nothing re-validates that token afterwards, so such a reader
-    /// is sent task id and status only. Everything else re-resolves at delivery.
+    /// The caller's identity came from something nothing re-validates after
+    /// the stream opened (an agent token, a proxy or gateway assertion), so
+    /// such a reader is sent task id and status only. An API key, a
+    /// certificate and a verified bearer re-resolve at delivery.
     status_only: bool,
 }
 
@@ -536,7 +537,18 @@ pub(super) fn task_frames(
         input_capabilities: caller.input_capabilities,
         session_id: caller.session_id.map(str::to_owned),
         principal: caller.client.map(|client| client.principal.clone()),
-        status_only: caller.oauth_agent_identity.is_some(),
+        // What cannot be re-proven at delivery is not trusted at delivery: an
+        // agent token, or a grant subject that is not the API key, the
+        // connection's certificate, or the verified bearer identity (whose
+        // bearer is re-checked at delivery); in particular a subject asserted
+        // by a trusted proxy or an access gateway.
+        status_only: caller.oauth_agent_identity.is_some()
+            || caller.grant_subject.as_ref().is_some_and(|subject| {
+                !matches!(subject.authority.as_str(), "api_key" | "mtls")
+                    && caller
+                        .verified_identity
+                        .is_none_or(|verified| verified.issuer != subject.authority)
+            }),
     })
 }
 
