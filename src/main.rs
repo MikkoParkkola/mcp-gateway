@@ -11,6 +11,13 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
+
+/// The default allocator (glibc, and musl in the static Linux builds) pays for the
+/// gateway's many short-lived per-call allocations across worker threads.
+/// mimalloc measured -9.7 us p50 and -17 us p99 per `tools/call` on the
+/// price2 workload (MIK-7536).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, PluginCommand, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
