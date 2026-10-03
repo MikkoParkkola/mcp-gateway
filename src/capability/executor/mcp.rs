@@ -611,16 +611,23 @@ impl CapabilityExecutor {
                     .discard(&capability.name, &principal, child_id);
                 Err(Error::BackendTimeout("MCP call timed out".to_string()))
             }
-            Ok(result) => result.map_err(|error| match error {
-                // The server's own error text may echo a credential it was
-                // given or a value the caller sent.
-                Error::Protocol(text) => Error::Protocol(super::cli::redact(
-                    &text,
-                    &env_values,
-                    &super::cli::caller_values(&params),
-                )),
-                other => other,
-            }),
+            Ok(result) => result
+                // A successful result may carry an injected credential the
+                // server echoed (MIK-7882): the same removal as an error, whole.
+                .map(|mut value| {
+                    super::cli::redact_value(&mut value, &env_values);
+                    value
+                })
+                .map_err(|error| match error {
+                    // The server's own error text may echo a credential it was
+                    // given or a value the caller sent.
+                    Error::Protocol(text) => Error::Protocol(super::cli::redact(
+                        &text,
+                        &env_values,
+                        &super::cli::caller_values(&params),
+                    )),
+                    other => other,
+                }),
         }
     }
 

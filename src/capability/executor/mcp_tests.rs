@@ -25,12 +25,12 @@ fn python() -> String {
         .to_string()
 }
 
-fn capability() -> CapabilityDefinition {
+fn capability_yaml() -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cap_exec/fake_mcp.py")
         .display()
         .to_string();
-    let yaml = format!(
+    format!(
         r#"name: mcp_probe
 description: MCP probe.
 schema:
@@ -113,8 +113,11 @@ providers:
               bind: {{ binary_name: program_name }}
 "#,
         python = python(),
-    );
-    parse_capability(&yaml).expect("probe parses")
+    )
+}
+
+fn capability() -> CapabilityDefinition {
+    parse_capability(&capability_yaml()).expect("probe parses")
 }
 
 fn caller(subject: &str) -> CapabilityExecutionContext {
@@ -542,4 +545,71 @@ async fn unloading_one_capability_does_not_refuse_a_call_to_another() {
     let before = ctx_with_generation(executor.mcp_generation(&cap.name));
     executor.bump_mcp_generation("some_other_capability");
     call(&executor, &cap, say, &before).await.unwrap();
+}
+
+/// An env file holding one injected secret, as the executor's overlay.
+fn executor_holding(secret: &str) -> (tempfile::TempDir, CapabilityExecutor) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(
+        &file,
+        format!("CAP_EXEC_TEST_TOKEN={secret}\n"),
+    )
+    .unwrap();
+    let overlay = std::sync::Arc::new(crate::config::EnvOverlay::from_paths(&[file]));
+    let env = std::sync::Arc::new(crate::config::LiveEnv::new(
+        overlay,
+        crate::config::ResolvedEnvFiles::default(),
+    ));
+    (dir, CapabilityExecutor::new().with_env(env))
+}
+
+fn capability_with_env() -> CapabilityDefinition {
+    let yaml = capability_yaml().replace(
+        "transport: stdio",
+        "transport: stdio\n      env: [CAP_EXEC_TEST_TOKEN]",
+    );
+    parse_capability(&yaml).expect("probe parses")
+}
+
+/// MIK-7882.REDACT.2: the server echoes the injected env value in a successful
+/// result, in its `wait` ready payload too; the caller receives neither.
+#[tokio::test]
+async fn a_successful_result_loses_the_injected_env_value() {
+    let secret = "tok-7882-mcp-redact-me";
+    let (_dir, executor) = executor_holding(secret);
+    let cap = capability_with_env();
+    let ctx = caller("a");
+
+    let plain = call(
+        &executor,
+        &cap,
+        json!({"operation": "say", "text": "hello"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        plain["test_values"]["CAP_EXEC_TEST_TOKEN"], "[redacted]",
+        "the child received the value, the caller does not: {plain}"
+    );
+    assert!(!plain.to_string().contains(secret), "{plain}");
+    assert_eq!(plain["arguments"]["message"], "hello", "the rest is intact");
+
+    let waited = call(
+        &executor,
+        &cap,
+        json!({"operation": "import_wait", "binary_path": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !waited.to_string().contains(secret),
+        "ready payload: {waited}"
+    );
+    assert!(
+        waited["ready"].to_string().contains("[redacted]"),
+        "the ready payload was reached and redacted: {waited}"
+    );
 }

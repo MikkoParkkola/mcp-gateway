@@ -224,14 +224,29 @@ fn interpret(
     params: &Value,
 ) -> Result<Value> {
     if outcome.status.success() {
+        // The child may echo a credential it was given (MIK-7882): the answer
+        // loses the injected secrets like an error does, but is returned whole.
+        // Caller values stay: a tool legitimately returns what it was asked to
+        // store, send or look up.
         return match output {
-            CliOutput::Json => serde_json::from_slice(&outcome.stdout).map_err(|_| {
-                Error::Protocol(format!(
-                    "'{}' succeeded but its output is not JSON",
-                    invocation.command
-                ))
-            }),
-            CliOutput::Text => Ok(json!({ "text": String::from_utf8_lossy(&outcome.stdout) })),
+            CliOutput::Json => serde_json::from_slice::<Value>(&outcome.stdout)
+                .map(|mut value| {
+                    redact_value(&mut value, secrets);
+                    value
+                })
+                .map_err(|_| {
+                    Error::Protocol(format!(
+                        "'{}' succeeded but its output is not JSON",
+                        invocation.command
+                    ))
+                }),
+            CliOutput::Text => Ok(json!({
+                "text": redact_untruncated(
+                    &String::from_utf8_lossy(&outcome.stdout),
+                    secrets,
+                    &[],
+                )
+            })),
         };
     }
     if unauthorized(outcome) {
@@ -292,10 +307,9 @@ pub(super) fn caller_values(params: &Value) -> Vec<String> {
     out
 }
 
-/// Remove injected secrets (any length) and caller values (from 4 bytes)
-/// literally, then run the firewall's credential scanner, then truncate.
-pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> String {
-    let mut text = text.to_owned();
+/// Injected secrets (any length) and caller values (from 4 bytes), longest
+/// first so a value containing another is removed whole.
+fn needles<'a>(secrets: &'a [String], caller: &'a [String]) -> Vec<&'a str> {
     let mut needles: Vec<&str> = secrets
         .iter()
         .map(String::as_str)
@@ -307,19 +321,69 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
                 .filter(|s| s.len() >= MIN_REDACTED_CALLER_VALUE),
         )
         .collect();
-    // Longest first, so a value containing another is removed whole.
     needles.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    needles
+}
+
+fn scrub(text: &str, needles: &[&str]) -> String {
+    let mut text = text.to_owned();
     for needle in needles {
         text = text.replace(needle, "[redacted]");
     }
-    // Without the `firewall` feature there is no credential scanner; the
-    // literal removal above (injected secrets, caller values) still applies.
+    text
+}
+
+/// [`redact`] without the truncation: for a result the caller receives whole.
+/// Removes the literals, then runs the firewall's credential scanner (absent
+/// without the `firewall` feature: the literal removal still applies).
+pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
+    let text = scrub(text, &needles(secrets, caller));
     #[cfg(feature = "firewall")]
     let text = {
         let mut value = Value::String(text);
         REDACTOR.scan_and_redact(&mut value);
         value.as_str().unwrap_or_default().to_owned()
     };
+    text
+}
+
+/// Redact a successful JSON result in place: every string value and object key,
+/// never the structure, so the document still parses and a redacted string
+/// stays a string. No truncation.
+pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
+    let needles = needles(secrets, &[]);
+    scrub_value(value, &needles);
+    #[cfg(feature = "firewall")]
+    REDACTOR.scan_and_redact(value);
+}
+
+fn scrub_value(value: &mut Value, needles: &[&str]) {
+    match value {
+        Value::String(s) => *s = scrub(s, needles),
+        Value::Array(items) => items.iter_mut().for_each(|v| scrub_value(v, needles)),
+        Value::Object(map) => {
+            let old = std::mem::take(map);
+            for (key, mut item) in old {
+                scrub_value(&mut item, needles);
+                let base = scrub(&key, needles);
+                // Two keys can collapse to the same marker: keep both entries.
+                let mut key = base.clone();
+                let mut n = 1;
+                while map.contains_key(&key) {
+                    n += 1;
+                    key = format!("{base}#{n}");
+                }
+                map.insert(key, item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remove injected secrets (any length) and caller values (from 4 bytes)
+/// literally, then run the firewall's credential scanner, then truncate.
+pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> String {
+    let text = redact_untruncated(text, secrets, caller);
     let text = text.as_str();
     if text.len() <= EXCERPT_BYTES {
         return text.to_owned();

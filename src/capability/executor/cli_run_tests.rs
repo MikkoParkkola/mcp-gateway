@@ -326,3 +326,55 @@ fn a_secret_straddling_the_excerpt_cut_is_removed_whole() {
         "{out}"
     );
 }
+
+/// MIK-7882.REDACT.3: a redacted success keeps its structure and its length.
+#[test]
+fn success_redaction_keeps_json_valid_and_does_not_truncate() {
+    let secret = "SECRET-7882-value";
+    let long = format!("{}{secret}{}", "x".repeat(5000), "y".repeat(5000));
+    let mut value = json!({
+        "n": 7,
+        "ok": true,
+        "nested": [{"s": long.clone()}, secret, null],
+        secret: "key carries it",
+    });
+    super::super::cli::redact_value(&mut value, &[secret.to_owned()]);
+    let text = value.to_string();
+    assert!(!text.contains(secret), "{text}");
+    let back: Value = serde_json::from_str(&text).expect("still a JSON document");
+    assert_eq!(back["n"], 7);
+    assert_eq!(back["ok"], true);
+    assert!(back["nested"][1].is_string(), "a string stays a string");
+    assert_eq!(back["nested"][1], "[redacted]");
+    assert_eq!(
+        back["nested"][0]["s"].as_str().unwrap().len(),
+        10_000 + "[redacted]".len(),
+        "no 2 KiB cut"
+    );
+    assert_eq!(back["[redacted]"], "key carries it");
+}
+
+#[test]
+fn two_keys_that_collapse_to_the_marker_both_survive() {
+    let mut value = json!({"aSECRETb": 1, "SECRET": 2});
+    super::super::cli::redact_value(&mut value, &["SECRET".to_owned()]);
+    assert_eq!(value.as_object().unwrap().len(), 2, "{value}");
+}
+
+#[test]
+fn untruncated_redaction_keeps_the_whole_text() {
+    let text = format!("{}tok{}", "a".repeat(4000), "b".repeat(4000));
+    let out = super::super::cli::redact_untruncated(&text, &["tok".to_owned()], &[]);
+    assert_eq!(out.len(), 8000 + "[redacted]".len());
+}
+
+/// With the credential scanner built in, a success result is scanned too: a
+/// credential-shaped value the gateway did not inject is replaced.
+#[cfg(feature = "firewall")]
+#[test]
+fn success_redaction_runs_the_credential_scanner() {
+    let shaped = concat!("AK", "IAIOSFODNN7", "EXAMPLE");
+    let mut value = json!({ "note": format!("key {shaped} end") });
+    super::super::cli::redact_value(&mut value, &[]);
+    assert!(!value.to_string().contains(shaped), "{value}");
+}
