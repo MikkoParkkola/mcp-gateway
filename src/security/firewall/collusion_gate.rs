@@ -29,6 +29,24 @@ pub enum CollusionAction {
     Block,
 }
 
+/// One reported relay, by action (`observe` or `block`).
+const RELAY_METRIC: &str = "mcp_gateway_collusion_relay_total";
+/// One egress checked without an authenticated caller, by action.
+const UNKEYED_METRIC: &str = "mcp_gateway_collusion_unkeyed_egress_total";
+
+/// `allowed_flows` entries one detector tracks: one bit each in a `u64`.
+const MAX_ALLOWED_FLOWS: usize = 64;
+
+/// One `allowed_flows` entry: content delivered by a `source` tool may leave
+/// through an `egress` tool without being a relay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowedFlow {
+    /// `server:tool` glob of the tool that delivered the content.
+    pub source: String,
+    /// `server:tool` glob of the tool the content leaves through.
+    pub egress: String,
+}
+
 /// `security.firewall.collusion`: verbatim cross-principal relay detection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -45,6 +63,8 @@ pub struct CollusionConfig {
     pub sources: Vec<String>,
     /// `server:tool` globs whose arguments are never checked.
     pub non_egress: Vec<String>,
+    /// `{source, egress}` glob pairs whose flow is expected collaboration.
+    pub allowed_flows: Vec<AllowedFlow>,
 }
 
 impl Default for CollusionConfig {
@@ -57,6 +77,7 @@ impl Default for CollusionConfig {
             common_principals: params.common_principals,
             sources: Vec::new(),
             non_egress: Vec::new(),
+            allowed_flows: Vec::new(),
         }
     }
 }
@@ -84,6 +105,22 @@ impl CollusionConfig {
         }
         if self.window_secs == 0 {
             return field("window_secs", "must be at least 1");
+        }
+        if self.allowed_flows.len() > MAX_ALLOWED_FLOWS {
+            return field(
+                "allowed_flows",
+                &format!("holds at most {MAX_ALLOWED_FLOWS} entries"),
+            );
+        }
+        for flow in &self.allowed_flows {
+            for pattern in [&flow.source, &flow.egress] {
+                if let Err(e) = glob::Pattern::new(pattern) {
+                    return field(
+                        "allowed_flows",
+                        &format!("has an invalid pattern {pattern:?}: {e}"),
+                    );
+                }
+            }
         }
         for (name, patterns) in [("sources", &self.sources), ("non_egress", &self.non_egress)] {
             for pattern in patterns {
@@ -127,6 +164,8 @@ pub(super) struct RelayGate {
     detector: Option<Arc<CollusionDetector>>,
     sources: Vec<glob::Pattern>,
     non_egress: Vec<glob::Pattern>,
+    /// The compiled `allowed_flows`, as (source, egress), bit `i` for entry `i`.
+    flows: Vec<(glob::Pattern, glob::Pattern)>,
     /// Delivered results whose text was cut to the recording cap.
     text_cut: AtomicU64,
 }
@@ -143,8 +182,36 @@ impl RelayGate {
             detector: detector_for(config),
             sources: compile(&config.sources),
             non_egress: compile(&config.non_egress),
+            flows: config
+                .allowed_flows
+                .iter()
+                .take(MAX_ALLOWED_FLOWS)
+                .filter_map(|f| {
+                    Some((
+                        glob::Pattern::new(&f.source).ok()?,
+                        glob::Pattern::new(&f.egress).ok()?,
+                    ))
+                })
+                .collect(),
             text_cut: AtomicU64::new(0),
         }
+    }
+
+    /// The `allowed_flows` entries (bit each) whose source matches `target`.
+    fn source_flows(&self, target: &str) -> u64 {
+        Self::mask(self.flows.iter().map(|(source, _)| source), target)
+    }
+
+    /// The `allowed_flows` entries (bit each) whose egress matches `target`.
+    fn egress_flows(&self, target: &str) -> u64 {
+        Self::mask(self.flows.iter().map(|(_, egress)| egress), target)
+    }
+
+    fn mask<'a>(patterns: impl Iterator<Item = &'a glob::Pattern>, target: &str) -> u64 {
+        patterns
+            .enumerate()
+            .filter(|(_, pattern)| pattern.matches(target))
+            .fold(0, |mask, (bit, _)| mask | (1 << bit))
     }
 }
 
@@ -228,18 +295,25 @@ impl Firewall {
             return FirewallVerdict::allow();
         }
         let block = self.config.collusion.action == CollusionAction::Block;
+        let label = if block { "block" } else { "observe" };
+        if matches!(caller, RelayCaller::Unkeyed(_)) {
+            telemetry_metrics::counter!(UNKEYED_METRIC, "action" => label).increment(1);
+        }
         let finding = match caller {
             RelayCaller::Unkeyed(_) if block => Some(relay_finding(
                 "relay check needs an authenticated caller".to_string(),
                 String::new(),
             )),
             _ => detector
-                .check_egress_at(
+                .check_egress_flows_at(
                     caller.key(),
-                    &target,
+                    (&target, self.relay.egress_flows(&target)),
                     &text_of(params, Walk::Egress),
                     Instant::now(),
                 )
+                .inspect(|_| {
+                    telemetry_metrics::counter!(RELAY_METRIC, "action" => label).increment(1);
+                })
                 .map(|f| {
                     relay_finding(
                         "content delivered to another caller is leaving through this call"
@@ -317,8 +391,14 @@ impl Firewall {
             return;
         };
         let source = format!("{server}:{tool}");
-        let (text, sensitive) = (&digest.text, digest.sensitive);
-        detector.record_delivery_at(&source, caller.key(), sensitive, text, Instant::now());
+        let flows = self.relay.source_flows(&source);
+        detector.record_delivery_flows_at(
+            &source,
+            caller.key(),
+            (digest.sensitive, flows),
+            &digest.text,
+            Instant::now(),
+        );
     }
 }
 
