@@ -559,12 +559,12 @@ pub fn client_identity(initialize_params: Option<&Value>, request_meta: Option<&
 // MIK-6704: label only — extracted for telemetry attribution, never for a
 // decision.
 fn client_info_name(value: Option<&Value>) -> Option<String> {
+    client_info_name_ref(value).map(str::to_string)
+}
+
+fn client_info_name_ref(value: Option<&Value>) -> Option<&str> {
     let name = value?.get("name")?.as_str()?.trim();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name.to_string())
-    }
+    (!name.is_empty()).then_some(name)
 }
 
 fn meta_string(meta: Option<&Value>, key: &str) -> Option<String> {
@@ -1008,18 +1008,24 @@ pub fn observe_inbound_request(
         return;
     }
     let initialize_params = (method == "initialize").then_some(params).flatten();
+    // Borrowed from the request: this runs on every call, and `revision_label`
+    // and `client_label` below map to `'static` labels anyway.
     let explicit_requested = request_meta_value(request, params, META_PROTOCOL_VERSION)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| requested_revision(initialize_params, None))
-        .or_else(|| protocol_header.map(str::trim).map(str::to_string))
+        .or_else(|| {
+            initialize_params
+                .and_then(|p| p.get("protocolVersion")?.as_str())
+                .filter(|s| !s.trim().is_empty())
+        })
+        .or_else(|| protocol_header.map(str::trim))
         .filter(|value| !value.is_empty());
     // MIK-6704: label only — attributes the observation, gates nothing.
-    let explicit_client = client_info_name(request_meta_value(request, params, META_CLIENT_INFO))
-        .or_else(|| client_info_name(initialize_params.and_then(|p| p.get("clientInfo"))))
-        .unwrap_or_else(|| UNATTRIBUTED_CLIENT.to_string());
+    let explicit_client =
+        client_info_name_ref(request_meta_value(request, params, META_CLIENT_INFO))
+            .or_else(|| client_info_name_ref(initialize_params.and_then(|p| p.get("clientInfo"))))
+            .unwrap_or(UNATTRIBUTED_CLIENT);
 
     let mut reg = global()
         .lock()
@@ -1027,12 +1033,12 @@ pub fn observe_inbound_request(
     let previous = (transport == Transport::Stdio)
         .then(|| reg.session_attribution(session_id))
         .flatten();
-    let requested_label = revision_label(explicit_requested.as_deref())
+    let requested_label = revision_label(explicit_requested)
         .or_else(|| previous.and_then(|item| item.requested_revision));
     let client = if explicit_client == UNATTRIBUTED_CLIENT {
         previous.map_or(UNATTRIBUTED_CLIENT, |item| item.client)
     } else {
-        client_label(&explicit_client)
+        client_label(explicit_client)
     };
     if transport == Transport::Stdio
         && method == "initialize"
@@ -1209,22 +1215,26 @@ pub fn global_shadow_count(filters: ListFilters) -> u64 {
         .shadow_count(filters)
 }
 
-fn emit_request_metrics(requested_revision: Option<&str>, client: &str, transport: Transport) {
+fn emit_request_metrics(
+    requested_revision: Option<&'static str>,
+    client: &'static str,
+    transport: Transport,
+) {
     let _ = (requested_revision, client, transport);
     #[cfg(feature = "metrics")]
     {
         if let Some(rev) = requested_revision {
             telemetry_metrics::counter!(
                 "mcp_protocol_revision_observations_total",
-                "requested_revision" => rev.to_string(),
-                "client" => client.to_string(),
+                "requested_revision" => rev,
+                "client" => client,
                 "transport" => transport.as_str()
             )
             .increment(1);
         } else {
             telemetry_metrics::counter!(
                 "mcp_protocol_revision_unattributed_observations_total",
-                "client" => client.to_string(),
+                "client" => client,
                 "transport" => transport.as_str()
             )
             .increment(1);
