@@ -753,3 +753,15 @@ async fn reloading_an_edited_capability_bumps_its_mcp_generation() {
         "an edited definition must be revoked"
     );
 }
+
+/// The pre-existing arm of the same revocation: a removed capability is
+/// revoked too.
+#[tokio::test]
+async fn reloading_a_removed_capability_bumps_its_mcp_generation() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let backend = loaded_mcp_backend(dir.path()).await;
+    let before = backend.executor.mcp_generation("mcp_probe");
+    std::fs::remove_file(dir.path().join("probe.yaml")).unwrap();
+    backend.reload().await.unwrap();
+    assert_ne!(backend.executor.mcp_generation("mcp_probe"), before);
+}
