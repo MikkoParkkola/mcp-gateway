@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index eb61a811f..cfe9d3796 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -312,7 +312,7 @@ impl Firewall {
+                     Instant::now(),
+                 )
+                 .inspect(|_| {
+-                    telemetry_metrics::counter!(RELAY_METRIC, "action" => label).increment(1);
++                    telemetry_metrics::counter!(RELAY_METRIC, "action" => label).increment(0);
+                 })
+                 .map(|f| {
+                     relay_finding(

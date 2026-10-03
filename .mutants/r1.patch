@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion.rs b/src/security/firewall/collusion.rs
+index 5323ac0eb..4db878fd9 100644
+--- a/src/security/firewall/collusion.rs
++++ b/src/security/firewall/collusion.rs
+@@ -411,7 +411,7 @@ impl CollusionDetector {
+                         .is_some_and(|at| now.saturating_duration_since(at) <= window)
+             };
+             if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
+-                t.principal != sender && !excused(t.source) && t.flows & egress_flows == 0
++                t.principal != sender && !excused(t.source) && true
+             }) {
+                 matches += 1;
+                 first.get_or_insert((t.source, t.principal));

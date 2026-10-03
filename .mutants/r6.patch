@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index eb61a811f..39acc6996 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -106,7 +106,7 @@ impl CollusionConfig {
+         if self.window_secs == 0 {
+             return field("window_secs", "must be at least 1");
+         }
+-        if self.allowed_flows.len() > MAX_ALLOWED_FLOWS {
++        if self.allowed_flows.len() > usize::MAX {
+             return field(
+                 "allowed_flows",
+                 &format!("holds at most {MAX_ALLOWED_FLOWS} entries"),

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index eb61a811f..eda37c94c 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -297,7 +297,7 @@ impl Firewall {
+         let block = self.config.collusion.action == CollusionAction::Block;
+         let label = if block { "block" } else { "observe" };
+         if matches!(caller, RelayCaller::Unkeyed(_)) {
+-            telemetry_metrics::counter!(UNKEYED_METRIC, "action" => label).increment(1);
++            telemetry_metrics::counter!(UNKEYED_METRIC, "action" => label).increment(0);
+         }
+         let finding = match caller {
+             RelayCaller::Unkeyed(_) if block => Some(relay_finding(
