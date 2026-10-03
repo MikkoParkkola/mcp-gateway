@@ -494,7 +494,6 @@ fn overdue(
     attempt > policy.max_attempts || (attempt > 1 && now >= window_end(first, policy.window))
 }
 
-/// Dead without a new HTTP status: the subscription's last error stands.
 /// The stored body as a JSON value, with the SHA-256 of what goes on the
 /// wire: the frame's own serialisation, which is what the audit hashes.
 fn wire_body(stored: &[u8]) -> Option<(serde_json::Value, String)> {
@@ -504,6 +503,28 @@ fn wire_body(stored: &[u8]) -> Option<(serde_json::Value, String)> {
     Some((value, hex::encode(sha2::Sha256::digest(sent))))
 }
 
+#[cfg(test)]
+mod wire_tests {
+    use super::wire_body;
+
+    /// The audited hash is the hash of the bytes the callback frame posts:
+    /// `send_callback` serialises the same value with `serde_json::to_vec`.
+    #[test]
+    fn the_audited_hash_is_the_hash_of_the_posted_bytes() {
+        use sha2::Digest as _;
+        let stored = br#"{"eventId":"e","data":{"b":1,"a":[1.5,"x"]},"cursor":null}"#;
+        let (value, hash) = wire_body(stored).expect("a JSON body");
+        let posted = serde_json::to_vec(&value).expect("serialises");
+        assert_eq!(hash, hex::encode(sha2::Sha256::digest(posted)));
+    }
+
+    #[test]
+    fn a_body_that_is_not_json_has_no_wire_form() {
+        assert!(wire_body(b"not json").is_none());
+    }
+}
+
+/// Dead without a new HTTP status: the subscription's last error stands.
 const fn quiet_dead(reason: DeadReason) -> Settle {
     Settle::Dead {
         reason,
