@@ -598,6 +598,54 @@ impl StdioTransport {
     }
 }
 
+/// Keep a progress-token registration alive exactly as long as its request,
+/// and drain it wherever that request ends.
+///
+/// `register_progress_token` inserts and only a drain removes, so every exit
+/// path has to reach one. A drain written as a statement after the await
+/// reaches three of them -- success, a write error, the internal timeout --
+/// and misses the fourth: an OUTER timeout or a task abort drops the in-flight
+/// request future mid-await, the statement never runs, and the entry lives for
+/// the transport's lifetime. That is growth rather than misrouting, because
+/// `gw-<uuid>` keys never collide and a stranded entry cannot capture another
+/// call's notifications, but it is unbounded growth.
+///
+/// This is `crate::transport::PendingRequestGuard`'s counterpart: same problem,
+/// same shape, the other map. Drop publishes what was captured, so all four
+/// paths drain through one place. Publishing outside a notification scope is a
+/// no-op, which is what a cancelled request wants.
+struct ProgressRegistrationGuard<'a> {
+    transport: &'a StdioTransport,
+    token: String,
+    /// Whether this guard's registration is the one in the map.
+    ///
+    /// `false` when the token was already registered to a live call. The
+    /// guard still exists -- construction has no failure mode the request
+    /// path can act on -- but it owns nothing and must retire nothing.
+    owns_registration: bool,
+}
+
+impl<'a> ProgressRegistrationGuard<'a> {
+    /// Register `token` on `transport` and hold it for the guard's lifetime.
+    #[must_use]
+    fn register(transport: &'a StdioTransport, token: &str) -> Self {
+        let owns_registration = transport.register_progress_token(token);
+        Self {
+            transport,
+            token: token.to_string(),
+            owns_registration,
+        }
+    }
+}
+
+impl Drop for ProgressRegistrationGuard<'_> {
+    fn drop(&mut self) {
+        if self.owns_registration {
+            self.transport.deregister_progress_token(&self.token);
+        }
+    }
+}
+
 #[async_trait]
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
@@ -704,7 +752,7 @@ mod early_exit;
 mod listen;
 #[path = "stdio_progress.rs"]
 mod progress;
-use progress::{ProgressRegistrationGuard, progress_token_string, request_progress_token};
+use progress::{progress_token_string, request_progress_token};
 
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
