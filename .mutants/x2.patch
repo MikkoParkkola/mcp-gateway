@@ -1,0 +1,13 @@
+diff --git a/src/capability/backend/initial_scan.rs b/src/capability/backend/initial_scan.rs
+index ac6e84a44..cae551a6d 100644
+--- a/src/capability/backend/initial_scan.rs
++++ b/src/capability/backend/initial_scan.rs
+@@ -51,7 +51,7 @@ impl CapabilityBackend {
+     /// is complete): a failed one leaves the catalogue partial.
+     #[must_use]
+     pub(crate) fn initial_scan_loaded_every_directory(&self) -> bool {
+-        self.initial_scan.load(std::sync::atomic::Ordering::Acquire) & FAILED == 0
++        true
+     }
+ }
+ 

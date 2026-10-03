@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 7cc2fc9b5..b222f0036 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -197,7 +197,7 @@ impl EventsHub {
+             body_sha256: &body_sha256,
+             ..ctx.attempt(status)
+         };
+-        if services.audit_attempt(&ended(SENDING)).await.is_err() {
++        if services.audit_attempt(&ended(SENDING)).await.is_ok() {
+             let next = Utc::now() + REFUSAL_RETRY;
+             let retry = Settle::Retry {
+                 next,

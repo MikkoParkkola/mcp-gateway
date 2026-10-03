@@ -1,0 +1,12 @@
+head_sha	9d406ef8b5d8ee68b1fa9213ebc224ef2e26aa6e
+# #2732 final batch
+W1	linux	w1.patch	--lib -- a_route_without_a_method_accepts_post
+W2	linux	w2.patch	--lib -- a_mapping_without_braces_is_a_literal_and_an_unresolved_template_is_omitted
+R1	linux	r1.patch	--lib -- reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked
+R2	linux	r2.patch	--lib -- reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked
+R3	linux	r3.patch	--lib -- reconcile_withdraws_only_unoffered_webhook_subscriptions_and_only_when_asked
+X1	linux	x1.patch	--lib -- a_partial_scan_keeps_every_subscription
+X2	linux	x2.patch	--lib -- a_failed_directory_marks_the_scan_partial_even_once_complete
+Y1	linux	y1.patch	--lib -- a_partial_scan_keeps_every_subscription
+Y2	linux	y2.patch	--lib -- webhooks_off_withdraws_even_after_a_partial_scan
+Q1	linux	q1.patch	--lib -- an_attempt_the_audit_log_refuses_is_not_sent
