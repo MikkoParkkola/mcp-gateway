@@ -158,3 +158,44 @@ fn the_reaper_removes_an_unopened_session() {
         "an unopened session outlived its TTL"
     );
 }
+
+/// MIK-7853.RACE.1: a session is visible before its channel opens, so streams
+/// may subscribe to it at once. Every one of them must join the one channel:
+/// a subscriber left on a channel nobody sends to would never see a frame.
+/// Entered through the production resume path, which subscribes after the
+/// store lock is released.
+#[test]
+fn streams_subscribing_at_once_to_an_unopened_session_share_one_channel() {
+    const STREAMS: usize = 8;
+    for _ in 0..200 {
+        let m = Arc::new(mux());
+        let id = m.get_or_create_session_id_scoped(None, &cred("alice"), None);
+        let start = Arc::new(std::sync::Barrier::new(STREAMS));
+        let streams: Vec<_> = (0..STREAMS)
+            .map(|_| {
+                let (m, id, start) = (Arc::clone(&m), id.clone(), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    m.get_or_create_session_for(Some(&id), &cred("alice"))
+                })
+            })
+            .collect();
+        let mut rxs: Vec<_> = streams
+            .into_iter()
+            .map(|t| {
+                let (again, rx) = t.join().expect("subscriber panicked");
+                assert_eq!(again, id, "a concurrent resume minted a new session");
+                rx
+            })
+            .collect();
+        assert!(m.send_to_session(&id, note()), "no stream was reached");
+        for rx in &mut rxs {
+            assert_eq!(
+                rx.try_recv()
+                    .expect("a concurrent subscriber missed the send")
+                    .event_type,
+                "notification"
+            );
+        }
+    }
+}
