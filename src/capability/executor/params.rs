@@ -464,3 +464,7 @@ fn detect_xml_format(headers: &reqwest::header::HeaderMap, response_format: &str
 #[cfg(test)]
 #[path = "params_secret_tests.rs"]
 mod secret_tests;
+
+#[cfg(test)]
+#[path = "params_catalogue_tests.rs"]
+mod catalogue_tests;

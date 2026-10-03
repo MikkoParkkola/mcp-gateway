@@ -1,4 +1,4 @@
-sha256: b5169d02e64e341b4ce6072afdf7028ab1fc087ee04588c0357a518d9e5e93e3
+sha256: 9de920ed0f042e1bacbd29a718dbebdc19bfbc6eb8b26d8efcf44bb5542f8b61
 fulcrum: "1.0"
 name: tavily_extract
 description: |
@@ -27,6 +27,7 @@ schema:
       - urls
   output:
     type: object
+    additionalProperties: true
     properties:
       results: { type: array }
       failed_results: { type: array }
