@@ -1,18 +1,18 @@
 {
   "criterion": "MIK-3274.RANKING.3",
-  "tool_inventory_size": 127,
+  "tool_inventory_size": 137,
   "corpus_size": 114,
-  "candidate_pool_size": 127,
-  "overall_top1_hit_rate": 0.7807017543859649,
-  "overall_top3_hit_rate": 0.8859649122807017,
-  "overall_top5_hit_rate": 0.9122807017543859,
-  "overall_mean_reciprocal_rank": 0.8388611621459966,
+  "candidate_pool_size": 137,
+  "overall_top1_hit_rate": 0.7543859649122807,
+  "overall_top3_hit_rate": 0.8596491228070176,
+  "overall_top5_hit_rate": 0.8771929824561403,
+  "overall_mean_reciprocal_rank": 0.8141677662442599,
   "by_derivation": {
     "abbreviation": {
       "n": 15,
-      "top1_hit_rate": 0.8,
-      "top3_hit_rate": 0.8,
-      "mean_reciprocal_rank": 0.8224501424501424
+      "top1_hit_rate": 0.6,
+      "top3_hit_rate": 0.6666666666666666,
+      "mean_reciprocal_rank": 0.6532123960695387
     },
     "description_lead": {
       "n": 24,
@@ -36,13 +36,13 @@
       "n": 20,
       "top1_hit_rate": 0.65,
       "top3_hit_rate": 0.65,
-      "mean_reciprocal_rank": 0.6709588961824526
+      "mean_reciprocal_rank": 0.6685255419686984
     },
     "typo": {
       "n": 12,
       "top1_hit_rate": 0.75,
-      "top3_hit_rate": 0.8333333333333334,
-      "mean_reciprocal_rank": 0.7922979797979798
+      "top3_hit_rate": 0.75,
+      "mean_reciprocal_rank": 0.773313492063492
     }
   },
   "cases": [
@@ -768,11 +768,11 @@
       "gold_tools": [
         "contacts_list"
       ],
-      "best_gold_rank": 19,
+      "best_gold_rank": 29,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.05263157894736842
+      "reciprocal_rank": 0.034482758620689655
     },
     {
       "id": "tag_query::albums",
@@ -811,11 +811,11 @@
         "confluence_search",
         "jira_search"
       ],
-      "best_gold_rank": 18,
+      "best_gold_rank": 28,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.05555555555555555
+      "reciprocal_rank": 0.03571428571428571
     },
     {
       "id": "tag_query::audit",
@@ -853,11 +853,11 @@
         "stripe_charges",
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 103,
+      "best_gold_rank": 113,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.009708737864077669
+      "reciprocal_rank": 0.008849557522123894
     },
     {
       "id": "tag_query::bus",
@@ -935,11 +935,11 @@
       "gold_tools": [
         "stripe_create_payment_intent"
       ],
-      "best_gold_rank": 104,
+      "best_gold_rank": 114,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.009615384615384616
+      "reciprocal_rank": 0.008771929824561403
     },
     {
       "id": "tag_query::climate",
@@ -948,11 +948,11 @@
       "gold_tools": [
         "weather"
       ],
-      "best_gold_rank": 120,
+      "best_gold_rank": 130,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.008333333333333333
+      "reciprocal_rank": 0.007692307692307693
     },
     {
       "id": "tag_query::code-review",
@@ -961,11 +961,11 @@
       "gold_tools": [
         "github_create_pr"
       ],
-      "best_gold_rank": 30,
+      "best_gold_rank": 40,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.03333333333333333
+      "reciprocal_rank": 0.025
     },
     {
       "id": "tag_query::comments",
@@ -1072,11 +1072,11 @@
       "gold_tools": [
         "cloudflare_manage"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
-      "top3_hit": true,
-      "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "best_gold_rank": null,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.0
     },
     {
       "id": "abbreviation::cdp",
@@ -1125,11 +1125,11 @@
       "gold_tools": [
         "github_search_repos"
       ],
-      "best_gold_rank": 39,
+      "best_gold_rank": 49,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.02564102564102564
+      "reciprocal_rank": 0.02040816326530612
     },
     {
       "id": "abbreviation::crm",
@@ -1165,11 +1165,11 @@
       "gold_tools": [
         "cloudflare_manage"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
-      "top3_hit": true,
-      "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "best_gold_rank": null,
+      "top1_hit": false,
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.0
     },
     {
       "id": "abbreviation::docs",
@@ -1179,11 +1179,11 @@
         "gws_docs_read",
         "gws_docs_write"
       ],
-      "best_gold_rank": 1,
-      "top1_hit": true,
+      "best_gold_rank": 2,
+      "top1_hit": false,
       "top3_hit": true,
       "top5_hit": true,
-      "reciprocal_rank": 1.0
+      "reciprocal_rank": 0.5
     },
     {
       "id": "abbreviation::ecb",
@@ -1205,11 +1205,11 @@
       "gold_tools": [
         "linear_update_issue"
       ],
-      "best_gold_rank": 5,
+      "best_gold_rank": 6,
       "top1_hit": false,
       "top3_hit": false,
-      "top5_hit": true,
-      "reciprocal_rank": 0.2
+      "top5_hit": false,
+      "reciprocal_rank": 0.16666666666666666
     },
     {
       "id": "abbreviation::feed",
@@ -1477,11 +1477,11 @@
       "gold_tools": [
         "contacts_list"
       ],
-      "best_gold_rank": 3,
+      "best_gold_rank": 8,
       "top1_hit": false,
-      "top3_hit": true,
-      "top5_hit": true,
-      "reciprocal_rank": 0.3333333333333333
+      "top3_hit": false,
+      "top5_hit": false,
+      "reciprocal_rank": 0.125
     },
     {
       "id": "typo::github_create_issue",
@@ -1594,11 +1594,11 @@
       "gold_tools": [
         "video_create"
       ],
-      "best_gold_rank": 11,
+      "best_gold_rank": 14,
       "top1_hit": false,
       "top3_hit": false,
       "top5_hit": false,
-      "reciprocal_rank": 0.09090909090909091
+      "reciprocal_rank": 0.07142857142857142
     },
     {
       "id": "typo::weather_current",

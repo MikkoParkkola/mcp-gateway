@@ -1,0 +1,64 @@
+sha256: 5be6f2514407f77649c0dc603745fe930759d762eb8bf1e8f963eec1df540a36
+fulcrum: "1.0"
+name: gws_docs_create
+description: Create an empty Google Doc with a title. Returns the new document's ID, which gws_docs_write can append text to.
+
+schema:
+  input:
+    type: object
+    properties:
+      title:
+        type: string
+        description: "Document title"
+    required:
+      - title
+  output:
+    type: object
+    properties:
+      documentId:
+        type: string
+      title:
+        type: string
+      revisionId:
+        type: string
+
+providers:
+  primary:
+    service: cli
+    cost_per_call: 0
+    timeout: 15
+    config:
+      command: gws
+      args:
+      - docs
+      - documents
+      - create
+      - json: --json=
+        value:
+          title: '{title}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
+
+cache:
+  strategy: none
+  ttl: 0
+
+auth:
+  required: true
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/documents
+
+metadata:
+  category: productivity
+  tags:
+    - google
+    - docs
+    - document
+    - create
+    - workspace
+  cost_category: free
+  execution_time: fast
+  read_only: false
+  docs: https://developers.google.com/docs/api/reference/rest/v1/documents/create

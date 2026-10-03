@@ -1,4 +1,4 @@
-sha256: e22c85b857e2a7c759fcb05cd6aea6d402f75427180d1b577bb6e4bf06d752a2
+sha256: bf55e0283d26cc290e4f34cf0d638fde05486e64af8ae05ed1c4e528725a6920
 fulcrum: "1.0"
 name: openpencil_design
 description: >
@@ -13,51 +13,57 @@ schema:
     properties:
       operation:
         type: string
-        description: "Design operation to perform"
+        description: Design operation to perform
         enum:
-          - open_file
-          - create_node
-          - query_nodes
-          - export_png
-          - export_svg
-          - list_components
-          - set_auto_layout
-          - get_design_tokens
+        - open_file
+        - create_node
+        - query_nodes
+        - export_png
+        - export_svg
+        - list_components
+        - set_auto_layout
+        - get_design_tokens
       file_path:
         type: string
-        description: "Path to .fig file (for open_file operation)"
+        path_root: projects
+        description: Path to a .fig file inside capabilities.files.projects (open_file)
       node_type:
         type: string
-        description: "Node type for create/query (FRAME, RECTANGLE, TEXT, ELLIPSE, etc.)"
+        description: Node type for create/query (FRAME, RECTANGLE, TEXT, ELLIPSE, etc.)
       query:
         type: string
-        description: "XPath-style query for node search"
+        description: XPath-style query for node search
       node_id:
         type: string
-        description: "Target node ID for operations"
+        description: Target node ID for operations
       format:
         type: string
-        description: "Export format"
-        enum: [png, jpg, webp, svg, jsx]
+        description: Export format
+        enum:
+        - png
+        - jpg
+        - webp
+        - svg
+        - jsx
         default: png
       scale:
         type: number
-        description: "Export scale factor"
+        description: Export scale factor
         default: 1.0
     required:
-      - operation
+    - operation
   output:
     type: object
     properties:
       result:
         type: object
-        description: "Operation-specific result data"
+        description: Operation-specific result data
       nodes:
         type: array
-        description: "Matching nodes (for query operations)"
+        description: Matching nodes (for query operations)
       data:
         type: string
-        description: "Base64-encoded export data (for export operations)"
+        description: Base64-encoded export data (for export operations)
 
 providers:
   primary:
@@ -67,6 +73,45 @@ providers:
     config:
       command: openpencil-mcp
       transport: stdio
+      tool_selector:
+        param: operation
+        tools:
+          open_file:
+            tool: open_file
+            arguments:
+              path: '{file_path}'
+          create_node:
+            tool: create_shape
+            arguments:
+              type: '{node_type}'
+              x: 0
+              y: 0
+              width: 100
+              height: 100
+          query_nodes:
+            tool: query_nodes
+            arguments:
+              selector: '{query}'
+          export_png:
+            tool: export_image
+            arguments:
+              ids:
+              - '{node_id}'
+              format: png
+              scale: '{scale}'
+          export_svg:
+            tool: export_svg
+            arguments:
+              ids:
+              - '{node_id}'
+          list_components:
+            tool: get_components
+          set_auto_layout:
+            tool: set_layout
+            arguments:
+              id: '{node_id}'
+          get_design_tokens:
+            tool: design_to_tokens
 
 auth:
   required: false
