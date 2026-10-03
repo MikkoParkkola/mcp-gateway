@@ -2141,6 +2141,10 @@ impl MetaMcp {
                 .await
             {
                 GateOutcome::Refuse(response) => return *response,
+                GateOutcome::RefuseUnasked(response) => {
+                    self.release_unasked_nonce(&caller);
+                    return *response;
+                }
                 GateOutcome::Proceed => false,
                 GateOutcome::ProceedConfirmed => true,
             };

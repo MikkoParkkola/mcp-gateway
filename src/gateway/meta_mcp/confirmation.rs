@@ -142,6 +142,10 @@ pub(super) async fn redeem_confirmation(
 pub(super) enum GateOutcome {
     /// The call does not run. This is the answer to send.
     Refuse(Box<JsonRpcResponse>),
+    /// [`Self::Refuse`] because the confirmation question could not be
+    /// delivered: nobody was asked, so a signed call's nonce goes back unspent
+    /// (MIK-7869).
+    RefuseUnasked(Box<JsonRpcResponse>),
     /// Nothing to confirm, or confirmation obtained out of band. Dispatch
     /// normally.
     Proceed,
@@ -243,7 +247,10 @@ pub(super) async fn destructive_confirmation_gate(
             if outcome == ConfirmationOutcome::Unsupported
                 && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
             {
-                return GateOutcome::refuse(refused(&action_desc));
+                return match GateOutcome::refuse(refused(&action_desc)) {
+                    GateOutcome::Refuse(response) => GateOutcome::RefuseUnasked(response),
+                    other => other,
+                };
             }
         }
         // The asker is the caller itself, one round-trip away: the gate answers

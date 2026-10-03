@@ -51,6 +51,6 @@ async fn a_legacy_call_on_the_empty_id_proceeds_with_the_legacy_warning() {
 async fn a_modern_call_on_the_empty_id_is_refused() {
     assert!(matches!(
         judge_on_the_empty_id(ConfirmationPolicy::for_modern()).await,
-        super::super::GateOutcome::Refuse(_)
+        super::super::GateOutcome::RefuseUnasked(_)
     ));
 }
