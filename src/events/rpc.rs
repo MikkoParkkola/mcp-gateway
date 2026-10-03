@@ -306,6 +306,11 @@ impl EventsHub {
             None => return Err(RpcError::invalid("delivery.mode")),
         }
         let arguments = checked_arguments(&descriptor, params.get("arguments"))?;
+        if let Some(source) = self.source_offering(&descriptor.name) {
+            source
+                .authorize(&principal, &descriptor.name, &arguments)
+                .await?;
+        }
         let url = callback_url(delivery.get("url"))?;
         let secret = delivery
             .get("secret")
@@ -365,13 +370,10 @@ impl EventsHub {
                 self.challenge(caller, &descriptor.name, &url, &id, &key)
                     .await?;
             }
-            let attempt = record.clone();
-            let fresh = !verified;
-            match blocking(self, move |store| {
-                store.admit(attempt, fresh, caps, grace, now, tail)
-            })
-            .await?
-            {
+            let outcome = self
+                .commit_started(&record, !verified, (caps, grace, tail), now)
+                .await;
+            match outcome? {
                 Ok(()) => {
                     self.subscribed(caller, existing.is_some(), &id, &descriptor.name, &url)
                         .await;
@@ -391,6 +393,39 @@ impl EventsHub {
             }
         }
         Err(RpcError::internal())
+    }
+
+    /// Start the source's upstream work for the subscription (when it is the
+    /// first of its key) and commit it, under one lifecycle lock: a stop for
+    /// another key cannot land between them (lifecycle.rs). A commit that
+    /// fails undoes the start it made.
+    async fn commit_started(
+        self: &Arc<Self>,
+        record: &Subscription,
+        fresh: bool,
+        (caps, grace, tail): (Caps, chrono::Duration, super::store::TailPolicy),
+        now: DateTime<Utc>,
+    ) -> Result<Result<(), CapHit>, RpcError> {
+        let attempt = record.clone();
+        let mut started = self.lifecycle.lock().await;
+        let begun = self
+            .start_key(
+                &mut started,
+                &record.principal,
+                &record.name,
+                &record.arguments,
+            )
+            .await?;
+        let outcome = blocking(self, move |store| {
+            store.admit(attempt, fresh, caps, grace, now, tail)
+        })
+        .await;
+        if !matches!(outcome, Ok(Ok(())))
+            && let Some(key) = begun
+        {
+            self.undo_start(&mut started, key).await;
+        }
+        outcome
     }
 
     /// Challenge the callback once, and record how it went.
@@ -479,6 +514,7 @@ impl EventsHub {
             Some(caller),
         )
         .await;
+        self.reconcile_stops().await;
         // A concurrent unsubscribe of the same key waits too. An attempt
         // still busy at the bound is not acknowledged as stopped.
         if self.settled(&id).await {

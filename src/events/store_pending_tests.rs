@@ -61,6 +61,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         subscription_id: sub.into(),
         name: "e".into(),
         backend: "b".into(),
+        owner_scoped: false,
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attribution: None,

@@ -31,6 +31,8 @@ SKIPPED = {
     "usability-smoke",
     # One SDK journey test (tests/task_upstream_recovery_sdk.rs); it reads no docs file.
     "task-sdk-recovery",
+    # Real gws against the gws capability files; no docs file is read.
+    "gws-dry-run",
 }
 # Workflows with no pull_request trigger: they cannot run on a docs-only PR, so
 # they need no gate. Gaining a pull_request trigger fails main() until gated.

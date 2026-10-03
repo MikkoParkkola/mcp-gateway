@@ -4,24 +4,21 @@
 //!
 //! Main OAuth client implementation with PKCE support.
 
-use std::sync::Arc;
-
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use super::callback;
+use super::metadata::{self, AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
+use super::storage::{TokenInfo, TokenStorage};
+use crate::security::ssrf::is_ssrf_refusal;
+use crate::{Error, Result};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use parking_lot::RwLock;
 use rand::RngExt;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, info, warn};
+use std::sync::Arc;
+use tracing::{debug, info, warn};
 use url::Url;
-
-use super::callback;
-use super::metadata::{self, AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
-use super::storage::{TokenInfo, TokenStorage};
-use crate::security::http_diagnostics::oauth_request_error;
-use crate::security::ssrf::is_ssrf_refusal;
-use crate::security::{safe_oauth_http_error, safe_reqwest_message};
-use crate::{Error, Result};
 
 /// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
 ///
@@ -522,96 +519,6 @@ impl OAuthClient {
         remaining < self.token_refresh_buffer_secs
     }
 
-    /// Attempt client-credentials grant (headless re-auth, no browser required).
-    ///
-    /// Returns `Ok(token)` only when the authorization server explicitly lists
-    /// `"client_credentials"` in `grant_types_supported` — so we never try it
-    /// against a server that won't accept it.
-    async fn try_client_credentials(&self) -> Result<String> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
-
-        if !auth_meta
-            .grant_types_supported
-            .iter()
-            .any(|g| g == "client_credentials")
-        {
-            return Err(Error::OAuth(
-                "Server does not support client_credentials grant".to_string(),
-            ));
-        }
-
-        let client_id = self
-            .client_id
-            .read()
-            .clone()
-            .ok_or_else(|| Error::OAuth("No client ID for client_credentials".to_string()))?;
-
-        let params = self.client_credentials_params(&client_id);
-
-        let response = self
-            .http_client
-            .post(&auth_meta.token_endpoint)
-            .form(&params)
-            .send()
-            .await
-            .map_err(|e| oauth_request_error("Client credentials request failed", &e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            // Mirror the exchange_code/refresh_token paths: a rejected dynamic registration must be
-            // purged so the next attempt re-registers. Fix 1's guard makes this a no-op for
-            // configured-secret (static) clients.
-            self.purge_client_id_if_invalid(&body);
-            return Err(Error::OAuth(safe_oauth_http_error(
-                "Client credentials failed",
-                status,
-                &body,
-            )));
-        }
-
-        let token_response: TokenResponse = response.json().await.map_err(|e| {
-            Error::OAuth(safe_reqwest_message(
-                "Failed to parse credentials response",
-                &e,
-            ))
-        })?;
-
-        let token = TokenInfo::from_response(
-            token_response.access_token,
-            token_response.token_type,
-            token_response.refresh_token,
-            token_response.expires_in,
-            token_response.scope,
-        );
-
-        self.storage
-            .save(&self.credential_key()?, &self.resource_url, &token)?;
-        *self.current_token.write() = Some(token.clone());
-
-        info!(backend = %self.backend_name, "Token renewed via client_credentials");
-        Ok(token.access_token)
-    }
-
-    /// RFC 8707 resource indicator for this backend.
-    ///
-    /// MCP's authorization spec (rev 2025-06-18) mandates Resource Indicators (RFC 8707): the
-    /// `resource` parameter MUST be sent on both the authorization request and every token request
-    /// so the authorization server can audience-bind the issued token to this specific MCP server.
-    /// Omitting it makes strict providers reject the flow with `server_error` (see issue #369).
-    ///
-    /// Prefers the canonical identifier advertised by discovered protected-resource metadata (RFC
-    /// 9728 `resource` field); falls back to the configured MCP endpoint URL when metadata
-    /// discovery did not run or omitted it.
-    fn resource_indicator(&self) -> &str {
-        self.resource_metadata
-            .as_ref()
-            .map_or(self.resource_url.as_str(), |m| m.resource.as_str())
-    }
-
     /// Build the OAuth 2.0 authorization-request URL (RFC 6749 §4.1.1 + PKCE
     /// RFC 7636 + Resource Indicators RFC 8707).
     ///
@@ -649,69 +556,6 @@ impl OAuthClient {
         }
 
         Ok(auth_url)
-    }
-
-    /// Form parameters for the `authorization_code` → token exchange
-    /// (RFC 6749 §4.1.3 + PKCE RFC 7636 + Resource Indicators RFC 8707).
-    ///
-    /// Pure builder so the request body — including the `resource` indicator
-    /// (issue #369) — is unit-testable without a live token endpoint.
-    fn token_exchange_params(
-        &self,
-        code: &str,
-        redirect_uri: &str,
-        client_id: &str,
-        code_verifier: &str,
-    ) -> Vec<(&'static str, String)> {
-        let mut params = vec![
-            ("grant_type", "authorization_code".to_string()),
-            ("code", code.to_string()),
-            ("redirect_uri", redirect_uri.to_string()),
-            ("client_id", client_id.to_string()),
-            ("code_verifier", code_verifier.to_string()),
-        ];
-        // Include client_secret when the provider requires it (Slack, Figma, …).
-        if let Some(ref secret) = self.client_secret {
-            params.push(("client_secret", secret.clone()));
-        }
-        // RFC 8707 Resource Indicator — must match the authorization request so
-        // the AS issues an audience-bound token (issue #369).
-        params.push(("resource", self.resource_indicator().to_string()));
-        params
-    }
-
-    /// Form parameters for the `refresh_token` grant (RFC 6749 §6 + RFC 8707).
-    fn refresh_params(&self, refresh_token: &str, client_id: &str) -> Vec<(&'static str, String)> {
-        let mut params = vec![
-            ("grant_type", "refresh_token".to_string()),
-            ("refresh_token", refresh_token.to_string()),
-            ("client_id", client_id.to_string()),
-        ];
-        if let Some(ref secret) = self.client_secret {
-            params.push(("client_secret", secret.clone()));
-        }
-        // RFC 8707 Resource Indicator — keep the refreshed token audience-bound
-        // to this MCP server, matching the original grant (issue #369).
-        params.push(("resource", self.resource_indicator().to_string()));
-        params
-    }
-
-    /// Form parameters for the `client_credentials` grant (RFC 6749 §4.4 +
-    /// RFC 8707). No `client_secret` is added here: this path historically
-    /// authenticates public/dynamically-registered clients without one.
-    fn client_credentials_params(&self, client_id: &str) -> Vec<(&'static str, String)> {
-        let mut params = vec![
-            ("grant_type", "client_credentials".to_string()),
-            ("client_id", client_id.to_string()),
-        ];
-        let scope_str = self.scopes.join(" ");
-        if !scope_str.is_empty() {
-            params.push(("scope", scope_str));
-        }
-        // RFC 8707 Resource Indicator — audience-bind the client_credentials
-        // token to this MCP server, matching the other grants (issue #369).
-        params.push(("resource", self.resource_indicator().to_string()));
-        params
     }
 
     /// Perform the authorization flow
@@ -795,276 +639,6 @@ impl OAuthClient {
 
         Ok(token.access_token)
     }
-
-    /// Exchange authorization code for tokens
-    async fn exchange_code(
-        &self,
-        code: &str,
-        redirect_uri: &str,
-        code_verifier: &str,
-    ) -> Result<TokenInfo> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
-
-        let client_id = self
-            .client_id
-            .read()
-            .clone()
-            .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
-
-        let params = self.token_exchange_params(code, redirect_uri, &client_id, code_verifier);
-
-        let response = self
-            .http_client
-            .post(&auth_meta.token_endpoint)
-            .form(&params)
-            .send()
-            .await
-            .map_err(|e| oauth_request_error("Token request failed", &e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            // #143 — structured telemetry: token exchange failure event.
-            warn!(
-                event = "oauth.token_exchange.failure",
-                backend = %self.backend_name,
-                http_status = status.as_u16(),
-                "OAuth token exchange failed"
-            );
-            self.purge_client_id_if_invalid(&body);
-            return Err(Error::OAuth(safe_oauth_http_error(
-                "Token exchange failed",
-                status,
-                &body,
-            )));
-        }
-
-        let token_response: TokenResponse = response.json().await.map_err(|e| {
-            Error::OAuth(safe_reqwest_message("Failed to parse token response", &e))
-        })?;
-
-        // #143 — structured telemetry: token exchange success event.
-        info!(
-            event = "oauth.token_exchange.success",
-            backend = %self.backend_name,
-            has_refresh_token = token_response.refresh_token.is_some(),
-            expires_in = token_response.expires_in,
-            "OAuth token exchange succeeded"
-        );
-
-        Ok(TokenInfo::from_response(
-            token_response.access_token,
-            token_response.token_type,
-            token_response.refresh_token,
-            token_response.expires_in,
-            token_response.scope,
-        ))
-    }
-
-    /// Refresh an access token
-    async fn refresh_token(&self, refresh_token: &str) -> Result<String> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
-
-        let client_id = self
-            .client_id
-            .read()
-            .clone()
-            .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
-
-        let params = self.refresh_params(refresh_token, &client_id);
-
-        let response = self
-            .http_client
-            .post(&auth_meta.token_endpoint)
-            .form(&params)
-            .send()
-            .await
-            .map_err(|e| oauth_request_error("Token refresh failed", &e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            self.purge_client_id_if_invalid(&body);
-            return Err(Error::OAuth(safe_oauth_http_error(
-                "Token refresh failed",
-                status,
-                &body,
-            )));
-        }
-
-        let token_response: TokenResponse = response.json().await.map_err(|e| {
-            Error::OAuth(safe_reqwest_message("Failed to parse refresh response", &e))
-        })?;
-
-        let token = TokenInfo::from_response(
-            token_response.access_token,
-            token_response.token_type,
-            token_response.refresh_token,
-            token_response.expires_in,
-            token_response.scope,
-        );
-
-        // Store and cache
-        self.storage
-            .save(&self.credential_key()?, &self.resource_url, &token)?;
-        *self.current_token.write() = Some(token.clone());
-
-        info!(backend = %self.backend_name, "Token refreshed successfully");
-        Ok(token.access_token)
-    }
-
-    /// Ensure we have a client ID, registering with the specific redirect URI
-    async fn ensure_client_id_with_redirect(&self, redirect_uri: &str) -> Result<String> {
-        // Check if we already have one
-        if let Some(id) = self.client_id.read().clone() {
-            return Ok(id);
-        }
-
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
-
-        // Try dynamic registration if supported
-        if let Some(ref reg_endpoint) = auth_meta.registration_endpoint {
-            match self.register_client(reg_endpoint, redirect_uri).await {
-                Ok(client_id) => {
-                    // Persist immediately: registration succeeded even if the
-                    // browser authorize step below never completes. Without this
-                    // every connection re-registers and opens a new OAuth tab.
-                    let credential_key = self.credential_key()?;
-                    match self.storage.save_client_id(
-                        &credential_key,
-                        &self.resource_url,
-                        &client_id,
-                    ) {
-                        Ok(persisted) => {
-                            // First-writer-wins: a co-located instance may have
-                            // registered concurrently; adopt the authoritative
-                            // on-disk id so both instances converge on one.
-                            *self.client_id.write() = Some(persisted.clone());
-                            *self.client_id_source.write() = Some(ClientIdSource::Registered);
-                            return Ok(persisted);
-                        }
-                        Err(e) => {
-                            // Do NOT silently swallow: a lost write re-opens the "new client_id
-                            // every restart" churn bug. The in-memory id is still valid for THIS
-                            // session, so the live auth proceeds, but the operator must see that
-                            // persistence failed.
-                            let client_file = self
-                                .storage
-                                .client_path(&credential_key, &self.resource_url);
-                            error!(
-                                backend = %self.backend_name,
-                                error = %e,
-                                path = %client_file.display(),
-                                "Failed to persist registered client_id; it will be re-registered \
-                                 on next restart (auth churn until the write path is fixed)"
-                            );
-                            *self.client_id.write() = Some(client_id.clone());
-                            *self.client_id_source.write() = Some(ClientIdSource::Registered);
-                            return Ok(client_id);
-                        }
-                    }
-                }
-                Err(e) if is_ssrf_refusal(&e) => return Err(e),
-                Err(e) => {
-                    debug!(error = %e, "Dynamic registration failed, using generated ID");
-                }
-            }
-        }
-
-        // Generate a client ID
-        let generated = generate_client_id();
-        *self.client_id.write() = Some(generated.clone());
-        *self.client_id_source.write() = Some(ClientIdSource::Registered);
-        Ok(generated)
-    }
-
-    /// Purge a stored `client_id` when the authorization server rejects it.
-    ///
-    /// OAuth 2.0 signals an unrecognized client with an `invalid_client` error
-    /// in the token-endpoint response body. When that happens the persisted
-    /// registration is stale (revoked, expired, garbage-collected); we drop it
-    /// from memory and disk so the next attempt re-registers rather than looping
-    /// on `invalid_client` forever with no recovery inside the product.
-    fn purge_client_id_if_invalid(&self, response_body: &str) {
-        if !response_body.contains("invalid_client") {
-            return;
-        }
-        // Guard on provenance, not `client_secret` presence: a PUBLIC operator-configured client
-        // (client_id set, no secret — e.g. a native/PKCE-only app registration) is just as much
-        // operator config as a confidential one, and the old `client_secret.is_some()` guard did
-        // not protect it (Defect 2, MIK-6750 r7). Only a client_id whose provenance is positively
-        // known to be `Registered` — Dynamic Client Registration, a generated DCR fallback, or a
-        // loaded prior registration — is safe to purge and re-register.
-        if *self.client_id_source.read() != Some(ClientIdSource::Registered) {
-            warn!(
-                backend = %self.backend_name,
-                "Client rejected with invalid_client; not purging (client_id provenance is not a dynamic registration)"
-            );
-            return;
-        }
-        warn!(
-            backend = %self.backend_name,
-            "Server rejected client_id (invalid_client); purging stored registration so the next attempt re-registers"
-        );
-        *self.client_id.write() = None;
-        *self.client_id_source.write() = None;
-        match self.credential_key() {
-            Ok(key) => {
-                if let Err(e) = self.storage.delete_client_id(&key, &self.resource_url) {
-                    warn!(backend = %self.backend_name, error = %e, "Failed to delete stale client_id file");
-                }
-            }
-            Err(e) => {
-                warn!(backend = %self.backend_name, error = %e, "Cannot locate stale client_id file without a discovered issuer");
-            }
-        }
-    }
-
-    /// Register a new client dynamically with the specified redirect URI
-    async fn register_client(&self, endpoint: &str, redirect_uri: &str) -> Result<String> {
-        // Built by the free function above, not inline. Inline, the body a test
-        // asserts and the body the gateway sends are two objects that merely
-        // resemble each other — and this exact split shipped once already this
-        // release, in a discovery document every test passed against.
-        let body = registration_body(&self.backend_name, redirect_uri);
-
-        let response = self
-            .http_client
-            .post(endpoint)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| oauth_request_error("Client registration failed", &e))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::OAuth(safe_oauth_http_error(
-                "Client registration failed",
-                status,
-                &body,
-            )));
-        }
-
-        let reg_response: ClientRegistrationResponse = response.json().await.map_err(|e| {
-            Error::OAuth(safe_reqwest_message(
-                "Failed to parse registration response",
-                &e,
-            ))
-        })?;
-
-        info!(client_id = %reg_response.client_id, "Registered OAuth client");
-        Ok(reg_response.client_id)
-    }
 }
 
 /// Generate PKCE code verifier and challenge
@@ -1119,6 +693,8 @@ fn open_browser(url: &str) -> bool {
 #[cfg(test)]
 mod authorize_tests;
 pub(crate) mod destination;
+mod grants;
+mod registration;
 mod renewal;
 #[cfg(test)]
 mod tests;

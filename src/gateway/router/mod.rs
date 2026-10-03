@@ -109,6 +109,8 @@ mod identity_parity_tests;
 #[cfg(test)]
 mod log_level_admin_tests;
 #[cfg(test)]
+mod mcp_route_signature_tests;
+#[cfg(test)]
 mod meta_dispatch_edge_tests;
 #[cfg(test)]
 mod probe_tests;
@@ -273,6 +275,7 @@ impl AppState {
             crate::gateway::subscription_registry::tools_list_changed(),
             backend,
         );
+        self.meta_mcp.events_tools_changed(backend);
     }
 }
 

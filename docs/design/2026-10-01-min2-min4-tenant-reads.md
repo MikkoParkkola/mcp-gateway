@@ -245,6 +245,13 @@ What the compiler guarantees:
   an `OutboundFrame` built by `judge_frame`;
 - nothing outside `outbound` can change a judged payload or skip a commit.
 
+What the typing PR delivers: the sealed `OutboundReply` with three named
+origins (judged answer, judged stream, gateway refusal), declared as the
+return type of every handler on an MCP path, and a source test that fails
+closed on any `/mcp` registration it cannot resolve. A `gateway_reply` is a
+claim about origin, made at its call site, that the compiler cannot verify;
+the registration table is not generic over the handler's return type.
+
 What it does not guarantee:
 - code that builds a JSON-RPC-shaped body on a non-MCP route;
 - a tower middleware layered after the MCP routes that answers with its own
@@ -837,7 +844,7 @@ a stated gap.
 |---|---|---|---|
 | History | one `Arc<ReadHistory>`, a required `from_config` argument (2ad) | one per process: `Gateway` builds it and `response_firewall` gives it to both firewalls (`with_reads`) | `from_config` keeps two arguments: 63 call sites, all tests but one. The production constructor is the only one and shares it. Row 2b proves the share on the router |
 | Records | responses on meta/stdio in `response_delivery_attempt` | every judged frame writes one `tenant_read` event (§8 open question a, draft decision); an HTTP answer's is written after `slot_http` (`emit_http`) | `response_delivery_attempt` keeps its meaning; with the transparency log on and `arg_keys` set this costs one more record per call (+82 us/call measured) |
-| H1-H4 POST | `OutboundReply` through `mcp_route` | judged after finalization, recorded, written by `outbound::to_http`; the body commits when read (F3) | early returns before dispatch are gateway refusals with no backend content; `mcp_route` and the compile-time guarantee are not built |
+| H1-H4 POST | `OutboundReply` (sealed type, typing PR) | judged after finalization, recorded, written by `outbound::to_http`; the body commits when read (F3) | early returns before dispatch are gateway refusals with no backend content; the handlers' declared return type is the compile-time part; there is no `mcp_route` adapter, and the registration test is a tripwire for handlers added to an `/mcp` route block (a route built another way, such as a prebuilt method router or a nested router, is outside it) |
 | H5/H6 POST-SSE | notification channel carries frames | judged in `send_or_count` as queued; written by `sse_message` | as designed |
 | H7 GET stream | moved payload | each session's copy judged at enqueue for the session's `caller_key`; a `StreamMark` beside the note carries the ticket | the note stays a `TaggedNotification`; webhook items also judged on the raw body |
 | H8 listen | `OutboundReply::Stream` | the acknowledgement document judged with the listen request's params as a read, each event judged for the listener's caller as written | rows 11, 2k |
