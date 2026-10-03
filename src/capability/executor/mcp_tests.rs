@@ -479,11 +479,13 @@ providers:
 
 #[test]
 fn a_requires_naming_an_undeclared_property_fails_the_load() {
-    let err = parse_capability(&probe_with(
+    let def = parse_capability(&probe_with(
         "            tool: echo\n            requires: [typo]",
     ))
-    .unwrap_err()
-    .to_string();
+    .unwrap();
+    let err = crate::capability::validate_capability(&def)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("requires 'typo'"), "{err}");
 }
 
