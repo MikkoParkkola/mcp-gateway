@@ -375,16 +375,8 @@ impl EventsHub {
                 .await;
             match outcome? {
                 Ok(admission) => {
-                    // The commit's own verdict, not the earlier read: two racing
-                    // identical subscribes cannot both be the first.
-                    self.subscribed(
-                        caller,
-                        admission == super::store::Admission::Refreshed,
-                        &id,
-                        &descriptor.name,
-                        &url,
-                    )
-                    .await;
+                    self.subscribed(caller, admission, &id, &descriptor.name, &url)
+                        .await;
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())

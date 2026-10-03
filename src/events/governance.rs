@@ -127,13 +127,15 @@ impl EventsHub {
     pub(crate) async fn subscribed(
         &self,
         caller: &Caller,
-        refreshed: bool,
+        admission: super::store::Admission,
         id: &str,
         name: &str,
         url: &url::Url,
     ) {
         let act = Lifecycle {
-            action: if refreshed {
+            // The commit's own verdict, not an earlier read: two racing
+            // identical subscribes cannot both be the first.
+            action: if admission == super::store::Admission::Refreshed {
                 "events.refresh"
             } else {
                 "events.subscribe"
