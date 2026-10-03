@@ -816,6 +816,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
 
 #[async_trait::async_trait]
 impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
+    #[allow(clippy::too_many_lines)]
     async fn invoke(
         &self,
         retry_params: Value,
@@ -835,7 +836,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // protect and burning the idempotency key here would deny the caller a
         // retry of work that never ran.
         #[cfg(feature = "cost-governance")]
-        self.meta
+        let admission = self
+            .meta
             .admit_spend_for(&dispatch_guards::BackendCall {
                 server: self.server,
                 tool: self.tool,
@@ -920,6 +922,9 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 &super::response_security::chain_receipt::ChainSlot::default(),
             )
             .await;
+        // The round's spend is recorded: give its reservation back.
+        #[cfg(feature = "cost-governance")]
+        drop(admission);
         let error = match dispatched {
             Ok(value) => {
                 // Asked again: the backend has not acted on this round.
@@ -1918,13 +1923,15 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let cost_warnings = self.admit_spend_for(&dispatch_guards::BackendCall {
+        let mut admission = self.admit_spend_for(&dispatch_guards::BackendCall {
             server,
             tool,
             session_id,
             api_key_name,
             trace_id,
         })?;
+        #[cfg(feature = "cost-governance")]
+        let cost_warnings = std::mem::take(&mut admission.warnings);
 
         // Derive a prompt_cache_key for OpenAI-compatible backends.
         // Priority: explicit _meta.prompt_cache_key > hash of a real session id.
@@ -2013,6 +2020,9 @@ impl MetaMcp {
             &chain_slot,
         ))
         .await;
+        // The spend is recorded: give the reservation back.
+        #[cfg(feature = "cost-governance")]
+        drop(admission);
 
         // A raw-receipt chain refusal is the answer, not a tool failure (D3).
         let receipt = std::mem::take(&mut *chain_slot.lock());
@@ -3258,12 +3268,18 @@ impl MetaMcp {
     /// backend call per round, and a budget checked only at the first would let
     /// a backend that keeps asking spend past the operator's limit.
     ///
-    /// Returns the warnings to inject post-dispatch; blocks with JSON-RPC
-    /// -32003 carrying the enforcer's own reason.
+    /// Returns the [`dispatch_guards::Admission`]: the warnings to inject
+    /// post-dispatch and the reservation on the call's cost, to be kept until
+    /// the spend is recorded. Blocks with JSON-RPC -32003 carrying the
+    /// enforcer's own reason.
     #[cfg(feature = "cost-governance")]
-    fn admit_spend(&self, tool: &str, api_key_name: Option<&str>) -> Result<Vec<String>> {
+    fn admit_spend(
+        &self,
+        tool: &str,
+        api_key_name: Option<&str>,
+    ) -> Result<dispatch_guards::Admission> {
         let Some(ref enforcer) = self.budget_enforcer else {
-            return Ok(Vec::new());
+            return Ok(dispatch_guards::Admission::default());
         };
         let result = enforcer.check(tool, api_key_name);
         if !result.allowed {
@@ -3274,7 +3290,10 @@ impl MetaMcp {
                     .unwrap_or_else(|| "Budget exceeded".to_string()),
             ));
         }
-        Ok(result.warnings)
+        Ok(dispatch_guards::Admission::new(
+            result.warnings,
+            result.hold,
+        ))
     }
 
     /// Dispatch one round to the backend and meter it.
