@@ -25,8 +25,8 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
 
-const NOTE: &str = "notifications/cancelled";
-const PASSTHROUGH: &str = "x-mcp-passthrough-authorization";
+pub(super) const NOTE: &str = "notifications/cancelled";
+pub(super) const PASSTHROUGH: &str = "x-mcp-passthrough-authorization";
 
 /// Mints `Bearer minted-for-<subject>` bound to `<subject>@<audience>`, and
 /// refuses the subject `mallory`.
@@ -63,11 +63,11 @@ impl crate::identity_propagation::IdentityPropagation for Mint {
 }
 
 /// `(slot, method, authorization)` for every message a slot is handed.
-type Seen = Arc<parking_lot::Mutex<Vec<(&'static str, String, Option<String>)>>>;
+pub(super) type Seen = Arc<parking_lot::Mutex<Vec<(&'static str, String, Option<String>)>>>;
 
-struct SlotWire {
-    slot: &'static str,
-    seen: Seen,
+pub(super) struct SlotWire {
+    pub(super) slot: &'static str,
+    pub(super) seen: Seen,
 }
 
 #[async_trait::async_trait]
@@ -164,7 +164,7 @@ impl Gateway {
     }
 }
 
-fn http() -> TransportConfig {
+pub(super) fn http() -> TransportConfig {
     TransportConfig::Http {
         http_url: "https://ledger.invalid/mcp".to_string(),
         streamable_http: true,
@@ -180,7 +180,7 @@ fn stdio() -> TransportConfig {
     }
 }
 
-fn backend_config(
+pub(super) fn backend_config(
     transport: TransportConfig,
     strategy: PropagationStrategyKind,
     required: bool,
