@@ -73,6 +73,41 @@ async fn the_subscription_lifecycle_writes_governance_records() {
     events_at_least(&rx, 2).await;
     let replayed = records_of(root.path(), "events.replay").await;
     assert_eq!(replayed[0]["event_id"], event_id.as_str());
+    // Accountability (MIK-7806): the record names the admin who replayed.
+    assert_eq!(replayed[0]["who"]["account"], "admin", "{}", replayed[0]);
+    assert_eq!(replayed[0]["who"]["credential_kind"], "api_key");
+    assert!(
+        replayed[0]["who"]["principal"]
+            .as_str()
+            .is_some_and(|p| !p.is_empty()),
+        "the admin credential's principal is on the record"
+    );
+    // A bulk replay writes one such record per dead letter it revives.
+    rx.script([EventReply::Status(410)]);
+    fire(&gw, "d-7806", "o/r").await;
+    let second = dead_with_reason(root.path(), "gone").await;
+    let second_id = second[0]["event_id"].as_str().expect("event id").to_owned();
+    let (status, _) = gw
+        .admin(
+            Some(ADMIN),
+            "POST",
+            &format!("/ui/api/events/dead-letters/replay?all=1&subscription={id}"),
+        )
+        .await;
+    assert_eq!(status, 200);
+    let bulk = wait_until(DEADLINE, || {
+        audit_records(root.path())
+            .iter()
+            .any(|r| r["action"] == "events.replay" && r["event_id"] == second_id.as_str())
+    })
+    .await;
+    assert!(bulk, "bulk replay writes a record per dead letter");
+    for record in audit_records(root.path())
+        .iter()
+        .filter(|r| r["action"] == "events.replay")
+    {
+        assert_eq!(record["who"]["account"], "admin", "{record}");
+    }
     unsubscribe(&gw, ALICE, &rx.url, json!({})).await;
     records_of(root.path(), "events.unsubscribe").await;
     let verified = records_of(root.path(), "events.verification").await;
