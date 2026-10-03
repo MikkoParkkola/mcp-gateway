@@ -1,0 +1,46 @@
+name: Perf arms
+
+# Throwaway branch only (never merged). Builds the release binary of each
+# L7 trim arm on aarch64 for price2 on the bench host.
+on:
+  push:
+    branches: ["throwaway/perf-arms-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build arm ${{ matrix.arm }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arm: X0, ref: 781b35ce46a2a7ba6b33498cf17d72b0a47dbf56 }
+          - { arm: X1, ref: 263997f8f7030519be2076d4a9df8d5f85c7d9c4 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.98.0
+      - name: Build
+        shell: bash
+        env:
+          ARM: ${{ matrix.arm }}
+        run: |
+          cargo build --release --locked --bin mcp-gateway
+          mkdir -p out
+          cp target/release/mcp-gateway "out/mcp-gateway-$ARM"
+          git rev-parse HEAD > "out/ref-$ARM.txt"
+          (cd out && sha256sum "mcp-gateway-$ARM" > "sha256-$ARM.txt")
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-arm-${{ matrix.arm }}-${{ matrix.ref }}
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
