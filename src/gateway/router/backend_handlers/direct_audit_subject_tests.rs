@@ -70,6 +70,84 @@ fn backend(config: BackendConfig) -> Arc<Backend> {
     ))
 }
 
+/// A sole-operator managed vault for [`ACCOUNT`].
+fn operator_vault() -> Arc<VaultStrategy> {
+    Arc::new(VaultStrategy::new(
+        Arc::new(Unreached),
+        AccountDescriptor {
+            descriptor_id: ACCOUNT.to_string(),
+            provider: "google".to_string(),
+            resource: "https://resource.invalid/".to_string(),
+            issuer: "https://accounts.google.invalid".to_string(),
+        },
+        "0".repeat(64),
+        true,
+    ))
+}
+
+/// A state whose only backend is `captured`, with the vault installed for its
+/// account and `logger` as the route's transparency log.
+async fn state_with(
+    captured: &Arc<Backend>,
+    logger: Arc<TransparencyLogger>,
+) -> Arc<crate::gateway::router::AppState> {
+    let (mut state, _store) =
+        direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
+    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    assert!(
+        state_mut.backends.register(Arc::clone(captured)),
+        "registration"
+    );
+    let meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    meta.account_strategies().install(
+        InstalledAccount {
+            descriptor_id: ACCOUNT.to_string(),
+            provider: "google".to_string(),
+            audience: "https://resource.invalid/".to_string(),
+            required: false,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+            minter: Minter::Managed(operator_vault()),
+        },
+        DescriptorMode::PersonalManaged,
+    );
+    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.transparency_log = Some(logger);
+    state
+}
+
+/// A caller that presented a validated credential and no end-user identity:
+/// the sole operator, where a vault says so.
+fn credentialed_caller() -> Caller {
+    Caller {
+        client: Some(AuthenticatedClient {
+            name: "key".to_string(),
+            principal: principal_of("a-validated-secret"),
+            authenticated: true,
+            ..anonymous_client()
+        }),
+        cert_identity: None,
+        oauth_agent_identity: None,
+        proven: None,
+        slot: None,
+        verified_identity: None,
+        inbound_headers: axum::http::HeaderMap::new(),
+        grant_subject: None,
+    }
+}
+
+fn guarded() -> Preflight {
+    Preflight {
+        retry: crate::protocol::mrtr::RetryFields::default(),
+        chain_nonce: None,
+        signing_scope: crate::gateway::meta_mcp::signing::SigningScope::InvokeOnly,
+        signs: false,
+        signing_nonce: None,
+        challenge: None,
+        isolation_guarded: true,
+    }
+}
+
 #[tokio::test]
 async fn the_mint_audit_subject_is_the_captured_backends_principal() {
     let file = tempfile::NamedTempFile::new().expect("tempfile");
@@ -86,39 +164,7 @@ async fn the_mint_audit_subject_is_the_captured_backends_principal() {
         account: Some(ACCOUNT.to_string()),
         ..BackendConfig::default()
     });
-    let (mut state, _store) =
-        direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
-    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    assert!(
-        state_mut.backends.register(Arc::clone(&captured)),
-        "registration"
-    );
-    let meta = MetaMcp::new(Arc::clone(&state_mut.backends));
-    let vault = Arc::new(VaultStrategy::new(
-        Arc::new(Unreached),
-        AccountDescriptor {
-            descriptor_id: ACCOUNT.to_string(),
-            provider: "google".to_string(),
-            resource: "https://resource.invalid/".to_string(),
-            issuer: "https://accounts.google.invalid".to_string(),
-        },
-        "0".repeat(64),
-        true,
-    ));
-    meta.account_strategies().install(
-        InstalledAccount {
-            descriptor_id: ACCOUNT.to_string(),
-            provider: "google".to_string(),
-            audience: "https://resource.invalid/".to_string(),
-            required: false,
-            token_exchange_endpoint: None,
-            token_exchange_scope: None,
-            minter: Minter::Managed(vault),
-        },
-        DescriptorMode::PersonalManaged,
-    );
-    state_mut.meta_mcp = Arc::new(meta);
-    state_mut.transparency_log = Some(logger);
+    let state = state_with(&captured, logger).await;
 
     // A reload replaces the account-bound backend with an unbound one.
     assert!(state.backends.remove("alpha"), "alpha was registered");
@@ -127,21 +173,7 @@ async fn the_mint_audit_subject_is_the_captured_backends_principal() {
         "the reload registers the replacement"
     );
 
-    let caller = Caller {
-        client: Some(AuthenticatedClient {
-            name: "key".to_string(),
-            principal: principal_of("a-validated-secret"),
-            authenticated: true,
-            ..anonymous_client()
-        }),
-        cert_identity: None,
-        oauth_agent_identity: None,
-        proven: None,
-        slot: None,
-        verified_identity: None,
-        inbound_headers: axum::http::HeaderMap::new(),
-        grant_subject: None,
-    };
+    let caller = credentialed_caller();
     let expected = state.meta_mcp.audit_subject_for(&captured, caller.proof());
     assert_ne!(
         expected,
@@ -153,15 +185,6 @@ async fn the_mint_audit_subject_is_the_captured_backends_principal() {
         backend: captured,
         session_id: None,
     };
-    let preflight = Preflight {
-        retry: crate::protocol::mrtr::RetryFields::default(),
-        chain_nonce: None,
-        signing_scope: crate::gateway::meta_mcp::signing::SigningScope::InvokeOnly,
-        signs: false,
-        signing_nonce: None,
-        challenge: None,
-        isolation_guarded: true,
-    };
     // The account-bound backend has no compiled propagation: refused, and the
     // refusal is audited under the subject of the principal it resolves for.
     let refused = propagate_identity(
@@ -169,7 +192,7 @@ async fn the_mint_audit_subject_is_the_captured_backends_principal() {
         "alpha",
         &caller,
         &route,
-        &preflight,
+        &guarded(),
         &RequestId::Number(1),
     )
     .await;
