@@ -98,8 +98,11 @@ pub(crate) enum LiveBinding {
         #[serde(default)]
         provider_sha256: Option<String>,
     },
-    /// The static bearer; its principal is the credential principal.
+    /// The static bearer of a row written before the full digest was kept:
+    /// its principal (a 12-hex fingerprint) is the credential principal.
     StaticBearer,
+    /// The static bearer, by the SHA-256 of the bearer itself (MIK-7889).
+    StaticBearerSha256 { bearer_sha256: String },
     /// A dashboard session, by the SHA-256 of its handle.
     DashboardSession { session_sha256: String },
 }
@@ -111,7 +114,7 @@ impl LiveBinding {
         match self {
             Self::KeyServerToken { .. } => Kind::KeyServerToken,
             Self::OidcBearer { .. } => Kind::OidcBearer,
-            Self::StaticBearer => Kind::StaticBearer,
+            Self::StaticBearer | Self::StaticBearerSha256 { .. } => Kind::StaticBearer,
             Self::DashboardSession { .. } => Kind::DashboardSession,
         }
     }
@@ -123,7 +126,7 @@ impl std::fmt::Debug for LiveBinding {
         f.write_str(match self {
             Self::KeyServerToken { .. } => "KeyServerToken",
             Self::OidcBearer { .. } => "OidcBearer",
-            Self::StaticBearer => "StaticBearer",
+            Self::StaticBearer | Self::StaticBearerSha256 { .. } => "StaticBearer",
             Self::DashboardSession { .. } => "DashboardSession",
         })
     }

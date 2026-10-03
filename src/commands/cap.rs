@@ -159,7 +159,13 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
 /// The executor `cap list` asks "is this one served?" with: the environment
 /// the gateway would start with (its config's `env_files` over the process
 /// environment), so the answer is the one `tools/list` gives.
-fn list_executor(config: Option<&std::path::Path>) -> CapabilityExecutor {
+///
+/// A config that cannot be loaded is an error, not a reason to answer from the
+/// process environment: the gateway would refuse to start on it, so a listing
+/// computed without it would show readiness the gateway never has.
+fn list_executor(
+    config: Option<&std::path::Path>,
+) -> Result<CapabilityExecutor, (std::path::PathBuf, mcp_gateway::Error)> {
     let (_, load_path) = crate::discovered_config::resolve(config);
     match mcp_gateway::config::Config::load_evaluated(load_path.as_deref()) {
         Ok(evaluated) => {
@@ -167,13 +173,20 @@ fn list_executor(config: Option<&std::path::Path>) -> CapabilityExecutor {
                 evaluated.overlay,
                 evaluated.env_paths,
             ));
-            CapabilityExecutor::for_listing(&evaluated.config, env)
+            Ok(CapabilityExecutor::for_listing(&evaluated.config, env))
         }
-        Err(_) => CapabilityExecutor::new(),
+        Err(e) => Err((load_path.unwrap_or_default(), e)),
     }
 }
 
 async fn cap_list(directory: std::path::PathBuf, config: Option<&std::path::Path>) -> ExitCode {
+    let executor = match list_executor(config) {
+        Ok(executor) => executor,
+        Err((path, e)) => {
+            eprintln!("❌ Failed to load config {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
     let path = directory.to_string_lossy();
     match CapabilityLoader::load_directory(&path).await {
         Ok(caps) => {
@@ -181,7 +194,6 @@ async fn cap_list(directory: std::path::PathBuf, config: Option<&std::path::Path
                 println!("No capabilities found in {path}");
             } else {
                 println!("Found {} capabilities in {}:\n", caps.len(), path);
-                let executor = list_executor(config);
                 for cap in caps {
                     println!("{}", executor.list_line(&cap));
                 }
