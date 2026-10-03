@@ -225,8 +225,9 @@ impl EventsHub {
     /// delete the subscriptions to webhook event types the catalogue no
     /// longer offers (a route removed while the gateway was down, or webhooks
     /// turned off), their pending records with them, and let the worker start.
-    /// Before this the catalogue is partial, so nothing is withdrawn and
-    /// nothing is sent (MIK-7772). `false`, with the worker still held, when
+    /// Before this the webhook catalogue is partial, so no webhook type is
+    /// withdrawn and nothing is sent (MIK-7772); backend types are complete
+    /// from the start and are withdrawn whatever the scan did (MIK-7803). `false`, with the worker still held, when
     /// a removal failed: the caller retries.
     pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
         // Held through the snapshot and the withdrawal, so a capability reload
