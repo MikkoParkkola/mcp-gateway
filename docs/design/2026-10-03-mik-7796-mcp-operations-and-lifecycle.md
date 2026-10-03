@@ -60,19 +60,27 @@ no behaviour change for other capabilities).
 `gateway_invoke`, which is already task-dispatchable, so a caller runs the slow operation as a task. Inside the
 call the executor needs a bounded wait:
 
-- `ToolCall.wait: Option<WaitStep>` with `{ tool, arguments, until: { field, equals }, interval_ms
-  (200..=5000, default 1000), max_wait_s }`. After the main call, poll `tool` until the result's `field` equals
-  `equals`, the per-call deadline passes, or `max_wait_s` (never above the provider timeout) passes. A poll that
-  returns a tool error or no match counts as not ready (the server answers an absent or unfinished binary
-  with an error), never aborts the wait. A timeout is an error naming the wait, not a silent success.
-  For pyghidra the poll is `list_project_binaries`, matching the imported file, until `analysis_complete`
-  is true; the matching program name is returned for later operations.
+- `ToolCall.wait: Option<WaitStep>` with `{ tool, arguments, until, interval_ms (200..=5000, default 1000),
+  max_wait_s }`, where `until` is `{ array, match, field, equals }`: the poll result's `array` must hold an
+  element whose `match` fields equal the given templates and whose `field` equals `equals`. For pyghidra:
+  `list_project_binaries`, `array: programs`, `match: { file_path: "{binary_path}" }`, `field:
+  analysis_complete`, `equals: true`, so "this binary is analysed" is expressible and the matching program name
+  is bound for later operations. A poll that returns a tool error or no match counts as not ready (the server
+  answers an absent or unfinished binary with an error); it never aborts the wait.
+- Deadlines. `max_wait_s` must be at most the provider timeout minus 10 s (load-time check). Exhausting
+  `max_wait_s` returns `BackendTimeout("analysis not finished within N s; call again to keep waiting")` and does
+  NOT discard the child: the server is busy, not wedged, and its analysis continues. Only the outer call
+  deadline (a server that stops answering) discards the child. The pyghidra provider timeout is 300 s.
+- The wait holds the lease (`InFlight`) for its whole duration and is inside the same `tokio::time::timeout` as
+  the call, so no path is unbounded and none outlives the lease.
 - Operations (read-only): `import` (`import_binary`, wait on `list_project_binary_metadata` for the binary),
   `list_binaries`, `decompile` (`decompile_function`), `xrefs` (`list_xrefs`), `search_symbols`
   (`search_symbols_by_name`), `search_strings`, `imports`, `exports`, `callgraph` (`gen_callgraph`),
   `metadata`. Mutating tools (rename, set comment/type/prototype, delete) are not exposed. `import` changes the
   project, so the capability is `read_only: false`, `destructive: false`, and both response caches are off
-  (`cache.strategy: none`): imports change state and child eviction discards it. `binary_path` carries `path_root: projects`.
+  (`cache.strategy: none`): imports change state and child eviction discards it. `binary_path` carries `path_root: uploads` (the root documented for analysis input; the frozen 7782
+  confinement of that parameter is unchanged). `env` allowlists `GHIDRA_INSTALL_DIR` and `JAVA_HOME` so the
+  isolated child can find Ghidra.
 - Verification: tool names and argument names are checked against the server's `tools/list` snapshot in a test
   (a mapped tool that the snapshot lacks fails it). A real Ghidra is not available in CI; this is stated in the
   PR.
