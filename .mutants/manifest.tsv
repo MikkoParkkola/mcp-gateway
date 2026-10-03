@@ -1,0 +1,7 @@
+head_sha	6cd7f0c4afff35b322afab9d8bf5944cf5968e9f
+# batch 1 for #2772 (captured backend)
+H1	linux	h1.patch	--lib -- direct_captured_backend_tests
+H2	linux	h2.patch	--lib -- direct_captured_backend_tests
+H3	linux	h3.patch	--lib -- direct_captured_backend_tests
+H4	linux	h4.patch	--lib -- direct_captured_backend_tests
+H5	linux	h5.patch	--lib -- captured_backend_tests

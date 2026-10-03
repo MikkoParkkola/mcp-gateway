@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_preflight.rs b/src/gateway/router/backend_handlers/direct_preflight.rs
+index 46e17ec9f..6bfb04291 100644
+--- a/src/gateway/router/backend_handlers/direct_preflight.rs
++++ b/src/gateway/router/backend_handlers/direct_preflight.rs
+@@ -402,7 +402,7 @@ pub(super) async fn propagate_identity(
+     // per-user OAuth backend on a multi-user gateway is refused rather than
+     // served the shared token.
+     if let Err(e) = state.meta_mcp.enforce_oauth_isolation_for(
+-        &route.backend,
++        &state.backends.get(name).unwrap_or_else(|| route.backend.clone()),
+         name,
+         !propagation.headers.is_empty(),
+     ) {

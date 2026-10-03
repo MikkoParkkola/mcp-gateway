@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_preflight.rs b/src/gateway/router/backend_handlers/direct_preflight.rs
+index 46e17ec9f..acc6c8bda 100644
+--- a/src/gateway/router/backend_handlers/direct_preflight.rs
++++ b/src/gateway/router/backend_handlers/direct_preflight.rs
+@@ -298,7 +298,7 @@ async fn audit_mint(
+     // The principal resolved for (passthrough: the verified identity).
+     let subject = state
+         .meta_mcp
+-        .audit_subject_for(&route.backend, caller.proof());
++        .audit_subject_for(&state.backends.get(name).unwrap_or_else(|| route.backend.clone()), caller.proof());
+     let audience = idp_cfg.map(|c| c.audience.as_str());
+     match result {
+         Ok(headers) => {

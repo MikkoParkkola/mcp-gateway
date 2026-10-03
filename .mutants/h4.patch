@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/notification_key.rs b/src/gateway/router/backend_handlers/notification_key.rs
+index ccff4314e..b9c3b7b6d 100644
+--- a/src/gateway/router/backend_handlers/notification_key.rs
++++ b/src/gateway/router/backend_handlers/notification_key.rs
+@@ -57,7 +57,7 @@ pub(super) async fn resolve(
+         }
+         match state
+             .meta_mcp
+-            .resolve_propagation_credential_held_for(name, Some(backend), caller)
++            .resolve_propagation_credential_held_for(name, state.backends.get(name).as_deref().or(Some(backend)), caller)
+             .await
+         {
+             Ok((headers, binding, _held)) => (headers, binding),
