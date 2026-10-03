@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index 990513e84..770c4058c 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -434,7 +434,7 @@ impl MetaMcp {
+         reason = "the call sits beside the other relay steps on the Meta-MCP"
+     )]
+     pub(crate) fn settle_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
+-        let delivers = response.error.is_none() && !response.delivery_refusal;
++        let delivers = true;
+         let _ = RELAY_DELIVERS.try_with(|flag| flag.set(delivers));
+     }
+ 
