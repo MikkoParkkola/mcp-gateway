@@ -454,6 +454,9 @@ fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
     delivered(&block, "alice");
     let (message, warnings) = observed_relay_warnings(&block, "bob", PROSE);
     let message = message.expect("block refuses the relay");
-    assert!(message.starts_with("Relay detection blocked: "), "{message}");
+    assert!(
+        message.starts_with("Relay detection blocked: "),
+        "{message}"
+    );
     assert!(warnings.is_empty(), "{warnings:?}");
 }
