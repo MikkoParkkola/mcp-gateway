@@ -298,12 +298,14 @@ mod tests {
     }
 
     #[test]
-    fn the_legacy_stream_keeps_only_the_three_notifications() {
+    fn the_legacy_stream_keeps_only_the_four_notifications() {
         let upd = json!({"jsonrpc": "2.0", "method": "notifications/resources/updated",
             "params": {"uri": "file:///a"}});
         assert!(unsolicited_frame(&upd.to_string()).is_some());
         let tools = json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"});
-        assert!(unsolicited_frame(&tools.to_string()).is_none());
+        assert!(unsolicited_frame(&tools.to_string()).is_some());
+        let other = json!({"jsonrpc": "2.0", "method": "notifications/message"});
+        assert!(unsolicited_frame(&other.to_string()).is_none());
         let resp = json!({"jsonrpc": "2.0", "id": 1, "result": {}});
         assert!(unsolicited_frame(&resp.to_string()).is_none());
         assert!(unsolicited_frame(": keep-alive").is_none());

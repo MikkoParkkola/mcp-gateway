@@ -180,6 +180,10 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
             Ev::Pending(None) => state.pending = None,
             Ev::Wake | Ev::Tick => {}
         }
+        if state.tools_pending {
+            // Before the event is sent: the re-read it prompts must be fresh.
+            backend.invalidate_tools();
+        }
         if !backend_still_current(backend, &target.handle) {
             debug!(backend = %shared.name, "upstream listener: transport replaced");
             return state.ended(started);

@@ -154,8 +154,11 @@ mod tests {
             parse_name("backend.x.resources_changed"),
             Some(("x", Kind::ResourcesChanged))
         );
+        assert_eq!(
+            parse_name("backend.x.tools_changed"),
+            Some(("x", Kind::ToolsChanged))
+        );
         for other in [
-            "backend.x.tools_changed",
             "backend..resources_changed",
             "backend.resources_changed",
             "backend.xresources_changed",
