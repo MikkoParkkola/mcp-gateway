@@ -663,4 +663,7 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "alternatives_tests.rs"]
+mod alternatives_tests;
+#[cfg(test)]
 mod tests;
