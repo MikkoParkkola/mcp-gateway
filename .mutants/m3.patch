@@ -1,0 +1,15 @@
+diff --git a/src/gateway/task_service/execution.rs b/src/gateway/task_service/execution.rs
+index 386609a1a..981ded63d 100644
+--- a/src/gateway/task_service/execution.rs
++++ b/src/gateway/task_service/execution.rs
+@@ -389,9 +389,7 @@ impl TaskExecutor {
+ 
+     /// End every worker spawned from now on before its first step, which is what
+     /// refuses a late task start (its `begin` answers `Unavailable`).
+-    pub(crate) fn seal(&self) {
+-        self.shutdown.cancel();
+-    }
++    pub(crate) fn seal(&self) {}
+ 
+     /// Whether [`Self::seal`] or a cancelling shutdown has closed admission.
+     #[cfg(test)]

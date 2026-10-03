@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/task_runtime.rs b/src/gateway/server/task_runtime.rs
+index fb9d00b33..2dbcf1d66 100644
+--- a/src/gateway/server/task_runtime.rs
++++ b/src/gateway/server/task_runtime.rs
+@@ -161,7 +161,7 @@ pub(super) async fn settle_store(
+             warn!(%error, "Task store did not release its lease cleanly");
+         }
+     };
+-    if tokio::time::timeout(bound, tail).await.is_err() {
++    if { tail.await; false } {
+         warn!(
+             ?bound,
+             "Task expiry join or store close did not finish in time; going on to backend teardown"

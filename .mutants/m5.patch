@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/task_runtime.rs b/src/gateway/server/task_runtime.rs
+index fb9d00b33..dc1b58eec 100644
+--- a/src/gateway/server/task_runtime.rs
++++ b/src/gateway/server/task_runtime.rs
+@@ -110,7 +110,7 @@ pub(super) async fn shutdown(
+     // start, since a handler that begins a task now would run against a store
+     // about to close. The bounded join also catches a task that slipped in
+     // between the drain and the seal.
+-    let outcome = executor.cancel_remaining(budget.cancel).await;
++    let outcome = if drained.timed_out { executor.cancel_remaining(budget.cancel).await } else { crate::gateway::task_service::execution::CancelOutcome { cancelled: 0, stopped: true } };
+     let cancelled = if drained.timed_out {
+         warn!(
+             cancelled = outcome.cancelled,
