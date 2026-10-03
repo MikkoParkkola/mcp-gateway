@@ -1,1 +1,0 @@
-- A capability reload that arrives before the startup scan completes is applied when the scan completes, instead of being dropped from the webhook routes (MIK-7862).
