@@ -20,7 +20,7 @@ use serde_json::json;
 
 use super::errors::{admin_auth_required, flat_error};
 use super::is_admin;
-use crate::events::{EventsHub, ReplayRefusal, is_dead_reason};
+use crate::events::{Actor, EventsHub, ReplayRefusal, is_dead_reason};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 
@@ -47,14 +47,23 @@ struct BulkQuery {
 fn admitted(
     state: &AppState,
     client: Option<Extension<AuthenticatedClient>>,
-) -> Result<Arc<EventsHub>, Box<axum::response::Response>> {
+) -> Result<(Arc<EventsHub>, Actor), Box<axum::response::Response>> {
     let client = client.map(|Extension(c)| c);
     if !is_admin(client.as_ref()) {
         return Err(Box::new(admin_auth_required().into_response()));
     }
-    state.meta_mcp.events().map(Arc::clone).ok_or_else(|| {
-        Box::new(flat_error(StatusCode::NOT_FOUND, "Events are not enabled").into_response())
-    })
+    // `is_admin` holds only for an authenticated client.
+    let actor = client.map(|c| Actor {
+        kind: c.credential_kind,
+        principal: c.principal,
+        name: c.name,
+    });
+    let (Some(actor), Some(hub)) = (actor, state.meta_mcp.events()) else {
+        return Err(Box::new(
+            flat_error(StatusCode::NOT_FOUND, "Events are not enabled").into_response(),
+        ));
+    };
+    Ok((Arc::clone(hub), actor))
 }
 
 fn refusal(why: ReplayRefusal) -> axum::response::Response {
@@ -75,8 +84,8 @@ async fn list(
     client: Option<Extension<AuthenticatedClient>>,
     Query(query): Query<ListQuery>,
 ) -> axum::response::Response {
-    let hub = match admitted(&state, client) {
-        Ok(hub) => hub,
+    let (hub, _) = match admitted(&state, client) {
+        Ok(admitted) => admitted,
         Err(answer) => return *answer,
     };
     if query.reason.as_deref().is_some_and(|r| !is_dead_reason(r)) {
@@ -91,11 +100,11 @@ async fn replay_one(
     client: Option<Extension<AuthenticatedClient>>,
     Path(id): Path<String>,
 ) -> axum::response::Response {
-    let hub = match admitted(&state, client) {
-        Ok(hub) => hub,
+    let (hub, actor) = match admitted(&state, client) {
+        Ok(admitted) => admitted,
         Err(answer) => return *answer,
     };
-    match hub.replay_dead(&id).await {
+    match hub.replay_dead(&id, &actor).await {
         Ok(()) => Json(json!({"eventId": id, "status": "queued"})).into_response(),
         Err(why) => refusal(why),
     }
@@ -106,8 +115,8 @@ async fn replay_all(
     client: Option<Extension<AuthenticatedClient>>,
     Query(query): Query<BulkQuery>,
 ) -> axum::response::Response {
-    let hub = match admitted(&state, client) {
-        Ok(hub) => hub,
+    let (hub, actor) = match admitted(&state, client) {
+        Ok(admitted) => admitted,
         Err(answer) => return *answer,
     };
     let (Some("1"), Some(subscription)) = (query.all.as_deref(), query.subscription.as_deref())
@@ -118,7 +127,7 @@ async fn replay_all(
         )
         .into_response();
     };
-    let (replayed, refused) = hub.replay_all(subscription).await;
+    let (replayed, refused) = hub.replay_all(subscription, &actor).await;
     let refused: Vec<_> = refused
         .into_iter()
         .map(|(id, why)| json!({"eventId": id, "reason": why.as_str()}))

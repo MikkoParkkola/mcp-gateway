@@ -87,7 +87,11 @@ impl EventsHub {
 
     /// Replay dead letter `event_id`: access re-check, fresh firewall scan,
     /// then a new outbox record under the same event id.
-    pub(crate) async fn replay_dead(self: &Arc<Self>, event_id: &str) -> Result<(), ReplayRefusal> {
+    pub(crate) async fn replay_dead(
+        self: &Arc<Self>,
+        event_id: &str,
+        actor: &super::governance::Actor,
+    ) -> Result<(), ReplayRefusal> {
         let services = self
             .runtime
             .services
@@ -166,7 +170,7 @@ impl EventsHub {
                             event_id: Some(event_id),
                             ok: true,
                         },
-                        None,
+                        super::governance::Attribution::Admin(actor),
                     )
                     .await;
                 Ok(())
@@ -184,12 +188,13 @@ impl EventsHub {
     pub(crate) async fn replay_all(
         self: &Arc<Self>,
         subscription: &str,
+        actor: &super::governance::Actor,
     ) -> (usize, Vec<(String, ReplayRefusal)>) {
         let mut replayed = 0;
         let mut refused = Vec::new();
         for entry in self.list_dead_letters(Some(subscription), None) {
             let id = entry["eventId"].as_str().unwrap_or_default().to_owned();
-            match self.replay_dead(&id).await {
+            match self.replay_dead(&id, actor).await {
                 Ok(()) => replayed += 1,
                 Err(why) => refused.push((id, why)),
             }

@@ -15,6 +15,30 @@ use super::rpc::Caller;
 use super::services::{Scan, Services};
 use crate::security::audit::{AuditEnvelope, AuditOutcome, AuditWho};
 
+/// Who an audit record names as the actor.
+#[derive(Clone, Copy)]
+pub(crate) enum Attribution<'a> {
+    /// The gateway itself (a settlement).
+    Gateway,
+    /// A subscriber calling `events/*`.
+    Caller(&'a Caller),
+    /// The authenticated admin who triggered the act (a replay).
+    Admin(&'a Actor),
+}
+
+/// An authenticated admin, as the UI routes resolved it.
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(dead_code, reason = "built by the dashboard routes")
+)]
+pub(crate) struct Actor {
+    pub kind: crate::security::audit::CredentialKind,
+    /// The audit principal: a digest of the credential, never the secret.
+    pub principal: String,
+    /// The configured key name.
+    pub name: String,
+}
+
 /// One governance act.
 pub(crate) struct Lifecycle<'a> {
     pub action: &'static str,
@@ -30,9 +54,8 @@ pub(crate) struct Lifecycle<'a> {
 }
 
 impl Services {
-    /// Write one governance record; `caller` attributes it, `None` is the
-    /// gateway itself (a settlement, an admin replay).
-    pub(crate) async fn audit_lifecycle(&self, act: &Lifecycle<'_>, caller: Option<&Caller>) {
+    /// Write one governance record, attributed as `by` says.
+    pub(crate) async fn audit_lifecycle(&self, act: &Lifecycle<'_>, by: Attribution<'_>) {
         let Some(log) = &self.audit else {
             return;
         };
@@ -48,21 +71,32 @@ impl Services {
             fields.insert("reason".into(), act.detail.into());
         }
         let mut envelope = AuditEnvelope::gateway();
-        if let Some(caller) = caller {
-            if let Some(principal) = &caller.principal {
-                fields.insert("principal".into(), principal.clone().into());
+        match by {
+            Attribution::Gateway => {}
+            Attribution::Caller(caller) => {
+                if let Some(principal) = &caller.principal {
+                    fields.insert("principal".into(), principal.clone().into());
+                }
+                envelope.who = AuditWho::from_parts(
+                    caller.credential.kind,
+                    Some(&caller.credential.principal),
+                    caller
+                        .credential
+                        .api_key
+                        .as_ref()
+                        .map(|k| k.name.as_str())
+                        .or(caller.principal.as_deref()),
+                    None,
+                );
             }
-            envelope.who = AuditWho::from_parts(
-                caller.credential.kind,
-                Some(&caller.credential.principal),
-                caller
-                    .credential
-                    .api_key
-                    .as_ref()
-                    .map(|k| k.name.as_str())
-                    .or(caller.principal.as_deref()),
-                None,
-            );
+            Attribution::Admin(actor) => {
+                envelope.who = AuditWho::from_parts(
+                    actor.kind,
+                    Some(&actor.principal),
+                    Some(&actor.name),
+                    None,
+                );
+            }
         }
         if !act.ok {
             envelope.outcome = AuditOutcome::Error(-32015);
@@ -118,14 +152,14 @@ impl EventsHub {
             event_id: None,
             ok: true,
         };
-        self.govern(&act, Some(caller)).await;
+        self.govern(&act, Attribution::Caller(caller)).await;
     }
 
     /// Write a governance record when the pipeline has started.
-    pub(crate) async fn govern(&self, act: &Lifecycle<'_>, caller: Option<&Caller>) {
+    pub(crate) async fn govern(&self, act: &Lifecycle<'_>, by: Attribution<'_>) {
         let services: Option<&Arc<Services>> = self.runtime.services.get();
         if let Some(services) = services {
-            services.audit_lifecycle(act, caller).await;
+            services.audit_lifecycle(act, by).await;
         }
     }
 }
