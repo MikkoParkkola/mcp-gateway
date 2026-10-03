@@ -1,0 +1,8 @@
+head_sha	92f4dbbc7d500e73899f4b75ed4912136cb75ca1
+# batch 1 for #2752 (direct route split)
+S1	linux	p1.patch	--lib -- a_call_the_tool_gate_refuses_does_not_spend_its_nonce
+S2	linux	p2.patch	--lib -- gateway::router
+S3	linux	p3.patch	--lib -- a_shared_personal_login_refuses_a_request_on_a_multi_user_gateway
+S4	linux	p4.patch	--lib -- gateway::router
+S5	linux	p5.patch	--lib -- gateway::router
+S6	linux	p6.patch	--lib -- gateway::router

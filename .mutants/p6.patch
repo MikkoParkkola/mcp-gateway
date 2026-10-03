@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_preflight.rs b/src/gateway/router/backend_handlers/direct_preflight.rs
+index 818101925..4831f924e 100644
+--- a/src/gateway/router/backend_handlers/direct_preflight.rs
++++ b/src/gateway/router/backend_handlers/direct_preflight.rs
+@@ -304,7 +304,7 @@ async fn audit_mint(
+                 return Ok(headers);
+             }
+             let required = idp_cfg.is_some_and(|c| c.required);
+-            if required && state.transparency_log.is_none() {
++            if false && required && state.transparency_log.is_none() {
+                 tracing::warn!(
+                     backend = %name,
+                     "identity-propagation required but no transparency log is \
