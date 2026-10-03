@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 6e93e578a..47791ff70 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -133,7 +133,7 @@ impl EventsHub {
+                 name: &event.name,
+             },
+         );
+-        let firewall = services.firewall_verdict(scan, data != event.data);
++        let firewall = services.firewall_verdict(scan, false);
+         let bytes = body(
+             &id,
+             event,

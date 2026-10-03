@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/events.rs b/src/gateway/ui/events.rs
+index c6a0214cd..588252e36 100644
+--- a/src/gateway/ui/events.rs
++++ b/src/gateway/ui/events.rs
+@@ -56,7 +56,7 @@ fn admitted(
+     let actor = client.map(|c| Actor {
+         kind: c.credential_kind,
+         principal: c.principal,
+-        name: c.name,
++        name: "gateway".to_owned(),
+     });
+     let (Some(actor), Some(hub)) = (actor, state.meta_mcp.events()) else {
+         return Err(Box::new(

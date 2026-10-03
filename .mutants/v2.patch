@@ -1,0 +1,13 @@
+diff --git a/src/events/governance.rs b/src/events/governance.rs
+index b87a563b0..45e74d8e9 100644
+--- a/src/events/governance.rs
++++ b/src/events/governance.rs
+@@ -121,7 +121,7 @@ impl Services {
+         #[cfg(feature = "firewall")]
+         return match (scan, redacted) {
+             (Scan::Block, _) => "block",
+-            (Scan::Pass, true) => "redacted",
++            (Scan::Pass, true) => "pass",
+             (Scan::Pass, false) => "pass",
+         };
+         #[cfg(not(feature = "firewall"))]
