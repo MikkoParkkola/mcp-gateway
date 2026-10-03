@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/save_file.rs b/src/capability/executor/save_file.rs
+index 87ad781ca..acc0c84b7 100644
+--- a/src/capability/executor/save_file.rs
++++ b/src/capability/executor/save_file.rs
+@@ -156,7 +156,7 @@ fn dir_size(root: &std::path::Path) -> std::io::Result<u64> {
+ 
+ fn create_new(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+     let mut o = std::fs::OpenOptions::new();
+-    o.write(true).create_new(true);
++    o.write(true).create(true).truncate(true);
+     #[cfg(unix)]
+     {
+         use std::os::unix::fs::OpenOptionsExt as _;

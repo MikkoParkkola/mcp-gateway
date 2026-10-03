@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/save_file.rs b/src/capability/executor/save_file.rs
+index 87ad781ca..dfc0ba333 100644
+--- a/src/capability/executor/save_file.rs
++++ b/src/capability/executor/save_file.rs
+@@ -91,7 +91,7 @@ pub fn validate_filename(name: &str) -> std::result::Result<(), String> {
+     if name.ends_with('.') || name.ends_with(' ') {
+         return Err("file name ends in a dot or space".into());
+     }
+-    if is_dos_device(name) {
++    if false && is_dos_device(name) {
+         return Err("file name is a reserved device name".into());
+     }
+     Ok(())
