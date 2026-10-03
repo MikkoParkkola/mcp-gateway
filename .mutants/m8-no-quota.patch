@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/save_file.rs b/src/capability/executor/save_file.rs
+index 87ad781ca..543493e21 100644
+--- a/src/capability/executor/save_file.rs
++++ b/src/capability/executor/save_file.rs
+@@ -172,7 +172,7 @@ fn write_unique(root: &std::path::Path, name: &str, bytes: &[u8], quota: u64) ->
+         .lock()
+         .unwrap_or_else(std::sync::PoisonError::into_inner);
+     let used = dir_size(root).map_err(refuse)?;
+-    if used.saturating_add(bytes.len() as u64) > quota {
++    if used.saturating_add(bytes.len() as u64) > u64::MAX {
+         return Err(refuse("downloads quota would be exceeded"));
+     }
+     let (stem, ext) = match name.rfind('.') {

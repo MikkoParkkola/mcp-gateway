@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp.rs b/src/capability/executor/mcp.rs
+index f76a2dc8f..d903f8487 100644
+--- a/src/capability/executor/mcp.rs
++++ b/src/capability/executor/mcp.rs
+@@ -70,7 +70,7 @@ impl McpChildren {
+         principal: &str,
+         start: impl FnOnce() -> Result<(Arc<Backend>, Workdir)>,
+     ) -> Result<(Arc<Backend>, InFlight)> {
+-        let key = (capability.name.clone(), principal.to_owned());
++        let key = (capability.name.clone(), String::new());
+         let mut stale = Vec::new();
+         let mut map = self.map.lock();
+         if map.get(&key).is_some_and(|child| child.config != *config)
