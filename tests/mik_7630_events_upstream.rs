@@ -56,7 +56,12 @@ fn api_key(name: &str, key: &str, backends: &[&str]) -> Value {
     reason = "call sites build the value inline with json!"
 )]
 fn upstream_config(root: &Path, backend: Value, extra: &[(&str, Value)]) -> Value {
-    let mut cfg = delivery_config(root, &json!({}));
+    // `localhost` may also resolve to ::1 (hosted runners do), and the resolver
+    // checks every address.
+    let mut cfg = delivery_config(
+        root,
+        &json!({"callback_allow_private": ["127.0.0.0/8", "::1/128"]}),
+    );
     cfg["backends"] = json!({ "x": backend });
     for (name, value) in extra {
         cfg["backends"][*name] = value.clone();
