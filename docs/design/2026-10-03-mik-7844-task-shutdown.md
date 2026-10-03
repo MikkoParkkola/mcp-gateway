@@ -33,16 +33,17 @@ Three holes remain at the tip of the release line:
    says so. The sweep is still stopped inside the same bound. Retaining beats
    joining: a worker that did not end inside its cancel budget has no bound on
    when it will, and joining would put an unbounded wait back.
-3. **Seal after a clean drain.** `TaskExecutor::seal()` cancels the shutdown
-   token (terminal, as `cancel_remaining` already is), and admission refuses
-   when the token is cancelled: `commit_create` takes no worker permit, so a
-   late start gets the existing capacity refusal and writes no row.
-   `shutdown` seals after every drain, clean or not, through
-   `cancel_remaining`, whose bounded join also catches a task that slipped in
-   between the drain and the seal and then retains the store as in decision 2.
-   A late start is refused (it never reaches a worker). `drain` itself stays a
-   join: its contract (nothing closed, no admission refused) is relied on by
-   its callers.
+3. **Seal after every drain.** `TaskExecutor::seal()` cancels the shutdown
+   token (terminal, as `cancel_remaining` already is): a worker spawned after it
+   is dropped before its first step and its `begin` answers `Unavailable`, which
+   is the refusal a late start gets. `shutdown` seals after every drain, clean
+   or not, through `cancel_remaining`, whose bounded join also catches a task
+   that slipped in between the drain and the seal and then retains the store as
+   in decision 2. `drain` itself stays a join: its contract (nothing closed, no
+   admission refused) is relied on by its callers. No second check is added at
+   the worker permit: the token already ends the worker, and a create that is
+   inside its commit when the seal lands leaves a `working` row that recovery
+   settles at the next start, as after a crash.
 4. **Docs.** The `ShutdownBudget::within` comment that says the tail "is not
    bounded here" is corrected.
 
@@ -67,8 +68,8 @@ Three holes remain at the tip of the release line:
 
 ## Mutants (each must be RED)
 
-Drop the `timeout`; close the store when `stopped` is false; skip `seal`; let
-`commit_create` ignore the sealed token; give `close` the whole reserve.
+Drop the `timeout`; close the store when `stopped` is false; skip `seal`; give
+`close` the whole reserve.
 
 ## Residual (not in this change)
 

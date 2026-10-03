@@ -85,15 +85,17 @@ impl ShutdownBudget {
 /// The task half of shutdown, in this order:
 /// - workers drain within `budget.drain` (a worker's dispatch IS a backend
 ///   call, so this precedes any backend teardown);
-/// - a drain that ran out cancels the workers still running and waits up to
-///   `budget.cancel` for them to end, so none commits into a closed store or
-///   outlives the backends. Their rows stay `working` and the next start
-///   settles them through the interrupted-task table;
+/// - the executor is sealed and the workers still running are cancelled, waiting
+///   up to `budget.cancel` for them to end, so none commits into a closed store
+///   or outlives the backends; after a clean drain this finds nothing and only
+///   seals, so a task cannot start after it. Their rows stay `working` and the
+///   next start settles them through the interrupted-task table;
 /// - the expiry sweep is joined while the store is still open, so a deletion
-///   already in flight finishes and no new one starts. After the workers,
-///   because its join has no bound of its own;
+///   already in flight finishes and no new one starts;
 /// - the store closes, joining any writer still in flight and giving the
-///   directory lease back.
+///   directory lease back, unless a cancelled worker had not stopped, in which
+///   case it is left open under it. The sweep join and the close share one
+///   `budget.close`, so a stalled delete or write cannot hold what follows.
 ///
 /// Returns what a drain that ran out cancelled, or `None` after a clean drain.
 pub(super) async fn shutdown(

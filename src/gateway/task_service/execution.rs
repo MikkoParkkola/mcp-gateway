@@ -387,7 +387,8 @@ impl TaskExecutor {
         }
     }
 
-    /// Refuse every admission from now on and end workers spawned afterwards.
+    /// End every worker spawned from now on before its first step, which is what
+    /// refuses a late task start (its `begin` answers `Unavailable`).
     pub(crate) fn seal(&self) {
         self.shutdown.cancel();
     }
@@ -440,17 +441,10 @@ impl TaskExecutor {
             targets,
         } = write;
         let workers = Arc::clone(&self.workers);
-        let sealed = self.shutdown.clone();
         let created = self
             .service
             .create_targeted(request.borrow(), task, (backend, targets), move || {
-                // A sealed executor takes no worker, so a late start is the
-                // capacity refusal and writes no row (MIK-7844).
-                if sealed.is_cancelled() {
-                    None
-                } else {
-                    workers.try_acquire_owned().ok()
-                }
+                workers.try_acquire_owned().ok()
             })
             .await
             .map_err(CommitFailure::Service)?;
