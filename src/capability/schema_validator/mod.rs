@@ -312,6 +312,9 @@ fn validate_object(
         }
     }
 
+    // Step 1b – `anyOf` / `oneOf`: which parameters must be given.
+    alternatives_violations(input_schema, &arg_map, &mut violations);
+
     // Step 2 – extra keys not declared in the schema (strict for inputs only).
     for key in arg_map.keys() {
         if reject_extra_keys && !properties.contains_key(key.as_str()) {
@@ -364,6 +367,68 @@ fn validate_object(
         violations,
         coerced,
     }
+}
+
+/// `anyOf` / `oneOf` on an object schema, each a list of alternatives that name
+/// `required` parameters (and may pin one with `properties: {x: {const: v}}`).
+/// `anyOf` needs at least one alternative satisfied, `oneOf` exactly one: a
+/// parameter set the upstream cannot act on, or acts on ambiguously, is
+/// refused here, before any request. Nothing else of JSON Schema's
+/// combinators is read.
+fn alternatives_violations(
+    schema: &Value,
+    arguments: &serde_json::Map<String, Value>,
+    violations: &mut Vec<ValidationViolation>,
+) {
+    for (keyword, exactly_one) in [("anyOf", false), ("oneOf", true)] {
+        let Some(alternatives) = schema.get(keyword).and_then(Value::as_array) else {
+            continue;
+        };
+        let satisfied = alternatives
+            .iter()
+            .filter(|alternative| alternative_holds(alternative, arguments))
+            .count();
+        if satisfied >= 1 && (!exactly_one || satisfied == 1) {
+            continue;
+        }
+        let names: Vec<&str> = alternatives
+            .iter()
+            .filter_map(|alternative| alternative.get("required")?.as_array())
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let rule = if exactly_one {
+            "exactly one of"
+        } else {
+            "at least one of"
+        };
+        violations.push(ValidationViolation::new(
+            names.join(", "),
+            format!("provide {rule}: {}", names.join(", ")),
+        ));
+    }
+}
+
+/// An alternative holds when every `required` parameter is present and not
+/// null, and every `const`-pinned parameter that is present has that value.
+fn alternative_holds(alternative: &Value, arguments: &serde_json::Map<String, Value>) -> bool {
+    let present = |name: &str| arguments.get(name).is_some_and(|value| !value.is_null());
+    let required_ok = alternative
+        .get("required")
+        .and_then(Value::as_array)
+        .is_none_or(|names| names.iter().filter_map(Value::as_str).all(present));
+    let pinned_ok = alternative
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_none_or(|properties| {
+            properties.iter().all(|(name, property)| {
+                match (arguments.get(name), property.get("const")) {
+                    (Some(value), Some(pinned)) => value == pinned,
+                    _ => true,
+                }
+            })
+        });
+    required_ok && pinned_ok
 }
 
 /// Validate `result` against `output_schema`.

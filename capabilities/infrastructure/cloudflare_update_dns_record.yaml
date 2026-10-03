@@ -1,4 +1,4 @@
-sha256: 96c785754ec9c2981e91ac7a231a4958601a360aa3c54ba9eabe632136e8ebcb
+sha256: ded5d70805d48816d9b0933324093cc7a9289f252d1e2df9bfd75cca8600f0ad
 fulcrum: '1.0'
 name: cloudflare_update_dns_record
 description: Update fields of a DNS record (PATCH).
@@ -35,6 +35,19 @@ schema:
     required:
     - zone_id
     - dns_record_id
+    anyOf:
+    - required:
+      - type
+    - required:
+      - name
+    - required:
+      - content
+    - required:
+      - ttl
+    - required:
+      - proxied
+    - required:
+      - comment
   output:
     type: object
     properties:

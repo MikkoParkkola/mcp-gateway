@@ -472,7 +472,9 @@ impl CapabilityExecutor {
 
         // Merge static_params (capability-defined fixed values) with caller params.
         // Caller-supplied values always win on key collision.
-        let effective_params = config.merge_with_static_params(params);
+        let merged = config.merge_with_static_params(params);
+        let effective_params =
+            params::with_path_defaults(config, &capability.schema.input, merged.as_ref());
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
