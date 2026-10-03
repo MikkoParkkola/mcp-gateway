@@ -604,21 +604,35 @@ fn signing_nonce_cleanup_cannot_erase_a_concurrent_fresh_readmission() {
     );
 }
 
-/// MIK-7869: only the principal that registered a nonce can give it back, and
-/// the give-back frees the principal's bucket and a later registration.
+/// MIK-7869: only the registration a call made can be given back, by the
+/// principal that made it; the give-back frees its bucket and its expiry
+/// record, and never erases a newer registration of the same nonce.
 #[test]
-fn release_unused_frees_only_the_registering_principals_nonce() {
-    let store = NonceStore::with_limits_for_test(8, 8);
-    store.admit_for_test("n", "alice").unwrap();
-    store.release_unused("n", "bob");
+fn release_unused_frees_only_the_registration_that_was_made() {
+    let store = NonceStore::with_clock_for_test(8, 8);
+    let stamp = store.register_for_principal("n", "alice").unwrap();
+    store.release_unused("n", "bob", stamp);
     assert_refusal(
         store.admit_for_test("n", "bob"),
         -32001,
         "Nonce replay detected",
     );
-    store.release_unused("n", "alice");
+    store.release_unused("n", "alice", stamp);
     assert_eq!(store.len(), 0);
     assert_eq!(store.principal_bucket_count_for_test(), 0);
-    store.admit_for_test("n", "alice").unwrap();
-    assert_eq!(store.len(), 1);
+    assert_eq!(store.state.lock().expiries.len(), 0, "no stale expiry");
+
+    // The old registration expires and the nonce is registered again: a late
+    // give-back of the first one must not erase the second.
+    let first = store.register_for_principal("m", "alice").unwrap();
+    store.advance_for_test(301);
+    let second = store.register_for_principal("m", "alice").unwrap();
+    store.release_unused("m", "alice", first);
+    assert_refusal(
+        store.admit_for_test("m", "alice"),
+        -32001,
+        "Nonce replay detected",
+    );
+    store.release_unused("m", "alice", second);
+    store.admit_for_test("m", "alice").unwrap();
 }

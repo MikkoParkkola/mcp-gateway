@@ -71,6 +71,9 @@ pub(crate) struct SigningInvocationContext {
     /// The nonce passed admission. Only an admitted context signs, so a
     /// response is never signed over a nonce the store did not register.
     admitted: bool,
+    /// The store's stamp of this call's nonce registration, so a refusal that
+    /// ran nothing can give back that registration and no other (MIK-7869).
+    nonce_stamp: Option<std::time::Instant>,
 }
 
 pub(crate) enum SigningDelivery<'a> {
@@ -108,6 +111,7 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: false,
+            nonce_stamp: None,
         };
         if origin == Origin::Unsigned {
             return context;
@@ -211,6 +215,7 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: false,
+            nonce_stamp: None,
         }
     }
 
@@ -224,6 +229,7 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: true,
+            nonce_stamp: None,
         }
     }
 
@@ -236,6 +242,7 @@ impl SigningInvocationContext {
             request_id: None,
             prepared_target: None,
             admitted: true,
+            nonce_stamp: None,
         }
     }
 
@@ -393,13 +400,16 @@ impl super::MetaMcp {
         let (Some(store), Some(context)) = (&self.nonce_store, caller.signing) else {
             return;
         };
-        if let (true, Ok(Some(nonce))) = (context.admitted, context.nonce_value()) {
+        if let (true, Ok(Some(nonce)), Some(stamp)) =
+            (context.admitted, context.nonce_value(), context.nonce_stamp)
+        {
             store.release_unused(
                 nonce,
                 caller.authorizer.quota_principal().map_or(
                     "anonymous",
                     crate::gateway::auth::QuotaPrincipal::as_store_key,
                 ),
+                stamp,
             );
         }
     }
@@ -427,7 +437,7 @@ impl super::MetaMcp {
         let nonce = context
             .nonce_value()
             .inspect_err(|_| record_nonce_rejection(NONCE_REASON_INVALID))?;
-        self.admit_signing_nonce(
+        context.nonce_stamp = self.admit_signing_nonce_stamped(
             nonce,
             caller.authorizer.quota_principal().map_or(
                 "anonymous",
@@ -451,16 +461,25 @@ impl super::MetaMcp {
         nonce: Option<&str>,
         principal: &str,
     ) -> crate::Result<()> {
+        self.admit_signing_nonce_stamped(nonce, principal).map(drop)
+    }
+
+    /// [`Self::admit_signing_nonce`], with the stamp of the registration it made.
+    fn admit_signing_nonce_stamped(
+        &self,
+        nonce: Option<&str>,
+        principal: &str,
+    ) -> crate::Result<Option<std::time::Instant>> {
         let Some(store) = &self.nonce_store else {
-            return Ok(());
+            return Ok(None);
         };
         match nonce {
-            Some(nonce) => store.check_and_register_for_principal(nonce, principal),
+            Some(nonce) => store.register_for_principal(nonce, principal).map(Some),
             None if self.require_nonce => Err(crate::Error::json_rpc(
                 -32001,
                 "Nonce required when message signing is enforced",
             )),
-            None => Ok(()),
+            None => Ok(None),
         }
     }
 

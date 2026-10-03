@@ -275,6 +275,12 @@ impl NonceStore {
         nonce: &str,
         principal: &str,
     ) -> Result<()> {
+        self.register_for_principal(nonce, principal).map(drop)
+    }
+
+    /// [`Self::check_and_register_for_principal`], returning the stamp of the
+    /// registration so a later [`Self::release_unused`] can name it.
+    pub(crate) fn register_for_principal(&self, nonce: &str, principal: &str) -> Result<Instant> {
         if nonce.is_empty() || nonce.len() > 256 {
             // Decided before the lock, so there is no occupancy to publish: the
             // store has not been consulted and cannot have changed.
@@ -323,19 +329,21 @@ impl NonceStore {
             .or_default() += 1;
         state.expiries.push_back((now, nonce.to_owned()));
         publish_nonce_occupancy(&state);
-        Ok(())
+        Ok(now)
     }
 
-    /// Forget a nonce `principal` registered and never used: the call it
-    /// carried was refused before anything ran, so its retry may carry it
-    /// again (MIK-7869). Another principal's nonce is left alone. The stale
-    /// expiry entry is skipped by [`Self::reclaim_expired`].
-    pub(crate) fn release_unused(&self, nonce: &str, principal: &str) {
+    /// Forget the registration `stamp` that `principal` made of `nonce` and
+    /// never used: the call it carried was refused before anything ran, so its
+    /// retry may carry the nonce again (MIK-7869). Anything else is left alone:
+    /// another principal's nonce, and a newer registration of the same nonce
+    /// after this one expired. Its expiry record goes with it, so a retry loop
+    /// does not grow the queue past the live entries.
+    pub(crate) fn release_unused(&self, nonce: &str, principal: &str, stamp: Instant) {
         let mut state = self.state.lock();
         if state
             .seen
             .get(nonce)
-            .is_none_or(|e| e.principal != principal)
+            .is_none_or(|e| e.principal != principal || e.admitted_at != stamp)
         {
             return;
         }
@@ -345,6 +353,14 @@ impl NonceStore {
             if *count == 0 {
                 state.principal_counts.remove(principal);
             }
+        }
+        // The newest registrations sit at the back, where a refused call's is.
+        if let Some(at) = state
+            .expiries
+            .iter()
+            .rposition(|(at, n)| *at == stamp && n == nonce)
+        {
+            state.expiries.remove(at);
         }
         publish_nonce_occupancy(&state);
     }

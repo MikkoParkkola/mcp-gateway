@@ -185,18 +185,19 @@ async fn kill_with_nonce(
     meta: &MetaMcp,
     proxy: &crate::gateway::ProxyManager,
     policy: crate::gateway::destructive_confirmation::ConfirmationPolicy,
+    session: &str,
 ) -> Value {
     const NAME: &str = "gateway_kill_server";
     let (mut context, arguments) = captured(NAME, &json!({"server": "x"}), "elicit-nonce");
     let mut caller = elicit_caller(proxy, policy);
-    meta.prepare_signing_for_call(&mut context, NAME, &arguments, Some(""), &caller)
+    meta.prepare_signing_for_call(&mut context, NAME, &arguments, Some(session), &caller)
         .expect("the confirmation is the dispatcher's to ask");
     caller.signing = Some(&context);
     let response = Box::pin(meta.handle_tools_call(
         crate::protocol::RequestId::Number(7),
         NAME,
         arguments,
-        Some(""),
+        Some(session),
         caller,
     ))
     .await;
@@ -223,7 +224,7 @@ fn nonce_is_free(meta: &MetaMcp) -> bool {
 async fn a_failed_elicitation_leaves_the_nonce_unspent() {
     use crate::gateway::destructive_confirmation::ConfirmationPolicy;
     let (meta, proxy) = (meta(), undeliverable_proxy());
-    let wire = kill_with_nonce(&meta, &proxy, ConfirmationPolicy::for_modern()).await;
+    let wire = kill_with_nonce(&meta, &proxy, ConfirmationPolicy::for_modern(), "").await;
     assert!(
         wire.get("error").is_some() || wire["result"]["isError"] == true,
         "{wire}"
@@ -240,7 +241,42 @@ async fn a_failed_elicitation_leaves_the_nonce_unspent() {
 async fn a_call_let_through_after_the_question_spends_the_nonce() {
     use crate::gateway::destructive_confirmation::ConfirmationPolicy;
     let (meta, proxy) = (meta(), undeliverable_proxy());
-    let wire = kill_with_nonce(&meta, &proxy, ConfirmationPolicy::for_legacy()).await;
+    let wire = kill_with_nonce(&meta, &proxy, ConfirmationPolicy::for_legacy(), "").await;
     assert_ne!(wire["error"]["code"], -32603, "{wire}");
     assert!(!nonce_is_free(&meta), "the call ran, so its nonce is spent");
+}
+
+/// A question that was delivered and answered with `action`: the answer is
+/// the operator's, so what it does to the nonce does not depend on delivery.
+async fn answered_with(action: &str) -> bool {
+    use crate::gateway::destructive_confirmation::ConfirmationPolicy;
+    let mux = std::sync::Arc::new(crate::gateway::NotificationMultiplexer::new(
+        std::sync::Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::StreamingConfig::default(),
+    ));
+    let mut stream = mux.seed_session("answering-session");
+    let proxy = crate::gateway::ProxyManager::new(std::sync::Arc::clone(&mux));
+    let meta = meta();
+    let operator = async {
+        let question = stream.recv().await.expect("the question is delivered");
+        let id = question.data["id"].as_str().expect("an elicitation id");
+        assert!(proxy.resolve_pending(id, "answering-session", json!({"action": action})));
+    };
+    let (wire, ()) = tokio::join!(
+        kill_with_nonce(
+            &meta,
+            &proxy,
+            ConfirmationPolicy::for_modern(),
+            "answering-session"
+        ),
+        operator
+    );
+    assert_ne!(wire["error"]["code"], -32603, "{wire}");
+    nonce_is_free(&meta)
+}
+
+#[tokio::test]
+async fn a_declined_or_accepted_question_keeps_the_nonce_spent() {
+    assert!(!answered_with("decline").await, "decline");
+    assert!(!answered_with("accept").await, "accept");
 }
