@@ -372,6 +372,7 @@ pub(crate) fn merge_client_meta_ref<'a>(
 /// Returns `(Option<RequestId>, method, params)` where `id` is `None` for
 /// notifications without request IDs.
 #[allow(clippy::result_large_err)] // JsonRpcResponse used directly as HTTP/server error body
+#[cfg(test)]
 pub(crate) fn parse_request(
     value: &Value,
 ) -> Result<(Option<RequestId>, String, Option<Value>), JsonRpcResponse> {
