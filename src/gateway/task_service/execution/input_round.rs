@@ -301,6 +301,17 @@ pub(crate) enum InputOutcome {
     Unavailable,
 }
 
+/// What a store refusal means to the caller of `provide_input`: one mapping,
+/// for the read that precedes the write and the write itself.
+fn input_outcome_of(error: StoreError) -> InputOutcome {
+    match error {
+        StoreError::InvalidTransition => InputOutcome::NotOutstanding,
+        StoreError::Capacity => InputOutcome::TooLarge,
+        StoreError::NotFound => InputOutcome::NotFound,
+        _ => InputOutcome::Unavailable,
+    }
+}
+
 impl TaskExecutor {
     /// Apply answers to an open round and, when they complete it, resume the
     /// call as the caller of THIS update (`caller`).
@@ -327,8 +338,7 @@ impl TaskExecutor {
         match store.get(owner.as_digest(), id) {
             Ok(current) if current.task.status() == TaskStatus::InputRequired => {}
             Ok(_) => return InputOutcome::NotOutstanding,
-            Err(StoreError::NotFound) => return InputOutcome::NotFound,
-            Err(_) => return InputOutcome::Unavailable,
+            Err(error) => return input_outcome_of(error),
         }
         let (handoff, cancel_rx) =
             match Handoff::accept_when_free(self, id, PRODUCE_SEAM_WAIT, waiting).await {
@@ -372,14 +382,17 @@ impl TaskExecutor {
                     // Settle it now rather than at the next sweep. Either way the
                     // round is closed to answers: every later one is refused the
                     // same way, and the sweep retries a close that fails here.
-                    let settled = match executor.service.store.get(&digest, &id) {
-                        Ok(current) => {
-                            executor
-                                .close_round(&digest, &id, current.revision, closed.reason())
-                                .await
-                        }
-                        Err(_) => Err(super::CommitFailure::RevisionConflict),
-                    };
+                    let settled = async {
+                        let current = executor
+                            .service
+                            .store
+                            .get(&digest, &id)
+                            .map_err(|_| super::CommitFailure::RevisionConflict)?;
+                        executor
+                            .close_round(&digest, &id, current.revision, closed.reason())
+                            .await
+                    }
+                    .await;
                     if let Err(super::CommitFailure::Service(error)) = settled {
                         tracing::warn!(task_id = %id, ?error, "closed input round not settled yet; the sweep retries");
                     }
@@ -404,10 +417,7 @@ impl TaskExecutor {
                     .await;
                     return;
                 }
-                Err(StoreError::InvalidTransition) => InputOutcome::NotOutstanding,
-                Err(StoreError::Capacity) => InputOutcome::TooLarge,
-                Err(StoreError::NotFound) => InputOutcome::NotFound,
-                Err(_) => InputOutcome::Unavailable,
+                Err(error) => input_outcome_of(error),
             };
             // Not a resume: the handoff and cancel receiver go with this task.
             drop((handoff, cancel_rx));
@@ -453,12 +463,10 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    if let Some(deadline) = deadline
-        && unix_secs(executor.service.store.now()) >= deadline
-    {
-        return executor
-            .close_late_round(&principal, &id, revision, deadline)
-            .await;
+    let ids = (principal.as_str(), id.as_str(), revision);
+    let reached = deadline.is_some_and(|d| unix_secs(executor.service.store.now()) >= d);
+    if executor.close_when(ids, deadline, reached).await {
+        return;
     }
     let call = TaskCall {
         tool: round.tool,
@@ -474,12 +482,11 @@ async fn resume(resume: Resume, mut cancel_rx: watch::Receiver<bool>) {
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
-    if let Some(deadline) = deadline
-        && rejected_after_expiry(&response, deadline, unix_secs(executor.service.store.now()))
-    {
-        return executor
-            .close_late_round(&principal, &id, revision, deadline)
-            .await;
+    let expired = deadline.is_some_and(|d| {
+        rejected_after_expiry(&response, d, unix_secs(executor.service.store.now()))
+    });
+    if executor.close_when(ids, deadline, expired).await {
+        return;
     }
     let response = inspect_settled(&state, &call, &id, response);
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
@@ -535,6 +542,23 @@ fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
 }
 
 impl TaskExecutor {
+    /// Close the round as the sweep would when `late` and it has a deadline:
+    /// the one place both late checks of a resume close it. Reports whether it
+    /// did.
+    async fn close_when(
+        &self,
+        (principal, id, revision): (&str, &str, u64),
+        deadline: Option<u64>,
+        late: bool,
+    ) -> bool {
+        let Some(deadline) = deadline.filter(|_| late) else {
+            return false;
+        };
+        self.close_late_round(principal, id, revision, deadline)
+            .await;
+        true
+    }
+
     /// Close a resumed round that met its deadline. A write that fails for any
     /// reason but a moved row is tried once more, reason and all.
     // ponytail: two attempts, then the row waits for restart recovery (which
@@ -655,5 +679,32 @@ mod deadline_tests {
         // Positive control: one second more room parks at expiry less margin.
         let room = round_deadline(state.keyring(), Some(&seal(now + MARGIN + 1)), now);
         assert_eq!(room.ok(), Some(Some(now + 1)));
+    }
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    use super::{InputOutcome, StoreError, input_outcome_of};
+
+    /// Each store refusal means one thing to the caller of `provide_input`,
+    /// whether the read or the write raised it.
+    #[test]
+    fn a_store_refusal_maps_to_one_input_outcome() {
+        assert!(matches!(
+            input_outcome_of(StoreError::InvalidTransition),
+            InputOutcome::NotOutstanding
+        ));
+        assert!(matches!(
+            input_outcome_of(StoreError::Capacity),
+            InputOutcome::TooLarge
+        ));
+        assert!(matches!(
+            input_outcome_of(StoreError::NotFound),
+            InputOutcome::NotFound
+        ));
+        assert!(matches!(
+            input_outcome_of(StoreError::Unavailable),
+            InputOutcome::Unavailable
+        ));
     }
 }
