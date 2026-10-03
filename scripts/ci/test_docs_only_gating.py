@@ -50,9 +50,6 @@ KEPT = {
     "file-size-ceiling", "control-drift-probes", "registry-packages",
     # Release signing's own unit tests; docker-build waits for them.
     "release-signing-checks",
-    # Real gws against every gws capability; it reads capability files, so it
-    # stays on docs-only pull requests like the other test jobs.
-    "gws-dry-run",
 }
 # Never run on an ordinary pull request (tag, dispatch or throwaway only).
 NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-manifest", "publish-mcp-registry",
