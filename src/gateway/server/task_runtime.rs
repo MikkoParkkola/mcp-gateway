@@ -59,21 +59,25 @@ pub(super) struct ShutdownBudget {
     pub drain: Duration,
     /// After a drain that ran out: waiting for the cancelled workers to end.
     pub cancel: Duration,
+    /// After the workers: joining the expiry sweep and closing the store,
+    /// together. What a stalled delete or write cannot hold past.
+    pub close: Duration,
 }
 
 impl ShutdownBudget {
     /// Carved out of the `remaining` shutdown window, which a drain as long as
     /// the window would otherwise use up and leave the cancellation never run.
     /// A fifth of the window is held back for cancelling and closing the
-    /// store; cancelling gets half of that. HTTP passes `shutdown_timeout` as
-    /// its window, so draining and cancelling take at most nine tenths of
-    /// one timeout (the expiry join and the store close are not bounded
-    /// here); stdio passes what is left of its teardown deadline.
+    /// store; cancelling gets half of that and the expiry join and store close the
+    /// other half. HTTP passes `shutdown_timeout` as its window, so the three
+    /// phases take at most one timeout between them; stdio passes what is left
+    /// of its teardown deadline.
     pub(super) fn within(remaining: Duration, timeout: Duration) -> Self {
         let reserve = remaining / 5;
         Self {
             drain: timeout.min(remaining.saturating_sub(reserve)),
             cancel: reserve / 2,
+            close: reserve - reserve / 2,
         }
     }
 }
@@ -100,27 +104,67 @@ pub(super) async fn shutdown(
 ) -> Option<CancelOutcome> {
     info!(timeout = ?budget.drain, "Draining in-flight tasks...");
     let drained = executor.drain(budget.drain).await;
+    // Sealed either way: after a clean drain nothing runs, and nothing may
+    // start, since a handler that begins a task now would run against a store
+    // about to close. The bounded join also catches a task that slipped in
+    // between the drain and the seal.
+    let outcome = executor.cancel_remaining(budget.cancel).await;
     let cancelled = if drained.timed_out {
-        let outcome = executor.cancel_remaining(budget.cancel).await;
         warn!(
             cancelled = outcome.cancelled,
             all_stopped = outcome.stopped,
             "Task drain timeout reached; cancelled the remaining tasks"
         );
         Some(outcome)
+    } else if outcome.cancelled > 0 || !outcome.stopped {
+        warn!(
+            cancelled = outcome.cancelled,
+            all_stopped = outcome.stopped,
+            "A task started after the drain; cancelled it"
+        );
+        Some(outcome)
     } else {
         info!("All in-flight tasks completed");
         None
     };
-    if let Err(error) = expiry.shutdown().await {
-        warn!(%error, "Task expiry sweep did not stop cleanly");
-    } else {
-        info!("Task expiry sweep stopped");
-    }
-    if let Err(error) = service.shutdown().await {
-        warn!(%error, "Task store did not release its lease cleanly");
-    }
+    settle_store(expiry, service, budget.close, cancelled.as_ref()).await;
     cancelled
+}
+
+/// The tail of shutdown: stop the expiry sweep, then close the store, both
+/// inside `bound` so a stalled delete or write cannot hold backend teardown.
+///
+/// A cancel that did not complete leaves a worker that may still write, so the
+/// store is retained, not closed under it; the next start settles its row
+/// through recovery, as after a crash. A timeout abandons the join and the
+/// close, and the process exit gives the directory lease back.
+pub(super) async fn settle_store(
+    expiry: ExpirySweep,
+    service: &TaskService,
+    bound: Duration,
+    cancelled: Option<&CancelOutcome>,
+) {
+    let retain = cancelled.is_some_and(|outcome| !outcome.stopped);
+    let tail = async {
+        if let Err(error) = expiry.shutdown().await {
+            warn!(%error, "Task expiry sweep did not stop cleanly");
+        } else {
+            info!("Task expiry sweep stopped");
+        }
+        if retain {
+            warn!(
+                "A cancelled task had not stopped; the task store is left open, not closed under it"
+            );
+        } else if let Err(error) = service.shutdown().await {
+            warn!(%error, "Task store did not release its lease cleanly");
+        }
+    };
+    if tokio::time::timeout(bound, tail).await.is_err() {
+        warn!(
+            ?bound,
+            "Task expiry join or store close did not finish in time; going on to backend teardown"
+        );
+    }
 }
 
 /// Whether `dir` lies under the operator's real `~/.mcp-gateway`.

@@ -24,7 +24,8 @@ Three holes remain at the tip of the release line:
 
 1. **Bound the tail.** `ShutdownBudget` gains `close`, the other half of the
    reserve that `cancel` leaves over (`reserve - reserve / 2`). The expiry join
-   and the store close run together inside `timeout(budget.close, ..)`. On
+   and the store close run inside one `timeout(budget.close, ..)`, the sweep
+   first and the close second, as today. On
    timeout shutdown warns and returns, so backend teardown proceeds; the
    process exit gives the lease back.
 2. **No close under a live worker.** When `cancel_remaining` reports
@@ -36,7 +37,10 @@ Three holes remain at the tip of the release line:
    token (terminal, as `cancel_remaining` already is), and admission refuses
    when the token is cancelled: `commit_create` takes no worker permit, so a
    late start gets the existing capacity refusal and writes no row.
-   `shutdown` calls `seal` right after a clean drain. `drain` itself stays a
+   `shutdown` seals after every drain, clean or not, through
+   `cancel_remaining`, whose bounded join also catches a task that slipped in
+   between the drain and the seal and then retains the store as in decision 2.
+   A late start is refused (it never reaches a worker). `drain` itself stays a
    join: its contract (nothing closed, no admission refused) is relied on by
    its callers.
 4. **Docs.** The `ShutdownBudget::within` comment that says the tail "is not
@@ -65,6 +69,14 @@ Three holes remain at the tip of the release line:
 
 Drop the `timeout`; close the store when `stopped` is false; skip `seal`; let
 `commit_create` ignore the sealed token; give `close` the whole reserve.
+
+## Residual (not in this change)
+
+- Returning from the bounded tail does not by itself end the process: dropping
+  the Tokio runtime waits for a stalled blocking write. A bounded runtime
+  shutdown at the entry point is a separate change.
+- `run_stdio` cancelled before EOF skips `task_runtime::shutdown` (an existing
+  drop path), so its workers are not cancelled by this helper.
 
 ## Risk and rollback
 

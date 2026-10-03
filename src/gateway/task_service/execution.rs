@@ -387,6 +387,16 @@ impl TaskExecutor {
         }
     }
 
+    /// Refuse every admission from now on and end workers spawned afterwards.
+    pub(crate) fn seal(&self) {
+        self.shutdown.cancel();
+    }
+
+    /// Whether [`Self::seal`] or a cancelling shutdown has closed admission.
+    pub(crate) fn is_sealed(&self) -> bool {
+        self.shutdown.is_cancelled()
+    }
+
     /// Cancel every worker still running and wait, up to `bound`, for each of
     /// them to end.
     ///
@@ -398,7 +408,7 @@ impl TaskExecutor {
     /// `spawn_blocking`, and closing the store joins it.
     pub(crate) async fn cancel_remaining(&self, bound: Duration) -> CancelOutcome {
         let cancelled = self.handoffs.len();
-        self.shutdown.cancel();
+        self.seal();
         let stopped = tokio::time::timeout(bound, self.handoffs.join())
             .await
             .is_ok();
@@ -429,10 +439,17 @@ impl TaskExecutor {
             targets,
         } = write;
         let workers = Arc::clone(&self.workers);
+        let sealed = self.shutdown.clone();
         let created = self
             .service
             .create_targeted(request.borrow(), task, (backend, targets), move || {
-                workers.try_acquire_owned().ok()
+                // A sealed executor takes no worker, so a late start is the
+                // capacity refusal and writes no row (MIK-7844).
+                if sealed.is_cancelled() {
+                    None
+                } else {
+                    workers.try_acquire_owned().ok()
+                }
             })
             .await
             .map_err(CommitFailure::Service)?;
