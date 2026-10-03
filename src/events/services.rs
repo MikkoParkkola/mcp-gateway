@@ -345,8 +345,12 @@ pub(crate) struct Attempt<'a> {
     pub tenants: &'a [String],
     pub callback_host: &'a str,
     pub status: &'a str,
+    /// SHA-256 of the body on the wire; empty when the attempt ended before
+    /// a body was built (no body was sent).
     pub body_sha256: &'a str,
-    /// What the firewall decided about the payload at fan-out.
+    /// What the firewall decided about the payload at fan-out: `pass`,
+    /// `redacted`, `block`, `none`, or `unrecorded` for a record written
+    /// before fan-out stamped it.
     pub firewall: &'a str,
     pub delivered: bool,
     /// The read verdict on this delivery (MIN.2), when it had one.

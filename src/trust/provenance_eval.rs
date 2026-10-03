@@ -76,6 +76,11 @@ pub enum ClaimVerdict {
 /// structural.
 #[must_use]
 pub fn score(claim: &Claim, receipt: &RuntimeProvenanceReceipt) -> ClaimVerdict {
+    // An event receipt describes a delivery, not a tool result: it has no
+    // observed result facts to judge a claim by (MIK-7859).
+    if receipt.subject_kind == super::CbomSubjectKind::Event {
+        return ClaimVerdict::Abstain;
+    }
     // A call the backend reported as failed cannot support any claim about what
     // the source "said" — this is could-not-check, never an authoritative fact.
     // Every claim (success, empty, count) is unsupported by a failure.
