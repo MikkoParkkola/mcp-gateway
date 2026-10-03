@@ -1,0 +1,19 @@
+diff --git a/src/gateway/task_service/mod.rs b/src/gateway/task_service/mod.rs
+index 148694d34..de55613cc 100644
+--- a/src/gateway/task_service/mod.rs
++++ b/src/gateway/task_service/mod.rs
+@@ -145,7 +145,6 @@ pub(crate) async fn open_runtime_with_recovery(
+ ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
+     let service = Arc::new(TaskService::open(store_dir, limits, admission).await?);
+     let executor = TaskExecutor::new(Arc::clone(&service), subscriptions, max_workers);
+-    before_recovery(&service, &executor);
+     #[cfg(debug_assertions)]
+     execution::pause_hook::install_from_env(&executor);
+     // Ready to serve means recovered. Rows a previous process left mid-flight are
+@@ -158,5 +157,6 @@ pub(crate) async fn open_runtime_with_recovery(
+         let _ = service.shutdown().await;
+         return Err(error);
+     }
++    before_recovery(&service, &executor);
+     Ok((service, executor))
+ }

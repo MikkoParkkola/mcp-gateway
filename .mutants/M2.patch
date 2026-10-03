@@ -1,0 +1,15 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index c87326622..a4830b715 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -230,8 +230,8 @@ impl EventsHub {
+             next: Utc::now() + REFUSAL_RETRY,
+             status: "audit_unavailable",
+         };
+-        self.settle(services, ctx.record, retry).await;
+-        false
++        let _ = retry;
++        true
+     }
+ 
+     /// Put the attempt on record, then charge and send it. The record comes

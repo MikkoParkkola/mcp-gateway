@@ -1,0 +1,13 @@
+diff --git a/src/trust/result_provenance.rs b/src/trust/result_provenance.rs
+index 701d81e93..50a619bd6 100644
+--- a/src/trust/result_provenance.rs
++++ b/src/trust/result_provenance.rs
+@@ -73,7 +73,7 @@ pub struct RuntimeProvenanceReceipt {
+     /// an event receipt, which describes a delivery and has no tool result
+     /// to judge; a record written before this field was optional reads as
+     /// `Some`.
+-    #[serde(default, skip_serializing_if = "Option::is_none")]
++    #[serde(default)]
+     pub backend_ok: Option<bool>,
+     /// Opaque gateway call id (`gw-<uuid>`), equal to the result-level
+     /// `trace_id` this receipt describes. This is the join key that ties the

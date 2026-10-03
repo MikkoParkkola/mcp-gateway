@@ -1,0 +1,4 @@
+head_sha	18b6d14c90d07fd0a2cbe87800f1f15f69fd70b3
+M1	linux	M1.patch	--lib trust::result_provenance::tests::an_event_receipt_carries_no_backend_ok
+M2	linux	M2.patch	--lib events::worker::tests::an_overdue_ending_the_audit_log_refuses_is_retried_not_buried
+M3	linux	M3.patch	--lib gateway::task_service::runtime_tests::recovery::cases::a_task_settled_during_recovery_is_published
