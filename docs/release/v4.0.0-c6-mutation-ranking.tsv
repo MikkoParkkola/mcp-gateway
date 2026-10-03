@@ -243,7 +243,7 @@ rank	status	named_path	file	qualified	occurrence	reason
 11	understudy	startup	src/gateway/server/cleartext.rs	reload_posture_refusal	1	Refuses a reload that would itself enter a refused network posture
 12	understudy	startup	src/gateway/server/cleartext.rs	serve_refusal	1	Everything that stops a configuration serving HTTP: the open-tools check, then the cleartext-credential check
 1	SAMPLE	stdio dispatch	src/transport/stdio.rs	StdioTransport::handle_response	1	Refuses a peer request on the response stream; delivers a response only to the pending id
-2	SAMPLE	stdio dispatch	src/transport/stdio.rs	configure_child_environment	1	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
+2	SAMPLE	stdio dispatch	src/transport/child_env.rs	configure_child_environment	1	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
 3	SAMPLE	stdio dispatch	src/transport/stdio.rs	StdioTransport::register_progress_token	1	Fails closed on a colliding token, so one call's progress cannot reach another call
 4	SAMPLE	stdio dispatch	src/transport/stdio.rs	StdioTransport::capture_notification	1	Routes only notifications/progress to the call that registered the token; drops the rest
 5	SAMPLE	stdio dispatch	src/transport/stdio.rs	ProgressRegistrationGuard::drop	1	Deregisters a progress token only for the registration's owner
