@@ -38,11 +38,19 @@ impl MetaMcp {
             return;
         };
         let capabilities = self.get_capabilities();
+        let registry = self.get_webhook_registry();
         tokio::spawn(async move {
             if let Some(capabilities) = &capabilities {
                 while !capabilities.initial_scan_complete() {
                     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
+            }
+            // A reload that arrived mid-scan was held: apply it before the
+            // catalogue is reconciled against the routes.
+            if let (Some(capabilities), Some(registry)) = (&capabilities, &registry)
+                && capabilities.take_held_reload()
+            {
+                apply_webhook_refresh(&hub, capabilities, registry);
             }
             // The loader's own outcome, read once the scan is over.
             let scan = if capabilities
@@ -193,19 +201,38 @@ impl MetaMcp {
         ) else {
             return;
         };
-        if capabilities.name != backend || !capabilities.initial_scan_complete() {
+        if capabilities.name != backend {
             return;
         }
-        let _gate = hub.catalogue_lock();
-        match crate::events::refresh_webhooks(&registry, &capabilities.list_capabilities()) {
-            Ok(removed) => {
-                hub.withdraw(&removed);
-            }
-            Err(event) => tracing::error!(
-                %event,
-                "capability reload not applied to webhook routes: it removes a filter or \
-                 mapped field of a live event type; the previous routes stay live"
-            ),
+        // Before the startup scan completes the reload is held, not dropped:
+        // `reconcile_events_after_scan` applies it once the scan is over.
+        if capabilities.hold_reload_until_scan_complete() {
+            return;
         }
+        apply_webhook_refresh(hub, &capabilities, &registry);
     }
 }
+
+/// Re-register the webhook routes of `capabilities`, unless the reload
+/// narrows a live event type (T52).
+fn apply_webhook_refresh(
+    hub: &Arc<EventsHub>,
+    capabilities: &crate::capability::CapabilityBackend,
+    registry: &Arc<parking_lot::RwLock<crate::gateway::WebhookRegistry>>,
+) {
+    let _gate = hub.catalogue_lock();
+    match crate::events::refresh_webhooks(registry, &capabilities.list_capabilities()) {
+        Ok(removed) => {
+            hub.withdraw(&removed);
+        }
+        Err(event) => tracing::error!(
+            %event,
+            "capability reload not applied to webhook routes: it removes a filter or \
+             mapped field of a live event type; the previous routes stay live"
+        ),
+    }
+}
+
+#[cfg(test)]
+#[path = "events_hook_tests.rs"]
+mod events_hook_tests;
