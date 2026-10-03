@@ -406,20 +406,22 @@ fn validate_property(
     value: &Value,
     prop_schema: &Value,
 ) -> (Value, Vec<ValidationViolation>) {
-    let declared_type = prop_schema.get("type").and_then(Value::as_str);
     let mut violations = Vec::new();
 
     // Attempt coercion first; use the coerced value for subsequent checks.
-    let coerced = if let Some(ty) = declared_type {
-        match try_coerce(value, ty) {
-            Ok(v) => v,
-            Err(msg) => {
-                violations.push(ValidationViolation::new(name, msg));
-                value.clone()
-            }
+    // `type` is one name or a list of names (`[string, "null"]`).
+    let attempt = match prop_schema.get("type") {
+        Some(Value::String(ty)) => Some(try_coerce(value, ty)),
+        Some(Value::Array(types)) => Some(coerce_to_any(value, types)),
+        _ => None,
+    };
+    let coerced = match attempt {
+        Some(Ok(v)) => v,
+        Some(Err(msg)) => {
+            violations.push(ValidationViolation::new(name, msg));
+            value.clone()
         }
-    } else {
-        value.clone()
+        None => value.clone(),
     };
 
     // Only proceed to enum / constraint checks if type was valid.
@@ -506,6 +508,30 @@ fn validate_property(
 }
 
 // ── Type coercion ─────────────────────────────────────────────────────────────
+
+/// Coerce `value` to the first listed type it fits. `"null"` matches only a
+/// null: `try_coerce` passes unknown names through, so it must not see it.
+fn coerce_to_any(value: &Value, types: &[Value]) -> Result<Value, String> {
+    let names: Vec<&str> = types.iter().filter_map(Value::as_str).collect();
+    if names.is_empty() {
+        return Ok(value.clone());
+    }
+    for ty in &names {
+        let fits = if *ty == "null" {
+            value.is_null().then(|| value.clone())
+        } else {
+            try_coerce(value, ty).ok()
+        };
+        if let Some(coerced) = fits {
+            return Ok(coerced);
+        }
+    }
+    Err(format!(
+        "expected {}, got {}",
+        names.join(" or "),
+        json_type_name(value)
+    ))
+}
 
 /// Attempt to coerce `value` to the declared JSON Schema `type`.
 ///

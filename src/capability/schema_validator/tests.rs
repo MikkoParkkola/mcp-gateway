@@ -694,3 +694,33 @@ fn closed_output_schemas_do_not_gain_extra_fields() {
     let result = validate_output(&json!({ "count": 2 }), &schema);
     assert_eq!(result.coerced, json!({ "count": 2 }));
 }
+
+// MIK-7845: `type: [string, "null"]` is read, not skipped.
+#[test]
+fn a_union_type_accepts_its_members_and_refuses_the_rest() {
+    let schema = schema_with_props(json!({ "answer": { "type": ["string", "null"] } }), &[]);
+    for ok in [json!("text"), json!(null)] {
+        let result = validate_arguments(&json!({ "answer": ok }), &schema);
+        assert!(result.is_valid(), "{ok}: {:?}", result.violations);
+    }
+    for bad in [json!({ "a": 1 }), json!(["x"])] {
+        let result = validate_arguments(&json!({ "answer": bad }), &schema);
+        assert_eq!(result.violations.len(), 1, "{bad}");
+        assert!(result.violations[0].message.contains("string or null"));
+    }
+}
+
+#[test]
+fn a_union_of_two_real_types_takes_either() {
+    let schema = schema_with_props(json!({ "n": { "type": ["integer", "boolean"] } }), &[]);
+    for ok in [json!(3), json!(true)] {
+        assert!(validate_arguments(&json!({ "n": ok }), &schema).is_valid());
+    }
+    assert!(!validate_arguments(&json!({ "n": [1] }), &schema).is_valid());
+}
+
+#[test]
+fn a_null_only_union_refuses_a_value() {
+    let schema = schema_with_props(json!({ "n": { "type": ["null"] } }), &[]);
+    assert!(!validate_arguments(&json!({ "n": "x" }), &schema).is_valid());
+}
