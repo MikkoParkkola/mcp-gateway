@@ -1,0 +1,10 @@
+head_sha	22af9ba08616d001a1329a8f6db4087eb97be685
+# batch 1 for #2797
+J1	linux	j1.patch	--test mik_7630_events_upstream -- t39l t39m
+J2	linux	j2.patch	--lib -- transport::upstream_tap
+J3	linux	j3.patch	--lib -- events::upstream_need
+J4	linux	j4.patch	--test mik_7630_events_upstream -- t39l t39m
+J5	linux	j5.patch	--test mik_7630_events_upstream -- t39l t39m
+J6	linux	j6.patch	--lib -- backend::listen
+J7	linux	j7.patch	--test mik_7630_events_upstream -- t39l t39m
+J8	linux	j8.patch	--test mik_7630_events_upstream -- t39l t39m

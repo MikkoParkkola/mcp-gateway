@@ -1,0 +1,13 @@
+diff --git a/src/events/backend_source.rs b/src/events/backend_source.rs
+index 808d4eed4..c1dfdd194 100644
+--- a/src/events/backend_source.rs
++++ b/src/events/backend_source.rs
+@@ -152,7 +152,7 @@ fn interest_of<'a>(name: &'a str, arguments: &Value) -> Option<(&'a str, Interes
+     let interest = match kind {
+         Kind::ResourcesChanged => Interest::ResourcesChanged,
+         Kind::PromptsChanged => Interest::PromptsChanged,
+-        Kind::ToolsChanged => Interest::ToolsChanged,
++        Kind::ToolsChanged => Interest::PromptsChanged,
+         Kind::ResourceUpdated => {
+             Interest::ResourceUpdated(arguments.get("uri")?.as_str()?.to_owned())
+         }

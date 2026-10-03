@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 5eed709cb..c714cd5d2 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -499,7 +499,7 @@ impl<'a> State<'a> {
+         if std::mem::take(&mut self.tools_pending)
+             && let Some(hub) = hub.upgrade()
+         {
+-            hub.backend_tools_changed(&self.shared.name);
++            let _ = &hub;
+         }
+         let due = self.coalescer.due(Instant::now());
+         if due.is_empty() {

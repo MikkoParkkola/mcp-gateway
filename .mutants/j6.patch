@@ -1,0 +1,13 @@
+diff --git a/src/backend/listen.rs b/src/backend/listen.rs
+index 7b7f85556..3194f3b7b 100644
+--- a/src/backend/listen.rs
++++ b/src/backend/listen.rs
+@@ -105,7 +105,7 @@ impl Backend {
+     /// cached list, so the re-read a `tools_changed` subscriber does next
+     /// reaches the backend instead of the old list (§14).
+     pub(crate) fn invalidate_tools(&self) {
+-        self.shared_entry().tools_cache.invalidate_if(|_| true);
++        let _ = self.shared_entry();
+     }
+ 
+     /// `resources/subscribe` or `resources/unsubscribe` for `uri` on the

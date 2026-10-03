@@ -1,0 +1,13 @@
+diff --git a/src/transport/upstream_tap.rs b/src/transport/upstream_tap.rs
+index 337e3c1a2..6fd56089a 100644
+--- a/src/transport/upstream_tap.rs
++++ b/src/transport/upstream_tap.rs
+@@ -64,7 +64,7 @@ pub(crate) enum Dropped {
+ pub(crate) fn listen_filter(kinds: KindSet, uris: &[String]) -> Value {
+     serde_json::json!({
+         "notifications": {
+-            "toolsListChanged": kinds.tools_changed,
++            "toolsListChanged": false,
+             "resourcesListChanged": kinds.resources_changed,
+             "promptsListChanged": kinds.prompts_changed,
+             "resourceSubscriptions": uris,

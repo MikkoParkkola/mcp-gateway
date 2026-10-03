@@ -1,0 +1,12 @@
+diff --git a/src/transport/upstream_tap.rs b/src/transport/upstream_tap.rs
+index 337e3c1a2..1516c41a4 100644
+--- a/src/transport/upstream_tap.rs
++++ b/src/transport/upstream_tap.rs
+@@ -95,7 +95,6 @@ pub(crate) fn project(
+         UPDATED => NoteKind::ResourceUpdated,
+         RESOURCES_CHANGED => NoteKind::ResourcesChanged,
+         PROMPTS_CHANGED => NoteKind::PromptsChanged,
+-        TOOLS_CHANGED => NoteKind::ToolsChanged,
+         ACKNOWLEDGED if listen.is_some() => {
+             let (id, requested) = listen.expect("guarded");
+             if !tagged(params, id) {

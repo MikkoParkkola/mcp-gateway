@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 5eed709cb..5bc1b2fd6 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -370,7 +370,7 @@ impl<'a> State<'a> {
+                 if kind == NoteKind::ToolsChanged {
+                     // Not coalesced here: the hub's own quiet window does it.
+                     if self.shared.need.lock().emits(kind, None) {
+-                        self.tools_due.get_or_insert(Instant::now() + TICK);
++                        self.tools_due = None;
+                     }
+                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
+                     self.coalescer.offer(kind, uri, Instant::now());
