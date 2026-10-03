@@ -1,0 +1,4 @@
+head_sha	154e013544e9631d7a60e659ed694f82c4fdf06b
+M1	linux	m1.patch	--lib -- issuers_are_not_advertised_unless_their_tokens_are_accepted
+M2	linux	m2.patch	--lib -- advertised_issuers_are_unique_and_never_blank
+M3	linux	m3.patch	--lib -- advertised_issuers_are_unique_and_never_blank

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/well_known.rs b/src/gateway/router/well_known.rs
+index 02c321ed7..c0b4f7ada 100644
+--- a/src/gateway/router/well_known.rs
++++ b/src/gateway/router/well_known.rs
+@@ -220,7 +220,7 @@ fn authorization_servers(config: &Config) -> Vec<String> {
+         // Exactly as configured: the token check compares the `iss` claim to
+         // this string, so a client must be sent the same identifier.
+         let issuer = provider.issuer.as_str();
+-        if !issuer.trim().is_empty() && !issuers.iter().any(|seen| seen == issuer) {
++        if !issuer.trim().is_empty() {
+             issuers.push(issuer.to_string());
+         }
+     }
