@@ -273,13 +273,13 @@ src/oauth/client/destination.rs	check_advertised_endpoints	1	critical	d	OAuthCli
 src/oauth/client/destination.rs	check_destination	1	critical	d	OAuthClient::check_destination	Refuses OAuth URLs whose literal host the destination policy denies
 src/oauth/client/destination.rs	hop	1	critical	d	hop	Redirect hop SSRF literal check plus hop budget
 src/oauth/client/destination.rs	http_client	1	standard	borderline	http_client	Installs the redirect policy enforcing hop()
-src/oauth/client/mod.rs	authorize	1	critical	b	OAuthClient::authorize	Issuer check enforced before redeeming the authorization code
+src/oauth/client/grants.rs	authorize	1	critical	b	OAuthClient::authorize	Issuer check enforced before redeeming the authorization code
+src/oauth/client/grants.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
 src/oauth/client/mod.rs	credential_key	1	critical	c	OAuthClient::credential_key	Credentials keyed by issuer; refuses before the issuer is known
 src/oauth/client/mod.rs	drop_credentials_from_other_issuer	1	critical	c	OAuthClient::drop_credentials_from_other_issuer	Drops token and registered client_id when the issuer changes
 src/oauth/client/mod.rs	get_token	1	critical	b	get_token	Reuses a cached credential only while it is unexpired
 src/oauth/client/mod.rs	has_valid_token	1	critical	b	has_valid_token	Decides whether a cached credential is still valid
 src/oauth/client/mod.rs	validate_issuer	1	critical	b	validate_issuer	RFC 9207: a present iss must exactly equal the recorded issuer
-src/oauth/client/mod.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
 src/oauth/client/mod.rs	generate_pkce	1	standard	borderline	generate_pkce	PKCE verifier randomness and S256 derivation
 src/oauth/client/mod.rs	generate_state	1	standard	borderline	generate_state	CSRF state randomness
 src/oauth/client/mod.rs	initialize	1	standard	borderline	OAuthClient::initialize	Orchestrates destination and issuer checks before keeping metadata
