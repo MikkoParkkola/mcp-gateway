@@ -352,6 +352,7 @@ impl MetaMcp {
 
     /// Take the receipts staged so far out of the collector, to record them
     /// later (a pushed frame is recorded only once it is written).
+    #[allow(clippy::unused_self)] // a method like its sibling, so callers hold one gateway handle
     pub(crate) fn take_staged_relay(&self) -> StagedReceipts {
         StagedReceipts(
             RELAY_RECEIPTS
