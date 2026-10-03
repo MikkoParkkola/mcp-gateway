@@ -36,10 +36,10 @@ pub(super) async fn resolve(
         ) {
             Ok((headers, digest)) => (
                 headers,
-                super::charged_binding(state, name, caller, proven, digest),
+                super::charged_binding(state, backend, caller, proven, digest),
             ),
             Err(reason) => {
-                refuse_audited(state, name, caller, audience, &reason).await;
+                refuse_audited(state, (name, backend), caller, audience, &reason).await;
                 return Err(());
             }
         }
@@ -50,14 +50,14 @@ pub(super) async fn resolve(
         // decides, and a non-required backend keeps its static path.
         if idp_cfg.is_some()
             && !backend.transport_carries_identity_headers()
-            && state.meta_mcp.has_principal_for(name, caller)
+            && state.meta_mcp.has_principal_for(backend, caller)
         {
-            refuse_audited(state, name, caller, audience, CANNOT_CARRY).await;
+            refuse_audited(state, (name, backend), caller, audience, CANNOT_CARRY).await;
             return Err(());
         }
         match state
             .meta_mcp
-            .resolve_propagation_credential_held(name, caller)
+            .resolve_propagation_credential_held_for(name, Some(backend), caller)
             .await
         {
             Ok((headers, binding, _held)) => (headers, binding),
@@ -66,7 +66,7 @@ pub(super) async fn resolve(
                 // account check, which writes no row; the minting resolver
                 // writes its own, so writing here too would double it.
                 if idp_cfg.is_none() {
-                    refuse_audited(state, name, caller, audience, &e.to_string()).await;
+                    refuse_audited(state, (name, backend), caller, audience, &e.to_string()).await;
                 }
                 return Err(());
             }
@@ -76,7 +76,7 @@ pub(super) async fn resolve(
         // Sent without its caller's credential, the notification would carry
         // the backend's static one: refuse it instead (#2292).
         if !backend.transport_carries_identity_headers() {
-            refuse_audited(state, name, caller, audience, CANNOT_CARRY).await;
+            refuse_audited(state, (name, backend), caller, audience, CANNOT_CARRY).await;
             return Err(());
         }
         // A forwarded credential is audited as a request's is, and not
@@ -86,7 +86,7 @@ pub(super) async fn resolve(
             tracing::warn!(backend = %name, "required credential not forwarded: no transparency log");
             return Err(());
         }
-        let subject = state.meta_mcp.audit_subject_for(name, caller);
+        let subject = state.meta_mcp.audit_subject_for(backend, caller);
         super::audit_identity_propagation(
             state.transparency_log.as_ref(),
             "idp_mint",
@@ -124,7 +124,7 @@ pub(super) struct Resolved {
 /// stands either way (the request arm's policy).
 async fn refuse_audited(
     state: &super::AppState,
-    name: &str,
+    (name, backend): (&str, &crate::backend::Backend),
     caller: crate::identity_propagation::CallerProof<'_>,
     audience: Option<&str>,
     reason: &str,
@@ -132,7 +132,7 @@ async fn refuse_audited(
     if let Err(e) = super::audit_identity_propagation(
         state.transparency_log.as_ref(),
         "idp_refuse",
-        &state.meta_mcp.audit_subject_for(name, caller),
+        &state.meta_mcp.audit_subject_for(backend, caller),
         name,
         audience,
         Some(reason),
