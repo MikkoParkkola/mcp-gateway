@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 use std::sync::Weak;
+use std::sync::atomic::Ordering;
 
 use serde_json::json;
 
@@ -44,10 +45,6 @@ pub(crate) struct ResourceSnapshot {
     pub uris: HashSet<String>,
     pub complete: bool,
 }
-
-/// A read this long may have been cut by the list page cap, which the
-/// resource fill does not report: it proves nothing about absence (§7).
-const POSSIBLY_CUT: usize = 1024;
 
 impl Backend {
     /// Take the idle lease; hold it while a stream is open.
@@ -95,7 +92,11 @@ impl Backend {
         }
         let resources = self.get_resources_for_binding(None, &[]).await?;
         Ok(ResourceSnapshot {
-            complete: resources.len() < POSSIBLY_CUT,
+            // A read cut by the page cap proves nothing about absence (§7).
+            complete: !self
+                .shared_entry()
+                .resources_truncated
+                .load(Ordering::SeqCst),
             uris: resources.iter().map(|r| r.uri.clone()).collect(),
         })
     }

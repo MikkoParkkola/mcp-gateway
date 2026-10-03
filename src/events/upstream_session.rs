@@ -123,7 +123,12 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
     let mut state = State::new(shared, if modern { Era::Modern } else { Era::Legacy });
     // The first catalogue read doubles as the legacy HTTP session's first
     // request on the shared bucket (§3).
-    state.read_snapshot(backend, false).await;
+    state.read_snapshot(backend, hub, false).await;
+    if !modern {
+        // A legacy GET names a session that exists: one shared-bucket request
+        // first, even when no URI is watched (§3).
+        let _ = backend.read_resource_snapshot(false).await;
+    }
     let first = requested(shared);
     let opened = tokio::select! {
         () = shared.stop.cancelled() => return Outcome::Stopped,
@@ -173,7 +178,7 @@ async fn session(shared: &Arc<Shared>, backend: &Arc<Backend>, hub: &Weak<Events
         }
         let stopped = tokio::select! {
             () = shared.stop.cancelled() => true,
-            () = state.maintain(backend, &target.handle, modern) => false,
+            () = state.maintain(backend, hub, &target.handle, modern) => false,
         };
         if stopped {
             state.release(backend).await;
@@ -288,13 +293,17 @@ impl<'a> State<'a> {
 
     /// Read the catalogue snapshot when URIs are watched; a failure keeps
     /// the previous good one (an error is not absence, §7).
-    async fn read_snapshot(&mut self, backend: &Backend, fresh: bool) {
+    async fn read_snapshot(&mut self, backend: &Backend, hub: &Weak<EventsHub>, fresh: bool) {
         if requested(self.shared).uris.is_empty() {
             return;
         }
         match backend.read_resource_snapshot(fresh).await {
             Ok(read) => {
+                let (complete, listed) = (read.complete, read.uris.clone());
                 self.shared.snapshot.lock().read(read.uris, read.complete);
+                if complete && let Some(hub) = hub.upgrade() {
+                    hub.revoke_absent_uris(&self.shared.name, &listed).await;
+                }
                 self.reread = false;
                 self.snapshot_due = Instant::now() + SNAPSHOT_TTL;
             }
@@ -353,6 +362,7 @@ impl<'a> State<'a> {
     async fn maintain(
         &mut self,
         backend: &Backend,
+        hub: &Weak<EventsHub>,
         handle: &Weak<dyn UpstreamListen>,
         modern: bool,
     ) {
@@ -390,7 +400,7 @@ impl<'a> State<'a> {
         let unread = watching && !self.shared.snapshot.lock().is_known();
         if (self.reread || unread || now >= self.snapshot_due) && now >= self.snapshot_retry_at {
             let fresh = self.reread;
-            self.read_snapshot(backend, fresh).await;
+            self.read_snapshot(backend, hub, fresh).await;
         }
     }
 

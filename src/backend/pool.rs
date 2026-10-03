@@ -99,11 +99,11 @@ pub(crate) struct PooledEntry {
     /// be resent (ADR-012 A1). Absent means deny, so an unfilled slot denies
     /// every resend, which is the safe direction.
     pub(crate) resend_permitted: RwLock<std::collections::HashSet<String>>,
-    /// Set when the last tools-cache drain (MIK 7570 PAGING.1) stopped before
-    /// the upstream catalogue was exhausted (page cap, repeated cursor, or the
-    /// fill budget). Cleared by the next fill that drains to completion.
-    /// Tools only — the other three families keep their pages either way.
+    /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
+    /// catalogue was exhausted (page cap, repeated cursor, or the fill
+    /// budget); cleared by the next complete fill. Tools and resources only.
     pub(crate) tools_truncated: AtomicBool,
+    pub(crate) resources_truncated: AtomicBool,
     /// When this slot's last tools fill ended without storing (F13): a drain,
     /// parse or start error, a `CallTimeout` expiry, or a voided store. Fills
     /// within `LIST_FILL_COOLDOWN` of it fail fast. Tokio's `Instant`, so a
@@ -210,6 +210,7 @@ impl PooledEntry {
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
+            resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),
             request_failed_since_close: parking_lot::Mutex::new(false),

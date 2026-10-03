@@ -44,6 +44,35 @@ impl Drop for UpstreamListeners {
     }
 }
 
+impl EventsHub {
+    /// A complete read of `backend`'s catalogue lacks some watched URIs: end
+    /// those `resource_updated` subscriptions now, freeing their interest
+    /// and URI budget instead of waiting for an occurrence (parent F9, §7).
+    pub(super) async fn revoke_absent_uris(
+        self: &Arc<Self>,
+        backend: &str,
+        listed: &std::collections::HashSet<String>,
+    ) {
+        let name = format!("backend.{backend}.resource_updated");
+        let now = chrono::Utc::now();
+        let gone: Vec<_> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .filter(|s| s.name == name && s.live(now))
+            .filter(|s| {
+                s.arguments
+                    .get("uri")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|u| !listed.contains(u))
+            })
+            .collect();
+        for sub in gone {
+            self.revoke(&sub).await;
+        }
+    }
+}
+
 impl UpstreamListeners {
     pub(crate) fn new(registry: Arc<BackendRegistry>, hub: Weak<EventsHub>) -> Arc<Self> {
         Arc::new(Self {
