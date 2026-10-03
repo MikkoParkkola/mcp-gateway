@@ -422,3 +422,36 @@ async fn a_peer_error_code_is_not_a_gateway_denial() {
         assert_eq!(record["error_code"], json!(code), "{code}: {record}");
     }
 }
+
+/// MIK-7735. A replay records the class its first execution carried, stored
+/// beside the cached delivery: the code alone cannot say whose refusal a
+/// `-32001` was. A peer's answer replays as `error`, a gateway refusal as
+/// `denied`, with the same code.
+#[tokio::test]
+async fn a_replay_keeps_the_stored_class_of_its_first_execution() {
+    use crate::gateway::meta_mcp::admission::ReplayAudit;
+    use crate::security::audit::AuditOutcome;
+    for (stored, label) in [
+        (AuditOutcome::Error(-32001), "error"),
+        (AuditOutcome::Denied(-32001), "denied"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let meta = meta(Ok(ok_result()), &dir);
+        let who = api_key_caller();
+        let delivered =
+            crate::protocol::JsonRpcResponse::success(RequestId::Number(1), ok_result());
+        let _ = meta
+            .audit_replay(
+                "gateway_invoke",
+                &args(),
+                None,
+                &context(&AllowAll, &who),
+                delivered,
+                Some(ReplayAudit::new(stored, None)),
+            )
+            .await;
+        let record = only_record(&dir);
+        assert_eq!(record["outcome"], json!(label), "{label}: {record}");
+        assert_eq!(record["error_code"], json!(-32001), "{label}: {record}");
+    }
+}
