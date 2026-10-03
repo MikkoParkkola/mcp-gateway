@@ -254,6 +254,32 @@ mod tests {
         }
     }
 
+    /// A refused connection to a URL that carries credentials: neither listen
+    /// error may repeat them (MIK-7895; a `reqwest` error's text embeds the URL).
+    #[tokio::test]
+    async fn a_listen_error_does_not_carry_url_credentials() {
+        let url = "http://user:hunter2@127.0.0.1:1/mcp";
+        let transport = HttpTransport::new(
+            url,
+            std::collections::HashMap::new(),
+            Duration::from_secs(2),
+            true,
+        )
+        .expect("transport");
+        let listen = transport
+            .open_listen(Requested::default())
+            .await
+            .expect_err("nothing listens on port 1");
+        let session = transport
+            .open_session_stream()
+            .await
+            .expect_err("nothing listens on port 1");
+        for error in [listen.to_string(), session.to_string()] {
+            assert!(!error.contains("hunter2"), "password leaked: {error}");
+            assert!(!error.contains("user:"), "userinfo leaked: {error}");
+        }
+    }
+
     #[test]
     fn frames_of_the_listen_are_projected() {
         let id = RequestId::Number(4);
