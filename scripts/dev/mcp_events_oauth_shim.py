@@ -155,11 +155,19 @@ class Shim(BaseHTTPRequestHandler):
 
     def proxy(self, verb, path):
         data = self.body()
-        rpc = []
+        rpc, rpc_params = [], []
         if path == "/mcp" and verb == "POST":
             try:
                 doc = json.loads(data)
-                rpc = [d.get("method") for d in (doc if isinstance(doc, list) else [doc])]
+                calls = doc if isinstance(doc, list) else [doc]
+                rpc = [d.get("method") for d in calls]
+                # Subscription identity only (never the delivery url or secret):
+                # the evidence check must see WHICH subscription a call named.
+                for d in calls:
+                    if d.get("method") in ("events/subscribe", "events/unsubscribe"):
+                        p = d.get("params") or {}
+                        rpc_params.append({"method": d["method"], "name": p.get("name"),
+                                           "arguments": p.get("arguments") or {}})
             except (ValueError, AttributeError):
                 pass
         headers = {k: v for k, v in self.headers.items()
@@ -186,6 +194,8 @@ class Shim(BaseHTTPRequestHandler):
         entry = {"kind": "http", "verb": verb, "path": path.split("?")[0], "status": resp.status}
         if rpc:
             entry["rpc"] = rpc
+            if rpc_params:
+                entry["rpc_params"] = rpc_params
             try:
                 text = out.decode()
                 if stream:

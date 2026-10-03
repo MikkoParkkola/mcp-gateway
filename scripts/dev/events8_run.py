@@ -257,8 +257,22 @@ def cmd_evidence(a):
     step("events/list", shim, rpc("events/list"))
     ver = step("verification handshake passed (gateway audit)", audit,
                act("events.verification", detail="verified", outcome="ok"))
-    step("events/subscribe answered with an id", shim,
-         lambda r: rpc("events/subscribe")(r) and r.get("result_has_id"))
+    def named(method, r):
+        return [p for p in r.get("rpc_params") or [] if p.get("method") == method]
+
+    sub_args = {}
+
+    def subscribed(r):
+        # The subscription the criterion is about: this event, filtered to the repo fired at.
+        if not (rpc("events/subscribe")(r) and r.get("result_has_id")):
+            return False
+        for p in named("events/subscribe", r):
+            if p.get("name") == EVENT and fire.get("repo") and (p.get("arguments") or {}).get("repo") == fire["repo"]:
+                sub_args.update(p["arguments"])
+                return True
+        return False
+
+    step("events/subscribe answered with an id for this event and repo", shim, subscribed)
     sub_id = (ver or {}).get("subscription_id")
     step("signed inbound webhook accepted (fire.json)", [fire] if fire else [],
          lambda r: r.get("signed") and r.get("status") == 200 and (r.get("ts", 0) >= last - 1))
@@ -266,7 +280,14 @@ def cmd_evidence(a):
          lambda r: has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)
          and bool(sub_id) and has(r, "subscription_id", sub_id)
          and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1)
-    step("events/unsubscribe answered", shim, rpc("events/unsubscribe"))
+    unsub = step("events/unsubscribe sent for the same event and arguments", shim,
+                 lambda r: rpc("events/unsubscribe")(r) and any(
+                     p.get("name") == EVENT and p.get("arguments") == sub_args and bool(sub_args)
+                     for p in named("events/unsubscribe", r)))
+    step("gateway removed that subscription (gateway audit)", audit,
+         lambda r: has(r, "action", "events.unsubscribe") and has(r, "detail", "removed")
+         and bool(sub_id) and has(r, "subscription_id", sub_id)
+         and (epoch(r) or 0) >= (epoch(unsub or {}) or 1e18) - 1)
     for r in results:
         print("PASS" if r["pass"] else "FAIL", r["check"])
     print("AUTOMATED CHECKS:", "PASS" if ok else "FAIL",
