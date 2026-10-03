@@ -299,3 +299,73 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
         "the attempt connects once the record is written"
     );
 }
+
+/// MIK-7842 AUDIT.3: an ending the audit log refuses (here an overdue record)
+/// is not buried unrecorded; it goes back to retry and is recorded once the
+/// log recovers.
+#[tokio::test]
+async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::TransparencyLogConfig {
+                enabled: true,
+                path: dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..crate::security::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("log"),
+    );
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        retry_max_attempts: 0,
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = Services {
+        live: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: Some(Arc::clone(&log)),
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: crate::events::LiveCredentials::default(),
+    };
+    queued(&hub, 9, "evt_overdue");
+    log.set_append_failure_for_test(true);
+    hub.attempt(&services, "evt_overdue").await;
+    let later = Utc::now() + chrono::Duration::minutes(5);
+    let due = hub
+        .store
+        .due(later, &std::collections::HashSet::new())
+        .expect("io");
+    assert_eq!(due.ready.len(), 1, "still pending, not buried");
+    assert_eq!(
+        due.ready[0].last_status.as_deref(),
+        Some("audit_unavailable")
+    );
+
+    // AUDIT.1, AUDIT.2: with the log back, the ending is recorded with the
+    // documented values for a record fan-out never stamped and a send that
+    // never built a body.
+    log.set_append_failure_for_test(false);
+    queued_event(&hub, "evt_overdue_two");
+    hub.attempt(&services, "evt_overdue_two").await;
+    let written = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
+    let line = written
+        .lines()
+        .find(|l| l.contains("evt_overdue_two"))
+        .expect("the ending is recorded");
+    assert!(
+        line.contains("\"firewall_verdict\":\"unrecorded\""),
+        "{line}"
+    );
+    assert!(line.contains("\"body_sha256\":\"\""), "{line}");
+}
