@@ -1,0 +1,15 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 3b0f13a09..c0cb6bd7f 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -113,9 +113,7 @@ impl UpstreamListeners {
+         let mut map = self.backends.lock();
+         // A task a reload ended (its backend became ineligible) is replaced,
+         // not reused, if the interest returns.
+-        if map.get(backend).is_some_and(|s| s.stop.is_cancelled()) {
+-            map.remove(backend);
+-        }
++
+         let shared = Arc::clone(
+             map.entry(backend.to_owned())
+                 .or_insert_with(|| self.start(backend)),

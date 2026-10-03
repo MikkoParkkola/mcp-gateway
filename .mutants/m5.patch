@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 4ed580550..20fdcfbff 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -83,7 +83,7 @@ fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
+     .into_iter()
+     .map(|kind| format!("backend.{}.{}", shared.name, kind.suffix()))
+     .collect();
+-    hub.withdraw(&names);
++
+     hub.reconcile_stops_in_background();
+ }
+ 

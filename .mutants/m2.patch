@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 4ed580550..816e0c69b 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -98,7 +98,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
+         if shared.stop.is_cancelled() {
+             return;
+         }
+-        if shared.is_ineligible() {
++        if false {
+             end_ineligible(&shared, &hub);
+             return;
+         }
