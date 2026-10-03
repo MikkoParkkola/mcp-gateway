@@ -51,20 +51,30 @@ impl MetaMcp {
         })
     }
 
-    /// Append up to `limit` visible event entries to `matches`; how many
-    /// matched in all, for the search's `total_available`.
-    pub(super) fn add_event_matches(
+    /// Add up to `limit` visible event entries to a search answer `out`
+    /// (after ranking and the tool limit), counting every match in `total`
+    /// and `total_available`.
+    pub(super) fn add_events_to(
         &self,
+        out: &mut serde_json::Value,
         query: &str,
         limit: usize,
         caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
-        matches: &mut Vec<serde_json::Value>,
-    ) -> usize {
+    ) {
         let events = self.event_search_matches(query, usize::MAX, caller, session_id);
-        let found = events.len();
+        let found = events.len() as u64;
+        let Some(matches) = out["matches"].as_array_mut().filter(|_| found > 0) else {
+            return;
+        };
         matches.extend(events.into_iter().take(limit));
-        found
+        let shown = matches.len();
+        out["total"] = shown.into();
+        out["total_available"] = (out["total_available"].as_u64().unwrap_or(0) + found).into();
+        // Suggestions are for an empty answer only.
+        if let Some(object) = out.as_object_mut() {
+            object.remove("suggestions");
+        }
     }
 
     /// `capabilities` as JSON, with `events` advertised when it applies.
