@@ -65,6 +65,10 @@ mod listen_scope;
 #[path = "listen_nested.rs"]
 mod listen_nested;
 
+// MIK-7778 PAYLOAD.1: the full task state, re-authorized per reader.
+#[path = "listen_payload.rs"]
+mod listen_payload;
+
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
     assert_receives_nothing, expect_message, open_listen, task_notification,

@@ -79,6 +79,34 @@ impl StreamJudge {
         self.admit(Payload::Request(document))
     }
 
+    /// Judge one document that carries a stored task's output. The attribution
+    /// kept beside a stored value is not persisted for a task, so with
+    /// attribution on the read is not attributable, as a `tasks/get` of the
+    /// same task treats it.
+    pub(crate) fn judge_restored_document(
+        &self,
+        document: serde_json::Value,
+    ) -> Option<OutboundFrame> {
+        let hidden = self.unattributed_read();
+        self.admit_hiding(Payload::Request(document), hidden.as_ref())
+    }
+
+    /// A read that cannot be attributed: `Some` only when this stream
+    /// attributes reads.
+    fn unattributed_read(&self) -> Option<ReadAttribution> {
+        #[cfg(feature = "firewall")]
+        {
+            self.guard
+                .as_deref()
+                .filter(|guard| guard.tenant_guard().attributes())
+                .map(|_| ReadAttribution::of(std::collections::BTreeSet::new(), true))
+        }
+        #[cfg(not(feature = "firewall"))]
+        {
+            None
+        }
+    }
+
     /// Judge the acknowledgement that opens a `subscriptions/listen` stream.
     /// The listen request's own params are a read by this caller too (they
     /// can name a tenant), though the acknowledgement does not echo them.

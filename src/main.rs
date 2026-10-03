@@ -4,11 +4,11 @@
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
+mod allocator;
 mod commands;
 mod home_dir;
 
-use std::path::Path;
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode};
 
 use clap::Parser;
 use mcp_gateway::{
