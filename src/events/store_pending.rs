@@ -430,16 +430,26 @@ impl Store {
             return Ok(Settled::default());
         };
         let sub_id = record.subscription_id.clone();
-        let settled = self.settle_record(&mut state, record, outcome, now, policy);
+        let mut settled = self.settle_record(&mut state, record, outcome, now, policy);
         if settled.is_err() {
-            let created_at = state.outbox.get(event_id).map(|r| r.created_at);
+            // The claimed occurrence's own stamp: the outbox entry may already
+            // be gone when the cleanup after the burial is what failed.
             let buried = state
                 .dead
                 .get(event_id)
-                .is_some_and(|(dead, _)| Some(dead.record.created_at) == created_at);
+                .is_some_and(|(dead, _)| dead.record.created_at == created_at);
             if buried {
-                // The dead letter is in place, if unsynced: never resend.
+                // The dead letter is in place, if unsynced: never resend. The
+                // burial happened, so its receipt stands: only the cleanup after
+                // it failed, and that is logged, not allowed to hide the burial.
                 state.outbox.remove(event_id);
+                if let Err(error) = &settled {
+                    tracing::warn!(%error, "events store: cleanup after a burial failed");
+                }
+                settled = Ok(Settled {
+                    evicted: Vec::new(),
+                    buried: true,
+                });
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
                 left.next_attempt_at = now + SETTLE_RETRY;
@@ -629,8 +639,14 @@ impl Store {
         policy: DeadPolicy,
     ) -> std::io::Result<Settled> {
         self.entomb(state, record, reason, now)?;
+        // The dead letter is written: a failed eviction after it is logged and
+        // the burial's receipt still stands.
+        let evicted = self.evict_dead(state, now, policy).unwrap_or_else(|error| {
+            tracing::warn!(%error, "events store: eviction after a burial failed");
+            Vec::new()
+        });
         Ok(Settled {
-            evicted: self.evict_dead(state, now, policy)?,
+            evicted,
             buried: true,
         })
     }

@@ -675,3 +675,35 @@ fn has_due_sees_a_pending_record_behind_one_in_flight() {
     assert!(!store.has_due("s2", now), "c is not due yet");
     assert!(!store.has_due("gone", now));
 }
+
+/// MIK-7805 AC5: a burial that is durable keeps its receipt even when the
+/// cleanup after it (the outbox file) cannot complete.
+#[test]
+fn a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    // The outbox directory is replaced by a file: removing the record's file
+    // after the dead letter is written then fails.
+    std::fs::remove_dir_all(dir.path().join("outbox")).expect("rm");
+    std::fs::write(dir.path().join("outbox"), b"x").expect("block");
+    let dead = Settle::Dead {
+        reason: DeadReason::Gone,
+        status: Some("http_4xx"),
+    };
+    let settled = store.settle("a", now, dead, now, ROOMY).expect("settled");
+    assert!(
+        settled.buried,
+        "the dead letter was written, so it is reported"
+    );
+    assert!(store.dead_letter_by_id("a").is_some());
+}
