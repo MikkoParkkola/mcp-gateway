@@ -17,7 +17,6 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tracing::{debug, info};
-use url::Url;
 
 /// Provenance of a `client_id` (MIK-6750 r7, Defect 2).
 ///
@@ -571,6 +570,9 @@ fn open_browser(url: &str) -> bool {
 #[cfg(test)]
 mod authorize_tests;
 pub(crate) mod destination;
+#[cfg(test)]
+use url::Url;
+
 mod grants;
 mod registration;
 mod renewal;
