@@ -462,20 +462,17 @@ pub(super) async fn meta_mcp_handler(
     let guard = super::helpers::read_guard(&state);
     let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
     let guard_for_scope = guard.clone();
+    let relay_on = state.meta_mcp.relay_active();
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
         logger.clone(),
         // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
         Box::pin(async move {
             crate::gateway::outbound::read_scoped(
                 guard_for_scope,
-                Box::pin(async move {
-                    let on = state.meta_mcp.relay_active();
-                    crate::gateway::meta_mcp::invoke::relay::collecting_if(
-                        on,
-                        meta_mcp_dispatch(state, http_request),
-                    )
-                    .await
-                }),
+                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_if(
+                    relay_on,
+                    meta_mcp_dispatch(state, http_request),
+                )),
             )
             .await
             .0
