@@ -33,14 +33,13 @@
 //! external-anchor / signature-verification hardening is tracked separately and
 //! is also mitigated by the SIEM export's trusted checkpoint anchor (MIK-6689).
 
+#[cfg(test)]
+use crate::control_plane::{ControlPlaneAction, ControlPlaneRollbackPlan};
 use crate::control_plane::{
     ControlPlaneAuditEvent, ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlanePolicy,
 };
-#[cfg(test)]
-use crate::{
-    control_plane::{ControlPlaneAction, ControlPlaneRollbackPlan},
-    security::TransparencyLogger,
-};
+#[cfg(any(test, doc))]
+use crate::security::TransparencyLogger;
 #[cfg(test)]
 use std::{path::Path, sync::Arc};
 
