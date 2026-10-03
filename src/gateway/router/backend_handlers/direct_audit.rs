@@ -132,7 +132,7 @@ pub(super) async fn audited_call(
     state: Arc<AppState>,
     name: String,
     request: axum::http::Request<axum::body::Body>,
-) -> axum::response::Response {
+) -> crate::gateway::outbound::OutboundReply {
     let judged = audited_call_judged(Arc::clone(&state), name, request);
     #[cfg(feature = "firewall")]
     if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
@@ -145,7 +145,7 @@ async fn audited_call_judged(
     state: Arc<AppState>,
     name: String,
     request: axum::http::Request<axum::body::Body>,
-) -> axum::response::Response {
+) -> crate::gateway::outbound::OutboundReply {
     let mut call = None;
     let mut reads = DirectReads::default();
     let guard = super::super::helpers::read_guard(&state);
@@ -168,7 +168,9 @@ async fn audited_call_judged(
     if status == StatusCode::ACCEPTED {
         // An accepted notification: the gateway's own placeholder, sent
         // with no body (MIK-7759), carries nothing to judge.
-        return super::super::helpers::bodiless_accepted((status, Json(body)));
+        return crate::gateway::outbound::gateway_reply(super::super::helpers::bodiless_accepted(
+            (status, Json(body)),
+        ));
     }
     let frame = crate::gateway::outbound::answer_value(
         guard.as_deref(),
@@ -182,14 +184,14 @@ async fn audited_call_judged(
     // `emit_http` writes last, as it can still replace the answer.
     let delivers = frame.delivers_result();
     let response = crate::gateway::outbound::to_http(frame, status, "");
-    let (response, written) =
-        crate::gateway::outbound::emit_http_checked(response, state.transparency_log.as_ref())
+    let (reply, written) =
+        crate::gateway::outbound::judged_reply_checked(response, state.transparency_log.as_ref())
             .await;
     #[cfg(feature = "firewall")]
     super::relay::commit_direct_receipts(&state, delivers && written);
     #[cfg(not(feature = "firewall"))]
     let _ = (delivers, written);
-    response
+    reply
 }
 
 /// Write the record for `call` and hand `answer` on, or withhold it when the

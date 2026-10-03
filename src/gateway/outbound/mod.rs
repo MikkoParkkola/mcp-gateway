@@ -20,6 +20,7 @@ mod callback;
 mod http;
 #[cfg(feature = "firewall")]
 mod judge;
+mod reply;
 mod stdio;
 mod stream;
 
@@ -35,6 +36,9 @@ pub(crate) use callback::{CallbackSend, callback_frame, send_callback};
 pub(crate) use http::{HeldAnswerId, carry_record, emit_http, emit_http_checked, to_http};
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, delivered};
+pub(crate) use reply::{
+    OutboundReply, gateway_reply, judged_reply, judged_reply_checked, stream_reply,
+};
 pub(crate) use stdio::StdioReads;
 pub(crate) use stream::{SessionJudge, StreamJudge, StreamMark, sse_data, sse_message};
 
