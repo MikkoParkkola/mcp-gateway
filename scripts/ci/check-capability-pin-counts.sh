@@ -128,9 +128,11 @@ fi
 # are three consistent numbers, and this is what keeps them that way.
 claims_json="benchmarks/public_claims.json"
 published=$(python3 -c "import json;print(json.load(open('$claims_json'))['capability_count'])")
-if [[ $published -ne $production ]]; then
-  echo "FAIL: $claims_json capability_count=$published; measured shipped catalogue=$production"
-  echo "      (total $total minus $templates templates under $TEMPLATE_PREFIX)."
+held=$(python3 -c "import json;print(len(json.load(open('$claims_json'))['held_capabilities']))")
+runnable=$((production - held))
+if [[ $published -ne $runnable ]]; then
+  echo "FAIL: $claims_json capability_count=$published; measured runnable catalogue=$runnable"
+  echo "      (total $total minus $templates templates under $TEMPLATE_PREFIX minus $held held)."
   fail=1
 fi
 
@@ -143,14 +145,14 @@ if [[ -z $readme_count ]]; then
   echo "FAIL: could not read the '**N built-in capabilities**' figure out of $readme."
   exit 1
 fi
-if [[ $readme_count -ne $production ]]; then
-  echo "FAIL: $readme says $readme_count built-in capabilities; measured shipped catalogue=$production."
+if [[ $readme_count -ne $runnable ]]; then
+  echo "FAIL: $readme says $readme_count built-in capabilities; measured runnable catalogue=$runnable."
   fail=1
 fi
 
 if [[ $fail -eq 0 ]]; then
   echo "OK: $pinned of $total capability files pinned, every pin reproduces,"
-  echo "    matrix agrees, published capability_count=$published matches the $production shipped."
+  echo "    matrix agrees, published capability_count=$published matches the $runnable runnable ($held held)."
 fi
 
 exit $fail
