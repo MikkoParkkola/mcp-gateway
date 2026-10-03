@@ -1,0 +1,15 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 4b87a878d..62b0037e7 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -125,7 +125,9 @@ impl ClientSession {
+     }
+ 
+     fn subscribe(&self) -> broadcast::Receiver<SessionFrame> {
+-        self.sender().subscribe()
++        let (tx, rx) = broadcast::channel(self.capacity);
++        let _ = self.tx.set(tx);
++        rx
+     }
+ 
+     fn receiver_count(&self) -> usize {

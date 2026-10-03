@@ -1,0 +1,16 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 4b87a878d..a65fb2830 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -138,10 +138,7 @@ impl ClientSession {
+         &self,
+         notification: SessionFrame,
+     ) -> std::result::Result<usize, broadcast::error::SendError<SessionFrame>> {
+-        match self.tx.get() {
+-            Some(tx) => tx.send(notification),
+-            None => Err(broadcast::error::SendError(notification)),
+-        }
++        self.sender().send(notification)
+     }
+ }
+ 

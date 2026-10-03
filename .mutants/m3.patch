@@ -1,0 +1,12 @@
+diff --git a/src/gateway/streaming.rs b/src/gateway/streaming.rs
+index 4b87a878d..b999429f9 100644
+--- a/src/gateway/streaming.rs
++++ b/src/gateway/streaming.rs
+@@ -381,6 +381,7 @@ impl NotificationMultiplexer {
+         let mut sessions = self.sessions.write();
+         if let Some(session) = session_id.and_then(|id| sessions.get(id))
+             && session.owner == *owner
++            && false
+         {
+             *session.last_active.write() = Instant::now();
+             return Arc::clone(session);
