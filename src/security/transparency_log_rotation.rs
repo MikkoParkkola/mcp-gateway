@@ -15,7 +15,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::hwm_scan::{hwm_missing_in, newest_finding};
+use super::hwm_scan::{contradicted, hwm_missing_in, newest_finding};
 use super::segments::{self, HighWater, Segment};
 use super::{
     MAX_TAIL_SCAN_BYTES, TransparencyLogConfig, chain_line, read_last_nonempty_line,
@@ -362,59 +362,6 @@ fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
     } else {
         carry
     }
-}
-
-/// Whether the newest surviving record `(counter, hash)` contradicts the
-/// authenticated mark `hw` (MIK-7884). Counters are global and monotone across
-/// segments and `.hwm` is written after its record, so an honest tail is never
-/// below the mark, in any segment, and at the mark's counter it is the mark's
-/// record. A tail behind the mark lost committed records (or is an older file
-/// restored); one at the mark with another hash was replaced. Either way
-/// re-minting `.hwm` from it would launder the change, signed log or not.
-pub(super) fn contradicts(hw: Option<&HighWater>, counter: u64, hash: &str) -> bool {
-    hw.is_some_and(|h| counter < h.counter || (counter == h.counter && hash != h.entry_hash))
-}
-
-/// [`contradicts`], and, when the tail is ahead of the mark, whether the
-/// record the mark names is still there as the mark recorded it (MIK-7884).
-/// A restart that repaired a torn suffix, or a mark that lags its record by a
-/// crash, leaves the tail ahead of a record that may have been replaced; the
-/// next append would carry the replacement forward unnoticed.
-fn contradicted(
-    path: &Path,
-    sealed: &[Segment],
-    hw: Option<&HighWater>,
-    counter: u64,
-    hash: &str,
-) -> io::Result<bool> {
-    let Some(h) = hw else {
-        return Ok(false);
-    };
-    if contradicts(hw, counter, hash) {
-        return Ok(true);
-    }
-    if counter == h.counter {
-        return Ok(false);
-    }
-    // The mark's record is the newest one when the mark was written: in the
-    // active file, or at the end of the sealed segment the mark names.
-    let named = sealed.iter().find(|s| s.seq == h.segment_seq);
-    for file in std::iter::once(path).chain(named.map(|s| s.path.as_path())) {
-        let text = match std::fs::read_to_string(file) {
-            Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-        };
-        let at_mark = text
-            .lines()
-            .filter_map(|line| record_head(line).ok())
-            .find(|(c, ..)| *c == h.counter);
-        if let Some((_, found, _, _)) = at_mark {
-            return Ok(found != h.entry_hash);
-        }
-    }
-    // Neither file holds the record the mark names.
-    Ok(true)
 }
 
 /// An active file whose last record is an ordinary record.

@@ -832,7 +832,7 @@ fn a_repair_record_on_a_restored_older_file_reuses_no_committed_counter() {
 /// (the seal-finishing and after-seal recovery paths share it).
 #[test]
 fn a_tail_contradicts_the_mark_when_behind_it_or_replaced_at_it() {
-    use super::rotation::contradicts;
+    use super::hwm_scan::contradicts;
     use super::segments::HighWater;
     let mark = HighWater {
         counter: 10,
