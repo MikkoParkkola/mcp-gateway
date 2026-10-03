@@ -371,7 +371,7 @@ impl CollusionDetector {
     pub(crate) fn check_egress_flows_at(
         &self,
         principal: &str,
-        (tool, _flows): (&str, u64),
+        (tool, egress_flows): (&str, u64),
         args: &str,
         now: Instant,
     ) -> Option<RelayFinding> {
@@ -410,11 +410,9 @@ impl CollusionDetector {
                     && t.sensitive_at
                         .is_some_and(|at| now.saturating_duration_since(at) <= window)
             };
-            if let Some(t) = tuples
-                .iter()
-                .filter(sensitive)
-                .find(|t| t.principal != sender && !excused(t.source))
-            {
+            if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
+                t.principal != sender && !excused(t.source) && t.flows & egress_flows == 0
+            }) {
                 matches += 1;
                 first.get_or_insert((t.source, t.principal));
             }
