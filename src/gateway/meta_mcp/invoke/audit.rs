@@ -187,9 +187,13 @@ impl DispatchNotes {
     }
 
     /// MIN.1 gap 1: a settlement's outcome. A gate refusal keeps the class a
-    /// live call's record gives it, with the code the task commits.
+    /// live call's record gives it, with the code the task commits. The
+    /// settlement result is built from a committed code alone, so a bare
+    /// `-32001`/`-32004` reads as `denied` in `from_result`: without a refusal
+    /// a gate noted it is the peer's own answer, an `error` (MIK-7735).
     fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (self.outcome(outcome), self.refusal) {
+            (AuditOutcome::Denied(code), None) => AuditOutcome::Error(code),
             (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
                 AuditOutcome::Denied(code)
             }
