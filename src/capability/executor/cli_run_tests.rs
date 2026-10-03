@@ -440,3 +440,18 @@ fn an_injected_multi_line_key_is_removed_whole() {
     super::super::cli::redact_value(&mut value, &[key]);
     assert!(!value.to_string().contains("abcdef0123456789"), "{value}");
 }
+
+/// A one-character needle matches at every position of a long text: the work
+/// and the memory stay linear in the text, not in the matches.
+#[test]
+fn a_needle_that_matches_everywhere_is_scrubbed_in_linear_space() {
+    let long = "a".repeat(8 * 1024 * 1024);
+    let started = std::time::Instant::now();
+    let out = super::super::cli::redact_untruncated(&long, &["a".to_owned(), "a".to_owned()], &[]);
+    assert_eq!(out, "[redacted]");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}",
+        started.elapsed()
+    );
+}

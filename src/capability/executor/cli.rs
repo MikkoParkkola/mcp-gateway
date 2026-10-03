@@ -326,39 +326,55 @@ fn needles<'a>(secrets: &'a [String], caller: &'a [String]) -> Vec<&'a str> {
 }
 
 /// Replace every occurrence of every needle with a marker. All matches are
-/// located in the ORIGINAL text and overlapping ones are merged first, so two
-/// credentials that overlap leave no fragment of either behind.
+/// located in the ORIGINAL text and overlapping ones merge into one marker, so
+/// two credentials that overlap leave no fragment of either behind.
+///
+/// Memory is one flag per byte of `text`, whatever the number of matches (a
+/// one-character needle in a long text matches at every position); each needle
+/// costs one pass.
 fn scrub(text: &str, needles: &[&str]) -> String {
-    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut covered: Vec<bool> = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
     for needle in needles {
+        if needle.is_empty() || seen.contains(needle) || !text.contains(needle) {
+            continue;
+        }
+        seen.push(needle);
+        if covered.is_empty() {
+            covered = vec![false; text.len()];
+        }
         let mut from = 0;
+        // Marked up to here by this needle: overlapping matches mark only what
+        // the previous one did not, so the marking is linear in the text.
+        let mut marked_to = 0;
         while let Some(found) = text[from..].find(needle) {
             let start = from + found;
-            spans.push((start, start + needle.len()));
+            let end = start + needle.len();
+            covered[start.max(marked_to)..end].fill(true);
+            marked_to = end;
             // One character on, so a match that overlaps the last one is seen.
             from = start + text[start..].chars().next().map_or(1, char::len_utf8);
         }
     }
-    if spans.is_empty() {
+    if covered.is_empty() {
         return text.to_owned();
     }
-    spans.sort_unstable();
     let mut out = String::with_capacity(text.len());
-    let mut copied_to = 0;
-    let mut spans = spans.into_iter().peekable();
-    while let Some((start, mut end)) = spans.next() {
-        while let Some(&(next_start, next_end)) = spans.peek() {
-            if next_start > end {
-                break;
+    let mut at = 0;
+    while at < text.len() {
+        if covered[at] {
+            while at < text.len() && covered[at] {
+                at += 1;
             }
-            end = end.max(next_end);
-            spans.next();
+            out.push_str("[redacted]");
+        } else {
+            let start = at;
+            while at < text.len() && !covered[at] {
+                at += 1;
+            }
+            out.push_str(&text[start..at]);
         }
-        out.push_str(&text[copied_to..start]);
-        out.push_str("[redacted]");
-        copied_to = end;
     }
-    out.push_str(&text[copied_to..]);
     out
 }
 
