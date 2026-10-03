@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/listen.rs b/src/transport/http/listen.rs
+index df23e2911..e7b354428 100644
+--- a/src/transport/http/listen.rs
++++ b/src/transport/http/listen.rs
+@@ -112,7 +112,7 @@ impl HttpTransport {
+             .timeout(STREAM_TIMEOUT)
+             .send()
+             .await
+-            .map_err(|e| safe_request_error("session stream", &e))?;
++            .map_err(|e| Error::Transport(format!("session stream: {e}")))?;
+         if !response.status().is_success() {
+             return Ok(Err(response.status().as_u16()));
+         }

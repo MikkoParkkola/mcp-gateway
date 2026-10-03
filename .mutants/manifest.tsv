@@ -1,0 +1,4 @@
+head_sha	98922d6fc2c2dda30eeb701b4d9c859d3d337e6e
+# batch 1 for 7895
+S1	linux	s1.patch	--lib -- a_listen_error_does_not_carry
+S2	linux	s2.patch	--lib -- a_listen_error_does_not_carry

@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/listen.rs b/src/transport/http/listen.rs
+index df23e2911..7fc98274f 100644
+--- a/src/transport/http/listen.rs
++++ b/src/transport/http/listen.rs
+@@ -68,7 +68,7 @@ impl HttpTransport {
+             .timeout(STREAM_TIMEOUT)
+             .send()
+             .await
+-            .map_err(|e| safe_request_error("listen", &e))?;
++            .map_err(|e| Error::Transport(format!("listen: {e}")))?;
+         if !response.status().is_success() {
+             return Err(Error::Transport(format!(
+                 "listen refused: HTTP {}",
