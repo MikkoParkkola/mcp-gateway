@@ -19,6 +19,7 @@ fn body_carries_only_protocol_fields_and_data() {
         name: "webhook.c.r.received".into(),
         backend: "hooks".into(),
         scope: Visibility::Backend("hooks".into()),
+        owner: None,
         upstream_id: "x".into(),
         occurred_at: Utc::now(),
         data: json!({"event_type": "t", "fields": {}}),

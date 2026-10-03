@@ -136,7 +136,7 @@ pub(crate) enum TransitionWrite<'a> {
 
 /// A callback told of each committed task transition.
 pub(crate) type PublicationHook =
-    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>) + Send + Sync>;
+    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>, Option<String>) + Send + Sync>;
 
 /// The one owner of a committed task record.
 ///
@@ -511,8 +511,9 @@ impl TaskExecutor {
     /// so a listener never learns of a transition that did not happen.
     pub(super) fn published(&self, task: &CommittedTask, task_id: &str) {
         let (status, changed_at) = (task.task.status(), task.task.last_updated_at());
+        let owner = task.owner_digest.clone();
         if let Some(hook) = self.publication_hook.get() {
-            hook(task_id, status, changed_at);
+            hook(task_id, status, changed_at, Some(owner));
         }
         tracing::debug!(
             task_id,

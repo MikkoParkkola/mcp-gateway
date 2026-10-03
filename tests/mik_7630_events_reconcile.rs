@@ -98,3 +98,49 @@ async fn webhooks_off_withdraws_webhook_subscriptions() {
         "the webhook subscription is withdrawn"
     );
 }
+
+/// MIK-7803: a backend removed while the gateway was down takes its
+/// `backend.<x>.tools_changed` subscription with it at the next start; a
+/// subscription to a retained event type survives the same restart.
+#[tokio::test]
+async fn a_backend_removed_while_down_takes_its_subscription() {
+    let dir = tempfile::tempdir().expect("root");
+    let root = dir.path().to_path_buf();
+    let rx = Receiver::start(&root).await;
+    let mut cfg = delivery_config(&root, &json!({}));
+    cfg["backends"] =
+        json!({"mock": {"http_url": "http://127.0.0.1:9/mcp", "streamable_http": true}});
+    for key in cfg["auth"]["api_keys"].as_array_mut().expect("keys") {
+        key["backends"]
+            .as_array_mut()
+            .expect("backends")
+            .push(json!("mock"));
+    }
+    let (k, v) = rx.trust_env();
+    let mut gw = Gateway::start_with_env(&root, cfg.clone(), &[(k, &v)]).await;
+    let name = "backend.mock.tools_changed";
+    gw.event_names(Some(ALICE), Some(name)).await;
+    let mut params = delivery::params(&rx.url, &whsec(32), json!({}));
+    params["name"] = json!(name);
+    let answer = gw.rpc(Some(ALICE), "events/subscribe", params).await;
+    assert!(
+        answer["result"]["id"].is_string(),
+        "backend subscribe: {answer}"
+    );
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    assert_eq!(subs_on_disk(&root), 2, "both subscriptions are stored");
+    gw.stop().await;
+    let mut gone = cfg;
+    gone["backends"] = json!({});
+    gw.rewrite_config(gone);
+    gw.restart().await;
+    assert!(
+        wait_until(DEADLINE, || subs_on_disk(&root) == 1).await,
+        "the removed backend's subscription is withdrawn, the webhook one kept"
+    );
+    let names = gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
+    assert!(
+        names.iter().all(|n| n != name),
+        "the type is gone: {names:?}"
+    );
+}

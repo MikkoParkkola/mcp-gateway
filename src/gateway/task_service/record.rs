@@ -331,6 +331,9 @@ pub(crate) struct CommittedTask {
     pub(crate) targets_recorded: bool,
     /// The row holds only the gateway's own bounded failure, no backend output.
     pub(crate) output_free: bool,
+    /// The owner's digest as the record persisted it, read in the same piece
+    /// as the rest of the snapshot (the events source carries it).
+    pub(crate) owner_digest: String,
 }
 
 impl CommittedTask {
@@ -360,6 +363,7 @@ impl CommittedTask {
             revision: record.revision,
             targets_recorded: record.version >= TARGET_VERSION,
             output_free: record.output_free,
+            owner_digest: record.admission.principal_digest.clone(),
         }
     }
 
