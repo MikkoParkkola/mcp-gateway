@@ -18,6 +18,7 @@ pub(crate) const TAP_CAPACITY: usize = 64;
 const UPDATED: &str = "notifications/resources/updated";
 const RESOURCES_CHANGED: &str = "notifications/resources/list_changed";
 const PROMPTS_CHANGED: &str = "notifications/prompts/list_changed";
+const TOOLS_CHANGED: &str = "notifications/tools/list_changed";
 const ACKNOWLEDGED: &str = "notifications/subscriptions/acknowledged";
 
 /// Which of the three upstream notifications a note stands for.
@@ -26,6 +27,7 @@ pub(crate) enum NoteKind {
     ResourceUpdated,
     ResourcesChanged,
     PromptsChanged,
+    ToolsChanged,
 }
 
 /// The list-changed kinds a listen asked for or a peer honoured.
@@ -33,6 +35,7 @@ pub(crate) enum NoteKind {
 pub(crate) struct KindSet {
     pub resources_changed: bool,
     pub prompts_changed: bool,
+    pub tools_changed: bool,
 }
 
 /// One projected frame of a listen or of the unsolicited stream.
@@ -61,7 +64,7 @@ pub(crate) enum Dropped {
 pub(crate) fn listen_filter(kinds: KindSet, uris: &[String]) -> Value {
     serde_json::json!({
         "notifications": {
-            "toolsListChanged": false,
+            "toolsListChanged": kinds.tools_changed,
             "resourcesListChanged": kinds.resources_changed,
             "promptsListChanged": kinds.prompts_changed,
             "resourceSubscriptions": uris,
@@ -92,6 +95,7 @@ pub(crate) fn project(
         UPDATED => NoteKind::ResourceUpdated,
         RESOURCES_CHANGED => NoteKind::ResourcesChanged,
         PROMPTS_CHANGED => NoteKind::PromptsChanged,
+        TOOLS_CHANGED => NoteKind::ToolsChanged,
         ACKNOWLEDGED if listen.is_some() => {
             let (id, requested) = listen.expect("guarded");
             if !tagged(params, id) {
@@ -146,6 +150,7 @@ impl Requested {
             kinds: KindSet {
                 resources_changed: self.kinds.resources_changed && flag("resourcesListChanged"),
                 prompts_changed: self.kinds.prompts_changed && flag("promptsListChanged"),
+                tools_changed: self.kinds.tools_changed && flag("toolsListChanged"),
             },
             uris: self
                 .uris

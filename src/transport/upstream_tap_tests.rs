@@ -13,6 +13,7 @@ fn requested() -> Requested {
         kinds: KindSet {
             resources_changed: true,
             prompts_changed: false,
+            tools_changed: false,
         },
         uris: vec!["file:///a".into(), "file:///b".into()],
     }
@@ -69,10 +70,6 @@ fn legacy_frames_carry_no_tag_and_no_ack() {
     );
     assert_eq!(project(ACKNOWLEDGED, None, None), Err(Dropped::Other));
     assert_eq!(
-        project("notifications/tools/list_changed", None, None),
-        Err(Dropped::Other)
-    );
-    assert_eq!(
         project("notifications/message", None, None),
         Err(Dropped::Other)
     );
@@ -114,7 +111,8 @@ fn the_ack_is_cut_to_what_was_asked() {
         Ok(UpstreamNote::Ack {
             kinds: KindSet {
                 resources_changed: true,
-                prompts_changed: false
+                prompts_changed: false,
+                tools_changed: false,
             },
             uris: vec!["file:///a".into()],
         }),
@@ -165,11 +163,13 @@ fn the_filter_names_what_is_needed() {
         KindSet {
             resources_changed: false,
             prompts_changed: true,
+            tools_changed: true,
         },
         &["file:///a".to_owned()],
     );
     assert_eq!(f["notifications"]["promptsListChanged"], true);
     assert_eq!(f["notifications"]["resourcesListChanged"], false);
+    assert_eq!(f["notifications"]["toolsListChanged"], true);
     assert_eq!(
         f["notifications"]["resourceSubscriptions"],
         json!(["file:///a"])
@@ -253,4 +253,23 @@ fn the_first_frame_compatible_response_acks_and_keeps_the_listen() {
     assert!(taps.response(&id, Some(&shape)), "a later one is the end");
     assert_eq!(rx.try_recv(), Ok(UpstreamNote::End));
     assert!(rx.try_recv().is_err());
+}
+
+/// A backend's tools notice projects to a note (I5b); on a listen it must
+/// carry the listen's tag like the others.
+#[test]
+fn a_tools_notice_projects_and_needs_its_tag() {
+    let id = json!(7);
+    let r = requested();
+    assert_eq!(
+        project("notifications/tools/list_changed", None, None),
+        Ok(UpstreamNote::Notice {
+            kind: NoteKind::ToolsChanged,
+            uri: None
+        })
+    );
+    assert_eq!(
+        project("notifications/tools/list_changed", None, Some((&id, &r))),
+        Err(Dropped::Untagged)
+    );
 }

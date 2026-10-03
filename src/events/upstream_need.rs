@@ -20,6 +20,7 @@ pub(crate) enum Interest {
     ResourceUpdated(String),
     ResourcesChanged,
     PromptsChanged,
+    ToolsChanged,
 }
 
 /// The URI budget is spent.
@@ -32,6 +33,7 @@ pub(crate) struct Full;
 pub(crate) struct Need {
     resources_changed: u32,
     prompts_changed: u32,
+    tools_changed: u32,
     uris: BTreeMap<String, u32>,
     uri_bytes: usize,
 }
@@ -51,6 +53,7 @@ impl Need {
         match interest {
             Interest::ResourcesChanged => self.resources_changed += 1,
             Interest::PromptsChanged => self.prompts_changed += 1,
+            Interest::ToolsChanged => self.tools_changed += 1,
             Interest::ResourceUpdated(uri) => {
                 if let Some(n) = self.uris.get_mut(uri) {
                     *n += 1;
@@ -78,6 +81,9 @@ impl Need {
             Interest::PromptsChanged => {
                 self.prompts_changed = self.prompts_changed.saturating_sub(1);
             }
+            Interest::ToolsChanged => {
+                self.tools_changed = self.tools_changed.saturating_sub(1);
+            }
             Interest::ResourceUpdated(uri) => {
                 if let Some(n) = self.uris.get_mut(uri) {
                     *n -= 1;
@@ -92,7 +98,10 @@ impl Need {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.resources_changed == 0 && self.prompts_changed == 0 && self.uris.is_empty()
+        self.resources_changed == 0
+            && self.prompts_changed == 0
+            && self.tools_changed == 0
+            && self.uris.is_empty()
     }
 
     /// Whether anyone subscribed to `kind` itself; `resources_changed` is
@@ -101,6 +110,7 @@ impl Need {
         match kind {
             NoteKind::ResourcesChanged => self.resources_changed > 0,
             NoteKind::PromptsChanged => self.prompts_changed > 0,
+            NoteKind::ToolsChanged => self.tools_changed > 0,
             NoteKind::ResourceUpdated => uri.is_some_and(|u| self.uris.contains_key(u)),
         }
     }
@@ -112,6 +122,7 @@ impl Need {
             KindSet {
                 resources_changed: self.resources_changed > 0 || !self.uris.is_empty(),
                 prompts_changed: self.prompts_changed > 0,
+                tools_changed: self.tools_changed > 0,
             },
             self.uris.keys().cloned().collect(),
         )
