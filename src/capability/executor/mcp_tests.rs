@@ -228,3 +228,41 @@ async fn unloading_stops_the_child_and_its_descendants() {
     }
     assert!(!alive, "grandchild {pid} outlived its MCP child");
 }
+
+#[tokio::test]
+async fn a_full_pool_evicts_its_least_recently_used_idle_child() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    for n in 0..=super::MAX_CHILDREN_PER_CAPABILITY {
+        call(
+            &executor,
+            &cap,
+            say.clone(),
+            &caller(&format!("caller-{n}")),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        executor.mcp_children.len(),
+        super::MAX_CHILDREN_PER_CAPABILITY,
+        "the 17th caller replaced the idlest child instead of growing the pool"
+    );
+}
+
+#[tokio::test]
+async fn unloading_stops_a_child_even_while_a_call_is_in_flight() {
+    let executor = CapabilityExecutor::new();
+    let cap = capability();
+    let say = json!({"operation": "say", "text": "x"});
+    call(&executor, &cap, say, &caller("alice")).await.unwrap();
+    let lease = executor.mcp_children.hold_for_test("alice");
+    executor.stop_unloaded_mcp(&|name| name != cap.name);
+    assert_eq!(
+        executor.mcp_children.len(),
+        0,
+        "unload does not wait for a busy child"
+    );
+    drop(lease);
+}

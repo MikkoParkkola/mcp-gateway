@@ -1,4 +1,4 @@
-sha256: f331aade0b1f4eaa01f977bbb1f6f96511bf53f50563ea4947c1487995ab5adf
+sha256: 3edca1f6b52e564a02a2227db878c070edcbca2178f8692ceb31cc621d5529d1
 fulcrum: '1.0'
 name: cloudflare_list_r2_objects
 description: List objects in an R2 bucket.
@@ -8,9 +8,11 @@ schema:
     properties:
       account_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare account ID
       bucket_name:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: R2 bucket name
       prefix:
         type: string

@@ -1,4 +1,4 @@
-sha256: b471c6783d06be0463aa987b714b87be29eea6ce02a50412864ff0e043328e48
+sha256: ef3dc1247b9836434b7547b760380bfc58a071224871d645dca9b7694838af15
 fulcrum: '1.0'
 name: cloudflare_delete_dns_record
 description: Delete a DNS record from a Cloudflare zone.
@@ -8,9 +8,11 @@ schema:
     properties:
       zone_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare zone ID
       dns_record_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: DNS record ID
     required:
     - zone_id

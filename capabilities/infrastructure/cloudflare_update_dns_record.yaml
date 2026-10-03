@@ -1,4 +1,4 @@
-sha256: c20dc443d08f6e22e2452d2d8b45d0c46dd1b8a65dadf5ad60bf893d72cb84d9
+sha256: 96c785754ec9c2981e91ac7a231a4958601a360aa3c54ba9eabe632136e8ebcb
 fulcrum: '1.0'
 name: cloudflare_update_dns_record
 description: Update fields of a DNS record (PATCH).
@@ -8,9 +8,11 @@ schema:
     properties:
       zone_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare zone ID
       dns_record_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: DNS record ID
       type:
         type: string

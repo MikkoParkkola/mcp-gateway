@@ -1,4 +1,4 @@
-sha256: af114b6cb073b0946fc99ed0ab67cfe52c7ea3bea82b1ce32296b2f0cb68b25a
+sha256: 485f63c34b3ed042bb670bb2689f90704db34dcdadc9ae1f990508fb538aa89b
 fulcrum: '1.0'
 name: cloudflare_list_dns_records
 description: List DNS records in a Cloudflare zone.
@@ -8,6 +8,7 @@ schema:
     properties:
       zone_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare zone ID
       type:
         type: string

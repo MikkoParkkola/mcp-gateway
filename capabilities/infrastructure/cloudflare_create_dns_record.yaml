@@ -1,4 +1,4 @@
-sha256: d375def597c0d22316339fc29044389321f191a20341cc8a1a598d5e9291f55d
+sha256: 0c8873ca2025d201f1cfa0812a6632848014348d0f8b7bc28485eae3afd513b7
 fulcrum: '1.0'
 name: cloudflare_create_dns_record
 description: Create a DNS record in a Cloudflare zone.
@@ -8,6 +8,7 @@ schema:
     properties:
       zone_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare zone ID
       type:
         type: string

@@ -1,4 +1,4 @@
-sha256: 7a5659aab688a13b895a3b5fab7b83a1d664c405c7e302f5b83515315fade863
+sha256: 6b8b341c5f7bbadc4cd2802ee96d245c5a0286409898151155046b22afd38f1b
 fulcrum: '1.0'
 name: cloudflare_list_workers
 description: List Worker scripts in a Cloudflare account.
@@ -8,6 +8,7 @@ schema:
     properties:
       account_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare account ID
     required:
     - account_id

@@ -104,3 +104,34 @@ fn a_value_that_looks_like_a_slot_is_not_expanded_again() {
     assert_eq!(render_filename("{a}.txt", &params), "{b}.txt");
     assert_eq!(render_filename("x{missing}y", &params), "x{missing}y");
 }
+
+#[tokio::test]
+async fn two_simultaneous_saves_cannot_both_fit_the_quota() {
+    let dir = tempfile::tempdir().unwrap();
+    // "hello" is 5 bytes: room for one file, not two.
+    let r = roots(dir.path(), 8);
+    let resp = json!({"data": "aGVsbG8"});
+    let one = json!({"filename": "one.txt"});
+    let two = json!({"filename": "two.txt"});
+    let spec_a = spec(100);
+    let spec_b = spec(100);
+    let (a, b) = tokio::join!(
+        save(&spec_a, &resp, &one, &r),
+        save(&spec_b, &resp, &two, &r)
+    );
+    assert_eq!(u8::from(a.is_ok()) + u8::from(b.is_ok()), 1, "{a:?} {b:?}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn a_long_name_that_collides_gets_no_suffix_past_the_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let r = roots(dir.path(), 1 << 20);
+    let name = format!("{}.txt", "a".repeat(251));
+    assert_eq!(name.len(), 255);
+    let p = json!({ "filename": name });
+    let resp = json!({"data": "aGVsbG8"});
+    save(&spec(100), &resp, &p, &r).await.unwrap();
+    let err = save(&spec(100), &resp, &p, &r).await;
+    assert!(err.is_err(), "255-byte name cannot take a suffix: {err:?}");
+}

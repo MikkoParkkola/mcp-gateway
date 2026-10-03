@@ -1,4 +1,4 @@
-sha256: 6dcf60845af39fd0ea17bea547823de1cc8fcf6a72ed8405333242970d650d7a
+sha256: b1f0435cb799569b9441ffa81d3d47ecac90ea31e99508ee9980c57d142ead9a
 fulcrum: '1.0'
 name: cloudflare_create_waf_rule
 description: Add a rule to a zone ruleset (get its ID from cloudflare_get_waf_rules).
@@ -8,9 +8,11 @@ schema:
     properties:
       zone_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare zone ID
       ruleset_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Ruleset ID
       expression:
         type: string

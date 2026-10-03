@@ -2,7 +2,7 @@
 
 `desktop_event_bus` turns app and window activity on a Mac into MCP events. A
 [Hammerspoon](https://www.hammerspoon.org/) script posts each event, signed, to the gateway's
-webhook route `/desktop/events`; the gateway checks the signature and publishes the event as
+webhook route `/desktop/events` under the webhook base path (`/webhooks` by default); the gateway checks the signature and publishes the event as
 `webhook.desktop_event_bus.desktop_events.received` with `app` and `kind` as filter keys. An agent
 subscribes with `events/subscribe` (MCP Events).
 
@@ -14,7 +14,7 @@ enable the capability. Requests with a missing or wrong `X-Desktop-Signature` he
 ## Mac side (`~/.hammerspoon/init.lua`)
 
 ```lua
-local GATEWAY = "http://127.0.0.1:" .. (os.getenv("MCP_GATEWAY_PORT") or "8080") .. "/desktop/events"
+local GATEWAY = "http://127.0.0.1:" .. (os.getenv("MCP_GATEWAY_PORT") or "8080") .. "/webhooks/desktop/events"
 local SECRET = os.getenv("DESKTOP_EVENT_SECRET") or hs.settings.get("desktop_event_secret")
 
 local function send(app, kind, title, bundle)

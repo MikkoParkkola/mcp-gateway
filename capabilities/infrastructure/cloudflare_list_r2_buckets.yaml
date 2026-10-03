@@ -1,4 +1,4 @@
-sha256: 68554509f81eccb8c11f6fc9b5d305fe04c828e753bb12c9cc6ee99858b5b890
+sha256: 138ebfd13297f69df61c6b47532706f758e689683d7bbc81917fac85019769f0
 fulcrum: '1.0'
 name: cloudflare_list_r2_buckets
 description: List R2 buckets in a Cloudflare account.
@@ -8,6 +8,7 @@ schema:
     properties:
       account_id:
         type: string
+        pattern: '^[A-Za-z0-9_-]+$'
         description: Cloudflare account ID
     required:
     - account_id

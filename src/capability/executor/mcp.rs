@@ -39,6 +39,8 @@ struct Child {
     backend: Arc<Backend>,
     /// The definition it was started from; a changed one restarts it.
     config: McpConfig,
+    /// Fingerprint of the env values it was started with; a rotated one restarts it.
+    env_fp: u64,
     in_flight: Arc<AtomicUsize>,
     last_used: Instant,
     /// Dropped after the backend is stopped, removing the tree.
@@ -68,12 +70,15 @@ impl McpChildren {
         capability: &CapabilityDefinition,
         config: &McpConfig,
         principal: &str,
+        env_fp: u64,
         start: impl FnOnce() -> Result<(Arc<Backend>, Workdir)>,
     ) -> Result<(Arc<Backend>, InFlight)> {
         let key = (capability.name.clone(), principal.to_owned());
         let mut stale = Vec::new();
         let mut map = self.map.lock();
-        if map.get(&key).is_some_and(|child| child.config != *config)
+        if map
+            .get(&key)
+            .is_some_and(|child| child.config != *config || child.env_fp != env_fp)
             && let Some(old) = map.remove(&key)
         {
             stale.push(old);
@@ -107,6 +112,7 @@ impl McpChildren {
                 Child {
                     backend,
                     config: config.clone(),
+                    env_fp,
                     in_flight: Arc::new(AtomicUsize::new(0)),
                     last_used: Instant::now(),
                     _workdir: workdir,
@@ -133,8 +139,11 @@ impl McpChildren {
         let gone: Vec<_> = map
             .iter()
             .filter(|((cap, _), child)| {
-                child.in_flight.load(Ordering::Acquire) == 0
-                    && (!loaded(cap) || now.duration_since(child.last_used) >= idle)
+                // An unloaded capability's child goes even mid-call; an idle one
+                // only when it has no call in flight.
+                !loaded(cap)
+                    || (child.in_flight.load(Ordering::Acquire) == 0
+                        && now.duration_since(child.last_used) >= idle)
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -164,6 +173,28 @@ impl McpChildren {
                 children.evict(IDLE_STOP, &|_| true);
             }
         });
+    }
+
+    /// Stop one caller's child (a call on it timed out, so it may be wedged).
+    fn discard(&self, capability: &str, principal: &str) {
+        let gone = self
+            .map
+            .lock()
+            .remove(&(capability.to_owned(), principal.to_owned()));
+        stop_all(gone.into_iter().collect());
+    }
+
+    /// Mark the caller's child busy, as a call in flight would.
+    #[cfg(test)]
+    pub(crate) fn hold_for_test(&self, _caller: &str) -> Vec<InFlight> {
+        self.map
+            .lock()
+            .values()
+            .map(|child| {
+                child.in_flight.fetch_add(1, Ordering::AcqRel);
+                InFlight(Arc::clone(&child.in_flight))
+            })
+            .collect()
     }
 
     /// Live children, for tests.
@@ -334,20 +365,34 @@ impl CapabilityExecutor {
         params: &Value,
         context: &CapabilityExecutionContext,
     ) -> Result<Value> {
+        super::cli::refuse_egress(capability)?;
         let params = super::cli::confine_paths(capability, params, &self.process_policy.files)?;
         let (tool, template, prepare) = select(config, &params)?;
         let principal = principal(capability, context, self.multi_user.load(Ordering::Acquire))?;
         self.mcp_children.ensure_sweeper();
-        let (backend, _busy) = self
-            .mcp_children
-            .acquire(capability, config, &principal, || {
-                self.start_mcp(capability, config)
-            })?;
+        let lookup = self.env_lookup();
+        let env_values: Vec<String> = config
+            .env
+            .iter()
+            .filter_map(|name| lookup(name))
+            .map(|v| v.to_string_lossy().into_owned())
+            .collect();
+        let env_fp = {
+            use std::hash::{Hash as _, Hasher as _};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            env_values.hash(&mut hasher);
+            hasher.finish()
+        };
+        let (backend, _busy) =
+            self.mcp_children
+                .acquire(capability, config, &principal, env_fp, || {
+                    self.start_mcp(capability, config)
+                })?;
 
         // One deadline for the whole call, writes included: a server that stops
         // reading its stdin must not hold its slot (and so its eviction) forever.
         let deadline = Duration::from_secs(capability.primary_provider().map_or(30, |p| p.timeout));
-        tokio::time::timeout(deadline, async {
+        let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
             if let Some(prepare) = prepare {
                 let first = call_tool(
@@ -374,8 +419,36 @@ impl CapabilityExecutor {
             }
             call_tool(&backend, tool, args).await
         })
-        .await
-        .map_err(|_| Error::BackendTimeout("MCP call timed out".to_string()))?
+        .await;
+        match outcome {
+            // A server that did not answer in time may be wedged: stop it so the
+            // next call starts a fresh one instead of timing out on the same.
+            Err(_) => {
+                self.mcp_children.discard(&capability.name, &principal);
+                Err(Error::BackendTimeout("MCP call timed out".to_string()))
+            }
+            Ok(result) => result.map_err(|error| match error {
+                // The server's own error text may echo a credential it was
+                // given or a value the caller sent.
+                Error::Protocol(text) => Error::Protocol(super::cli::redact(
+                    &text,
+                    &env_values,
+                    &super::cli::caller_values(&params),
+                )),
+                other => other,
+            }),
+        }
+    }
+
+    /// Environment lookup for a child: the config overlay, then the process.
+    fn env_lookup(&self) -> impl Fn(&str) -> Option<std::ffi::OsString> + use<> {
+        let overlay = self.env.get();
+        move |name: &str| {
+            overlay
+                .resolve(name)
+                .map(std::ffi::OsString::from)
+                .or_else(|| std::env::var_os(name))
+        }
     }
 
     /// A new backend for one caller's child, in its own directory tree.
@@ -386,13 +459,7 @@ impl CapabilityExecutor {
     ) -> Result<(Arc<Backend>, Workdir)> {
         let workdir = Workdir::create()
             .map_err(|e| Error::Protocol(format!("no private work directory: {}", e.kind())))?;
-        let overlay = self.env.get();
-        let lookup = |name: &str| {
-            overlay
-                .resolve(name)
-                .map(std::ffi::OsString::from)
-                .or_else(|| std::env::var_os(name))
-        };
+        let lookup = self.env_lookup();
         let program = super::cli_run::resolve_command(
             &config.command,
             lookup("PATH").as_deref(),

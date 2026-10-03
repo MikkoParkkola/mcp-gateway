@@ -185,6 +185,10 @@ fn write_unique(root: &std::path::Path, name: &str, bytes: &[u8], quota: u64) ->
         } else {
             format!("{stem}_{n}{ext}")
         };
+        if candidate.len() > 255 {
+            // A suffix would push a long valid name past the limit.
+            continue;
+        }
         let path = root.join(&candidate);
         match create_new(&path) {
             Ok(mut f) => {

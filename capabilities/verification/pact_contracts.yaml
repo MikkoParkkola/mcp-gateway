@@ -1,4 +1,4 @@
-sha256: 5f1d97705fb9e533c8914b6a36621ad5a6ee35fd0a226dffad8f734d19d4aebb
+sha256: 35883a8ca5dba1437d2c52687727122b052cd55c0ae3606f92d8771fd53a29f9
 fulcrum: "1.0"
 name: pact_contracts
 description: >
@@ -31,6 +31,7 @@ schema:
         description: PACT project directory inside capabilities.files.projects
     required:
     - operation
+    - project_dir
   output:
     type: object
     properties:

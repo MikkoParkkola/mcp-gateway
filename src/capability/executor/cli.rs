@@ -133,7 +133,7 @@ impl CapabilityExecutor {
 /// The gateway cannot stop a child from following a redirect or a DNS rebind
 /// to a private address, and no shipped tool refuses those at dial time yet
 /// (MIK-7788), so no such capability runs on a pre-check alone.
-fn refuse_egress(capability: &CapabilityDefinition) -> Result<()> {
+pub(super) fn refuse_egress(capability: &CapabilityDefinition) -> Result<()> {
     let egress = capability
         .schema
         .input
@@ -277,7 +277,7 @@ fn diagnostic(outcome: &CliOutcome) -> String {
 }
 
 /// Every string, number and boolean the caller supplied.
-fn caller_values(params: &Value) -> Vec<String> {
+pub(super) fn caller_values(params: &Value) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![params];
     while let Some(value) = stack.pop() {
