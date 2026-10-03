@@ -1,0 +1,6 @@
+head_sha	055e79f1b9033d91d5d2b4c368f5b971ffc523f5
+# MIK-7806 evidence mutants
+A1	linux	a1.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+A2	linux	a2.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records
+B1	linux	b1.patch	--test mik_7630_events_sso_replay -- an_sso_admins_replays_carry_the_verified_issuer_and_subject
+C1	linux	c1.patch	--test mik_7630_events_governance -- the_subscription_lifecycle_writes_governance_records

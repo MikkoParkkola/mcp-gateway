@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/events.rs b/src/gateway/ui/events.rs
+index ac297a3b5..132aa42f8 100644
+--- a/src/gateway/ui/events.rs
++++ b/src/gateway/ui/events.rs
+@@ -63,7 +63,7 @@ fn admitted(
+         .filter(|id| !id.issuer.is_empty() && !id.subject.is_empty())
+         .map(|id| GrantSubject::new(id.issuer, id.subject, None));
+     let actor = client.map(|c| Actor {
+-        who: AuditWho::from_request(Some(&c), subject.as_ref()),
++        who: AuditWho::from_request(Some(&c), { let _ = &subject; None }),
+     });
+     let (Some(actor), Some(hub)) = (actor, state.meta_mcp.events()) else {
+         return Err(Box::new(
