@@ -3699,7 +3699,7 @@ It depended on a tool that is not published, so it could not run on any other ma
 
 **Startup:** no notice, the capabilities load and refuse at call time
 
-A child process can follow a redirect or a DNS rebind to a private address, and the gateway cannot stop it from outside. Until the tool refuses private addresses at connect time (MIK-7788), `trawl_extract` and `cisco_scanner` `scan_mcp_server` return `not executable`.
+A child process can follow a redirect or a DNS rebind to a private address, and the gateway cannot stop it from outside. Until the tool refuses private addresses at connect time (MIK-7788), `trawl_extract` and `cisco_scanner` `scan_mcp_server` return `not executable`. The default `capabilities.process_commands` list does not admit `trawl` or `mcp-scanner remote` either, so a capability you pinned yourself that runs one of them is refused until you list it (an entry is a `command` plus `args_prefix`, for example `mcp-scanner` with `--analyzers yara remote`; setting the key replaces the shipped list, so keep the shipped entries you still need). No 3.x release ran `service: cli` capabilities, so nothing that worked before stops working.
 
 **Action:** none.
 
