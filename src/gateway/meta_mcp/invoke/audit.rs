@@ -187,9 +187,13 @@ impl DispatchNotes {
     }
 
     /// MIN.1 gap 1: a settlement's outcome. A gate refusal keeps the class a
-    /// live call's record gives it, with the code the task commits.
+    /// live call's record gives it, with the code the task commits. The
+    /// settlement result is built from a committed code alone, so a bare
+    /// `-32001`/`-32004` reads as `denied` in `from_result`: without a refusal
+    /// a gate noted it is the peer's own answer, an `error` (MIK-7735).
     fn settled_outcome(&self, outcome: AuditOutcome) -> AuditOutcome {
         match (self.outcome(outcome), self.refusal) {
+            (AuditOutcome::Denied(code), None) => AuditOutcome::Error(code),
             (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
                 AuditOutcome::Denied(code)
             }
@@ -601,6 +605,13 @@ impl MetaMcp {
             };
             let Some(outcome) = AuditOutcome::from_result(&result) else {
                 return replay;
+            };
+            // A delivered error carries a code and no provenance, and `from_result`
+            // reads a bare `-32001`/`-32004` as a gateway refusal: with no stored
+            // class, that is a peer's answer as likely as a refusal (MIK-7735).
+            let outcome = match outcome {
+                AuditOutcome::Denied(code) => AuditOutcome::Error(code),
+                other => other,
             };
             super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
         };
