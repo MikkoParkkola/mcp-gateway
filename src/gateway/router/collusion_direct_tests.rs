@@ -58,6 +58,8 @@ struct Alpha {
     read: Arc<Mutex<Read>>,
     reads: Arc<AtomicUsize>,
     sends: Arc<AtomicUsize>,
+    /// `resources/read` and `prompts/get` calls that reached the backend.
+    catalogue: Arc<AtomicUsize>,
 }
 
 fn text_result(text: &str) -> Value {
@@ -74,6 +76,32 @@ impl Transport for Alpha {
                 .map(|n| json!({"name": n, "description": "A tool.", "inputSchema": {"type": "object"}}))
                 .collect();
             return Ok(JsonRpcResponse::success(id, json!({ "tools": tools })));
+        }
+        // The catalogue: one resource and one prompt, both answering PROSE.
+        let served = match &*self.read.lock().unwrap() {
+            Read::Text(text) => text.clone(),
+            _ => PROSE.to_string(),
+        };
+        let doc = |text: &str| json!({"contents": [{"uri": "res://orchard", "text": text}]});
+        match method {
+            "resources/list" => {
+                let listed = json!({"resources": [{"uri": "res://orchard", "name": "orchard"}]});
+                return Ok(JsonRpcResponse::success(id, listed));
+            }
+            "prompts/list" => {
+                let listed = json!({"prompts": [{"name": "orchard"}]});
+                return Ok(JsonRpcResponse::success(id, listed));
+            }
+            "resources/read" => {
+                self.catalogue.fetch_add(1, Ordering::SeqCst);
+                return Ok(JsonRpcResponse::success(id, doc(&served)));
+            }
+            "prompts/get" => {
+                self.catalogue.fetch_add(1, Ordering::SeqCst);
+                let message = json!({"role": "user", "content": {"type": "text", "text": served}});
+                return Ok(JsonRpcResponse::success(id, json!({"messages": [message]})));
+            }
+            _ => {}
         }
         let name = params
             .as_ref()
@@ -130,6 +158,7 @@ struct Fixture {
     read: Arc<Mutex<Read>>,
     reads: Arc<AtomicUsize>,
     sends: Arc<AtomicUsize>,
+    catalogue: Arc<AtomicUsize>,
     _store: tempfile::TempDir,
 }
 
@@ -191,6 +220,7 @@ async fn fixture(setup: Setup) -> Fixture {
     };
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let (reads, sends) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let catalogue = Arc::new(AtomicUsize::new(0));
     let read = Arc::new(Mutex::new(Read::Text(PROSE.to_string())));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     let backend = Arc::new(Backend::new(
@@ -206,6 +236,7 @@ async fn fixture(setup: Setup) -> Fixture {
         read: Arc::clone(&read),
         reads: Arc::clone(&reads),
         sends: Arc::clone(&sends),
+        catalogue: Arc::clone(&catalogue),
     }));
     assert!(state_mut.backends.register(Arc::clone(&backend)));
     let config = FirewallConfig {
@@ -239,11 +270,16 @@ async fn fixture(setup: Setup) -> Fixture {
         read,
         reads,
         sends,
+        catalogue,
         _store: store,
     }
 }
 
 impl Fixture {
+    fn catalogue(&self) -> usize {
+        self.catalogue.load(Ordering::SeqCst)
+    }
+
     fn sends(&self) -> usize {
         self.sends.load(Ordering::SeqCst)
     }
@@ -706,6 +742,7 @@ async fn a_forged_public_verdict_is_replaced_by_the_gateways_own() {
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
 }
 
+mod catalogue;
 mod meta;
 mod verdict;
 

@@ -278,11 +278,10 @@ impl MetaMcp {
             Err(refused) => return *refused,
         };
         let empty = json!({"messages": []});
-        Self::forward_for_caller(
+        self.forward_catalogue(
             id,
             &backend,
-            "prompts/get",
-            forward_params,
+            ("prompts/get", forward_params),
             credential,
             empty,
         )
