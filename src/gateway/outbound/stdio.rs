@@ -112,16 +112,9 @@ impl StdioReads {
         recorded(frame, self.log.as_ref()).await
     }
 
-    /// Judge a batch's answers one by one, each with its own request's
-    /// params and what its own dispatch read, into one frame.
-    pub(crate) async fn batch(
-        &self,
-        answers: Vec<(Value, Option<ReadAttribution>, Option<Value>)>,
-    ) -> OutboundFrame {
-        let mut items = Vec::with_capacity(answers.len());
-        for (answer, hidden, params) in answers {
-            items.push(self.answer(answer, params.as_ref(), hidden.as_ref()).await);
-        }
+    /// One frame for a batch whose items were each judged (and had their relay
+    /// receipts recorded) right after their own dispatch.
+    pub(crate) fn batch_of(items: Vec<OutboundFrame>) -> OutboundFrame {
         OutboundFrame::unjudged(Payload::Batch(items))
     }
 

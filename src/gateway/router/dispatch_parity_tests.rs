@@ -414,6 +414,56 @@ const BANNED: &[&str] = &[
     "apply_response_gates",
 ];
 
+/// Every source file that makes up the direct backend route.
+const DIRECT_ROUTE: [&str; 6] = [
+    include_str!("backend_handlers.rs"),
+    include_str!("backend_handlers/direct_caller.rs"),
+    include_str!("backend_handlers/direct_preflight.rs"),
+    include_str!("backend_handlers/direct_dispatch.rs"),
+    include_str!("backend_handlers/direct_audit.rs"),
+    include_str!("backend_handlers/direct_list.rs"),
+];
+
+/// The stage functions, in the order `backend_handler_inner` must call them.
+const STAGES: [&str; 7] = [
+    "resolve_caller(",
+    "read_envelope(",
+    "route(",
+    "forward_notification(",
+    "preflight(",
+    "propagate_identity(",
+    "admit(",
+];
+
+/// T8, order: the orchestrator calls every stage, in the order that carries
+/// the refusal precedence (scope before lookup, attestation before the mint,
+/// the notification arm between routing and preflight), and every stage is
+/// defined in a scanned file. A stage dropped, reordered, or moved to an
+/// unscanned file fails here, not only in review.
+#[test]
+fn t8_the_direct_route_calls_its_stages_in_order() {
+    let body = fn_body(DIRECT_ROUTE[0], "backend_handler_inner");
+    let mut from = 0;
+    for stage in STAGES {
+        let at = body[from..].find(stage).unwrap_or_else(|| {
+            panic!("{stage} missing, or out of order, in backend_handler_inner")
+        });
+        from += at + stage.len();
+    }
+    assert!(
+        body[from..].contains("dispatch("),
+        "the terminal dispatch is not called last"
+    );
+    let scanned = DIRECT_ROUTE.concat();
+    for stage in STAGES {
+        let name = stage.trim_end_matches('(');
+        assert!(
+            scanned.contains(&format!("fn {name}(")) || scanned.contains(&format!("fn {name}<")),
+            "stage {name} is defined outside the scanned files"
+        );
+    }
+}
+
 /// `active_profile(` followed, across whitespace and newlines, by `.check`.
 fn has_profile_check(body: &str) -> bool {
     body.match_indices("active_profile(").any(|(i, _)| {
@@ -429,7 +479,6 @@ fn has_profile_check(body: &str) -> bool {
 #[test]
 fn t8_no_control_primitive_runs_outside_the_shared_stages() {
     let invoke = include_str!("../meta_mcp/invoke.rs");
-    let handlers = include_str!("backend_handlers.rs");
     let guards = include_str!("direct_guards.rs");
     let sites = [
         ("invoke_tool_traced", fn_body(invoke, "invoke_tool_traced")),
@@ -438,10 +487,14 @@ fn t8_no_control_primitive_runs_outside_the_shared_stages() {
             fn_body(invoke, "check_invocation_policy"),
         ),
         ("accounted_dispatch", fn_body(invoke, "accounted_dispatch")),
-        (
-            "backend_handler_inner",
-            fn_body(handlers, "backend_handler_inner"),
-        ),
+        // The direct route's stages live in whole files, so a primitive moved
+        // into any of them is still scanned.
+        ("backend_handlers.rs", DIRECT_ROUTE[0]),
+        ("direct_caller.rs", DIRECT_ROUTE[1]),
+        ("direct_preflight.rs", DIRECT_ROUTE[2]),
+        ("direct_dispatch.rs", DIRECT_ROUTE[3]),
+        ("direct_audit.rs", DIRECT_ROUTE[4]),
+        ("direct_list.rs", DIRECT_ROUTE[5]),
         ("direct_guards.rs", guards),
     ];
     let mut found = Vec::new();

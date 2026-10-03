@@ -1728,11 +1728,17 @@
     },
     {
       "id": "MIK-7630.SAFETY.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-02 after I2 (7317d4c94): the I2 rows pass, but an attempt still completes when the audit log refuses its record (MIK-7784); stays pending. Reviewed 2026-10-03 after #2718 (10bf73dde): the audit-before-POST change and the body-free assertion are merged; stays pending until T29's tenant-attribution assertion checks the attributed values rather than the key's presence (review finding), and the no-POST clause gets a worker-level test."
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs",
+        "tests/mik_7630_events_delivery_safety.rs",
+        "src/events/services_audit_tests.rs",
+        "src/events/worker_tests.rs",
+        "src/events/worker.rs"
+      ],
+      "note": "Graded 2026-10-03 at a009b5249 (PR #2732; the audit-before-POST change merged earlier in 10bf73dde, PR #2718, MIK-7784). T29 (tests/mik_7630_events_delivery.rs, every_delivery_attempt_writes_one_attributed_audit_record): three attempts write three attributed audit records with the attempt number, the hash of the bytes sent, the callback host without its path and the exact hashed tenant of the data (hash_argument of the repo value), and no record of the event, an attempt's or its outcome's, holds the body (a canary in the data never appears). T21 (tests/mik_7630_events_delivery_safety.rs, secrets_never_leave_the_store): the whsec secret appears in no audit record. Worker level (src/events/worker_tests.rs an_attempt_the_audit_log_refuses_is_not_sent): with the audit log refusing its append the callback receives no connection and the record waits (audit_unavailable); with the log working the same flow connects. src/events/services_audit_tests.rs: a refused append reaches the caller. Red first: CI run 37061829649 (the audit-refusal unit test failed at its own assertion). The worker-level test and the exact tenant assertion have no red run; they pin behaviour the merged code already had. Green: CI run 37091855027 on the PR head e1b51997c (the merged tree: a009b5249 is that head squashed onto the base it was last merged with; Tests, Clippy, Windows, macOS). Mutants: A1 (refusal swallowed) RED on b12829d81 (run 37073489208); Q1 (audit refusal ignored in the worker) RED on the final head (run 37092186093). Reviews: gpt and grok on each part and on every delta; bot threads answered FIXED. Outside the criterion's wording, design 3.7 also lists a firewall verdict on the attempt record and governance records for subscribe, refresh, unsubscribe, verification, dead-letter and replay; those are not built and are tracked in MIK-7802. Scope of 'attempt': the record is written, and must succeed, before a POST; the refusals that send nothing (access revoked, window exhausted, budget) are audited best effort with an empty body hash, because no payload leaves the gateway for them."
     },
     {
       "id": "MIK-7630.SAFETY.3",
@@ -1740,7 +1746,7 @@
       "stage": "ungraded",
       "blocked_on": "none",
       "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-03 after MIN.2 E1 (6b463a06a): T25 is un-ignored and passes in observe mode and block mode (tests/mik_7630_events_delivery_safety.rs tenant_guard_applies_to_event_payloads, tenant_guard_blocks_a_cross_tenant_event_delivery); T24 pins revocation (the next event is not delivered, the pending retry is cancelled, the subscription is deleted, a refresh answers -32011). Still pending: T24's source-level authorize refusal answering -32012 cannot be written until the EventSource trait has an authorize hook (I4), and T3's backend and task clauses are I4 rows too."
     },
     {
       "id": "MIK-7630.SAFETY.4",

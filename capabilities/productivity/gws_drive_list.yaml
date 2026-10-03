@@ -1,4 +1,4 @@
-sha256: 2df573d39cb833cfae408956e1dedeb9761b9c963a9508ab3bc217ee97a3408a
+sha256: fca7f4f7911531b6f20eca2093bdc3eafc7769f1a5c8696369a8ec31f5bbb590
 fulcrum: "1.0"
 name: gws_drive_list
 description: List files in Google Drive. Supports search queries, pagination, and filtering by MIME type.
@@ -45,11 +45,15 @@ providers:
     config:
       command: gws
       args:
-        - drive
-        - files
-        - list
-        - "--params"
-        - '{"pageSize": {pageSize}, "orderBy": "{orderBy}", "q": "{query}"}'
+      - drive
+      - files
+      - list
+      - json: --params=
+        value:
+          pageSize: '{pageSize}'
+          orderBy: '{orderBy}'
+          q: '{query}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: ttl
@@ -57,8 +61,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s drive"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/drive.readonly
 
 metadata:
   category: productivity

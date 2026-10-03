@@ -602,3 +602,31 @@ fn mcp_refusal_text_is_bounded_for_a_huge_schema() {
         "the violation itself must survive the cap"
     );
 }
+
+#[test]
+fn a_pattern_refuses_a_value_that_does_not_match() {
+    let schema = schema_with_props(
+        json!({"zone_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"}}),
+        &["zone_id"],
+    );
+    assert!(
+        validate_arguments(&json!({"zone_id": "abc-123"}), &schema)
+            .violations
+            .is_empty()
+    );
+    for bad in ["real?x=#", "a/b", "..", ""] {
+        let r = validate_arguments(&json!({"zone_id": bad}), &schema);
+        assert_eq!(r.violations.len(), 1, "{bad:?}");
+    }
+}
+
+#[test]
+fn a_pattern_that_does_not_compile_refuses_everything() {
+    let schema = schema_with_props(json!({"x": {"type": "string", "pattern": "("}}), &[]);
+    assert_eq!(
+        validate_arguments(&json!({"x": "a"}), &schema)
+            .violations
+            .len(),
+        1
+    );
+}

@@ -256,7 +256,11 @@ impl TransparencyLogger {
         &self,
         fields: &serde_json::Map<String, serde_json::Value>,
     ) -> bool {
-        let kind = fields.get("kind").and_then(serde_json::Value::as_str);
+        // A record without a `kind` is named by its `event` (a `tenant_read`).
+        let kind = fields
+            .get("kind")
+            .or_else(|| fields.get("event"))
+            .and_then(serde_json::Value::as_str);
         let mut armed = self.bound.fail_next_kind.lock().expect("fault lock");
         let kind_hit = kind.is_some() && armed.as_deref() == kind && armed.take().is_some();
         drop(armed);

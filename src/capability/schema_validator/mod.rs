@@ -448,6 +448,17 @@ fn validate_property(
                     format!("must be at least {min_len} characters long"),
                 ));
             }
+            // `pattern` is unanchored, as in JSON Schema. A pattern that does not
+            // compile refuses every value: a guard that cannot be read must not
+            // be skipped.
+            if let Some(pattern) = prop_schema.get("pattern").and_then(Value::as_str)
+                && !regex::Regex::new(pattern).is_ok_and(|re| re.is_match(s))
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must match the pattern {pattern}"),
+                ));
+            }
             if let Some(max_len) = prop_schema.get("maxLength").and_then(Value::as_u64)
                 && (len as u64) > max_len
             {

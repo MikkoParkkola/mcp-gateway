@@ -155,7 +155,7 @@ pub struct CapabilityBackend {
     /// they may be set in either order at startup. Read by
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
-    initial_scan: std::sync::atomic::AtomicBool,
+    initial_scan: std::sync::atomic::AtomicU8,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -181,7 +181,7 @@ impl CapabilityBackend {
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
-            initial_scan: std::sync::atomic::AtomicBool::new(true), // see initial_scan.rs
+            initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
         }
     }
 
@@ -192,6 +192,7 @@ impl CapabilityBackend {
     pub fn set_multi_user(&self, multi_user: bool) {
         self.multi_user
             .store(multi_user, std::sync::atomic::Ordering::Relaxed);
+        self.executor.set_multi_user(multi_user);
     }
 
     /// Whether the capability backend is currently considered healthy by its
@@ -214,6 +215,7 @@ impl CapabilityBackend {
     /// to call `reload()` immediately afterwards, but this method is `pub` and
     /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
+        self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
         let mut caps = self.capabilities.write();
         if let Some(&pos) = caps.index.get(name) {
             caps.entries.remove(pos);
@@ -387,6 +389,8 @@ impl CapabilityBackend {
             let mut caps = self.capabilities.write();
             caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
+            self.executor
+                .stop_unloaded_mcp(&|name| caps.index.contains_key(name));
         }
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");

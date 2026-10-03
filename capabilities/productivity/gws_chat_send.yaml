@@ -1,4 +1,4 @@
-sha256: 466c5de0d0ba903d0f030c899d71779d780ecae60a0f83b46aa13aeaba45e4fa
+sha256: 3339e9db657886ff2f60a31f41a9afa650824718aee6233150f4f1521c9db7f8
 fulcrum: "1.0"
 name: gws_chat_send
 description: Send a message in a Google Chat space. Posts a text message to the specified Chat space.
@@ -9,18 +9,19 @@ schema:
     properties:
       spaceName:
         type: string
-        description: "Chat space resource name (e.g., spaces/AAAA1234)"
+        description: Chat space resource name (e.g., spaces/AAAA1234)
         examples:
-          - "spaces/AAAA1234"
+        - spaces/AAAA1234
       text:
         type: string
-        description: "Message text to send (supports basic formatting)"
+        format: multiline
+        description: Message text (plain text)
       threadKey:
         type: string
-        description: "Thread key to reply within a specific thread (optional)"
+        description: Thread key to reply within a specific thread (optional)
     required:
-      - spaceName
-      - text
+    - spaceName
+    - text
   output:
     type: object
     properties:
@@ -44,14 +45,20 @@ providers:
     config:
       command: gws
       args:
-        - chat
-        - "+send"
-        - "--space"
-        - "{spaceName}"
-        - "--text"
-        - "{text}"
-        - "--thread-key"
-        - "{threadKey}"
+      - chat
+      - spaces
+      - messages
+      - create
+      - json: --params=
+        value:
+          parent: '{spaceName}'
+          messageReplyOption: REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD
+      - json: --json=
+        value:
+          text: '{text}'
+          thread:
+            threadKey: '{threadKey}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -59,8 +66,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s chat"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/chat.messages.create
 
 metadata:
   category: productivity
