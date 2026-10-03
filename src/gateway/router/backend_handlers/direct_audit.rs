@@ -125,7 +125,23 @@ impl DirectReads {
 /// D2: one write per tools/call, with the notes of its dispatch scope. Then
 /// every answer, whatever the method, is judged for the caller (H9) and
 /// written through the outbound sink.
+/// [`audited_call_judged`] inside one relay-receipt collector, which spans the
+/// dispatch, the audit write and the judge (COLLUDE.1). With relay detection
+/// off there is nothing to collect.
 pub(super) async fn audited_call(
+    state: Arc<AppState>,
+    name: String,
+    request: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    let judged = audited_call_judged(Arc::clone(&state), name, request);
+    #[cfg(feature = "firewall")]
+    if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
+        return crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged)).await;
+    }
+    Box::pin(judged).await
+}
+
+async fn audited_call_judged(
     state: Arc<AppState>,
     name: String,
     request: axum::http::Request<axum::body::Body>,
@@ -161,8 +177,19 @@ pub(super) async fn audited_call(
         reads.params.as_ref(),
         hidden.as_ref(),
     );
+    // COLLUDE.1 x MIN.2: receipts record only an answer that was delivered, so
+    // they follow the judge, the audit write and the read record that
+    // `emit_http` writes last, as it can still replace the answer.
+    let delivers = frame.delivers_result();
     let response = crate::gateway::outbound::to_http(frame, status, "");
-    crate::gateway::outbound::emit_http(response, state.transparency_log.as_ref()).await
+    let (response, written) =
+        crate::gateway::outbound::emit_http_checked(response, state.transparency_log.as_ref())
+            .await;
+    #[cfg(feature = "firewall")]
+    super::relay::commit_direct_receipts(&state, delivers && written);
+    #[cfg(not(feature = "firewall"))]
+    let _ = (delivers, written);
+    response
 }
 
 /// Write the record for `call` and hand `answer` on, or withhold it when the

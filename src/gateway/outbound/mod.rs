@@ -32,7 +32,7 @@ use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 
 pub(crate) use audit::{REJECTION_AUDIT_PERMITS, RejectionAudit, audit_rejection, recorded};
 pub(crate) use callback::{CallbackSend, callback_frame, send_callback};
-pub(crate) use http::{HeldAnswerId, carry_record, emit_http, to_http};
+pub(crate) use http::{HeldAnswerId, carry_record, emit_http, emit_http_checked, to_http};
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use judge::{admit, attribute, delivered};
 pub(crate) use stdio::StdioReads;
