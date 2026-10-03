@@ -1,0 +1,1 @@
+["search_code", "list_xrefs", "gen_callgraph", "decompile_function", "list_exports", "list_imports", "read_bytes", "search_strings", "search_symbols_by_name", "import_binary", "list_project_binaries", "list_project_binary_metadata", "delete_project_binary", "rename_function", "rename_variable", "set_variable_type", "set_function_prototype", "set_comment"]
