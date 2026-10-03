@@ -397,11 +397,24 @@ impl CapabilityBackend {
         Ok(total)
     }
 
-    /// Get all tools (pre-built MCP tool representations).
+    /// Get the tools clients are shown (pre-built MCP tool representations).
     ///
-    /// O(n) clone of the pre-built cache — no `to_mcp_tool()` conversions.
+    /// A capability whose required login is missing is left out until it is
+    /// supplied (MIK-7787 D4): the catalogue is a library, and a tool that
+    /// can only fail is noise in every listing.
     pub fn get_tools(&self) -> Vec<Tool> {
-        self.capabilities.read().tools.clone()
+        let caps = self.capabilities.read();
+        let mut oauth_seen = HashMap::new();
+        caps.entries
+            .iter()
+            .zip(caps.tools.iter())
+            .filter(|(entry, _tool)| {
+                self.executor
+                    .missing_credential(&entry.auth, &mut oauth_seen)
+                    .is_none()
+            })
+            .map(|(_entry, tool)| tool.clone())
+            .collect()
     }
 
     /// Get tools visible in `current_state`.
@@ -409,19 +422,35 @@ impl CapabilityBackend {
     /// A capability is included when its `visible_in_states` list is **empty**
     /// (always visible — backward compat) or when it contains `current_state`.
     ///
-    /// O(n) over entries + tool cache; no extra allocations beyond the returned
-    /// `Vec`.
+    /// Also leaves out a capability whose required login is missing, as
+    /// [`Self::get_tools`] does.
     pub fn get_tools_for_state(&self, current_state: &str) -> Vec<Tool> {
         let caps = self.capabilities.read();
+        let mut oauth_seen = HashMap::new();
         caps.entries
             .iter()
             .zip(caps.tools.iter())
             .filter(|(entry, _tool)| {
-                entry.visible_in_states.is_empty()
-                    || entry.visible_in_states.iter().any(|s| s == current_state)
+                (entry.visible_in_states.is_empty()
+                    || entry.visible_in_states.iter().any(|s| s == current_state))
+                    && self
+                        .executor
+                        .missing_credential(&entry.auth, &mut oauth_seen)
+                        .is_none()
             })
             .map(|(_entry, tool)| tool.clone())
             .collect()
+    }
+
+    /// Whether clients are shown the capability `name`: it exists and its
+    /// required login (if any) is in place. A name this backend does not hold
+    /// is not its to hide, so it counts as listed.
+    pub fn is_listed(&self, name: &str) -> bool {
+        self.capabilities.read().get(name).is_none_or(|entry| {
+            self.executor
+                .missing_credential(&entry.auth, &mut HashMap::new())
+                .is_none()
+        })
     }
 
     /// Get a specific capability by name — O(1) via the name index.

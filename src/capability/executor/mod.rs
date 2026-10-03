@@ -27,6 +27,7 @@ pub mod jsonrpc;
 mod mcp;
 mod params;
 mod process;
+mod readiness;
 pub mod rest;
 mod save_file;
 pub use save_file::SaveFileSpec;

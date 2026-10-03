@@ -598,3 +598,96 @@ fn capability_backend_status_surfaces_executor_health() {
     assert_eq!(json["healthy"], serde_json::json!(true));
     assert_eq!(json["consecutive_failures"], serde_json::json!(0));
 }
+
+// ── MIK-7787 D4: a capability whose login is missing is not listed ──────────
+
+mod login_gate {
+    use super::*;
+    use crate::config::{EnvOverlay, LiveEnv, ResolvedEnvFiles};
+
+    /// An overlay holding `vars`, read from an owner-only env file (the
+    /// overlay prefers env-file values to the process environment).
+    fn overlay_with(vars: &str) -> Arc<EnvOverlay> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("keys.env");
+        crate::gateway::test_helpers::write_owner_only(&path, vars).unwrap();
+        let mut overlay = EnvOverlay::none();
+        overlay.apply_file(&path).unwrap();
+        Arc::new(overlay)
+    }
+
+    fn backend_with_env(vars: &str) -> CapabilityBackend {
+        let env = Arc::new(LiveEnv::new(
+            overlay_with(vars),
+            ResolvedEnvFiles::default(),
+        ));
+        let executor = Arc::new(CapabilityExecutor::new().with_env(env));
+        CapabilityBackend::new("test", executor)
+    }
+
+    fn keyed_cap(name: &str, required: bool, key: &str) -> CapabilityDefinition {
+        let yaml = format!(
+            "name: {name}\ndescription: Keyed\nproviders:\n  primary:\n    service: rest\n    \
+             config:\n      base_url: https://api.invalid\n      path: /k\nauth:\n  required: \
+             {required}\n  type: bearer\n  key: \"{key}\"\n"
+        );
+        crate::capability::parse_capability(&yaml).unwrap()
+    }
+
+    fn names(tools: Vec<Tool>) -> Vec<String> {
+        let mut names: Vec<String> = tools.into_iter().map(|t| String::clone(&t.name)).collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_capability_is_listed_only_once_its_login_is_in_place() {
+        let backend =
+            backend_with_env("MIK7787_SET=x\nMIK7787_BRACED=x\nMIK7787_BARE=x\nMIK7787_EMPTY=\n");
+        for (name, required, key) in [
+            ("env_set", true, "env:MIK7787_SET"),
+            ("braced_set", true, "{env.MIK7787_BRACED}"),
+            ("bare_set", true, "MIK7787_BARE"),
+            ("env_missing", true, "env:MIK7787_NEVER_SET_ANYWHERE"),
+            ("bare_missing", true, "MIK7787_NEVER_SET_ANYWHERE"),
+            ("env_empty", true, "env:MIK7787_EMPTY"),
+            ("not_required", false, "env:MIK7787_NEVER_SET_ANYWHERE"),
+            ("keychain", true, "keychain:mik7787-undecided"),
+            ("oauth_missing", true, "oauth:mik7787-no-such-provider"),
+        ] {
+            backend
+                .register_capability(keyed_cap(name, required, key))
+                .unwrap();
+        }
+        let listed = names(backend.get_tools());
+        assert_eq!(
+            listed,
+            [
+                "bare_set",
+                "braced_set",
+                "env_set",
+                "keychain",
+                "not_required"
+            ]
+        );
+        // The state-scoped listing applies the same rule.
+        assert_eq!(names(backend.get_tools_for_state("any")), listed);
+    }
+
+    #[test]
+    fn supplying_the_key_turns_the_capability_on() {
+        let env = Arc::new(LiveEnv::new(
+            overlay_with("UNRELATED=1\n"),
+            ResolvedEnvFiles::default(),
+        ));
+        let executor = Arc::new(CapabilityExecutor::new().with_env(Arc::clone(&env)));
+        let backend = CapabilityBackend::new("test", executor);
+        backend
+            .register_capability(keyed_cap("late", true, "env:MIK7787_LATE"))
+            .unwrap();
+        assert!(backend.get_tools().is_empty());
+
+        env.set(overlay_with("MIK7787_LATE=x\n"));
+        assert_eq!(names(backend.get_tools()), ["late"]);
+    }
+}

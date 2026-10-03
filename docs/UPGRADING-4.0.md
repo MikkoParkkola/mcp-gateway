@@ -153,11 +153,12 @@ backend" and "fails a capability file" first.**
 | 126 | `mcp-gateway add <registry name>` writes the server's `${VAR}` env or header references, its OAuth stanza and its transport dialect; it writes the server disabled when a reference does not resolve or the server can reach any address (Playwright, fetch). `init` (local profile) enables memory, sequential-thinking and context7. Enabling a backend with an unresolved reference is refused | Set the named variable, then `enabled: true`; nothing changes for backends already in `gateway.yaml` |
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
 | 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
-| 129 | The shipped `gws_*` Google Workspace capabilities (17) now run through the `gws` command-line tool; their input schemas follow the tool's own parameters | Install `gws` (`npm i -g @googleworkspace/cli`) and sign in; a caller that sent the old parameter names sends the new ones (see each capability's schema) |
-| 130 | `cloudflare_manage` is removed and replaced by 11 REST capabilities (`cloudflare_*`) against the Cloudflare API v4; the npm package it declared never existed | Call the specific `cloudflare_*` capability; set the account or zone as an input. `deploy_worker` is not included yet |
-| 131 | `metacognition_verify` is removed from the public catalogue: it needs a private tool nobody else can install | None for other users; keep a private copy of the file if you run that tool |
-| 132 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
-| 133 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
+| 129 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
+| 130 | The shipped `gws_*` Google Workspace capabilities (17) now run through the `gws` command-line tool; their input schemas follow the tool's own parameters | Install `gws` (`npm i -g @googleworkspace/cli`) and sign in; a caller that sent the old parameter names sends the new ones (see each capability's schema) |
+| 131 | `cloudflare_manage` is removed and replaced by 11 REST capabilities (`cloudflare_*`) against the Cloudflare API v4; the npm package it declared never existed | Call the specific `cloudflare_*` capability; set the account or zone as an input. `deploy_worker` is not included yet |
+| 132 | `metacognition_verify` is removed from the public catalogue: it needs a private tool nobody else can install | None for other users; keep a private copy of the file if you run that tool |
+| 133 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
+| 134 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3614,7 +3615,27 @@ REST with an empty URL. It now runs the command, under these rules:
 capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
 `capabilities.process_commands` (the list then replaces the default).
 
-## 129. Google Workspace capabilities run through gws
+## 129. A capability that needs a login is listed once the login exists
+
+**Startup:** no notice
+
+The bundled catalogue is a library: it ships capabilities for many services, and most need an
+account. A capability that declares `auth.required: true` used to be listed whether or not its key
+existed, so a new install showed tools that could only fail. It is now left out of `tools/list` and
+search until its credential exists:
+
+- an `env:NAME` (or `{env.NAME}`, or bare `NAME`) key whose variable is set and non-empty in the
+  environment or an `env_files` entry;
+- an `oauth:<provider>` key whose provider has a stored login.
+
+A `keychain:` or `file:` key, and a per-caller account credential, cannot be checked without reading
+a secret or knowing the caller, so those capabilities stay listed. Calls are unchanged: a hidden
+capability invoked by name behaves as before.
+
+**Action:** if a capability you use disappeared from the list, set the variable it names; supplying
+the key lists it again.
+
+## 130. Google Workspace capabilities run through gws
 
 **Startup:** no notice, the `gws_*` capabilities are served and run `gws` when called
 
@@ -3622,7 +3643,7 @@ These capabilities loaded in 3.x but never ran. Each is now pinned and runs one 
 
 **Action:** install `gws`, sign in, and update callers to the new parameter names.
 
-## 130. cloudflare_manage is replaced by Cloudflare REST capabilities
+## 131. cloudflare_manage is replaced by Cloudflare REST capabilities
 
 **Startup:** no notice, `cloudflare_manage` no longer appears in the catalogue
 
@@ -3630,7 +3651,7 @@ The MCP package it declared was never published, so it could not run. Eleven RES
 
 **Action:** switch to the `cloudflare_*` capability for the operation you need and pass the account or zone.
 
-## 131. metacognition_verify is removed
+## 132. metacognition_verify is removed
 
 **Startup:** no notice, `metacognition_verify` no longer appears in the catalogue
 
@@ -3638,7 +3659,7 @@ It depended on a tool that is not published, so it could not run on any other ma
 
 **Action:** none, unless you use that tool privately; keep your own pinned copy of the capability file.
 
-## 132. Two network-reaching CLI capabilities are held
+## 133. Two network-reaching CLI capabilities are held
 
 **Startup:** no notice, the capabilities load and refuse at call time
 
@@ -3646,7 +3667,7 @@ A child process can follow a redirect or a DNS rebind to a private address, and 
 
 **Action:** none.
 
-## 133. Attachment capabilities save to a configured directory and return Google's field names
+## 134. Attachment capabilities save to a configured directory and return Google's field names
 
 **Startup:** no notice, `gmail_save_attachment` refuses until `capabilities.files.downloads` is set
 
