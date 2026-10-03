@@ -46,4 +46,5 @@ jobs:
       - name: Test failures
         if: always()
         shell: pwsh
-        run: Select-String -Path cov.log -Pattern "FAILED|test result: FAILED|panicked" | ForEach-Object { $_.Line }
+        run: |
+          Select-String -Path cov.log -Pattern "FAILED|panicked" | ForEach-Object { $_.Line }
