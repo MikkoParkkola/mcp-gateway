@@ -854,7 +854,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // The same key rule as the first round, against the slot as it is now.
         let checked_at = std::time::Instant::now();
         let refusal = self.meta.undeclared_key_refusal(
-            self.server,
+            (self.server, self.captured.as_ref()),
             self.tool,
             self.arguments,
             self.cache_binding,
@@ -1781,7 +1781,7 @@ impl MetaMcp {
         // failsafe refusing that list answers as a refused dispatch does.
         let checked_at = std::time::Instant::now();
         let refusal = self.undeclared_key_refusal(
-            server,
+            (server, backend.as_ref()),
             tool,
             &arguments,
             dispatch_binding.as_deref(),
@@ -3559,10 +3559,8 @@ impl MetaMcp {
         }
 
         // The backend the call was judged on, not a second lookup by name a
-        // reload may have answered differently (MIK-7810).
-        let backend = captured
-            .or_else(|| self.backends.get(server))
-            .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+        // reload may have answered differently (MIK-7810). None: not found.
+        let backend = captured.ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
         // A "did you mean?" hint off THIS CALLER'S slot (MIK-7334.CATALOGUE.1):
         // the shared one holds a catalogue this caller was never shown once a
@@ -6024,6 +6022,9 @@ mod suggestion_authz_tests;
 
 #[cfg(test)]
 mod f13_bridge_tests;
+
+#[cfg(test)]
+mod captured_invoke_tests;
 
 #[cfg(test)]
 mod cancel_settles_tests;

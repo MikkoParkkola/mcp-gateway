@@ -12,10 +12,11 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::backend::{Backend, BackendRegistry};
+use crate::backend::{Backend, BackendRegistry, PoolKey};
 use crate::config::{BackendConfig, FailsafeConfig, OAuthConfig};
 use crate::gateway::authz::AllowAll;
-use crate::gateway::meta_mcp::{Authentication, MetaMcp, MetaMcpCallerContext};
+use crate::gateway::meta_mcp::{Authentication, InvokeScope, MetaMcp, MetaMcpCallerContext};
+use crate::gateway::router::CallerStanding;
 use crate::identity_propagation::{
     BackendDescriptor, IdentityPropagation, IdentityPropagationConfig, PropagatedCredential,
     PropagationError, PropagationStrategyKind, SessionMode,
@@ -45,6 +46,39 @@ impl Transport for Counting {
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             RequestId::Number(1),
             json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Counts only the `tools/list` requests it served: a cold-slot schema check
+/// lists the backend as the caller, with the caller's headers.
+struct Listing(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl Transport for Listing {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/list" {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]}),
         ))
     }
 
@@ -206,5 +240,59 @@ async fn a_reload_during_the_mint_does_not_change_the_backend_a_call_is_judged_o
         ),
         (1, 0),
         "the call must be served by the backend it was judged on"
+    );
+}
+
+/// The schema check lists a cold slot as the caller, with the caller's minted
+/// headers. It lists the backend the call was judged on. Mutant: the check
+/// looks the name up again and sends those headers to the replacement.
+#[tokio::test]
+async fn the_schema_check_lists_the_captured_backend_not_the_replacement() {
+    let (captured_lists, replacement_lists) =
+        (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let registry = Arc::new(BackendRegistry::new());
+    let make = |config, lists: &Arc<AtomicUsize>| {
+        let backend = Arc::new(Backend::new(
+            "alpha",
+            config,
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+        ));
+        let wire = Arc::new(Listing(Arc::clone(lists))) as Arc<dyn Transport>;
+        backend.set_transport_for_test(Arc::clone(&wire));
+        backend.set_pooled_transport_for_test(
+            &PoolKey::PerUser {
+                binding: "alice@alpha".to_owned(),
+            },
+            wire,
+        );
+        backend
+    };
+    let captured = make(optional_propagation(), &captured_lists);
+    assert!(registry.register(Arc::clone(&captured)));
+    // The reload: the registry now answers `alpha` with another backend.
+    assert!(registry.remove("alpha"));
+    assert!(registry.register(make(optional_propagation(), &replacement_lists)));
+    let meta = MetaMcp::new(Arc::clone(&registry));
+
+    let refusal = meta
+        .undeclared_key_refusal(
+            ("alpha", Some(&captured)),
+            "read",
+            &json!({"invented": 1}),
+            Some("alice@alpha"),
+            &[("Authorization".to_string(), "Bearer minted".to_string())],
+            (InvokeScope::allow_all(CallerStanding::Standard), None),
+        )
+        .await;
+
+    assert!(refusal.is_ok(), "the check itself answers: {refusal:?}");
+    assert_eq!(
+        (
+            captured_lists.load(Ordering::SeqCst),
+            replacement_lists.load(Ordering::SeqCst)
+        ),
+        (1, 0),
+        "the caller's headers must reach only the backend the call was judged on"
     );
 }
