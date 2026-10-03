@@ -363,32 +363,35 @@ fn scrub(text: &str, needles: &[&str]) -> String {
 }
 
 /// [`redact`] without the truncation: for a result the caller receives whole.
-/// Runs the firewall's credential scanner (absent without the `firewall`
-/// feature), then removes the literals: the other way round, a secret that is
-/// itself a common word (`Bearer`) would strip the context the scanner keys on.
+/// Removes the literals first, then runs the firewall's credential scanner
+/// (absent without the `firewall` feature: the literal removal still applies).
+///
+/// The literals go first on purpose: a multi-line injected value such as a PEM
+/// key must be removed whole, before the scanner can cut a header out of it.
+/// The cost is that an injected value equal to a word the scanner keys on
+/// (`Bearer`) blunts that one pattern.
 pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
+    let text = scrub(text, &needles(secrets, caller));
     #[cfg(feature = "firewall")]
     let text = {
-        let mut value = Value::String(text.to_owned());
+        let mut value = Value::String(text);
         REDACTOR.scan_and_redact(&mut value);
         value.as_str().unwrap_or_default().to_owned()
     };
-    #[cfg(not(feature = "firewall"))]
-    let text = text.to_owned();
-    scrub(&text, &needles(secrets, caller))
+    text
 }
 
 /// Redact a successful JSON result in place: every string value and object key,
 /// never the structure, so the document still parses and a redacted string
 /// stays a string. No truncation.
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
-    // The scanner first, then the literals (see `redact_untruncated`).
-    #[cfg(feature = "firewall")]
-    REDACTOR.scan_and_redact(value);
+    // The literals first, then the scanner (see `redact_untruncated`).
     let needles = needles(secrets, &[]);
     if !needles.is_empty() {
         scrub_value(value, &needles);
     }
+    #[cfg(feature = "firewall")]
+    REDACTOR.scan_and_redact(value);
 }
 
 fn scrub_value(value: &mut Value, needles: &[&str]) {

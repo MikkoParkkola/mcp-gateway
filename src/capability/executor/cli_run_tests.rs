@@ -423,16 +423,20 @@ fn overlapping_credentials_leave_no_fragment_of_either() {
     assert_eq!(out, "x[redacted]y");
 }
 
-/// A credential that is a common word must not strip the context the
-/// scanner keys on (`Bearer <token>`).
-#[cfg(feature = "firewall")]
+/// A multi-line injected credential (a PEM key) is removed whole: the scanner
+/// must not get to cut its header out first and leave the body matchable by
+/// nobody.
 #[test]
-fn a_secret_that_is_a_common_word_does_not_hide_a_credential_from_the_scanner() {
-    let token = "opaque-token-0123456789abcdef";
-    let text = format!("Authorization: Bearer {token}");
-    let out = super::super::cli::redact_untruncated(&text, &["Bearer".to_owned()], &[]);
-    assert!(!out.contains(token), "{out}");
-    let mut value = json!({ "h": text });
-    super::super::cli::redact_value(&mut value, &["Bearer".to_owned()]);
-    assert!(!value.to_string().contains(token), "{value}");
+fn an_injected_multi_line_key_is_removed_whole() {
+    let key = format!(
+        "-----BEGIN {0} KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nabcdef0123456789\n-----END {0} KEY-----",
+        "PRIVATE"
+    );
+    let text = format!("echo: {key} done");
+    let out = super::super::cli::redact_untruncated(&text, std::slice::from_ref(&key), &[]);
+    assert!(!out.contains("MIIEvQIBADANBg"), "{out}");
+    assert!(!out.contains("abcdef0123456789"), "{out}");
+    let mut value = json!({ "k": text });
+    super::super::cli::redact_value(&mut value, &[key]);
+    assert!(!value.to_string().contains("abcdef0123456789"), "{value}");
 }
