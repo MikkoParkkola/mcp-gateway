@@ -9,7 +9,11 @@ use super::*;
 use crate::backend::BackendRegistry;
 
 fn listeners() -> Arc<UpstreamListeners> {
-    UpstreamListeners::new(Arc::new(BackendRegistry::new()), Weak::new())
+    UpstreamListeners::new(
+        Arc::new(BackendRegistry::new()),
+        Weak::new(),
+        Arc::new(std::collections::BTreeSet::new),
+    )
 }
 
 fn watched(uri: &str) -> Interest {

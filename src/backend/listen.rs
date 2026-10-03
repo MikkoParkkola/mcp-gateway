@@ -105,7 +105,11 @@ impl Backend {
     /// cached list, so the re-read a `tools_changed` subscriber does next
     /// reaches the backend instead of the old list (§14).
     pub(crate) fn invalidate_tools(&self) {
-        self.shared_entry().tools_cache.invalidate_if(|_| true);
+        let entry = self.shared_entry();
+        entry.tools_cache.invalidate_if(|_| true);
+        // Derived from the list just dropped; a stale set would keep
+        // permitting a resend for a tool that is no longer read-only.
+        entry.resend_permitted.write().clear();
     }
 
     /// `resources/subscribe` or `resources/unsubscribe` for `uri` on the

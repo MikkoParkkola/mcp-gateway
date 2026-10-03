@@ -31,6 +31,16 @@ pub(super) struct Shared {
     /// Held for a task's whole life, its stop cleanup included, so a
     /// successor for the same backend starts only after it.
     pub gate: Arc<tokio::sync::Mutex<()>>,
+    /// The backends the live config makes unable to offer upstream events,
+    /// read at each use (MIK-7894).
+    pub ineligible: super::backend_source::Ineligible,
+}
+
+impl Shared {
+    /// Whether the live config now refuses this backend's upstream events.
+    pub(super) fn is_ineligible(&self) -> bool {
+        (self.ineligible)().contains(&self.name)
+    }
 }
 
 /// The per-backend listeners of one hub.
@@ -38,6 +48,7 @@ pub(crate) struct UpstreamListeners {
     registry: Arc<BackendRegistry>,
     hub: Weak<EventsHub>,
     backends: Mutex<HashMap<String, Arc<Shared>>>,
+    ineligible: super::backend_source::Ineligible,
     gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     stop: CancellationToken,
 }
@@ -78,10 +89,15 @@ impl EventsHub {
 }
 
 impl UpstreamListeners {
-    pub(crate) fn new(registry: Arc<BackendRegistry>, hub: Weak<EventsHub>) -> Arc<Self> {
+    pub(crate) fn new(
+        registry: Arc<BackendRegistry>,
+        hub: Weak<EventsHub>,
+        ineligible: super::backend_source::Ineligible,
+    ) -> Arc<Self> {
         Arc::new(Self {
             registry,
             hub,
+            ineligible,
             backends: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
@@ -95,6 +111,11 @@ impl UpstreamListeners {
     /// [`Full`] when the backend's URI budget is spent.
     pub(crate) fn add(&self, backend: &str, interest: &Interest) -> Result<(), Full> {
         let mut map = self.backends.lock();
+        // A task a reload ended (its backend became ineligible) is replaced,
+        // not reused, if the interest returns.
+        if map.get(backend).is_some_and(|s| s.stop.is_cancelled()) {
+            map.remove(backend);
+        }
         let shared = Arc::clone(
             map.entry(backend.to_owned())
                 .or_insert_with(|| self.start(backend)),
@@ -187,6 +208,7 @@ impl UpstreamListeners {
             wake,
             stop: self.stop.child_token(),
             gate: Arc::clone(self.gates.lock().entry(backend.to_owned()).or_default()),
+            ineligible: Arc::clone(&self.ineligible),
         });
         tokio::spawn(super::upstream_session::run(
             Arc::clone(&shared),
