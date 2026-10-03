@@ -630,23 +630,3 @@ fn a_pattern_that_does_not_compile_refuses_everything() {
         1
     );
 }
-
-#[test]
-fn any_of_required_lists_needs_one_complete_list() {
-    let mut schema = schema_with_props(
-        json!({"files": {"type": "array"}, "purge_everything": {"type": "boolean"}}),
-        &[],
-    );
-    schema["anyOf"] = json!([{"required": ["files"]}, {"required": ["purge_everything"]}]);
-    assert_eq!(validate_arguments(&json!({}), &schema).violations.len(), 1);
-    assert!(
-        validate_arguments(&json!({"files": ["a"]}), &schema)
-            .violations
-            .is_empty()
-    );
-    assert!(
-        validate_arguments(&json!({"purge_everything": true}), &schema)
-            .violations
-            .is_empty()
-    );
-}

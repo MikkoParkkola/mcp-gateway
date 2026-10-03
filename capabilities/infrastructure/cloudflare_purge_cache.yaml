@@ -1,4 +1,4 @@
-sha256: 57376c3af673e7e28c58550e820eb1921701075ded418be645eafc3202e79080
+sha256: ef80f300981b399c84c1600ecb256ce904f3c6db3167a699fe1f41750bbd18de
 fulcrum: '1.0'
 name: cloudflare_purge_cache
 description: 'Purge a zone''s cache: everything, or the listed files.'
@@ -21,9 +21,6 @@ schema:
         description: URLs to purge
     required:
     - zone_id
-    anyOf:
-    - required: [purge_everything]
-    - required: [files]
   output:
     type: object
     properties:

@@ -243,36 +243,6 @@ fn key_violations(faults: &[closed_keys::KeyFault], schema: &Value) -> Vec<Valid
     out
 }
 
-/// `anyOf` of `required` lists: at least one list must be fully present. This
-/// is the only `anyOf` shape the subset reads (a capability that needs one of
-/// several optional parameters, such as a cache purge mode).
-fn any_of_required_violation(
-    input_schema: &Value,
-    arg_map: &serde_json::Map<String, Value>,
-) -> Option<ValidationViolation> {
-    let branches = input_schema.get("anyOf").and_then(Value::as_array)?;
-    let lists: Vec<Vec<&str>> = branches
-        .iter()
-        .filter_map(|b| b.get("required").and_then(Value::as_array))
-        .map(|r| r.iter().filter_map(Value::as_str).collect())
-        .collect();
-    let satisfied = |list: &Vec<&str>| {
-        list.iter()
-            .all(|n| arg_map.get(*n).is_some_and(|v| !v.is_null()))
-    };
-    if lists.is_empty() || lists.iter().any(satisfied) {
-        return None;
-    }
-    let options: Vec<String> = lists.iter().map(|l| l.join(" + ")).collect();
-    Some(ValidationViolation::new(
-        "",
-        format!(
-            "one of these parameter sets is required: {}",
-            options.join(" | ")
-        ),
-    ))
-}
-
 /// Core object validator shared by [`validate_arguments`] and [`validate_output`].
 ///
 /// `reject_extra_keys` controls how keys absent from the schema's `properties`
@@ -341,8 +311,6 @@ fn validate_object(
             _ => {}
         }
     }
-
-    violations.extend(any_of_required_violation(input_schema, &arg_map));
 
     // Step 2 – extra keys not declared in the schema (strict for inputs only).
     for key in arg_map.keys() {
