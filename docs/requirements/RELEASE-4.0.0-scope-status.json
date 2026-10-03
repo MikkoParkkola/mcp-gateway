@@ -1614,11 +1614,16 @@
     },
     {
       "id": "MIK-7630.EVENTS.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_sources.rs",
+        "tests/mik_7630_events_delivery_store.rs",
+        "tests/snapshots/mik_7630_event_schemas.json"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T3 webhook clause (tests/mik_7630_events_surface.rs:156), backend and task clauses (tests/mik_7630_events_sources.rs:166: alice sees backend.hooks.tools_changed and task.settled, bob sees task.settled and no backend.hooks name); T4 (tests/mik_7630_events_surface.rs:187); T12 (tests/mik_7630_events_surface.rs:313 over tests/snapshots/mik_7630_event_schemas.json, now with backend.hooks.tools_changed and task.settled); T42 (tests/mik_7630_events_surface.rs:376); T52 (tests/mik_7630_events_delivery_store.rs:312). Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.EVENTS.3",
@@ -1701,19 +1706,24 @@
     },
     {
       "id": "MIK-7630.SOURCE.2",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "tests/mik_7630_events_sources.rs",
+        "src/events/sources_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T40 (tests/mik_7630_events_sources.rs:300): two delegated-bearer owners; a non-terminal transition emits nothing; alice's all-tasks and taskId-pinned subscribers hear her task settle with taskId, status and settledAt and no result content; bob hears only his own; bob subscribing with alice's taskId answers -32012; a second task of alice's reaches only her all-tasks subscriber. The terminal-status filter is also pinned in-crate (src/events/sources_tests.rs, only_terminal_task_statuses_emit). Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.SOURCE.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "evidence": [
+        "src/events/lifecycle_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T41 (src/events/lifecycle_tests.rs:161, in-crate: EventSource is crate-private, so no public registration surface was added; recorded in design section 19): a source written against the trait alone lists its descriptor, gets on_first_subscriber once for two subscribers with the same arguments and on_last_subscriber once after both leave, its emitted event reaches an outbox record per subscriber through start and the emit queue, and a restart replays the start once. The red scaffold showed the delivery assertion green and only the lifecycle assertions red, which is the without-core-changes evidence. Delivery here is the outbox record; the send path is T17, T31 and T32. Further rows: replacement, source refusal and replay dedupe (lifecycle_tests.rs). Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.SAFETY.1",
@@ -1742,11 +1752,15 @@
     },
     {
       "id": "MIK-7630.SAFETY.3",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope. Reviewed 2026-10-03 after MIN.2 E1 (6b463a06a): T25 is un-ignored and passes in observe mode and block mode (tests/mik_7630_events_delivery_safety.rs tenant_guard_applies_to_event_payloads, tenant_guard_blocks_a_cross_tenant_event_delivery); T24 pins revocation (the next event is not delivered, the pending retry is cancelled, the subscription is deleted, a refresh answers -32011). Still pending: T24's source-level authorize refusal answering -32012 cannot be written until the EventSource trait has an authorize hook (I4), and T3's backend and task clauses are I4 rows too."
+      "evidence": [
+        "tests/mik_7630_events_surface.rs",
+        "tests/mik_7630_events_sources.rs",
+        "tests/mik_7630_events_delivery_safety.rs"
+      ],
+      "note": "Graded 2026-10-03 at 8ffef9b78. T3 (tests/mik_7630_events_surface.rs:156 and tests/mik_7630_events_sources.rs:166); T24 revocation (tests/mik_7630_events_delivery_safety.rs:160: the next event is not delivered, the pending retry is cancelled, the subscription is deleted, a refresh answers -32011); T25 in observe and block mode (tests/mik_7630_events_delivery_safety.rs, tenant_guard_applies_to_event_payloads and tenant_guard_blocks_a_cross_tenant_event_delivery). T24's source-level -32012 clause, now that EventSource has authorize: tests/mik_7630_events_sources.rs:317-327 (the backend and event are visible to bob, the source refuses alice's taskId, -32012), and a refusal at fan-out ends the subscription (src/events/lifecycle_tests.rs, a_source_refusal_at_fan_out_ends_the_subscription). That clause lives in T40 rather than in the T24 function, which is a webhook-only fixture. Merged as 8ffef9b78 (PR #2710, MIK-7630 I4). Red run 37071718687: T3 (sources:170), T38 and T40 (subscribe answers -32011 at their own assertions), T41 (lifecycle_tests:161) and T12 (surface:328) failed at their assertions. Green: CI run 37098336121 at head 4e67d9704 (Tests, Clippy, Windows, macOS; Public repo hygiene's only finding was a 73-character branch commit subject, replaced by the squash subject), feature-combos 37098334112. Mutants K1-K17 all RED (runs 37093674723, 37099055810, 37100822446). Reviews: gpt and grok on the tests and the diff, gpt delta; eleven bot threads answered (seven FIXED or NOT-A-DEFECT, four to MIK-7803)."
     },
     {
       "id": "MIK-7630.SAFETY.4",
