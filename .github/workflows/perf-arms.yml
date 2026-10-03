@@ -18,11 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { arm: M0, ref: 943d8d838c67123c6b1c54d99650426b1306d9c9 }
-          - { arm: M1, ref: 6f0dd5fec3f413f57478012f0c8bd3ade9929be8 }
-          - { arm: M2, ref: 7317d4c94ef5ec23602eccb49d2943b1706a0736 }
-          - { arm: M3, ref: 734eb228a6e23ce0877b0451ca49eb1371a39d34 }
-          - { arm: M4, ref: 6b463a06a5a0703be815b20475393e0f36e51330 }
+          - { arm: S1, ref: 01658207d74969860b8d5e58f69bdda708435b76 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,6 +31,8 @@ jobs:
         shell: bash
         env:
           ARM: ${{ matrix.arm }}
+          CARGO_PROFILE_RELEASE_STRIP: none
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
           cargo build --release --locked --bin mcp-gateway
           mkdir -p out
