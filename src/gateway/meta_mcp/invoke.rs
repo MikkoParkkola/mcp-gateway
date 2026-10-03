@@ -1585,7 +1585,7 @@ impl MetaMcp {
             && caller_credential.headers.is_empty()
             && backend
                 .as_deref()
-                .is_some_and(|b| b.oauth_requires_per_user_isolation())
+                .is_some_and(crate::backend::Backend::oauth_requires_per_user_isolation)
         {
             tracing::warn!(
                 server = %server,
