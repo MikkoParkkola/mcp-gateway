@@ -5,9 +5,8 @@
 //! T39a-k). Backend `resources/updated`, `resources/list_changed` and
 //! `prompts/list_changed` become events for every backend era.
 //!
-//! Before I5 no `backend.<x>.resource_updated|resources_changed|prompts_changed`
-//! descriptor exists, so each row goes red at its first "listed" assertion,
-//! after the gateway and the mock peer are up. Receiver rows need
+//! Before I5 no `backend.<x>.resource_updated|...` descriptor exists, so each
+//! row goes red at its first "listed" assertion. Receiver rows need
 //! `SSL_CERT_FILE`, honoured only on Unix other than Apple.
 #![cfg(all(unix, not(target_vendor = "apple")))]
 
@@ -56,12 +55,8 @@ fn api_key(name: &str, key: &str, backends: &[&str]) -> Value {
     reason = "call sites build the value inline with json!"
 )]
 fn upstream_config(root: &Path, backend: Value, extra: &[(&str, Value)]) -> Value {
-    // `localhost` may also resolve to ::1 (hosted runners do), and the resolver
-    // checks every address.
-    let mut cfg = delivery_config(
-        root,
-        &json!({"callback_allow_private": ["127.0.0.0/8", "::1/128"]}),
-    );
+    let allow = json!({"callback_allow_private": ["127.0.0.0/8", "::1/128"]}); // localhost may be ::1
+    let mut cfg = delivery_config(root, &allow);
     cfg["backends"] = json!({ "x": backend });
     for (name, value) in extra {
         cfg["backends"][*name] = value.clone();
