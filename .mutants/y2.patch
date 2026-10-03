@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 5c376f2ec..f447b6731 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -200,7 +200,7 @@ impl EventsHub {
+             .read()
+             .iter()
+             .any(|source| source.kind() == SourceKind::Webhook);
+-        if scan == CatalogueScan::Partial && webhooks_on {
++        if scan == CatalogueScan::Partial {
+             tracing::warn!(
+                 "events: a capability directory could not be read at startup; stored \
+                  subscriptions are kept and reconciled at the next complete start"

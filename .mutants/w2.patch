@@ -1,0 +1,14 @@
+diff --git a/src/gateway/webhooks/mod.rs b/src/gateway/webhooks/mod.rs
+index a3e07575c..c15dfc3c7 100644
+--- a/src/gateway/webhooks/mod.rs
++++ b/src/gateway/webhooks/mod.rs
+@@ -670,6 +670,9 @@ fn extract_template_value(template: &str, payload: &Value) -> Result<String, Str
+         }
+     }
+ 
++    if !template.contains('{') {
++        return Err("no braces".to_owned());
++    }
+     Ok(result)
+ }
+ 

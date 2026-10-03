@@ -1,0 +1,13 @@
+diff --git a/src/capability/definition/webhook.rs b/src/capability/definition/webhook.rs
+index b3f0d6993..29afad2bc 100644
+--- a/src/capability/definition/webhook.rs
++++ b/src/capability/definition/webhook.rs
+@@ -9,7 +9,7 @@ use super::WebhookDefinition;
+ 
+ /// Webhook senders POST; a route that names no method accepts that.
+ pub(super) fn default_method() -> String {
+-    "POST".to_string()
++    "GET".to_string()
+ }
+ 
+ /// The `event:` block of a webhook route: the route becomes the event
