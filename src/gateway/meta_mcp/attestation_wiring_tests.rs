@@ -200,7 +200,7 @@ fn resolved_observe_wiring_admits_under_capability_token_and_audits() {
     // An under-capability / invalid token must be ADMITTED (never blocked)
     // while the mismatch is recorded in the audit ring buffer.
     let (validator, mode) =
-        crate::attestation::resolve_attestation_wiring(Some("observe"), Some(KEY), None)
+        crate::attestation::resolve_attestation_wiring(Some("observe"), Some(KEY), None, None)
             .expect("observe must parse")
             .expect("observe must attach a validator");
     assert_eq!(mode, AttestationMode::Observe);
@@ -223,7 +223,7 @@ fn resolved_off_wiring_is_a_pure_no_op() {
     // off → resolver attaches no validator; the gateway behaves exactly as
     // an un-wired one (the gate is a zero-cost no-op even without a token).
     assert!(matches!(
-        crate::attestation::resolve_attestation_wiring(Some("off"), Some(KEY), None),
+        crate::attestation::resolve_attestation_wiring(Some("off"), Some(KEY), None, None),
         Ok(None)
     ));
     let mm = make_meta_mcp(); // no attestation attached, as off would leave it

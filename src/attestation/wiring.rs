@@ -45,6 +45,11 @@ pub const ATTESTATION_SIGNING_KEY_ENV: &str = "GATEWAY_ATTESTATION_SIGNING_KEY";
 /// Defaults to [`DEFAULT_KEY_ID`].
 pub const ATTESTATION_KEY_ID_ENV: &str = "GATEWAY_ATTESTATION_KEY_ID";
 
+/// Env var naming the destination this gateway accepts tokens for. Tokens
+/// carry the audience they were minted for, and a token for another audience
+/// is refused (MIK-7795). Blank is unset.
+pub const ATTESTATION_AUDIENCE_ENV: &str = "GATEWAY_ATTESTATION_AUDIENCE";
+
 /// Default signing key id when [`ATTESTATION_KEY_ID_ENV`] is unset.
 pub const DEFAULT_KEY_ID: &str = "gateway";
 
@@ -59,6 +64,7 @@ pub fn resolve_attestation_wiring(
     mode: Option<&str>,
     signing_key: Option<&[u8]>,
     key_id: Option<&str>,
+    _audience: Option<&str>,
 ) -> Result<Option<(Arc<AttestationValidator>, AttestationMode)>, String> {
     let normalized = mode.map(|m| m.trim().to_ascii_lowercase());
     let mode = match normalized.as_deref() {
@@ -129,6 +135,7 @@ pub fn attestation_wiring_from_overlay(
         mode.as_deref(),
         key.as_deref().map(str::as_bytes),
         key_id.as_deref(),
+        env.resolve(ATTESTATION_AUDIENCE_ENV).as_deref(),
     )
 }
 
@@ -163,7 +170,8 @@ mod tests {
     use super::*;
 
     fn mode_of(raw: Option<&str>) -> Result<Option<AttestationMode>, String> {
-        resolve_attestation_wiring(raw, Some(b"k"), None).map(|w| w.map(|(_, mode)| mode))
+        resolve_attestation_wiring(raw, Some(b"k"), None, Some("gw"))
+            .map(|w| w.map(|(_, mode)| mode))
     }
 
     #[test]
@@ -239,9 +247,10 @@ mod tests {
 
     #[test]
     fn explicit_observe_attaches_validator() {
-        let (_, mode) = resolve_attestation_wiring(Some("observe"), Some(b"k"), Some("kid"))
-            .expect("observe must parse")
-            .expect("observe must attach a validator");
+        let (_, mode) =
+            resolve_attestation_wiring(Some("observe"), Some(b"k"), Some("kid"), Some("gw"))
+                .expect("observe must parse")
+                .expect("observe must attach a validator");
         assert_eq!(mode, AttestationMode::Observe);
     }
 
@@ -271,7 +280,7 @@ mod tests {
         // off → no validator attached at all (byte-identical to pre-wiring).
         assert_eq!(mode_of(Some("off")), Ok(None));
         assert!(matches!(
-            resolve_attestation_wiring(Some("  OFF "), None, None),
+            resolve_attestation_wiring(Some("  OFF "), None, None, None),
             Ok(None)
         ));
     }
@@ -279,9 +288,10 @@ mod tests {
     /// MIK-7570.ATTEST.1: `enforce` resolves to Enforce, never a downgrade.
     #[test]
     fn enforce_value_resolves_to_enforce() {
-        let (_, mode) = resolve_attestation_wiring(Some("enforce"), Some(b"k"), Some("kid"))
-            .expect("enforce with a key must parse")
-            .expect("enforce must attach a validator");
+        let (_, mode) =
+            resolve_attestation_wiring(Some("enforce"), Some(b"k"), Some("kid"), Some("gw"))
+                .expect("enforce with a key must parse")
+                .expect("enforce must attach a validator");
         assert_eq!(mode, AttestationMode::Enforce);
     }
 
@@ -290,7 +300,7 @@ mod tests {
     #[test]
     fn enforce_without_key_is_refused() {
         for key in [None, Some(&b""[..]), Some(&b"  "[..])] {
-            let err = resolve_attestation_wiring(Some("enforce"), key, None)
+            let err = resolve_attestation_wiring(Some("enforce"), key, None, Some("gw"))
                 .map(|w| w.map(|(_, mode)| mode))
                 .expect_err("enforce without a key must be a load error");
             assert!(err.contains(ATTESTATION_SIGNING_KEY_ENV), "{key:?}: {err}");
@@ -311,7 +321,7 @@ mod tests {
     #[test]
     fn missing_signing_key_still_initialises_validator() {
         // No key configured → validator still inits (observe will audit-only).
-        let wiring = resolve_attestation_wiring(Some("observe"), None, None).unwrap();
+        let wiring = resolve_attestation_wiring(Some("observe"), None, None, None).unwrap();
         assert!(wiring.is_some(), "validator must init even without a key");
         let (validator, _) = wiring.unwrap();
         // A token cannot verify against the empty key, so observe would audit it;
@@ -331,9 +341,10 @@ mod tests {
         use super::super::validator::AttestationRejection;
         use chrono::{TimeDelta, Utc};
 
-        let (validator, _) = resolve_attestation_wiring(Some("observe"), Some(b"   "), Some("kid"))
-            .unwrap()
-            .expect("whitespace-only key must still attach an observe validator");
+        let (validator, _) =
+            resolve_attestation_wiring(Some("observe"), Some(b"   "), Some("kid"), None)
+                .unwrap()
+                .expect("whitespace-only key must still attach an observe validator");
 
         let request = TokenRequest {
             agent_identity: "agent".to_string(),

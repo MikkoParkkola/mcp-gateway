@@ -81,6 +81,14 @@ pub enum AttestationRejection {
         /// The issuer the token claimed.
         issuer: String,
     },
+    /// The token is authentic but was minted for another destination, or
+    /// either side has no audience (MIK-7795).
+    AudienceMismatch {
+        /// The audience this validator accepts (empty when unconfigured).
+        expected: String,
+        /// The audience the token carries.
+        presented: String,
+    },
     /// The `expires_at` claim is not valid RFC-3339.
     InvalidExpiry {
         /// The raw claim value.
@@ -113,6 +121,13 @@ impl std::fmt::Display for AttestationRejection {
             Self::MalformedToken { detail } => write!(f, "malformed attestation token: {detail}"),
             Self::BadSignature => write!(f, "attestation signature verification failed"),
             Self::UnknownIssuer { issuer } => write!(f, "unknown attestation issuer: {issuer}"),
+            Self::AudienceMismatch {
+                expected,
+                presented,
+            } => write!(
+                f,
+                "attestation token is for audience {presented:?}, this gateway accepts {expected:?}"
+            ),
             Self::InvalidExpiry { value } => write!(f, "invalid expiry timestamp: {value}"),
             Self::Expired { expires_at } => write!(f, "attestation token expired at {expires_at}"),
             Self::RotatedOut { token_id } => {
