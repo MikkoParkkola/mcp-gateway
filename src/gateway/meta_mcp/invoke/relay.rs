@@ -20,9 +20,9 @@ pub(crate) struct RelayKey<'a> {
     keyed: bool,
 }
 
+#[cfg(feature = "firewall")]
 impl<'a> RelayKey<'a> {
     /// A caller's key, and whether it is a real identity.
-    #[cfg(feature = "firewall")]
     pub(crate) const fn new(key: &'a str, keyed: bool) -> Self {
         Self { key, keyed }
     }
@@ -275,7 +275,10 @@ impl StagedReceipts {
 
     /// Record what was staged when the answer that was written `delivered` a
     /// result; drop it otherwise.
-    #[cfg_attr(not(feature = "firewall"), allow(clippy::needless_pass_by_value))]
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(clippy::needless_pass_by_value, clippy::unused_self)
+    )]
     pub(crate) fn commit(self, delivered: bool) {
         #[cfg(feature = "firewall")]
         if delivered && let Some(fw) = self.fw.as_deref() {
