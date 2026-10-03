@@ -122,6 +122,27 @@ pub(super) fn stage_direct_delivery(
     crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), result);
 }
 
+/// [`stage_direct_delivery`] for a catalogue result, which no response gate
+/// classifies: the staged copy carries the context-integrity verdict of the
+/// text, so content the gateway reads as sensitive needs no `sources` glob.
+#[cfg(feature = "firewall")]
+pub(super) fn stage_direct_catalogue(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    (server, method): (&str, &str),
+    result: Option<&Value>,
+) {
+    let Some(result) = result else {
+        return;
+    };
+    let caller_name = auth.client.map(|c| c.name.as_str());
+    let recorded =
+        state
+            .meta_mcp
+            .recorded_prompt((server, method), caller_name, "catalogue", result);
+    stage_direct_delivery(state, auth, server, method, Some(&recorded));
+}
+
 /// Record the staged receipts when the answer that was written delivers a
 /// result: a read the judge withheld, or a fail-closed audit write replaced,
 /// leaves none.

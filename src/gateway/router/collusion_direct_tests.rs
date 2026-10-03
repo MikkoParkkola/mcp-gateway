@@ -78,6 +78,10 @@ impl Transport for Alpha {
             return Ok(JsonRpcResponse::success(id, json!({ "tools": tools })));
         }
         // The catalogue: one resource and one prompt, both answering PROSE.
+        let served = match &*self.read.lock().unwrap() {
+            Read::Text(text) => text.clone(),
+            _ => PROSE.to_string(),
+        };
         let doc = |text: &str| json!({"contents": [{"uri": "res://orchard", "text": text}]});
         match method {
             "resources/list" => {
@@ -90,11 +94,11 @@ impl Transport for Alpha {
             }
             "resources/read" => {
                 self.catalogue.fetch_add(1, Ordering::SeqCst);
-                return Ok(JsonRpcResponse::success(id, doc(PROSE)));
+                return Ok(JsonRpcResponse::success(id, doc(&served)));
             }
             "prompts/get" => {
                 self.catalogue.fetch_add(1, Ordering::SeqCst);
-                let message = json!({"role": "user", "content": {"type": "text", "text": PROSE}});
+                let message = json!({"role": "user", "content": {"type": "text", "text": served}});
                 return Ok(JsonRpcResponse::success(id, json!({"messages": [message]})));
             }
             _ => {}

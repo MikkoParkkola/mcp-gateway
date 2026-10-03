@@ -447,7 +447,12 @@ fn finish_response(
     } else if matches!(method, "prompts/get" | "resources/read") && response.error.is_none() {
         // MIK-7765: what a catalogue read delivers is a relay source too.
         #[cfg(feature = "firewall")]
-        super::stage_direct_delivery(state, admitted.auth, name, method, response.result.as_ref());
+        super::stage_direct_catalogue(
+            state,
+            admitted.auth,
+            (name, method),
+            response.result.as_ref(),
+        );
     }
     build_http_response(&response, StatusCode::OK)
 }

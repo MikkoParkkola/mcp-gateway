@@ -288,6 +288,7 @@ impl MetaMcp {
         credential: super::super::caller_forward::ForwardCredential,
         empty: Value,
     ) -> crate::protocol::JsonRpcResponse {
+        #[cfg(feature = "firewall")]
         let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
         #[cfg(feature = "firewall")]
         if let (Some(caller), Some(fw)) = (
@@ -314,6 +315,7 @@ impl MetaMcp {
         }
         let response =
             Self::forward_for_caller(id, backend, method, params, credential, empty).await;
+        #[cfg(feature = "firewall")]
         if let (Some(caller), Some(result)) = (caller, response.result.as_ref())
             && response.error.is_none()
             && self.relay_active()

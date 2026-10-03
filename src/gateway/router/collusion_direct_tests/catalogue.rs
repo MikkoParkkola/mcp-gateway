@@ -200,3 +200,32 @@ async fn direct_prompt_result_then_tool_call_is_refused() {
 async fn direct_resource_read_then_uri_is_refused() {
     resource_read_then_uri().await;
 }
+
+/// With no `sources` glob, content the gateway classifies as personal data is
+/// still a relay source: A reads a resource carrying an email address; B sends
+/// that text as `prompts/get` arguments.
+async fn classified_read_is_a_relay_source(route: Route) {
+    let setup = Setup {
+        sources: Vec::new(),
+        ..Setup::default()
+    };
+    let fx = match route {
+        Route::Meta => meta_fixture(setup, None).await,
+        Route::Direct => fixture(setup).await,
+    };
+    let text = format!("{PROSE} Contact: keeper@orchardcoop.fi");
+    fx.answer_read(Read::Text(text.clone()));
+    read_resource(&fx, route, "a").await;
+    let forwarded = fx.catalogue();
+    assert_catalogue_refused(&fx, &prompt_with(&fx, route, "b", &text).await, forwarded);
+}
+
+#[tokio::test]
+async fn meta_classified_read_is_a_relay_source() {
+    classified_read_is_a_relay_source(Route::Meta).await;
+}
+
+#[tokio::test]
+async fn direct_classified_read_is_a_relay_source() {
+    classified_read_is_a_relay_source(Route::Direct).await;
+}
