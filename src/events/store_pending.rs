@@ -96,6 +96,46 @@ fn dead_size(dead: &DeadLetter) -> u64 {
     serde_json::to_vec_pretty(dead).map_or(0, |b| u64::try_from(b.len()).unwrap_or(u64::MAX))
 }
 
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "dead-letter administration is served by the web UI router"
+    )
+)]
+/// A dead letter without its body, for the admin listing.
+#[derive(Debug, Clone)]
+pub(crate) struct DeadSummary {
+    pub event_id: String,
+    pub subscription_id: String,
+    pub name: String,
+    pub reason: String,
+    pub dead_at: DateTime<Utc>,
+    pub size: u64,
+    pub attempts: u32,
+}
+
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(
+        dead_code,
+        reason = "dead-letter administration is served by the web UI router"
+    )
+)]
+/// What [`Store::revive`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Revived {
+    Written,
+    /// The subscription is gone or expired.
+    NoSubscription,
+    /// The outbox is at a cap.
+    Full,
+    /// The outbox already holds this event id.
+    AlreadyPending,
+    /// The dead letter was swept, evicted or replayed meanwhile.
+    Missing,
+}
+
 /// Whether `sub` may be attempted at `now`.
 fn sendable(sub: &Subscription, now: DateTime<Utc>) -> bool {
     sub.active && sub.live(now)
@@ -110,6 +150,15 @@ impl Store {
         caps: OutboxCaps,
     ) -> std::io::Result<Enqueued> {
         let mut state = self.state.lock();
+        self.enqueue_locked(&mut state, record, caps)
+    }
+
+    fn enqueue_locked(
+        &self,
+        state: &mut State,
+        record: OutboxRecord,
+        caps: OutboxCaps,
+    ) -> std::io::Result<Enqueued> {
         if !state.subs.contains_key(&record.subscription_id) {
             return Ok(Enqueued::NoSubscription);
         }
@@ -137,6 +186,120 @@ impl Store {
         state.outbox.insert(record.event_id.clone(), record);
         placed.durable()?;
         Ok(Enqueued::Written)
+    }
+
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "dead-letter administration is served by the web UI router"
+        )
+    )]
+    /// Every dead letter's metadata, oldest first: never a body, so a full
+    /// directory is listed without copying it.
+    pub(crate) fn dead_summaries(&self) -> Vec<DeadSummary> {
+        let state = self.state.lock();
+        let mut all: Vec<DeadSummary> = state
+            .dead
+            .values()
+            .map(|(d, size)| DeadSummary {
+                event_id: d.record.event_id.clone(),
+                subscription_id: d.record.subscription_id.clone(),
+                name: d.record.name.clone(),
+                reason: d.reason.clone(),
+                dead_at: d.dead_at,
+                size: *size,
+                attempts: d.record.attempt,
+            })
+            .collect();
+        all.sort_by(|a, b| (a.dead_at, &a.event_id).cmp(&(b.dead_at, &b.event_id)));
+        all
+    }
+
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "dead-letter administration is served by the web UI router"
+        )
+    )]
+    /// Dead letter `event_id`, body included.
+    pub(crate) fn dead_letter_by_id(&self, event_id: &str) -> Option<DeadLetter> {
+        self.state.lock().dead.get(event_id).map(|(d, _)| d.clone())
+    }
+
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(
+            dead_code,
+            reason = "dead-letter administration is served by the web UI router"
+        )
+    )]
+    /// Move dead letter `event_id` back to the outbox as `record` (the same
+    /// event id, a fresh attempt count), in one locked step: the dead letter
+    /// leaves `dead/` only once the record is placed. `dead_at` names the
+    /// dead letter the caller scanned, so one buried again meanwhile is not
+    /// replayed on the old verdict.
+    pub(crate) fn revive(
+        &self,
+        event_id: &str,
+        dead_at: DateTime<Utc>,
+        record: OutboxRecord,
+        caps: OutboxCaps,
+        clock: impl FnOnce() -> DateTime<Utc>,
+    ) -> std::io::Result<Revived> {
+        let mut state = self.state.lock();
+        // Read under the lock: an expiry that lands while this waits counts.
+        let now = clock();
+        if state
+            .dead
+            .get(event_id)
+            .is_none_or(|(dead, _)| dead.dead_at != dead_at)
+        {
+            return Ok(Revived::Missing);
+        }
+        // An expired subscription takes nothing, even before its sweep.
+        if !state
+            .subs
+            .get(&record.subscription_id)
+            .is_some_and(|s| s.live(now))
+        {
+            return Ok(Revived::NoSubscription);
+        }
+        // The same occurrence is already pending: nothing to place, and the
+        // dead letter is not dropped for a record that is not the replay.
+        if state.outbox.contains_key(event_id) {
+            return Ok(Revived::AlreadyPending);
+        }
+        let placed = self.enqueue_locked(&mut state, record, caps);
+        match placed {
+            Ok(Enqueued::Written) => {}
+            Ok(Enqueued::NoSubscription) => return Ok(Revived::NoSubscription),
+            Ok(Enqueued::DroppedGlobal | Enqueued::DroppedPerSubscription) => {
+                return Ok(Revived::Full);
+            }
+            // Placed but not durable: roll it back, so a crash cannot lose
+            // both copies. The dead letter stands.
+            Err(error) => {
+                if state.outbox.remove(event_id).is_some() {
+                    let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
+                }
+                return Err(error);
+            }
+        }
+        // The dead file must be unlinked before the replay counts: if it
+        // cannot be, the new record is rolled back so one of the two stands.
+        // A sync failure after the unlink is logged, never undone.
+        // ponytail: a failed rollback unlink leaves a stray outbox file that
+        // delivers once after a restart; stage records outside outbox/ if
+        // double faults ever matter.
+        if let Err(error) = remove_record(&self.dead_dir, &OutboxRecord::file(event_id)) {
+            state.outbox.remove(event_id);
+            let _ = remove_record(&self.outbox_dir, &OutboxRecord::file(event_id));
+            return Err(error);
+        }
+        state.dead.remove(event_id);
+        Ok(Revived::Written)
     }
 
     /// Due records, at most one per subscription not in `busy`, each the

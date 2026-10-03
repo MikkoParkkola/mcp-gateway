@@ -82,6 +82,35 @@ impl EventsHub {
         Ok(json!({ "events": events }))
     }
 
+    /// Catalogue entries a keyword search finds (a case-insensitive
+    /// substring of name or description), for the callers `visible` admits,
+    /// as `gateway_search` entries (design §3.9, §18), at most `limit`.
+    pub(crate) fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        visible: impl Fn(&Visibility) -> bool,
+    ) -> Vec<Value> {
+        let query = query.to_lowercase();
+        self.catalogue()
+            .iter()
+            .filter(|d| visible(&d.scope))
+            .filter(|d| {
+                d.name.to_lowercase().contains(&query)
+                    || d.description.to_lowercase().contains(&query)
+            })
+            .take(limit)
+            .map(|d| {
+                json!({
+                    "kind": "event",
+                    "name": d.name,
+                    "description": d.description,
+                    "inputSchema": d.input_schema,
+                })
+            })
+            .collect()
+    }
+
     /// The visible descriptor called `name`; invisible and missing are one
     /// answer, so the catalogue cannot be probed (design §7.4).
     ///

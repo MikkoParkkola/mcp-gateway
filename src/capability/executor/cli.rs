@@ -4,7 +4,9 @@
 //! answer into a result or a redacted error.
 
 use std::ffi::OsString;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
+#[cfg(feature = "firewall")]
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -14,6 +16,7 @@ use super::cli_argv::{CliInvocation, build_cli_invocation};
 use super::cli_run::{CliOutcome, Workdir, child_env, resolve_command, run};
 use crate::capability::definition::{CliConfig, CliOutput, MAX_OUTPUT_BYTES_CEILING};
 use crate::capability::{CapabilityDefinition, CapabilityExecutionContext};
+#[cfg(feature = "firewall")]
 use crate::security::firewall::redactor::Redactor;
 use crate::{Error, Result};
 
@@ -25,6 +28,7 @@ const EXCERPT_BYTES: usize = 2048;
 /// or `1` would destroy the message, and secrets never travel as caller values.
 const MIN_REDACTED_CALLER_VALUE: usize = 4;
 
+#[cfg(feature = "firewall")]
 static REDACTOR: LazyLock<Redactor> = LazyLock::new(Redactor::new);
 
 impl CapabilityExecutor {
@@ -308,9 +312,15 @@ pub(crate) fn redact(text: &str, secrets: &[String], caller: &[String]) -> Strin
     for needle in needles {
         text = text.replace(needle, "[redacted]");
     }
-    let mut value = Value::String(text);
-    REDACTOR.scan_and_redact(&mut value);
-    let text = value.as_str().unwrap_or_default();
+    // Without the `firewall` feature there is no credential scanner; the
+    // literal removal above (injected secrets, caller values) still applies.
+    #[cfg(feature = "firewall")]
+    let text = {
+        let mut value = Value::String(text);
+        REDACTOR.scan_and_redact(&mut value);
+        value.as_str().unwrap_or_default().to_owned()
+    };
+    let text = text.as_str();
     if text.len() <= EXCERPT_BYTES {
         return text.to_owned();
     }

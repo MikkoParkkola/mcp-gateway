@@ -358,3 +358,18 @@ async fn meta_replay_renews_the_receipt() {
     );
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
+
+/// Row 13 on the meta route: an allowlisted flow is not refused under `block`.
+#[tokio::test]
+async fn meta_allowed_flow_not_refused() {
+    let setup = Setup {
+        allowed_flows: vec![crate::security::firewall::AllowedFlow {
+            source: "alpha:read".to_string(),
+            egress: "alpha:send".to_string(),
+        }],
+        ..Setup::default()
+    };
+    let fx = meta_fixture(setup, None).await;
+    meta_read(&fx, Some("a")).await;
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
+}
