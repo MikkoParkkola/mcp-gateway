@@ -85,8 +85,11 @@ async fn the_subscription_lifecycle_writes_governance_records() {
     // A bulk replay writes one such record per dead letter it revives.
     rx.script([EventReply::Status(410)]);
     fire(&gw, "d-7806", "o/r").await;
-    let second = dead_with_reason(root.path(), "gone").await;
-    let second_id = second[0]["event_id"].as_str().expect("event id").to_owned();
+    let second_dead = dead_with_reason(root.path(), "gone").await;
+    let second_id = second_dead[0]["event_id"]
+        .as_str()
+        .expect("event id")
+        .to_owned();
     let (status, _) = gw
         .admin(
             Some(ADMIN),
@@ -178,6 +181,7 @@ async fn a_redacted_payload_is_recorded_as_redacted() {
     let posts = events_at_least(&rx, 1).await;
     let body = String::from_utf8_lossy(&posts[0].body).into_owned();
     assert!(body.contains("REDACTED"), "delivered redacted: {body}");
+    assert!(!body.contains(&token), "the token never leaves: {body}");
     let seen = wait_until(DEADLINE, || {
         audit_records(root.path())
             .iter()
