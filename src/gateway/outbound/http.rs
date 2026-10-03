@@ -108,6 +108,7 @@ pub(crate) fn to_http(
 ) -> axum::response::Response {
     let pending = frame
         .assessment()
+        .filter(|_| !frame.record_taken)
         .map(|a| a.record_fields(frame.key.as_deref()))
         .filter(|fields| !fields.is_empty());
     let held_id = pending.as_ref().map(|_| frame.answer_id());

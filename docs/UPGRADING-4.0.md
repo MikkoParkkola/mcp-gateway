@@ -154,13 +154,14 @@ backend" and "fails a capability file" first.**
 | 127 | `service: cli` capabilities now run: a pinned capability whose command is on the `capabilities.process_commands` list starts a local process (no shell, private directories, cleared environment). Unpinned ones and unlisted commands are refused | Set `capabilities.process_execution: disabled` to keep the 3.x behaviour; list your own CLI capabilities in `capabilities.process_commands`; set `capabilities.files.*` roots for path parameters |
 | 128 | MCP Events: a subscription to `backend.<name>.resource_updated`, `resources_changed` or `prompts_changed` on an SSE-handshake HTTP, A2A, identity-propagating (personal or external account included) or (multi-user) per-user OAuth backend answers `-32014` naming the reason, never a silent subscription; the listener for the other backends is pending | Set `streamable_http: true` where the backend speaks it; otherwise poll `resources/list` or `prompts/list` for that backend |
 | 129 | A capability that declares `auth.required: true` is left out of `tools/list` and search until its credential exists (an environment or `env_files` variable that is set and non-empty, or a stored login for its `oauth:` provider); 79 bundled capabilities declare it. A `keychain:` or `file:` key and a per-caller account credential cannot be checked here and stay listed | Set the key the capability names; a call to a hidden capability by name is unchanged |
-| 130 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity; an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
+| 130 | With `tenant_guard.arg_keys` set, every frame the gateway sends a caller (answers, errors, notifications and server requests, on every transport) is checked: a caller whose frames name more than one tenant inside `window_secs` gets a `tenant_read` audit record with `cross_tenant_read: flagged`, or `unattributable` without an identity (for an answer on `POST /mcp` the fields ride its `response_delivery_attempt` record); an unreadable response counts as a tenant of its own. The new key `tenant_guard.cross_tenant_reads` takes `off`, `observe` (default) or `block`. Tenant ids are compared across backends | None. Set `off` to silence it, or `block` to withhold such frames; namespace tenant ids that two backends reuse |
 | 131 | A capability `webhooks:` route that names no `method` accepts `POST`, as its documentation said; it accepted only `GET`, so a sender that POSTed got 405 | A route that relied on the `GET` default: add `method: GET` |
 | 132 | The shipped `gws_*` Google Workspace capabilities (18) now run through the `gws` command-line tool; their input schemas follow the tool's own parameters | Install `gws` (`npm i -g @googleworkspace/cli`) and sign in; a caller that sent the old parameter names sends the new ones (see each capability's schema) |
 | 133 | `cloudflare_manage` is removed and replaced by 11 REST capabilities (`cloudflare_*`) against the Cloudflare API v4; the npm package it declared never existed | Call the specific `cloudflare_*` capability; set the account or zone as an input. `deploy_worker` is not included yet |
 | 134 | `metacognition_verify` is removed from the public catalogue: it needs a private tool nobody else can install | None for other users; keep a private copy of the file if you run that tool |
 | 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
+| 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3649,7 +3650,7 @@ POST and GET streams, the direct route and stdio. Content the gateway read but d
 too, and a response it could not read counts as a tenant of its own. When one `caller_key`'s
 frames name more than one tenant inside `window_secs`, the new key
 `tenant_guard.cross_tenant_reads` decides: `observe` (the default) writes a `tenant_read`
-audit record with `cross_tenant_read: flagged`, `block` withholds the frame with a JSON-RPC
+audit record with `cross_tenant_read: flagged` (for an answer on `POST /mcp`, the same fields ride the answer's own `response_delivery_attempt` record, so it costs no second record), `block` withholds the frame with a JSON-RPC
 error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
 Tenant ids are compared across backends, so two backends that reuse one id count as one tenant.
 Name tenant fields that appear inside backend content in `arg_keys`; the names of protocol members the gateway writes itself (`jsonrpc`, `id`, `method`, `params`, `result`, `error`, `data`, `cacheScope`, and the event envelope's own members) are matched inside content only, not on the wrapper. A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
@@ -3707,6 +3708,14 @@ A child process can follow a redirect or a DNS rebind to a private address, and 
 The embedded script that wrote a caller-chosen path is gone. A declarative `save_file` step decodes the payload, accepts one portable file name, never overwrites or follows a link, writes mode 0600, and stops at `downloads_quota_bytes` (default 1 GiB). The saved path is returned, never the bytes.
 
 **Action:** configure the downloads directory; update readers of `calendar_get_attachment` to Google's field names.
+
+## 137. Stdio backends have a message size limit, set per backend
+
+**Startup:** no notice, the limit applies to every stdio backend from the first message
+
+Through 3.x the gateway read a stdio backend's output line by line with no ceiling, so a peer that never sent a newline could grow its memory without bound. A message (one line) over 16 MiB now fails the call and stops that backend's process; the error names the backend setting.
+
+**Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid only on a backend declared with a `command`.
 
 ## Upgrading from 3.5.x: a walkthrough
 

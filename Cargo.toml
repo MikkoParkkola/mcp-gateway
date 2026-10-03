@@ -236,6 +236,7 @@ glob = "0.3"
 telemetry_metrics = { package = "metrics", version = "0.24" }
 metrics-exporter-prometheus = { version = "0.18", optional = true }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
+mimalloc = { version = "0.1.52", default-features = false }
 
 # ADR-016: the Win32 security calls behind owner-only stores on Windows, used only
 # by `src/win_acl.rs`. Already in the lock file through mio, socket2 and others;

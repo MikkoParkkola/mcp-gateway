@@ -184,6 +184,7 @@ pub(crate) fn delivered(
         payload,
         assessment: Some(assessment),
         ticket,
+        record_taken: false,
         key: key.map(Arc::from),
     }
 }
@@ -216,6 +217,7 @@ pub(crate) fn admit(
         payload,
         assessment: Some(assessment),
         ticket,
+        record_taken: false,
         key: key.map(Arc::from),
     })
 }
@@ -255,6 +257,7 @@ pub(crate) fn admit_stream_item(
         payload: Payload::Withheld,
         assessment: Some(assessment),
         ticket,
+        record_taken: false,
         key: key.map(Arc::from),
     })
 }

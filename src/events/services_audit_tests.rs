@@ -25,6 +25,7 @@ fn attempt() -> Attempt<'static> {
         callback_host: "h",
         status: "sending",
         body_sha256: "",
+        firewall: "pass",
         delivered: false,
         cross_tenant_read: None,
     }
@@ -68,9 +69,10 @@ async fn an_attempt_record_the_log_refuses_is_reported_not_swallowed() {
 }
 
 #[tokio::test]
-async fn no_audit_log_configured_is_not_a_refusal() {
+async fn no_audit_log_configured_refuses_the_attempt_record() {
+    // MIK-7802: with no logger there is no record, so no POST.
     let services = services_with(None);
-    services.audit_attempt(&attempt()).await.expect("no log");
+    assert!(services.audit_attempt(&attempt()).await.is_err());
 }
 
 /// MIN.2 E1: a `tenant_read` record the fail-closed log refuses leaves the

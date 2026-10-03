@@ -1,0 +1,1 @@
+- **Stdio backend messages are limited to 16 MiB by default.** Before this, there was no limit. A backend that legitimately sends larger single messages sets `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB). See UPGRADING item 137.

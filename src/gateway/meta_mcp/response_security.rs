@@ -198,6 +198,22 @@ impl super::MetaMcp {
     /// have run the response firewall on this exact artifact.
     pub(crate) async fn finalize_response_after_inspection(
         &self,
+        response: crate::protocol::JsonRpcResponse,
+        context: &ResponseDeliveryContext<'_>,
+        inspection: DeliveryInspection,
+    ) -> crate::protocol::JsonRpcResponse {
+        let response = self.finalize_content(response, context, inspection);
+        self.record_delivery(response, &context.correlation, None)
+            .await
+    }
+
+    /// Everything of the finalization that decides the delivered content:
+    /// firewall, scope clamp, chain, signing. The delivery record is not
+    /// written here, so a caller can judge the finalized answer first and put
+    /// its verdict in that record (MIK-7799).
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn finalize_content(
+        &self,
         mut response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
         inspection: DeliveryInspection,
@@ -290,23 +306,51 @@ impl super::MetaMcp {
             }
         }
 
-        // Logging applies to every actual response, including unscanned methods.
-        // With auth on, a response whose delivery cannot be audited is withheld.
-        if !self
-            .record_response_delivery_attempt(&response, &context.correlation)
-            .await
-        {
-            let error = crate::Error::AuditUnavailable;
-            response = match response.id {
-                Some(id) => super::error_response_preserving_status(id, &error),
-                None => crate::protocol::JsonRpcResponse::error(
-                    None,
-                    error.to_rpc_code(),
-                    error.to_string(),
-                ),
-            };
-        }
         response
+    }
+
+    /// Record the delivery attempt of the finalized `response`, with `read`
+    /// (the answer's `tenant_read` fields) in the same record. With auth on, a
+    /// response whose delivery cannot be audited is withheld: it is replaced
+    /// by the audit-unavailable refusal.
+    pub(crate) async fn record_delivery(
+        &self,
+        response: crate::protocol::JsonRpcResponse,
+        correlation: &ResponseCorrelation<'_>,
+        read: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> crate::protocol::JsonRpcResponse {
+        if self.record_delivery_of(&response, correlation, read).await {
+            return response;
+        }
+        Self::audit_unavailable_refusal(response.id)
+    }
+
+    /// [`Self::record_delivery`] without taking the response: `false` when
+    /// the log refused the record and the answer must be withheld.
+    pub(crate) async fn record_delivery_of(
+        &self,
+        response: &crate::protocol::JsonRpcResponse,
+        correlation: &ResponseCorrelation<'_>,
+        read: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> bool {
+        // Logging applies to every actual response, including unscanned methods.
+        self.record_response_delivery_attempt(response, correlation, read)
+            .await
+    }
+
+    /// The refusal that replaces an answer whose record the log refused.
+    pub(crate) fn audit_unavailable_refusal(
+        id: Option<crate::protocol::RequestId>,
+    ) -> crate::protocol::JsonRpcResponse {
+        let error = crate::Error::AuditUnavailable;
+        match id {
+            Some(id) => super::error_response_preserving_status(id, &error),
+            None => crate::protocol::JsonRpcResponse::error(
+                None,
+                error.to_rpc_code(),
+                error.to_string(),
+            ),
+        }
     }
 
     /// Append evidence of the final output attempt; never a client receipt.
@@ -318,8 +362,50 @@ impl super::MetaMcp {
         &self,
         response: &crate::protocol::JsonRpcResponse,
         correlation: &ResponseCorrelation<'_>,
+        read: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> bool {
-        use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
+        use crate::security::audit::AuditOutcome;
+
+        let outcome = response
+            .error
+            .as_ref()
+            .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code));
+        self.record_delivery_attempt(
+            serde_json::to_value(response),
+            outcome,
+            "transport_finalized",
+            correlation,
+            read,
+        )
+        .await
+    }
+
+    /// The delivery evidence for one pushed notification frame, hashed as it
+    /// is about to be sent. Same event, same failure policy as a response.
+    pub(super) async fn record_notification_delivery_attempt(
+        &self,
+        frame: &serde_json::Value,
+        correlation: &ResponseCorrelation<'_>,
+    ) -> bool {
+        self.record_delivery_attempt(
+            Ok(frame.clone()),
+            crate::security::audit::AuditOutcome::Ok,
+            "notification_delivered",
+            correlation,
+            None,
+        )
+        .await
+    }
+
+    async fn record_delivery_attempt(
+        &self,
+        value: serde_json::Result<serde_json::Value>,
+        outcome: crate::security::audit::AuditOutcome,
+        stage: &str,
+        correlation: &ResponseCorrelation<'_>,
+        read: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> bool {
+        use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditWho};
 
         use sha2::{Digest, Sha256};
 
@@ -327,7 +413,7 @@ impl super::MetaMcp {
             return true;
         };
         let fail_closed = logger.failure_policy() == AuditFailurePolicy::FailClosed;
-        let encoded = serde_json::to_value(response).and_then(|value| serde_json::to_vec(&value));
+        let encoded = value.and_then(|value| serde_json::to_vec(&value));
         let Ok(encoded) = encoded else {
             tracing::warn!("Failed to encode response delivery attempt for transparency log");
             return !fail_closed;
@@ -335,7 +421,7 @@ impl super::MetaMcp {
         let hash = format!("sha256:{}", hex::encode(Sha256::digest(encoded)));
         let mut fields = serde_json::Map::new();
         fields.insert("event".into(), "response_delivery_attempt".into());
-        fields.insert("response_stage".into(), "transport_finalized".into());
+        fields.insert("response_stage".into(), stage.into());
         fields.insert("response_hash_encoding".into(), "sorted-json-v1".into());
         fields.insert("response_hash".into(), hash.into());
         fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
@@ -345,11 +431,17 @@ impl super::MetaMcp {
         fields.insert("caller".into(), correlation.caller.into());
         fields.insert("server".into(), correlation.external_server.into());
         fields.insert("tool".into(), correlation.external_tool.into());
+        // The answer's read verdict rides this record instead of a second one
+        // (MIK-7799); its own `event` and `caller_key` stay the delivery's.
+        if let Some(read) = read {
+            for (name, value) in read {
+                if name != "event" {
+                    fields.entry(name).or_insert(value);
+                }
+            }
+        }
         let envelope = AuditEnvelope {
-            outcome: response
-                .error
-                .as_ref()
-                .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code)),
+            outcome,
             ..AuditEnvelope::ok(AuditWho::from_actor_id(correlation.caller))
         };
         // F20: bounded on the blocking pool; a stalled disk withholds the

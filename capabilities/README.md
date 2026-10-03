@@ -1,6 +1,17 @@
 # MCP Gateway Built-in Capabilities
 
-mcp-gateway currently ships **137 built-in capabilities** (marketed publicly as **130+**), derived from the tracked YAML inventory under `capabilities/` excluding `examples/`.
+mcp-gateway currently ships **135 built-in capabilities** (marketed publicly as **130+**): the tracked YAML inventory under `capabilities/` excluding `examples/` (137 files) minus the held capabilities below. Only capabilities that run are counted.
+
+## Held
+
+These ship, load and are listed, but refuse to run, so they are not counted:
+
+| Held | Why |
+|------|-----|
+| `pyghidra_reverse` | Its operations are not yet mapped to the server's tools (MIK-7796). |
+| `trawl_extract` | The tool cannot refuse private addresses at connect time, so the gateway cannot confine its network access (MIK-7788). |
+
+Held operation of a counted capability: `cisco_scanner` `scan_mcp_server` is not offered, for the same network-access reason (MIK-7788); its skill scan runs.
 
 ## Categories
 
