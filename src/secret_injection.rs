@@ -489,3 +489,7 @@ impl SecretInjector {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "secret_injection_flip_tests.rs"]
+mod flip_tests;

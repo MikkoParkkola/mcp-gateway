@@ -62,3 +62,34 @@ fn the_typed_body_path_sends_a_caller_reference_as_text() {
         json!({ "query": "see {env.MIK7787_TEST_SECRET}", "note": "x see {env.MIK7787_TEST_SECRET}" })
     );
 }
+
+// MIK-7888: one pass over the template. A value that was substituted is data
+// and is never scanned for placeholders again.
+
+#[test]
+fn a_secret_containing_a_placeholder_reaches_the_provider_byte_for_byte() {
+    let (_dir, executor) = executor_holding("MIK7888_TOKEN=abc{q}xyz\n");
+    let params = json!({ "q": "caller-text" });
+    let value = executor
+        .substitute_string("Bearer {env.MIK7888_TOKEN}", &params)
+        .unwrap();
+    assert_eq!(value, "Bearer abc{q}xyz");
+}
+
+#[test]
+fn a_caller_value_that_looks_like_another_placeholder_is_not_expanded() {
+    let (_dir, executor) = executor_holding("MIK7888_UNUSED=1\n");
+    // Whichever key a map visits first, neither value is re-scanned.
+    let params = json!({ "a": "{b}", "b": "B-VALUE" });
+    let value = executor.substitute_string("{a}|{b}", &params).unwrap();
+    assert_eq!(value, "{b}|B-VALUE");
+}
+
+#[test]
+fn a_secret_containing_another_secret_reference_is_not_chained() {
+    let (_dir, executor) = executor_holding("MIK7888_A=x{env.MIK7888_B}y\nMIK7888_B=second\n");
+    let value = executor
+        .substitute_string("{env.MIK7888_A}-{env.MIK7888_B}", &json!({}))
+        .unwrap();
+    assert_eq!(value, "x{env.MIK7888_B}y-second");
+}
