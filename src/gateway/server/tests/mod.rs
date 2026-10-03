@@ -69,6 +69,7 @@ mod owner2_stdio_tasks;
 mod stdio1_discover_versions;
 mod stdio_reused_id;
 mod task_drain_timeout;
+mod task_shutdown_tail;
 
 // #2480: a stdio idempotent replay writes its invocation record.
 mod stdio_replay_audit;

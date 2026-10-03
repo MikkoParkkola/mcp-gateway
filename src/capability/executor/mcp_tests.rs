@@ -330,6 +330,52 @@ fn ctx_with_generation(generation: u64) -> CapabilityExecutionContext {
     }
 }
 
+/// MIK-7889 (#2777): a reload revokes under the same lock that admits a call,
+/// so it cannot land between the epoch check and the lease. The bump from
+/// another thread must wait for an acquire that is already past its check.
+#[test]
+fn a_generation_bump_waits_for_an_acquire_past_its_epoch_check() {
+    let executor = std::sync::Arc::new(CapabilityExecutor::new());
+    let cap = capability();
+    let config: crate::capability::definition::McpConfig =
+        serde_json::from_value(json!({"command": "x"})).unwrap();
+    let name = cap.name.clone();
+    let mut bumper = None;
+    let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let refused = executor.mcp_children.acquire(
+        &cap,
+        &config,
+        "alice",
+        (0, Duration::from_secs(1)),
+        |_| true,
+        || {
+            let e = std::sync::Arc::clone(&executor);
+            let n = name.clone();
+            let flag = std::sync::Arc::clone(&started);
+            bumper = Some(std::thread::spawn(move || {
+                flag.store(true, Ordering::SeqCst);
+                e.bump_mcp_generation(&n);
+            }));
+            // The bumper is running and about to bump before the check, so
+            // the unchanged generation below is the lock's doing, not a late
+            // thread's.
+            while !started.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(
+                executor.mcp_generation(&name),
+                0,
+                "the reload revoked between the epoch check and the lease"
+            );
+            Err(crate::Error::Config("no child in this test".into()))
+        },
+    );
+    assert!(refused.is_err());
+    bumper.unwrap().join().unwrap();
+    assert_eq!(executor.mcp_generation(&cap.name), 1);
+}
+
 #[tokio::test]
 async fn a_call_from_before_an_unload_never_starts_a_child() {
     let executor = CapabilityExecutor::new();

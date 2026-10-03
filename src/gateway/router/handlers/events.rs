@@ -26,6 +26,8 @@ pub(super) struct Presented {
     facts: Option<CredentialFacts>,
     identity: Option<crate::key_server::oidc::VerifiedIdentity>,
     session_sha256: Option<String>,
+    /// The static bearer's full digest (MIK-7889); the principal is 48 bits.
+    bearer_sha256: Option<String>,
 }
 
 impl Presented {
@@ -36,7 +38,18 @@ impl Presented {
             identity: extensions.get().cloned(),
             session_sha256: crate::gateway::auth::session_cookie_value(request.headers())
                 .map(|handle| crate::hashing::sha256_hex(handle.as_bytes())),
+            bearer_sha256: crate::gateway::auth::presented_bearer_sha256(request.headers()),
         }
+    }
+
+    /// The static bearer's binding: its full digest. With no bearer header to
+    /// hash there is no binding, and a bound kind without its binding is
+    /// refused at the re-check (fail closed), never kept on the 12-hex
+    /// fingerprint.
+    fn static_bearer_binding(&self) -> Option<LiveBinding> {
+        self.bearer_sha256
+            .clone()
+            .map(|bearer_sha256| LiveBinding::StaticBearerSha256 { bearer_sha256 })
     }
 
     /// The credential `client` presented, as events keep it. A key-server or
@@ -79,7 +92,7 @@ impl Presented {
                     provider_sha256: facts.provider_sha256.clone(),
                 })
             }
-            CredentialKind::StaticBearer => Some(LiveBinding::StaticBearer),
+            CredentialKind::StaticBearer => self.static_bearer_binding(),
             CredentialKind::DashboardSession => self
                 .session_sha256
                 .clone()
@@ -153,6 +166,40 @@ mod tests {
             authenticated,
             credential_kind: kind,
         }
+    }
+
+    /// MIK-7889 (#2695): a subscription made with the static bearer binds the
+    /// bearer's full digest, taken from the request's own header.
+    #[test]
+    fn a_static_bearer_subscription_binds_the_full_digest() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer tok".parse().unwrap(),
+        );
+        let digest = crate::gateway::auth::presented_bearer_sha256(&headers);
+        assert_eq!(digest, Some(crate::hashing::sha256_hex(b"tok")));
+        let with = Presented {
+            facts: None,
+            identity: None,
+            session_sha256: None,
+            bearer_sha256: digest.clone(),
+        };
+        assert_eq!(
+            with.static_bearer_binding(),
+            Some(LiveBinding::StaticBearerSha256 {
+                bearer_sha256: digest.unwrap()
+            })
+        );
+        let without = Presented {
+            bearer_sha256: None,
+            ..with
+        };
+        assert_eq!(without.static_bearer_binding(), None, "fail closed");
+        assert_eq!(
+            crate::gateway::auth::presented_bearer_sha256(&axum::http::HeaderMap::new()),
+            None
+        );
     }
 
     /// Only a configured API key has an `api_keys` entry to re-check
