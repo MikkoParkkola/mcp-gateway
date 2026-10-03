@@ -312,6 +312,31 @@ fn validate_object(
         }
     }
 
+    // `anyOf` of `required` lists: at least one list must be fully present. This
+    // is the only `anyOf` shape the subset reads (a capability that needs one of
+    // several optional parameters, such as a cache purge mode).
+    if let Some(branches) = input_schema.get("anyOf").and_then(Value::as_array) {
+        let lists: Vec<Vec<&str>> = branches
+            .iter()
+            .filter_map(|b| b.get("required").and_then(Value::as_array))
+            .map(|r| r.iter().filter_map(Value::as_str).collect())
+            .collect();
+        let satisfied = |list: &Vec<&str>| {
+            list.iter()
+                .all(|n| arg_map.get(*n).is_some_and(|v| !v.is_null()))
+        };
+        if !lists.is_empty() && !lists.iter().any(satisfied) {
+            let options: Vec<String> = lists.iter().map(|l| l.join(" + ")).collect();
+            violations.push(ValidationViolation::new(
+                "",
+                format!(
+                    "one of these parameter sets is required: {}",
+                    options.join(" | ")
+                ),
+            ));
+        }
+    }
+
     // Step 2 – extra keys not declared in the schema (strict for inputs only).
     for key in arg_map.keys() {
         if reject_extra_keys && !properties.contains_key(key.as_str()) {
@@ -446,6 +471,17 @@ fn validate_property(
                 violations.push(ValidationViolation::new(
                     name,
                     format!("must be at least {min_len} characters long"),
+                ));
+            }
+            // `pattern` is unanchored, as in JSON Schema. A pattern that does not
+            // compile refuses every value: a guard that cannot be read must not
+            // be skipped.
+            if let Some(pattern) = prop_schema.get("pattern").and_then(Value::as_str)
+                && !regex::Regex::new(pattern).is_ok_and(|re| re.is_match(s))
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must match the pattern {pattern}"),
                 ));
             }
             if let Some(max_len) = prop_schema.get("maxLength").and_then(Value::as_u64)

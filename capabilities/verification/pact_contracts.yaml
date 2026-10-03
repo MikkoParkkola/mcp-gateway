@@ -1,4 +1,4 @@
-sha256: 35883a8ca5dba1437d2c52687727122b052cd55c0ae3606f92d8771fd53a29f9
+sha256: d46f90024747a1abe63e9694145960d92af1b77b57e29c52096c63421721d677
 fulcrum: "1.0"
 name: pact_contracts
 description: >
@@ -108,5 +108,5 @@ metadata:
     - quality
   cost_category: free
   execution_time: medium
-  read_only: true
+  read_only: false
   docs: https://github.com/jmcentire/pact
