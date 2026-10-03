@@ -115,3 +115,56 @@ async fn a_retained_result_is_signed_over_the_new_nonce() {
         );
     }
 }
+
+/// `tools/call` of `tool` on alpha with `nonce`, as a modern-era request.
+async fn call_tool(fx: &Fx, tool: &str, nonce: &str) -> (StatusCode, Value) {
+    let params = json!({
+        "name": tool,
+        "arguments": {},
+        "_meta": {
+            NONCE_META: nonce,
+            KEY_PROTOCOL_VERSION: MODERN_VERSIONS[0],
+            KEY_CLIENT_CAPABILITIES: {},
+        },
+    });
+    send_with_headers(
+        fx,
+        "/mcp/alpha",
+        "k-std",
+        "tools/call",
+        params,
+        None,
+        &[
+            ("mcp-protocol-version", MODERN_VERSIONS[0]),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", tool),
+        ],
+    )
+    .await
+}
+
+/// MIK-7698: the signing nonce is admitted after every refusal, so a call the
+/// tool-call gate refuses consumes none. Mutant: admitting the nonce before the
+/// gate burns it on the refused call, and the same nonce then fails as a replay.
+#[tokio::test]
+async fn a_call_the_tool_gate_refuses_does_not_spend_its_nonce() {
+    let fx = fixture_hardened_signed(Answer::Ok, true).await;
+    let (status, body) = call_tool(&fx, "bad tool name", "spent-by-refusal").await;
+    assert!(
+        status.is_client_error(),
+        "the gate must refuse: {status} {body}"
+    );
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        0,
+        "a refused call dispatched"
+    );
+
+    let (status, body) = call_tool(&fx, "read", "spent-by-refusal").await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the nonce was burned by the refusal: {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1);
+}
