@@ -81,7 +81,9 @@ fn a_malformed_config_is_reported_and_not_replaced_by_the_environment() {
     let root = tempfile::tempdir().expect("root");
     let caps = capabilities(root.path());
     let broken = root.path().join("broken.yaml");
-    std::fs::write(&broken, "server: [this is: not, valid\n").expect("config");
+    // Owner-only, so a permission refusal cannot stand in for a parse error.
+    mcp_gateway::gateway::test_helpers::write_owner_only(&broken, "server: [this is: not, valid\n")
+        .expect("config");
     let output = run(
         root.path(),
         &[
@@ -110,7 +112,8 @@ fn listing_with_env_file(contents: &str) -> String {
     let config = root.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(
         &config,
-        &format!("env_files:\n  - \"{}\"\n", env_file.display()),
+        // Single-quoted YAML keeps a Windows path's backslashes literal.
+        format!("env_files:\n  - '{}'\n", env_file.display()),
     )
     .expect("config");
     let output = run(
