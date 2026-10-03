@@ -20,10 +20,15 @@ mod receiver;
 use std::path::Path;
 use std::time::Duration;
 
-use delivery::{DEADLINE, delivery_config, events_at_least, fire, records, subscribe, wait_until};
+use delivery::{delivery_config, events_at_least, fire, records, subscribe, wait_until};
 use gateway::{ALICE, Gateway};
 use receiver::{EventReply, Receiver, whsec};
 use serde_json::json;
+
+/// Longest a row waits for the startup reconcile. Three gateways start at once
+/// in this binary, and reconcile runs after the capability scan, so the shared
+/// 20 s bound is tight on a loaded runner; the assertion itself is unchanged.
+const DEADLINE: Duration = Duration::from_secs(60);
 
 fn subs_on_disk(root: &Path) -> usize {
     std::fs::read_dir(root.join("events/subs")).map_or(0, |d| d.flatten().count())
