@@ -113,3 +113,47 @@ fn placeholders_that_name_nothing_stay_as_written() {
         assert_eq!(got, want, "template {template:?}");
     }
 }
+
+// MIK-7857: the query path drops a value because of what it looks like. A
+// value is dropped only when the TEMPLATE named a placeholder nothing filled.
+
+fn query_pairs(
+    executor: &CapabilityExecutor,
+    template: &str,
+    params: &serde_json::Value,
+) -> Vec<(String, String)> {
+    let templates = std::collections::HashMap::from([("q".to_string(), template.to_string())]);
+    executor.substitute_params(&templates, params).unwrap()
+}
+
+#[test]
+fn a_query_value_starting_with_a_brace_reaches_the_provider_verbatim() {
+    let (_dir, executor) = executor_holding("MIK7857_UNUSED=1\n");
+    let json_text = r#"{"filter": "open"}"#;
+    let pairs = query_pairs(&executor, "{q}", &json!({ "q": json_text }));
+    assert_eq!(pairs, [("q".to_string(), json_text.to_string())]);
+}
+
+#[test]
+fn a_caller_value_shaped_like_a_reference_is_sent_as_that_text() {
+    let (_dir, executor) = executor_holding("MIK7857_SECRET=gateway-owned\n");
+    let pairs = query_pairs(&executor, "{q}", &json!({ "q": "{env.MIK7857_SECRET}" }));
+    assert_eq!(
+        pairs,
+        [("q".to_string(), "{env.MIK7857_SECRET}".to_string())]
+    );
+}
+
+#[test]
+fn a_secret_that_starts_with_a_brace_is_not_dropped_from_the_query() {
+    let (_dir, executor) = executor_holding("MIK7857_TOKEN={q}-token\n");
+    let pairs = query_pairs(&executor, "{env.MIK7857_TOKEN}", &json!({ "q": "caller" }));
+    assert_eq!(pairs, [("q".to_string(), "{q}-token".to_string())]);
+}
+
+#[test]
+fn a_placeholder_nothing_fills_is_still_left_out_of_the_query() {
+    let (_dir, executor) = executor_holding("MIK7857_UNUSED=1\n");
+    assert!(query_pairs(&executor, "{absent}", &json!({ "q": "x" })).is_empty());
+    assert!(query_pairs(&executor, "{q}", &json!({})).is_empty());
+}
