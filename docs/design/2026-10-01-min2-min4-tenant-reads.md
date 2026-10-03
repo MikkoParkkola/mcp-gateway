@@ -245,6 +245,13 @@ What the compiler guarantees:
   an `OutboundFrame` built by `judge_frame`;
 - nothing outside `outbound` can change a judged payload or skip a commit.
 
+What the typing PR delivers: the sealed `OutboundReply` with three named
+origins (judged answer, judged stream, gateway refusal), declared as the
+return type of every handler on an MCP path, and a source test that fails
+closed on any `/mcp` registration it cannot resolve. A `gateway_reply` is a
+claim about origin, made at its call site, that the compiler cannot verify;
+the registration table is not generic over the handler's return type.
+
 What it does not guarantee:
 - code that builds a JSON-RPC-shaped body on a non-MCP route;
 - a tower middleware layered after the MCP routes that answers with its own

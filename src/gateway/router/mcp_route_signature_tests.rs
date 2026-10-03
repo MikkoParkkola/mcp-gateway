@@ -15,24 +15,29 @@ fn read(relative: &str) -> String {
         .unwrap_or_else(|e| panic!("{relative}: {e}"))
 }
 
-/// The handler names registered on `/mcp` paths in the router table.
-fn registered_mcp_handlers() -> Vec<String> {
-    let table = read("src/gateway/router/mod.rs");
+/// The handler names registered on `/mcp` paths in `table`, or why the table
+/// cannot be read: every method registration in an `/mcp` block must name a
+/// `handlers::` function, so a closure, an unqualified function or a nested
+/// router fails closed instead of going unchecked.
+fn registered_in(table: &str) -> Result<Vec<String>, String> {
+    let methods = ["post(", "get(", "delete(", "put(", "patch(", "any(", "on("];
     let mut names = Vec::new();
     let mut open = false;
     for line in table.lines() {
-        if line.contains(".route(") || line.contains("Router::new") {
+        if line.contains(".route(") || line.contains("Router::new") || line.contains(".nest") {
             open = false;
         }
         if line.contains("\"/mcp") {
             open = true;
         }
-        if line.contains("\"/") && !line.contains("\"/mcp") {
-            open = false;
+        if line.contains(".nest") && line.contains("mcp") {
+            return Err(format!("nested MCP router: {line}"));
         }
         if !open {
             continue;
         }
+        let registrations: usize = methods.iter().map(|m| line.matches(m).count()).sum();
+        let mut found = 0;
         let mut rest = line;
         while let Some(at) = rest.find("handlers::") {
             let tail = &rest[at + "handlers::".len()..];
@@ -40,12 +45,20 @@ fn registered_mcp_handlers() -> Vec<String> {
                 .find(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .unwrap_or(tail.len());
             names.push(tail[..end].to_owned());
+            found += 1;
             rest = &tail[end..];
+        }
+        if registrations != found {
+            return Err(format!("unresolved MCP registration: {line}"));
         }
     }
     names.sort();
     names.dedup();
-    names
+    Ok(names)
+}
+
+fn registered_mcp_handlers() -> Vec<String> {
+    registered_in(&read("src/gateway/router/mod.rs")).expect("the MCP routes are resolvable")
 }
 
 /// The text of `fn name`'s signature, up to its body.
@@ -88,4 +101,17 @@ fn every_mcp_handler_returns_an_outbound_reply() {
             "{name} must return OutboundReply, found: {sig}"
         );
     }
+}
+
+#[test]
+fn an_unresolvable_mcp_registration_fails_closed() {
+    for table in [
+        ".route(\"/mcp\", post(|| async { \"raw\" }))",
+        ".route(\"/mcp\", post(meta_mcp_handler))",
+        ".route(\"/mcp\", post(handlers::meta_mcp_handler).get(local_handler))",
+    ] {
+        assert!(registered_in(table).is_err(), "must not pass: {table}");
+    }
+    let ok = ".route(\"/mcp\", post(handlers::meta_mcp_handler))";
+    assert_eq!(registered_in(ok), Ok(vec!["meta_mcp_handler".to_owned()]));
 }
