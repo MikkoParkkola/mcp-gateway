@@ -666,9 +666,15 @@ pub fn subscription_stream(
                     // published value, tagged.
                     let tagged = match &task_frames {
                         Some(frames) if is_task_notification(&published.notification) => {
-                            let reader = listener.current_client().await;
+                            // Resolved again for this frame: a credential that
+                            // stopped authenticating since `delivery()` passed
+                            // ends the stream, as `Delivery::Dead` does.
+                            let Some(reader) = listener.current_client().await else {
+                                warn!("subscription listener's credential no longer authenticates; closing");
+                                break;
+                            };
                             let Some(frame) = frames
-                                .frame(&published.notification, &subscription, reader.as_ref())
+                                .frame(&published.notification, &subscription, Some(&reader))
                                 .await
                             else {
                                 // The frame could not be delivered auditably.

@@ -43,10 +43,12 @@ impl MetaMcp {
         subscription: &SubscriptionId,
         reader: &Reader<'_>,
     ) -> Option<Value> {
-        // The collector is outside the slot: receipts are recorded only after
-        // the slot's own write (grant decisions) has also succeeded.
+        // The collector is outside the slot, and the delivery log entry comes
+        // after the slot's own write: a frame withheld because a grant
+        // decision could not be written is never logged as delivered, and its
+        // receipts are dropped.
         super::invoke::relay::collecting(async {
-            let slotted =
+            let decided =
                 super::grant_audit::slot_result(self.transparency_logger.as_ref(), async {
                     let withheld = stored.is_none_or(refused);
                     let params = match stored {
@@ -61,24 +63,25 @@ impl MetaMcp {
                         }),
                         None => notification.clone(),
                     };
-                    let frame = subscription.tag(frame);
-                    let correlation = ResponseCorrelation {
-                        session_id: reader.session_id,
-                        caller: reader.caller,
-                        external_server: "gateway",
-                        external_tool: "notifications/tasks",
-                    };
-                    let delivered = self
-                        .record_notification_delivery_attempt(&frame, &correlation)
-                        .await;
-                    Ok(delivered.then_some((frame, withheld)))
+                    Ok((subscription.tag(frame), withheld))
                 })
                 .await
-                .ok()
-                .flatten();
-            // Receipts a refused or withheld frame staged are dropped.
-            self.commit_staged_relay(slotted.as_ref().is_some_and(|(_, withheld)| !withheld));
-            slotted.map(|(frame, _)| frame)
+                .ok();
+            let Some((frame, withheld)) = decided else {
+                self.commit_staged_relay(false);
+                return None;
+            };
+            let correlation = ResponseCorrelation {
+                session_id: reader.session_id,
+                caller: reader.caller,
+                external_server: "gateway",
+                external_tool: "notifications/tasks",
+            };
+            let delivered = self
+                .record_notification_delivery_attempt(&frame, &correlation)
+                .await;
+            self.commit_staged_relay(delivered && !withheld);
+            delivered.then_some(frame)
         })
         .await
     }
