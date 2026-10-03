@@ -1,0 +1,13 @@
+diff --git a/src/identity_propagation/account_strategies.rs b/src/identity_propagation/account_strategies.rs
+index 475e04e01..c8fc8bd05 100644
+--- a/src/identity_propagation/account_strategies.rs
++++ b/src/identity_propagation/account_strategies.rs
+@@ -652,7 +652,7 @@ impl AccountStrategyRegistry {
+         // is the only one that can see a revocation committed since the mint.
+         // The custody refusal text names the account state (revoked, reconnect
+         // required, retired lease), never a token.
+-        if let Some((lease, current)) = custody
++        if let Some((lease, current)) = custody.filter(|_| false)
+             && let Err(error) = lease.recheck(current).await
+         {
+             return refuse(&format!("durable custody refused its lease: {error}"));
