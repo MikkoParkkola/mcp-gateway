@@ -1710,11 +1710,18 @@
     },
     {
       "id": "MIK-7630.SOURCE.1",
-      "status": "pending",
-      "stage": "ungraded",
+      "status": "met",
+      "stage": "met",
       "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope; exclusions: decision mik_7630_events_source1_exclusions."
+      "evidence": [
+        "tests/mik_7630_events_sources.rs",
+        "tests/mik_7630_events_upstream.rs",
+        "tests/mik_7630_events_refusal.rs",
+        "src/events/upstream.rs",
+        "src/events/sources_tests.rs",
+        "src/events/upstream_need_tests.rs"
+      ],
+      "note": "Graded 2026-10-03 at 1b27cb78b, clause by clause against the amended text (decision mik_7630_events_source1_exclusions). (1) Tool-set changes become backend.<x>.tools_changed: T38 backend_tool_changes_become_events (tests/mik_7630_events_sources.rs:190), burst clause in src/events/sources_tests.rs; merged as 8ffef9b78 (PR #2710, I4). (2) resources/updated, resources/list_changed and prompts/list_changed become resource_updated, resources_changed and prompts_changed: T39a-k (tests/mik_7630_events_upstream.rs) 11 of 11 pass, red first on CI run 37014613784 at their own 'must be listed' assertion; delivery by era and transport: T39a modern HTTP, T39b legacy HTTP, T39c modern stdio, T39d legacy stdio, T39e WebSocket. (3) The upstream subscription opens only while an event subscription needs it: T39b step 3 and T39d (the last unsubscribe unsubscribes upstream and drops the GET), T39i (a restarted stdio backend is resubscribed), T39f (nothing opens upstream for a refused subscribe). (4) The named exclusions (A2A, SSE-handshake HTTP, identity-propagated or per-user-credential backends) are refused with -32014 and data.reason, never silently empty: tests/mik_7630_events_refusal.rs ineligible_backends_refuse_upstream_events_with_the_reason (sse_handshake_transport, a2a_transport, identity_propagation) and the_refusal_is_not_a_probe; account and per-user cases in src/events/upstream.rs account_bindings_are_judged_as_they_compile; T39j eligible backends only. The exclusions rest on a lead interim ruling made under the operator's standing instruction to decide with gpt-review and grok-review (2026-10-02), not on an operator approval receipt. Merged as 1b27cb78b (PR #2767, I5), refusal as 837431a8c (PR #2727). Green: CI run 37118978490 at head 8007423 (Tests with T39a-k listed passing, Clippy, Windows, macOS). Mutants K1-K12 all RED (runs 37110082243 and 37114505952). Reviews: gpt and grok on the implementation, two delta rounds, findings fixed; deferred and stated: old stream dropped on replacement ack, hourly modern recycle reconnects with a gap of about one second, acknowledgement-first strictness, per-backend counters."
     },
     {
       "id": "MIK-7630.SOURCE.2",
