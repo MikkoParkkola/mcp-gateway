@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..6a955a6ac 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -323,7 +323,7 @@ fn reopen_tail(
+                 Ok((state, behind))
+             } else {
+                 let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
+-                let below_mark = contradicted(path, sealed, hw, counter, &resumed.last_entry_hash)?;
++                let below_mark = false;
+                 Ok((resumed, below_mark))
+             }
+         }

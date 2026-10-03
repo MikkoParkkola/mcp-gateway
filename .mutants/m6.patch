@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..5c6dce9df 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -372,7 +372,7 @@ fn lost_from(carry: Option<u64>, below_mark: bool, tail: u64) -> Option<u64> {
+ /// restored); one at the mark with another hash was replaced. Either way
+ /// re-minting `.hwm` from it would launder the change, signed log or not.
+ pub(super) fn contradicts(hw: Option<&HighWater>, counter: u64, hash: &str) -> bool {
+-    hw.is_some_and(|h| counter < h.counter || (counter == h.counter && hash != h.entry_hash))
++    hw.is_some_and(|h| counter < h.counter || (counter == h.counter && hash == h.entry_hash))
+ }
+ 
+ /// [`contradicts`], and, when the tail is ahead of the mark, whether the

@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..155cd525a 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -410,7 +410,7 @@ fn contradicted(
+             .filter_map(|line| record_head(line).ok())
+             .find(|(c, ..)| *c == h.counter);
+         if let Some((_, found, _, _)) = at_mark {
+-            return Ok(found != h.entry_hash);
++            return Ok(false);
+         }
+     }
+     // Neither file holds the record the mark names.

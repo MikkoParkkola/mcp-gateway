@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..8d40927cc 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -652,7 +652,7 @@ fn repair_torn_tail(
+         // so a restored older file's repair record reuses no committed counter.
+         let at = hw
+             .filter(|h| h.counter > pred_counter + 1)
+-            .map_or(pred_counter + 1, |h| h.counter + 1);
++            .map_or(pred_counter + 1, |_| pred_counter + 1);
+         write_synced(&mut file, config, fields, at, &pred_hash)?;
+     }
+     Ok(Some(pred_counter + 1))

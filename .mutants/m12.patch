@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..15ec33905 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -393,7 +393,7 @@ fn contradicted(
+     if contradicts(hw, counter, hash) {
+         return Ok(true);
+     }
+-    if counter == h.counter {
++    if counter != h.counter {
+         return Ok(false);
+     }
+     // The mark's record is the newest one when the mark was written: in the

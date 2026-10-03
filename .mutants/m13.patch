@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..1c1c0331a 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -317,7 +317,7 @@ fn reopen_tail(
+                 std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
+                 segments::sync_dir(path)?;
+                 let sealed = segments::list_segments(path)?;
+-                let behind = contradicted(path, &sealed, hw, counter, &hash)?;
++                let behind = false;
+                 let carry = lost_from(newest_finding(&sealed, config)?, behind, counter);
+                 let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
+                 Ok((state, behind))

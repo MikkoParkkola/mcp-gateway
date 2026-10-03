@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..75a0d43d2 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -399,7 +399,7 @@ fn contradicted(
+     // The mark's record is the newest one when the mark was written: in the
+     // active file, or at the end of the sealed segment the mark names.
+     let named = sealed.iter().find(|s| s.seq == h.segment_seq);
+-    for file in std::iter::once(path).chain(named.map(|s| s.path.as_path())) {
++    for file in std::iter::once(path).chain(named.filter(|_| false).map(|s| s.path.as_path())) {
+         let text = match std::fs::read_to_string(file) {
+             Ok(text) => text,
+             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,

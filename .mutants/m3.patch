@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..3f4284242 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -447,7 +447,7 @@ fn resume_active(
+     // records reuse the lost counters, so verify reports the gap (2.13).
+     // Counters are global across segments, so the mark bounds them whatever
+     // segment it names: a restored older file must not reuse them (MIK-7884).
+-    let counter = hw.map_or(counter, |h| h.counter.max(counter));
++    let counter = counter;
+     let file = OpenOptions::new()
+         .append(true)
+         .open(path)

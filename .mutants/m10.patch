@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_rotation.rs b/src/security/transparency_log_rotation.rs
+index b9dd8be4b..52a6cc192 100644
+--- a/src/security/transparency_log_rotation.rs
++++ b/src/security/transparency_log_rotation.rs
+@@ -414,7 +414,7 @@ fn contradicted(
+         }
+     }
+     // Neither file holds the record the mark names.
+-    Ok(true)
++    Ok(false)
+ }
+ 
+ /// An active file whose last record is an ordinary record.
