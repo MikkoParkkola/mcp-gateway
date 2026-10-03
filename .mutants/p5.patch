@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers/tasks.rs b/src/gateway/router/handlers/tasks.rs
+index 4674442a2..746f3a891 100644
+--- a/src/gateway/router/handlers/tasks.rs
++++ b/src/gateway/router/handlers/tasks.rs
+@@ -560,7 +560,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
+                         .as_ref()
+                         .is_none_or(|opened_as| *opened_as == reader.principal)
+             })
+-            .and_then(|id| self.state.tasks.get(&self.owner, id).ok());
++            .and_then(|_| None);
+         let live = RecoveryCaller {
+             client: Some(reader),
+             oauth_agent_identity: self.oauth_agent_identity.as_ref(),
