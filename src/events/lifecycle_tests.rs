@@ -322,7 +322,7 @@ async fn a_source_refusal_at_fan_out_ends_the_subscription() {
     );
 }
 
-/// The posts a receiver got: headers and body of each.
+/// The posts a receiver has received: the headers and body of each.
 type Posts = Arc<parking_lot::Mutex<Vec<(axum::http::HeaderMap, Vec<u8>)>>>;
 
 /// One HTTPS receiver with its own CA: the posts it got.
@@ -412,8 +412,43 @@ async fn a_test_source_event_reaches_a_receiver() {
     assert_eq!(posts.len(), 1, "one delivery to the receiver");
     let body: Value = serde_json::from_slice(&posts[0].1).expect("json body");
     assert_eq!(body["name"], NAME);
+    // Verified here with an independent HMAC over id.timestamp.body under
+    // the subscriber's secret, not with the gateway's own signer.
+    let header = |name: &str| {
+        posts[0]
+            .0
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let (id, timestamp, signatures) = (
+        header("webhook-id"),
+        header("webhook-timestamp"),
+        header("webhook-signature"),
+    );
     assert!(
-        posts[0].0.contains_key("webhook-signature"),
-        "signed like every delivery"
+        !id.is_empty() && !timestamp.is_empty(),
+        "id and timestamp present"
+    );
+    let key = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(whsec().trim_start_matches("whsec_"))
+            .expect("secret decodes")
+    };
+    use hmac::{KeyInit as _, Mac as _};
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&key).expect("key");
+    mac.update(format!("{id}.{timestamp}.").as_bytes());
+    mac.update(&posts[0].1);
+    let expected = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes())
+    };
+    assert!(
+        signatures
+            .split(' ')
+            .any(|part| part.strip_prefix("v1,") == Some(expected.as_str())),
+        "the POST is signed under the subscriber's secret: {signatures}"
     );
 }
