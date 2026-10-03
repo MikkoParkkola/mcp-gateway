@@ -3583,8 +3583,12 @@ REST with an empty URL. It now runs the command, under these rules:
   area, with a cleared environment plus the names the capability lists, and is killed with every
   process it started when it times out or its output passes the cap.
 - A parameter that names a file must resolve inside the configured `capabilities.files.<root>`; no root
-  is configured by default. A parameter that names a network destination makes the capability refuse
-  to run, because the gateway cannot confine where a child process connects.
+  is configured by default. The check canonicalizes the path, then the child opens it: a local process
+  that can write inside a root can swap a path for a symlink between the two, so no other user (by
+  owner, group or ACL) may write to a root (`uploads`, `projects`, `downloads`) or to any directory
+  above it. A parameter that names a
+  network destination makes the capability refuse to run, because the gateway cannot confine where a
+  child process connects.
 
 **Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
 capabilities, pin them (`mcp-gateway cap pin`) and list their commands in

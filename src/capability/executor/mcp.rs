@@ -215,6 +215,10 @@ impl McpChildren {
 
     /// Revoke the calls of one capability that read an earlier generation.
     pub(crate) fn bump_generation(&self, capability: &str) {
+        // Under the map lock `acquire` holds from its epoch check to the
+        // lease, so a reload cannot land between the two (MIK-7889). Same
+        // order as `acquire`: map, then generations.
+        let _admission = self.map.lock();
         *self
             .generations
             .lock()

@@ -297,6 +297,10 @@ already served as a configured backend, so `McpConfig` has no `url`), with
   with a message naming the key. Used by `gws_drive_upload.filePath` (`uploads`),
   `pyghidra_reverse.binary_path` (`uploads`), `pact_contracts.project_dir` and
   `openpencil_design.file_path` (`projects`), and `downloads` for §7.
+  Residual (MIK-7889, #2690): the check and the child's open are two steps, so a process that can write
+  inside any root can swap a checked path for a symlink in between. No other user may therefore write
+  to a root (`uploads`, `projects`, `downloads`) or to a directory above it; stated in docs. A
+  handle-based open is not possible for an arbitrary child.
 
 ### 6.3 Credentials and secrets (CWE-532)
 

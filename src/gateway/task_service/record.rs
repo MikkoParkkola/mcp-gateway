@@ -388,7 +388,11 @@ pub(super) const EXECUTION_OUTCOME_KEY: &str = "io.mcp-gateway/executionOutcome"
 /// descriptor never speaks for the plan, and a row without a consistent one
 /// has no recoverable provenance.
 fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
-    if matches!(task.tool(), "gateway_execute" | "gateway_run_playbook") {
+    // A row older than the descriptor cannot have captured one; a descriptor
+    // found there is forged or downgraded (the loader and store.rs agree).
+    if record.version < UPSTREAM_VERSION
+        || matches!(task.tool(), "gateway_execute" | "gateway_run_playbook")
+    {
         return Vec::new();
     }
     record
