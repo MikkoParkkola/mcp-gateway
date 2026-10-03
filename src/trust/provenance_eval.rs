@@ -84,8 +84,11 @@ pub fn score(claim: &Claim, receipt: &RuntimeProvenanceReceipt) -> ClaimVerdict 
     // A call the backend reported as failed cannot support any claim about what
     // the source "said" — this is could-not-check, never an authoritative fact.
     // Every claim (success, empty, count) is unsupported by a failure.
-    if !receipt.backend_ok {
-        return ClaimVerdict::Unsupported;
+    match receipt.backend_ok {
+        Some(false) => return ClaimVerdict::Unsupported,
+        // Not observed: could-not-check, never a success.
+        None => return ClaimVerdict::Abstain,
+        Some(true) => {}
     }
 
     match claim {
@@ -437,7 +440,7 @@ mod tests {
             signed: signed_receipt(true, None, CacheOutcome::Miss),
         };
         // Tamper: flip an observed fact without re-signing.
-        case.signed.receipt.backend_ok = false;
+        case.signed.receipt.backend_ok = Some(false);
         let report = replay(&[case], &validator());
         assert_eq!(report.rejected, 1);
         assert_eq!(report.supported + report.unsupported + report.abstained, 0);
@@ -573,7 +576,7 @@ mod tests {
         let mut receipt = signed_receipt_with_call_id("gw-call-1", true, None);
         // Tamper after signing without re-signing — the HMAC no longer covers
         // the mutated fact.
-        receipt.receipt.backend_ok = false;
+        receipt.receipt.backend_ok = Some(false);
         let records = vec![CorpusRecord {
             call_id: "gw-call-1".to_string(),
             claim: Claim::Succeeded,

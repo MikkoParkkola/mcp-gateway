@@ -163,6 +163,7 @@ backend" and "fails a capability file" first.**
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
 | 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
 | 138 | `mcp_gateway::key_server::oidc::OidcError` gained three variants (`InsecureIssuer`, `InsecureFetch`, `ClientUnavailable`) and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles | Add the three arms, or end the `match` with a wildcard arm |
+| 139 | `RuntimeProvenanceReceipt::backend_ok` is now `Option<bool>`, and an event receipt carries none (the JSON has no `backend_ok` field). Before, an event receipt claimed `true`, which nothing had observed | An embedder that reads or builds the field uses `Some(..)`; a verifier reads `subject_kind` first and treats a missing `backend_ok` as not observed. Receipts already stored still read |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3731,6 +3732,14 @@ Through 3.x the gateway read a stdio backend's output line by line with no ceili
 `mcp_gateway::key_server::oidc::OidcError` is a public enum, and it is not `#[non_exhaustive]`. Since 3.5.x it has three new variants, all unit variants with no payload because the refused URL is never echoed (it can carry userinfo, a path or a query): `InsecureIssuer` (a provider issuer that is cleartext and off this machine), `InsecureFetch` (a discovery or JWKS fetch that names such a URL) and `ClientUnavailable` (the HTTP client could not be built at startup). A `match` on `OidcError` that lists every variant and has no wildcard arm no longer compiles. The gateway binary and its configuration are not affected.
 
 **Action:** an embedder that matches on `OidcError` adds the three arms, or ends the `match` with `_ =>`. Treat all three as a refusal of the token or the provider, the same as `InsecureJwksUri`.
+
+## 139. `backend_ok` on a provenance receipt is optional
+
+**Startup:** no notice, a library API and receipt-format change rather than a change to running behaviour
+
+`mcp_gateway::trust::RuntimeProvenanceReceipt::backend_ok` was a `bool`. It is now `Option<bool>`: an event receipt (`subject_kind: event`) carries `None` and its JSON has no `backend_ok` field, because an event is a delivery, not a tool result, and nothing observed a success. Through the 4.0 betas an event receipt signed `backend_ok: true`. Runtime receipts are unchanged on the wire (`true` or `false`, same field position), so stored receipts and their signatures still verify and read. Replay scoring abstains on an event receipt, and on any receipt without the field.
+
+**Action:** an embedder that reads `receipt.backend_ok` as a `bool`, or sets it, uses `Option<bool>` (`Some(true)`, `Some(false)`). A verifier treats a missing `backend_ok` as not observed, never as success.
 
 ## Upgrading from 3.5.x: a walkthrough
 
