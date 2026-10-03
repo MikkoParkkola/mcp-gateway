@@ -34,8 +34,9 @@ pub(crate) struct BackendCall<'a> {
 pub(crate) struct Admission {
     /// Budget warnings to attach to the result.
     pub(crate) warnings: Vec<String>,
+    /// Held only for its `Drop`, never read.
     #[cfg(feature = "cost-governance")]
-    hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
+    _hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -45,7 +46,10 @@ impl Admission {
         warnings: Vec<String>,
         hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
     ) -> Self {
-        Self { warnings, hold }
+        Self {
+            warnings,
+            _hold: hold,
+        }
     }
 }
 

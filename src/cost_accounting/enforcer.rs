@@ -5,7 +5,8 @@
 //!
 //! `BudgetEnforcer::check()` is called BEFORE every tool dispatch.
 //! It must complete in <0.1 ms: one `DashMap` lookup + ≤3 atomic comparisons,
-//! no allocations on the hot path when the tool is free.
+//! no allocations on the hot path when the tool is free. A paid tool also takes
+//! the reservation lock and allocates its hold (MIK-7763).
 //!
 //! # Day-boundary reset
 //!
@@ -287,8 +288,10 @@ pub struct EnforcerSnapshot {
 
 /// Pre-invoke budget enforcement engine.
 ///
-/// Wrap in `Arc` and share via `MetaMcp`.  All operations are lock-free
-/// in the common case (no day rollover, no limit exceeded).
+/// Wrap in `Arc` and share via `MetaMcp`.  Free tools and a disabled
+/// governance take no lock; a check of a paid tool takes one short mutex
+/// (the reservation ledger) and allocates its hold. Spend recording and
+/// snapshots stay lock-free.
 #[cfg(feature = "cost-governance")]
 pub struct BudgetEnforcer {
     pub(crate) config: CostGovernanceConfig,
