@@ -209,3 +209,7 @@ impl MetaMcp {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "events_hook_tests.rs"]
+mod events_hook_tests;
