@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/response_security.rs b/src/gateway/meta_mcp/response_security.rs
+index ac71422e7..d84b34a69 100644
+--- a/src/gateway/meta_mcp/response_security.rs
++++ b/src/gateway/meta_mcp/response_security.rs
+@@ -395,7 +395,7 @@ impl super::MetaMcp {
+         if let Some(read) = read {
+             for (name, value) in read {
+                 if name != "event" {
+-                    fields.entry(name).or_insert(value);
++                    let _ = value;
+                 }
+             }
+         }

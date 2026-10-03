@@ -1,0 +1,12 @@
+diff --git a/src/gateway/outbound/mod.rs b/src/gateway/outbound/mod.rs
+index 07df452f3..0d99d3524 100644
+--- a/src/gateway/outbound/mod.rs
++++ b/src/gateway/outbound/mod.rs
+@@ -198,7 +198,6 @@ impl OutboundFrame {
+             .as_ref()
+             .map(|a| a.record_fields(self.key.as_deref()))
+             .filter(|fields| !fields.is_empty())?;
+-        self.record_taken = true;
+         Some(fields)
+     }
+ 

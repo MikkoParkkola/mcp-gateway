@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index bdd1e4a44..eb11725e3 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -1929,7 +1929,8 @@ async fn meta_mcp_dispatch(
+         let refusal =
+             crate::gateway::meta_mcp::MetaMcp::audit_unavailable_refusal(frame.answer_id());
+         frame = frame.replaced_by(refusal.clone());
+-        finalized.map(|_| refusal)
++        let _ = refusal;
++        finalized
+     };
+     if let (Some(execution), Some(finalized)) = (execution, finalized) {
+         execution.complete_delivery(&finalized, signing_context.as_ref());
