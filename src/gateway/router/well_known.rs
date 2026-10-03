@@ -38,12 +38,12 @@
 //! effect. `public_url` *is* read live, so a `public_url`-only reload is
 //! reflected immediately.
 //!
-//! `authorization_servers` is deliberately left empty: RFC 9728 defines it as
-//! the OAuth authorization-server issuer identifiers a client resolves via
-//! `/.well-known/oauth-authorization-server` (RFC 8414). This gateway does not
-//! yet publish RFC 8414 metadata, so naming any issuer here would break client
-//! discovery. It is omitted from the serialized document (RFC 9728 §3.2) until
-//! the gateway serves authorization-server metadata.
+//! `authorization_servers` names the OIDC issuers of an enabled key server with
+//! `delegated_bearer` on: those are the authorization servers whose tokens the
+//! MCP routes accept, so a standards-following client (ChatGPT, for one) learns
+//! where to sign in. It stays empty, and is omitted (RFC 9728 section 3.2),
+//! when no issuer token is accepted: the gateway itself serves no RFC 8414
+//! authorization-server metadata, so naming itself would break discovery.
 
 use std::sync::Arc;
 
@@ -204,6 +204,27 @@ fn resolve_resource_origin(config: &Config, bind_origin: Option<&str>) -> Option
     bind_origin.map(ToString::to_string)
 }
 
+/// The authorization servers whose tokens this gateway accepts as bearers
+/// (RFC 9728 section 2): the OIDC issuers of an enabled key server with
+/// `delegated_bearer` on, in configured order, blank and repeated ones
+/// dropped. Empty otherwise, and then omitted from the document: an
+/// exchange-only key server accepts no issuer token on the MCP routes, and the
+/// gateway itself serves no authorization-server metadata.
+fn authorization_servers(config: &Config) -> Vec<String> {
+    let key_server = &config.key_server;
+    if !(key_server.enabled && key_server.delegated_bearer) {
+        return Vec::new();
+    }
+    let mut issuers: Vec<String> = Vec::new();
+    for provider in &key_server.oidc {
+        let issuer = provider.issuer.trim();
+        if !issuer.is_empty() && !issuers.iter().any(|seen| seen == issuer) {
+            issuers.push(issuer.to_string());
+        }
+    }
+    issuers
+}
+
 /// Build RFC 9728 protected-resource metadata, or `None` when no honest
 /// `resource` identifier is available (see module docs).
 #[must_use]
@@ -214,9 +235,7 @@ pub fn build_protected_resource_metadata(
     let resource = resolve_resource_origin(config, bind_origin)?;
     Some(ProtectedResourceMetadata {
         resource,
-        // Empty until the gateway serves RFC 8414 authorization-server metadata;
-        // see module docs. Omitted from the serialized document when empty.
-        authorization_servers: Vec::new(),
+        authorization_servers: authorization_servers(config),
         bearer_methods_supported: vec!["header".to_string()],
         scopes_supported: Vec::new(),
     })
