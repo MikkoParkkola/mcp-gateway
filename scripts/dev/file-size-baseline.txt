@@ -34,7 +34,6 @@
 1329 tests/openwebui_adapter_config.rs
 1285 src/gateway/meta_mcp/authz_tests.rs
 1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
-1275 src/oauth/client/mod.rs
 1257 src/oauth/storage.rs
 1246 src/backend/lifecycle.rs
 1180 src/gateway/meta_mcp/search_ranking_authz_tests.rs

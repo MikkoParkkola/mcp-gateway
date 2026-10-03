@@ -80,9 +80,11 @@ pub(super) fn relay_refusal(
     ))
 }
 
-/// Record what the direct caller was actually delivered, after every gate,
-/// redaction and the provenance stamp.
-pub(super) fn record_direct_delivery(
+/// Stage what the direct caller is delivered, after every gate, redaction and
+/// the provenance stamp. The receipt is recorded only once the answer has
+/// passed the read judge and the audit write ([`commit_direct_receipts`]).
+#[cfg(feature = "firewall")]
+pub(super) fn stage_direct_delivery(
     state: &AppState,
     auth: BackendAuthContext<'_>,
     server: &str,
@@ -93,7 +95,18 @@ pub(super) fn record_direct_delivery(
         return;
     };
     let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
-    fw.record_delivery(RelayCaller::new(&key, keyed), server, tool, result);
+    let who = crate::gateway::meta_mcp::invoke::relay::RelayKey::new(&key, keyed);
+    crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), result);
+}
+
+/// Record the staged receipts when the answer that was written delivers a
+/// result: a read the judge withheld, or a fail-closed audit write replaced,
+/// leaves none.
+#[cfg(feature = "firewall")]
+pub(super) fn commit_direct_receipts(state: &AppState, delivered: bool) {
+    if let Some(fw) = state.firewall.as_ref() {
+        crate::gateway::meta_mcp::invoke::relay::commit_with(fw, delivered);
+    }
 }
 
 #[cfg(test)]
