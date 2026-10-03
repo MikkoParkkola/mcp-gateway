@@ -1,0 +1,7 @@
+head_sha	804fb4e6718542c62c94acbe00afb0978be1d4a3
+# batch 1 for #2818
+R1	linux	r1.patch	--lib -- held_reload_tests
+R2	linux	r2.patch	--lib -- held_reload_tests
+R3	linux	r3.patch	--lib -- events_hook_tests
+R4	linux	r4.patch	--lib -- events_hook_tests
+R5	linux	r5.patch	--lib -- held_reload_tests

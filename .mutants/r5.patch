@@ -1,0 +1,13 @@
+diff --git a/src/capability/backend/initial_scan.rs b/src/capability/backend/initial_scan.rs
+index 29229c171..f8ea45b70 100644
+--- a/src/capability/backend/initial_scan.rs
++++ b/src/capability/backend/initial_scan.rs
+@@ -60,7 +60,7 @@ impl CapabilityBackend {
+     /// Whether a reload was held during the scan; clears the hold.
+     pub(crate) fn take_held_reload(&self) -> bool {
+         self.initial_scan
+-            .fetch_and(!RELOAD_HELD, std::sync::atomic::Ordering::AcqRel)
++            .fetch_and(!0, std::sync::atomic::Ordering::AcqRel)
+             & RELOAD_HELD
+             != 0
+     }

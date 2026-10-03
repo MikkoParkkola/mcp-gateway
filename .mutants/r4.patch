@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/events_hook.rs b/src/gateway/meta_mcp/events_hook.rs
+index 5884f1ff4..5d10d7bda 100644
+--- a/src/gateway/meta_mcp/events_hook.rs
++++ b/src/gateway/meta_mcp/events_hook.rs
+@@ -206,7 +206,7 @@ impl MetaMcp {
+         }
+         // Before the startup scan completes the reload is held, not dropped:
+         // `reconcile_events_after_scan` applies it once the scan is over.
+-        if capabilities.hold_reload_until_scan_complete() {
++        if !capabilities.initial_scan_complete() {
+             return;
+         }
+         apply_webhook_refresh(hub, &capabilities, &registry);

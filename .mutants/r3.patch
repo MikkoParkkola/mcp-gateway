@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/events_hook.rs b/src/gateway/meta_mcp/events_hook.rs
+index 5884f1ff4..bd2348ad1 100644
+--- a/src/gateway/meta_mcp/events_hook.rs
++++ b/src/gateway/meta_mcp/events_hook.rs
+@@ -48,7 +48,7 @@ impl MetaMcp {
+             // A reload that arrived mid-scan was held: apply it before the
+             // catalogue is reconciled against the routes.
+             if let (Some(capabilities), Some(registry)) = (&capabilities, &registry)
+-                && capabilities.take_held_reload()
++                && false
+             {
+                 apply_webhook_refresh(&hub, capabilities, registry);
+             }

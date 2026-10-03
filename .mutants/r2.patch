@@ -1,0 +1,13 @@
+diff --git a/src/capability/backend/initial_scan.rs b/src/capability/backend/initial_scan.rs
+index 29229c171..ac271cd7e 100644
+--- a/src/capability/backend/initial_scan.rs
++++ b/src/capability/backend/initial_scan.rs
+@@ -52,7 +52,7 @@ impl CapabilityBackend {
+         use std::sync::atomic::Ordering::{AcqRel, Acquire};
+         self.initial_scan
+             .try_update(AcqRel, Acquire, |bits| {
+-                (bits & COMPLETE == 0).then_some(bits | RELOAD_HELD)
++                (bits & COMPLETE != 0).then_some(bits | RELOAD_HELD)
+             })
+             .is_ok()
+     }
