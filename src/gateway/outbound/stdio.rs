@@ -116,11 +116,19 @@ impl StdioReads {
     /// params and what its own dispatch read, into one frame.
     pub(crate) async fn batch(
         &self,
-        answers: Vec<(Value, Option<ReadAttribution>, Option<Value>)>,
+        answers: Vec<(
+            Value,
+            Option<ReadAttribution>,
+            Option<Value>,
+            crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+        )>,
     ) -> OutboundFrame {
         let mut items = Vec::with_capacity(answers.len());
-        for (answer, hidden, params) in answers {
-            items.push(self.answer(answer, params.as_ref(), hidden.as_ref()).await);
+        for (answer, hidden, params, staged) in answers {
+            let frame = self.answer(answer, params.as_ref(), hidden.as_ref()).await;
+            // Each item's receipts follow its own frame's verdict.
+            staged.commit(frame.delivers_result());
+            items.push(frame);
         }
         OutboundFrame::unjudged(Payload::Batch(items))
     }

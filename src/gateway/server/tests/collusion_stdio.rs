@@ -37,6 +37,8 @@ fn text_result(text: &str) -> Value {
 /// Backend `alpha`: `read` answers [`PROSE`]; `send` counts deliveries.
 struct Alpha {
     sends: Arc<AtomicUsize>,
+    /// What `read` answers.
+    read: Arc<parking_lot::Mutex<String>>,
 }
 
 #[async_trait::async_trait]
@@ -55,7 +57,8 @@ impl crate::transport::Transport for Alpha {
             self.sends.fetch_add(1, Ordering::SeqCst);
             return Ok(JsonRpcResponse::success(id, text_result("sent")));
         }
-        Ok(JsonRpcResponse::success(id, text_result(PROSE)))
+        let text = self.read.lock().clone();
+        Ok(JsonRpcResponse::success(id, text_result(&text)))
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())
@@ -94,6 +97,7 @@ async fn stdio_operator_is_one_principal() {
     let sends = Arc::new(AtomicUsize::new(0));
     backend.set_transport_for_test(Arc::new(Alpha {
         sends: Arc::clone(&sends),
+        read: Arc::new(parking_lot::Mutex::new(PROSE.to_string())),
     }));
     assert!(registry.register(backend));
     let firewall = Arc::new(Firewall::from_config(
@@ -136,5 +140,156 @@ async fn stdio_operator_is_one_principal() {
         sends.load(Ordering::SeqCst),
         1,
         "the relay reached the backend"
+    );
+}
+
+/// A stdio gateway whose firewall judges tenants (`block`) and detects relays
+/// (`block`), over a backend whose `read` answers what the returned cell holds.
+fn judged_stdio() -> (Arc<MetaMcp>, Arc<Firewall>, Arc<parking_lot::Mutex<String>>) {
+    use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuardConfig};
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "alpha",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let read = Arc::new(parking_lot::Mutex::new(String::new()));
+    backend.set_transport_for_test(Arc::new(Alpha {
+        sends: Arc::new(AtomicUsize::new(0)),
+        read: Arc::clone(&read),
+    }));
+    assert!(registry.register(backend));
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+            collusion: CollusionConfig {
+                action: CollusionAction::Block,
+                sources: vec!["alpha:read".to_string()],
+                ..CollusionConfig::default()
+            },
+            tenant_guard: TenantGuardConfig {
+                arg_keys: vec!["customer_id".to_string()],
+                cross_tenant_reads: CrossTenantReads::Block,
+                ..TenantGuardConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    (Arc::new(meta), firewall, read)
+}
+
+/// One operator `read` of `text`, dispatched as the serve loop does: the
+/// answer, what it read, its request's params and the receipts it staged.
+async fn staged_read(
+    meta: &Arc<MetaMcp>,
+    reads: &crate::gateway::outbound::StdioReads,
+    cell: &parking_lot::Mutex<String>,
+    text: String,
+) -> (
+    Value,
+    Option<crate::security::tenant_reads::ReadAttribution>,
+    Option<Value>,
+    crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+) {
+    use crate::gateway::server::{Gateway, StdioClient, StdioTelemetry};
+    *cell.lock() = text;
+    let policy = Arc::new(crate::security::ToolPolicy::default());
+    let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig::default(),
+    ));
+    let params = json!({"name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
+    let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+    let client = StdioClient {
+        session_id: "stdio-7800",
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+        handshake_capabilities: crate::protocol::meta::Declared::NONE,
+        tasks: None,
+        modern: false,
+    };
+    let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
+        reads.guard(),
+        Box::pin(Gateway::dispatch_single_staged(
+            meta,
+            &policy,
+            &mtls,
+            request.clone(),
+            client,
+            &StdioTelemetry::default(),
+        )),
+    )
+    .await;
+    let value = answer.expect("a request is answered");
+    (value, hidden, request.get("params").cloned(), staged)
+}
+
+/// Whether an HTTP caller sending `text` through `alpha:send` is refused.
+fn http_relay_refused(firewall: &Firewall, text: &str) -> bool {
+    let params = json!({"name": "send", "arguments": {"text": text}});
+    let verdict = firewall.check_relay(
+        RelayCaller::Keyed("http-caller"),
+        "alpha",
+        "send",
+        &params,
+        ("s", "http"),
+    );
+    !verdict.allowed
+}
+
+fn tenant_note(tenant: &str, note: &str) -> String {
+    format!("{{\"customer_id\":\"{tenant}\",\"note\":\"{note}\"}}")
+}
+
+/// MIK-7800: over stdio a read the cross-tenant judge withholds records no
+/// receipt for the operator. The operator reads tenant t1 (delivered), then
+/// t2 (withheld under `block`); an HTTP caller sending t2's text is not
+/// refused, while sending t1's text is (the control).
+#[tokio::test]
+async fn stdio_judged_out_read_records_no_receipt() {
+    use crate::gateway::server::Gateway;
+    let (meta, firewall, cell) = judged_stdio();
+    let reads = meta.stdio_reads();
+    let (first, second) = (tenant_note("t1", PROSE), tenant_note("t2", OTHER));
+    for (text, expect_delivered) in [(&first, true), (&second, false)] {
+        let (value, hidden, params, staged) = staged_read(&meta, &reads, &cell, text.clone()).await;
+        let frame =
+            Gateway::judge_and_commit(&reads, (value, params.as_ref(), hidden.as_ref()), staged)
+                .await;
+        assert_eq!(frame.delivers_result(), expect_delivered, "base: {text}");
+        // The sink writes it: that is what commits the read history.
+        frame.stdio_written();
+    }
+    assert!(
+        http_relay_refused(&firewall, &first),
+        "control: a delivered read records a receipt"
+    );
+    assert!(
+        !http_relay_refused(&firewall, &second),
+        "a read the judge withheld must record no receipt"
+    );
+}
+
+/// The same in a JSON-RPC batch: each item's receipts follow its own frame.
+#[tokio::test]
+async fn stdio_judged_out_batch_item_records_no_receipt() {
+    let (meta, firewall, cell) = judged_stdio();
+    let reads = meta.stdio_reads();
+    let (first, second) = (tenant_note("t1", PROSE), tenant_note("t2", OTHER));
+    let mut answers = Vec::new();
+    for text in [&first, &second] {
+        answers.push(staged_read(&meta, &reads, &cell, text.clone()).await);
+    }
+    reads.batch(answers).await.stdio_written();
+    assert!(
+        http_relay_refused(&firewall, &first),
+        "control: a delivered batch item records a receipt"
+    );
+    assert!(
+        !http_relay_refused(&firewall, &second),
+        "a batch item the judge withheld must record no receipt"
     );
 }

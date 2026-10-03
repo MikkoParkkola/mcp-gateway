@@ -12,11 +12,13 @@ use super::Gateway;
 use crate::gateway::outbound::{OutboundFrame, StdioReads};
 use crate::security::tenant_reads::ReadAttribution;
 
-/// One batch answer, the reading of its own dispatch, and its request's params.
+/// One batch answer, the reading of its own dispatch, its request's params,
+/// and the relay receipts it staged (recorded after its frame is judged).
 pub(super) type BatchAnswer = (
     serde_json::Value,
     Option<ReadAttribution>,
     Option<serde_json::Value>,
+    crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
 );
 
 impl Gateway {
@@ -93,6 +95,7 @@ impl Gateway {
                     .to_value_lossy(),
                 None,
                 None,
+                crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
             )];
         };
 
@@ -102,6 +105,7 @@ impl Gateway {
                     .to_value_lossy(),
                 None,
                 None,
+                crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
             )];
         }
 
@@ -112,7 +116,7 @@ impl Gateway {
             let params = judging.then(|| req.get("params").cloned()).flatten();
             let (resp, read) = crate::gateway::outbound::read_scoped(
                 guard.clone(),
-                Box::pin(Self::dispatch_single_with_sink(
+                Box::pin(Self::dispatch_single_staged(
                     meta_mcp,
                     tool_policy,
                     mtls_policy,
@@ -134,8 +138,9 @@ impl Gateway {
                 )),
             )
             .await;
-            if let Some(resp) = resp {
-                responses.push((resp, read, params));
+            match resp {
+                (Some(resp), staged) => responses.push((resp, read, params, staged)),
+                (None, staged) => staged.commit(false),
             }
         }
         responses
@@ -162,7 +167,10 @@ impl Gateway {
         )
         .await
         .into_iter()
-        .map(|(answer, ..)| answer)
+        .map(|(answer, _, _, staged)| {
+            staged.commit(answer.get("error").is_none());
+            answer
+        })
         .collect()
     }
 }
