@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index 57f21910c..6fc2d9106 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -562,7 +562,7 @@ impl MetaMcp {
+         allow(clippy::unused_self, clippy::needless_pass_by_value)
+     )]
+     pub(crate) fn restage_if_changed(&self, snapshot: Option<Value>, result: Option<&Value>) {
+-        if !snapshot.is_some_and(|before| Some(&before) != result) {
++        if true {
+             return;
+         }
+         let _ = RELAY_RECEIPTS.try_with(|receipts| {
