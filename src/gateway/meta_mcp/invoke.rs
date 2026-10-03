@@ -768,6 +768,8 @@ struct BridgeDispatcher<'a> {
     protocol_revision: Option<&'a str>,
     routing_profile: &'a str,
     scope: super::InvokeScope<'a>,
+    /// The backend the call was judged on, dispatched through unchanged.
+    captured: Option<Arc<crate::backend::Backend>>,
     /// A11: the managed lease the headers were released under, if any.
     managed: Option<&'a crate::personal_accounts::ManagedLease>,
     /// A11: a round's 401 turned into a reconnect refusal or a rejection mark.
@@ -852,7 +854,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         // The same key rule as the first round, against the slot as it is now.
         let checked_at = std::time::Instant::now();
         let refusal = self.meta.undeclared_key_refusal(
-            self.server,
+            (self.server, self.captured.as_ref()),
             self.tool,
             self.arguments,
             self.cache_binding,
@@ -914,6 +916,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.protocol_revision,
                 self.routing_profile,
                 self.scope,
+                self.captured.clone(),
                 &super::response_security::chain_receipt::ChainSlot::default(),
             )
             .await;
@@ -1580,10 +1583,9 @@ impl MetaMcp {
         // token (INV-1): it refuses.
         if self.multi_user.load(Ordering::Relaxed)
             && caller_credential.headers.is_empty()
-            && self
-                .backends
-                .get(server)
-                .is_some_and(|b| b.oauth_requires_per_user_isolation())
+            && backend
+                .as_deref()
+                .is_some_and(crate::backend::Backend::oauth_requires_per_user_isolation)
         {
             tracing::warn!(
                 server = %server,
@@ -1779,7 +1781,7 @@ impl MetaMcp {
         // failsafe refusing that list answers as a refused dispatch does.
         let checked_at = std::time::Instant::now();
         let refusal = self.undeclared_key_refusal(
-            server,
+            (server, backend.as_ref()),
             tool,
             &arguments,
             dispatch_binding.as_deref(),
@@ -1817,7 +1819,7 @@ impl MetaMcp {
             super::support::note_cache_bypass(&caller_principal, "meta");
         }
         // A chained backend's answer is bound to one challenge: no cache (D7).
-        let chained = self.chain_mode_of(server) != crate::config::ChainMode::Off;
+        let chained = self.is_chained(backend.as_deref());
         if !want_full
             && !chained
             && protocol_revision.is_some()
@@ -2007,6 +2009,7 @@ impl MetaMcp {
             protocol_revision,
             &profile.name,
             caller.scope(),
+            backend.clone(),
             &chain_slot,
         ))
         .await;
@@ -2211,6 +2214,7 @@ impl MetaMcp {
                     protocol_revision,
                     routing_profile: &profile.name,
                     scope: caller.scope(),
+                    captured: backend.clone(),
                     managed: caller_credential.managed.as_ref(),
                     account_refusal: &account_refusal,
                     reservation: &held,
@@ -3136,8 +3140,7 @@ impl MetaMcp {
             Err(e) => refuse(format!("credential minting failed: {e}"))
                 .await
                 .map_err(|refused| {
-                    let backend = self.backends.get(server);
-                    let account_id = backend.as_deref().and_then(|b| b.account_descriptor_id());
+                    let account_id = backend.and_then(|b| b.account_descriptor_id());
                     crate::personal_accounts::refusal::mark(refused, &e, account_id)
                 }),
         }
@@ -3318,6 +3321,8 @@ impl MetaMcp {
         protocol_revision: Option<&str>,
         routing_profile: &str,
         scope: super::InvokeScope<'_>,
+        // The backend the call was judged on; `None` for the capability route.
+        captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
         let dispatch_start = Instant::now();
@@ -3341,6 +3346,7 @@ impl MetaMcp {
                 protocol_revision,
                 routing_profile,
                 scope,
+                captured,
                 chain,
             )
             .await;
@@ -3434,6 +3440,8 @@ impl MetaMcp {
         protocol_revision: Option<&str>,
         routing_profile: &str,
         scope: super::InvokeScope<'_>,
+        // The backend the call was judged on; `None` for the capability route.
+        captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
         let injection = self.secret_injector.inject(server, tool, arguments)?;
@@ -3550,10 +3558,9 @@ impl MetaMcp {
             return Ok(final_result);
         }
 
-        let backend = self
-            .backends
-            .get(server)
-            .ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
+        // The backend the call was judged on, not a second lookup by name a
+        // reload may have answered differently (MIK-7810). None: not found.
+        let backend = captured.ok_or_else(|| Error::BackendNotFound(server.to_string()))?;
 
         // A "did you mean?" hint off THIS CALLER'S slot (MIK-7334.CATALOGUE.1):
         // the shared one holds a catalogue this caller was never shown once a
@@ -6015,6 +6022,9 @@ mod suggestion_authz_tests;
 
 #[cfg(test)]
 mod f13_bridge_tests;
+
+#[cfg(test)]
+mod captured_invoke_tests;
 
 #[cfg(test)]
 mod cancel_settles_tests;
