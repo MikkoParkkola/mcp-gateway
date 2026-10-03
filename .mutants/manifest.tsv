@@ -1,0 +1,4 @@
+head_sha	9b9dec9c3c4ae345ac3074c1ece18df1061eacc8
+# #2768 meta HTTP receipts at the last replacer
+H2	linux	h2.patch	--lib -- http_receipts_record_only
+H3	linux	h3.patch	--lib -- http_receipts_record_only
