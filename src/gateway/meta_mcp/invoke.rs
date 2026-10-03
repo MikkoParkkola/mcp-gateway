@@ -1819,7 +1819,11 @@ impl MetaMcp {
             super::support::note_cache_bypass(&caller_principal, "meta");
         }
         // A chained backend's answer is bound to one challenge: no cache (D7).
-        let chained = self.chain_mode_of(server) != crate::config::ChainMode::Off;
+        // Judged on the captured backend, like the dispatch it protects.
+        let chained = self.chain_signer.is_some()
+            && backend
+                .as_deref()
+                .is_some_and(|b| b.chain_policy().0 != crate::config::ChainMode::Off);
         if !want_full
             && !chained
             && protocol_revision.is_some()
