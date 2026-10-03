@@ -185,7 +185,7 @@ impl CapabilityExecutor {
     ///
     /// Answers from the DECLARED catalogue and never mints: asking this question
     /// must not consume a custody lease.
-    fn account_is_shared(&self, account: &str) -> bool {
+    pub(super) fn account_is_shared(&self, account: &str) -> bool {
         self.account_strategies().is_some_and(|registry| {
             registry
                 .declared(account)
@@ -435,7 +435,7 @@ impl CapabilityExecutor {
                 Error::Config(format!(
                     "OAuth refresh request to '{}' failed: {}",
                     crate::security::sanitize::redact_url_for_diagnostics(token_endpoint),
-                    super::redact_url(e)
+                    super::client::redact_url(e)
                 ))
             })?;
 
@@ -449,7 +449,7 @@ impl CapabilityExecutor {
         let resp: RefreshTokenResponse = response.json().await.map_err(|e| {
             Error::Config(format!(
                 "Failed to parse OAuth refresh response for '{provider}': {}",
-                super::redact_url(e)
+                super::client::redact_url(e)
             ))
         })?;
 
@@ -623,6 +623,8 @@ mod tests {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: super::super::process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
         }
     }
 
@@ -637,6 +639,8 @@ mod tests {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: super::super::process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
         }
     }
 

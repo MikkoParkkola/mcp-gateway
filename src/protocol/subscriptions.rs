@@ -64,8 +64,9 @@ impl NotificationKind {
             Self::PromptsListChanged => "promptsListChanged",
             Self::ResourcesListChanged => "resourcesListChanged",
             Self::ResourceSubscriptions => "resourceSubscriptions",
-            // Read from the params ROOT, not from the `notifications` object:
-            // the ownership narrowing writes `params.taskIds`.
+            // The tasks extension names it under `notifications`; the
+            // gateway's own earlier form, the params root, is read too
+            // ([`named_task_ids`]).
             Self::Tasks => "taskIds",
         }
     }
@@ -81,6 +82,47 @@ impl NotificationKind {
             Self::Tasks,
         ]
     }
+}
+
+/// Whether a `subscriptions/listen` names task ids, in either placement.
+///
+/// Presence, whatever the value: the ownership guard keys on this, so a
+/// malformed entry must still reach it.
+#[must_use]
+pub fn names_task_ids(params: &Value) -> bool {
+    let key = NotificationKind::Tasks.opt_in_field();
+    params.get(key).is_some()
+        || params
+            .get("notifications")
+            .is_some_and(|filter| filter.get(key).is_some())
+}
+
+/// The task ids a `subscriptions/listen` names: the tasks extension's
+/// `notifications.taskIds` and the params root, one filter, in request order
+/// without repeats. Non-string entries are dropped like resource URIs are.
+///
+/// The ownership narrowing rewrites both placements, so every reader goes
+/// through here and none sees a copy the narrowing did not touch.
+#[must_use]
+pub fn named_task_ids(params: &Value) -> Vec<String> {
+    let key = NotificationKind::Tasks.opt_in_field();
+    let mut ids: Vec<String> = Vec::new();
+    // A set, not a scan of `ids`: the arrays are client-sized, and a quadratic
+    // dedup over a request body that large would stall a worker.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for list in [
+        params.get(key),
+        params.get("notifications").and_then(|f| f.get(key)),
+    ] {
+        for id in list.and_then(Value::as_array).into_iter().flatten() {
+            if let Some(id) = id.as_str()
+                && seen.insert(id)
+            {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    ids
 }
 
 /// What a client asked to be told about.
@@ -112,25 +154,12 @@ impl ListenRequest {
         let params = params?;
         let filter = params.get("notifications")?.as_object()?;
 
-        // The task ids sit at the params ROOT, because that is where the
-        // ownership narrowing writes them: a copy found under `notifications`
-        // was never the one that narrowing rewrote, so it opts into nothing.
-        // Non-string entries are dropped like resource URIs are.
-        let task_ids: Vec<String> = params
-            .get(NotificationKind::Tasks.opt_in_field())
-            .and_then(Value::as_array)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let task_ids = named_task_ids(params);
 
         let wanted: Vec<NotificationKind> = NotificationKind::all()
             .into_iter()
             .filter(|kind| match kind {
-                // Named tasks only, and named at the root.
+                // Named tasks only.
                 NotificationKind::Tasks => !task_ids.is_empty(),
                 // Three are booleans. The fourth is not, and treating it as one
                 // silently dropped every resource a client named.

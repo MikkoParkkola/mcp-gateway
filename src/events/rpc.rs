@@ -28,15 +28,18 @@ pub(crate) struct Caller {
 impl Caller {
     fn sees(&self, hub: &EventsHub, descriptor: &EventDescriptor) -> bool {
         match &descriptor.scope {
-            Visibility::Backend(backend) => {
-                self.visible_backends.contains(backend)
-                    && hub.live_admits(self.credential.api_key.as_ref(), backend)
-            }
+            Visibility::Backend(backend) => self.sees_backend(hub, backend),
             // Owner-scoped types (task events, I4) are listed to anyone who
             // can own a record; operator types land in 4.0.1.
             Visibility::Owner => self.principal.is_some(),
             Visibility::Operator => false,
         }
+    }
+
+    /// Whether this caller may see event types scoped to `backend`.
+    fn sees_backend(&self, hub: &EventsHub, backend: &str) -> bool {
+        self.visible_backends.contains(backend)
+            && hub.live_admits(self.credential.api_key.as_ref(), backend)
     }
 }
 
@@ -51,6 +54,7 @@ impl EventsHub {
                 Visibility::Backend(backend) => Some(backend),
                 _ => None,
             })
+            .chain(self.ineligible_backends().into_keys())
             .collect();
         backends.sort();
         backends.dedup();
@@ -77,11 +81,38 @@ impl EventsHub {
 
     /// The visible descriptor called `name`; invisible and missing are one
     /// answer, so the catalogue cannot be probed (design §7.4).
+    ///
+    /// The one exception: an upstream-notification event of a backend the
+    /// caller may see but which cannot offer it is refused with the reason
+    /// (I5 design §11 D2/D3), so the subscription is never silently dead.
     fn visible(&self, caller: &Caller, name: &str) -> Result<EventDescriptor, RpcError> {
-        self.catalogue()
+        if let Some(found) = self
+            .catalogue()
             .into_iter()
             .find(|d| d.name == name && caller.sees(self, d))
-            .ok_or_else(RpcError::not_found)
+        {
+            return Ok(found);
+        }
+        let refusal = super::upstream::parse_name(name)
+            .filter(|(backend, _)| caller.sees_backend(self, backend))
+            .and_then(|(backend, _)| self.ineligible_backends().remove(backend))
+            .map(|reason| RpcError::unsupported_backend_events(name, reason.as_str()));
+        Err(refusal.unwrap_or_else(RpcError::not_found))
+    }
+
+    /// The configured backends that cannot offer upstream-notification
+    /// events, under the live config; none while that source is off.
+    fn ineligible_backends(
+        &self,
+    ) -> std::collections::BTreeMap<String, super::upstream::Ineligible> {
+        let Some(services) = self.runtime.services.get() else {
+            return std::collections::BTreeMap::new();
+        };
+        if !self.config.sources.backend_notifications {
+            return std::collections::BTreeMap::new();
+        }
+        let multi_user = super::upstream::multi_user(services.live.running());
+        super::upstream::ineligible_backends(&services.live.get(), multi_user)
     }
 }
 
@@ -309,7 +340,8 @@ impl EventsHub {
                 Ok(()) => {
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
-                    let throttled = self.runtime.rates.throttled(&id);
+                    let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
+                        && self.store.has_due(&id, Utc::now());
                     return Ok(subscribe_answer(
                         &id,
                         expires_at,

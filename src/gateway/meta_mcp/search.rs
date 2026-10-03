@@ -139,8 +139,9 @@ impl MetaMcp {
         {
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for capability in cap.list_capabilities() {
-                if !capability.visible_in_states.is_empty()
-                    && !capability.visible_in_states.contains(&current_state)
+                if (!capability.visible_in_states.is_empty()
+                    && !capability.visible_in_states.contains(&current_state))
+                    || !cap.is_listed(&capability.name)
                 {
                     continue;
                 }
@@ -243,8 +244,9 @@ impl MetaMcp {
         {
             let cap_killed = self.kill_switch.is_killed(&cap.name);
             for capability in cap.list_capabilities() {
-                if !capability.visible_in_states.is_empty()
-                    && !capability.visible_in_states.contains(&current_state)
+                if (!capability.visible_in_states.is_empty()
+                    && !capability.visible_in_states.contains(&current_state))
+                    || !cap.is_listed(&capability.name)
                 {
                     continue;
                 }
@@ -263,7 +265,10 @@ impl MetaMcp {
                         .metadata
                         .chains_with
                         .iter()
-                        .filter(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok())
+                        .filter(|t| {
+                            self.may_invoke(&cap.name, t, scope, session_id).is_ok()
+                                && cap.is_listed(t)
+                        })
                         .cloned()
                         .collect();
                     let mut entry = build_match_json_with_chains(&cap.name, &tool, &chains);
