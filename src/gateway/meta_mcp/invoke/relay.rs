@@ -304,6 +304,17 @@ impl MetaMcp {
     }
 }
 
+/// [`collecting`] when `on`. Off, nothing is staged (`receipt` yields none
+/// without a detector) and a commit outside a collector records nothing, so
+/// the scope and its allocation buy nothing.
+pub(crate) async fn collecting_if<F: std::future::Future>(on: bool, delivery: F) -> F::Output {
+    if on {
+        collecting(delivery).await
+    } else {
+        delivery.await
+    }
+}
+
 impl MetaMcp {
     /// Stage `value`, the result `server:tool` answered `who` with, as gated.
     /// A no-op outside a collector or with relay detection off.

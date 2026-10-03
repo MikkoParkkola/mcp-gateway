@@ -469,16 +469,12 @@ pub(super) async fn meta_mcp_handler(
             crate::gateway::outbound::read_scoped(
                 guard_for_scope,
                 Box::pin(async move {
-                    // Off, nothing is staged or recorded, so the scope (a
-                    // task-local and its allocation) is skipped, as the stdio
-                    // route does.
-                    let relay_on = state.meta_mcp.relay_active();
-                    let dispatch = meta_mcp_dispatch(state, http_request);
-                    if relay_on {
-                        crate::gateway::meta_mcp::invoke::relay::collecting(dispatch).await
-                    } else {
-                        dispatch.await
-                    }
+                    let on = state.meta_mcp.relay_active();
+                    crate::gateway::meta_mcp::invoke::relay::collecting_if(
+                        on,
+                        meta_mcp_dispatch(state, http_request),
+                    )
+                    .await
                 }),
             )
             .await
