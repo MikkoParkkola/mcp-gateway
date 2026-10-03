@@ -264,11 +264,32 @@ async fn meta_catalogue_relay_audit_names_the_callers_session() {
     let fx = meta_fixture(observe, None).await;
     read_resource(&fx, Route::Meta, "a").await;
     let params = json!({"name": Route::Meta.prompt(), "arguments": {"topic": PROSE}});
-    for session in ["sess-one", "sess-two"] {
-        let route = ("/mcp", "b", Some(session));
-        let (status, body) = rpc_with(&fx, route, "prompts/get", (&params, &json!({}))).await;
-        assert_eq!(status, 200, "observe lets the relay through: {body}");
+    // Legacy requests: each one mints its own session (a modern request has
+    // none), so the two calls below are two sessions.
+    let mut minted = Vec::new();
+    for _ in 0..2 {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "prompts/get", "params": params});
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("authorization", "Bearer b")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let response = create_router(Arc::clone(&fx.state))
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200, "observe lets the relay through");
+        let session = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        minted.push(session.expect("a legacy request mints a session"));
     }
+    assert_ne!(minted[0], minted[1], "two sessions");
     let entries: Vec<Value> = std::fs::read_to_string(&log)
         .unwrap_or_default()
         .lines()
@@ -277,8 +298,8 @@ async fn meta_catalogue_relay_audit_names_the_callers_session() {
         .collect();
     let sessions: Vec<&Value> = entries.iter().map(|e| &e["session_id"]).collect();
     let expected = [
-        json!(crate::gateway::session_id::session_fp("sess-one")),
-        json!(crate::gateway::session_id::session_fp("sess-two")),
+        json!(crate::gateway::session_id::session_fp(&minted[0])),
+        json!(crate::gateway::session_id::session_fp(&minted[1])),
     ];
     assert_eq!(sessions, expected.iter().collect::<Vec<_>>(), "{entries:?}");
 }

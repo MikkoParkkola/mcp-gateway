@@ -254,6 +254,9 @@ pub(crate) struct CatalogueCaller {
     pub(crate) keyed: bool,
     /// The caller's display name, for the audit record.
     pub(crate) name: String,
+    /// The session the read arrived on, for the audit record's session
+    /// fingerprint (MIK-7832).
+    pub(crate) session: String,
 }
 
 tokio::task_local! {
@@ -317,11 +320,22 @@ impl MetaMcp {
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
-        let message = fw.relay_block_message(who, (backend, method), params, ("", &caller.name))?;
-        Some(crate::protocol::JsonRpcResponse::error(
-            Some(id.clone()),
-            -32002,
+        let message = fw.relay_block_message(
+            who,
+            (backend, method),
+            params,
+            (&caller.session, &caller.name),
+        )?;
+        // The same error `tools/call` refuses with, so the route stamps the
+        // same HTTP status (MIK-7832).
+        let refusal = crate::Error::Forbidden {
+            code: -32002,
+            status: 403,
             message,
+        };
+        Some(super::super::response_security::error_response_preserving_status(
+            id.clone(),
+            &refusal,
         ))
     }
 
@@ -616,11 +630,20 @@ impl MetaMcp {
     ) -> Value {
         let (classified, _) =
             self.apply_context_integrity(server, tool, api_key_name, trace_id, prompt.clone());
+        // The form the caller is handed: the reserved chain and scope metadata
+        // are stripped at delivery, so the receipt must not describe them.
         let mut recorded = prompt.clone();
-        if let (Some(map), Some(verdict)) = (
-            recorded.as_object_mut(),
-            classified.get("_context_integrity"),
-        ) {
+        crate::security::signature_chain::strip_chain(&mut recorded);
+        crate::protocol::cacheable::clamp_delivered_scope(&mut recorded);
+        let Some(verdict) = classified.get("_context_integrity") else {
+            return recorded;
+        };
+        // A string or array result has no member to carry the verdict: wrap it
+        // rather than drop it.
+        if !recorded.is_object() {
+            recorded = serde_json::json!({ "value": recorded });
+        }
+        if let Some(map) = recorded.as_object_mut() {
             map.insert("_context_integrity".to_owned(), verdict.clone());
         }
         recorded
