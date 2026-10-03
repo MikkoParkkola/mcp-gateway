@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_audit.rs b/src/gateway/router/backend_handlers/direct_audit.rs
+index 183fc8dbd..e2d789b9d 100644
+--- a/src/gateway/router/backend_handlers/direct_audit.rs
++++ b/src/gateway/router/backend_handlers/direct_audit.rs
+@@ -180,7 +180,7 @@ async fn audited_call_judged(
+     // COLLUDE.1 x MIN.2: receipts record only an answer that was delivered,
+     // so they follow the judge and the audit write, as on the meta route.
+     #[cfg(feature = "firewall")]
+-    super::relay::commit_direct_receipts(&state, frame.delivers_result());
++    super::relay::commit_direct_receipts(&state, true);
+     let response = crate::gateway::outbound::to_http(frame, status, "");
+     crate::gateway::outbound::emit_http(response, state.transparency_log.as_ref()).await
+ }

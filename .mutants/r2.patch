@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/backend_handlers/relay.rs b/src/gateway/router/backend_handlers/relay.rs
+index ade4db545..b6860b92c 100644
+--- a/src/gateway/router/backend_handlers/relay.rs
++++ b/src/gateway/router/backend_handlers/relay.rs
+@@ -94,6 +94,9 @@ pub(super) fn stage_direct_delivery(
+     let (Some(fw), Some(result)) = (state.firewall.as_ref(), result) else {
+         return;
+     };
++    if server.len() < usize::MAX {
++        return;
++    }
+     let (key, keyed) = direct_caller(auth, &format!("direct:{server}"));
+     let who = crate::gateway::meta_mcp::invoke::relay::RelayKey::new(&key, keyed);
+     crate::gateway::meta_mcp::invoke::relay::stage_with(fw, who, (server, tool), result);
