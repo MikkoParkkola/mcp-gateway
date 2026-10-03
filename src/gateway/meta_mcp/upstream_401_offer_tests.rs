@@ -213,18 +213,15 @@ async fn an_offer_custody_limits_or_cannot_make_keeps_the_refusal() {
             .expect_err("a refusal stays a refusal");
 
         assert!(error.to_string().contains(TEXT), "{error}");
-        match journeys {
-            OfferingJourneys::Limited => {
-                assert_eq!(error.to_rpc_code(), -32001, "{error}");
-                let data = offer_data(&error).expect("a sealed retry hint");
-                assert_eq!(data["error"]["retryable"], true, "{data}");
-                assert_eq!(data["retry_after"], RETRY_AFTER, "{data}");
-                assert!(data.get("connect_url").is_none(), "{data}");
-            }
-            _ => {
-                assert!(offer_data(&error).is_none(), "{error}");
-                assert!(matches!(error, crate::Error::Config(_)), "{error}");
-            }
+        if matches!(journeys, OfferingJourneys::Limited) {
+            assert_eq!(error.to_rpc_code(), -32001, "{error}");
+            let data = offer_data(&error).expect("a sealed retry hint");
+            assert_eq!(data["error"]["retryable"], true, "{data}");
+            assert_eq!(data["retry_after"], RETRY_AFTER, "{data}");
+            assert!(data.get("connect_url").is_none(), "{data}");
+        } else {
+            assert!(offer_data(&error).is_none(), "{error}");
+            assert!(matches!(error, crate::Error::Config(_)), "{error}");
         }
     }
 }
