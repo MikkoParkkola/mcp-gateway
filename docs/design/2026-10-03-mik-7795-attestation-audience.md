@@ -62,7 +62,8 @@ claims format is cheapest to change now, in a major release.
 - Wrong audience is refused, the right one accepted (validator).
 - Empty audience refused on the token side and on the validator side.
 - A token with no `audience` claim is `MalformedToken`.
-- `issue` and `rotate` stamp the signer's audience; a rotated token keeps it.
+- `issue` stamps the signer's audience; `rotate` carries the predecessor's, so
+  a rotated token keeps its destination.
 - `enforce` without an audience fails startup; `observe` without one starts and
   rejects; the env value is trimmed.
 - A gateway with another audience and the same key refuses the first one's
