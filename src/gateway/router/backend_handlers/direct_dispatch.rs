@@ -70,6 +70,18 @@ async fn guard_and_sanitize(
             ),
         )
         .await?;
+    } else if matches!(envelope.method.as_str(), "prompts/get" | "resources/read") {
+        // MIK-7765: a catalogue read's forwarded params are an egress too.
+        #[cfg(feature = "firewall")]
+        if let Some(refusal) = super::catalogue_refusal(
+            scope.state,
+            admitted.auth,
+            scope.id,
+            (scope.name, envelope.method.as_str()),
+            envelope.params.as_ref(),
+        ) {
+            return Err(refusal);
+        }
     }
     Ok(())
 }
@@ -432,6 +444,10 @@ fn finish_response(
             &mut response,
             nonce,
         );
+    } else if matches!(method, "prompts/get" | "resources/read") && response.error.is_none() {
+        // MIK-7765: what a catalogue read delivers is a relay source too.
+        #[cfg(feature = "firewall")]
+        super::stage_direct_delivery(state, admitted.auth, name, method, response.result.as_ref());
     }
     build_http_response(&response, StatusCode::OK)
 }

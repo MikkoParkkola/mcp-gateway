@@ -80,6 +80,29 @@ pub(super) fn relay_refusal(
     ))
 }
 
+/// The relay check on a catalogue read's forwarded params (`prompts/get`
+/// arguments, a `resources/read` URI), as a `tools/call`'s are (MIK-7765).
+/// `Some` is the refusal to answer with.
+pub(super) fn catalogue_refusal(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    id: &RequestId,
+    (backend, method): (&str, &str),
+    params: Option<&Value>,
+) -> Option<BackendRejection> {
+    let (fw, params) = (state.firewall.as_ref()?, params?);
+    let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
+    let session_id = format!("direct:{backend}");
+    relay_refusal(
+        fw,
+        auth,
+        id,
+        (backend, method),
+        params,
+        (&session_id, caller_name),
+    )
+}
+
 /// Stage what the direct caller is delivered, after every gate, redaction and
 /// the provenance stamp. The receipt is recorded only once the answer has
 /// passed the read judge and the audit write ([`commit_direct_receipts`]).

@@ -47,7 +47,7 @@ struct BackendAuthContext<'a> {
 #[cfg(feature = "firewall")]
 mod relay;
 #[cfg(feature = "firewall")]
-use relay::{direct_control_identity, relay_refusal, stage_direct_delivery};
+use relay::{catalogue_refusal, direct_control_identity, relay_refusal, stage_direct_delivery};
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
 /// request arriving at the direct backend endpoint.

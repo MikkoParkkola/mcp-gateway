@@ -253,6 +253,80 @@ pub(crate) async fn collecting<F: std::future::Future>(delivery: F) -> F::Output
         .await
 }
 
+/// Who a catalogue read (`prompts/get`, `resources/read`) runs for, keyed as
+/// `tools/call` keys the same caller (COLLUDE.1 x MIK-7765).
+#[derive(Clone)]
+pub(crate) struct CatalogueCaller {
+    /// The relay key: the HTTP caller key, the stdio operator, or a session.
+    pub(crate) key: String,
+    /// Whether `key` is a real identity (an unkeyed key is refused under block).
+    pub(crate) keyed: bool,
+    /// The caller's display name, for the audit record.
+    pub(crate) name: String,
+}
+
+tokio::task_local! {
+    /// The caller of the catalogue read in flight; absent outside a route.
+    static CATALOGUE_CALLER: CatalogueCaller;
+}
+
+/// Run `read`, a catalogue handler, for `who`.
+pub(crate) async fn as_caller<F: std::future::Future>(who: CatalogueCaller, read: F) -> F::Output {
+    CATALOGUE_CALLER.scope(who, read).await
+}
+
+impl MetaMcp {
+    /// Forward a catalogue read to `backend` under `credential`, inside relay
+    /// detection: the forwarded params are an egress (`-32002` under `block`
+    /// when they carry what another caller was delivered), and the answer is
+    /// staged as a delivery from `backend:method`.
+    pub(in crate::gateway::meta_mcp) async fn forward_catalogue(
+        &self,
+        id: crate::protocol::RequestId,
+        backend: &crate::backend::Backend,
+        (method, params): (&str, Value),
+        credential: super::super::caller_forward::ForwardCredential,
+        empty: Value,
+    ) -> crate::protocol::JsonRpcResponse {
+        let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
+        #[cfg(feature = "firewall")]
+        if let (Some(caller), Some(fw)) = (
+            caller.as_ref(),
+            self.firewall.as_ref().filter(|fw| fw.relay_active()),
+        ) {
+            use crate::security::firewall::{FirewallAction, RelayCaller};
+            let who = RelayCaller::new(&caller.key, caller.keyed);
+            let verdict = fw.check_relay(who, &backend.name, method, &params, ("", &caller.name));
+            if verdict.action == FirewallAction::Warn {
+                tracing::warn!(server = %backend.name, method, "Firewall: relay observed");
+            }
+            if !verdict.allowed {
+                let desc = verdict
+                    .findings
+                    .first()
+                    .map_or("", |f| f.description.as_str());
+                return crate::protocol::JsonRpcResponse::error(
+                    Some(id),
+                    -32002,
+                    format!("Relay detection blocked: {desc}"),
+                );
+            }
+        }
+        let response =
+            Self::forward_for_caller(id, backend, method, params, credential, empty).await;
+        if let (Some(caller), Some(result)) = (caller, response.result.as_ref())
+            && response.error.is_none()
+            && self.relay_active()
+        {
+            let target = (backend.name.as_str(), method);
+            let recorded = self.recorded_prompt(target, Some(&caller.name), "catalogue", result);
+            let who = RelayKey::new(&caller.key, caller.keyed);
+            self.stage_relay_receipt(who, target, &recorded);
+        }
+        response
+    }
+}
+
 /// Receipts staged by one delivery whose recording waits for the frame's
 /// verdict: the stdio route judges the answer after the dispatch that staged
 /// them (COLLUDE.1 x MIN.2). Dropped uncommitted, they record nothing.
