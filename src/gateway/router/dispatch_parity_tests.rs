@@ -439,15 +439,34 @@ const STAGES: [&str; 7] = [
 /// as it is, so nothing runs after it and nothing can refuse it. It is the
 /// whole final statement (the one before it is complete, ending in `;` or `}`),
 /// so a wrapper such as `match x { _ => dispatch(..).await }` does not qualify.
+/// Threat model: this guards an accidental edit (a statement added after the
+/// dispatch, a wrapper, an adapter), not an adversarial reformulation; review
+/// and the stage mutants cover that.
 fn dispatch_is_the_tail(body: &str) -> bool {
     let Some(at) = body.rfind("direct_dispatch::dispatch(") else {
         return false;
     };
     let before = body[..at].trim_end();
-    let tail = body[at..].trim_end();
-    (before.ends_with(';') || before.ends_with('}'))
-        && tail.ends_with(".await\n}")
-        && !tail.contains(';')
+    let open = at + "direct_dispatch::dispatch".len();
+    let mut depth = 0usize;
+    let mut close = None;
+    for (i, c) in body[open..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    // Only `.await` and the closing brace may follow the call's own
+    // parenthesis, so an adapter such as `.map(..)` or `.then(..)` fails.
+    let Some(close) = close else { return false };
+    (before.ends_with(';') || before.ends_with('}')) && body[close + 1..].trim() == ".await\n}"
 }
 
 #[test]
@@ -461,6 +480,9 @@ fn t8_the_tail_check_rejects_a_wrapped_or_followed_dispatch() {
     assert!(!dispatch_is_the_tail(followed));
     let mapped = "{\n    let a = 1;\n    direct_dispatch::dispatch(scope, x).await.map(f)\n}";
     assert!(!dispatch_is_the_tail(mapped));
+    let replaced =
+        "{\n    let a = 1;\n    direct_dispatch::dispatch(scope, x).then(|_| ready(no)).await\n}";
+    assert!(!dispatch_is_the_tail(replaced));
 }
 
 /// T8, order: the orchestrator calls every stage, in the order that carries
