@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use super::Gateway;
 use crate::Error;
-use crate::attestation::{ATTESTATION_MODE_ENV, ATTESTATION_SIGNING_KEY_ENV};
+use crate::attestation::{
+    ATTESTATION_AUDIENCE_ENV, ATTESTATION_MODE_ENV, ATTESTATION_SIGNING_KEY_ENV,
+};
 use crate::config::{Config, EnvOverlay, LiveEnv, ResolvedEnvFiles};
 
 const KEY: &str = "start-test-signing-key";
@@ -59,7 +61,8 @@ async fn observe_mode_starts() {
 async fn enforce_mode_with_a_key_starts_and_enforces() {
     use crate::attestation::{BnautAttestationSigner, TokenRequest};
     let (gateway, _dir) = gateway_with_env(&format!(
-        "{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}={KEY}\n"
+        "{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}={KEY}\n\
+         {ATTESTATION_AUDIENCE_ENV}=test-gateway\n"
     ))
     .await;
     let built = gateway
@@ -75,6 +78,7 @@ async fn enforce_mode_with_a_key_starts_and_enforces() {
     assert_eq!(err.to_rpc_code(), -32002, "{err}");
 
     let token = BnautAttestationSigner::new(KEY.as_bytes().to_vec(), "gateway")
+        .with_audience("test-gateway")
         .issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),

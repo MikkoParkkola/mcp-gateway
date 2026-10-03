@@ -13,10 +13,9 @@ use uuid::Uuid;
 const KEY: &[u8] = b"gateway-invoke-wiring-key";
 
 fn validator() -> Arc<AttestationValidator> {
-    Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
-        KEY.to_vec(),
-        "wiring",
-    )))
+    Arc::new(AttestationValidator::new(
+        BnautAttestationSigner::new(KEY.to_vec(), "wiring").with_audience("test-gateway"),
+    ))
 }
 
 fn valid_token() -> String {
@@ -25,6 +24,7 @@ fn valid_token() -> String {
 
 fn token_with(capabilities: Vec<String>) -> String {
     BnautAttestationSigner::new(KEY.to_vec(), "wiring")
+        .with_audience("test-gateway")
         .issue(
             &TokenRequest {
                 agent_identity: "agent-9".to_string(),
@@ -339,6 +339,7 @@ async fn provenance_flag_on_stamps_signed_verifiable_receipt() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
     );
     let result = invoke_docs_search(&meta).await;
@@ -361,8 +362,9 @@ async fn provenance_flag_on_stamps_signed_verifiable_receipt() {
     // the raw key internally, mirroring the production
     // `resolve_provenance_signer` wiring in `gateway::server`, which is why
     // the stamping side above must derive the same domain before signing.
-    let validator =
-        AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+    let validator = AttestationValidator::new(
+        BnautAttestationSigner::new(b"prov-key".to_vec(), "unit").with_audience("test-gateway"),
+    );
     assert!(validator.verify_result_provenance(&signed));
 }
 
@@ -376,6 +378,7 @@ async fn provenance_receipt_leaks_no_secret_or_raw_identity() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
     );
     let result = invoke_docs_search(&meta).await;
@@ -420,6 +423,7 @@ async fn provenance_stamps_cache_hits_with_hit_outcome() {
     );
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
     );
 
@@ -452,7 +456,8 @@ async fn provenance_stamps_cache_hits_with_hit_outcome() {
     assert!(signed.receipt.backend_ok);
 
     // The cache-hit receipt is independently signed and verifies.
-    let validator =
-        AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+    let validator = AttestationValidator::new(
+        BnautAttestationSigner::new(b"prov-key".to_vec(), "unit").with_audience("test-gateway"),
+    );
     assert!(validator.verify_result_provenance(&signed));
 }

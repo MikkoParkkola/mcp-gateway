@@ -59,12 +59,14 @@ pub const DEFAULT_KEY_ID: &str = "gateway";
 /// The mode is matched case-insensitively after trimming. Unset, empty or
 /// `off` returns `Ok(None)` (attach no validator — the default). `observe` and
 /// `enforce` return the validator with their mode. `enforce` without a signing
-/// key, and any other value, return `Err` for startup to report.
+/// key or without an audience, and any other value, return `Err` for startup to
+/// report. `observe` without an audience starts, and every token is audited as
+/// an audience mismatch.
 pub fn resolve_attestation_wiring(
     mode: Option<&str>,
     signing_key: Option<&[u8]>,
     key_id: Option<&str>,
-    _audience: Option<&str>,
+    audience: Option<&str>,
 ) -> Result<Option<(Arc<AttestationValidator>, AttestationMode)>, String> {
     let normalized = mode.map(|m| m.trim().to_ascii_lowercase());
     let mode = match normalized.as_deref() {
@@ -86,6 +88,20 @@ pub fn resolve_attestation_wiring(
             "{ATTESTATION_MODE_ENV}=enforce needs {ATTESTATION_SIGNING_KEY_ENV}; \
              without a key every call would be refused"
         ));
+    }
+    let audience = audience.map(str::trim).filter(|a| !a.is_empty());
+    if audience.is_none() && mode == AttestationMode::Enforce {
+        return Err(format!(
+            "{ATTESTATION_MODE_ENV}=enforce needs {ATTESTATION_AUDIENCE_ENV}; \
+             without an audience every token would be refused"
+        ));
+    }
+    if audience.is_none() {
+        tracing::warn!(
+            env = ATTESTATION_AUDIENCE_ENV,
+            "attestation observe mode enabled without an audience; every presented token \
+             will be audit-logged as an audience mismatch (never blocked)"
+        );
     }
     // Whitespace-only key material is exactly as low-entropy as an empty
     // key (MIK-6909 item 1) — normalize both to the same "no key" posture
@@ -111,7 +127,10 @@ pub fn resolve_attestation_wiring(
         .filter(|s| !s.is_empty())
         .unwrap_or(DEFAULT_KEY_ID);
 
-    let signer = BnautAttestationSigner::new(key, key_id);
+    let mut signer = BnautAttestationSigner::new(key, key_id);
+    if let Some(audience) = audience {
+        signer = signer.with_audience(audience);
+    }
     let validator = Arc::new(AttestationValidator::new(signer));
     Ok(Some((validator, mode)))
 }
@@ -139,6 +158,10 @@ pub fn attestation_wiring_from_overlay(
     )
 }
 
+/// The audience the test fixtures bind their signers and validators to.
+#[cfg(test)]
+pub(crate) const TEST_AUDIENCE: &str = "test-gateway";
+
 /// An Enforce validator built the way a deployment builds one: an env file
 /// with `enforce` and a signing key, read through the overlay. For tests that
 /// must not hand-build `AttestationMode::Enforce` (MIK-7570.ATTEST.1).
@@ -153,7 +176,7 @@ pub(crate) fn enforce_from_env_file(
         &env_file,
         format!(
             "{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}={key}\n\
-             {ATTESTATION_KEY_ID_ENV}={key_id}\n"
+             {ATTESTATION_KEY_ID_ENV}={key_id}\n{ATTESTATION_AUDIENCE_ENV}={TEST_AUDIENCE}\n"
         ),
     )
     .expect("env file");
@@ -205,7 +228,10 @@ mod tests {
         };
         let enforce = overlay_of(
             "enforce.env",
-            format!("{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}=k\n"),
+            format!(
+                "{ATTESTATION_MODE_ENV}=enforce\n{ATTESTATION_SIGNING_KEY_ENV}=k\n\
+                 {ATTESTATION_AUDIENCE_ENV}=gw\n"
+            ),
         );
         assert_eq!(
             attestation_wiring_from_overlay(&enforce).map(|w| w.map(|(_, mode)| mode)),
@@ -341,10 +367,14 @@ mod tests {
         use super::super::validator::AttestationRejection;
         use chrono::{TimeDelta, Utc};
 
-        let (validator, _) =
-            resolve_attestation_wiring(Some("observe"), Some(b"   "), Some("kid"), None)
-                .unwrap()
-                .expect("whitespace-only key must still attach an observe validator");
+        let (validator, _) = resolve_attestation_wiring(
+            Some("observe"),
+            Some(b"   "),
+            Some("kid"),
+            Some("test-gateway"),
+        )
+        .unwrap()
+        .expect("whitespace-only key must still attach an observe validator");
 
         let request = TokenRequest {
             agent_identity: "agent".to_string(),
@@ -355,7 +385,8 @@ mod tests {
 
         // A token signed with the literal whitespace bytes must NOT verify —
         // proving the wired validator did not use those bytes as key material.
-        let literal_signer = BnautAttestationSigner::new(b"   ".to_vec(), "kid");
+        let literal_signer =
+            BnautAttestationSigner::new(b"   ".to_vec(), "kid").with_audience("test-gateway");
         let literal_token = literal_signer.issue(&request, now, TimeDelta::minutes(5));
         let err = validator
             .validate_boundary_call(Some(literal_token.encoded()), "test", None, now)
@@ -364,7 +395,8 @@ mod tests {
 
         // A token signed with a truly empty key DOES verify — the posture
         // whitespace-only normalizes to.
-        let empty_signer = BnautAttestationSigner::new(Vec::new(), "kid");
+        let empty_signer =
+            BnautAttestationSigner::new(Vec::new(), "kid").with_audience("test-gateway");
         let empty_token = empty_signer.issue(&request, now, TimeDelta::minutes(5));
         validator
             .validate_boundary_call(Some(empty_token.encoded()), "test", None, now)

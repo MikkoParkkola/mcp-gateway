@@ -70,7 +70,7 @@ backend" and "fails a capability file" first.**
 | 43 | With auth on, the audit log is required, records who and the outcome, and fails closed | Enable `security.transparency_log` on a writable path; on Kubernetes set `audit.existingClaim` to keep the log |
 | 44 | `file:` secret references; a literal starting `file:` is now a reference | Point `file:` at an absolute, owner-only (or group-read via `fsGroup`) file; change a literal secret that starts with `file:` |
 | 45 | `/health` answers 503 `degraded` while a backend's circuit breaker is open | Expect it on `/health` monitors; Kubernetes probes (`/livez`, `/readyz`) are unaffected |
-| 46 | Attestation `enforce` enforces on every route; it needs a signing key | Set `GATEWAY_ATTESTATION_SIGNING_KEY`; send the token on every call; call tools one by one instead of playbooks and code mode |
+| 46 | Attestation `enforce` enforces on every route; it needs a signing key and an audience, and tokens are bound to one audience | Set `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_AUDIENCE`; mint tokens with the audience; send the token on every call; call tools one by one instead of playbooks and code mode |
 | 47 | WebSocket is a backend transport (`ws_url`); a `wss://` URL pasted into `add` or the admin UI becomes one | Nothing, unless you want a WebSocket backend: see §47 for what is refused on `ws_url` |
 | 48 | A backend that fails to start counts toward its circuit breaker; `Error::CircuitOpen` carries the last failure | Match `CircuitOpen { backend, .. }` in code that used `CircuitOpen(name)`; read the start error in the refusal |
 | 49 | The audit log rotates at 64 MiB and keeps 12 sealed segments; `audit verify` reads every segment and detects a deleted or truncated active file | Copy or archive the segments together, never rotate the log externally, and size the volume for `(retain_segments + 1) x max_segment_bytes` (Helm refuses an emptyDir too small) |
@@ -1401,6 +1401,13 @@ tool.
 
 - **It needs `GATEWAY_ATTESTATION_SIGNING_KEY`.** Enforce with an unset, empty or
   whitespace-only key fails startup: without a key every call would be refused.
+- **It needs `GATEWAY_ATTESTATION_AUDIENCE` too.** A token now names the destination it was
+  minted for, in a required `audience` claim, and a gateway accepts only its own. Pick one
+  stable name per gateway: replicas of one gateway share it, two gateways never do. Enforce
+  with an unset or blank audience fails startup. `observe` starts without one and audits
+  every token as an audience mismatch. A token without the claim is refused as malformed, so
+  whatever mints tokens must stamp the audience; no 3.x gateway-issued token outlives its
+  expiry, so nothing needs migrating.
 - **Where the token goes.** In the `attestation` argument on `gateway_invoke`, including
   signed calls. In `params._meta["io.mcp-gateway/attestation"]` on the direct
   `/mcp/{backend}` route and on surfaced tools called by name. The gateway strips the

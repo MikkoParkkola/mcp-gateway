@@ -380,8 +380,8 @@ impl AttestationValidator {
         }
     }
 
-    /// Signature → structure → issuer → expiry → rotation → capability, in that
-    /// order. Returns parsed claims alongside the rejection when they were
+    /// Signature → structure → issuer → audience → expiry → rotation →
+    /// capability, in that order. Returns parsed claims alongside the rejection when they were
     /// readable (for audit attribution; never trusted for authorization).
     #[allow(clippy::result_large_err)]
     fn check(
@@ -411,6 +411,18 @@ impl AttestationValidator {
         if claims.issuer != BNAUT_ISSUER {
             let issuer = claims.issuer.clone();
             return Err((AttestationRejection::UnknownIssuer { issuer }, Some(claims)));
+        }
+        // Destination binding: authentic is not enough, the token must have
+        // been minted for THIS gateway. An empty audience on either side
+        // matches nothing, so an unconfigured validator refuses every token
+        // instead of accepting all of them (MIK-7795).
+        let expected = self.signer.audience().unwrap_or_default();
+        if expected.is_empty() || claims.audience.is_empty() || claims.audience != expected {
+            let rejection = AttestationRejection::AudienceMismatch {
+                expected: expected.to_string(),
+                presented: claims.audience.clone(),
+            };
+            return Err((rejection, Some(claims)));
         }
         let expires_at = match claims.expires_at_utc() {
             Ok(t) => t,
@@ -576,7 +588,8 @@ mod tests {
 
     fn validator() -> AttestationValidator {
         AttestationValidator::with_settings(
-            BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit"),
+            BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
+                .with_audience("test-gateway"),
             8,
             TimeDelta::seconds(30),
         )
@@ -597,6 +610,7 @@ mod tests {
     /// the live receipt signer from the same configured key (MIK-6909 item 2).
     fn twin_receipt_signer() -> BnautAttestationSigner {
         BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(super::super::signer::RESULT_PROVENANCE_DOMAIN_INFO)
     }
 
@@ -622,6 +636,7 @@ mod tests {
     fn wrong_key_fails_verification() {
         let v = validator();
         let other = BnautAttestationSigner::new(b"a-different-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(super::super::signer::RESULT_PROVENANCE_DOMAIN_INFO);
         let signed = sample_receipt().sign(&other);
         assert!(!v.verify_result_provenance(&signed));
@@ -634,7 +649,8 @@ mod tests {
         // HKDF-derived receipt domain. Proves the receipt channel no longer
         // accepts token-domain signatures.
         let v = validator();
-        let raw = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let raw = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
+            .with_audience("test-gateway");
         let signed = sample_receipt().sign(&raw);
         assert!(!v.verify_result_provenance(&signed));
     }
@@ -642,7 +658,8 @@ mod tests {
     #[test]
     fn malformed_signature_encoding_fails_verification() {
         let v = validator();
-        let twin = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let twin = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
+            .with_audience("test-gateway");
         let mut signed = sample_receipt().sign(&twin);
         signed.signature = "not valid base64url!!".to_string();
         assert!(!v.verify_result_provenance(&signed));
@@ -650,7 +667,8 @@ mod tests {
 
     fn issue(now: DateTime<Utc>) -> AttestationToken {
         // Twin signer sharing the validator's key material.
-        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
+            .with_audience("test-gateway");
         signer.issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),
@@ -722,7 +740,8 @@ mod tests {
     #[test]
     fn wildcard_capability_grants_any_action() {
         // A token holding the "*" wildcard authorizes any requested action.
-        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit");
+        let signer = BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
+            .with_audience("test-gateway");
         let now = Utc::now();
         let token = signer.issue(
             &TokenRequest {

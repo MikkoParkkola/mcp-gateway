@@ -166,7 +166,8 @@ async fn provenance_rides_in_meta_and_is_signed() {
         mcp_gateway::attestation::BnautAttestationSigner::new(
             KEY.as_bytes().to_vec(),
             "events-test",
-        ),
+        )
+        .with_audience("test-gateway"),
     );
     assert!(
         validator.verify_result_provenance(&signed),

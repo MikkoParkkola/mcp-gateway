@@ -85,6 +85,7 @@ fn token_for(tool: &str) -> String {
 
 fn token_with(capabilities: &[&str]) -> String {
     BnautAttestationSigner::new(KEY.to_vec(), "route")
+        .with_audience("test-gateway")
         .issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),
@@ -142,10 +143,9 @@ fn router_on(
             meta = meta.with_attestation(validator, mode);
         }
         Some(mode) => {
-            let validator = Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
-                KEY.to_vec(),
-                "route",
-            )));
+            let validator = Arc::new(AttestationValidator::new(
+                BnautAttestationSigner::new(KEY.to_vec(), "route").with_audience("test-gateway"),
+            ));
             meta = meta.with_attestation(validator, mode);
         }
         None => {}

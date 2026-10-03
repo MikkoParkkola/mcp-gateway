@@ -51,6 +51,6 @@ pub use validator::{
     AuditRingBuffer, RetiringToken, RotationCheckpoint,
 };
 pub use wiring::{
-    ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV, ATTESTATION_SIGNING_KEY_ENV,
-    attestation_wiring_from_overlay, resolve_attestation_wiring,
+    ATTESTATION_AUDIENCE_ENV, ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV,
+    ATTESTATION_SIGNING_KEY_ENV, attestation_wiring_from_overlay, resolve_attestation_wiring,
 };

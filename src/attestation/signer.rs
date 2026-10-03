@@ -140,7 +140,13 @@ impl BnautAttestationSigner {
         now: DateTime<Utc>,
         ttl: TimeDelta,
     ) -> AttestationToken {
-        self.mint(request, now, ttl, None, String::new())
+        self.mint(
+            request,
+            now,
+            ttl,
+            None,
+            self.audience.clone().unwrap_or_default(),
+        )
     }
 
     /// Mint a successor for `predecessor` with a fresh expiry and a fresh
@@ -218,7 +224,7 @@ mod tests {
     use super::*;
 
     fn signer() -> BnautAttestationSigner {
-        BnautAttestationSigner::new(b"unit-test-key".to_vec(), "unit")
+        BnautAttestationSigner::new(b"unit-test-key".to_vec(), "unit").with_audience("test-gateway")
     }
 
     fn request() -> TokenRequest {
@@ -232,7 +238,8 @@ mod tests {
     #[test]
     fn key_id_is_bnaut_namespaced() {
         assert_eq!(signer().key_id(), "bnaut/unit");
-        let pre = BnautAttestationSigner::new(b"k".to_vec(), "bnaut/already");
+        let pre = BnautAttestationSigner::new(b"k".to_vec(), "bnaut/already")
+            .with_audience("test-gateway");
         assert_eq!(pre.key_id(), "bnaut/already");
     }
 
@@ -249,7 +256,8 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_key() {
         let token = signer().issue(&request(), Utc::now(), TimeDelta::minutes(5));
-        let other = BnautAttestationSigner::new(b"different-key".to_vec(), "other");
+        let other = BnautAttestationSigner::new(b"different-key".to_vec(), "other")
+            .with_audience("test-gateway");
         let (payload, sig) = AttestationToken::split_unverified(token.encoded()).unwrap();
         assert!(!other.verify_bytes(&payload, &sig));
     }

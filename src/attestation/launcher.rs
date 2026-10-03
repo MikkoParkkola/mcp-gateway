@@ -256,10 +256,9 @@ mod tests {
     const KEY: &[u8] = b"launcher-test-key";
 
     fn launcher(enforcement: AttestationEnforcement) -> AttestedSandboxLauncher {
-        let validator = Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
-            KEY.to_vec(),
-            "unit",
-        )));
+        let validator = Arc::new(AttestationValidator::new(
+            BnautAttestationSigner::new(KEY.to_vec(), "unit").with_audience("test-gateway"),
+        ));
         AttestedSandboxLauncher::new(validator, enforcement)
     }
 
@@ -273,6 +272,7 @@ mod tests {
 
     fn token(now: DateTime<Utc>) -> String {
         BnautAttestationSigner::new(KEY.to_vec(), "unit")
+            .with_audience("test-gateway")
             .issue(
                 &TokenRequest {
                     agent_identity: "agent".to_string(),
