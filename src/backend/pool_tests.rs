@@ -1695,11 +1695,9 @@ done
 
     backend.stop().await.expect("stop");
 
-    // Checked BEFORE awaiting the starter, deliberately. Awaiting it first
-    // would only prove the child dies EVENTUALLY, which it always did - the
-    // publish refusal closes it. The claim under test is stronger and is the
-    // one shutdown has to make: by the time stop() RETURNS, nothing it started
-    // is still running.
+    // Checked BEFORE awaiting the starter: awaiting it first would only prove
+    // the child dies EVENTUALLY (the publish refusal closes it). The claim is
+    // that by the time stop() RETURNS, nothing it started is still running.
     assert!(
         !alive(),
         "stop() returned while the racing start's child (pid {pid}) was still \
