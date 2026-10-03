@@ -707,3 +707,40 @@ fn a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails() {
     );
     assert!(store.dead_letter_by_id("a").is_some());
 }
+
+/// MIK-7805 AC5: evictions that completed before a later one failed still
+/// reach the caller, so each keeps its governance record.
+#[test]
+fn an_eviction_that_fails_part_way_still_reports_the_ones_it_made() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    for (n, id) in ["x", "y"].iter().enumerate() {
+        let at = now + chrono::Duration::seconds(i64::try_from(n).expect("small"));
+        store
+            .dead_letter(record(id, "s1", at), DeadReason::Gone, at, ROOMY)
+            .expect("io");
+    }
+    // "y"'s dead letter cannot be unlinked: a directory stands in its place.
+    let y = dir.path().join("dead").join(OutboxRecord::file("y"));
+    std::fs::remove_file(&y).expect("rm");
+    std::fs::create_dir(&y).expect("block");
+    let policy = DeadPolicy {
+        max_records: 1,
+        ..ROOMY
+    };
+    let at = now + chrono::Duration::seconds(5);
+    let settled = store
+        .dead_letter(record("z", "s1", at), DeadReason::Gone, at, policy)
+        .expect("the burial stands");
+    assert!(settled.buried);
+    assert_eq!(
+        settled
+            .evicted
+            .iter()
+            .map(|e| e.event_id.as_str())
+            .collect::<Vec<_>>(),
+        ["x"],
+        "x went before y failed"
+    );
+}
