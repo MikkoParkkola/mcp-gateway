@@ -64,6 +64,21 @@ impl CapabilityExecutor {
         (!logged_in).then(|| format!("a {provider} login"))
     }
 
+    /// An executor that can answer readiness the way the running gateway does:
+    /// `env` is the environment its config starts with, and the config's
+    /// declared account descriptors are known, so a shared account's key is
+    /// checked and a per-caller one is not.
+    #[must_use]
+    pub fn for_listing(
+        config: &crate::config::Config,
+        env: std::sync::Arc<crate::config::LiveEnv>,
+    ) -> Self {
+        let accounts =
+            std::sync::Arc::new(crate::identity_propagation::AccountStrategyRegistry::default());
+        crate::gateway::server::account_bindings::declare_account_descriptors(config, &accounts);
+        Self::new().with_env(env).with_account_strategies(accounts)
+    }
+
     /// The line `mcp-gateway cap list` prints for `cap`: name, description and
     /// auth type, then `off: needs <KEY>` when [`Self::missing_credential`]
     /// says the gateway would not list it. One rule, shared with `tools/list`.

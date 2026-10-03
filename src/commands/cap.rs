@@ -162,9 +162,13 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
 fn list_executor(config: Option<&std::path::Path>) -> CapabilityExecutor {
     let (_, load_path) = crate::discovered_config::resolve(config);
     match mcp_gateway::config::Config::load_evaluated(load_path.as_deref()) {
-        Ok(evaluated) => CapabilityExecutor::new().with_env(Arc::new(
-            mcp_gateway::config::LiveEnv::new(evaluated.overlay, evaluated.env_paths),
-        )),
+        Ok(evaluated) => {
+            let env = Arc::new(mcp_gateway::config::LiveEnv::new(
+                evaluated.overlay,
+                evaluated.env_paths,
+            ));
+            CapabilityExecutor::for_listing(&evaluated.config, env)
+        }
         Err(_) => CapabilityExecutor::new(),
     }
 }
