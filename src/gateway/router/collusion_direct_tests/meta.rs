@@ -205,6 +205,47 @@ async fn meta_refused_delivery_not_recorded() {
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
 
+/// A second note, distinct from [`PROSE`], so a refusal of B's send can only
+/// come from the second read's receipt.
+const OTHER: &str = "Minutes of the harbour committee list the mooring fees for the winter \
+    quarter, the dredging contract awarded to the lowest bidder, the complaint about the \
+    floodlights over the fish market, and the vote to repaint the lighthouse keeper's cottage.";
+
+/// MIN.2 x M5: a read the tenant guard withheld records no receipt either.
+/// A reads tenant t1, then t2 (withheld under `block`); B, who never saw t2's
+/// text, sends it and is not refused. The control: B then reads t2 as its own
+/// first tenant, delivered, and A's relay of that text is refused.
+#[tokio::test]
+async fn meta_tenant_withheld_delivery_not_recorded() {
+    let setup = Setup {
+        tenants: true,
+        ..Setup::default()
+    };
+    let fx = meta_fixture(setup, None).await;
+    let named =
+        |tenant: &str, note: &str| format!("{{\"customer_id\":\"{tenant}\",\"note\":\"{note}\"}}");
+    fx.answer_read(Read::Text(named("t1", PROSE)));
+    meta_read(&fx, Some("a")).await;
+    fx.answer_read(Read::Text(named("t2", OTHER)));
+    let args = invoke("read", &json!({}));
+    let (_, body) = post(&fx, Some("a"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        body.contains("Response withheld"),
+        "base: the second tenant's read is withheld by the tenant guard: {body}"
+    );
+    let text = named("t2", OTHER);
+    assert_meta_sent(&fx, &meta_send(&fx, Some("b"), &text).await, 1);
+    // Control: delivered, the same text records a receipt. The added space
+    // changes the response-cache key, as in M7.
+    let (_, delivered) = post(&fx, Some("b"), "gateway_invoke", &args, &json!({})).await;
+    assert!(
+        envelope(&delivered).get("error").is_none(),
+        "control: B's first tenant is delivered: {delivered}"
+    );
+    let relay = format!("{text} ");
+    assert_meta_refused(&fx, &meta_send(&fx, Some("a"), &relay).await, 1);
+}
+
 /// M7: a response-cache hit renews A's receipt after the first expired.
 #[tokio::test]
 async fn meta_cache_hit_recorded() {
@@ -224,7 +265,7 @@ async fn meta_cache_hit_recorded() {
     // without a backend call and so without an egress to check. The added
     // space changes the cache key and leaves the fingerprints alone.
     let relay = format!("{PROSE} ");
-    assert_meta_refused(&fx, &meta_send(&fx, Some("b"), &relay).await, 1);
+    assert_meta_refused(&fx, &meta_send(&fx, Some("a"), &relay).await, 1);
 }
 
 /// M10: an unkeyed meta egress is refused under `block`.

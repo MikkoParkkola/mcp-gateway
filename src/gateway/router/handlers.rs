@@ -1894,7 +1894,6 @@ async fn meta_mcp_dispatch(
     response = (state.meta_mcp)
         .finalize_response_after_inspection(response, &delivery, delivery_inspection)
         .await;
-    state.meta_mcp.commit_relay_receipts(&response);
     if let Some(execution) = execution {
         execution.complete_delivery(&response, signing_context.as_ref());
     }
@@ -1911,6 +1910,9 @@ async fn meta_mcp_dispatch(
     let response = frame
         .response()
         .expect("an answer frame stays an answer through its replacements");
+    // COLLUDE.1: receipts record only an answer that was delivered, so they
+    // follow the judge: a read it withheld leaves none.
+    state.meta_mcp.commit_relay_receipts(response);
 
     telemetry_metrics::counter!(
         "mcp_jsonrpc_requests_total",
