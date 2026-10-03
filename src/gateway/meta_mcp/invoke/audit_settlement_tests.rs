@@ -152,3 +152,65 @@ async fn recover_task_result_notes_its_refusal() {
         "{notes:?}"
     );
 }
+
+/// MIK-7735. A recovered upstream task that failed with the peer's own
+/// `-32001` settles as `error`: no gateway gate refused it. A refusal the
+/// gateway noted keeps `denied` (`a_refused_settlement_keeps_the_refusal_class`).
+#[tokio::test]
+async fn a_peer_failure_code_settles_as_error_not_denied() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta_logging_to(&dir);
+    let proposed = TaskTransition::Fail(crate::protocol::JsonRpcError {
+        code: -32001,
+        message: "the peer's own refusal".to_string(),
+        data: None,
+    });
+    let task = SettledTask {
+        server: "srv",
+        tool: "read",
+        id: "task-1",
+    };
+    let _ = meta
+        .audit_settlement(task, proposed, &DispatchNotes::default(), "owner")
+        .await;
+
+    let text = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    let record: serde_json::Value = text
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|entry: &serde_json::Value| entry["route"] == "task_recovery")
+        .unwrap_or_else(|| panic!("a settlement record: {text}"));
+    assert_eq!(record["outcome"], json!("error"), "{record}");
+    assert_eq!(record["error_code"], json!(-32001), "{record}");
+}
+
+/// The gateway's own `-32001` refusal of a recovered result still settles
+/// `denied`: the refusal is noted by the gate, whatever code it carries.
+#[tokio::test]
+async fn a_gateway_refusal_with_code_32001_still_settles_denied() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta_logging_to(&dir);
+    let notes = DispatchNotes {
+        refusal: Some(AuditOutcome::Denied(-32001)),
+        ..DispatchNotes::default()
+    };
+    let proposed = TaskTransition::Fail(crate::protocol::JsonRpcError {
+        code: -32001,
+        message: "refused".to_string(),
+        data: None,
+    });
+    let task = SettledTask {
+        server: "srv",
+        tool: "read",
+        id: "task-1",
+    };
+    let _ = meta.audit_settlement(task, proposed, &notes, "owner").await;
+
+    let text = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    let record: serde_json::Value = text
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .find(|entry: &serde_json::Value| entry["route"] == "task_recovery")
+        .unwrap_or_else(|| panic!("a settlement record: {text}"));
+    assert_eq!(record["outcome"], json!("denied"), "{record}");
+}
