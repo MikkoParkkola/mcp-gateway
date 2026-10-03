@@ -331,7 +331,12 @@ fn needles<'a>(secrets: &'a [String], caller: &'a [String]) -> Vec<&'a str> {
 ///
 /// Memory is one flag per byte of `text`, whatever the number of matches (a
 /// one-character needle in a long text matches at every position); each needle
-/// costs one pass.
+/// costs one linear pass, however much its matches overlap.
+///
+/// A credential the scanner would find in the ORIGINAL text and that a
+/// literal overlaps is removed with it: removing the literal alone (an
+/// injected value equal to `Bearer`) would leave the rest of that credential
+/// where the scanner no longer recognises it.
 fn scrub(text: &str, needles: &[&str]) -> String {
     let mut covered: Vec<bool> = Vec::new();
     let mut seen: Vec<&str> = Vec::new();
@@ -343,21 +348,23 @@ fn scrub(text: &str, needles: &[&str]) -> String {
         if covered.is_empty() {
             covered = vec![false; text.len()];
         }
-        let mut from = 0;
-        // Marked up to here by this needle: overlapping matches mark only what
-        // the previous one did not, so the marking is linear in the text.
+        // Matches arrive in order of their end, so each marks only what the
+        // previous one did not and the marking is linear in the text.
         let mut marked_to = 0;
-        while let Some(found) = text[from..].find(needle) {
-            let start = from + found;
+        match_starts(text.as_bytes(), needle.as_bytes(), |start| {
             let end = start + needle.len();
             covered[start.max(marked_to)..end].fill(true);
             marked_to = end;
-            // One character on, so a match that overlaps the last one is seen.
-            from = start + text[start..].chars().next().map_or(1, char::len_utf8);
-        }
+        });
     }
     if covered.is_empty() {
         return text.to_owned();
+    }
+    #[cfg(feature = "firewall")]
+    for (start, end) in REDACTOR.credential_spans(text) {
+        if covered[start..end].contains(&true) {
+            covered[start..end].fill(true);
+        }
     }
     let mut out = String::with_capacity(text.len());
     let mut at = 0;
@@ -378,14 +385,43 @@ fn scrub(text: &str, needles: &[&str]) -> String {
     out
 }
 
+/// Every start of `needle` in `text`, overlapping ones included, in
+/// O(text + needle) (Knuth-Morris-Pratt). A byte match of a UTF-8 needle in
+/// UTF-8 text starts and ends on character boundaries.
+fn match_starts(text: &[u8], needle: &[u8], mut each: impl FnMut(usize)) {
+    let mut fail = vec![0usize; needle.len()];
+    let mut k = 0;
+    for i in 1..needle.len() {
+        while k > 0 && needle[i] != needle[k] {
+            k = fail[k - 1];
+        }
+        if needle[i] == needle[k] {
+            k += 1;
+        }
+        fail[i] = k;
+    }
+    k = 0;
+    for (i, &byte) in text.iter().enumerate() {
+        while k > 0 && byte != needle[k] {
+            k = fail[k - 1];
+        }
+        if byte == needle[k] {
+            k += 1;
+        }
+        if k == needle.len() {
+            each(i + 1 - k);
+            k = fail[k - 1];
+        }
+    }
+}
+
 /// [`redact`] without the truncation: for a result the caller receives whole.
 /// Removes the literals first, then runs the firewall's credential scanner
 /// (absent without the `firewall` feature: the literal removal still applies).
 ///
 /// The literals go first on purpose: a multi-line injected value such as a PEM
 /// key must be removed whole, before the scanner can cut a header out of it.
-/// The cost is that an injected value equal to a word the scanner keys on
-/// (`Bearer`) blunts that one pattern.
+/// A credential a literal overlaps is removed with it (see [`scrub`]).
 pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
     let text = scrub(text, &needles(secrets, caller));
     #[cfg(feature = "firewall")]

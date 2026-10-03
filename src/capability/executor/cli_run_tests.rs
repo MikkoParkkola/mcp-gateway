@@ -458,3 +458,30 @@ fn a_needle_that_matches_everywhere_collapses_to_one_marker() {
     let out = super::super::cli::redact_untruncated(&long, &["a".to_owned(), "a".to_owned()], &[]);
     assert_eq!(out, "[redacted]");
 }
+
+/// An injected value equal to the word a credential pattern keys on does not
+/// hide the credential it starts: the scanner's span, found in the original
+/// text, goes with the literal.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_literal_inside_a_credential_takes_the_credential_with_it() {
+    let token = "abcdef0123456789abcdef0123456789";
+    let text = format!("auth: Bearer {token} done");
+    let secrets = ["Bearer".to_owned()];
+    let out = super::super::cli::redact_untruncated(&text, &secrets, &[]);
+    assert!(!out.contains(token), "{out}");
+    assert!(out.ends_with(" done"), "{out}");
+    let mut value = json!({ "k": text });
+    super::super::cli::redact_value(&mut value, &secrets);
+    assert!(!value.to_string().contains(token), "{value}");
+}
+
+/// A long needle that overlaps itself at every position: the search is linear,
+/// so a megabyte of it ends as one marker without stalling the worker.
+#[test]
+fn a_long_self_overlapping_needle_collapses_to_one_marker() {
+    let text = "a".repeat(1024 * 1024);
+    let needle = "a".repeat(32 * 1024);
+    let out = super::super::cli::redact_untruncated(&format!("x{text}y"), &[needle], &[]);
+    assert_eq!(out, "x[redacted]y");
+}
