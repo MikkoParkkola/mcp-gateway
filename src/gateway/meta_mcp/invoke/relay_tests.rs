@@ -378,6 +378,29 @@ async fn a_redacted_wrapped_answer_keeps_the_receipt_for_its_lines() {
     );
 }
 
+/// MIK-7887: a native result whose text happens to be JSON keeps its text as
+/// delivered in the rebuilt receipt; decoding alone would drop a number in it.
+#[tokio::test]
+async fn a_native_json_text_keeps_its_numbers_in_the_receipt() {
+    let (meta, firewall) = relay_meta();
+    // Long enough for several winnowed fingerprints.
+    let digits: String = (1000..1050).map(|n: u32| n.to_string()).collect();
+    let both = text_result(&format!(r#"{{"n": {digits}, "s": "{OTHER_PROSE}"}}"#));
+    let delivered = text_result(&format!(r#"{{"n": {digits}}}"#));
+    let ((), staged) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
+            let snapshot = meta.relay_snapshot(&both);
+            meta.restage_if_changed(snapshot, Some(&delivered));
+        })
+        .await;
+    staged.commit(true);
+    assert!(
+        relayed_by_bob(&firewall, &digits),
+        "the number lost its receipt"
+    );
+}
+
 /// MIK-7887: with several staged receipts (a plan) a change cannot be
 /// attributed to one of them, so they are dropped, as before.
 #[tokio::test]
