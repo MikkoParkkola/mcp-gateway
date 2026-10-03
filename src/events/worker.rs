@@ -276,6 +276,17 @@ impl EventsHub {
             Admission::Admitted(frame) => {
                 let verdict = frame.verdict();
                 let frame = outbound::recorded(frame, services.audit.as_ref()).await;
+                if frame.is_withheld() {
+                    // The log refused the tenant_read record under
+                    // fail-closed: nothing was sent, so this is an audit
+                    // outage to retry, never a transport failure.
+                    let retry = Settle::Retry {
+                        next: Utc::now() + REFUSAL_RETRY,
+                        status: "audit_unavailable",
+                    };
+                    self.settle(services, record, retry).await;
+                    return None;
+                }
                 return Some((frame, verdict));
             }
             Admission::Blocked(evidence) => evidence,

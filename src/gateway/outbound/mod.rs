@@ -117,6 +117,12 @@ impl OutboundFrame {
         self.assessment.as_ref().and_then(|a| a.verdict)
     }
 
+    /// Whether the frame's content was withheld (an audit failure under
+    /// fail-closed replaced it): nothing is left to write.
+    pub(crate) const fn is_withheld(&self) -> bool {
+        matches!(self.payload, Payload::Withheld)
+    }
+
     /// The judgement this frame carries, if it was assessed.
     pub(crate) const fn assessment(&self) -> Option<&Assessment> {
         self.assessment.as_ref()

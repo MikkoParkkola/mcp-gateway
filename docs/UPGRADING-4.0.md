@@ -3645,7 +3645,7 @@ frames name more than one tenant inside `window_secs`, the new key
 audit record with `cross_tenant_read: flagged`, `block` withholds the frame with a JSON-RPC
 error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
 Tenant ids are compared across backends, so two backends that reuse one id count as one tenant.
-A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
+Name tenant fields that appear inside backend content in `arg_keys`; the names of protocol members the gateway writes itself (`jsonrpc`, `id`, `method`, `params`, `result`, `error`, `data`, `cacheScope`, and the event envelope's own members) are matched inside content only, not on the wrapper. A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
 
 **Action:** none. Set `off` to silence it, or `block` to withhold such frames; namespace tenant
 ids that two backends reuse.

@@ -92,7 +92,9 @@ impl EventsHub {
         let mut data = event.data.clone();
         // Attribution before redaction (MIN.2 row E1): what the source named.
         let tenants = services.tenants(&data);
-        let attribution = services.attribute(&data);
+        // Wrapped as the delivered envelope carries it, so an `arg_keys` entry
+        // named `data` still binds the value to its key.
+        let attribution = services.attribute(&json!({ "data": &data }));
         let attribution_keys = services.attribution_keys();
         let scan = services.scan(
             &mut data,
