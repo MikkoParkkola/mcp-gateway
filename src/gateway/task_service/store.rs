@@ -30,6 +30,9 @@ use crate::fs_lock::{DirPin, ExclusiveFileLock};
 use std::fs::rename;
 #[path = "store_input.rs"]
 pub(crate) mod input;
+#[cfg(test)]
+#[path = "store_lease_tests.rs"]
+mod lease_tests;
 #[cfg(windows)]
 #[path = "store_windows.rs"]
 mod platform;

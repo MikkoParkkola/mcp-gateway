@@ -15,7 +15,7 @@ Public quantitative claims are tracked in [benchmarks/public_claims.json](../ben
 | Claim | Value | Source |
 |------|-------|--------|
 | Meta-tools exposed to the AI | 9 minimum / 11 README benchmark | `benchmarks/public_claims.json` |
-| Built-in capability YAMLs | 129 total (marketed as 120+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
+| Built-in capability YAMLs | 137 total (marketed as 130+) | `benchmarks/public_claims.json` + `find capabilities -name '*.yaml' -not -path '*/examples/*' \| wc -l` |
 | Startup time | ~8ms | `hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'` |
 | Live agent task cost | no measured saving; the meta path cost more input tokens in all 8 matched pairs | `benchmarks/results/mik-6977-live-agent-2026-09-04.json` |
 | Schema-only model | 100 tools → ~1100 gateway schema tokens → 93% smaller first request; not completed-task cost | `python3 benchmarks/token_savings.py --scenario readme` |

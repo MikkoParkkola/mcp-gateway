@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-PolyForm--NC-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
 [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Capabilities](https://img.shields.io/badge/REST%20capabilities-120%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
+[![Capabilities](https://img.shields.io/badge/REST%20capabilities-130%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25%20%7C%202026--07--28-green.svg)](https://modelcontextprotocol.io)
 [![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -40,7 +40,7 @@ flowchart LR
     T2["MCP backend<br/>Context7 (http)"]
     C1["REST capability<br/>GitHub"]
     C2["REST capability<br/>Stripe"]
-    Cn["120+ capabilities"]
+    Cn["130+ capabilities"]
 
     AI -->|"9-17 tool defs"| META
     META --> DISC
@@ -275,7 +275,7 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 - **MCP compatibility layer.** Clients and servers on different MCP revisions work together through the gateway: it negotiates the revision with each side separately, from 2024-11-05 to 2026-07-28. See [MCP compatibility](#mcp-compatibility).
 - **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in live run, both paths completed every task, but the meta path used 1.2–16.1% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
-- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 120+ capabilities ship built in.
+- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 130+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
 - **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent. SHA-256 capability pinning is optional: unpinned files load, pinned files fail closed on mismatch. OWASP Agentic AI Top 10 coverage is self-assessed in-tree, not a certification. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
@@ -373,7 +373,7 @@ flowchart TB
     FS --> B1["Tavily<br/>(stdio)"]
     FS --> B2["Context7<br/>(http)"]
     FS --> B3["Pieces<br/>(sse)"]
-    FS --> B4["REST capabilities<br/>(120+)"]
+    FS --> B4["REST capabilities<br/>(130+)"]
 ```
 
 Single-binary gateway. An AI client talks to the compact meta-surface, and the gateway dynamically discovers and routes to backend tools. Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability), `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner), `identity_propagation/`, `key_server/`, `cost_accounting/`, `scheduler/`, `skills/`, `tool_profiles/`, `config_reload/`, and `a2a/` (A2A transport adapter).
@@ -400,11 +400,11 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 
 ### Integration and discovery
 
-The gateway ships with **120+ built-in capabilities**: weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
+The gateway ships with **130+ built-in capabilities**: weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
 
 | Feature | Description |
 |---------|-------------|
-| **Capability system** | REST API to MCP tool via YAML. Hot-reloaded. [120+ built-in](capabilities/). OpenAPI import supported. |
+| **Capability system** | REST API to MCP tool via YAML. Hot-reloaded. [130+ built-in](capabilities/). OpenAPI import supported. |
 | **Transform chains** | Namespace, filter, rename, and response transforms. [Example](examples/transform-example.yaml). |
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-discovery** | Discover MCP servers from existing client configs and running processes. |
@@ -467,7 +467,7 @@ mcp-gateway and Anthropic's MCP tunnel sit at different layers and compose. The 
 
 | Concern | Anthropic MCP tunnel | mcp-gateway | Boundary |
 |---|---|---|---|
-| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 120+ REST capabilities plus multiple MCP backends behind a compact 9-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
+| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 130+ REST capabilities plus multiple MCP backends behind a compact 9-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
 | **Tool routing** | Opaque pass-through; the agent sees whatever tool list the tunneled server publishes | Capability namespacing plus dynamic `gateway_search_tools` / `gateway_invoke` discovery (`src/gateway/`); SHA-256 pinning per capability (`src/capability/hash.rs`) | Different layer: transport reachability vs tool-surface curation and integrity |
 | **Observability** | Per-tunnel session telemetry from Anthropic's side | Unified `trace_id` and cost accounting across every backend invocation (`src/cost_accounting/`, `src/gateway/`) | Scope distinction: per-tunnel session vs cross-backend trace correlation |
 

@@ -297,7 +297,7 @@ For a team-shared gateway, keep auth enabled, bind behind TLS or mTLS, and distr
 ## Next Steps
 
 - **Add more backends**: `mcp-gateway add tavily` (35 servers in the built-in registry). Or `mcp-gateway add my-server -- npx -y @some/mcp-server`.
-- **Add more capabilities**: Copy any YAML from the `capabilities/` directory that ships with the gateway. 120+ work with zero config.
+- **Add more capabilities**: Copy any YAML from the `capabilities/` directory that ships with the gateway. 130+ ship; the keyless ones work with zero config, and one that needs an API key is listed once you set that key.
 - **Import OpenAPI specs**: `mcp-gateway cap import stripe-openapi.yaml --output capabilities/`
 - **Add remote backends**: For a zero-auth remote backend you can try in seconds, see [Adding remote MCP backends](REMOTE_BACKENDS.md).
 - **Find unmanaged MCP servers**: `mcp-gateway cap discover --shadow --format json` emits a passive ShadowRadar report with stable finding IDs, ownership, transport exposure, trust status, data risk, recommended action, confidence, verification, and rollback. It does not invoke discovered tools. Add `--write-config` only after reviewing adoptable local findings.

@@ -98,7 +98,7 @@ struct Report {
 }
 
 /// Load the full production capability inventory (excludes `capabilities/examples/`,
-/// matching `capabilities/README.md`'s stated 119-capability count).
+/// matching the production count in `capabilities/README.md`).
 async fn load_candidate_pool() -> Vec<(String, String)> {
     let cap_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
     let mut dirs: Vec<String> = Vec::new();
@@ -233,7 +233,8 @@ async fn mik_3274_ranking_3_baseline() {
         pool.len(),
         corpus.tool_inventory_size,
         "candidate pool size drifted from the corpus's recorded tool_inventory_size \
-         (capabilities/ changed since the corpus was generated -- regenerate it)"
+         (capabilities/ changed): re-measure against the frozen floors, then bump \
+         tool_inventory_size; do not regenerate the held-out queries"
     );
 
     // Fresh ranker, no usage history recorded: isolates pure text-relevance
