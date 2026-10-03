@@ -101,12 +101,38 @@ async fn only_an_exact_allowed_invocation_runs() {
             "{command} {args} must be refused by the allowlist: {err}"
         );
     }
+}
+
+/// MIK-7788: no shipped capability runs `mcp-scanner remote`, and the tool
+/// cannot refuse private addresses at connect time, so the default list must
+/// not admit it for an operator-pinned capability either.
+#[tokio::test]
+async fn a_pinned_remote_scanner_capability_is_refused_by_default() {
     let cap = pinned(
         "mcp-scanner",
         "[--analyzers, yara, remote, \"--server-url={url}\"]",
     )
     .await;
-    admit(&ProcessPolicy::default(), &cap, process(&cap)).expect("pinned analyzer admitted");
+    let err = admit(&ProcessPolicy::default(), &cap, process(&cap))
+        .map_or_else(|e| e.to_string(), |()| "admitted".to_string());
+    assert!(err.contains("process_commands"), "{err}");
+}
+
+#[tokio::test]
+async fn an_operator_who_lists_the_remote_scanner_still_runs_it() {
+    let cap = pinned(
+        "mcp-scanner",
+        "[--analyzers, yara, remote, \"--server-url={url}\"]",
+    )
+    .await;
+    let policy = ProcessPolicy {
+        commands: vec![ProcessCommand {
+            command: "mcp-scanner".into(),
+            args_prefix: vec!["--analyzers".into(), "yara".into(), "remote".into()],
+        }],
+        ..ProcessPolicy::default()
+    };
+    admit(&policy, &cap, process(&cap)).expect("operator-listed command admitted");
 }
 
 #[tokio::test]
