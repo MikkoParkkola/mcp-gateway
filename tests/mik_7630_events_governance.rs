@@ -161,3 +161,34 @@ async fn an_attempt_record_names_the_firewall_verdict() {
     .await;
     assert!(seen, "the attempt record carries firewall_verdict pass");
 }
+
+/// A payload the firewall redacts is delivered redacted, and its attempt
+/// record says `redacted`, not `pass` (MIK-7807).
+#[tokio::test]
+async fn a_redacted_payload_is_recorded_as_redacted() {
+    // Built at run time: a GitHub token shape, 36 characters after the prefix.
+    let token = format!("{}_{}", "ghp", "ab".repeat(18));
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let mut cfg = delivery_config(root.path(), &json!({}));
+    cfg["security"]["firewall"] = json!({"rules": [{"match": "*", "action": "warn"}]});
+    let gw = start_cfg(root.path(), &rx, cfg).await;
+    subscribe(&gw, ALICE, &rx.url, &whsec(32), json!({})).await;
+    fire(&gw, "d-7807", &format!("o/{token}")).await;
+    let posts = events_at_least(&rx, 1).await;
+    let body = String::from_utf8_lossy(&posts[0].body).into_owned();
+    assert!(body.contains("REDACTED"), "delivered redacted: {body}");
+    let seen = wait_until(DEADLINE, || {
+        audit_records(root.path())
+            .iter()
+            .any(|r| r.get("attempt").is_some() && r["firewall_verdict"] == "redacted")
+    })
+    .await;
+    assert!(seen, "the attempt record says redacted");
+    assert!(
+        audit_records(root.path())
+            .iter()
+            .all(|r| r["firewall_verdict"] != "pass"),
+        "no attempt of this event claims pass"
+    );
+}
