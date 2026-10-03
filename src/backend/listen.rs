@@ -101,6 +101,13 @@ impl Backend {
         })
     }
 
+    /// The backend told us its tool list changed: drop the shared slot's
+    /// cached list, so the re-read a `tools_changed` subscriber does next
+    /// reaches the backend instead of the old list (§14).
+    pub(crate) fn invalidate_tools(&self) {
+        self.shared_entry().tools_cache.invalidate_if(|_| true);
+    }
+
     /// `resources/subscribe` or `resources/unsubscribe` for `uri` on the
     /// legacy channel. `Ok(false)` when the peer answers method-not-found:
     /// that backend's resource interest is unsupported (§3).
@@ -125,3 +132,7 @@ impl Backend {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "listen_tests.rs"]
+mod tests;
