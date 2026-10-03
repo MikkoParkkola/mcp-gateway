@@ -193,7 +193,14 @@ impl EventsHub {
         // Held through the snapshot and the withdrawal, so a capability reload
         // cannot restore a route in between and lose its subscriptions.
         let _gate = self.catalogue_lock();
-        if scan == CatalogueScan::Partial {
+        // With webhooks off no route can come back, so a partial capability
+        // scan proves nothing about them: their catalogue is complete (empty).
+        let webhooks_on = self
+            .sources
+            .read()
+            .iter()
+            .any(|source| source.kind() == SourceKind::Webhook);
+        if scan == CatalogueScan::Partial && webhooks_on {
             tracing::warn!(
                 "events: a capability directory could not be read at startup; stored \
                  subscriptions are kept and reconciled at the next complete start"

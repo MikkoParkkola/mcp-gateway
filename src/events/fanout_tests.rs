@@ -192,6 +192,10 @@ fn a_partial_scan_keeps_every_subscription() {
         .expect("io")
         .expect("admitted");
 
+    hub.set_webhook_registry(std::sync::Arc::new(parking_lot::RwLock::new(
+        crate::gateway::WebhookRegistry::new(crate::config::WebhookConfig::default()),
+    )));
+
     assert!(hub.reconcile_catalogue(CatalogueScan::Partial));
 
     assert_eq!(hub.store.subscriptions().len(), 1, "kept");
@@ -200,4 +204,33 @@ fn a_partial_scan_keeps_every_subscription() {
             .reconciled
             .load(std::sync::atomic::Ordering::Acquire)
     );
+}
+
+/// With webhooks off no route can return, so even a partial scan withdraws
+/// the stored webhook subscriptions (MIK-7772).
+#[test]
+fn webhooks_off_withdraws_even_after_a_partial_scan() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let (now, tail) = (Utc::now(), super::super::tail_policy(&config));
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    hub.store
+        .admit(
+            subscription("webhook.gone.route.received"),
+            true,
+            caps,
+            chrono::Duration::zero(),
+            now,
+            tail,
+        )
+        .expect("io")
+        .expect("admitted");
+
+    assert!(hub.reconcile_catalogue(CatalogueScan::Partial));
+
+    assert!(hub.store.subscriptions().is_empty(), "withdrawn");
 }
