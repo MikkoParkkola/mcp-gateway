@@ -537,3 +537,96 @@ fn a_start_built_before_the_stamp_is_not_published() {
             .is_ok()
     );
 }
+
+/// An HTTP backend whose start is refused before anything can connect: its own
+/// enabled OAuth beside identity propagation, which `create_oauth_client`
+/// refuses at the sink.
+fn refused_before_connecting() -> Arc<Backend> {
+    let idp = crate::identity_propagation::IdentityPropagationConfig {
+        strategy: crate::identity_propagation::PropagationStrategyKind::Passthrough,
+        audience: "https://backend.example".to_string(),
+        required: true,
+        session_mode: crate::identity_propagation::SessionMode::Stateless,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
+    };
+    let oauth = crate::config::OAuthConfig {
+        enabled: true,
+        scopes: vec![],
+        client_id: None,
+        client_secret: None,
+        callback_host: None,
+        callback_port: None,
+        callback_path: None,
+        token_refresh_buffer_secs: 300,
+        shared_account: false,
+    };
+    Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: http(),
+            oauth: Some(oauth),
+            identity_propagation: Some(idp),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+// MIK-7855: a start refused before anything connects built nothing, so it
+// leaves the backend un-marked and a later hardened pairing is not refused.
+#[tokio::test]
+async fn a_start_refused_before_connecting_does_not_block_a_hardened_pairing() {
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = refused_before_connecting();
+    assert!(registry.register(Arc::clone(&backend)));
+    assert!(
+        backend.ensure_started().await.is_err(),
+        "the start is refused before connecting"
+    );
+    assert!(
+        !backend.started_unpinned(),
+        "nothing connected, so nothing is unpinned"
+    );
+    assert!(pair_hardened(registry).is_ok());
+    assert_eq!(backend.destination(), DestinationPolicy::Public);
+}
+
+// MIK-7855: a start that read its policy before a hardened pairing stamped
+// one, and is held in that window while the pairing runs. Nothing is marked
+// yet, so the pairing succeeds and stamps; the start must then notice the
+// stamp it did not build under and refuse rather than connect unpinned.
+#[tokio::test]
+async fn a_pairing_inside_the_start_window_stops_the_start_connecting() {
+    let registry = Arc::new(BackendRegistry::new());
+    let (backend, accepted) = started_at_loopback().await;
+    assert!(registry.register(Arc::clone(&backend)));
+    let gate = Arc::new(super::MarkWindowGate::default());
+    *backend.mark_window_gate.lock() = Some(Arc::clone(&gate));
+
+    let start = tokio::spawn({
+        let backend = Arc::clone(&backend);
+        async move { backend.ensure_started().await }
+    });
+    gate.reached.notified().await;
+    assert!(
+        !backend.started_unpinned(),
+        "held before the mark, so nothing is marked yet"
+    );
+    assert!(
+        pair_hardened(Arc::clone(&registry)).is_ok(),
+        "nothing connected or marked, so the pairing succeeds"
+    );
+    assert_eq!(backend.destination(), DestinationPolicy::Public);
+    gate.release.notify_one();
+
+    let started = start.await.expect("start task");
+    assert!(started.is_err(), "the start built under the old policy");
+    assert_eq!(
+        accepted.load(Ordering::SeqCst),
+        0,
+        "a successful pairing left an unpinned connection"
+    );
+    assert!(!backend.started_unpinned());
+}
