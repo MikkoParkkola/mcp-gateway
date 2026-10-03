@@ -1,16 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The OAuth grants: authorization code with PKCE, code exchange, refresh and client credentials.
+//! The OAuth grants: authorization code exchange, refresh and client credentials, and their parameter builders.
 
-use super::super::callback;
 use super::super::storage::TokenInfo;
 use crate::security::http_diagnostics::oauth_request_error;
 use crate::security::{safe_oauth_http_error, safe_reqwest_message};
 use crate::{Error, Result};
 use tracing::{info, warn};
-use url::Url;
 
-use super::{OAuthClient, TokenResponse, generate_pkce, generate_state, validate_issuer};
+use super::{OAuthClient, TokenResponse};
 
 impl OAuthClient {
     /// Attempt client-credentials grant (headless re-auth, no browser required).
@@ -103,45 +101,6 @@ impl OAuthClient {
             .map_or(self.resource_url.as_str(), |m| m.resource.as_str())
     }
 
-    /// Build the OAuth 2.0 authorization-request URL (RFC 6749 §4.1.1 + PKCE
-    /// RFC 7636 + Resource Indicators RFC 8707).
-    ///
-    /// Pure and side-effect free so the query parameters — critically the
-    /// `resource` indicator required by the MCP auth spec (issue #369) — are
-    /// unit-testable without standing up a browser or callback server.
-    pub(super) fn build_authorize_url(
-        &self,
-        authorization_endpoint: &str,
-        client_id: &str,
-        callback_url: &str,
-        state: &str,
-        code_challenge: &str,
-    ) -> Result<Url> {
-        let mut auth_url = Url::parse(authorization_endpoint)
-            .map_err(|e| Error::OAuth(format!("Invalid auth endpoint: {e}")))?;
-
-        {
-            let mut params = auth_url.query_pairs_mut();
-            params.append_pair("response_type", "code");
-            params.append_pair("client_id", client_id);
-            params.append_pair("redirect_uri", callback_url);
-            params.append_pair("state", state);
-            params.append_pair("code_challenge", code_challenge);
-            params.append_pair("code_challenge_method", "S256");
-
-            if !self.scopes.is_empty() {
-                params.append_pair("scope", &self.scopes.join(" "));
-            }
-
-            // RFC 8707 Resource Indicator (mandated by the MCP authorization
-            // spec). Audience-binds the issued token to this MCP server; strict
-            // providers reject the flow without it (issue #369).
-            params.append_pair("resource", self.resource_indicator());
-        }
-
-        Ok(auth_url)
-    }
-
     /// Form parameters for the `authorization_code` → token exchange
     /// (RFC 6749 §4.1.3 + PKCE RFC 7636 + Resource Indicators RFC 8707).
     ///
@@ -207,88 +166,6 @@ impl OAuthClient {
         // token to this MCP server, matching the other grants (issue #369).
         params.push(("resource", self.resource_indicator().to_string()));
         params
-    }
-
-    /// Perform the authorization flow
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any step of the OAuth authorization flow fails
-    /// (callback server, client registration, browser auth, or code exchange).
-    pub async fn authorize(&self) -> Result<String> {
-        let auth_meta = self
-            .auth_metadata
-            .as_ref()
-            .ok_or_else(|| Error::OAuth("OAuth not initialized".to_string()))?;
-
-        // Generate PKCE parameters
-        let (code_verifier, code_challenge) = generate_pkce();
-
-        // Generate state for CSRF protection
-        let state = generate_state();
-
-        // Start callback server FIRST to get the actual callback URL
-        // This must happen BEFORE client registration so we know the port
-        let callback_server = callback::start_callback_server(
-            state.clone(),
-            self.callback_host.as_deref(),
-            self.callback_port,
-            self.callback_path.as_deref(),
-        )
-        .await?;
-        let callback_url = callback_server.callback_url.clone();
-
-        // Now ensure we have a client ID, passing the actual callback URL for registration
-        let client_id = match self.ensure_client_id_with_redirect(&callback_url).await {
-            Ok(client_id) => client_id,
-            Err(e) => {
-                callback_server.stop();
-                return Err(e);
-            }
-        };
-
-        // Build authorization URL with the ACTUAL callback URL
-        let auth_url = self.build_authorize_url(
-            &auth_meta.authorization_endpoint,
-            &client_id,
-            &callback_url,
-            &state,
-            &code_challenge,
-        )?;
-
-        // Open browser
-        let auth_url_str = auth_url.to_string();
-        info!(url = %auth_url_str, "Opening browser for authorization");
-
-        if !(self.open_browser)(&auth_url_str) {
-            warn!("Failed to open browser automatically");
-            println!("\nPlease authorize this client by visiting:\n{auth_url_str}\n");
-        }
-
-        // Wait for callback
-        let (actual_callback_url, callback_result) = callback_server.wait_for_callback().await?;
-
-        // RFC 9207, before the code is redeemed: a code that came from another
-        // authorization server must not be sent to this one's token endpoint.
-        validate_issuer(callback_result.iss.as_deref(), &auth_meta.issuer).map_err(|mismatch| {
-            warn!(
-                event = "oauth.callback.issuer_mismatch",
-                "authorization response named an issuer other than the recorded one"
-            );
-            Error::OAuth(mismatch)
-        })?;
-
-        // Exchange code for token
-        let token = self
-            .exchange_code(&callback_result.code, &actual_callback_url, &code_verifier)
-            .await?;
-
-        // Store and cache the token
-        self.storage
-            .save(&self.credential_key()?, &self.resource_url, &token)?;
-        *self.current_token.write() = Some(token.clone());
-
-        Ok(token.access_token)
     }
 
     /// Exchange authorization code for tokens
