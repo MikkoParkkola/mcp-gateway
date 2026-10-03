@@ -6,6 +6,7 @@
 use serde_json::{Value, json};
 
 use super::super::MetaMcp;
+use crate::gateway::meta_mcp_helpers::parse_code_mode_tool_ref;
 use crate::{Error, Result};
 
 impl MetaMcp {
