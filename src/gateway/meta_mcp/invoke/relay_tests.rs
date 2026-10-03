@@ -158,6 +158,52 @@ async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
     );
 }
 
+/// Under `observe` a relay on the meta route is let through and reported: the
+/// backend is called, and the audit log holds one digest-only relay finding.
+#[tokio::test]
+async fn meta_observe_reports_a_relay_and_sends_it() {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    backend.set_transport_for_test(Arc::new(Seen(Arc::clone(&seen))));
+    assert!(registry.register(backend));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+            audit_log: Some(dir.path().join("audit.ndjson")),
+            collusion: CollusionConfig {
+                action: CollusionAction::Observe,
+                sources: vec!["alpha:*".to_string()],
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
+    firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
+
+    let bob = MetaMcpCallerContext {
+        caller_key: Some("bob"),
+        ..ctx(&AllowAll)
+    };
+    let call = json!({"server": "alpha", "tool": "send", "arguments": {"text": PROSE}});
+    let result = meta.invoke_tool(&call, None, &bob).await;
+    assert!(result.is_ok(), "observe must not refuse: {result:?}");
+    assert_eq!(seen.lock().len(), 1, "base: the relay was sent");
+    let audit = std::fs::read_to_string(dir.path().join("audit.ndjson")).expect("audited");
+    assert_eq!(audit.matches("collusion_relay").count(), 1, "{audit}");
+    assert!(!audit.contains("orchard"), "content leaked into the audit");
+}
+
 /// The relay check and the dispatch read one builder: every field a
 /// backend receives beside `arguments` is in it.
 #[test]
