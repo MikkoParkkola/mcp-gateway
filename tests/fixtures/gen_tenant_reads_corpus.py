@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Generate tests/fixtures/tenant-reads-corpus.jsonl (MIK-7116.MIN.4, design §5): python3 tests/fixtures/gen_tenant_reads_corpus.py > tests/fixtures/tenant-reads-corpus.jsonl.
 
 One line per outbound frame. Labels come from the generating pattern, never
