@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{Map, Value};
+use serde_json::Map;
 
 use super::EventsHub;
 use super::rpc::Caller;

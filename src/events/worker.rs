@@ -378,6 +378,14 @@ impl EventsHub {
         record: &OutboxRecord,
         reason: DeadReason,
     ) {
+        // Only a dead letter that exists: a cancelled occurrence settles nothing.
+        let buried = self
+            .store
+            .dead_letter_by_id(&record.event_id)
+            .is_some_and(|dead| dead.record.created_at == record.created_at);
+        if !buried {
+            return;
+        }
         let host = self
             .store
             .get(&record.subscription_id)

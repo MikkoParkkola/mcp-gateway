@@ -116,15 +116,18 @@ impl EventsHub {
         let mut body: Value =
             serde_json::from_slice(&bytes).map_err(|_| ReplayRefusal::Unavailable)?;
         let mut data = body["data"].take();
+        let before = data.clone();
         let subject = Subject {
             event_id,
             principal: &sub.principal,
             backend: &dead.record.backend,
             name: &dead.record.name,
         };
-        if services.scan(&mut data, &subject) == Scan::Block {
+        let scan = services.scan(&mut data, &subject);
+        if scan == Scan::Block {
             return Err(ReplayRefusal::FirewallBlocked);
         }
+        let verdict = services.firewall_verdict(scan, data != before);
         body["data"] = data;
         let bytes = serde_json::to_vec(&body).map_err(|_| ReplayRefusal::Unavailable)?;
         if bytes.len() > MAX_BODY {
@@ -139,6 +142,7 @@ impl EventsHub {
             state: OutboxState::Pending,
             last_status: None,
             dead_as: None,
+            firewall: Some(verdict.to_owned()),
             ..dead.record.clone()
         };
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);
