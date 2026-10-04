@@ -446,7 +446,8 @@ async fn undeliverable_elicitation_leaves_no_pending_entry() {
     );
 }
 
-// The WIRE.11 cancellation and MIK-7388 cross-exchange rows, kept in a file
-// of their own to hold both files under the size ceiling.
+// The WIRE.11 cancellation, MIK-7388 cross-exchange and minor-11a
+// elicitation-id rows, kept in a file of their own to hold both files under
+// the size ceiling.
 #[path = "proxy_cancellation_tests.rs"]
 mod cancellation;
