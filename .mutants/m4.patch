@@ -1,0 +1,13 @@
+diff --git a/src/backend/listen.rs b/src/backend/listen.rs
+index fc1b4ff07..f7ccd3fc6 100644
+--- a/src/backend/listen.rs
++++ b/src/backend/listen.rs
+@@ -109,7 +109,7 @@ impl Backend {
+         entry.tools_cache.invalidate_if(|_| true);
+         // Derived from the list just dropped; a stale set would keep
+         // permitting a resend for a tool that is no longer read-only.
+-        entry.resend_permitted.write().clear();
++
+     }
+ 
+     /// `resources/subscribe` or `resources/unsubscribe` for `uri` on the

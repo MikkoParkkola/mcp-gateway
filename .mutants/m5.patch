@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index b6828804c..ce75193c7 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -92,7 +92,6 @@ fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
+     tokio::spawn(async move {
+         let started = hub.lifecycle.lock().await;
+         if ineligible().contains(&name) {
+-            hub.withdraw(&names);
+         }
+         drop(started);
+         hub.reconcile_stops_in_background();

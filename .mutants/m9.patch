@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index b6828804c..b21c42328 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -91,7 +91,7 @@ fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
+     let (name, ineligible) = (shared.name.clone(), Arc::clone(&shared.ineligible));
+     tokio::spawn(async move {
+         let started = hub.lifecycle.lock().await;
+-        if ineligible().contains(&name) {
++        if !name.is_empty() || ineligible().contains(&name) {
+             hub.withdraw(&names);
+         }
+         drop(started);

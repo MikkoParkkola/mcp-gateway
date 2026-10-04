@@ -1,0 +1,15 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index d2f578e8a..9f2f9047b 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -116,10 +116,6 @@ impl UpstreamListeners {
+         // interest still counted (the `tools_changed` keys the reload kept),
+         // so their removal later balances against it.
+         let mut carried = Need::default();
+-        if let Some(ended) = map.get(backend).filter(|s| s.stop.is_cancelled()) {
+-            carried = std::mem::take(&mut *ended.need.lock());
+-            map.remove(backend);
+-        }
+         let shared = Arc::clone(
+             map.entry(backend.to_owned())
+                 .or_insert_with(|| self.start(backend, carried)),

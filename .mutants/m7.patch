@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 7297a2bd3..182782440 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -167,7 +167,7 @@ impl EventsHub {
+                 .authorize(&sub.principal, &sub.name, &sub.arguments)
+                 .await
+                 .is_err_and(|e| e.code == -32012),
+-            None => sub.name.starts_with(super::backend_source::NAME_PREFIX),
++            None => false,
+         };
+         if refused {
+             services
