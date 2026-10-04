@@ -3072,8 +3072,8 @@ The task record now lists those calls (server and tool names, never arguments). 
 `gateway_invoke` or surfaced-tool task records its call at creation; a playbook or `gateway_execute`
 task records the calls it actually dispatched when it settles. A row written by a beta has no
 list: its one call is recovered from its upstream descriptor when that is consistent and checked
-as above, and a row without recoverable provenance, every playbook or `gateway_execute` row
-included, is refused -32003 (item 120). Only beta task stores contain such rows.
+as above, and a row that holds backend output without recoverable provenance, every such
+playbook or `gateway_execute` row included, is refused -32003 (item 120). Only beta task stores contain such rows.
 
 **Rollback:** a record that carries calls is written as version 5, and a version 4 or 5 row makes
 a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
