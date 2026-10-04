@@ -5,7 +5,6 @@
 
 use serde_json::Value;
 
-#[cfg(feature = "firewall")]
 use super::RELAY_RECEIPTS;
 use super::{MetaMcp, RelayKey};
 
@@ -38,6 +37,62 @@ impl MetaMcp {
             let _ = (who, server, tool, value);
             None
         }
+    }
+
+    /// A final check may have changed the delivered result (a redaction):
+    /// the staged receipts then describe text the caller never got.
+    ///
+    /// One staged receipt (a single-target call) is rebuilt from what is
+    /// delivered, so the text the caller still got keeps its receipt and the
+    /// removed text stops being tracked. A plan's step receipts are kept for
+    /// [`MetaMcp::rebuild_receipt_from_final`], which keeps each to the text
+    /// the final answer still delivers; until then they never commit. Several
+    /// receipts of no plan cannot be told apart and are dropped.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(clippy::unused_self, clippy::needless_pass_by_value)
+    )]
+    pub(crate) fn restage_if_changed(&self, snapshot: Option<Value>, result: Option<&Value>) {
+        if !snapshot.is_some_and(|before| Some(&before) != result) {
+            return;
+        }
+        let _ = RELAY_RECEIPTS.try_with(|receipts| {
+            let mut receipts = receipts.borrow_mut();
+            let mut staged = std::mem::take(&mut *receipts);
+            // A plan's step receipts wait for the final answer, which keeps
+            // each to the text it still delivers (MIK-7887.RECEIPT.2).
+            if staged.iter().any(|r| r.in_plan) {
+                staged.retain(|r| r.in_plan);
+                for r in &mut staged {
+                    r.pending_retain = true;
+                }
+                *receipts = staged;
+                return;
+            }
+            #[cfg(feature = "firewall")]
+            if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
+                && let Some(digest) = fw.delivery_digest(
+                    &one.server,
+                    &one.tool,
+                    &super::super::audit::delivered_value(delivered),
+                )
+            {
+                // A redaction can drop the classification marker with the
+                // text; what the call was judged sensitive for stays so.
+                let digest = digest.keeping_sensitivity_of(&one.digest);
+                receipts.push(super::Receipt {
+                    key: one.key.clone(),
+                    keyed: one.keyed,
+                    server: one.server.clone(),
+                    tool: one.tool.clone(),
+                    digest,
+                    in_plan: false,
+                    pending_retain: false,
+                });
+            }
+            #[cfg(not(feature = "firewall"))]
+            drop(staged);
+        });
     }
 
     /// MIK-7887.RECEIPT.4: rebuild a single staged receipt from `result` as it
