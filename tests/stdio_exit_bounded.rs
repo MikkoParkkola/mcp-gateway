@@ -13,10 +13,36 @@ use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-/// Requests whose answers together exceed any OS pipe buffer.
+/// Requests whose answers together exceed any OS pipe buffer: each answer
+/// echoes a 200-byte id, so 4000 of them are about 1 MiB, past the largest
+/// pipe a Linux or macOS host gives by default.
 const PINGS: usize = 4000;
 /// Drain (30 s) + teardown (10 s) + runtime shutdown (10 s), plus margin.
 const EXIT_BOUND: Duration = Duration::from_secs(65);
+/// The reading control's outstanding-request window, below the stdio
+/// in-flight cap, so no answer is a busy refusal.
+const WINDOW: usize = 500;
+
+/// The id of ping `k`: 200 bytes, so the answers fill a pipe quickly.
+fn id(k: usize) -> String {
+    format!("p{k:0>199}")
+}
+
+fn ping(k: usize) -> String {
+    serde_json::json!({"jsonrpc": "2.0", "id": id(k), "method": "ping"}).to_string()
+}
+
+fn initialize() -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0", "id": "init", "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "mik7683", "version": "0"},
+        },
+    })
+    .to_string()
+}
 
 fn command(dir: &tempfile::TempDir) -> tokio::process::Command {
     let path = dir.path().join("gateway.yaml");
@@ -47,26 +73,6 @@ fn command(dir: &tempfile::TempDir) -> tokio::process::Command {
     command
 }
 
-/// The handshake, then `PINGS` pings, one per line.
-fn script() -> String {
-    let mut lines = vec![
-        serde_json::json!({
-            "jsonrpc": "2.0", "id": "init", "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "mik7683", "version": "0"},
-            },
-        })
-        .to_string(),
-    ];
-    lines.extend(
-        (0..PINGS)
-            .map(|k| serde_json::json!({"jsonrpc": "2.0", "id": k, "method": "ping"}).to_string()),
-    );
-    lines.join("\n") + "\n"
-}
-
 /// AC2. stdout is never read, stdin closes after the requests: the process
 /// exits within the stated bound instead of hanging in the runtime drop.
 #[tokio::test]
@@ -74,16 +80,19 @@ async fn the_process_exits_when_stdout_is_never_read() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = command(&dir).spawn().expect("spawn shipped binary");
     let mut stdin = child.stdin.take().expect("stdin");
-    // Held, never read: a closed pipe would end the stuck write with EPIPE.
-    let _stdout = child.stdout.take().expect("stdout");
+    // Held, never read, until after the child is reaped: a read or a closed
+    // pipe would end the stuck write.
+    let stdout = child.stdout.take().expect("stdout");
     let mut stderr = child.stderr.take().expect("stderr");
     let stderr_text = tokio::spawn(async move {
         let mut text = String::new();
         drop(tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut text).await);
         text
     });
+    let mut script = vec![initialize()];
+    script.extend((0..PINGS).map(ping));
     stdin
-        .write_all(script().as_bytes())
+        .write_all((script.join("\n") + "\n").as_bytes())
         .await
         .expect("write the requests");
     drop(stdin);
@@ -92,6 +101,7 @@ async fn the_process_exits_when_stdout_is_never_read() {
     if !exited {
         drop(child.kill().await);
     }
+    drop(stdout);
     let stderr = stderr_text.await.unwrap_or_default();
     assert!(
         exited,
@@ -99,36 +109,69 @@ async fn the_process_exits_when_stdout_is_never_read() {
     );
 }
 
-/// Positive control: a client that reads gets every answer, and the process
-/// exits cleanly. The bound does not cost a reading client a frame.
+/// Positive control: a client that reads gets every answer and a clean exit.
+/// Requests go in windows below the in-flight cap, and the last window is
+/// still being answered when stdin closes, so the shutdown path runs while
+/// frames are pending.
 #[tokio::test]
 async fn a_reading_client_gets_every_answer_before_exit() {
     let dir = tempfile::tempdir().unwrap();
     let mut child = command(&dir).spawn().expect("spawn shipped binary");
-    let mut stdin = child.stdin.take().expect("stdin");
-    let stdout = child.stdout.take().expect("stdout");
-    let reader = tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        let mut ids = std::collections::BTreeSet::new();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let frame: serde_json::Value = serde_json::from_str(&line).expect("one JSON frame");
-            if let Some(id) = frame["id"].as_u64() {
-                ids.insert(id);
-            }
-        }
-        ids
+    let mut stdin = Some(child.stdin.take().expect("stdin"));
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let mut stderr = child.stderr.take().expect("stderr");
+    let stderr_text = tokio::spawn(async move {
+        let mut text = String::new();
+        drop(tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut text).await);
+        text
     });
-    stdin
-        .write_all(script().as_bytes())
-        .await
-        .expect("write the requests");
-    drop(stdin);
+    let mut seen = std::collections::BTreeMap::<String, usize>::new();
+    let read_one = async |lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+                          seen: &mut std::collections::BTreeMap<String, usize>|
+           -> bool {
+        match tokio::time::timeout(EXIT_BOUND, lines.next_line()).await {
+            Ok(Ok(Some(line))) => {
+                let frame: serde_json::Value = serde_json::from_str(&line).expect("one JSON frame");
+                if let Some(id) = frame["id"].as_str() {
+                    *seen.entry(id.to_string()).or_default() += 1;
+                }
+                true
+            }
+            _ => false,
+        }
+    };
+    let write = async |stdin: &mut tokio::process::ChildStdin, text: String| {
+        stdin
+            .write_all(text.as_bytes())
+            .await
+            .expect("write requests");
+    };
+    write(stdin.as_mut().unwrap(), initialize() + "\n").await;
+    for start in (0..PINGS).step_by(WINDOW) {
+        let end = (start + WINDOW).min(PINGS);
+        let chunk: Vec<String> = (start..end).map(ping).collect();
+        write(stdin.as_mut().unwrap(), chunk.join("\n") + "\n").await;
+        if end == PINGS {
+            // The last window is closed behind while its answers are pending.
+            drop(stdin.take());
+            break;
+        }
+        while seen.len() < end + 1 {
+            assert!(
+                read_one(&mut lines, &mut seen).await,
+                "answers stopped early"
+            );
+        }
+    }
+    while read_one(&mut lines, &mut seen).await {}
     let status = tokio::time::timeout(EXIT_BOUND, child.wait())
         .await
         .expect("a reading client's gateway exits")
         .expect("reap child");
-    assert!(status.success(), "{status}");
-    let ids = reader.await.expect("reader task");
-    let expected: std::collections::BTreeSet<u64> = (0..PINGS as u64).collect();
-    assert_eq!(ids, expected, "every ping is answered exactly once");
+    let stderr = stderr_text.await.unwrap_or_default();
+    assert!(status.success(), "{status}; stderr:\n{stderr}");
+    let mut expected: std::collections::BTreeMap<String, usize> =
+        (0..PINGS).map(|k| (id(k), 1)).collect();
+    expected.insert("init".to_string(), 1);
+    assert_eq!(seen, expected, "every request is answered exactly once");
 }
