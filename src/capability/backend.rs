@@ -780,3 +780,7 @@ pub struct CapabilityBackendStatus {
 #[cfg(test)]
 #[path = "backend_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "backend_pin_tests.rs"]
+mod pin_tests;
