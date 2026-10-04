@@ -317,13 +317,13 @@ fn reopen_tail(
                 std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
                 segments::sync_dir(path)?;
                 let sealed = segments::list_segments(path)?;
-                let behind = contradicted(path, &sealed, hw, counter, &hash)?;
+                let behind = contradicted(path, &sealed, hw, counter, &hash, config)?;
                 let carry = lost_from(newest_finding(&sealed, config)?, behind, counter);
                 let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
                 Ok((state, behind))
             } else {
                 let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
-                let below_mark = contradicted(path, sealed, hw, counter, &resumed.last_entry_hash)?;
+                let below_mark = contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
                 Ok((resumed, below_mark))
             }
         }
@@ -347,7 +347,7 @@ fn reopen_after_seal(
         Some(segment) => seal_of(segment)?.unwrap_or_default(),
         None => (0, String::new()),
     };
-    let below_mark = contradicted(path, sealed, hw, tail, &tail_hash)?;
+    let below_mark = contradicted(path, sealed, hw, tail, &tail_hash, config)?;
     let carry = lost_from(newest_finding(sealed, config)?, below_mark, tail);
     let state = open_after_seal(path, config, sealed, hw, now, carry)?;
     Ok((state, below_mark))

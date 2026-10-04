@@ -142,6 +142,7 @@ pub(super) fn contradicted(
     hw: Option<&HighWater>,
     counter: u64,
     hash: &str,
+    config: &TransparencyLogConfig,
 ) -> io::Result<bool> {
     let Some(h) = hw else {
         return Ok(false);
@@ -156,19 +157,58 @@ pub(super) fn contradicted(
     // active file, or at the end of the sealed segment the mark names.
     let named = sealed.iter().find(|s| s.seq == h.segment_seq);
     for file in std::iter::once(path).chain(named.map(|s| s.path.as_path())) {
-        let text = match std::fs::read_to_string(file) {
-            Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-        };
-        let at_mark = text
-            .lines()
-            .filter_map(|line| record_head(line).ok())
-            .find(|(c, ..)| *c == h.counter);
-        if let Some((_, found, _, _)) = at_mark {
-            return Ok(found != h.entry_hash);
+        if let Some(contradicts) = record_at_mark(file, h, config)? {
+            return Ok(contradicts);
         }
     }
     // Neither file holds the record the mark names.
     Ok(true)
+}
+
+/// Whether the record at `h.counter` in `file` contradicts the mark, or `None`
+/// when `file` is missing or holds no record at that counter.
+///
+/// Read with the scan's line bound: a line over [`MAX_RECORD_BYTES`] is a
+/// finding, as [`hwm_missing_in`] counts it, and is never held whole. The
+/// record is judged on its content: its stored `entry_hash` must equal the
+/// mark's, recompute from the record, and carry a valid signature when a
+/// secret is set. An edit that keeps the stored hash is otherwise accepted
+/// here, and retention later expires the edited record with nothing recorded.
+fn record_at_mark(
+    file: &Path,
+    h: &HighWater,
+    config: &TransparencyLogConfig,
+) -> io::Result<Option<bool>> {
+    use std::io::{BufRead, Read};
+    let mut reader = match File::open(file) {
+        Ok(f) => io::BufReader::new(f),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(segments::ctx("read", file)(e)),
+    };
+    let secret = config.shared_secret.as_bytes();
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = (&mut reader)
+            .take(MAX_RECORD_BYTES as u64 + 1)
+            .read_until(b'\n', &mut buf)
+            .map_err(segments::ctx("read", file))?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if buf.last() != Some(&b'\n') && buf.len() > MAX_RECORD_BYTES {
+            return Ok(Some(true));
+        }
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            continue;
+        };
+        let Ok((counter, stored, _, v)) = record_head(line.trim()) else {
+            continue;
+        };
+        if counter == h.counter {
+            let intact = recompute_entry_hash(&v).is_ok_and(|x| x == stored)
+                && (secret.is_empty() || verify_entry_sig(&v, &stored, secret).is_ok());
+            return Ok(Some(stored != h.entry_hash || !intact));
+        }
+    }
 }
