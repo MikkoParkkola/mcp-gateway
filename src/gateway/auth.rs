@@ -48,6 +48,11 @@ use bootstrap::{bootstrap_param, try_dashboard_bootstrap};
 #[cfg(feature = "webui")]
 pub(crate) use handoff::{HANDOFF_PATH, handoff_form, private as handoff_private, redeem_handoff};
 
+/// The `tracing` target of the events this module raises, its `resolved`
+/// child included: code moved into a child module keeps the target a log
+/// filter already names.
+const AUTH_TARGET: &str = module_path!();
+
 /// Type alias for our rate limiter
 type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 

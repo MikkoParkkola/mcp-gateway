@@ -11,8 +11,8 @@ use governor::{Quota, RateLimiter};
 use tracing::warn;
 
 use super::{
-    AuthenticatedClient, NamedApiKey, QuotaPrincipal, ResolvedApiKey, ResolvedAuthConfig,
-    bearer_token_fingerprint, principal_of,
+    AUTH_TARGET, AuthenticatedClient, NamedApiKey, QuotaPrincipal, ResolvedApiKey,
+    ResolvedAuthConfig, bearer_token_fingerprint, principal_of,
 };
 use crate::Result;
 use crate::config::{AuthConfig, CircuitBreakerConfig};
@@ -46,7 +46,7 @@ impl ResolvedAuthConfig {
         if config.bearer_token.as_deref() == Some("auto")
             && let Some(ref token) = bearer_token
         {
-            tracing::info!(
+            tracing::info!(target: AUTH_TARGET,
                 "Auto-generated bearer token (fingerprint {})",
                 bearer_token_fingerprint(token)
             );
@@ -183,7 +183,7 @@ impl ResolvedAuthConfig {
         })?;
         // After the match: an expired key is never an authenticated caller.
         if crate::config::api_key_expired(key.expires_at, chrono::Utc::now()) {
-            warn!(key = %key.name, "expired API key");
+            warn!(target: AUTH_TARGET, key = %key.name, "expired API key");
             return None;
         }
         Some((
