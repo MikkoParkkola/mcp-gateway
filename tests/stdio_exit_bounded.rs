@@ -17,8 +17,12 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 /// echoes a 200-byte id, so 4000 of them are about 1 MiB, past the largest
 /// pipe a Linux or macOS host gives by default.
 const PINGS: usize = 4000;
-/// Drain (30 s) + teardown (10 s) + runtime shutdown (10 s), plus margin.
+/// `STDIO_DRAIN_TIMEOUT` (30 s) + `STDIO_TEARDOWN_TIMEOUT` (10 s, a maximum)
+/// + the runtime shutdown bound (10 s), plus margin. Private constants of the
+/// library, so restated here; a change there must move this.
 const EXIT_BOUND: Duration = Duration::from_secs(65);
+/// Writing the requests, bounded apart from the exit.
+const WRITE_BOUND: Duration = Duration::from_secs(30);
 /// The reading control's outstanding-request window, below the stdio
 /// in-flight cap, so no answer is a busy refusal.
 const WINDOW: usize = 500;
@@ -45,21 +49,34 @@ fn initialize() -> String {
 }
 
 fn command(dir: &tempfile::TempDir) -> tokio::process::Command {
-    let path = dir.path().join("gateway.yaml");
     let yaml = format!(
         "backends: {{}}\ntasks:\n  store_dir: {}\n",
         serde_json::to_string(&dir.path().join("tasks").display().to_string())
             .expect("a JSON string")
     );
+    command_with(dir, &yaml)
+}
+
+/// `serve --stdio` under the config `yaml`, written into `dir`.
+fn command_with(dir: &tempfile::TempDir, yaml: &str) -> tokio::process::Command {
+    let path = dir.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mcp-gateway"));
     command
-        .args(["--config", path.to_str().unwrap(), "serve", "--stdio"])
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "--log-level",
+            "info",
+            "serve",
+            "--stdio",
+        ])
         .current_dir(dir.path())
         .env("HOME", dir.path())
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_DATA_HOME", dir.path().join("data"))
         .env("MCP_GATEWAY_TEST_HOME_DIR", dir.path())
+        .env_remove("RUST_LOG")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -91,22 +108,30 @@ async fn the_process_exits_when_stdout_is_never_read() {
     });
     let mut script = vec![initialize()];
     script.extend((0..PINGS).map(ping));
-    stdin
-        .write_all((script.join("\n") + "\n").as_bytes())
-        .await
-        .expect("write the requests");
+    // Bounded on its own: a child that stopped reading stdin must fail the
+    // test, not hang it.
+    tokio::time::timeout(
+        WRITE_BOUND,
+        stdin.write_all((script.join("\n") + "\n").as_bytes()),
+    )
+    .await
+    .expect("the gateway keeps reading stdin")
+    .expect("write the requests");
     drop(stdin);
     let status = tokio::time::timeout(EXIT_BOUND, child.wait()).await;
-    let exited = matches!(status, Ok(Ok(_)));
-    if !exited {
+    let exited = matches!(&status, Ok(Ok(status)) if status.success());
+    if status.is_err() {
         drop(child.kill().await);
     }
     drop(stdout);
     let stderr = stderr_text.await.unwrap_or_default();
     assert!(
         exited,
-        "the process must exit within {EXIT_BOUND:?} of EOF with stdout unread; stderr:\n{stderr}"
+        "the process must exit cleanly within {EXIT_BOUND:?} of EOF with stdout unread \
+         ({status:?}); stderr:\n{stderr}"
     );
+    // The hang being bounded is the one after the serve loop: it read EOF.
+    assert!(stderr.contains("EOF reached"), "stderr:\n{stderr}");
 }
 
 /// Positive control: a client that reads gets every answer and a clean exit.
@@ -174,4 +199,98 @@ async fn a_reading_client_gets_every_answer_before_exit() {
         (0..PINGS).map(|k| (id(k), 1)).collect();
     expected.insert("init".to_string(), 1);
     assert_eq!(seen, expected, "every request is answered exactly once");
+}
+
+/// An in-process MCP backend with one tool, `echo`.
+async fn spawn_backend() -> String {
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(|axum::Json(request): axum::Json<serde_json::Value>| async move {
+            let result = match request["method"].as_str().unwrap_or("") {
+                "initialize" => serde_json::json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "fixture", "version": "0"},
+                }),
+                "tools/list" => serde_json::json!({"tools": [
+                    {"name": "echo", "description": "echoes", "inputSchema": {"type": "object"}},
+                ]}),
+                "tools/call" => serde_json::json!({"content": [{"type": "text", "text": "echoed"}]}),
+                _ => serde_json::json!({}),
+            };
+            axum::Json(serde_json::json!({"jsonrpc": "2.0", "id": request.get("id"), "result": result}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture backend");
+    let address = listener.local_addr().expect("fixture address");
+    tokio::spawn(async move { drop(axum::serve(listener, app).await) });
+    format!("http://{address}/")
+}
+
+/// The bound cuts only the stdio runtime's blocking work, never an audit
+/// write: a call answered just before EOF has its invocation record on disk
+/// once the process has exited.
+#[tokio::test]
+async fn the_last_audit_record_is_on_disk_after_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let audit = dir.path().join("audit").join("transparency.jsonl");
+    let yaml = format!(
+        "backends:\n  fixture:\n    http_url: \"{}\"\n    streamable_http: true\n\
+         tasks:\n  store_dir: {}\n\
+         security:\n  transparency_log:\n    enabled: true\n    path: {}\n",
+        spawn_backend().await,
+        serde_json::to_string(&dir.path().join("tasks").display().to_string())
+            .expect("a JSON string"),
+        serde_json::to_string(&audit.display().to_string()).expect("a JSON string"),
+    );
+    let mut child = command_with(&dir, &yaml)
+        .spawn()
+        .expect("spawn shipped binary");
+    let mut stdin = child.stdin.take().expect("stdin");
+    let mut lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
+    let mut stderr = child.stderr.take().expect("stderr");
+    let stderr_text = tokio::spawn(async move {
+        let mut text = String::new();
+        drop(tokio::io::AsyncReadExt::read_to_string(&mut stderr, &mut text).await);
+        text
+    });
+    let call = serde_json::json!({
+        "jsonrpc": "2.0", "id": "call-1", "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "fixture", "tool": "echo", "arguments": {},
+        }},
+    });
+    stdin
+        .write_all(format!("{}\n{call}\n", initialize()).as_bytes())
+        .await
+        .expect("write the requests");
+    let answered = tokio::time::timeout(WRITE_BOUND, async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let frame: serde_json::Value = serde_json::from_str(&line).expect("one JSON frame");
+            if frame["id"] == "call-1" {
+                return Some(frame);
+            }
+        }
+        None
+    })
+    .await
+    .expect("the call is answered")
+    .expect("stdout stays open until the answer");
+    assert!(answered.get("result").is_some(), "{answered}");
+    drop(stdin);
+    while let Ok(Some(_)) = lines.next_line().await {}
+    let status = tokio::time::timeout(EXIT_BOUND, child.wait())
+        .await
+        .expect("the gateway exits")
+        .expect("reap child");
+    let stderr = stderr_text.await.unwrap_or_default();
+    assert!(status.success(), "{status}; stderr:\n{stderr}");
+    let log = std::fs::read_to_string(&audit).expect("the audit log exists");
+    assert!(
+        log.lines()
+            .any(|line| line.contains("request_hash") && line.contains("\"echo\"")),
+        "the call's invocation record is on disk:\n{log}"
+    );
 }
