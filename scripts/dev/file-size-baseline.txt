@@ -35,7 +35,6 @@
 1006 src/protocol/messages.rs
 1004 src/ranking/tests.rs
 1002 src/runtime/provider.rs
-984 src/idempotency/admission.rs
 978 src/gateway/server/support.rs
 970 src/ranking/mod.rs
 964 src/gateway/meta_mcp_tool_defs.rs
