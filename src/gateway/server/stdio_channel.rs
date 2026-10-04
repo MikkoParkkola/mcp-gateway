@@ -367,6 +367,14 @@ mod tests {
         assert!(!channel.resolve("elicit-gone", json!({"result": {}})));
     }
 
+    /// MIK-7324.COV.3 (C6 stdio 6): any `method` member makes the frame a
+    /// request, whatever its type, so a null method with an id is no reply.
+    #[test]
+    fn a_frame_with_a_null_method_is_not_a_reply() {
+        let frame = json!({"jsonrpc": "2.0", "id": "elicit-1", "method": null});
+        assert_eq!(StdioClientChannel::reply_id(&frame), None, "{frame}");
+    }
+
     /// MIK-7324.COV.3 (C6 stdio 8): a reply naming an id nobody waits on is
     /// never handed to a different request that is waiting.
     #[test]

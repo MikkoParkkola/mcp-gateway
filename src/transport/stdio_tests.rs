@@ -37,6 +37,27 @@ fn pending_request_guard_removes_entry_on_drop() {
     assert!(pending.is_empty(), "guard drop removes the entry");
 }
 
+/// MIK-7324.COV.3 (C6 stdio 1): a response is delivered only to the request
+/// pending under its own id; a response for an id nobody waits on reaches no
+/// other caller.
+#[test]
+fn a_response_for_an_id_nobody_waits_on_reaches_no_other_caller() {
+    let transport = make_transport("cat");
+    let (tx, mut answer) = oneshot::channel::<crate::protocol::JsonRpcResponse>();
+    transport.pending.insert("7".to_string(), tx);
+    transport
+        .handle_response(r#"{"jsonrpc":"2.0","id":8,"result":{}}"#)
+        .expect("a response must not fail the read loop");
+    assert!(
+        transport.pending.contains_key("7"),
+        "another id's response consumed the pending request"
+    );
+    assert!(
+        answer.try_recv().is_err(),
+        "the pending request received another id's response"
+    );
+}
+
 fn make_transport(cmd: &str) -> Arc<StdioTransport> {
     StdioTransport::new(
         cmd,
