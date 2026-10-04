@@ -17,9 +17,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 /// echoes a 200-byte id, so 4000 of them are about 1 MiB, past the largest
 /// pipe a Linux or macOS host gives by default.
 const PINGS: usize = 4000;
-/// `STDIO_DRAIN_TIMEOUT` (30 s) + `STDIO_TEARDOWN_TIMEOUT` (10 s, a maximum)
-/// + the runtime shutdown bound (10 s), plus margin. Private constants of the
-/// library, so restated here; a change there must move this.
+/// The sum of `STDIO_DRAIN_TIMEOUT` (30 s), `STDIO_TEARDOWN_TIMEOUT` (10 s, a
+/// maximum) and the runtime shutdown bound (10 s), plus margin. They are
+/// private constants of the binary, so restated here; a change there must
+/// move this.
 const EXIT_BOUND: Duration = Duration::from_secs(65);
 /// Writing the requests, bounded apart from the exit.
 const WRITE_BOUND: Duration = Duration::from_secs(30);

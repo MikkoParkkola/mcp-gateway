@@ -33,7 +33,7 @@ fn a_panic_in_the_main_body_reaches_the_caller() {
 /// blocking work, whose audit and store flushes are not proven finished.
 #[test]
 fn only_stdio_serve_bounds_the_runtime_shutdown() {
-    use crate::{RuntimeShutdown, STDIO_RUNTIME_SHUTDOWN_TIMEOUT};
+    use crate::runtime::{RuntimeShutdown, STDIO_RUNTIME_SHUTDOWN_TIMEOUT};
     use mcp_gateway::cli::Command;
     assert_eq!(
         RuntimeShutdown::of(Some(&Command::Serve { stdio: true })),
