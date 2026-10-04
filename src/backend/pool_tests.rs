@@ -1624,19 +1624,9 @@ done
 
 // GW.IDLE.RACE.10 - a start racing shutdown must never outlive it.
 //
-// This is the ORDINARY start path, not force_restart: every client request
-// reaches it, and it takes no lifecycle lock, so it can genuinely be mid-start
-// when shutdown runs. If publishing is not ordered against shutdown's pool
-// traversal, the transport lands in a slot `stop()` has already visited and
-// will never revisit - and the child outlives the gateway with nothing holding
-// a handle to close it.
-//
-// Asserting the latch is "set before the traversal" is not enough on its own:
-// an implementation could take every transport out, THEN latch, then close, and
-// still leave exactly this gap. So the test drives the race itself and checks
-// the only thing that matters - after shutdown returns, is anything still
-// alive? The witness is the process table.
-//
+// The ORDINARY start path (no lifecycle lock) can be mid-start when shutdown
+// runs; unless publishing is ordered against the pool traversal its child
+// outlives the gateway. The test drives the race and checks the process table.
 #[cfg(unix)] // Unix-only: the witness is read via kill(1).
 #[tokio::test(flavor = "multi_thread")]
 async fn an_ordinary_start_racing_shutdown_leaves_no_child_behind() {
@@ -1647,7 +1637,7 @@ async fn an_ordinary_start_racing_shutdown_leaves_no_child_behind() {
         &server,
         format!(
             r#"echo $$ > "{}"
-sleep 3
+i=0; while [ ! -e "{}" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done
 while IFS= read -r request; do
     case "$request" in
         *'"method":"initialize"'*)
@@ -1656,7 +1646,8 @@ while IFS= read -r request; do
     esac
 done
 "#,
-            pidfile.display()
+            pidfile.display(),
+            dir.path().join("release").display()
         ),
     )
     .expect("write server");
@@ -1671,9 +1662,7 @@ done
         tokio::spawn(async move { backend.ensure_started().await })
     };
 
-    // Wait for the child to spawn and record its pid; it is then in its
-    // pre-handshake delay, so the start is genuinely in flight when shutdown
-    // begins. A fixed sleep here failed under a loaded or instrumented host.
+    // The child blocks on a release file written once stop() has set its latch.
     let deadline = std::time::Instant::now() + Duration::from_millis(2500);
     while !std::fs::read_to_string(&pidfile).is_ok_and(|pid| !pid.trim().is_empty())
         && std::time::Instant::now() < deadline
@@ -1693,7 +1682,16 @@ done
     };
     assert!(alive(), "precondition: the racing start's child is running");
 
+    let release = dir.path().join("release");
+    let (gate, released) = (Arc::clone(&backend), release.clone());
+    tokio::spawn(async move {
+        while !gate.replaced_transport_cleanups.lock().stopping {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        std::fs::write(released, "").expect("release the child");
+    });
     backend.stop().await.expect("stop");
+    assert!(release.exists(), "child ran past the gate");
 
     // Checked BEFORE awaiting the starter: awaiting it first would only prove
     // the child dies EVENTUALLY (the publish refusal closes it). The claim is

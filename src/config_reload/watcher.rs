@@ -102,7 +102,11 @@ impl ConfigWatcher {
     ///
     /// # Errors
     ///
-    /// Returns an error if the underlying `notify` watcher cannot be created.
+    /// Returns an error if the underlying `notify` watcher cannot be created,
+    /// or if the registry refuses the destination pairing: under the
+    /// `hardened` posture, a backend that already connected over HTTP or
+    /// WebSocket before any destination policy was stamped cannot be pinned in
+    /// place (MIK-7700), and nothing is started.
     pub fn start(
         config_path: PathBuf,
         live_config: Arc<LiveConfig>,

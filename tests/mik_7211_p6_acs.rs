@@ -92,6 +92,7 @@ mod source_checks {
             "src/gateway/meta_mcp/chain_emission_tests.rs",
             "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
             "src/gateway/meta_mcp/signing_delivery_scope_tests.rs",
+            "src/gateway/outbound/tests.rs",
             "src/gateway/router/handlers/tasks/scope_tests.rs",
             "src/gateway/server/tests/stdio_cache_scope.rs",
             "src/gateway/task_service/execution/scope_tests.rs",

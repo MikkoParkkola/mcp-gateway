@@ -168,6 +168,9 @@ pub struct ReloadContext {
     /// Cancelled when the gateway starts shutting down; every reload wait
     /// ends on it. Never cancelled unless the server wires one in.
     pub(super) stop: tokio_util::sync::CancellationToken,
+    /// The capability backend whose listing the env overlay can change: a key
+    /// set or removed in an env file turns a keyed capability on or off.
+    pub(super) capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
 }
 
 /// The refusal a reload returns when the gateway's shutdown ended its wait.
@@ -231,7 +234,31 @@ impl ReloadContext {
             load: load_config_patch,
             spawn: spawn_load_thread,
             stop: tokio_util::sync::CancellationToken::new(),
+            capabilities: None,
         })
+    }
+
+    /// Announce `tools/list_changed` for `capabilities` when a reload's env
+    /// overlay changes what it lists (a login or key edit).
+    #[must_use]
+    pub(crate) fn with_capabilities(
+        mut self,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
+    ) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
+    /// Publish `overlay` and, when it changes what the capability backend
+    /// lists, send the same tools-changed notice a registry change sends.
+    fn publish_overlay(&self, overlay: Arc<crate::config::EnvOverlay>) {
+        let before = self.capabilities.as_ref().map(|c| c.listed_names());
+        self.env.set(overlay);
+        if let (Some(capabilities), Some(before)) = (&self.capabilities, before)
+            && capabilities.listed_names() != before
+        {
+            self.registry.announce_change(&capabilities.name);
+        }
     }
 
     /// Stop this context's reload waits when `stop` is cancelled (#1808).
@@ -582,7 +609,7 @@ impl ReloadContext {
             // The env files can rotate under an unchanged config file, so the
             // overlay is published even here — a resolver reading the old one
             // would serve a value the operator has already replaced.
-            self.env.set(overlay);
+            self.publish_overlay(overlay);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
@@ -690,7 +717,7 @@ impl ReloadContext {
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
         self.live_config.set(new_config);
-        self.env.set(overlay);
+        self.publish_overlay(overlay);
 
         Ok(with_pending_restart(
             outcome,

@@ -69,18 +69,26 @@ pub enum ClaimVerdict {
 /// Score one claim against the facts in a receipt.
 ///
 /// This is the whole adjudication logic. It reads *only* observed facts
-/// (`backend_ok`, `row_count`) and never infers meaning the receipt does not
+/// (`subject_kind`, `backend_ok`, `row_count`) and never infers meaning the receipt does not
 /// carry — in particular an absent `row_count` is treated as "not observed"
 /// (→ `Abstain`), never as zero. A failed call can never support any positive
 /// claim, which is the checked-empty-vs-could-not-check distinction made
 /// structural.
 #[must_use]
 pub fn score(claim: &Claim, receipt: &RuntimeProvenanceReceipt) -> ClaimVerdict {
+    // An event receipt describes a delivery, not a tool result: it has no
+    // observed result facts to judge a claim by (MIK-7859).
+    if receipt.subject_kind == super::CbomSubjectKind::Event {
+        return ClaimVerdict::Abstain;
+    }
     // A call the backend reported as failed cannot support any claim about what
     // the source "said" — this is could-not-check, never an authoritative fact.
     // Every claim (success, empty, count) is unsupported by a failure.
-    if !receipt.backend_ok {
-        return ClaimVerdict::Unsupported;
+    match receipt.backend_ok {
+        Some(false) => return ClaimVerdict::Unsupported,
+        // Not observed: could-not-check, never a success.
+        None => return ClaimVerdict::Abstain,
+        Some(true) => {}
     }
 
     match claim {
@@ -389,6 +397,20 @@ mod tests {
         );
     }
 
+    /// MIK-7859 SCORE.2: an event receipt describes a delivery, not a tool
+    /// result, so no claim about a result is supported or contradicted by it.
+    #[test]
+    fn an_event_receipt_scores_every_claim_as_could_not_check() {
+        let receipt = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
+        for claim in [
+            Claim::Succeeded,
+            Claim::AuthoritativeEmpty,
+            Claim::FoundRows { count: 1 },
+        ] {
+            assert_eq!(score(&claim, &receipt), ClaimVerdict::Abstain, "{claim:?}");
+        }
+    }
+
     /// MIK-6904.RUNG2.3 — the report keeps could-not-check separate from
     /// authoritative-negative. The fixture contains at least one of each and
     /// they land in different buckets.
@@ -418,7 +440,7 @@ mod tests {
             signed: signed_receipt(true, None, CacheOutcome::Miss),
         };
         // Tamper: flip an observed fact without re-signing.
-        case.signed.receipt.backend_ok = false;
+        case.signed.receipt.backend_ok = Some(false);
         let report = replay(&[case], &validator());
         assert_eq!(report.rejected, 1);
         assert_eq!(report.supported + report.unsupported + report.abstained, 0);
@@ -554,7 +576,7 @@ mod tests {
         let mut receipt = signed_receipt_with_call_id("gw-call-1", true, None);
         // Tamper after signing without re-signing — the HMAC no longer covers
         // the mutated fact.
-        receipt.receipt.backend_ok = false;
+        receipt.receipt.backend_ok = Some(false);
         let records = vec![CorpusRecord {
             call_id: "gw-call-1".to_string(),
             claim: Claim::Succeeded,

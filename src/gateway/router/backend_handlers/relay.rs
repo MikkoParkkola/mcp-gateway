@@ -60,14 +60,31 @@ pub(super) fn relay_refusal(
 ) -> Option<BackendRejection> {
     let (key, keyed) = direct_caller(auth, session_id);
     let caller = RelayCaller::new(&key, keyed);
-    let message =
-        fw.relay_block_message(caller, (backend, tool), params, (session_id, caller_name))?;
+    // The progress token is the gateway's own, substituted for the client's:
+    // it is not content the caller sent, so it is not scanned (MIK-7832).
+    let scanned = without_progress_token(params);
+    let message = fw.relay_block_message(
+        caller,
+        (backend, tool),
+        scanned.as_ref().unwrap_or(params),
+        (session_id, caller_name),
+    )?;
     Some(backend_security_error_with_status(
         id,
         -32002,
         &message,
         StatusCode::FORBIDDEN,
     ))
+}
+
+/// `params` without `_meta.progressToken`; `None` when it carries none.
+fn without_progress_token(params: &Value) -> Option<Value> {
+    params.pointer("/_meta/progressToken")?;
+    let mut copy = params.clone();
+    copy.get_mut("_meta")?
+        .as_object_mut()?
+        .remove("progressToken");
+    Some(copy)
 }
 
 /// The relay check on a catalogue read's forwarded params (`prompts/get`
@@ -125,6 +142,11 @@ pub(super) fn stage_direct_catalogue(
     let Some(result) = result else {
         return;
     };
+    // Classifying the text is the cost; with relay detection off nothing is
+    // staged, so skip it (MIK-7832).
+    if !state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
+        return;
+    }
     let caller_name = auth.client.map(|c| c.name.as_str());
     let recorded =
         state

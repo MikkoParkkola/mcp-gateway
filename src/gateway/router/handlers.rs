@@ -1772,9 +1772,9 @@ async fn meta_mcp_dispatch(
                         external_tool: &external_tool,
                     },
                 );
-                // A redaction changed the delivery: its staged receipts go.
+                // A redaction changed the delivery: its receipt is rebuilt from what goes out.
                 let delivered = call_response.result.as_ref();
-                crate::gateway::meta_mcp::invoke::relay::discard_if_changed(snapshot, delivered);
+                state.meta_mcp.restage_if_changed(snapshot, delivered);
             }
 
             call_response
@@ -2107,6 +2107,7 @@ fn catalogue_caller(
         key: if keyed { key } else { session_id.to_owned() },
         keyed,
         name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
+        session: session_id.to_owned(),
     }
 }
 

@@ -67,6 +67,19 @@ fn a_legacy_row_without_a_consistent_descriptor_names_nothing() {
     );
 }
 
+/// MIK-7889 (#2620): a row older than the version that introduced `upstream`
+/// cannot have captured a descriptor, so one found there (a downgraded or
+/// forged row whose digest still matches) names nothing, as store.rs does.
+#[test]
+fn a_row_older_than_the_descriptor_version_names_nothing() {
+    for version in [1, 2] {
+        assert!(
+            targets("gateway_invoke", version, Some(upstream(DIGEST))).is_empty(),
+            "version {version}"
+        );
+    }
+}
+
 #[test]
 fn a_legacy_plan_row_names_nothing_even_with_a_descriptor() {
     for plan in ["gateway_execute", "gateway_run_playbook"] {

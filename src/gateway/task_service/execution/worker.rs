@@ -542,8 +542,10 @@ pub(super) fn inspect_settled(
         .meta_mcp()
         .inspect_task_result(&targets, id, result)
         .is_err();
-    // A redaction changed what the task will deliver: its receipts go.
-    crate::gateway::meta_mcp::invoke::relay::discard_if_changed(snapshot, Some(&*result));
+    // A redaction changed what the task will deliver: its receipt is rebuilt from it.
+    state
+        .meta_mcp()
+        .restage_if_changed(snapshot, Some(&*result));
     if refused {
         response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
             response.id,

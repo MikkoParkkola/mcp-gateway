@@ -136,7 +136,7 @@ backend" and "fails a capability file" first.**
 | 109 | A backend or capability call whose destination the SSRF guard refuses after DNS resolution answers `-32600 "SSRF blocked: ..."` on the first attempt, in every posture; before, it was tried three times and answered `-32000`. Under `security.posture: hardened`, HTTP and WebSocket backends reach only public addresses: `localhost` and private-network backends are refused | Match the new code where a client matched `-32000` for this case. Under `hardened`, run a local backend over stdio, or keep it on `standard` |
 | 110 | With `tenant_guard.arg_keys` set, invocation records name the tenants a call reached (hashed), and an `attribution` field says how far that reaches: `cached_delivery`, `uninspected` (part of the response was not read: JSON text over 1 MiB, JSON-shaped text that fails to parse or nests too deep, encoding nested past three layers, or a reply refused for its signature chain) or `cached_delivery_uninspected` | With `uninspected`, the listed `tenants` were read, but the response may reach others that were not: do not read an empty or short list as complete. None for deployments without `arg_keys` |
 | 111 | A stdio gateway keeps durable tasks for its local operator in `<tasks.store_dir>/stdio`, its own directory beside HTTP's: `tasks/get`, `tasks/update` and `tasks/cancel` now answer on stdio, and no HTTP caller can reach a stdio task. A second stdio gateway on the same config finds that store held and serves without tasks, advertising none. An HTTP gateway pointed explicitly at a store a stdio gateway holds fails to start, and its error names the likely holder | Nothing for separate stores. If you set two configs' `tasks.store_dir` so that HTTP lands on another gateway's `stdio` directory, give each gateway its own `tasks.store_dir`. Back up `tasks.store_dir` with every gateway that writes under it stopped |
-| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result whose nonce was admitted, on `/mcp` and `/mcp/{backend}`, is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]` (answers given before admission are unsigned); a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
+| 112 | Under `security.posture: hardened`, message signing is forced on and needs a 32-byte secret; every successful `tools/call` result whose nonce was admitted, on `/mcp`, `/mcp/{backend}` and over `serve --stdio`, is signed over the nonce in `params._meta["io.mcp-gateway/nonce"]` (answers given before admission are unsigned); a legacy client must declare elicitation, the direct route serves legacy clients only their `initialize`, and an unconfirmable legacy destructive call is refused | Before adopting `hardened`: set `security.message_signing.shared_secret`, send one fresh nonce per `tools/call`, and make legacy clients declare elicitation (or move them to 2026-07-28) |
 | 113 | A task the backend answered with its own upstream task now writes a second invocation record when the gateway settles it: `route: "task_recovery"`, `correlation_source: "task_id"`, joined to the submission record by a new `task_id` field. Under `FailClosed`, a failed write settles the task `-32005` with no backend content | Readers that assume one record per call, or that `route` is `meta` or `direct`, see a new value. None without a transparency log |
 | 114 | Under `security.posture: hardened`, backends named in `security.hardened.private_backends` may reach loopback, RFC 1918 and unique-local addresses (never link-local or `fd00:ec2::254`); every other backend stays public-only. A listed name that is not a configured backend refuses start, and changing the list needs a restart | To run a local or in-cluster HTTP backend under `hardened`, list it; list only what needs it |
 | 115 | A legacy session now expires after `streaming.session_ttl` of inactivity, not at that age; when it ends (an owned `DELETE /mcp` or the reaper), its routing profile, workflow state, cost bucket and other per-session state are reclaimed, and its cost stays in the aggregate | None. A client that kept a session open across the 30-minute mark keeps it, and its profile, while it stays active |
@@ -162,6 +162,9 @@ backend" and "fails a capability file" first.**
 | 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
 | 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
+| 138 | `mcp_gateway::key_server::oidc::OidcError` gained three variants (`InsecureIssuer`, `InsecureFetch`, `ClientUnavailable`) and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles | Add the three arms, or end the `match` with a wildcard arm |
+| 139 | A relay refusal of a catalogue read (`prompts/get`, `resources/read`) on the meta route now answers HTTP 403, as a `tools/call` relay refusal does; before it was HTTP 200 with the error in the body | A client that branches on the HTTP status of a refused catalogue read should treat 403 as a refusal; the JSON-RPC error (`-32002`) is unchanged |
+| 140 | `RuntimeProvenanceReceipt::backend_ok` is now `Option<bool>`, and an event receipt carries none (the JSON has no `backend_ok` field). Before, an event receipt claimed `true`, which nothing had observed | An embedder that reads or builds the field uses `Some(..)`; a verifier reads `subject_kind` first and treats a missing `backend_ok` as not observed. Receipts already stored still read |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3257,8 +3260,13 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
 - **Signing.** `security.message_signing.enabled` is forced on, whatever the file says, so
   `security.message_signing.shared_secret` must resolve to at least 32 bytes (an env-only
   `${VAR}` reference resolves) or the gateway refuses to start. Every successful `tools/call`
-  result whose nonce was admitted, on `/mcp` and on `/mcp/{backend}`, carries the v2
-  `_signature`. Its nonce is
+  result whose nonce was admitted, on `/mcp`, on `/mcp/{backend}` and over `serve --stdio`,
+  carries the v2 `_signature`. Over stdio the posture is the one the process started with, and
+  every `tools/call`, not only `gateway_invoke`, is signed when its nonce is admitted, and
+  needs one when `require_nonce` is true (with it false, a call that sends no nonce is not
+  replay-checked, as on HTTP); a stdio caller
+  is still the operator who spawned the process (SECURITY.md), so signing there proves the
+  answer's origin and stops a replayed nonce, it does not change who may call. Its nonce is
   `params._meta["io.mcp-gateway/nonce"]` (`gateway_invoke` keeps `arguments.nonce`; sending both
   is refused `-32602`). A nonce is admitted once, before dispatch, in one replay store for both
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
@@ -3583,8 +3591,12 @@ REST with an empty URL. It now runs the command, under these rules:
   area, with a cleared environment plus the names the capability lists, and is killed with every
   process it started when it times out or its output passes the cap.
 - A parameter that names a file must resolve inside the configured `capabilities.files.<root>`; no root
-  is configured by default. A parameter that names a network destination makes the capability refuse
-  to run, because the gateway cannot confine where a child process connects.
+  is configured by default. The check canonicalizes the path, then the child opens it: a local process
+  that can write inside a root can swap a path for a symlink between the two, so no other user (by
+  owner, group or ACL) may write to a root (`uploads`, `projects`, `downloads`) or to any directory
+  above it. A parameter that names a
+  network destination makes the capability refuse to run, because the gateway cannot confine where a
+  child process connects.
 
 **Action:** to keep 3.x behaviour, set `capabilities.process_execution: disabled`. To run your own CLI
 capabilities, pin them (`mcp-gateway cap pin`) and list their commands in
@@ -3654,7 +3666,7 @@ frames name more than one tenant inside `window_secs`, the new key
 audit record with `cross_tenant_read: flagged` (for an answer on `POST /mcp`, the same fields ride the answer's own `response_delivery_attempt` record, so it costs no second record), `block` withholds the frame with a JSON-RPC
 error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
 Tenant ids are compared across backends, so two backends that reuse one id count as one tenant.
-Name tenant fields that appear inside backend content in `arg_keys`; the names of protocol members the gateway writes itself (`jsonrpc`, `id`, `method`, `params`, `result`, `error`, `data`, `cacheScope`, and the event envelope's own members) are matched inside content only, not on the wrapper. A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
+Name tenant fields that appear inside backend content in `arg_keys`. The judge scans the document that is emitted, so a configured name equal to a wrapper member (`message`, `method`, `source`, `event_id`) also attributes, for responses, notifications and non-message stream events (#2846). A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
 
 **Action:** none. Set `off` to silence it, or `block` to withhold such frames; namespace tenant
 ids that two backends reuse.
@@ -3717,6 +3729,30 @@ The embedded script that wrote a caller-chosen path is gone. A declarative `save
 Through 3.x the gateway read a stdio backend's output line by line with no ceiling, so a peer that never sent a newline could grow its memory without bound. A message (one line) over 16 MiB now fails the call and stops that backend's process; the error names the backend setting.
 
 **Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid only on a backend declared with a `command`.
+
+## 138. `OidcError` gained three variants
+
+**Startup:** no notice, a library API change rather than a change to running behaviour
+
+`mcp_gateway::key_server::oidc::OidcError` is a public enum, and it is not `#[non_exhaustive]`. Since 3.5.x it has three new variants, all unit variants with no payload because the refused URL is never echoed (it can carry userinfo, a path or a query): `InsecureIssuer` (a provider issuer that is cleartext and off this machine), `InsecureFetch` (a discovery or JWKS fetch that names such a URL) and `ClientUnavailable` (the HTTP client could not be built at startup). A `match` on `OidcError` that lists every variant and has no wildcard arm no longer compiles. The gateway binary and its configuration are not affected.
+
+**Action:** an embedder that matches on `OidcError` adds the three arms, or ends the `match` with `_ =>`. Treat all three as a refusal of the token or the provider, the same as `InsecureJwksUri`.
+
+## 139. A catalogue relay refusal answers HTTP 403 on the meta route
+
+**Startup:** no notice, the status changes for a refused catalogue read from the first request
+
+With relay detection set to `block`, a `prompts/get` whose arguments, or a `resources/read` whose URI, carry content another caller was delivered is refused with JSON-RPC error `-32002`. On the meta route that refusal used to travel as HTTP 200 with the error in the body, while the same refusal of a `tools/call` answered 403. Both now answer 403. The JSON-RPC error code and message are unchanged, and the direct route already answered 403.
+
+**Action:** a client that reads the HTTP status of a meta-route catalogue read and treats 200 as "the call was answered" should handle 403 as a refusal and read the JSON-RPC error from the body, as it already does for a refused `tools/call`. A client that only reads the JSON-RPC body needs no change.
+
+## 140. `backend_ok` on a provenance receipt is optional
+
+**Startup:** no notice, a library API and receipt-format change rather than a change to running behaviour
+
+`mcp_gateway::trust::RuntimeProvenanceReceipt::backend_ok` was a `bool`. It is now `Option<bool>`: an event receipt (`subject_kind: event`) carries `None` and its JSON has no `backend_ok` field, because an event is a delivery, not a tool result, and nothing observed a success. Through the 4.0 betas an event receipt signed `backend_ok: true`. Runtime receipts are unchanged on the wire (`true` or `false`, same field position), so stored receipts and their signatures still verify and read. Replay scoring abstains on an event receipt, and on any receipt without the field.
+
+**Action:** an embedder that reads `receipt.backend_ok` as a `bool`, or sets it, uses `Option<bool>` (`Some(true)`, `Some(false)`). A verifier treats a missing `backend_ok` as not observed, never as success.
 
 ## Upgrading from 3.5.x: a walkthrough
 

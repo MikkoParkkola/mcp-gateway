@@ -81,10 +81,13 @@ impl SessionFrame {
 struct ClientSession {
     /// Session ID; prints as its fingerprint.
     id: SessionId,
-    /// Notification sender, opened on first subscribe or fan-out. A POST-only
-    /// session never holds a receiver, and a broadcast send with no receiver
-    /// delivers nothing, so it never needs the channel's buffer
-    /// (NFR.WORKLOAD.1).
+    /// Notification sender, opened by the first subscribe and by nothing else:
+    /// a send, fan-out included, to an unopened sender is refused as a send
+    /// with no receiver is. A POST-only session therefore never allocates the
+    /// channel or its buffer (NFR.WORKLOAD.1). The session is in the store
+    /// before this is set; every reader treats an unset sender as one with
+    /// no receiver, and `OnceLock` gives concurrent subscribers one channel
+    /// (MIK-7853.RACE.1).
     tx: OnceLock<broadcast::Sender<SessionFrame>>,
     /// Capacity the sender opens with.
     capacity: usize,
@@ -240,17 +243,15 @@ impl NotificationMultiplexer {
         let key = key.as_deref();
         let mark = match self.reads.get() {
             None => None,
-            Some(judge) => {
-                match judge.judge(key, &notification.data, &notification.event_type, hidden) {
-                    Ok(mark) => mark.map(Box::new),
-                    Err(()) => {
-                        return Err(broadcast::error::SendError(SessionFrame {
-                            note: notification,
-                            mark: None,
-                        }));
-                    }
+            Some(judge) => match judge.judge(key, &notification, hidden) {
+                Ok(mark) => mark.map(Box::new),
+                Err(()) => {
+                    return Err(broadcast::error::SendError(SessionFrame {
+                        note: notification,
+                        mark: None,
+                    }));
                 }
-            }
+            },
         };
         session.send(SessionFrame {
             note: notification,

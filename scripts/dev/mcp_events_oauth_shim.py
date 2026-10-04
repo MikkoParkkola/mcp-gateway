@@ -18,6 +18,13 @@ import argparse, os, base64, hashlib, http.client, json, secrets, sys, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
+MAX_BODY = 1 << 20  # a request body over this is refused before it is read
+
+
+class TooLarge(Exception):
+    pass
+
+
 CODES = {}
 REFRESH = set()
 CLIENTS = {}  # client_id -> registered redirect_uris
@@ -43,13 +50,22 @@ class Shim(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(raw)))
+        # Token and registration answers carry credentials: never cacheable.
+        self.send_header("cache-control", "no-store")
+        self.send_header("pragma", "no-cache")
         for k, v in headers:
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(raw)
 
     def body(self):
-        return self.rfile.read(int(self.headers.get("content-length") or 0))
+        try:
+            length = int(self.headers.get("content-length") or 0)
+        except ValueError:
+            raise TooLarge from None
+        if length < 0 or length > MAX_BODY:
+            raise TooLarge
+        return self.rfile.read(length)
 
     def do_GET(self):
         self.route("GET")
@@ -61,6 +77,12 @@ class Shim(BaseHTTPRequestHandler):
         self.route("DELETE")
 
     def route(self, verb):
+        try:
+            self.dispatch(verb)
+        except TooLarge:
+            self.send_json(413, {"error": "request_too_large"})
+
+    def dispatch(self, verb):
         path = urlparse(self.path).path
         o = self.origin()
         if path.startswith("/.well-known/oauth-protected-resource"):
@@ -155,11 +177,23 @@ class Shim(BaseHTTPRequestHandler):
 
     def proxy(self, verb, path):
         data = self.body()
-        rpc = []
+        rpc, rpc_params = [], []
         if path == "/mcp" and verb == "POST":
             try:
                 doc = json.loads(data)
-                rpc = [d.get("method") for d in (doc if isinstance(doc, list) else [doc])]
+                calls = doc if isinstance(doc, list) else [doc]
+                rpc = [d.get("method") for d in calls]
+                # Subscription identity only (never the delivery url or secret):
+                # the evidence check must see WHICH subscription a call named.
+                for d in calls:
+                    if d.get("method") in ("events/subscribe", "events/unsubscribe"):
+                        p = d.get("params") or {}
+                        args = p.get("arguments") if isinstance(p.get("arguments"), dict) else {}
+                        # Allowlisted filter keys only: arguments are caller-supplied.
+                        rpc_params.append({"method": d["method"], "name": p.get("name"),
+                                           "arguments": {k: v for k, v in args.items()
+                                                         if k in ("repo", "ref", "event_type")
+                                                         and isinstance(v, str)}})
             except (ValueError, AttributeError):
                 pass
         headers = {k: v for k, v in self.headers.items()
@@ -186,17 +220,34 @@ class Shim(BaseHTTPRequestHandler):
         entry = {"kind": "http", "verb": verb, "path": path.split("?")[0], "status": resp.status}
         if rpc:
             entry["rpc"] = rpc
-            try:
-                text = out.decode()
-                if stream:
-                    text = [ln[5:] for ln in text.splitlines() if ln.startswith("data:")][-1]
-                reply = json.loads(text)
-                reply = reply[0] if isinstance(reply, list) else reply
-                entry["error_code"] = (reply.get("error") or {}).get("code")
-                entry["result_has_id"] = "id" in (reply.get("result") or {})
-            except (ValueError, AttributeError, IndexError) as e:
-                entry["parse_error"] = type(e).__name__
+            if rpc_params:
+                entry["rpc_params"] = rpc_params
+            entry.update(reply_facts(out.decode(errors="replace"), stream))
         self.evidence(**entry)
+
+
+def reply_facts(text, stream):
+    """What the evidence check may rely on about one upstream reply body.
+
+    Fail closed: only a JSON-RPC object with a `result` and no `error` has
+    `reply_ok`; anything that does not parse, or is not an object, carries
+    `parse_error` instead.
+    """
+    try:
+        if stream:
+            text = [ln[5:] for ln in text.splitlines() if ln.startswith("data:")][-1]
+        reply = json.loads(text)
+        reply = reply[0] if isinstance(reply, list) else reply
+        if not isinstance(reply, dict):
+            return {"reply_ok": False, "parse_error": "NotAnObject"}
+        facts = {"reply_ok": "result" in reply and "error" not in reply,
+                 "error_code": (reply.get("error") or {}).get("code") if isinstance(reply.get("error"), dict) else None,
+                 "result_has_id": "id" in (reply.get("result") or {})}
+        if isinstance((reply.get("result") or {}).get("id"), str):
+            facts["result_id"] = reply["result"]["id"]
+        return facts
+    except (ValueError, AttributeError, IndexError, TypeError) as e:
+        return {"reply_ok": False, "parse_error": type(e).__name__}
 
 
 def main():
