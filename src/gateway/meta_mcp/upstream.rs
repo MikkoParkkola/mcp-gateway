@@ -82,8 +82,8 @@ fn read_query(response: JsonRpcResponse) -> UpstreamAnswer {
             .get("result")
             .cloned()
             .map_or(UpstreamAnswer::Unavailable, UpstreamAnswer::Completed),
-        Some("failed") => UpstreamAnswer::Failed(failed_error(result.get("error"))),
-        Some("cancelled") => UpstreamAnswer::Failed(JsonRpcError {
+        Some("failed") => failed_answer(result.get("error")),
+        Some("cancelled") => UpstreamAnswer::Substituted(JsonRpcError {
             code: -32603,
             message: "the upstream task was cancelled".into(),
             data: None,
@@ -96,22 +96,29 @@ fn read_query(response: JsonRpcResponse) -> UpstreamAnswer {
     }
 }
 
-/// The peer's `error` payload, or a stated substitute when it sent none.
-fn failed_error(error: Option<&Value>) -> JsonRpcError {
+/// The peer's `error` payload, or the gateway's stated substitute when it
+/// sent no message. A substitute keeps the peer's code but none of its bytes:
+/// the gateway wrote it, so nothing in it is the peer's (MIK-7887.RECEIPT.1).
+fn failed_answer(error: Option<&Value>) -> UpstreamAnswer {
     let code = error
         .and_then(|error| error.get("code"))
         .and_then(Value::as_i64)
         .and_then(|code| i32::try_from(code).ok())
         .unwrap_or(-32603);
-    let message = error
+    match error
         .and_then(|error| error.get("message"))
         .and_then(Value::as_str)
-        .unwrap_or("the upstream task failed without a message")
-        .to_owned();
-    JsonRpcError {
-        code,
-        message,
-        data: error.and_then(|error| error.get("data").cloned()),
+    {
+        Some(message) => UpstreamAnswer::Failed(JsonRpcError {
+            code,
+            message: message.to_owned(),
+            data: error.and_then(|error| error.get("data").cloned()),
+        }),
+        None => UpstreamAnswer::Substituted(JsonRpcError {
+            code,
+            message: "the upstream task failed without a message".to_owned(),
+            data: None,
+        }),
     }
 }
 

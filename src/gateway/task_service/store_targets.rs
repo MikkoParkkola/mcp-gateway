@@ -9,7 +9,9 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
-use crate::gateway::task_service::record::{CommittedTask, Record, TARGET_VERSION, Target};
+use crate::gateway::task_service::record::{
+    CommittedTask, ErrorAuthor, Record, TARGET_VERSION, Target,
+};
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
 
@@ -59,10 +61,32 @@ impl TaskStore {
         (event, targets): (TaskTransition, Option<Vec<Target>>),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
+        self.settle_bounded_by(
+            owner,
+            id,
+            revision,
+            (event, targets),
+            ErrorAuthor::Gateway,
+            at,
+        )
+        .await
+    }
+
+    /// [`Self::settle_bounded`], recording who wrote a `Fail` event's error
+    /// (MIK-7887.RECEIPT.1). The bounded fallback is always the gateway's.
+    pub(crate) async fn settle_bounded_by(
+        &self,
+        owner: &str,
+        id: &str,
+        revision: u64,
+        (event, targets): (TaskTransition, Option<Vec<Target>>),
+        author: ErrorAuthor,
+        at: DateTime<Utc>,
+    ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.settle_bounded_blocking(&owner, &id, revision, (event, targets), at)
+            shared.settle_bounded_blocking(&owner, &id, revision, (event, targets, author), at)
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -152,7 +176,7 @@ impl Shared {
         owner: &str,
         id: &str,
         revision: u64,
-        (event, targets): (TaskTransition, Option<Vec<Target>>),
+        (event, targets, author): (TaskTransition, Option<Vec<Target>>, ErrorAuthor),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
@@ -175,21 +199,28 @@ impl Shared {
         // Last resort: an output-free record. It discards the targets and the
         // recovery descriptor, so it fits whenever any record can, and it is
         // marked so delivery knows its only content is the gateway's own error.
-        match self.settle_attempt(&task, &record, (event, targets, false), at) {
+        match self.settle_attempt(&task, &record, (event, targets, false, author), at) {
             Err(StoreError::Capacity) => {}
             settled => return settled,
         }
-        self.settle_attempt(&task, &record, (bounded, None, true), at)
+        self.settle_attempt(
+            &task,
+            &record,
+            (bounded, None, true, ErrorAuthor::Gateway),
+            at,
+        )
     }
 
     fn settle_attempt(
         &self,
         task: &Task,
         record: &Record,
-        (event, targets, discard): (TaskTransition, Option<Vec<Target>>, bool),
+        (event, targets, discard, author): (TaskTransition, Option<Vec<Target>>, bool, ErrorAuthor),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let (mut task, mut record) = (task.clone(), record.clone());
+        // Only a Fail has an error to attribute; any other outcome clears it.
+        let fails = matches!(event, TaskTransition::Fail(_));
         let change = task
             .transition(event, at)
             .map_err(|_| StoreError::InvalidTransition)?;
@@ -198,6 +229,7 @@ impl Shared {
         }
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
         record.set_model(&task);
+        record.error_author = fails.then_some(author);
         if discard {
             record.targets.clear();
             record.upstream = None;

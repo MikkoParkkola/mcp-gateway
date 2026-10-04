@@ -28,6 +28,7 @@ fn row(task: &Task, version: u32, upstream: Option<UpstreamRecord>) -> Record {
         input_round: None,
         targets: Vec::new(),
         output_free: false,
+        error_author: None,
         admission: AdmissionRecord {
             identity_digest: "identity".to_owned(),
             principal_digest: "principal".to_owned(),
@@ -126,6 +127,7 @@ fn a_row_serves_backend_output_by_status() {
         targets: Vec::new(),
         targets_recorded: true,
         output_free,
+        error_author: None,
         owner_digest: String::new(),
     };
     let working = Task::create("t");

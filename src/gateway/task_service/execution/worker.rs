@@ -8,6 +8,9 @@ use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
 
 use super::input_round::Settling;
+use super::settle_followed::{
+    FollowedJob, rebuild_task_receipt, settle_followed, stage_followed_result,
+};
 use super::settlement::{
     backend_output, interrupted_before_dispatch, interrupted_result, strip_http_status,
 };
@@ -16,8 +19,9 @@ use super::{
     BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
     TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
 };
-use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
+use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
+use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::Target;
 use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
 use crate::gateway::task_service::store::StoreError;
@@ -359,7 +363,7 @@ async fn follow_upstream_job(
     // notes travel with the transition (MIN.1 gap 1).
     let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
         match answer {
-            UpstreamAnswer::Completed(result) => Some(
+            UpstreamAnswer::Completed(result) => Some((
                 match state
                     .meta_mcp()
                     .recover_task_result(&job.server, &job.tool, None, id, result)
@@ -376,37 +380,39 @@ async fn follow_upstream_job(
                         data: None,
                     }),
                 },
-            ),
+                None,
+            )),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
             UpstreamAnswer::Failed(error) => {
-                Some(TaskTransition::Fail(state.meta_mcp().recover_task_error(
+                let peer = strip_http_status(error);
+                let screened = (state.meta_mcp()).recover_task_error(
                     &job.server,
                     &job.tool,
                     None,
                     id,
-                    strip_http_status(error),
-                )))
+                    peer.clone(),
+                );
+                Some((TaskTransition::Fail(screened), Some(peer)))
+            }
+            // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
+            UpstreamAnswer::Substituted(error) => {
+                Some((TaskTransition::Fail(strip_http_status(error)), None))
             }
             // [`poll_to_terminal`] hands back a lease only with a terminal answer.
             UpstreamAnswer::Live | UpstreamAnswer::Unavailable => None,
         }
     })
     .await;
-    if let (Some(event), notes) = processed {
-        // Recorded before the commit, still under the lease, as a live call is
-        // recorded before its result is stored.
-        let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
-            server: &job.server,
-            tool: &job.tool,
+    if let (Some(outcome), notes) = processed {
+        let followed = FollowedJob {
+            job: &job,
+            relay,
             id,
+            principal,
+            revision,
         };
-        let event = state
-            .meta_mcp()
-            .audit_settlement(task, event, &notes, principal)
-            .await;
-        let stored = executor.settle_cas(principal, id, revision, event).await;
-        state.meta_mcp().commit_staged_relay(stored);
+        settle_followed(executor, state, &followed, outcome, &notes).await;
     }
     lease.release(executor, id).await;
 }
@@ -638,7 +644,22 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
+        outcome: (TaskTransition, Option<Vec<Target>>),
+    ) -> bool {
+        self.settle_cas_by(principal, id, revision, outcome, ErrorAuthor::Gateway)
+            .await
+    }
+
+    /// [`Self::settle_cas_with`], recording who wrote a `Fail` event's error
+    /// (MIK-7887.RECEIPT.1). `true` when the stored row delivers backend
+    /// output a relay receipt may be committed for.
+    pub(super) async fn settle_cas_by(
+        &self,
+        principal: &str,
+        id: &str,
+        revision: u64,
         (event, targets): (TaskTransition, Option<Vec<Target>>),
+        author: ErrorAuthor,
     ) -> bool {
         match self
             .commit_transition(TransitionWrite::Settle {
@@ -647,10 +668,11 @@ impl TaskExecutor {
                 revision,
                 event: event.clone(),
                 targets: targets.clone(),
+                author,
             })
             .await
         {
-            Ok(stored) => return stored_completed(&stored),
+            Ok(stored) => return stored_backend_output(&stored),
             Err(CommitFailure::RevisionConflict) => {}
             Err(_) => {
                 tracing::warn!(task_id = %id, "task settlement write failed");
@@ -674,20 +696,23 @@ impl TaskExecutor {
                 revision: current.revision,
                 event,
                 targets,
+                author,
             })
             .await;
         let Ok(stored) = settled else {
             tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
             return false;
         };
-        stored_completed(&stored)
+        stored_backend_output(&stored)
     }
 }
 
-/// Whether a settlement stored a completed result with output: what a relay
-/// receipt may be committed for. A bounded settlement stores no output.
-fn stored_completed(stored: &CommittedTask) -> bool {
-    stored.task.status() == TaskStatus::Completed && !stored.output_free
+/// Whether a settlement stored backend output a relay receipt may be
+/// committed for: a completed result, or (MIK-7887.RECEIPT.1) an error the
+/// gateway established as the peer's. A bounded settlement stores neither.
+fn stored_backend_output(stored: &CommittedTask) -> bool {
+    (stored.task.status() == TaskStatus::Completed && !stored.output_free)
+        || stored.backend_error().is_some()
 }
 
 fn is_terminal(status: TaskStatus) -> bool {
@@ -703,31 +728,4 @@ fn is_terminal(status: TaskStatus) -> bool {
 pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
-}
-
-/// Stage a followed upstream result for `relay` under `target`, as stored: the
-/// backend's own value, never a `gateway_invoke` wrapper (MIK-7887.RECEIPT.4).
-fn stage_followed_result(
-    state: &crate::gateway::task_service::host::LiveHost,
-    relay: crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
-    target: (&str, &str),
-    stored: &serde_json::Value,
-) {
-    state
-        .meta_mcp()
-        .stage_upstream_result(relay, target, stored);
-    rebuild_task_receipt(state, stored, AnswerShape::Literal);
-}
-
-/// MIK-7887.RECEIPT.4: a task's receipt describes its result as stored and
-/// served: `stored` has settlement's marker strip applied, and the rebuild
-/// leaves out the scope the serializer clamps and the gateway's chain.
-fn rebuild_task_receipt(
-    state: &crate::gateway::task_service::host::LiveHost,
-    stored: &serde_json::Value,
-    shape: AnswerShape,
-) {
-    state
-        .meta_mcp()
-        .rebuild_receipt_from_final(Some(stored), GatewayStamps::Legacy, shape);
 }

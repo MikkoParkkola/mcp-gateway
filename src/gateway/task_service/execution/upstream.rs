@@ -277,10 +277,10 @@ impl TaskExecutor {
                 // are retained; nothing is faked terminal or resubmitted.
                 UpstreamAnswer::Live | UpstreamAnswer::Unavailable => return None,
                 UpstreamAnswer::Completed(result) => match finish(backend_output(result)) {
-                    Ok(processed) => TaskTransition::Complete(processed),
+                    Ok(processed) => (TaskTransition::Complete(processed), None),
                     // The same configured output policy that guards a live
                     // dispatch refused this payload. Its refusal is the outcome.
-                    Err(error) => TaskTransition::Fail(strip_http_status(error)),
+                    Err(error) => (TaskTransition::Fail(strip_http_status(error)), None),
                 },
                 // A peer's failure is upstream content, not a gateway verdict:
                 // its message and nested data pass the reader's configured
@@ -288,12 +288,17 @@ impl TaskExecutor {
                 // reaches the durable record or the read that serves it. The
                 // code is preserved.
                 UpstreamAnswer::Failed(error) => {
-                    TaskTransition::Fail(finish_error(strip_http_status(error)))
+                    let peer = strip_http_status(error);
+                    (TaskTransition::Fail(finish_error(peer.clone())), Some(peer))
+                }
+                // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
+                UpstreamAnswer::Substituted(error) => {
+                    (TaskTransition::Fail(strip_http_status(error)), None)
                 }
             })
         })
         .await;
-        let Some(event) = event else {
+        let Some((event, peer)) = event else {
             return Ok(RecoveredRead::Retained);
         };
 
@@ -311,12 +316,15 @@ impl TaskExecutor {
         // meanwhile wins the revision below; the record then stands for a
         // recovery that did not land.
         let event = settle(event, notes).await;
+        // Decided on what is committed, after the audit (MIK-7887.RECEIPT.1).
+        let author = super::settle_followed::error_author(&event, peer.as_ref());
         match self
             .commit_transition(TransitionWrite::Recover {
                 owner_digest,
                 id,
                 revision,
                 event,
+                author,
             })
             .await
         {
