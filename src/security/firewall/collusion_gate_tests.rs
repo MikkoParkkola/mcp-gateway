@@ -217,7 +217,10 @@ fn a_capped_digest_has_no_fingerprint_across_its_cut() {
 
     use super::super::collusion::{CollusionDetector, RelayParams};
     let detector = CollusionDetector::new(RelayParams::default());
-    let text: String = (0..2000).map(|i| format!("w{i:05} ")).collect();
+    let text = (0..2000)
+        .map(|i| format!("w{i:05}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
     assert!(cut);
     let segments = digest.segment_texts();

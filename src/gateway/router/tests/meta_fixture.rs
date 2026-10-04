@@ -13,6 +13,19 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta(
     key_server: Option<Arc<crate::key_server::KeyServer>>,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
+    test_router_app_state_with_meta_and_firewall(auth, key_server, None, configure).await
+}
+
+/// [`test_router_app_state_with_meta`], with `firewall` as the router's own
+/// engine (the response pass), as startup wires it beside the Meta-MCP's.
+pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_firewall(
+    auth: &AuthConfig,
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+    firewall: Option<Arc<crate::security::firewall::Firewall>>,
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fixture {
+    #[cfg(not(feature = "firewall"))]
+    let _ = firewall;
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(configure(MetaMcp::new(Arc::clone(&backends))));
     let streaming_config = StreamingConfig::default();
@@ -52,7 +65,7 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta(
         capability_dirs: Vec::new(),
         config_path: None,
         #[cfg(feature = "firewall")]
-        firewall: None,
+        firewall,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
