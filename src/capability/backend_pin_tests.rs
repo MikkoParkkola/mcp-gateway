@@ -450,16 +450,30 @@ async fn every_shipped_pinned_capability_keeps_its_fingerprint() {
             if path.extension().is_none_or(|ext| ext != "yaml") {
                 continue;
             }
-            let Ok(first) = crate::capability::parse_capability_file(&path).await else {
-                continue;
+            let pinned = std::fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .any(|line| line.starts_with("sha256: "));
+            let first = match crate::capability::parse_capability_file(&path).await {
+                Ok(first) => first,
+                // A pinned file that fails to load is a failure, not a skip.
+                Err(err) => {
+                    assert!(!pinned, "pinned {path:?} failed to load: {err}");
+                    continue;
+                }
             };
             if first.providers.integrity() != crate::capability::Integrity::Verified {
+                assert!(!pinned, "pinned {path:?} loaded unverified");
                 continue;
             }
             let second = crate::capability::parse_capability_file(&path)
                 .await
                 .unwrap();
             assert_eq!(first.providers.pinned, second.providers.pinned, "{path:?}");
+            assert!(
+                first.providers.pinned.is_some(),
+                "{path:?} has no fingerprint"
+            );
             assert_eq!(
                 first.clone().fingerprint(),
                 first.providers.pinned,
@@ -542,4 +556,64 @@ async fn an_undriven_runtime_replacement_stops_a_child_with_a_call_in_flight() {
         !alive,
         "grandchild {pid} outlived a replacement under an undriven runtime"
     );
+}
+
+/// MIK-7814, cli kind: a verified definition edited in place between two
+/// calls recomputes its fingerprint and is refused, never served the first
+/// call's cached answer.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cli_definition_edited_between_calls_is_refused() {
+    use crate::capability::definition::FINGERPRINTS;
+    let mut cap = pinned_from(&pin_probe_body("Pin probe.")).await;
+    let executor = python_policy_executor();
+    let context = CapabilityExecutionContext::default();
+    let before = FINGERPRINTS.with(std::cell::Cell::get);
+    executor
+        .execute_with_context(&cap, json!({}), context.clone())
+        .await
+        .expect("as loaded, it runs and is cached");
+    assert!(
+        FINGERPRINTS.with(std::cell::Cell::get) > before,
+        "a process call computes its fingerprint"
+    );
+    cap.description = "Edited after loading.".into();
+    let err = executor
+        .execute_with_context(&cap, json!({}), context)
+        .await
+        .expect_err("the edited definition must meet the gate, not the cache");
+    assert!(err.to_string().contains("changed after its pin"), "{err}");
+}
+
+/// MIK-7814, mcp kind: the same, for a definition that runs an MCP child.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_mcp_definition_edited_between_calls_is_refused() {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cap_exec/fake_mcp.py")
+        .display()
+        .to_string();
+    let body = format!(
+        "name: mcp_edit_probe\ndescription: Edit probe.\nschema:\n  input:\n    type: object\n    \
+         properties:\n      operation:\n        type: string\n      text:\n        type: string\n\
+         cache:\n  ttl: 60\n  strategy: memory\n\
+         providers:\n  primary:\n    service: mcp\n    timeout: 20\n    config:\n      \
+         command: 'python3'\n      args: ['{script}']\n      transport: stdio\n      \
+         tool_selector:\n        param: operation\n        tools:\n          \
+         say: {{ tool: echo, arguments: {{ message: \"{{text}}\" }} }}\n"
+    );
+    let mut cap = pinned_from(&body).await;
+    let executor = python_policy_executor();
+    let context = CapabilityExecutionContext::default();
+    let params = json!({"operation": "say", "text": "hi"});
+    executor
+        .execute_with_context(&cap, params.clone(), context.clone())
+        .await
+        .expect("as loaded, it runs and is cached");
+    cap.description = "Edited after loading.".into();
+    let err = executor
+        .execute_with_context(&cap, params, context)
+        .await
+        .expect_err("the edited definition must meet the gate, not the cache");
+    assert!(err.to_string().contains("changed after its pin"), "{err}");
 }

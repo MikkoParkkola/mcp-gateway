@@ -48,6 +48,13 @@ impl ProcessPolicy {
     }
 }
 
+/// The local process this definition runs, if any: the one predicate that
+/// decides both the process gate and whether the response cache keys on the
+/// definition's fingerprint, so the two cannot drift apart (MIK-7814).
+pub(crate) fn spawned_process(capability: &CapabilityDefinition) -> Option<&ProcessConfig> {
+    capability.providers.process.get("primary")
+}
+
 /// Refuse unless this definition may run its process here. Called before the
 /// response cache as well as before a run, so a cached answer never skips it
 /// (MIK-7814).

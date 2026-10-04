@@ -564,6 +564,8 @@ impl CapabilityDefinition {
     /// `None` only if the definition cannot be serialized, which never
     /// matches a stored fingerprint (MIK-7814).
     pub(crate) fn fingerprint(&self) -> Option<String> {
+        #[cfg(test)]
+        FINGERPRINTS.with(|count| count.set(count.get() + 1));
         let value = sorted_keys(serde_json::to_value(self).ok()?);
         Some(crate::hashing::sha256_hex(
             &serde_json::to_vec(&value).ok()?,
@@ -785,4 +787,11 @@ fn sorted_keys(value: serde_json::Value) -> serde_json::Value {
         }
         other => other,
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fingerprints computed on this thread, so a test can show a path
+    /// never computes one.
+    pub(crate) static FINGERPRINTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

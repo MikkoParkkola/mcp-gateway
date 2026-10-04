@@ -563,3 +563,25 @@ async fn cache_4_executor_modern_revision_hits_the_inner_cache() {
         "the modern entry must still be live"
     );
 }
+
+/// MIK-7814: only a process provider keys its cache on the whole definition.
+/// A cacheable REST call, hit or miss, never computes a fingerprint; the
+/// process-provider tests in `backend_pin_tests` show the counter does move.
+#[tokio::test]
+async fn a_rest_cacheable_call_never_computes_a_fingerprint() {
+    use crate::capability::definition::FINGERPRINTS;
+    let (executor, capability, hits) = cacheable_counting_executor().await;
+    let before = FINGERPRINTS.with(std::cell::Cell::get);
+    for _ in 0..2 {
+        executor
+            .execute_with_context(&capability, serde_json::json!({}), alice())
+            .await
+            .unwrap();
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "the second call is a hit");
+    assert_eq!(
+        FINGERPRINTS.with(std::cell::Cell::get) - before,
+        0,
+        "a REST call must not pay for a fingerprint"
+    );
+}

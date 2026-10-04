@@ -302,21 +302,18 @@ impl McpChildren {
 /// Stop each child's backend (which kills its process tree), then drop its
 /// directory. Runs off the caller's path.
 fn stop_all(children: Vec<Child>) {
-    if children.is_empty() {
-        return;
-    }
-    let Some(handle) = tokio::runtime::Handle::try_current()
-        .ok()
-        .or_else(|| children.iter().find_map(|child| child.runtime.clone()))
-    else {
-        return;
-    };
-    handle.spawn(async move {
-        for child in children {
+    // Each child stops on the runtime that drives it: the current one may be
+    // entered but never driven, and a stop spawned there would never run.
+    let current = tokio::runtime::Handle::try_current().ok();
+    for child in children {
+        let Some(handle) = child.runtime.clone().or_else(|| current.clone()) else {
+            continue;
+        };
+        handle.spawn(async move {
             let _ = child.backend.stop().await;
             drop(child);
-        }
-    });
+        });
+    }
 }
 
 /// Which child a call belongs to: the dispatch binding, else the verified

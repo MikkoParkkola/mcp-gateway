@@ -207,3 +207,27 @@ async fn an_edit_between_adjacent_large_integers_is_refused() {
         .to_string();
     assert!(err.contains("changed after its pin"), "{err}");
 }
+
+/// MIK-7814: key order inside objects nested in arrays does not move the
+/// fingerprint; the order of array elements does.
+#[test]
+fn the_fingerprint_ignores_key_order_but_not_array_order() {
+    let base = crate::capability::parse_capability(
+        "name: fp_probe\ndescription: Fingerprint probe.\nproviders:\n  primary:\n    \
+         service: cli\n    config:\n      command: gws\n      args: [gmail]\n",
+    )
+    .unwrap();
+    let with = |examples: serde_json::Value| {
+        let mut cap = base.clone();
+        cap.schema.input = serde_json::json!({ "examples": examples });
+        cap.fingerprint().unwrap()
+    };
+    let ab: serde_json::Value =
+        serde_json::from_str(r#"[{"a": 1, "b": {"c": 2, "d": 3}}, 4]"#).unwrap();
+    let ba: serde_json::Value =
+        serde_json::from_str(r#"[{"b": {"d": 3, "c": 2}, "a": 1}, 4]"#).unwrap();
+    let swapped: serde_json::Value =
+        serde_json::from_str(r#"[4, {"a": 1, "b": {"c": 2, "d": 3}}]"#).unwrap();
+    assert_eq!(with(ab.clone()), with(ba), "key order is not content");
+    assert_ne!(with(ab), with(swapped), "array order is content");
+}
