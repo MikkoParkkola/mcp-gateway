@@ -505,7 +505,20 @@ fn a_literal_load_leaves_an_env_file_override_out_of_the_config() {
 /// exactly as written could not start the gateway.
 #[test]
 fn a_file_substituting_a_key_it_defined_itself_is_not_refused() {
-    let file = "BASE=https://api.invalid-test\nENDPOINT=${BASE}/v1\n";
+    // dotenvy substitutes from the process environment before the buffer
+    // (dotenvy 0.15.7 `parse.rs:265`), so a common name such as `BASE`
+    // exported by whatever runs the tests replaces the file's own value and
+    // fails the precondition below. Namespaced keys keep the fixture hermetic,
+    // and the check names the cause if one is ever set anyway.
+    const BASE: &str = "MCPGW_TEST_SAME_FILE_BASE";
+    const ENDPOINT: &str = "MCPGW_TEST_SAME_FILE_ENDPOINT";
+    for key in [BASE, ENDPOINT] {
+        assert!(
+            std::env::var_os(key).is_none(),
+            "{key} is set in the process environment, which dotenvy reads before the file"
+        );
+    }
+    let file = format!("{BASE}=https://api.invalid-test\n{ENDPOINT}=${{{BASE}}}/v1\n");
 
     let parsed: std::collections::HashMap<String, String> =
         dotenvy::from_read_iter(std::io::Cursor::new(file.as_bytes()))
@@ -514,16 +527,16 @@ fn a_file_substituting_a_key_it_defined_itself_is_not_refused() {
             .into_iter()
             .collect();
     assert_eq!(
-        parsed.get("ENDPOINT").map(String::as_str),
+        parsed.get(ENDPOINT).map(String::as_str),
         Some("https://api.invalid-test/v1"),
         "dotenvy must expand the same-file reference, or this case proves nothing"
     );
 
-    let defined = ["BASE".to_string(), "ENDPOINT".to_string()]
+    let defined = [BASE.to_string(), ENDPOINT.to_string()]
         .into_iter()
         .collect();
     assert_eq!(
-        super::env_overlay::substitution_naming_defined_key(file, &defined),
+        super::env_overlay::substitution_naming_defined_key(&file, &defined),
         None,
         "a reference the same file already supplied is not a cross-file read"
     );
