@@ -546,6 +546,21 @@ pub(super) fn inspect_settled(
     state
         .meta_mcp()
         .restage_if_changed(snapshot, Some(&*result));
+    // MIK-7887.RECEIPT.4: the receipt describes the result as it is stored and
+    // served: without the backend's copy of the gateway's outcome marker,
+    // which settlement strips (`backend_output`), and with the scope clamped.
+    {
+        use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
+        let stored = super::settlement::backend_output(result.clone());
+        let shape = if call.tool == "gateway_invoke" {
+            AnswerShape::InvokeWrapped
+        } else {
+            AnswerShape::Literal
+        };
+        state
+            .meta_mcp()
+            .rebuild_receipt_from_final(Some(&stored), GatewayStamps::Legacy, shape);
+    }
     if refused {
         response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
             response.id,
