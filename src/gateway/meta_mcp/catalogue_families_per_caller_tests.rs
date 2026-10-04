@@ -511,7 +511,7 @@ async fn each_identity_sees_its_own_prompts_and_no_one_elses() {
 /// collapses a non-`per_user` backend to `PoolKey::Shared` whatever binding is
 /// handed to it, so one fetch backs all three callers and the cache answers the
 /// rest. The sibling for `tools/list` is
-/// `backend::tests::per_user_metadata_fetch_is_identity_free_and_shared`.
+/// `backend::tests::per_identity_catalogue::per_user_metadata_fetch_is_identity_free_and_shared`.
 #[tokio::test]
 async fn a_non_identity_backend_still_single_flights_to_one_fetch() {
     let wire = Arc::new(PerIdentityFamilies::new(
