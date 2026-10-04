@@ -8,9 +8,10 @@
 
 use std::sync::Arc;
 
+use rcgen::string::{BmpString, UniversalString};
 use rcgen::{
-    BasicConstraints, BmpString, CertificateParams, CustomExtension, DnType, DnValue,
-    ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, SanType, SerialNumber, UniversalString,
+    BasicConstraints, CertificateParams, CustomExtension, DnType, DnValue,
+    ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, SanType, SerialNumber,
 };
 use rustls::pki_types::{CertificateDer, UnixTime};
 use rustls::server::WebPkiClientVerifier;
