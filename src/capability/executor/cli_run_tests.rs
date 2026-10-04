@@ -542,7 +542,7 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
 }
 
 /// A digit credential past u64 is compared after the same float parse that
-/// read the result. serde_json without `float_roundtrip` truncates past u64
+/// read the result. `serde_json` without `float_roundtrip` truncates past u64
 /// and scales, so for this 25-digit value it lands one ULP from the correctly
 /// rounded `str::parse`: a needle parsed the other way would miss the number.
 /// The feature is on in every build today (jsonschema enables it), so this row
