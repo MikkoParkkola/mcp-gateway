@@ -782,3 +782,21 @@ fn a_whole_number_beyond_i64_is_kept_not_clamped() {
         assert_eq!(result.coerced["n"], integer, "{sent}");
     }
 }
+
+/// MIK-7905 with MIK-7818: a `oneOf` alternative is judged on the forwarded
+/// (coerced) value, so a whole number beyond `i64` pinned by `const` matches
+/// only because it is kept, not clamped to `i64::MAX`.
+#[test]
+fn a_whole_number_beyond_i64_in_a_one_of_alternative_is_kept() {
+    let schema = json!({
+        "type": "object",
+        "properties": { "n": { "type": "integer" }, "m": { "type": "string" } },
+        "oneOf": [
+            { "required": ["n"], "properties": { "n": { "const": 1e20 } } },
+            { "required": ["m"] }
+        ]
+    });
+    let result = validate_arguments(&json!({ "n": 1e20 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["n"], json!(1e20));
+}
