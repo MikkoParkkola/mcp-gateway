@@ -237,3 +237,30 @@ fn the_graphql_builder_substitutes_each_caller_value_once() {
     .unwrap();
     assert_eq!(body["query"], "{b}|B");
 }
+
+/// A filled `{access_token}` keeps its header even when another placeholder in
+/// the same template is left unfilled: the skip is about the token alone.
+#[tokio::test]
+async fn a_filled_access_token_beside_an_unfilled_placeholder_keeps_its_header() {
+    let executor = CapabilityExecutor::new();
+    let config = crate::capability::RestConfig {
+        headers: std::collections::HashMap::from([(
+            "Authorization".to_string(),
+            "Bearer {access_token} {scheme}".to_string(),
+        )]),
+        ..Default::default()
+    };
+    let headers = executor
+        .build_headers(
+            &config,
+            &crate::capability::AuthConfig::default(),
+            &json!({ "access_token": "tok" }),
+            &crate::capability::CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+        Some("Bearer tok {scheme}")
+    );
+}

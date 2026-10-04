@@ -188,11 +188,7 @@ impl CapabilityExecutor {
     /// [`Self::substitute_string`], also saying whether the TEMPLATE named a
     /// `{placeholder}` that no parameter or secret filled. That is known from
     /// the single scan, not guessed from how the result looks.
-    pub(super) fn substitute_string_tracked(
-        &self,
-        template: &str,
-        params: &Value,
-    ) -> Result<(String, bool)> {
+    fn substitute_string_tracked(&self, template: &str, params: &Value) -> Result<(String, bool)> {
         // One scan of the template resolves secrets and caller parameters
         // together: a substituted value is data and is never scanned again, so
         // a secret holding `{q}` or a caller value holding `{other}` arrives

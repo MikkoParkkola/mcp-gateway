@@ -612,15 +612,15 @@ impl CapabilityExecutor {
         let mut headers = HeaderMap::new();
 
         for (name, value_template) in &config.headers {
-            let (value, unfilled) = self.substitute_string_tracked(value_template, params)?;
+            let value = self.substitute_string(value_template, params)?;
 
-            // Skip an Authorization header whose TEMPLATE left {access_token}
-            // unfilled; inject_auth handles auth from the credential key. The
-            // value is not consulted: a resolved secret may contain that text
-            // (MIK-7888).
+            // Skip an Authorization header whose TEMPLATE names {access_token}
+            // with no access_token parameter to fill it; inject_auth handles
+            // auth from the credential key. The value is not consulted: a
+            // resolved secret may contain that text (MIK-7888).
             if name.eq_ignore_ascii_case("authorization")
-                && unfilled
                 && value_template.contains("{access_token}")
+                && params.get("access_token").is_none()
             {
                 continue;
             }
