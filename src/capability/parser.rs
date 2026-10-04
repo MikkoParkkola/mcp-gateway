@@ -78,6 +78,12 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
         capability.name = stem.to_string_lossy().to_string();
     }
 
+    // Last, over the definition as returned, so admission and the cache can
+    // tell it from any later edit or substitute (MIK-7814).
+    if capability.providers.integrity == crate::capability::Integrity::Verified {
+        capability.providers.pinned = capability.fingerprint();
+    }
+
     Ok(capability)
 }
 

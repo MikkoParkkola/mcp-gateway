@@ -48,6 +48,9 @@ struct Child {
     in_flight: Arc<AtomicUsize>,
     /// Set at acquire and again when a call ends, so a long call is not idle.
     last_used: Arc<Mutex<Instant>>,
+    /// The runtime it was started on, so a stop from a thread without one
+    /// (a replacement registered by an embedder) still reaches it (MIK-7814).
+    runtime: Option<tokio::runtime::Handle>,
     /// Dropped after the backend is stopped, removing the tree.
     _workdir: Workdir,
 }
@@ -143,6 +146,7 @@ impl McpChildren {
                     id: self.next_id.fetch_add(1, Ordering::Relaxed),
                     in_flight: Arc::new(AtomicUsize::new(0)),
                     last_used: Arc::new(Mutex::new(Instant::now())),
+                    runtime: tokio::runtime::Handle::try_current().ok(),
                     _workdir: workdir,
                 },
             );
@@ -253,6 +257,17 @@ impl McpChildren {
             .collect()
     }
 
+    /// Clone every child's backend, as a call's lease does, so a test can
+    /// keep a "call in flight" past the child's eviction.
+    #[cfg(all(test, unix))]
+    pub(crate) fn lease_backends_for_test(&self) -> Vec<Arc<Backend>> {
+        self.map
+            .lock()
+            .values()
+            .map(|child| Arc::clone(&child.backend))
+            .collect()
+    }
+
     /// The id of the one child of `capability`, for tests.
     #[cfg(test)]
     pub(crate) fn id_for_test(&self, capability: &str) -> u64 {
@@ -287,18 +302,18 @@ impl McpChildren {
 /// Stop each child's backend (which kills its process tree), then drop its
 /// directory. Runs off the caller's path.
 fn stop_all(children: Vec<Child>) {
-    if children.is_empty() {
-        return;
-    }
-    let Ok(handle) = tokio::runtime::Handle::try_current() else {
-        return;
-    };
-    handle.spawn(async move {
-        for child in children {
+    // Each child stops on the runtime that drives it: the current one may be
+    // entered but never driven, and a stop spawned there would never run.
+    let current = tokio::runtime::Handle::try_current().ok();
+    for child in children {
+        let Some(handle) = child.runtime.clone().or_else(|| current.clone()) else {
+            continue;
+        };
+        handle.spawn(async move {
             let _ = child.backend.stop().await;
             drop(child);
-        }
-    });
+        });
+    }
 }
 
 /// Which child a call belongs to: the dispatch binding, else the verified
@@ -733,3 +748,12 @@ mod tests;
 #[cfg(test)]
 #[path = "shipped_capability_tests.rs"]
 mod shipped_capability_tests;
+
+impl super::CapabilityExecutor {
+    /// Stop every MCP child of one capability, mid-call included (its
+    /// definition was replaced; MIK-7814).
+    pub(crate) fn stop_mcp(&self, capability: &str) {
+        self.mcp_children
+            .evict(Duration::MAX, &|name| name != capability);
+    }
+}

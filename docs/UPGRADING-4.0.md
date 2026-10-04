@@ -168,6 +168,7 @@ backend" and "fails a capability file" first.**
 | 141 | A successful `cli` or `mcp` capability result no longer carries a credential the gateway injected into the child (an env value, or the resolved `token_env`): every string value and key is rewritten to `[redacted]` and the document is otherwise intact; with the `firewall` feature the credential scanner runs on it too. Values the caller sent are left in the result, since a tool legitimately returns them (with the `firewall` feature the scanner can still replace one that looks like a credential). Without the `firewall` feature only the literal removal of injected values applies: a credential the child invents or reads from elsewhere is not recognised, in results or in error text. The removal is literal: a credential the child encodes (base64, URL escapes) or splits across separate values is not matched. Numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, ... | A capability whose tool must return an injected value cannot: read it from the child's own source instead |
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
+| 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead; one that replaces `mcp` definitions keeps the runtime that started their children driven, or drops it |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3813,6 +3814,42 @@ match.
 
 **Action:** a client that reads `items.properties` reads `items.anyOf[0].properties` for tool rows
 and `items.anyOf[1]` for event rows. Raise `limit` to see more event rows when tools fill it.
+
+## 144. A capability's pin state and process configs are read-only outside the crate
+
+**Startup:** no notice, a library API change rather than a change to running behaviour
+
+`mcp_gateway::capability::ProvidersConfig` carried two public fields: `process`, the typed
+configuration of each `cli` or `mcp` provider, and `integrity`, the pin state of the file the
+definition came from. A process provider runs only when `integrity` is `Integrity::Verified`, so a
+program built on the crate could set that field on a definition it built itself and run a local
+process from a definition that never passed the pin check. Both fields are now crate-private. They
+are read through `ProvidersConfig::process()` and `ProvidersConfig::integrity()`, and only the
+capability loader sets `Verified`. A definition deserialized or built any other way stays
+`Unpinned`, as before. The loader also records a fingerprint of the whole definition, and a
+process runs only while the definition still matches it: a verified definition cloned and then
+changed (its schema, arguments or any other field) is refused. For a process provider the response
+cache keys on the same fingerprint, so a different definition under the same name never reads
+another's answers. Other providers keep the epoch key: on an executor with no shared policy epoch,
+or for a request that snapshotted the epoch before a replacement, a REST call can still return the
+answer the earlier definition cached, within its TTL. That answer is stale, but no process starts
+and no request goes out.
+The gateway's own response cache keys on the policy epoch a request snapshots when it starts:
+a request that began before a replacement can still be answered from the earlier, pinned
+definition's cache entry (it is ordered before the replacement), and one that begins after it
+never is. `CapabilityBackend::register_capability` replacing a definition of the same
+name now also drops the answers cached for it and stops its running `mcp` children, so an
+unpinned replacement meets the process check instead of the pinned original's cached result. Its children are stopped on the runtime that started them:
+keep that runtime driven, or drop it. A runtime that is kept but no longer driven (a current-thread
+runtime after `block_on` returns) stops them only when it next runs. Dropping it drops the queued
+stop, and a child's whole process tree ends when the last holder of that child lets go; a call
+still in flight elsewhere keeps the child running until that call is released (MIK-7923, to be
+fixed in 4.0.1).
+
+**Action:** an embedder that read `providers.process` or `providers.integrity` calls the getter of
+the same name. One that set `integrity`, or that edits a loaded definition before running it,
+loads the definition it means to run through the capability loader, which checks its `sha256:`
+pin.
 
 ## Upgrading from 3.5.x: a walkthrough
 

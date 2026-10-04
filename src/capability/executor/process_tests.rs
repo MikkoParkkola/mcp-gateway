@@ -165,3 +165,69 @@ fn schema_defaults_fill_only_missing_or_null() {
     assert_eq!(merged["format"], "csv");
     assert!(merged.get("n").is_none());
 }
+
+/// MIK-7814 T1: a verified definition changed after loading no longer runs.
+#[tokio::test]
+async fn a_verified_definition_changed_after_loading_is_refused() {
+    let loaded = pinned("gws", "[gmail]").await;
+    let mut changed = loaded.clone();
+    changed.description = "Changed after the pin was checked.".into();
+    assert_eq!(changed.providers.integrity, Integrity::Verified);
+    let err = admit(&ProcessPolicy::default(), &changed, process(&changed))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("changed after its pin"), "{err}");
+}
+
+/// MIK-7814: the fingerprint is lossless. Two integers a double cannot tell
+/// apart (2^53 and 2^53 + 1) must still give different fingerprints, so an
+/// edit between them is refused.
+#[tokio::test]
+async fn an_edit_between_adjacent_large_integers_is_refused() {
+    let body = "name: gate_probe\ndescription: Gate probe.\nschema:\n  input:\n    type: object\n    \
+                properties:\n      n:\n        type: integer\n        default: 9007199254740992\n\
+                providers:\n  primary:\n    service: cli\n    config:\n      command: gws\n      \
+                args: [gmail]\n";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gate_probe.yaml");
+    std::fs::write(
+        &path,
+        rewrite_with_pin(body, &compute_capability_hash(body)),
+    )
+    .unwrap();
+    let loaded = parse_capability_file(&path)
+        .await
+        .expect("pinned file loads");
+    admit(&ProcessPolicy::default(), &loaded, process(&loaded)).expect("as loaded, admitted");
+    let mut changed = loaded.clone();
+    changed.schema.input["properties"]["n"]["default"] =
+        serde_json::json!(9_007_199_254_740_993_u64);
+    let err = admit(&ProcessPolicy::default(), &changed, process(&changed))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("changed after its pin"), "{err}");
+}
+
+/// MIK-7814: key order inside objects nested in arrays does not move the
+/// fingerprint; the order of array elements does.
+#[test]
+fn the_fingerprint_ignores_key_order_but_not_array_order() {
+    let base = crate::capability::parse_capability(
+        "name: fp_probe\ndescription: Fingerprint probe.\nproviders:\n  primary:\n    \
+         service: cli\n    config:\n      command: gws\n      args: [gmail]\n",
+    )
+    .unwrap();
+    let with = |examples: serde_json::Value| {
+        let mut cap = base.clone();
+        cap.schema.input = serde_json::json!({ "examples": examples });
+        cap.fingerprint().unwrap()
+    };
+    let ab: serde_json::Value =
+        serde_json::from_str(r#"[{"a": 1, "b": {"c": 2, "d": 3}}, 4]"#).unwrap();
+    let ba: serde_json::Value =
+        serde_json::from_str(r#"[{"b": {"d": 3, "c": 2}, "a": 1}, 4]"#).unwrap();
+    let swapped: serde_json::Value =
+        serde_json::from_str(r#"[4, {"a": 1, "b": {"c": 2, "d": 3}}]"#).unwrap();
+    assert_eq!(with(ab.clone()), with(ba), "key order is not content");
+    assert_ne!(with(ab), with(swapped), "array order is content");
+}
