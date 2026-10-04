@@ -144,6 +144,47 @@ fn newline_less_valid_record_is_kept() {
     assert!(verify(&path, false).ok);
 }
 
+/// A whole newline-less last line is kept only when it verifies as the next
+/// record. One edited under its stored hash (unsigned), or carrying a forged
+/// signature (signed; the hash leaves the signature out), is a torn tail:
+/// dropped and recorded, never kept with its newline restored.
+#[test]
+fn newline_less_record_failing_its_hash_or_signature_is_dropped() {
+    for signed in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+        (0..3).for_each(|i| append(&l, i));
+        drop(l);
+        let mut all = lines(&path);
+        let last = all.len() - 1;
+        if signed {
+            all[last]["sig"] = serde_json::Value::String("0".repeat(64));
+        } else {
+            all[last]["tool"] = serde_json::Value::String("edited".into());
+        }
+        let mut text = String::new();
+        for record in &all[..last] {
+            text.push_str(&record.to_string());
+            text.push('\n');
+        }
+        text.push_str(&all[last].to_string());
+        std::fs::write(&path, text).unwrap();
+        let p = path.clone();
+        within_10s(move || drop(TransparencyLogger::open(cfg(&p, 12, signed)).unwrap()));
+        let after = lines(&path);
+        assert_eq!(
+            event(after.last().unwrap()),
+            Some(EV_TORN),
+            "signed {signed}: {after:?}"
+        );
+        assert!(
+            !after.contains(&all[last]),
+            "signed {signed}: the failing line was kept"
+        );
+    }
+}
+
 #[test]
 fn recovers_crash_between_expiry_record_and_unlink() {
     let dir = tempfile::tempdir().unwrap();
