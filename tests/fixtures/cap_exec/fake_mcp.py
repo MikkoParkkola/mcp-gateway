@@ -9,13 +9,16 @@ Tools:
   fail          isError true with a text block
   flood         answers with one 20 MiB line and no newline until the end
   grandchild    starts a sleeping grandchild and returns its pid
+  open_file     opens `path` only inside OPENPENCIL_MCP_ROOT, else the cwd, as
+                @open-pencil/mcp does; structuredContent {opened, pid}
 """
 import json
 import os
 import subprocess
 import sys
 
-TOOLS = ["echo", "import_binary", "fail", "flood", "grandchild", "list_project_binaries"]
+TOOLS = ["echo", "import_binary", "fail", "flood", "grandchild", "list_project_binaries",
+         "open_file"]
 POLLS = {"n": 0}
 
 
@@ -71,6 +74,15 @@ for line in sys.stdin:
                     {"name": "other", "file_path": "/other", "analysis_complete": True},
                     {"name": "prog-x", "file_path": args.get("expect", ""), "analysis_complete": done,
                      "test_values": test_values()}]}})
+        elif name == "open_file":
+            root = os.path.realpath(os.environ.get("OPENPENCIL_MCP_ROOT") or os.getcwd())
+            path = os.path.realpath(args.get("path", ""))
+            if os.path.commonpath([root, path]) != root:
+                result(req_id, {"isError": True, "content": [
+                    {"type": "text", "text": "path is outside the server root " + root}]})
+            else:
+                result(req_id, {"content": [], "structuredContent": {"opened": path,
+                                                                     "pid": os.getpid()}})
         elif name == "fail":
             result(req_id, {"isError": True, "content": [{"type": "text", "text": "tool said no"}]})
         elif name == "flood":

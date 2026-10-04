@@ -1,4 +1,4 @@
-sha256: e351e78eeb148aade05ced970dfe55ac71fc9d77f4bc07a2f94a37db9e812629
+sha256: b12a4d6e306fc3a67bd15d3fb0b23c1fa88c029729c55f10328d278b0488546f
 fulcrum: "1.0"
 name: cisco_scanner
 description: Scan an agent skill package for security issues with Cisco's skill-scanner (static analyzers
@@ -13,7 +13,8 @@ schema:
         type: string
         enum:
         - scan_skill_file
-        description: Scan operation
+        description: Scan operation. scan_mcp_server is held until mcp-scanner refuses private addresses at
+          connect time (MIK-7788).
       target:
         type: string
         path_root: projects

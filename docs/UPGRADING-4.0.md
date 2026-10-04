@@ -159,7 +159,7 @@ backend" and "fails a capability file" first.**
 | 132 | The shipped `gws_*` Google Workspace capabilities (18) now run through the `gws` command-line tool; their input schemas follow the tool's own parameters | Install `gws` (`npm i -g @googleworkspace/cli`) and sign in; a caller that sent the old parameter names sends the new ones (see each capability's schema) |
 | 133 | `cloudflare_manage` is removed and replaced by 11 REST capabilities (`cloudflare_*`) against the Cloudflare API v4; the npm package it declared never existed | Call the specific `cloudflare_*` capability; set the account or zone as an input. `deploy_worker` is not included yet |
 | 134 | `metacognition_verify` is removed from the public catalogue: it needs a private tool nobody else can install | None for other users; keep a private copy of the file if you run that tool |
-| 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, they refuse with a message naming MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
+| 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, `trawl_extract` refuses with a message naming MIK-7788, and a `scan_mcp_server` call fails input validation with a message naming `scan_skill_file` and MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
 | 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
 | 138 | `mcp_gateway::key_server::oidc::OidcError` gained three variants (`InsecureIssuer`, `InsecureFetch`, `ClientUnavailable`) and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles | Add the three arms, or end the `match` with a wildcard arm |
@@ -3602,7 +3602,9 @@ REST with an empty URL. It now runs the command, under these rules:
   is configured by default. The check canonicalizes the path, then the child opens it: a local process
   that can write inside a root can swap a path for a symlink between the two, so no other user (by
   owner, group or ACL) may write to a root (`uploads`, `projects`, `downloads`) or to any directory
-  above it. A parameter that names a
+  above it. An `mcp` capability whose server scopes its file access to one root names that root under
+  `root_env` (variable: root), for example `OPENPENCIL_MCP_ROOT: projects`: the server starts with the
+  canonical root path, a changed root restarts it, and an unset root sets nothing. A parameter that names a
   network destination makes the capability refuse to run, because the gateway cannot confine where a
   child process connects.
 
@@ -3718,7 +3720,7 @@ It depended on a tool that is not published, so it could not run on any other ma
 
 **Startup:** no notice, the capabilities load and refuse at call time
 
-A child process can follow a redirect or a DNS rebind to a private address, and the gateway cannot stop it from outside. Until the tool refuses private addresses at connect time (MIK-7788), `trawl_extract` and `cisco_scanner` `scan_mcp_server` return `not executable`. The default `capabilities.process_commands` list does not admit `trawl` or `mcp-scanner remote` either, so a capability you pinned yourself that runs one of them is refused until you list it (an entry is a `command` plus `args_prefix`, for example `mcp-scanner` with `--analyzers yara remote`; setting the key replaces the shipped list, so keep the shipped entries you still need). No 3.x release ran `service: cli` capabilities, so nothing that worked before stops working.
+A child process can follow a redirect or a DNS rebind to a private address, and the gateway cannot stop it from outside. Until the tool refuses private addresses at connect time (MIK-7788), `trawl_extract` returns `not executable`, and `cisco_scanner` does not offer `scan_mcp_server`: a call is refused with a message naming `scan_skill_file` and MIK-7788. The default `capabilities.process_commands` list does not admit `trawl` or `mcp-scanner remote` either, so a capability you pinned yourself that runs one of them is refused until you list it (an entry is a `command` plus `args_prefix`, for example `mcp-scanner` with `--analyzers yara remote`; setting the key replaces the shipped list, so keep the shipped entries you still need). No 3.x release ran `service: cli` capabilities, so nothing that worked before stops working.
 
 **Action:** none.
 
