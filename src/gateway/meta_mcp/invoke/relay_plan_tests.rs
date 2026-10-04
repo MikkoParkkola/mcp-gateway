@@ -208,7 +208,9 @@ async fn text_removed_from_one_step_but_delivered_by_another_stays_receipted() {
     let answer = plan_answer(&json!({"a": text_result(&a), "b": text_result(&b)}));
     let redacted = plan_answer(&json!({"a": text_result(PROSE), "b": text_result(&b)}));
     deliver_plan(&meta, &[("a", &a), ("b", &b)], &answer, &redacted).await;
-    carol_holds(&firewall, "a", SECRET);
+    // carol holds A as the source sent it, so a match is the same text in
+    // the same context, never a winnowing edge.
+    carol_holds(&firewall, "a", &a);
 
     assert!(
         refused(&firewall, "bob", SECRET),
