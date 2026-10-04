@@ -94,10 +94,22 @@ impl StdioClientChannel {
 impl ClientChannel for StdioClientChannel {
     async fn send_request(
         &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, DeliveryError> {
+        self.send_request_committing(session_id, id, method, params, None)
+            .await
+    }
+
+    async fn send_request_committing(
+        &self,
         _session_id: &str,
         id: &str,
         method: &str,
         params: Option<Value>,
+        commit: Option<crate::gateway::input_bridge::DeliveryCommit>,
     ) -> Result<Value, DeliveryError> {
         // Registered before the frame goes out: a client fast enough to answer
         // between the write and the registration would find no receiver.
@@ -145,7 +157,10 @@ impl ClientChannel for StdioClientChannel {
         let Some(frame) = self.reads.request(frame).await else {
             return Err(DeliveryError::NoSession);
         };
-        permit.send(frame);
+        // MIK-7887.RECEIPT.3: committed by the writer once stdout took the
+        // frame, not here, so a writer that dies first delivered nothing and a
+        // wait cancelled after the write keeps it.
+        permit.send(frame.committing_on_write(commit));
         debug!(%id, %method, "stdio: sent bridged request to the client");
 
         // A dropped sender means the entry went away without an answer, which
@@ -274,6 +289,74 @@ mod tests {
             rx.try_recv().is_err(),
             "no frame may be written after close: the client can never answer it"
         );
+    }
+
+    /// A commit that counts how often it ran.
+    fn counting_commit() -> (
+        crate::gateway::input_bridge::DeliveryCommit,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let runs = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&runs);
+        let commit = crate::gateway::input_bridge::DeliveryCommit::new(move || {
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        (commit, runs)
+    }
+
+    /// MIK-7887.RECEIPT.3: a queued frame is not delivered. The commit runs
+    /// when the writer reports stdout took the frame, once, and survives the
+    /// caller abandoning its wait.
+    #[tokio::test]
+    async fn a_delivery_commits_when_stdout_takes_the_frame_not_when_queued() {
+        use std::sync::atomic::Ordering;
+        let (tx, mut rx) = mpsc::channel(16);
+        let channel = StdioClientChannel::new(tx, plain_reads());
+        let (commit, runs) = counting_commit();
+        // The wait is abandoned right after the frame is queued.
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            channel.send_request_committing(
+                "stdio",
+                "elicit-7",
+                "elicitation/create",
+                None,
+                Some(commit),
+            ),
+        )
+        .await;
+        assert!(outcome.is_err(), "no reply came");
+        let frame = rx.recv().await.expect("the request was queued");
+        assert_eq!(runs.load(Ordering::SeqCst), 0, "queued is not delivered");
+        frame.stdio_written();
+        frame.stdio_written();
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "written once, committed once"
+        );
+    }
+
+    /// MIK-7887.RECEIPT.3: a closed session commits nothing.
+    #[tokio::test]
+    async fn a_closed_session_commits_no_delivery() {
+        use std::sync::atomic::Ordering;
+        let (tx, mut rx) = mpsc::channel(16);
+        let channel = StdioClientChannel::new(tx, plain_reads());
+        channel.close();
+        let (commit, runs) = counting_commit();
+        let sent = channel
+            .send_request_committing(
+                "stdio",
+                "elicit-8",
+                "elicitation/create",
+                None,
+                Some(commit),
+            )
+            .await;
+        assert!(matches!(sent, Err(DeliveryError::NoSession)), "{sent:?}");
+        assert!(rx.try_recv().is_err(), "nothing was queued");
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

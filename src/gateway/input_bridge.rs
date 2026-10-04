@@ -382,6 +382,53 @@ pub trait ClientChannel: Send + Sync {
         method: &str,
         params: Option<Value>,
     ) -> Result<Value, DeliveryError>;
+
+    /// [`Self::send_request`], committing `commit` once the request reached
+    /// the client (MIK-7887.RECEIPT.3). A channel with a commit point (the
+    /// frame entered the session stream, stdout took the bytes) overrides this
+    /// and commits there, before the reply, so a send cancelled after delivery
+    /// keeps its commit. This default commits after the call returns, unless
+    /// no session existed: a cancelled send commits nothing, which errs
+    /// towards no record rather than one for a prompt nobody saw.
+    async fn send_request_committing(
+        &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+        commit: Option<DeliveryCommit>,
+    ) -> Result<Value, DeliveryError> {
+        let answer = self.send_request(session_id, id, method, params).await;
+        if !matches!(answer, Err(DeliveryError::NoSession))
+            && let Some(commit) = commit
+        {
+            commit.commit();
+        }
+        answer
+    }
+}
+
+/// Work to run once, when a request is known to have reached the client: the
+/// relay receipt of a bridged prompt (MIK-7887.RECEIPT.3). Owned, so it can
+/// ride on a queued frame past the future that built it.
+pub struct DeliveryCommit(Box<dyn FnOnce() + Send + Sync>);
+
+impl DeliveryCommit {
+    /// Wrap `work`, run by [`Self::commit`].
+    pub fn new(work: impl FnOnce() + Send + Sync + 'static) -> Self {
+        Self(Box::new(work))
+    }
+
+    /// Run the work. Consumes the commit, so it runs at most once.
+    pub fn commit(self) {
+        (self.0)();
+    }
+}
+
+impl std::fmt::Debug for DeliveryCommit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DeliveryCommit")
+    }
 }
 
 /// A [`ClientChannel`] for a transport that cannot reach a client at all.
