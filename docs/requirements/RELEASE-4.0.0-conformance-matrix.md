@@ -206,7 +206,7 @@ than by a filter. That distinction is the reason the closing tests say so in
 their own doc comments:
 
 - (a), live path —
-  `gateway::proxy::tests::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths`.
+  `gateway::proxy::tests::cancellation::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths`.
   Both `forward_elicitation` and `forward_elicitation_with_response`
   re-serialise from `ElicitationCreateParams` (`src/protocol/messages.rs:513`),
   which names four fields and carries no `#[serde(flatten)]`. Neither path

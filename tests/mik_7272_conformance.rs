@@ -343,7 +343,7 @@ const MINOR: &[Row] = &[
             // (a) The live forward paths cannot put `elicitationId` on the
             // wire: both re-serialise from `ElicitationCreateParams`, which
             // names four fields and carries no `flatten`.
-            "gateway::proxy::tests::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths",
+            "gateway::proxy::tests::cancellation::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths",
             // (a), legacy half. The relay for a client that must be asked
             // directly carries the params whole, because 2025-11-25 did not
             // remove the field.
