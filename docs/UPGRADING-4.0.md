@@ -3378,8 +3378,9 @@ call that runs longer than that (a backend `timeout` above two minutes) can stil
 **Startup:** refuses to start, only when a `key_server.oidc` issuer, `jwks_uri` or `discovery_url` is `http://` to a host that is not loopback
 
 The gateway fetches each provider's discovery document and signing keys from these URLs. Over
-cleartext, anyone on the path can swap the keys and mint tokens the key server accepts. The
-issuer check only logged a warning; it now refuses.
+cleartext, anyone on the path could swap the keys and mint tokens the key server accepts. Earlier
+releases already fetched only over HTTPS (a redirect to `http://` included), so that swap was not
+reachable; but the issuer check only logged a warning, and it now refuses at load.
 
 - `key_server.oidc[N] issuer '...' is non-HTTPS and off this machine` (or
   `key_server.oidc[N].jwks_uri` / `.discovery_url`) at load. The `jwks_uri` and
