@@ -9,13 +9,15 @@
 //! test also runs the rightful call on the same state and sees the kill land,
 //! so an empty kill switch means "refused", not "this fixture never runs it".
 //!
-//! Two arms have no test here because no HTTP request reaches them:
-//! - no principal (`confirmation.rs:271-272`): the gate sits behind the admin
-//!   check, and every admin client carries a name, which
-//!   `confirmation_principal` always turns into a principal;
-//! - signing refused (`:319-321`): the envelope has a fixed size and lifetime,
-//!   and the per-key mint budget is 2^32, with no seam to lower it on a
-//!   running gateway.
+//! Two arms have no test here:
+//! - no principal (`confirmation.rs:271-272`) is unreachable over HTTP: the
+//!   gate sits behind the admin check, and every admin client carries a name,
+//!   which `confirmation_principal` always turns into a principal;
+//! - signing refused (`:319-321`) fires only on a random-source failure or an
+//!   exhausted per-key budget of 2^32 envelopes (the gate fixes the payload's
+//!   size and lifetime). A test can induce neither: `Keyring::with_mint_budget`
+//!   can lower the budget, but `ContinuationState::new` is the only
+//!   constructor and builds its keyring at the full budget.
 
 use std::sync::Arc;
 
