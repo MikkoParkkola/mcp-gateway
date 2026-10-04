@@ -18,17 +18,17 @@ use super::segments::{list_segments, sibling};
 use super::*;
 use crate::security::audit::AuditFailurePolicy;
 
-const MARK: &str = "audit_segment_hwm_missing";
+pub(super) const MARK: &str = "audit_segment_hwm_missing";
 
 /// A config that never rotates.
-fn never_rotates(path: &Path) -> Arc<TransparencyLogConfig> {
+pub(super) fn never_rotates(path: &Path) -> Arc<TransparencyLogConfig> {
     let mut c = (*cfg(path, 12, false)).clone();
     c.rotation.max_segment_bytes = u64::MAX;
     Arc::new(c)
 }
 
 /// Counters of every marker record, sealed segments first.
-fn marks(path: &Path) -> Vec<u64> {
+pub(super) fn marks(path: &Path) -> Vec<u64> {
     let mut files: Vec<_> = list_segments(path)
         .unwrap()
         .into_iter()
@@ -470,6 +470,44 @@ fn a_crash_between_seal_and_rename_is_marked() {
     drop(l);
     assert_eq!(marks(&path).len(), 1);
     assert_live_fails_on_mark(&path);
+}
+
+/// MIK-7884: the seal-finishing path (a crash after the seal record, before
+/// the rename) shares the predicate. Its tail is the seal, so a mark ahead of
+/// it, or at its counter with another hash, is a contradiction, not a restart.
+#[test]
+fn a_finished_seal_that_contradicts_the_mark_is_marked() {
+    use super::segments::{HighWater, encode_hwm, write_hwm};
+    for replaced_at_seal in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_path(&dir);
+        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        rotate_n(&l, &path, 1);
+        drop(l);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::rename(super::segments::sealed_path(&path, 0), &path).unwrap();
+        let seal = lines(&path).pop().unwrap();
+        assert_eq!(event(&seal), Some("audit_segment_sealed"));
+        if replaced_at_seal {
+            // The mark sits at the seal's counter, recording another hash.
+            let mark = HighWater {
+                counter: seal["counter"].as_u64().unwrap(),
+                entry_hash: "not-the-seal-hash".into(),
+                segment_seq: 0,
+            };
+            write_hwm(&path, &encode_hwm(&mark, b"", "test").unwrap(), true).unwrap();
+        }
+        let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+        append(&l, 9);
+        drop(l);
+        assert!(
+            !marks(&path).is_empty(),
+            "no finding (replaced at the seal: {replaced_at_seal})"
+        );
+        // Verify fails too, on the missing counters or the marker: either way
+        // the restart did not launder the contradiction.
+        assert!(!verify(&path, false).ok, "replaced: {replaced_at_seal}");
+    }
 }
 
 /// A pre-D6 log (no open record) keeps its re-minted mark and verifies clean.

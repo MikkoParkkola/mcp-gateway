@@ -11,8 +11,9 @@ use serde_json::Value;
 
 use super::rotation::{
     EV_HWM_MISSING, EV_OPENED, EV_TORN, HWM_MISSING_AT, MAX_RECORD_BYTES, TORN_COMMITTED,
+    record_head,
 };
-use super::segments::{self, Segment};
+use super::segments::{self, HighWater, Segment};
 use super::{TransparencyLogConfig, recompute_entry_hash, verify_entry_sig};
 
 /// The earliest missing-mark counter `file` records: an [`EV_HWM_MISSING`]
@@ -117,4 +118,97 @@ pub(super) fn newest_finding(
     sealed
         .last()
         .map_or(Ok(None), |s| hwm_missing_in(&s.path, config))
+}
+
+/// Whether the newest surviving record `(counter, hash)` contradicts the
+/// authenticated mark `hw` (MIK-7884). Counters are global and monotone across
+/// segments and `.hwm` is written after its record, so an honest tail is never
+/// below the mark, in any segment, and at the mark's counter it is the mark's
+/// record. A tail behind the mark lost committed records (or is an older file
+/// restored); one at the mark with another hash was replaced. Either way
+/// re-minting `.hwm` from it would launder the change, signed log or not.
+pub(super) fn contradicts(hw: Option<&HighWater>, counter: u64, hash: &str) -> bool {
+    hw.is_some_and(|h| counter < h.counter || (counter == h.counter && hash != h.entry_hash))
+}
+
+/// [`contradicts`], and, when the tail is ahead of the mark, whether the
+/// record the mark names is still there as the mark recorded it (MIK-7884).
+/// A restart that repaired a torn suffix, or a mark that lags its record by a
+/// crash, leaves the tail ahead of a record that may have been replaced; the
+/// next append would carry the replacement forward unnoticed.
+pub(super) fn contradicted(
+    path: &Path,
+    sealed: &[Segment],
+    hw: Option<&HighWater>,
+    counter: u64,
+    hash: &str,
+    config: &TransparencyLogConfig,
+) -> io::Result<bool> {
+    let Some(h) = hw else {
+        return Ok(false);
+    };
+    if contradicts(hw, counter, hash) {
+        return Ok(true);
+    }
+    if counter == h.counter {
+        return Ok(false);
+    }
+    // The mark's record is the newest one when the mark was written: in the
+    // active file, or at the end of the sealed segment the mark names.
+    let named = sealed.iter().find(|s| s.seq == h.segment_seq);
+    for file in std::iter::once(path).chain(named.map(|s| s.path.as_path())) {
+        if let Some(contradicts) = record_at_mark(file, h, config)? {
+            return Ok(contradicts);
+        }
+    }
+    // Neither file holds the record the mark names.
+    Ok(true)
+}
+
+/// Whether the record at `h.counter` in `file` contradicts the mark, or `None`
+/// when `file` is missing or holds no record at that counter.
+///
+/// Read with the scan's line bound: a line over [`MAX_RECORD_BYTES`] is a
+/// finding, as [`hwm_missing_in`] counts it, and is never held whole. The
+/// record is judged on its content: its stored `entry_hash` must equal the
+/// mark's, recompute from the record, and carry a valid signature when a
+/// secret is set. An edit that keeps the stored hash is otherwise accepted
+/// here, and retention later expires the edited record with nothing recorded.
+fn record_at_mark(
+    file: &Path,
+    h: &HighWater,
+    config: &TransparencyLogConfig,
+) -> io::Result<Option<bool>> {
+    use std::io::{BufRead, Read};
+    let mut reader = match File::open(file) {
+        Ok(f) => io::BufReader::new(f),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(segments::ctx("read", file)(e)),
+    };
+    let secret = config.shared_secret.as_bytes();
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = (&mut reader)
+            .take(MAX_RECORD_BYTES as u64 + 1)
+            .read_until(b'\n', &mut buf)
+            .map_err(segments::ctx("read", file))?;
+        if n == 0 {
+            return Ok(None);
+        }
+        if buf.last() != Some(&b'\n') && buf.len() > MAX_RECORD_BYTES {
+            return Ok(Some(true));
+        }
+        let Ok(line) = std::str::from_utf8(&buf) else {
+            continue;
+        };
+        let Ok((counter, stored, _, v)) = record_head(line.trim()) else {
+            continue;
+        };
+        if counter == h.counter {
+            let intact = recompute_entry_hash(&v).is_ok_and(|x| x == stored)
+                && (secret.is_empty() || verify_entry_sig(&v, &stored, secret).is_ok());
+            return Ok(Some(stored != h.entry_hash || !intact));
+        }
+    }
 }
