@@ -5,8 +5,9 @@
 //! The acceptor refuses the connection on a parse failure, so such a leaf
 //! would lock out a client the TLS layer trusted; this pins that none of the
 //! bounded unusual-but-signable leaves below does, so a dependency bump that
-//! opens such a split fails here. Not covered: an unusual signature-algorithm
-//! encoding (rcgen cannot emit one; it needs a hand-re-signed TBS).
+//! opens such a split fails here. Not covered, as rcgen cannot emit them and
+//! each needs a hand-re-signed TBS: a negative serial (rcgen always writes a
+//! positive INTEGER) and an unusual signature-algorithm encoding.
 
 use std::sync::Arc;
 
@@ -99,10 +100,6 @@ fn candidates() -> Vec<(&'static str, CertificateParams)> {
                 p.custom_extensions =
                     vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 2], &[0x05, 0x00], false)];
             }),
-        ),
-        (
-            "negative serial",
-            leaf(|p| p.serial_number = Some(SerialNumber::from_slice(&[0x80, 0x01]))),
         ),
         (
             "21-byte serial (over the 20-octet limit)",
