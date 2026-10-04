@@ -459,6 +459,20 @@ impl MetaMcp {
         Ok(gated)
     }
 
+    /// The tests' shorthand: the screened error alone.
+    #[cfg(test)]
+    pub(crate) fn recover_task_error(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        error: JsonRpcError,
+    ) -> JsonRpcError {
+        self.recover_task_error_with(server, tool, api_key_name, trace_id, error)
+            .0
+    }
+
     /// The ordinary post-dispatch processing for a FAILURE that arrived late.
     ///
     /// A peer's `error.message` and its nested `error.data` are upstream text
@@ -469,14 +483,18 @@ impl MetaMcp {
     ///
     /// The outcome stays a failure and keeps the peer's `code`: there is no
     /// return path here through which an error could become a result.
-    pub(crate) fn recover_task_error(
+    ///
+    /// Also says who wrote what it returns (MIK-7887.RECEIPT.1): the peer when
+    /// its error passed every gate unchanged, the gateway when it was
+    /// withheld. The caller never infers that from the error itself.
+    pub(crate) fn recover_task_error_with(
         &self,
         server: &str,
         tool: &str,
         api_key_name: Option<&str>,
         trace_id: &str,
         error: JsonRpcError,
-    ) -> JsonRpcError {
+    ) -> (JsonRpcError, crate::gateway::task_service::ErrorAuthor) {
         let mut content = vec![json!({"type": "text", "text": error.message})];
         if let Some(data) = &error.data {
             // Inspected too: a gate shown only the message would let the same
@@ -492,7 +510,7 @@ impl MetaMcp {
             crate::security::response_inspect::extract_text_from_result(value) == submitted
         });
         if clean {
-            error
+            (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {
             tracing::warn!(
                 server,
@@ -500,11 +518,14 @@ impl MetaMcp {
                 code = error.code,
                 "recovered upstream failure withheld by the configured response policy"
             );
-            JsonRpcError {
-                code: error.code,
-                message: RECOVERED_ERROR_WITHHELD.into(),
-                data: None,
-            }
+            (
+                JsonRpcError {
+                    code: error.code,
+                    message: RECOVERED_ERROR_WITHHELD.into(),
+                    data: None,
+                },
+                crate::gateway::task_service::ErrorAuthor::Gateway,
+            )
         }
     }
 }

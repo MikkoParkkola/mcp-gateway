@@ -381,15 +381,16 @@ async fn follow_upstream_job(
                         data: None,
                     }),
                 },
-                None,
+                ErrorAuthor::Gateway,
             )),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
             UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, &job, id, error)),
             // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
-            UpstreamAnswer::Substituted(error) => {
-                Some((TaskTransition::Fail(strip_http_status(error)), None))
-            }
+            UpstreamAnswer::Substituted(error) => Some((
+                TaskTransition::Fail(strip_http_status(error)),
+                ErrorAuthor::Gateway,
+            )),
             // [`poll_to_terminal`] hands back a lease only with a terminal answer.
             UpstreamAnswer::Live | UpstreamAnswer::Unavailable => None,
         }

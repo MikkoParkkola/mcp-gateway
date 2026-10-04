@@ -47,16 +47,17 @@ pub(super) struct FollowedJob<'a> {
     pub(super) revision: u64,
 }
 
-/// Audit, attribute and settle a followed job's outcome; `peer` is the peer's
-/// own error when the job failed with one. The error is the peer's only when
-/// the committed error is that error unchanged by every screen and by the
-/// audit, which can replace any outcome (MIK-7887.RECEIPT.1). Only then is its
-/// receipt staged in place of the working stub; otherwise the stub is dropped.
+/// Audit, attribute and settle a followed job's outcome. `screened` says who
+/// wrote a `Fail` event's error before the audit; the audit can still replace
+/// the outcome with the gateway's own refusal, and says so. The error is the
+/// peer's only when both left it as the peer wrote it (MIK-7887.RECEIPT.1).
+/// Only then is its receipt staged in place of the working stub; otherwise
+/// the stub is dropped.
 pub(super) async fn settle_followed(
     executor: &Arc<TaskExecutor>,
     state: &crate::gateway::task_service::host::LiveHost,
     followed: &FollowedJob<'_>,
-    (event, peer): (TaskTransition, Option<crate::protocol::JsonRpcError>),
+    (event, screened): (TaskTransition, ErrorAuthor),
     notes: &crate::gateway::meta_mcp::invoke::audit::DispatchNotes,
 ) {
     let (job, id) = (followed.job, followed.id);
@@ -67,10 +68,10 @@ pub(super) async fn settle_followed(
         tool: &job.tool,
         id,
     };
-    let event = (state.meta_mcp())
-        .audit_settlement(task, event, notes, followed.principal)
+    let (event, kept) = (state.meta_mcp())
+        .audit_settlement_kept(task, event, notes, followed.principal)
         .await;
-    let author = error_author(&event, peer.as_ref());
+    let author = committed_author(screened, kept);
     if let TaskTransition::Fail(error) = &event {
         let target = (job.server.as_str(), job.tool.as_str());
         (state.meta_mcp()).stage_followed_error(followed.relay, target, error, author);
@@ -87,78 +88,46 @@ pub(super) async fn settle_followed(
     state.meta_mcp().commit_staged_relay(stored);
 }
 
-/// A peer's failure screened by the reader's error policy, beside the peer's
-/// own error so authorship can be decided on what is committed.
+/// A peer's failure screened by the reader's error policy, with the screen's
+/// own verdict on who wrote what it returns.
 pub(super) fn screened_peer_failure(
     state: &crate::gateway::task_service::host::LiveHost,
     job: &crate::gateway::meta_mcp::upstream::DirectJob,
     id: &str,
     error: crate::protocol::JsonRpcError,
-) -> (TaskTransition, Option<crate::protocol::JsonRpcError>) {
+) -> (TaskTransition, ErrorAuthor) {
     let peer = super::settlement::strip_http_status(error);
-    let screened =
-        (state.meta_mcp()).recover_task_error(&job.server, &job.tool, None, id, peer.clone());
-    (TaskTransition::Fail(screened), Some(peer))
+    let (screened, author) =
+        (state.meta_mcp()).recover_task_error_with(&job.server, &job.tool, None, id, peer);
+    (TaskTransition::Fail(screened), author)
 }
 
-/// `Peer` only when `event` fails with exactly the peer's own error.
-pub(super) fn error_author(
-    event: &TaskTransition,
-    peer: Option<&crate::protocol::JsonRpcError>,
-) -> ErrorAuthor {
-    let same = |a: &crate::protocol::JsonRpcError, b: &crate::protocol::JsonRpcError| {
-        serde_json::to_value(a).ok() == serde_json::to_value(b).ok()
-    };
-    match (event, peer) {
-        (TaskTransition::Fail(error), Some(peer)) if same(error, peer) => ErrorAuthor::Peer,
-        _ => ErrorAuthor::Gateway,
-    }
+/// Who wrote a committed error: the screen's verdict, unless the audit
+/// replaced the outcome, which makes it the gateway's.
+pub(super) fn committed_author(screened: ErrorAuthor, kept: bool) -> ErrorAuthor {
+    if kept { screened } else { ErrorAuthor::Gateway }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::JsonRpcError;
-    use serde_json::json;
 
-    fn peer() -> JsonRpcError {
-        JsonRpcError {
-            code: -32042,
-            message: "the peer's words".to_owned(),
-            data: Some(json!({"row": 7})),
-        }
-    }
-
-    /// MIK-7887.RECEIPT.1: only the peer's own error, unchanged by every
-    /// screen and by the audit, is the peer's. A rewrite, a replacement, any
-    /// other outcome, or no peer error at all is the gateway's.
+    /// MIK-7887.RECEIPT.1: an error is the peer's only when the screen passed
+    /// it and the audit kept it.
     #[test]
-    fn only_an_unchanged_peer_error_is_the_peers() {
-        let unchanged = TaskTransition::Fail(peer());
-        assert_eq!(error_author(&unchanged, Some(&peer())), ErrorAuthor::Peer);
-
-        let mut rewritten = peer();
-        rewritten.message = "withheld by the gateway".to_owned();
-        let rewritten = TaskTransition::Fail(rewritten);
+    fn only_a_screened_and_kept_peer_error_is_the_peers() {
+        assert_eq!(committed_author(ErrorAuthor::Peer, true), ErrorAuthor::Peer);
         assert_eq!(
-            error_author(&rewritten, Some(&peer())),
+            committed_author(ErrorAuthor::Peer, false),
             ErrorAuthor::Gateway
         );
-
-        let mut data_dropped = peer();
-        data_dropped.data = None;
-        let data_dropped = TaskTransition::Fail(data_dropped);
         assert_eq!(
-            error_author(&data_dropped, Some(&peer())),
+            committed_author(ErrorAuthor::Gateway, true),
             ErrorAuthor::Gateway
         );
-
-        let completed = TaskTransition::Complete(json!({"content": []}));
         assert_eq!(
-            error_author(&completed, Some(&peer())),
+            committed_author(ErrorAuthor::Gateway, false),
             ErrorAuthor::Gateway
         );
-
-        assert_eq!(error_author(&unchanged, None), ErrorAuthor::Gateway);
     }
 }
