@@ -1,4 +1,4 @@
-sha256: fc65d346e683b439810753815ee18485dc4afc66a9b63d0846a7029c6595a082
+sha256: 6fb9e141556023354db38e24b434bee9f7ab3140f2e3f65f4971f2aafd0d74c8
 fulcrum: "1.0"
 name: brave_web_search
 description: |
@@ -32,6 +32,7 @@ schema:
       - q
   output:
     type: object
+    additionalProperties: true
     properties:
       web: { type: object }
       query: { type: object }

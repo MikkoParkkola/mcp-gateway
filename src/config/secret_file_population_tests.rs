@@ -124,7 +124,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
-        "src/gateway/task_service/store.rs",
+        "src/gateway/task_service/store_unix.rs",
         "task records: O_NOFOLLOW open, fstat mode 0600 checked (RECORD_MODE)",
     ),
     (

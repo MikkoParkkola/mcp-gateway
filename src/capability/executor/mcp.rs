@@ -566,7 +566,7 @@ impl CapabilityExecutor {
             &principal,
             (env_fp, deadline),
             |current| generation.is_none_or(|g| g == current),
-            || self.start_mcp(capability, config),
+            || Self::start_mcp(capability, config, &lookup),
         )?;
         let backend = lease.backend;
         let _busy = lease.busy;
@@ -615,16 +615,23 @@ impl CapabilityExecutor {
                     .discard(&capability.name, &principal, child_id);
                 Err(Error::BackendTimeout("MCP call timed out".to_string()))
             }
-            Ok(result) => result.map_err(|error| match error {
-                // The server's own error text may echo a credential it was
-                // given or a value the caller sent.
-                Error::Protocol(text) => Error::Protocol(super::cli::redact(
-                    &text,
-                    &env_values,
-                    &super::cli::caller_values(&params),
-                )),
-                other => other,
-            }),
+            Ok(result) => result
+                // A successful result may carry an injected credential the
+                // server echoed (MIK-7882): the same removal as an error, whole.
+                .map(|mut value| {
+                    super::cli::redact_value(&mut value, &env_values);
+                    value
+                })
+                .map_err(|error| match error {
+                    // The server's own error text may echo a credential it was
+                    // given or a value the caller sent.
+                    Error::Protocol(text) => Error::Protocol(super::cli::redact(
+                        &text,
+                        &env_values,
+                        &super::cli::caller_values(&params),
+                    )),
+                    other => other,
+                }),
         }
     }
 
@@ -640,14 +647,17 @@ impl CapabilityExecutor {
     }
 
     /// A new backend for one caller's child, in its own directory tree.
+    ///
+    /// `lookup` is the environment snapshot the call already redacts against:
+    /// the child must receive exactly the values the result is scrubbed of, so
+    /// a reload that lands between the two cannot leave one uncovered.
     fn start_mcp(
-        &self,
         capability: &CapabilityDefinition,
         config: &McpConfig,
+        lookup: &dyn Fn(&str) -> Option<std::ffi::OsString>,
     ) -> Result<(Arc<Backend>, Workdir)> {
         let workdir = Workdir::create()
             .map_err(|e| Error::Protocol(format!("no private work directory: {}", e.kind())))?;
-        let lookup = self.env_lookup();
         let program = super::cli_run::resolve_command(
             &config.command,
             lookup("PATH").as_deref(),
@@ -662,7 +672,7 @@ impl CapabilityExecutor {
                 capability.name
             ))
         })?;
-        let env = child_env(workdir.path(), &config.env, &lookup, None)
+        let env = child_env(workdir.path(), &config.env, lookup, None)
             .into_iter()
             .map(|(k, v)| {
                 (

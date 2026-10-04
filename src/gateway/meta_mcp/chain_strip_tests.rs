@@ -39,6 +39,7 @@ fn meta_with(registry: Arc<BackendRegistry>, stamping: bool) -> MetaMcp {
     if stamping {
         meta.enable_provenance_stamping(
             crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                .with_audience("test-gateway")
                 .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
         );
     }

@@ -34,9 +34,8 @@
 1180 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1179 src/identity_propagation/mod.rs
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
-1141 src/gateway/task_service/store.rs
 1138 tests/mik_7214_header_9_acs.rs
-1137 src/protocol/meta.rs
+960 src/protocol/meta.rs
 1132 src/gateway/streaming.rs
 1108 tests/mik_7215_acs.rs
 1087 src/control_plane/mod.rs

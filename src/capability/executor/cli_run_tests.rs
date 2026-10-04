@@ -326,3 +326,172 @@ fn a_secret_straddling_the_excerpt_cut_is_removed_whole() {
         "{out}"
     );
 }
+
+/// MIK-7882.REDACT.3: a redacted success keeps its structure and its length.
+#[test]
+fn success_redaction_keeps_json_valid_and_does_not_truncate() {
+    let secret = "SECRET-7882-value";
+    let long = format!("{}{secret}{}", "x".repeat(5000), "y".repeat(5000));
+    let mut value = json!({
+        "n": 7,
+        "ok": true,
+        "nested": [{"s": long.clone()}, secret, null],
+        secret: "key carries it",
+    });
+    super::super::cli::redact_value(&mut value, &[secret.to_owned()]);
+    let text = value.to_string();
+    assert!(!text.contains(secret), "{text}");
+    let back: Value = serde_json::from_str(&text).expect("still a JSON document");
+    assert_eq!(back["n"], 7);
+    assert_eq!(back["ok"], true);
+    assert!(back["nested"][1].is_string(), "a string stays a string");
+    assert_eq!(back["nested"][1], "[redacted]");
+    assert_eq!(
+        back["nested"][0]["s"].as_str().unwrap().len(),
+        10_000 + "[redacted]".len(),
+        "no 2 KiB cut"
+    );
+    assert_eq!(back["[redacted]"], "key carries it");
+}
+
+#[test]
+fn a_renamed_key_never_takes_the_name_of_one_that_stays() {
+    // `SECRET` becomes `[redacted]`; the key that already had that name keeps
+    // its own value, and the renamed one gets the next free name.
+    let mut value = json!({"[redacted]": 1, "SECRET": 2});
+    super::super::cli::redact_value(&mut value, &["SECRET".to_owned()]);
+    assert_eq!(value["[redacted]"], 1, "{value}");
+    assert_eq!(value["[redacted]#2"], 2, "{value}");
+    assert_eq!(value.as_object().unwrap().len(), 2);
+}
+
+#[test]
+fn a_renamed_key_skips_every_name_already_taken() {
+    let mut value = json!({"[redacted]": 1, "[redacted]#2": 2, "SECRET": 3});
+    super::super::cli::redact_value(&mut value, &["SECRET".to_owned()]);
+    assert_eq!(value["[redacted]#2"], 2, "{value}");
+    assert_eq!(value["[redacted]#3"], 3, "{value}");
+    assert_eq!(value.as_object().unwrap().len(), 3);
+}
+
+#[test]
+fn many_keys_that_collapse_to_the_marker_all_survive() {
+    // Fifty secrets, each also a key: every key renames to the same marker.
+    let secrets: Vec<String> = (0..50).map(|i| format!("SECRET-{i:02}")).collect();
+    let map: serde_json::Map<String, Value> =
+        secrets.iter().map(|s| (s.clone(), json!(s))).collect();
+    let mut value = Value::Object(map);
+    super::super::cli::redact_value(&mut value, &secrets);
+    assert_eq!(value.as_object().unwrap().len(), 50, "{value}");
+    assert!(!value.to_string().contains("SECRET-"), "{value}");
+}
+
+#[test]
+fn an_all_digit_credential_does_not_survive_as_a_json_number() {
+    let mut value = json!({"pin": 4_815_162_342_u64, "count": 3, "nested": [4_815_162_342_u64]});
+    super::super::cli::redact_value(&mut value, &["4815162342".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["nested"][0], "[redacted]", "{value}");
+    assert_eq!(value["count"], 3, "an unrelated number is untouched");
+
+    // A short needle would hit every number: numbers are only checked from 4 bytes.
+    let mut value = json!({"n": 1234});
+    super::super::cli::redact_value(&mut value, &["1".to_owned()]);
+    assert_eq!(value["n"], 1234);
+}
+
+#[test]
+fn untruncated_redaction_keeps_the_whole_text() {
+    let text = format!("{}tok{}", "a".repeat(4000), "b".repeat(4000));
+    let out = super::super::cli::redact_untruncated(&text, &["tok".to_owned()], &[]);
+    assert_eq!(out.len(), 8000 + "[redacted]".len());
+}
+
+/// With the credential scanner built in, a success result is scanned too: a
+/// credential-shaped value the gateway did not inject is replaced.
+#[cfg(feature = "firewall")]
+#[test]
+fn success_redaction_runs_the_credential_scanner() {
+    let shaped = concat!("AK", "IAIOSFODNN7", "EXAMPLE");
+    let mut value = json!({ "note": format!("key {shaped} end") });
+    super::super::cli::redact_value(&mut value, &[]);
+    assert!(!value.to_string().contains(shaped), "{value}");
+}
+
+#[test]
+fn overlapping_credentials_leave_no_fragment_of_either() {
+    let secrets = ["abcdef".to_owned(), "cdefgh".to_owned()];
+    let out = super::super::cli::redact_untruncated("x abcdefgh y", &secrets, &[]);
+    assert_eq!(out, "x [redacted] y");
+    let mut value = json!({"k": "abcdefgh"});
+    super::super::cli::redact_value(&mut value, &secrets);
+    assert_eq!(value["k"], "[redacted]");
+
+    // A value that overlaps itself: no tail of it survives.
+    let out = super::super::cli::redact_untruncated("xabababy", &["abab".to_owned()], &[]);
+    assert_eq!(out, "x[redacted]y");
+}
+
+/// A multi-line injected credential (a PEM key) is removed whole: the scanner
+/// must not get to cut its header out first and leave the body matchable by
+/// nobody.
+#[test]
+fn an_injected_multi_line_key_is_removed_whole() {
+    let key = format!(
+        "-----BEGIN {0} KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nabcdef0123456789\n-----END {0} KEY-----",
+        "PRIVATE"
+    );
+    let text = format!("echo: {key} done");
+    let out = super::super::cli::redact_untruncated(&text, std::slice::from_ref(&key), &[]);
+    assert!(!out.contains("MIIEvQIBADANBg"), "{out}");
+    assert!(!out.contains("abcdef0123456789"), "{out}");
+    let mut value = json!({ "k": text });
+    super::super::cli::redact_value(&mut value, &[key]);
+    assert!(!value.to_string().contains("abcdef0123456789"), "{value}");
+}
+
+/// A one-character needle matches at every position of a long text (the case
+/// that made one span per match costly): the whole run is one marker.
+#[test]
+fn a_needle_that_matches_everywhere_collapses_to_one_marker() {
+    let long = "a".repeat(1024 * 1024);
+    let out = super::super::cli::redact_untruncated(&long, &["a".to_owned(), "a".to_owned()], &[]);
+    assert_eq!(out, "[redacted]");
+}
+
+/// An injected value equal to the word a credential pattern keys on does not
+/// hide the credential it starts: the scanner's span, found in the original
+/// text, goes with the literal.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_literal_inside_a_credential_takes_the_credential_with_it() {
+    let token = "abcdef0123456789abcdef0123456789";
+    let text = format!("auth: Bearer {token} done");
+    let secrets = ["Bearer".to_owned()];
+    let out = super::super::cli::redact_untruncated(&text, &secrets, &[]);
+    assert!(!out.contains(token), "{out}");
+    assert!(out.ends_with(" done"), "{out}");
+    let mut value = json!({ "k": text });
+    super::super::cli::redact_value(&mut value, &secrets);
+    assert!(!value.to_string().contains(token), "{value}");
+}
+
+/// A long needle that overlaps itself at every position: the search is linear,
+/// so a megabyte of it ends as one marker without stalling the worker.
+#[test]
+fn a_long_self_overlapping_needle_collapses_to_one_marker() {
+    let text = "a".repeat(1024 * 1024);
+    let needle = "a".repeat(32 * 1024);
+    let out = super::super::cli::redact_untruncated(&format!("x{text}y"), &[needle], &[]);
+    assert_eq!(out, "x[redacted]y");
+}
+
+/// An all-digit credential past u64 comes back as a float in exponent form;
+/// it is still matched, by value.
+#[test]
+fn a_digit_credential_past_u64_is_redacted_as_a_number() {
+    let secret = "18446744073709551616".to_owned();
+    let mut value: Value = serde_json::from_str(r#"{"n": 18446744073709551616}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &[secret]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+}

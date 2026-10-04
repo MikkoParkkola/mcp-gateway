@@ -9,7 +9,11 @@ use super::*;
 use crate::backend::BackendRegistry;
 
 fn listeners() -> Arc<UpstreamListeners> {
-    UpstreamListeners::new(Arc::new(BackendRegistry::new()), Weak::new())
+    UpstreamListeners::new(
+        Arc::new(BackendRegistry::new()),
+        Weak::new(),
+        Arc::new(std::collections::BTreeSet::new),
+    )
 }
 
 fn watched(uri: &str) -> Interest {
@@ -56,5 +60,42 @@ async fn the_last_interest_ends_the_listener() {
         "prompts still wanted"
     );
     hub.remove("b", &Interest::PromptsChanged);
+    assert!(!hub.backends.lock().contains_key("b"));
+}
+
+/// MIK-7894: a task a reload ended (its backend became ineligible) is not
+/// reused when interest returns; a fresh one replaces it.
+#[tokio::test]
+async fn a_listener_task_a_reload_ended_is_replaced_when_interest_returns() {
+    let hub = listeners();
+    hub.add("b", &Interest::ResourcesChanged).expect("room");
+    let first = hub.backends.lock().get("b").cloned().expect("listener");
+    first.stop.cancel();
+    hub.add("b", &Interest::PromptsChanged).expect("room");
+    let second = hub.backends.lock().get("b").cloned().expect("listener");
+    assert!(!Arc::ptr_eq(&first, &second), "the ended task was reused");
+    assert!(!second.stop.is_cancelled());
+}
+
+/// MIK-7894: the replacement keeps the interest the reload left standing (a
+/// `tools_changed` key), so the newcomer leaving does not stop the listener
+/// those subscribers still need.
+#[tokio::test]
+async fn a_replaced_listener_keeps_the_interest_that_stayed() {
+    let hub = listeners();
+    hub.add("b", &Interest::ToolsChanged).expect("room");
+    hub.backends
+        .lock()
+        .get("b")
+        .expect("listener")
+        .stop
+        .cancel();
+    hub.add("b", &Interest::PromptsChanged).expect("room");
+    hub.remove("b", &Interest::PromptsChanged);
+    assert!(
+        hub.backends.lock().contains_key("b"),
+        "the tools_changed interest was lost"
+    );
+    hub.remove("b", &Interest::ToolsChanged);
     assert!(!hub.backends.lock().contains_key("b"));
 }

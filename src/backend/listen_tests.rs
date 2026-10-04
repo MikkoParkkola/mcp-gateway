@@ -61,3 +61,21 @@ async fn a_tools_notice_drops_the_cached_tool_list() {
         "the notice forced a re-read"
     );
 }
+
+/// MIK-7894: the resend-permitted set is derived from the cached tool list, so
+/// a notice that drops the list drops the set with it; a stale set would keep
+/// letting a tool that is no longer read-only be sent again.
+#[tokio::test]
+async fn a_tools_notice_clears_the_resend_permitted_set() {
+    let backend = backend();
+    let entry = backend.shared_entry();
+    entry
+        .resend_permitted
+        .write()
+        .insert("was_read_only".to_owned());
+    backend.invalidate_tools();
+    assert!(
+        entry.resend_permitted.read().is_empty(),
+        "a stale resend set outlived the tool list"
+    );
+}

@@ -593,6 +593,99 @@ async fn unloading_one_capability_does_not_refuse_a_call_to_another() {
     call(&executor, &cap, say, &before).await.unwrap();
 }
 
+/// An env file holding one injected secret, as the executor's overlay.
+fn executor_holding(secret: &str) -> (tempfile::TempDir, CapabilityExecutor) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(
+        &file,
+        format!("CAP_EXEC_TEST_TOKEN={secret}\n"),
+    )
+    .unwrap();
+    let overlay = std::sync::Arc::new(crate::config::EnvOverlay::from_paths(&[file]));
+    let env = std::sync::Arc::new(crate::config::LiveEnv::new(
+        overlay,
+        crate::config::ResolvedEnvFiles::default(),
+    ));
+    (dir, CapabilityExecutor::new().with_env(env))
+}
+
+fn capability_with_env() -> CapabilityDefinition {
+    let yaml = capability_yaml().replace(
+        "transport: stdio",
+        "transport: stdio\n      env: [CAP_EXEC_TEST_TOKEN]",
+    );
+    parse_capability(&yaml).expect("probe parses")
+}
+
+/// MIK-7882.REDACT.2: the server echoes the injected env value in a successful
+/// result, in its `wait` ready payload too; the caller receives neither.
+#[tokio::test]
+async fn a_successful_result_loses_the_injected_env_value() {
+    let secret = "tok-7882-mcp-redact-me";
+    let (_dir, executor) = executor_holding(secret);
+    let cap = capability_with_env();
+    let ctx = caller("a");
+
+    let plain = call(
+        &executor,
+        &cap,
+        json!({"operation": "say", "text": "hello"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        plain["test_values"]["CAP_EXEC_TEST_TOKEN"], "[redacted]",
+        "the child received the value, the caller does not: {plain}"
+    );
+    assert!(!plain.to_string().contains(secret), "{plain}");
+    assert_eq!(plain["arguments"]["message"], "hello", "the rest is intact");
+
+    let waited = call(
+        &executor,
+        &cap,
+        json!({"operation": "import_wait", "binary_path": "x"}),
+        &ctx,
+    )
+    .await
+    .unwrap();
+    assert!(
+        !waited.to_string().contains(secret),
+        "ready payload: {waited}"
+    );
+    assert!(
+        waited["ready"].to_string().contains("[redacted]"),
+        "the ready payload was reached and redacted: {waited}"
+    );
+}
+
+/// The child is started with the environment the call redacts against, not a
+/// second read of it: after a reload between the two, the value the child holds
+/// is still one the result is scrubbed of.
+#[tokio::test]
+async fn the_child_starts_with_the_snapshot_the_call_redacts_against() {
+    let (_dir, executor) = executor_holding("old-snapshot-value");
+    let cap = capability_with_env();
+    let Some(ProcessConfig::Mcp(config)) = cap.providers.process.get("primary") else {
+        panic!("not an mcp provider");
+    };
+    let snapshot =
+        |name: &str| (name == "CAP_EXEC_TEST_TOKEN").then(|| "old-snapshot-value".into());
+
+    // A reload publishes another value after the call took its snapshot.
+    let (_other, reloaded) = executor_holding("new-value-after-reload");
+    executor.env.set(reloaded.env.get());
+
+    let (backend, _workdir) = CapabilityExecutor::start_mcp(&cap, config, &snapshot).unwrap();
+    let args = serde_json::Map::from_iter([("message".to_owned(), json!("x"))]);
+    let echoed = super::call_tool(&backend, "echo", args).await.unwrap();
+    assert_eq!(
+        echoed["test_values"]["CAP_EXEC_TEST_TOKEN"], "old-snapshot-value",
+        "the child got the snapshot, not the reloaded value: {echoed}"
+    );
+}
+
 /// MIK-7870.RELOAD.2 and .3: a call read its definition and generation, then a
 /// reload swapped in an EDITED definition of the same capability; the call
 /// reaches acquire with the pre-edit generation and is refused, while a call
