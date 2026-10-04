@@ -15,9 +15,23 @@
 //! ```text
 //! U1_BASELINE=u1-baseline-20261002T164939Z.prom U1_BASELINE_TS=1790959779 \
 //! U1_FINAL=u1-final.prom U1_FINAL_TS=<scrape unix second> \
-//! U1_DATA_DIR=$HOME/.mcp-gateway \
+//! U1_DATA_DIR=<copy of ~/.mcp-gateway taken with the final scrape> \
+//! U1_PID_LOG=u1-pid-watch.log U1_PID=53431 \
 //! cargo test --test u1_v1_window_grade -- --ignored --nocapture
 //! ```
+//!
+//! Provenance: keep the final scrape and the window.json copy on the
+//! maintainer's machine, never in the repository and never deleted, beside a
+//! `.meta` file in `.git/lead-decisions/` recording both files' sha256 and
+//! byte size, the scrape second, the gateway PID and start time, and this
+//! harness's commit. The public record cites shares, the decision, both
+//! sha256 values and the harness commit; it carries no raw request counts.
+//!
+//! The grade refuses inputs that cannot support it: a scrape missing any
+//! zero-registered series, a counter that went down, a stdio window written
+//! after the final scrape, or a PID watch log showing another process or a
+//! gap after the window's process started (a restart that caught back up to
+//! the baseline counts is invisible in the counters alone).
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -70,6 +84,15 @@ fn label<'a>(pairs: &'a [(String, String)], key: &str) -> &'a str {
 /// `Registry::snapshot`. A counter that went down means a restart, which
 /// voids the window.
 fn delta_snapshot(baseline: &Series, last: &Series) -> Snapshot {
+    // Every series is registered at zero at startup, so both scrapes carry
+    // the same set; a missing one means a truncated or foreign scrape.
+    assert!(!baseline.is_empty(), "the baseline scrape has no U1 series");
+    let missing: Vec<_> = baseline.keys().filter(|k| !last.contains_key(*k)).collect();
+    let extra: Vec<_> = last.keys().filter(|k| !baseline.contains_key(*k)).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "the scrapes carry different series: missing {missing:?}, extra {extra:?}"
+    );
     let mut snapshot = Snapshot::default();
     for (key, now) in last {
         let before = baseline.get(key).copied().unwrap_or(0);
@@ -100,6 +123,62 @@ fn delta_snapshot(baseline: &Series, last: &Series) -> Snapshot {
     snapshot
 }
 
+/// The PID watch log after `restart done pid=<pid>` names only `pid` and has
+/// an entry at least every ~11 minutes of the window (it writes every 10).
+fn assert_one_process(log: &str, pid: u32, elapsed: Duration) {
+    let marker = format!("restart done pid={pid}");
+    let lines: Vec<&str> = log.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|line| line.contains(&marker))
+        .unwrap_or_else(|| panic!("no '{marker}' line in the PID watch log"));
+    let want = pid.to_string();
+    let mut entries = 0_u64;
+    for line in &lines[start + 1..] {
+        // Every `pid=<digits>` on the line must name the window's process.
+        let named: Vec<&str> = line
+            .split("pid=")
+            .skip(1)
+            .map(|rest| {
+                rest.split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+            })
+            .collect();
+        if named.is_empty() {
+            continue;
+        }
+        assert!(
+            named.iter().all(|n| *n == want),
+            "another process in the window: {line}"
+        );
+        entries += 1;
+    }
+    let needed = elapsed.as_secs() / 660;
+    assert!(
+        entries >= needed,
+        "{entries} PID checks for {} s: the watch has gaps",
+        elapsed.as_secs()
+    );
+}
+
+/// Mirrors `production_retirement_decision_at`: misalignment blocks, then the
+/// stdio half, then the HTTP half, then their intersection.
+fn joint(
+    aligned: bool,
+    stdio: Result<Vec<String>, impl std::fmt::Debug>,
+    http: Result<Vec<String>, impl std::fmt::Debug>,
+) -> Result<Vec<String>, String> {
+    if !aligned {
+        return Err("WindowMisaligned".to_string());
+    }
+    match (stdio, http) {
+        (Err(blocked), _) => Err(format!("{blocked:?}")),
+        (Ok(_), Err(blocked)) => Err(format!("{blocked:?}")),
+        (Ok(stdio), Ok(http)) => Ok(stdio.into_iter().filter(|r| http.contains(r)).collect()),
+    }
+}
+
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("{name} is required"))
 }
@@ -127,6 +206,17 @@ fn u1_v1_window_grade() {
     let aligned = window["started_at_unix_seconds"].as_u64() == Some(baseline_ts);
     let elapsed = Duration::from_secs(final_ts.saturating_sub(baseline_ts));
 
+    let updated = window["updated_at_unix_seconds"]
+        .as_u64()
+        .expect("updated_at");
+    assert!(
+        updated <= final_ts,
+        "window.json was written after the final scrape ({updated} > {final_ts}); copy it with the scrape"
+    );
+    let pid: u32 = env("U1_PID").parse().expect("a PID");
+    let log = std::fs::read_to_string(env("U1_PID_LOG")).expect("a readable PID watch log");
+    assert_one_process(&log, pid, elapsed);
+
     let http_decision = retire_revisions(&http, elapsed);
     let stdio_decision = retire_revisions(&stdio, elapsed);
     println!(
@@ -142,17 +232,7 @@ fn u1_v1_window_grade() {
     println!("stdio decision: {stdio_decision:?}");
     // Mirrors production_retirement_decision_at: misalignment blocks, then
     // the stdio half, then the HTTP half, then the intersection.
-    let joint = if aligned {
-        match (stdio_decision, http_decision) {
-            (Err(blocked), _) | (Ok(_), Err(blocked)) => Err(format!("{blocked:?}")),
-            (Ok(stdio), Ok(http)) => Ok(stdio
-                .into_iter()
-                .filter(|rev| http.contains(rev))
-                .collect::<Vec<_>>()),
-        }
-    } else {
-        Err("WindowMisaligned".to_string())
-    };
+    let joint = joint(aligned, stdio_decision, http_decision);
     println!("\nJOINT DECISION (retire): {joint:?}");
 }
 
@@ -162,6 +242,7 @@ fn a_scrape_pair_becomes_the_counts_between_them() {
     let baseline = parse(concat!(
         "# TYPE mcp_protocol_revision_observations_total counter\n",
         "mcp_protocol_revision_observations_total{requested_revision=\"2025-06-18\",client=\"unattributed\",transport=\"http\"} 4\n",
+        "mcp_protocol_revision_observations_total{requested_revision=\"2025-11-25\",client=\"claude\",transport=\"http\"} 0\n",
         "mcp_protocol_revision_unattributed_observations_total{client=\"claude\",transport=\"http\"} 0\n",
         "other_metric{a=\"b\"} 9\n",
     ));
@@ -177,4 +258,49 @@ fn a_scrape_pair_becomes_the_counts_between_them() {
     assert_eq!(snapshot.by_revision["2025-11-25"], 3);
     assert_eq!(snapshot.by_client["claude"], 4);
     assert_eq!(snapshot.by_transport["http"], 10);
+}
+
+/// A final scrape missing a zero-registered series is refused, not read as zero.
+#[test]
+#[should_panic(expected = "different series")]
+fn a_scrape_missing_a_series_is_refused() {
+    let line = "mcp_protocol_revision_unattributed_observations_total{client=\"claude\",transport=\"http\"} 0\n";
+    delta_snapshot(&parse(line), &parse(""));
+}
+
+/// The joint decision: misalignment first, then stdio, then HTTP, then the
+/// intersection.
+#[test]
+fn the_joint_decision_keeps_the_v1_precedence() {
+    let ok = |v: &[&str]| Ok::<Vec<String>, &str>(v.iter().map(ToString::to_string).collect());
+    assert_eq!(
+        joint(false, ok(&["a"]), ok(&["a"])),
+        Err("WindowMisaligned".to_string())
+    );
+    assert_eq!(
+        joint(true, Err("NoObservations"), Err("AttributionBelowFloor")),
+        Err("\"NoObservations\"".to_string())
+    );
+    assert_eq!(
+        joint(true, ok(&["a"]), Err("AttributionBelowFloor")),
+        Err("\"AttributionBelowFloor\"".to_string())
+    );
+    assert_eq!(
+        joint(true, ok(&["a", "b"]), ok(&["b", "c"])),
+        ok(&["b"]).map_err(String::from)
+    );
+}
+
+/// One process across the window passes; another PID or a gap is refused.
+#[test]
+fn the_pid_watch_must_show_one_unbroken_process() {
+    let hour = Duration::from_secs(3600);
+    let mut log = String::from("x pid=1 lstart=old\nrestart done pid=7 lstart=t\n");
+    for _ in 0..6 {
+        log.push_str("ts pid=7 lstart=t\n");
+    }
+    assert_one_process(&log, 7, hour);
+    let other = format!("{log}ts pid=8 lstart=u\n");
+    assert!(std::panic::catch_unwind(|| assert_one_process(&other, 7, hour)).is_err());
+    assert!(std::panic::catch_unwind(|| assert_one_process(&log, 7, hour * 2)).is_err());
 }
