@@ -87,6 +87,20 @@ pub(super) async fn settle_followed(
     state.meta_mcp().commit_staged_relay(stored);
 }
 
+/// A peer's failure screened by the reader's error policy, beside the peer's
+/// own error so authorship can be decided on what is committed.
+pub(super) fn screened_peer_failure(
+    state: &crate::gateway::task_service::host::LiveHost,
+    job: &crate::gateway::meta_mcp::upstream::DirectJob,
+    id: &str,
+    error: crate::protocol::JsonRpcError,
+) -> (TaskTransition, Option<crate::protocol::JsonRpcError>) {
+    let peer = super::settlement::strip_http_status(error);
+    let screened =
+        (state.meta_mcp()).recover_task_error(&job.server, &job.tool, None, id, peer.clone());
+    (TaskTransition::Fail(screened), Some(peer))
+}
+
 /// `Peer` only when `event` fails with exactly the peer's own error.
 pub(super) fn error_author(
     event: &TaskTransition,

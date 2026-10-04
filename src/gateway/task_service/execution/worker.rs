@@ -9,7 +9,8 @@ use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
 
 use super::input_round::Settling;
 use super::settle_followed::{
-    FollowedJob, rebuild_task_receipt, settle_followed, stage_followed_result,
+    FollowedJob, rebuild_task_receipt, screened_peer_failure, settle_followed,
+    stage_followed_result,
 };
 use super::settlement::{
     backend_output, interrupted_before_dispatch, interrupted_result, strip_http_status,
@@ -384,17 +385,7 @@ async fn follow_upstream_job(
             )),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            UpstreamAnswer::Failed(error) => {
-                let peer = strip_http_status(error);
-                let screened = (state.meta_mcp()).recover_task_error(
-                    &job.server,
-                    &job.tool,
-                    None,
-                    id,
-                    peer.clone(),
-                );
-                Some((TaskTransition::Fail(screened), Some(peer)))
-            }
+            UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, &job, id, error)),
             // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
             UpstreamAnswer::Substituted(error) => {
                 Some((TaskTransition::Fail(strip_http_status(error)), None))
