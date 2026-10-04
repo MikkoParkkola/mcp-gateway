@@ -605,7 +605,7 @@ fn prompts_in(frames: &[Value]) -> Vec<&Value> {
 }
 
 /// The stdio reader's own refusal, `stdio_busy_response` in
-/// `src/gateway/server/mod.rs`.
+/// `src/gateway/server/stdio_refusal.rs`.
 const SERVER_BUSY: &str = "server busy: too many stdio requests in flight";
 
 /// Every id carrying a `-32000 server busy` refusal.

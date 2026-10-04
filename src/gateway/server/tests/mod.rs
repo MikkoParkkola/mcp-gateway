@@ -88,3 +88,6 @@ mod hardened_destination;
 
 // MIK-7685 (#2530): stdio EOF teardown is bounded.
 mod stdio_teardown_bound;
+
+// MIK-7684: the stdio reader never waits for stdout room.
+mod stdio_reader_unparked;
