@@ -181,7 +181,8 @@ fn ac_sub_1_a_nested_task_filter_opts_in_and_is_acknowledged() {
 }
 
 /// MIK-7766: a server-ended subscription closes with the listen request's
-/// own response, a complete result carrying only the subscription id.
+/// own response, a complete result carrying the subscription id and, as every
+/// result does, the server's name (MIK-7878).
 #[test]
 fn ac_sub_1_a_graceful_end_is_the_listen_response() {
     for id in [RequestId::Number(4), RequestId::String("sub-b".into())] {
@@ -194,7 +195,13 @@ fn ac_sub_1_a_graceful_end_is_the_listen_response() {
                 "id": wire,
                 "result": {
                     "resultType": "complete",
-                    "_meta": { "io.modelcontextprotocol/subscriptionId": wire },
+                    "_meta": {
+                        "io.modelcontextprotocol/subscriptionId": wire,
+                        "io.modelcontextprotocol/serverInfo": {
+                            "name": "mcp-gateway",
+                            "version": env!("CARGO_PKG_VERSION"),
+                        },
+                    },
                 },
             })
         );
