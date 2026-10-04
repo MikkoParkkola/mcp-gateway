@@ -193,7 +193,12 @@ fn alive(pid: u32) -> bool {
         .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
         .output()
         .unwrap();
-    String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+    // A failed query is not evidence that the process is gone.
+    assert!(out.status.success(), "tasklist failed: {out:?}");
+    let pid = pid.to_string();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .any(|row| row.split(',').nth(1).map(|f| f.trim_matches('"')) == Some(pid.as_str()))
 }
 
 /// Whether `pid` is gone within five seconds.
