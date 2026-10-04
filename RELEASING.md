@@ -77,6 +77,7 @@ fragments needs no fold; if its heading rename still edits `CHANGELOG.md`, apply
 `no-changelog` label.
 
 ```sh
+python3 scripts/release/check_security_fragments.py   # every Security bullet: Affects + Operator action
 python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # review
 python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md, deletes the fragments
 ```
@@ -96,7 +97,8 @@ or its mention removed from the draft.
    the `[4.0.0]` section above as the complete list. Remove any text under `[4.0.0]` that calls
    criteria open or lists known gaps.
 5. Give every Security entry in the new heading the versions it affects and what an operator
-   has to do, or "no action" when there is nothing to do.
+   has to do, or "no action" when there is nothing to do. Fragment bullets already carry this
+   (checked above by `check_security_fragments.py`); the older section's bullets do not.
 6. Add a new empty `## [Unreleased]` above.
 
 Then, once that pull request has merged:
