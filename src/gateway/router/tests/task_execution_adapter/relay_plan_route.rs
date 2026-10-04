@@ -7,7 +7,9 @@ use super::super::*;
 use super::support::*;
 use pretty_assertions::assert_eq;
 
-use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
+use crate::security::firewall::{
+    CollusionAction, CollusionConfig, Firewall, FirewallAction, FirewallConfig, FirewallRule,
+};
 
 /// Credential-shaped text the router's redactor removes (a fake token,
 /// spelled in two pieces).
@@ -37,6 +39,13 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
             scan_responses: true,
             scan_requests: false,
             credential_redaction: true,
+            // Allowed, so the credential is redacted rather than the answer refused.
+            rules: vec![FirewallRule {
+                tool_match: "*".to_string(),
+                action: FirewallAction::Allow,
+                reason: None,
+                scan: Vec::new(),
+            }],
             ..FirewallConfig::default()
         },
         None,
