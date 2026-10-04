@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
 use crate::attestation::signer::TokenRequest;
 use uuid::Uuid;
