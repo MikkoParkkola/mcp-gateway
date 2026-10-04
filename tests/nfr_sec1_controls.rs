@@ -235,14 +235,16 @@ async fn control_12_a_modern_non_admin_caller_of_an_admin_meta_tool_is_refused()
         &[("authorization", "Bearer k")],
     )
     .await;
-    assert_ne!(
+    // Past the gate, the tool's own answer: this fixture attaches no reload
+    // context, so the call reaches the dispatcher and is declined there.
+    assert_eq!(
         served,
-        StatusCode::FORBIDDEN,
+        StatusCode::OK,
         "an admin key must clear the admin gate; body: {body}"
     );
     assert!(
-        !body.to_string().contains("requires admin access"),
-        "{body}"
+        body.to_string().contains("Config reload is not enabled"),
+        "the admin call must reach the tool itself; body: {body}"
     );
 }
 
