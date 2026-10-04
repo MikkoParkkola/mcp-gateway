@@ -418,3 +418,46 @@ async fn service_07b_an_unattributable_principal_owns_nothing_even_the_empty_set
     assert!(service.owns_all(ALICE, std::iter::empty::<&str>()));
     service.close().await.unwrap();
 }
+
+/// C6 gap table rank 7 (tasks, `TaskService::get`): a principal that has no
+/// owner identity (empty, or past the metadata limit) reads nothing, not even
+/// the local operator's task; the operator still reads it.
+#[tokio::test]
+async fn get_without_an_owner_identity_reads_nothing() {
+    use crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL;
+    let dir = tempfile::tempdir().unwrap();
+    let service = service(dir.path()).await;
+    let task = task();
+    assert!(matches!(
+        service
+            .create(
+                request(LOCAL_OPERATOR_PRINCIPAL, "k-operator"),
+                &task,
+                BACKEND,
+                allow_worker()
+            )
+            .await
+            .unwrap(),
+        CreateOutcome::Created { .. }
+    ));
+    let oversized = "p".repeat(crate::idempotency::admission::METADATA_LIMIT + 1);
+
+    for principal in ["", oversized.as_str()] {
+        assert_eq!(
+            service.get(principal, task.id()).unwrap_err(),
+            ServiceError::NotFound,
+            "principal of {} bytes",
+            principal.len()
+        );
+    }
+    // Positive control: the operator reads its own task.
+    assert_eq!(
+        service
+            .get(LOCAL_OPERATOR_PRINCIPAL, task.id())
+            .unwrap()
+            .task
+            .id(),
+        task.id()
+    );
+    service.close().await.unwrap();
+}

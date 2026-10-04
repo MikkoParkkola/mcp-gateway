@@ -90,6 +90,9 @@ mod source_checks {
             "src/gateway/router/handlers/modern_response.rs",
             "src/protocol/cacheable.rs",
             "src/gateway/meta_mcp/chain_emission_tests.rs",
+            // MIK-7910: pins that a bridged prompt reaches the client with its
+            // scope clamped; it writes the key only into a test prompt.
+            "src/gateway/meta_mcp/invoke/relay_tests.rs",
             "src/gateway/meta_mcp/response_delivery_scope_tests.rs",
             "src/gateway/meta_mcp/signing_delivery_scope_tests.rs",
             "src/gateway/outbound/tests.rs",

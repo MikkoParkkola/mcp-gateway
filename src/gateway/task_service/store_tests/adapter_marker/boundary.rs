@@ -226,6 +226,28 @@ async fn upstream_02_a_descriptor_that_overflows_the_record_cap_is_refused_unwri
     store.close().await.unwrap();
 }
 
+/// C6 killer (`TASKS_OWNERFILTER`): the descriptor-size probe is owner-scoped,
+/// so a foreign owner learns only what an absent task would tell it.
+#[tokio::test]
+async fn upstream_02_the_descriptor_probe_answers_a_foreign_owner_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (task, binding) = admitted(&store, &services(), "probe-owner").await;
+    let owner = binding.principal_digest().to_owned();
+    let args = json!({"sku": "x"});
+    assert_eq!(
+        store.admits_upstream_descriptor(&owner, task.id(), "orders", "create", &args),
+        Ok(true),
+        "positive control: the owner is answered"
+    );
+    assert_eq!(
+        store.admits_upstream_descriptor(OTHER, task.id(), "orders", "create", &args),
+        Err(StoreError::NotFound)
+    );
+    store.close().await.unwrap();
+}
+
 /// Every read and write entry point refuses a store that is not serving, and
 /// writes nothing.
 async fn assert_unserved(reader: &TaskStore, owner: &str, id: &str, binding: &TaskBinding) {

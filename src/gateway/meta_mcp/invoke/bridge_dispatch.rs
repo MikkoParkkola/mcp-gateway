@@ -145,9 +145,24 @@ pub(super) struct BridgeDispatcher<'a> {
     pub(super) relay_refused: &'a parking_lot::Mutex<Option<Error>>,
 }
 
+/// A round's batch as the client receives it: each prompt's params, or a
+/// handed-back result, in [`relay::delivered_form`].
+fn delivered_challenge(challenge: &Value) -> Value {
+    let mut shown = challenge.clone();
+    match shown.as_array_mut() {
+        Some(prompts) => prompts
+            .iter_mut()
+            .filter_map(|prompt| prompt.get_mut("params"))
+            .for_each(relay::delivered_form),
+        None => relay::delivered_form(&mut shown),
+    }
+    shown
+}
+
 impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
-    /// Scans the batch as the backend composed it, against the backend's own
-    /// target, and refuses the exchange rather than rewriting the question:
+    /// Scans the batch as the client receives it (MIK-7910: what delivery
+    /// drops is never shown), against the backend's own target, and refuses
+    /// the exchange rather than rewriting the question:
     /// `enforce_firewall_challenge` runs `Immutable`, so a redaction is not
     /// one of the outcomes available here.
     fn admit(
@@ -165,7 +180,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             external_tool: "gateway_invoke",
         };
         self.meta
-            .enforce_firewall_challenge(challenge, &targets, &correlation)
+            .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
             .map_err(
                 |_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
                     dispatched: false,

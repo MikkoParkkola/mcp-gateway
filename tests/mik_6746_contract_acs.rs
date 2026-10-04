@@ -7,7 +7,7 @@
 //! Two things only an integration binary can establish for this row.
 //!
 //! 1. MIGRATION. The existing coverage builds a `Config` struct and clears
-//!    `audience` by field assignment (`src/config/tests.rs:1191`). An operator
+//!    `audience` by field assignment (`src/config/tests/idle_and_agents.rs:238`). An operator
 //!    does not hold a struct; they hold a pre-4.0.0 YAML file in which the key
 //!    is simply ABSENT. A `#[serde(default)]` that quietly supplies a value, or
 //!    a `load` path that never reaches `validate`, both pass the struct row and
