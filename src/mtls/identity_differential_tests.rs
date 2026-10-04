@@ -4,7 +4,9 @@
 //! leaf that Rustls/webpki accepts is one `CertIdentity::from_der` rejects.
 //! The acceptor refuses the connection on a parse failure, so such a leaf
 //! would lock out a client the TLS layer trusted; this pins that none of the
-//! bounded unusual-but-signable leaves below does.
+//! bounded unusual-but-signable leaves below does, so a dependency bump that
+//! opens such a split fails here. Not covered: an unusual signature-algorithm
+//! encoding (rcgen cannot emit one; it needs a hand-re-signed TBS).
 
 use std::sync::Arc;
 
@@ -125,15 +127,19 @@ fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
     let mut split = Vec::new();
     for (name, params) in candidates {
         let key = KeyPair::generate().unwrap();
-        let der: CertificateDer<'static> = match params.signed_by(&key, &issuer) {
-            Ok(cert) => cert.der().clone(),
-            Err(error) => {
-                eprintln!("{name:42} | not signable by rcgen: {error}");
-                continue;
-            }
-        };
+        let der: CertificateDer<'static> = params
+            .signed_by(&key, &issuer)
+            .unwrap_or_else(|error| panic!("{name}: not signable: {error}"))
+            .der()
+            .clone();
         let webpki = verifier.verify_client_cert(&der, &[], UnixTime::now());
         let parsed = CertIdentity::from_der(der.as_ref());
+        if name == "baseline" {
+            // The control: without it, a verifier that refused every leaf
+            // would make this guard pass with nothing compared.
+            assert!(webpki.is_ok(), "baseline refused by webpki: {webpki:?}");
+            assert!(parsed.is_ok(), "baseline rejected by from_der");
+        }
         eprintln!(
             "{name:42} | webpki {:8} | from_der {:8} | cn {:?}",
             if webpki.is_ok() { "accepts" } else { "refuses" },
