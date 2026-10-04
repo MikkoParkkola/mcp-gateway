@@ -452,22 +452,30 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
         // A credential that is all digits can come back as a JSON number. A
         // short needle would hit every number, so only one a caller could not
         // guess by chance (the same floor as caller values) is looked for.
-        // An integer past u64 parses as a float and prints in exponent form,
-        // so an all-digit needle is also compared by value.
+        // An all-digit needle is also compared by value: printed as a number,
+        // it loses its leading zeros ("012345" comes back as 12345), and past
+        // u64 it parses as a float and prints in exponent form. The floor is
+        // on the needle as injected, so "0007" redacts the number 7 but never
+        // the 7 inside 1771.
         Value::Number(n) => {
             let digits = n.to_string();
             let float = n.as_f64().filter(|_| n.is_f64());
-            let same_float = |needle: &str| {
-                float.is_some_and(|f| {
-                    needle.bytes().all(|b| b.is_ascii_digit())
-                        && needle
-                            .parse::<f64>()
-                            .is_ok_and(|p| p.to_bits() == f.to_bits())
-                })
+            let same_value = |needle: &str| {
+                if !needle.bytes().all(|b| b.is_ascii_digit()) {
+                    return false;
+                }
+                if let Some(f) = float {
+                    return needle
+                        .parse::<f64>()
+                        .is_ok_and(|p| p.to_bits() == f.to_bits());
+                }
+                let value = needle.trim_start_matches('0');
+                let value = if value.is_empty() { "0" } else { value };
+                digits.trim_start_matches('-') == value
             };
             if needles.iter().any(|needle| {
                 needle.len() >= MIN_REDACTED_CALLER_VALUE
-                    && (digits.contains(needle) || same_float(needle))
+                    && (digits.contains(needle) || same_value(needle))
             }) {
                 *value = Value::String("[redacted]".to_owned());
             }
