@@ -46,7 +46,7 @@ fn tampered_receipt_fails_verification() {
     let v = validator();
     let mut signed = sample_receipt().sign(&twin_receipt_signer());
     // Flip a fact after signing — the HMAC must no longer match.
-    signed.receipt.backend_ok = false;
+    signed.receipt.backend_ok = Some(false);
     assert!(!v.verify_result_provenance(&signed));
 }
 

@@ -220,7 +220,21 @@ pub struct Backend {
     /// that start built may still be alive somewhere (pooled, closing, held
     /// by a request), so a hardened pairing refuses this backend (MIK-7700).
     connected_unpinned: std::sync::atomic::AtomicBool,
+    /// A test's pause point in an HTTP start, after it read the policy it
+    /// builds under and before it builds anything from it or
+    /// [`Backend::begin_connecting`] checks and marks.
+    #[cfg(test)]
+    mark_window_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
     pub(crate) budgets: ShutdownBudgets,
+}
+
+/// Holds a start in the window before it marks: the start signals `reached`
+/// and waits for `release`.
+#[cfg(test)]
+#[derive(Default)]
+struct MarkWindowGate {
+    reached: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl Backend {
@@ -251,18 +265,20 @@ impl Backend {
         )
     }
 
-    /// Start a WebSocket transport under this backend's policy.
+    /// Start a WebSocket transport under `destination`, the policy the start
+    /// read when it marked the backend.
     async fn start_websocket(
         &self,
         ws_url: &str,
         protocol_version: Option<String>,
+        destination: crate::security::ssrf::DestinationPolicy,
     ) -> crate::Result<Arc<crate::transport::websocket::WebSocketTransport>> {
         crate::transport::websocket::WebSocketTransport::start_with_destination(
             ws_url,
             &self.config.headers,
             self.config.timeout,
             protocol_version,
-            self.destination(),
+            destination,
         )
         .await
     }

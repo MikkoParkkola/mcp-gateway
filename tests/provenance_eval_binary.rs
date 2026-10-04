@@ -257,7 +257,7 @@ fn regenerate_fixture() {
                 let mut tampered = receipt("gw-fixture-007", true, None).sign(&signer);
                 // Tamper AFTER signing so the HMAC no longer matches — a real
                 // signature, just no longer over the content it's attached to.
-                tampered.receipt.backend_ok = false;
+                tampered.receipt.backend_ok = Some(false);
                 tampered
             },
         },

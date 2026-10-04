@@ -12,8 +12,14 @@ use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::{Error, Result};
 
 impl Backend {
-    /// Create OAuth client if OAuth is configured for this backend
-    pub(super) fn create_oauth_client(&self, resource_url: &str) -> Result<Option<OAuthClient>> {
+    /// Create OAuth client if OAuth is configured for this backend, under
+    /// `destination`: the policy the start that builds it read once, so the
+    /// client and its transport cannot be built under two different policies.
+    pub(super) fn create_oauth_client(
+        &self,
+        resource_url: &str,
+        destination: crate::security::ssrf::DestinationPolicy,
+    ) -> Result<Option<OAuthClient>> {
         let oauth_config = match &self.config.oauth {
             Some(cfg) if cfg.enabled => cfg,
             _ => return Ok(None),
@@ -40,7 +46,7 @@ impl Backend {
 
         info!(backend = %self.name, "Initializing OAuth client");
 
-        let http_client = crate::oauth::client::destination::http_client(self.destination())?;
+        let http_client = crate::oauth::client::destination::http_client(destination)?;
 
         // Get or create token storage
         let storage = Arc::new(
@@ -50,7 +56,7 @@ impl Backend {
 
         // Create OAuth client
         let oauth = OAuthClient::with_destination(
-            self.destination(),
+            destination,
             http_client,
             self.name.clone(),
             resource_url.to_string(),

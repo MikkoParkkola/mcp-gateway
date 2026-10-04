@@ -354,7 +354,7 @@ async fn provenance_flag_on_stamps_signed_verifiable_receipt() {
     // Facts recorded (rung 1.4: observed only).
     assert_eq!(signed.receipt.backend_id, "remote_docs");
     assert_eq!(signed.receipt.tool, "search");
-    assert!(signed.receipt.backend_ok);
+    assert_eq!(signed.receipt.backend_ok, Some(true));
     assert_eq!(signed.receipt.evidence_kind, TrustEvidenceKind::Observed);
 
     // Signature verifies under a twin validator sharing the key (rung 1.3).
@@ -453,7 +453,7 @@ async fn provenance_stamps_cache_hits_with_hit_outcome() {
         "cache-served result must be tagged cache=Hit"
     );
     assert_eq!(signed.receipt.backend_id, "remote_docs");
-    assert!(signed.receipt.backend_ok);
+    assert_eq!(signed.receipt.backend_ok, Some(true));
 
     // The cache-hit receipt is independently signed and verifies.
     let validator = AttestationValidator::new(

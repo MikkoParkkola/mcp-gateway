@@ -113,6 +113,7 @@ pub(crate) async fn open_runtime_with_admission(
         subscriptions,
         admission,
         &[],
+        |_, _| {},
     )
     .await
 }
@@ -129,6 +130,10 @@ pub(crate) async fn open_runtime_with_admission(
 /// that can see both lists here: `AppState` does not exist yet, and a deferred
 /// row is decided by configuration and the record alone — the weakest evaluable
 /// test, which is right, because deferral is not a trust claim.
+///
+/// `before_recovery` runs with the executor built and recovery not yet run, so
+/// a listener it installs (the events task source) hears the rows recovery
+/// settles; installed after this returns it would miss them (MIK-7840).
 pub(crate) async fn open_runtime_with_recovery(
     store_dir: &Path,
     max_workers: usize,
@@ -136,9 +141,11 @@ pub(crate) async fn open_runtime_with_recovery(
     subscriptions: Arc<SubscriptionRegistry>,
     admission: Arc<ExecutionAdmission>,
     managed: &[String],
+    before_recovery: impl FnOnce(&Arc<TaskService>, &TaskExecutor),
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
     let service = Arc::new(TaskService::open(store_dir, limits, admission).await?);
     let executor = TaskExecutor::new(Arc::clone(&service), subscriptions, max_workers);
+    before_recovery(&service, &executor);
     #[cfg(debug_assertions)]
     execution::pause_hook::install_from_env(&executor);
     // Ready to serve means recovered. Rows a previous process left mid-flight are
