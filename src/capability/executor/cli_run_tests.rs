@@ -495,3 +495,32 @@ fn a_digit_credential_past_u64_is_redacted_as_a_number() {
     super::super::cli::redact_value(&mut value, &[secret]);
     assert_eq!(value["n"], "[redacted]", "{value}");
 }
+
+/// An all-digit credential with leading zeros loses them when the child prints
+/// it as a JSON number: it is matched by value, not by its text.
+#[test]
+fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "neg": -12_345, "other": 123_456});
+    super::super::cli::redact_value(&mut value, &["012345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 123_456, "a different value is untouched");
+
+    // Past u64 the number is a float; leading zeros still do not hide it.
+    let mut value: Value = serde_json::from_str(r#"{"n": 18446744073709551616}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["0018446744073709551616".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+
+    // The floor applies to the needle as given; once its zeros go, a short
+    // value matches only a number equal to it, never one that contains it.
+    let mut value = json!({"n": 7, "m": 1_771, "z": 0});
+    super::super::cli::redact_value(&mut value, &["0007".to_owned(), "0000".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["m"], 1_771, "{value}");
+    assert_eq!(value["z"], "[redacted]", "{value}");
+
+    // Below the floor, numbers are left alone even on an exact value.
+    let mut value = json!({"n": 7});
+    super::super::cli::redact_value(&mut value, &["007".to_owned()]);
+    assert_eq!(value["n"], 7, "{value}");
+}
