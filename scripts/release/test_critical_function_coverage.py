@@ -1,0 +1,578 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""critical_function_coverage.py grades each Critical function on its own lines.
+
+A fixture crate with two same-named functions (the second picked by
+occurrence), a fully covered one, one below the floor, one compiled out
+(no DA records) and one that no longer exists.
+"""
+
+import contextlib
+import importlib.util
+import io
+import pathlib
+import tempfile
+import unittest
+
+HERE = pathlib.Path(__file__).resolve().parent
+SPEC = importlib.util.spec_from_file_location("cfc", HERE / "critical_function_coverage.py")
+cfc = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(cfc)
+
+SOURCE = """\
+fn guard(x: u8) -> bool {
+    let s = "}";
+    x > 1
+}
+
+#[cfg(unix)]
+fn check(x: u8) -> bool {
+    if x == 0 {
+        return false;
+    }
+    true
+}
+
+#[cfg(windows)]
+fn check(x: u8) -> bool {
+    x != 0
+}
+
+fn helper() {}
+"""
+
+# guard 1-4 all hit; unix check 7-12: line 9 never hit; windows check absent.
+LCOV = """\
+SF:/build/repo/src/lib.rs
+DA:1,3
+DA:2,3
+DA:3,3
+DA:4,3
+DA:7,2
+DA:8,2
+DA:9,0
+DA:11,2
+DA:12,2
+DA:19,1
+end_of_record
+"""
+
+HEADER = "# fixture\npath\tfn\toccurrence\ttier\tcategory\tqualified\treason\n"
+
+
+class CriticalFunctionCoverage(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        root = pathlib.Path(self.dir.name)
+        (root / "src").mkdir()
+        (root / "src/lib.rs").write_text(SOURCE)
+        self.lcov = root / "cov.lcov"
+        self.lcov.write_text(LCOV)
+        self.root = root
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def run_rows(self, rows, lcovs=None):
+        inventory = self.root / "inv.tsv"
+        inventory.write_text(HEADER + "".join(r + "\n" for r in rows))
+        args = ["--inventory", str(inventory), "--root", str(self.root)]
+        for lcov in lcovs or [self.lcov]:
+            args += ["--lcov", str(lcov)]
+        return cfc.main(args)
+
+    def statuses(self, rows):
+        inventory = self.root / "inv.tsv"
+        inventory.write_text(HEADER + "".join(r + "\n" for r in rows))
+        return [r[0] for r in cfc.grade(self.root, inventory, [self.lcov])]
+
+    def test_a_fully_covered_function_passes_despite_a_brace_in_a_string(self):
+        row = "src/lib.rs\tguard\t1\tcritical\td\tguard\tr"
+        self.assertEqual(self.statuses([row]), ["ok"])
+        self.assertEqual(self.run_rows([row]), 0)
+
+    def test_one_missed_line_of_five_is_below_the_floor(self):
+        row = "src/lib.rs\tcheck\t1\tcritical\td\tcheck\tr"
+        self.assertEqual(self.statuses([row]), ["BELOW"])
+        self.assertEqual(self.run_rows([row]), 1)
+
+    def test_a_variant_no_report_measured_fails(self):
+        row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
+        self.assertEqual(self.statuses([row]), ["UNMEASURED"])
+        self.assertEqual(self.run_rows([row]), 1)
+
+    def test_the_other_platforms_report_grades_its_variant(self):
+        # The Windows run's report measures lines 15-17; the union passes.
+        windows = self.root / "windows.lcov"
+        windows.write_text("SF:C:\\build\\repo\\src\\lib.rs\nDA:15,1\nDA:16,1\nDA:17,1\nend_of_record\n")
+        row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
+        self.assertEqual(self.run_rows([row], lcovs=[self.lcov, windows]), 0)
+
+    def test_a_checkout_under_a_directory_named_src_still_resolves(self):
+        nested = self.root / "nested.lcov"
+        nested.write_text(LCOV.replace("SF:/build/repo/src/lib.rs", "SF:/src/mcp-gateway/src/lib.rs"))
+        row = "src/lib.rs\tguard\t1\tcritical\td\tguard\tr"
+        self.assertEqual(self.run_rows([row], lcovs=[nested]), 0)
+
+    def test_a_vanished_function_always_fails(self):
+        row = "src/lib.rs\tgone\t1\tcritical\td\tgone\tr"
+        self.assertEqual(self.statuses([row]), ["MISSING"])
+        self.assertEqual(self.run_rows([row]), 1)
+
+    def test_standard_rows_are_not_graded(self):
+        row = "src/lib.rs\tcheck\t1\tstandard\tborderline\tcheck\tr"
+        self.assertEqual(self.statuses([row]), [])
+        self.assertEqual(self.run_rows([row]), 0)
+
+
+
+TRACED = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        value = x,
+        "seen"
+    );
+    x > 0
+}
+"""
+
+
+class TracingArgumentLines(unittest.TestCase):
+    """A reached macro's zero-count argument lines are excluded (and listed);
+    an unreached macro's are not, so an untested log call still fails."""
+
+    def grade(self, head_count):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(TRACED)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                f"SF:/repo/src/lib.rs\nDA:1,1\nDA:2,{head_count}\nDA:3,0\nDA:6,1\nDA:7,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def test_a_reached_macro_has_its_argument_lines_excluded_and_listed(self):
+        result = self.grade(head_count=1)
+        self.assertEqual(result[0], "ok")
+        self.assertEqual((result[5], result[6]), (4, 4))
+        self.assertEqual(result[8], ["src/lib.rs:3 (head 2=1)"])
+
+    def test_logic_nested_in_an_argument_stays_graded(self):
+        nested = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        value = if x > 1 {
+            enforce(x)
+        } else {
+            0
+        },
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(nested)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,0\nDA:10,1\nDA:11,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [4], "the branch body inside the argument is still graded")
+        self.assertEqual(result[8], [])
+
+    def test_a_call_nested_in_an_argument_stays_graded(self):
+        nested = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        value = Some(
+            enforce(x)
+        ),
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(nested)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nDA:8,1\nDA:9,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3, 4], "an argument spanning lines is graded whole")
+        self.assertEqual(result[8], [])
+
+    def test_a_continued_expression_in_an_argument_stays_graded(self):
+        continued = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        allowed = x > 1
+            && enforce(x),
+        count = x,
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(continued)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nDA:5,0\nDA:8,1\nDA:9,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3, 4], "both halves of the continued field stay graded")
+        self.assertEqual(result[8], ["src/lib.rs:5 (head 2=1)"], "the whole field line is excluded")
+
+    def test_a_comment_between_fields_keeps_the_next_field_whole(self):
+        commented = """\
+fn logs(x: u8) -> bool {
+    tracing::debug!(
+        event = "seen",
+        // the count is the field the instrument mis-attributes
+        count = x,
+        "seen"
+    );
+    x > 0
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(commented)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:5,0\nDA:8,1\nDA:9,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [])
+        self.assertEqual(result[8], ["src/lib.rs:5 (head 2=1)"])
+
+    def test_a_try_operator_in_a_field_stays_graded_and_a_debug_sigil_does_not(self):
+        tried = """\
+fn logs(x: u8) -> Result<bool, u8> {
+    tracing::debug!(
+        value = enforce(x)?,
+        shown = ?x,
+        "seen"
+    );
+    Ok(x > 0)
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(tried)
+            lcov = root / "cov.lcov"
+            lcov.write_text(
+                "SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,0\nDA:4,0\nDA:7,1\nDA:8,1\nend_of_record\n"
+            )
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            result = cfc.grade(root, inventory, [lcov])[0]
+        self.assertEqual(result[4], [3], "the early return through ? stays graded")
+        self.assertEqual(result[8], ["src/lib.rs:4 (head 2=1)"])
+
+    def test_an_unreached_macro_keeps_its_argument_lines(self):
+        result = self.grade(head_count=0)
+        self.assertEqual(result[0], "BELOW")
+        self.assertEqual(result[4], [2, 3])
+        self.assertEqual(result[8], [])
+
+
+class HeadLineCalls(unittest.TestCase):
+    """A call on a tracing macro's head line rides that line's hit count, so the
+    count cannot show the call ran: the line is graded as missed and listed as
+    unverifiable, whatever its count (MIK-7725). It can fail spuriously; it can
+    never pass an unrun call."""
+
+    def grade(self, body, counts):
+        source = "fn logs(x: u8) -> bool {\n" + body + "    x > 0\n}\n"
+        last = source.count("\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(source)
+            records = "".join(f"DA:{n},{c}\n" for n, c in sorted({1: 1, **counts, last - 1: 1, last: 1}.items()))
+            lcov = root / "cov.lcov"
+            lcov.write_text(f"SF:/repo/src/lib.rs\n{records}end_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def test_a_reached_one_line_macro_with_a_call_is_missed_and_listed(self):
+        result = self.grade('    debug!(url = %clean(x), "seen");\n', {2: 5})
+        self.assertEqual(result[0], "BELOW")
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 5)"])
+
+    def test_a_method_call_on_the_head_line_is_unverifiable(self):
+        result = self.grade('    tracing::warn!(path = %p.display(), "seen");\n', {2: 1})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_a_nested_macro_on_the_head_line_is_unverifiable(self):
+        result = self.grade('    info!(msg = %format!("{x}"), "seen");\n', {2: 1})
+        self.assertEqual(result[4], [2])
+
+    def test_a_multi_line_macro_with_a_call_on_its_head_line_is_unverifiable(self):
+        body = '    debug!(url = %clean(x),\n        "seen"\n    );\n'
+        result = self.grade(body, {2: 1, 3: 1})
+        self.assertEqual(result[4], [2], "the head is unverifiable whatever its count")
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_an_unverifiable_head_still_excludes_its_reached_plain_field_lines(self):
+        # The head's count still proves the macro was reached, so a plain field
+        # on a later line that reads zero is excluded as before.
+        body = '    debug!(url = %clean(x),\n        n = y,\n    );\n'
+        result = self.grade(body, {2: 1, 3: 0})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[8], ["src/lib.rs:3 (head 2=1)"])
+
+    def test_shapes_a_call_list_would_miss_are_unverifiable(self):
+        # A head line is verifiable only when every argument on it is plain, so
+        # call shapes no pattern lists stay graded missed (a whitelist).
+        shapes = [
+            '    debug!(v = %clean::<Vec<u8>>(x), "seen");\n',
+            '    debug!(v = %(clean)(x), "seen");\n',
+            '    debug!(v = %x[0], "seen");\n',
+            '    debug!(v = %x + y, "seen");\n',
+            '    debug!(v = %|| x, "seen");\n',
+            '    ::tracing::warn!(v = %clean(x), "seen");\n',
+            '    tracing :: warn ! (v = %clean(x), "seen");\n',
+            '    debug!{v = %x, "seen"};\n',
+            '    debug![v = %x, "seen"];\n',
+            '    debug!(r#"a "quoted" {}"#, clean(x));\n',
+            "    debug!(c = ?'\"', v = %clean(x));\n",
+            '    debug!(v = %x /* note */, "seen");\n',
+            '    debug!("first"); debug!(v = %clean(x));\n',
+            "    let q = '\"'; debug!(v = %clean(x), \"seen\");\n",
+            '    let q = r"\\"; debug!(v = %clean(x), "seen");\n',
+            '    /* " */ debug!(v = %clean(x), "seen");\n',
+            '    debug!(v = %x, "seen"); // clean(x)\n',
+            '    Err(e) => debug!(%e, "seen"),\n',
+            '    span!(Level::INFO, "work");\n',
+            '    debug!("a \\" b", clean(x));\n',
+            '    debug!("a", clean(x), "b");\n',
+            '    debug!(v = wrapper.value, "seen");\n',
+            '    debug!(v = %self.name, "seen");\n',
+            '    debug!(n = 1.max, "seen");\n',
+            '    debug /* note */ !(v = %clean(x));\n',
+        ]
+        for body in shapes:
+            with self.subTest(body=body.strip()):
+                result = self.grade(body, {2: 1})
+                self.assertEqual(result[4], [2])
+                self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_any_way_to_run_a_tracing_macro_under_another_name_refuses_the_grade(self):
+        # Fail closed: a renamed or wrapped level macro would hide from the
+        # head-line rule, so its mere presence anywhere in src/ fails the grade.
+        refused = [
+            "use tracing::debug as d;\n",
+            "use tracing::debug as r#emit;\n",
+            "use tracing::{info, debug as d};\n",
+            "use tracing::{\n    // logging\n    debug as d,\n};\n",
+            "pub use ::tracing::warn as w;\n",
+            "use tracing as t;\n",
+        ]
+        allowed = [
+            "use tracing::{debug, info};\n",
+            "use tracing::instrument::WithSubscriber as _;\n",
+            "macro_rules! twice {\n    ($e:expr) => { $e + $e };\n}\n",
+            "macro_rules! emit {\n    ($($t:tt)*) => { tracing::debug!($($t)*) };\n}\n",
+        ]
+        for header, expect in [(h, True) for h in refused] + [(h, False) for h in allowed]:
+            with self.subTest(header=header):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = pathlib.Path(tmp)
+                    (root / "src").mkdir()
+                    (root / "src/lib.rs").write_text(header + "fn logs(x: u8) -> bool {\n    x > 0\n}\n")
+                    (root / "src/other.rs").write_text("fn quiet() {}\n")
+                    lines = header.count("\n")
+                    lcov = root / "cov.lcov"
+                    lcov.write_text(f"SF:/repo/src/lib.rs\nDA:{lines + 1},1\nDA:{lines + 2},1\nDA:{lines + 3},1\nend_of_record\n")
+                    inventory = root / "inv.tsv"
+                    inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+                    statuses = [r[0] for r in cfc.grade(root, inventory, [lcov])]
+                    code = cfc.main(["--root", str(root), "--inventory", str(inventory), "--lcov", str(lcov)])
+                self.assertEqual("INDIRECT" in statuses, expect)
+                self.assertEqual(code, 1 if expect else 0)
+
+    def test_a_macro_that_is_not_known_safe_is_unverifiable(self):
+        # A local macro_rules! (whatever its delimiters or body) or a macro
+        # from a dependency may wrap tracing, so its line is unverifiable; a
+        # known-safe macro's line is graded by its count.
+        wrappers = [
+            "macro_rules! hidden ( ($($t:tt)*) => { tracing::debug!($($t)*); } );\n",
+            'macro_rules! hidden { ($($t:tt)*) => { let _ = "}}"; tracing::debug!($($t)*); } }\n',
+            "macro_rules /* c */ ! hidden { ($($t:tt)*) => { tracing::debug!($($t)*) } }\n",
+        ]
+        for header in wrappers:
+            with self.subTest(header=header):
+                line = header.count("\n") + 2
+                result = self.graded_with(header, "    hidden!(v = clean(x));\n")
+                self.assertEqual(result[9], [f"src/lib.rs:{line} (head count 1)"])
+        dependency = self.graded_with("", "    other::log!(v = clean(x));\n")
+        self.assertEqual(dependency[4], [2])
+        negation = self.graded_with("", "    if !(x > 1 || clean(x)) {}\n")
+        self.assertEqual(negation[9], [], "a negation after a keyword is not a macro")
+        safe = self.graded_with("", '    let s = format!("{}", clean(x));\n')
+        self.assertEqual((safe[0], safe[9]), ("ok", []))
+        shadowed = self.graded_with("macro_rules /* c */ ! format { ($($t:tt)*) => { tracing::debug!($($t)*) } }\n", '    let s = format!("{}", clean(x));\n')
+        self.assertEqual(len(shadowed[9]), 1)
+
+    def graded_with(self, header, body):
+        source = header + "fn logs(x: u8) -> bool {\n" + body + "    x > 0\n}\n"
+        first = header.count("\n") + 1
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(source)
+            lcov = root / "cov.lcov"
+            lcov.write_text("SF:/repo/src/lib.rs\n" + "".join(f"DA:{n},1\n" for n in range(first, first + 4)) + "end_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def test_the_cli_prints_the_unverifiable_line_and_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text('fn logs(x: u8) -> bool {\n    debug!(v = %clean(x), "seen");\n    x > 0\n}\n')
+            lcov = root / "cov.lcov"
+            lcov.write_text("SF:/repo/src/lib.rs\nDA:1,1\nDA:2,1\nDA:3,1\nDA:4,1\nend_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = cfc.main(["--root", str(root), "--inventory", str(inventory), "--lcov", str(lcov)])
+        self.assertEqual(code, 1)
+        self.assertIn("unverifiable tracing head line src/lib.rs:2 (head count 1): graded missed", out.getvalue())
+
+    def test_plain_fields_on_the_head_line_stay_covered(self):
+        shapes = [
+            '    debug!(url = %x, kind = ?k, n = 3, "seen {}", x);\n',
+            '    tracing::warn!(%error, path = %shown_path, "task record unreadable");\n',
+            '    ::tracing::info!(?reason, kind = Kind::Plain, n = 3u8, "seen")\n',
+            '    error!(\n',
+            '    debug!(url = %x,\n',
+        ]
+        for body in shapes:
+            with self.subTest(body=body.strip()):
+                result = self.grade(body, {2: 1})
+                self.assertEqual(result[9], [])
+                self.assertNotIn(2, result[4])
+
+    def test_a_constant_target_on_the_head_line_stays_covered(self):
+        shapes = [
+            '    debug!(target: HTTP_TARGET, url = %x, "seen");\n',
+            '    tracing::info!(target: crate::LOG_TARGET, n = 3, "seen")\n',
+            '    warn!(target: "gateway.http", %error, "seen");\n',
+            '    warn!(target: HTTP_TARGET,\n',
+        ]
+        for body in shapes:
+            with self.subTest(body=body.strip()):
+                result = self.grade(body, {2: 1})
+                self.assertEqual(result[9], [])
+                self.assertNotIn(2, result[4])
+
+    def test_a_call_in_the_target_is_unverifiable(self):
+        result = self.grade('    debug!(target: pick(x), "seen");\n', {2: 1})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_a_call_inside_the_message_literal_is_not_a_call(self):
+        result = self.grade('    debug!("see clean(x) for {}", x);\n', {2: 1})
+        self.assertEqual(result[0], "ok")
+        self.assertEqual(result[9], [])
+
+    def test_a_statement_before_the_macro_on_the_same_line_is_unverifiable(self):
+        # The whole line must be a plain head line; anything sharing it, even
+        # a statement before the macro, makes the line unverifiable.
+        result = self.grade('    let y = f(x); debug!(y, "seen");\n', {2: 1})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
+    def test_an_unreached_one_line_macro_with_a_call_is_missed_and_listed(self):
+        result = self.grade('    debug!(url = %clean(x), "seen");\n', {2: 0})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 0)"])
+
+
+class PlainFieldWhitelist(unittest.TestCase):
+    """Only a plain field line is ever excluded; every other shape stays graded."""
+
+    ALLOWED = [
+        'event = "",',
+        "count = x,",
+        "x,",
+        "%self.name,",
+        "?err,",
+        "kind = a::B,",
+        "n = -3,",
+        "flag = true,",
+    ]
+    REFUSED = [
+        "v = x.count_ones(),",
+        "v = a + b,",
+        "v = f()?,",
+        "v = x?,",
+        "v = !x,",
+        "v = |x| x,",
+        "v = m!(x),",
+        "v = (x),",
+        "v = x",
+        "v = x && y,",
+        "v = if a { b } else { c },",
+    ]
+
+    def test_the_table(self):
+        for shape in self.ALLOWED:
+            with self.subTest(allowed=shape):
+                self.assertTrue(cfc.is_plain_field(shape))
+        for shape in self.REFUSED:
+            with self.subTest(refused=shape):
+                self.assertFalse(cfc.is_plain_field(shape))
+
+
+class InventoryResolves(unittest.TestCase):
+    """Every row of the real inventory names a function that exists.
+
+    Code moves: a refactor that relocates an enforcing function must move its
+    row too, or the release grade would report it MISSING.
+    """
+
+    def test_every_inventory_row_resolves_in_the_tree(self):
+        root = HERE.parent.parent
+        rows = cfc.read_inventory(root / "docs/release/v4.0.0-critical-functions.tsv")
+        self.assertTrue(rows)
+        unresolved = []
+        for row in rows:
+            source = root / row["path"]
+            lines = source.read_text().splitlines() if source.exists() else []
+            if cfc.fn_line(lines, row["fn"], int(row["occurrence"])) is None:
+                unresolved.append(f"{row['path']}:{row['fn']}#{row['occurrence']}")
+        self.assertEqual(unresolved, [], "move these rows to the file that now defines them")
+
+
+if __name__ == "__main__":
+    unittest.main()

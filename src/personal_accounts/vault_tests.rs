@@ -335,10 +335,13 @@ fn stdio_is_admitted_but_stays_distinguishable_from_a_validated_secret() {
     seed_sole_operator(tmp.path());
     let (vault, _) = strategy(tmp.path(), true);
 
+    // The stdio name alone is text, never the transport (MIK-7272.OWNER.3):
+    // `LocalTransport` needs the transport's mark, pinned in
+    // `gateway/server/tests/stdio_sole_operator.rs`.
     assert_eq!(
         CallerProvenance::classify(Some("stdio")),
-        CallerProvenance::LocalTransport,
-        "the stdio constant is matched by name, not counted as a presented secret"
+        CallerProvenance::Credential,
+        "the stdio name is text, not the transport"
     );
     assert_eq!(
         CallerProvenance::classify(Some("a1b2c3-digest-of-a-validated-secret")),
@@ -691,3 +694,78 @@ fn a_lease_from_another_descriptor_revision_is_fenced_after_refresh() {
         );
     });
 }
+
+/// The binding a dispatch keys its caches on comes from the released lease, so
+/// a re-consented account (new generation) can never read the previous
+/// grant's cached result.
+#[test]
+fn a_reconsented_grant_gets_a_new_binding() {
+    let alice = identity();
+    let account = key_for(Principal::Verified(&alice));
+    let old = unexpired_grant(ALICE_TOKEN);
+    let mut renewed = unexpired_grant(ALICE_TOKEN);
+    renewed.generation = "0123456789abcdef0123456789abcdef".into();
+    renewed.authorization_epoch = 2;
+
+    let binding_for = |grant: GrantRecord| {
+        let tmp = tempfile::TempDir::new().expect("root");
+        seed(tmp.path(), &[(account.clone(), grant)]);
+        block_on(async {
+            let (vault, _) = strategy(tmp.path(), false);
+            let (first, _) = vault
+                .prepare(Principal::Verified(&alice), &backend())
+                .await
+                .expect("the seeded grant leases");
+            let (again, _) = vault
+                .prepare(Principal::Verified(&alice), &backend())
+                .await
+                .expect("the same grant leases again");
+            assert_eq!(first.cache_binding, again.cache_binding, "stable per grant");
+            first.cache_binding
+        })
+    };
+    let before = binding_for(old.clone());
+    assert!(before.contains(&old.generation), "{before}");
+    assert_ne!(before, binding_for(renewed));
+}
+
+/// Mutant: a backend expecting another audience is minted for, or a principal
+/// whose key cannot be built is minted for, before custody is consulted.
+#[test]
+fn prepare_refuses_a_wrong_audience_and_an_unbindable_principal_before_custody() {
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed_sole_operator(tmp.path());
+
+    block_on(async {
+        let (vault, refreshes) = strategy(tmp.path(), true);
+        let mut elsewhere = backend();
+        elsewhere.audience = "https://other.invalid/".into();
+        let refused = vault.prepare(Principal::SoleOperator, &elsewhere).await;
+        assert!(
+            matches!(refused, Err(PropagationError::Misconfigured(_))),
+            "{refused:?}"
+        );
+
+        let mut nameless = identity();
+        nameless.subject = String::new();
+        let refused = vault
+            .prepare(Principal::Verified(&nameless), &backend())
+            .await;
+        // The identity-binding refusal specifically: custody also refuses an
+        // invalid key, with the same variant but its own text.
+        let Err(PropagationError::Refuse(why)) = refused else {
+            panic!("an unbindable principal must be refused: {refused:?}");
+        };
+        assert!(why.starts_with("account identity binding refused"), "{why}");
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0, "custody was not asked");
+
+        // Positive control: the same strategy and backend mint for the operator.
+        vault
+            .prepare(Principal::SoleOperator, &backend())
+            .await
+            .expect("control: the seeded grant leases");
+    });
+}
+
+#[path = "vault_revalidate_tests.rs"]
+mod revalidate;

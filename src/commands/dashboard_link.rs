@@ -122,13 +122,14 @@ pub fn dashboard_link_base(
 ///
 /// A message naming the target and asking for `https://` or a loopback URL.
 pub(crate) fn check_target(base: &str) -> Result<(), String> {
-    let url = reqwest::Url::parse(base).map_err(|e| format!("not a URL: {base} ({e})"))?;
+    let shown = mcp_gateway::security::sanitize::redact_url_for_diagnostics(base);
+    let url = reqwest::Url::parse(base).map_err(|e| format!("not a URL: {shown} ({e})"))?;
     match url.scheme() {
         "https" => return Ok(()),
         "http" => {}
         other => {
             return Err(format!(
-                "unsupported scheme {other}: in {base}; use https:// or http://"
+                "unsupported scheme {other}: in {shown}; use https:// or http://"
             ));
         }
     }
@@ -142,7 +143,7 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "refusing to send the admin credential in cleartext to {base}; \
+            "refusing to send the admin credential in cleartext to {shown}; \
              use https:// or a loopback address"
         ))
     }
@@ -154,8 +155,35 @@ pub(crate) fn check_target(base: &str) -> Result<(), String> {
 ///
 /// A message carrying the gateway's status or the transport failure.
 pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result<String, String> {
+    let body = admin_call(
+        reqwest::Method::POST,
+        base,
+        "/ui/api/dashboard-link",
+        token,
+        tls,
+    )
+    .await?;
+    body["link"]
+        .as_str()
+        .map(ToString::to_string)
+        .ok_or_else(|| "the gateway's answer carried no link".to_string())
+}
+
+/// One admin request to the gateway at `base`; the JSON answer of a success.
+///
+/// # Errors
+///
+/// A message carrying the gateway's status and reason, or the transport
+/// failure.
+pub(crate) async fn admin_call(
+    method: reqwest::Method,
+    base: &str,
+    path: &str,
+    token: &str,
+    tls: &LinkTls,
+) -> Result<serde_json::Value, String> {
     check_target(base)?;
-    let endpoint = format!("{}/ui/api/dashboard-link", base.trim_end_matches('/'));
+    let endpoint = format!("{}{path}", base.trim_end_matches('/'));
     // Direct, never through an environment proxy: an HTTP_PROXY would carry the
     // credential off this machine even to a loopback URL. No redirects either:
     // `check_target` vetted only this URL, and a same-host, same-port hop
@@ -173,22 +201,141 @@ pub(crate) async fn fetch_link(base: &str, token: &str, tls: &LinkTls) -> Result
         .build()
         .map_err(|e| format!("could not build the HTTP client: {e}"))?;
     let response = client
-        .post(&endpoint)
+        .request(method, &endpoint)
         .timeout(std::time::Duration::from_secs(30))
         .bearer_auth(token)
         .send()
         .await
-        .map_err(|e| transport_error(base, &e, tls))?;
+        .map_err(|e| transport_error(base, e, tls))?;
     let status = response.status();
     let body: serde_json::Value = response.json().await.unwrap_or_default();
     if !status.is_success() {
-        let reason = body["error"].as_str().unwrap_or("no reason given");
+        let reason = body["reason"]
+            .as_str()
+            .or_else(|| body["error"].as_str())
+            .unwrap_or("no reason given");
         return Err(format!("the gateway answered {status}: {reason}"));
     }
-    body["link"]
-        .as_str()
-        .map(ToString::to_string)
-        .ok_or_else(|| "the gateway's answer carried no link".to_string())
+    if body.is_null() {
+        return Err(format!("the gateway answered {status} with no JSON body"));
+    }
+    Ok(body)
+}
+
+/// `mcp-gateway events dead-letters`: the request the arguments describe.
+///
+/// # Errors
+///
+/// A usage message when the arguments do not name a request.
+pub(crate) fn dead_letters_request(
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+) -> Result<(reqwest::Method, String), String> {
+    use mcp_gateway::cli::events::DeadLetterAction;
+    const BASE: &str = "/ui/api/events/dead-letters";
+    let enc = |v: &str| url::form_urlencoded::byte_serialize(v.as_bytes()).collect::<String>();
+    match (args.action, args.id.as_deref(), args.all) {
+        (DeadLetterAction::List, None, false) => {
+            let mut query = Vec::new();
+            if let Some(s) = &args.subscription {
+                query.push(format!("subscription={}", enc(s)));
+            }
+            if let Some(r) = &args.reason {
+                query.push(format!("reason={}", enc(r)));
+            }
+            let query = if query.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", query.join("&"))
+            };
+            Ok((reqwest::Method::GET, format!("{BASE}{query}")))
+        }
+        (DeadLetterAction::Replay, Some(id), false) => {
+            Ok((reqwest::Method::POST, format!("{BASE}/{}/replay", enc(id))))
+        }
+        (DeadLetterAction::Replay, None, true) => {
+            let subscription = args
+                .subscription
+                .as_deref()
+                .ok_or("replay --all needs --subscription")?;
+            Ok((
+                reqwest::Method::POST,
+                format!("{BASE}/replay?all=1&subscription={}", enc(subscription)),
+            ))
+        }
+        _ => Err("use `list`, `replay ID` or `replay --all --subscription S`".to_string()),
+    }
+}
+
+/// `mcp-gateway dashboard-link`: resolve the gateway, then ask it for a link.
+pub async fn run_dashboard_link_args(
+    args: mcp_gateway::cli::dashboard_link::DashboardLinkArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+) -> ExitCode {
+    let flags = LinkTlsFlags {
+        client_cert: args.tls.client_cert,
+        client_key: args.tls.client_key,
+        ca_cert: args.tls.ca_cert,
+    };
+    match dashboard_link_base(args.url, flags, load, port_override, host_override) {
+        Ok((base, tls)) => run_dashboard_link_command(&base, &tls).await,
+        Err(message) => {
+            eprintln!("dashboard-link: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `mcp-gateway events ...`: resolve the gateway like `dashboard-link`, then
+/// run the subcommand.
+pub async fn run_events_command(
+    args: mcp_gateway::cli::events::EventsArgs,
+    load: impl FnOnce() -> Result<mcp_gateway::config::Config, String>,
+    port_override: Option<u16>,
+    host_override: Option<&str>,
+) -> ExitCode {
+    let mcp_gateway::cli::events::EventsCommand::DeadLetters(args) = args.command;
+    let flags = LinkTlsFlags {
+        client_cert: args.tls.client_cert.clone(),
+        client_key: args.tls.client_key.clone(),
+        ca_cert: args.tls.ca_cert.clone(),
+    };
+    match dashboard_link_base(args.url.clone(), flags, load, port_override, host_override) {
+        Ok((base, tls)) => run_dead_letters_command(&base, &tls, &args).await,
+        Err(message) => {
+            eprintln!("events dead-letters: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Run `events dead-letters` against the gateway at `base`.
+async fn run_dead_letters_command(
+    base: &str,
+    tls: &LinkTls,
+    args: &mcp_gateway::cli::events::DeadLettersArgs,
+) -> ExitCode {
+    let result = match (
+        read_token(|name| std::env::var(name).ok()),
+        dead_letters_request(args),
+    ) {
+        (Ok(token), Ok((method, path))) => admin_call(method, base, &path, &token, tls).await,
+        (Err(message), _) | (_, Err(message)) => Err(message),
+    };
+    match result {
+        Ok(body) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&body).unwrap_or_default()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("events dead-letters: {message}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn read_file(path: &Path) -> Result<Vec<u8>, String> {
@@ -222,10 +369,14 @@ fn read_identity(cert: &Path, key: &Path) -> Result<reqwest::Identity, String> {
 
 /// A transport failure with its causes, and on `https` the TLS material the
 /// operator did not give.
-fn transport_error(base: &str, error: &reqwest::Error, tls: &LinkTls) -> String {
+fn transport_error(base: &str, error: reqwest::Error, tls: &LinkTls) -> String {
     use std::fmt::Write as _;
-    let mut message = format!("could not reach the gateway at {base}: {error}");
-    let mut cause = std::error::Error::source(error);
+    // Neither `--url` nor the error's own request URL may carry userinfo or a
+    // query token to the terminal.
+    let shown = mcp_gateway::security::sanitize::redact_url_for_diagnostics(base);
+    let error = error.without_url();
+    let mut message = format!("could not reach the gateway at {shown}: {error}");
+    let mut cause = std::error::Error::source(&error);
     while let Some(inner) = cause {
         let _ = write!(message, ": {inner}");
         cause = inner.source();
@@ -398,6 +549,21 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move { axum::serve(listener, app).await });
         format!("http://{addr}")
+    }
+
+    /// A `--url` carrying userinfo or a query token must not reach stderr.
+    #[tokio::test]
+    async fn errors_never_echo_url_credentials() {
+        for base in [
+            "http://user:PW1@10.0.0.5:9/x?token=Q1",
+            "http://user:PW1@127.0.0.1:1/x?token=Q1",
+            "ftp://user:PW1@h/x?token=Q1",
+        ] {
+            let err = fetch_link(base, "tok").await.expect_err(base);
+            assert!(!err.contains("PW1") && !err.contains("Q1"), "{err}");
+        }
+        let err = super::check_target("not a url:PW1@?token=Q1").expect_err("unparseable");
+        assert!(!err.contains("PW1") && !err.contains("Q1"), "{err}");
     }
 
     #[tokio::test]

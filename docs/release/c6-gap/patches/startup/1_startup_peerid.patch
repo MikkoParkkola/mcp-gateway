@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/support.rs b/src/gateway/server/support.rs
+index c99f5fe5f..bc2ec222d 100644
+--- a/src/gateway/server/support.rs
++++ b/src/gateway/server/support.rs
+@@ -217,7 +217,8 @@ where
+ 
+         Box::pin(async move {
+             let (stream, service) = acceptor.accept(stream, service).await?;
+-            let identity = client_identity_from_peer_chain(stream.get_ref().1.peer_certificates())?;
++            let identity =
++                client_identity_from_peer_chain(stream.get_ref().1.peer_certificates()).unwrap_or(None);
+             let service = PeerCertIdentityLayer::new(identity).layer(service);
+ 
+             Ok((stream, service))

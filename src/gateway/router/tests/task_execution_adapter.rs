@@ -56,22 +56,47 @@
 
 mod support;
 
+/// COLLUDE.1 M9: a task's relay receipt is committed at settlement.
+#[cfg(feature = "firewall")]
+mod relay_settlement;
+/// COLLUDE.1 M15: an upstream task's result is a relay source.
+#[cfg(feature = "firewall")]
+mod relay_upstream;
+
+/// D3-a: grant decision records at the route.
+mod grant_decision_tasks;
+mod grant_decisions;
+
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
 mod attestation_tasks;
+/// G4: a task keys its arm and hints on its caller.
+mod caller_keyed_hints;
 mod capacity;
 mod client_extensions;
 mod confirmation;
 mod dedupe;
 mod drain;
+/// MIK-7311.LIFECYCLE.1 increment 1b: the input round on `/mcp`.
+mod input_round;
+mod input_round_deadline;
+mod input_round_races;
 mod interlock;
 mod lifecycle;
+mod pending_input_policy;
+mod proven_subject_admission;
+mod provide_input_guards;
 /// I5's during-the-wire half: one query per record at a time, worker and
 /// authenticated reader alike.
 mod query_serialization;
 mod refusals;
+mod replay_policy;
 mod result_shapes;
 mod settlement;
+/// MIK-7116.MIN.1 gap 1: the settlement record of a recovered upstream task.
+#[cfg(feature = "firewall")]
+mod settlement_record;
 mod signing_joint;
+mod stored_result_policy;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided

@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use mcp_gateway::{
     capability::{
-        AuthTemplate, CapabilityExecutor, CapabilityLoader, OpenApiConverter,
+        AuthTemplate, CapabilityExecutor, CapabilityLoader, IssueSeverity, OpenApiConverter,
         compute_capability_hash, parse_capability_file, rewrite_with_pin, validate_capability,
+        validate_capability_definition,
     },
     cli::CapCommand,
     discovery::{
@@ -20,11 +21,11 @@ use mcp_gateway::{
 
 /// Run a `cap` subcommand (validate, list, import, test, discover, install, search, ...).
 #[allow(clippy::too_many_lines)]
-pub async fn run_cap_command(cmd: CapCommand) -> ExitCode {
+pub async fn run_cap_command(cmd: CapCommand, config: Option<&std::path::Path>) -> ExitCode {
     match cmd {
         CapCommand::Validate { file } => cap_validate(file).await,
         CapCommand::Pin { file } => cap_pin(file).await,
-        CapCommand::List { directory } => cap_list(directory).await,
+        CapCommand::List { directory } => cap_list(directory, config).await,
         CapCommand::Import {
             spec,
             output,
@@ -80,6 +81,16 @@ async fn cap_validate(file: std::path::PathBuf) -> ExitCode {
         Ok(cap) => {
             if let Err(e) = validate_capability(&cap) {
                 eprintln!("❌ Validation failed: {e}");
+                return ExitCode::FAILURE;
+            }
+            // The structural checks the loader runs: an error here means the
+            // gateway would skip the file, a warning that it loads with a smell.
+            let issues = validate_capability_definition(&cap, Some(&file.to_string_lossy()));
+            for issue in &issues {
+                eprintln!("{issue}");
+            }
+            if issues.iter().any(|i| i.severity == IssueSeverity::Error) {
+                eprintln!("❌ Validation failed: structural errors above");
                 return ExitCode::FAILURE;
             }
             println!("✅ {} - valid", cap.name);
@@ -145,7 +156,37 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-async fn cap_list(directory: std::path::PathBuf) -> ExitCode {
+/// The executor `cap list` asks "is this one served?" with: the environment
+/// the gateway would start with (its config's `env_files` over the process
+/// environment), so the answer is the one `tools/list` gives.
+///
+/// A config that cannot be loaded is an error, not a reason to answer from the
+/// process environment: the gateway would refuse to start on it, so a listing
+/// computed without it would show readiness the gateway never has.
+fn list_executor(
+    config: Option<&std::path::Path>,
+) -> Result<CapabilityExecutor, (std::path::PathBuf, mcp_gateway::Error)> {
+    let (_, load_path) = crate::discovered_config::resolve(config);
+    match mcp_gateway::config::Config::load_evaluated(load_path.as_deref()) {
+        Ok(evaluated) => {
+            let env = Arc::new(mcp_gateway::config::LiveEnv::new(
+                evaluated.overlay,
+                evaluated.env_paths,
+            ));
+            Ok(CapabilityExecutor::for_listing(&evaluated.config, env))
+        }
+        Err(e) => Err((load_path.unwrap_or_default(), e)),
+    }
+}
+
+async fn cap_list(directory: std::path::PathBuf, config: Option<&std::path::Path>) -> ExitCode {
+    let executor = match list_executor(config) {
+        Ok(executor) => executor,
+        Err((path, e)) => {
+            eprintln!("❌ Failed to load config {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
     let path = directory.to_string_lossy();
     match CapabilityLoader::load_directory(&path).await {
         Ok(caps) => {
@@ -154,12 +195,7 @@ async fn cap_list(directory: std::path::PathBuf) -> ExitCode {
             } else {
                 println!("Found {} capabilities in {}:\n", caps.len(), path);
                 for cap in caps {
-                    let auth_info = if cap.auth.required {
-                        format!(" [{}]", cap.auth.auth_type)
-                    } else {
-                        String::new()
-                    };
-                    println!("  {} - {}{}", cap.name, cap.description, auth_info);
+                    println!("{}", executor.list_line(&cap));
                 }
             }
             ExitCode::SUCCESS

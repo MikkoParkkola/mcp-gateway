@@ -18,6 +18,7 @@
 //! The counting key is therefore the authenticated principal, and the span is
 //! an explicit window ([`crate::security::firewall::principal_window`]).
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -53,14 +54,36 @@ pub enum TenantVerdict {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TenantGuardConfig {
-    /// Whether the guard runs at all.
+    /// Whether the guard may refuse a request. Tenant attribution in the audit
+    /// logs (MIK-7116.MIN.1) runs whenever `arg_keys` is set, even when this
+    /// is `false`: the observe-only rollout.
     pub enabled: bool,
     /// Distinct tenants one principal may touch inside the window.
     pub max_tenants_per_window: usize,
     /// How long a tenant observation counts against its principal.
     pub window_secs: u64,
-    /// Argument keys whose values name a tenant, at any nesting depth.
+    /// Argument keys whose values name a tenant, at any nesting depth. The
+    /// same keys attribute tool results (text-JSON included) to tenants in
+    /// the audit logs, hashed, never raw.
     pub arg_keys: Vec<String>,
+    /// What the cross-tenant read verdict (MIK-7116.MIN.2) does with a caller
+    /// whose delivered frames name a second tenant inside the window.
+    pub cross_tenant_reads: CrossTenantReads,
+}
+
+/// Mode of the cross-tenant read verdict on outbound frames (MIK-7116.MIN.2).
+///
+/// Observe-first: blocking by default waits for the MIN.KILL week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CrossTenantReads {
+    /// No verdict.
+    Off,
+    /// Flag the frame in the audit record and deliver it.
+    #[default]
+    Observe,
+    /// Withhold the frame and record the refusal.
+    Block,
 }
 
 impl Default for TenantGuardConfig {
@@ -75,8 +98,23 @@ impl Default for TenantGuardConfig {
             max_tenants_per_window: 3,
             window_secs: 300,
             arg_keys: Vec::new(),
+            cross_tenant_reads: CrossTenantReads::Observe,
         }
     }
+}
+
+/// Largest JSON-carrying string [`TenantGuard::response_tenants`] parses.
+const MAX_PARSED_TEXT_BYTES: usize = 1024 * 1024;
+
+/// How many nested JSON-in-a-string layers the response scan decodes before
+/// it reports the rest unread (MIN.1 gap 3).
+const MAX_DECODE_DEPTH: usize = 3;
+
+/// What one response scan found.
+#[derive(Default)]
+struct ResponseScan {
+    tenants: Vec<String>,
+    uninspected: bool,
 }
 
 /// Per-principal cross-tenant reach limiter.
@@ -129,6 +167,148 @@ impl TenantGuard {
         verdict
     }
 
+    /// The tenants a request names, under the configured `arg_keys`, with the
+    /// guard's own walk. Pure: it records nothing, so attribution never counts
+    /// against the guard, and it runs whether or not the guard may refuse.
+    pub(crate) fn request_tenants(&self, args: &Value) -> BTreeSet<String> {
+        let mut tenants = Vec::new();
+        self.collect(args, &mut tenants);
+        tenants.into_iter().collect()
+    }
+
+    /// The tenants a tool result names: the guard's walk over the result, also
+    /// into every JSON document a string carries (`content[].text`, a string
+    /// field, a double-encoded text). Pure, like [`Self::request_tenants`].
+    pub(crate) fn response_tenants(&self, result: &Value) -> BTreeSet<String> {
+        self.scan_response(result).0
+    }
+
+    /// [`Self::response_tenants`] and [`Self::response_uninspected`] in one
+    /// walk.
+    pub(crate) fn response_reading(&self, result: &Value) -> (BTreeSet<String>, bool) {
+        self.scan_response(result)
+    }
+
+    /// Whether tenant attribution is configured (`arg_keys` set).
+    pub(crate) fn attributes(&self) -> bool {
+        !self.config.arg_keys.is_empty()
+    }
+
+    /// MIN.1 gaps 2 and 3: whether any part of `result` could not be read for
+    /// tenants: a document over the parse bound, one that fails to parse (depth
+    /// limit included), or encoding nested past [`MAX_DECODE_DEPTH`].
+    pub(crate) fn response_uninspected(&self, result: &Value) -> bool {
+        self.scan_response(result).1
+    }
+
+    /// MIN.2: one walk over the parts of an outbound frame: whole values and
+    /// bare strings (a `method`, an error message), each decoded like a
+    /// response string. Empty when attribution is off.
+    pub(crate) fn scan_frame(&self, values: &[&Value], texts: &[&str]) -> (BTreeSet<String>, bool) {
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        for value in values {
+            self.walk_response(value, 0, &mut scan);
+        }
+        for text in texts {
+            self.decode_response(text, 0, &mut scan);
+        }
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    /// MIN.2: [`Self::scan_frame`] over a whole document but its top-level
+    /// `skip` keys (`jsonrpc`, `id`).
+    pub(crate) fn scan_document(&self, doc: &Value, skip: &[&str]) -> (BTreeSet<String>, bool) {
+        let Value::Object(map) = doc else {
+            return self.scan_frame(&[doc], &[]);
+        };
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        for (key, child) in map {
+            if skip.contains(&key.as_str()) {
+                continue;
+            }
+            if self.config.arg_keys.iter().any(|k| k == key)
+                && let Some(tenant) = Self::tenant_name(child)
+            {
+                scan.tenants.push(tenant);
+            }
+            self.walk_response(child, 0, &mut scan);
+        }
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    /// The configuration this guard was built from.
+    pub(crate) const fn config(&self) -> &TenantGuardConfig {
+        &self.config
+    }
+
+    /// One walk: the tenants read, and whether anything was left unread.
+    // ponytail: each public caller rescans; merge into one call if a profile shows it.
+    fn scan_response(&self, result: &Value) -> (BTreeSet<String>, bool) {
+        if self.config.arg_keys.is_empty() {
+            return (BTreeSet::new(), false);
+        }
+        let mut scan = ResponseScan::default();
+        self.walk_response(result, 0, &mut scan);
+        (scan.tenants.into_iter().collect(), scan.uninspected)
+    }
+
+    fn walk_response(&self, value: &Value, decoded: usize, scan: &mut ResponseScan) {
+        match value {
+            Value::Object(map) => {
+                for (key, child) in map {
+                    if self.config.arg_keys.iter().any(|k| k == key)
+                        && let Some(tenant) = Self::tenant_name(child)
+                    {
+                        scan.tenants.push(tenant);
+                    }
+                    // A keyed string is the tenant id and may also carry JSON:
+                    // read it too, or report it unread.
+                    self.walk_response(child, decoded, scan);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    self.walk_response(item, decoded, scan);
+                }
+            }
+            Value::String(text) => self.decode_response(text, decoded, scan),
+            _ => {}
+        }
+    }
+
+    /// Read the JSON a string carries. Prose is not JSON and holds no keyed
+    /// tenant, so it is skipped. Text that opens like a document (`{`, `[`)
+    /// must parse, or it is unread: fail closed, even for bracket-led prose. A
+    /// quoted text is decoded when it is exactly one JSON string.
+    fn decode_response(&self, text: &str, decoded: usize, scan: &mut ResponseScan) {
+        // A byte-order mark is not whitespace to `trim_start`, nor JSON to the
+        // parser: strip marks and whitespace in any order so neither hides a
+        // document.
+        let text = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+        let opens = text.as_bytes().first().copied();
+        let document = matches!(opens, Some(b'{' | b'['));
+        let quoted = opens == Some(b'"');
+        if !document && !quoted {
+            return;
+        }
+        // Past the parse bound or the decode bound: unread, without parsing,
+        // so both bounds also cap the work.
+        if text.len() > MAX_PARSED_TEXT_BYTES || decoded > MAX_DECODE_DEPTH {
+            scan.uninspected = true;
+            return;
+        }
+        match serde_json::from_str::<Value>(text) {
+            Ok(value) => self.walk_response(&value, decoded + 1, scan),
+            Err(_) => scan.uninspected |= document,
+        }
+    }
+
     /// Gather every value under a configured tenant key, at any depth.
     ///
     /// Recursive because tenant identifiers arrive nested — a `customer_id`
@@ -169,3 +349,7 @@ impl TenantGuard {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tenant_attribution_tests.rs"]
+mod attribution_tests;

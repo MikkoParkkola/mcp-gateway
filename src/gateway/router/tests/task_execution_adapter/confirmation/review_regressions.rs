@@ -27,7 +27,7 @@ use super::*;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
-use crate::gateway::task_service::{ServiceError, TaskStatus};
+use crate::gateway::task_service::{CommittedTask, ServiceError, TaskStatus};
 use crate::key_server::oidc::VerifiedIdentity;
 
 /// The admission principal the route derives for `key-a`.
@@ -343,4 +343,180 @@ async fn c_cancel_that_loses_to_settlement_is_answered_from_the_committed_view()
         ),
         "an absent task stays NotFound"
     );
+}
+
+/// C2: a `cancel` behind a non-terminal move is retried once at the revision it
+/// re-reads, and only that retry cancels.
+///
+/// Mutant: the retry reuses the stale revision, or answers the stale view
+/// without cancelling, and the owner's task keeps working after a cancel it
+/// was told succeeded.
+#[tokio::test]
+async fn c2_a_cancel_behind_a_non_terminal_move_is_retried_at_the_current_revision() {
+    use crate::gateway::task_service::TaskTransition;
+    use crate::gateway::task_service::execution::TransitionWrite;
+
+    let (mock, mut gate) = MockBackend::holding(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let owner = alice();
+
+    let created = post(
+        &state,
+        "key-a",
+        task_invoke(2, "cancel-retry", json!({ "read": true })),
+    )
+    .await;
+    let id = task_id(&created);
+    gate.wait_for_dispatch().await;
+    let captured = state
+        .tasks
+        .get(&owner, &id)
+        .expect("the working record is readable by its own owner")
+        .revision;
+
+    // Move the record without settling it: the cancel's revision is now stale
+    // while the task is still working.
+    state
+        .task_executor
+        .commit_transition(TransitionWrite::Settle {
+            principal: &owner,
+            id: &id,
+            revision: captured,
+            event: TaskTransition::StatusMessage(Some("moved".into())),
+            targets: None,
+        })
+        .await
+        .unwrap_or_else(|_| panic!("a status message commits on the working row"));
+    let moved = state.tasks.get(&owner, &id).unwrap();
+    assert!(
+        moved.revision > captured,
+        "the record moved past the capture"
+    );
+    std::assert_eq!(moved.task.status(), TaskStatus::Working);
+
+    let answer = state
+        .task_executor
+        .cancel(&owner, &id, captured)
+        .await
+        .expect("a cancel behind a non-terminal move is retried, not refused");
+    std::assert_eq!(answer.task.status(), TaskStatus::Cancelled);
+    assert!(
+        answer.revision > moved.revision,
+        "the retry wrote the cancel"
+    );
+    let after = state.tasks.get(&owner, &id).unwrap();
+    std::assert_eq!(after.task.status(), TaskStatus::Cancelled);
+    std::assert_eq!(after.revision, answer.revision);
+
+    gate.release_all();
+}
+
+/// Moves the record again at the instant a lost cancel is about to retry, so
+/// the retry itself conflicts: the one race `cancel_lost_the_revision` bounds.
+struct MoveOnRetry {
+    state: Arc<AppState>,
+    owner: String,
+    event: parking_lot::Mutex<Option<crate::gateway::task_service::TaskTransition>>,
+}
+
+#[async_trait::async_trait]
+impl crate::gateway::task_service::CommitObserver for MoveOnRetry {
+    async fn reached(&self, stage: crate::gateway::task_service::CommitStage, id: &str) {
+        use crate::gateway::task_service::execution::TransitionWrite;
+        if stage != crate::gateway::task_service::CommitStage::CancelRetry {
+            return;
+        }
+        let Some(event) = self.event.lock().take() else {
+            return;
+        };
+        let current = self.state.tasks.get(&self.owner, id).unwrap();
+        self.state
+            .task_executor
+            .commit_transition(TransitionWrite::Settle {
+                principal: &self.owner,
+                id,
+                revision: current.revision,
+                event,
+                targets: None,
+            })
+            .await
+            .unwrap_or_else(|_| panic!("the record moves under the retry"));
+    }
+}
+
+/// A cancel whose retry also loses is answered from the committed view: the
+/// record the second mover made terminal is the honest answer, and a record
+/// that is still working is a store nobody can write to.
+///
+/// Mutants: the second conflict answers the stale view, or a terminal move
+/// after the retry is reported as unavailable.
+async fn cancel_that_loses_twice(
+    id_label: &str,
+    second_move: crate::gateway::task_service::TaskTransition,
+) -> (Result<CommittedTask, ServiceError>, TaskStatus) {
+    use crate::gateway::task_service::TaskTransition;
+    use crate::gateway::task_service::execution::TransitionWrite;
+
+    let (mock, mut gate) = MockBackend::holding(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let owner = alice();
+    let created = post(
+        &state,
+        "key-a",
+        task_invoke(2, id_label, json!({ "read": true })),
+    )
+    .await;
+    let id = task_id(&created);
+    gate.wait_for_dispatch().await;
+    let captured = state.tasks.get(&owner, &id).unwrap().revision;
+    state
+        .task_executor
+        .commit_transition(TransitionWrite::Settle {
+            principal: &owner,
+            id: &id,
+            revision: captured,
+            event: TaskTransition::StatusMessage(Some("moved".into())),
+            targets: None,
+        })
+        .await
+        .unwrap_or_else(|_| panic!("a status message commits on the working row"));
+    state.task_executor.observe_commits(Arc::new(MoveOnRetry {
+        state: Arc::clone(&state),
+        owner: owner.clone(),
+        event: parking_lot::Mutex::new(Some(second_move)),
+    })
+        as Arc<dyn crate::gateway::task_service::CommitObserver>);
+
+    let answer = state.task_executor.cancel(&owner, &id, captured).await;
+    let after = state.tasks.get(&owner, &id).unwrap().task.status();
+    gate.release_all();
+    (answer, after)
+}
+
+#[tokio::test]
+async fn c2b_a_cancel_whose_retry_loses_to_a_working_move_is_unavailable() {
+    use crate::gateway::task_service::TaskTransition;
+    let (answer, after) = cancel_that_loses_twice(
+        "cancel-retry-working",
+        TaskTransition::StatusMessage(Some("moved again".into())),
+    )
+    .await;
+    assert!(
+        matches!(answer, Err(ServiceError::Unavailable)),
+        "a record still working after two lost races is unavailable"
+    );
+    std::assert_eq!(after, TaskStatus::Working);
+}
+
+#[tokio::test]
+async fn c2c_a_cancel_whose_retry_loses_to_a_terminal_move_gets_that_view() {
+    use crate::gateway::task_service::TaskTransition;
+    let (answer, after) = cancel_that_loses_twice(
+        "cancel-retry-terminal",
+        TaskTransition::Complete(json!({"content": []})),
+    )
+    .await;
+    let answer = answer.expect("a terminal move after the retry is the honest answer");
+    std::assert_eq!(answer.task.status(), TaskStatus::Completed);
+    std::assert_eq!(after, TaskStatus::Completed);
 }

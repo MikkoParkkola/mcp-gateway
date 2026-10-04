@@ -77,6 +77,9 @@ pub(super) async fn start_stdio_backend(
         backend.timeout,
         protocol_version.clone(),
     );
+    if let Some(bytes) = backend.max_frame_bytes {
+        transport.set_max_frame_bytes(bytes);
+    }
     // The transport logs an early exit's redacted stderr tail as the `stderr`
     // field of one record; doctor reads it from there rather than through a
     // second API (#526).
@@ -127,6 +130,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ExcerptCapture {
     }
 }
 
+// Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.
 #[cfg(all(test, unix))]
 mod tests {
     use std::collections::HashMap;

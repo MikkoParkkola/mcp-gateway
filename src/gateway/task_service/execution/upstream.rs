@@ -12,14 +12,16 @@
 //! nothing here reconstructs an identity: the owner is named only by the digest
 //! the record persisted.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::settlement::strip_http_status;
-use super::{CommitFailure, TaskExecutor, TaskWrite, UpstreamAnswer, UpstreamHandle, WriteOutcome};
+use super::settlement::{backend_output, strip_http_status};
+use super::{CommitFailure, TaskExecutor, TransitionWrite, UpstreamAnswer, UpstreamHandle};
+use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, with_dispatch_scope};
 use crate::gateway::task_service::record::UpstreamRecord;
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::JsonRpcError;
@@ -95,6 +97,10 @@ impl QueryLease {
 #[cfg(test)]
 #[path = "upstream/failed_policy_tests.rs"]
 mod failed_policy_tests;
+
+#[cfg(test)]
+#[path = "upstream/refusal_tests.rs"]
+mod refusal_tests;
 
 impl TaskExecutor {
     /// Durably attach the handle and its recovery descriptor to a working row.
@@ -187,19 +193,25 @@ impl TaskExecutor {
     /// `finish_error` is the same reader's error policy: a recovered FAILURE is
     /// upstream content too, and it passes that before it can reach disk or the
     /// owner. Its return type keeps a raw upstream error from ever becoming a
-    /// successful output-schema result.
-    pub(crate) async fn recover_upstream_read<F, E>(
+    /// successful output-schema result. `settle` writes the settlement record
+    /// from the processed transition and what its gates noted, and returns the
+    /// transition to commit (MIN.1 gap 1).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn recover_upstream_read<F, E, S, R>(
         &self,
         owner_digest: &str,
         id: &str,
         authorized: bool,
         finish: F,
         finish_error: E,
+        settle: S,
         deadline: Duration,
     ) -> Result<RecoveredRead, RecoveryRefusal>
     where
         F: FnOnce(Value) -> Result<Value, JsonRpcError>,
         E: FnOnce(JsonRpcError) -> JsonRpcError,
+        S: FnOnce(TaskTransition, DispatchNotes) -> R,
+        R: Future<Output = TaskTransition>,
     {
         if !authorized {
             return Err(RecoveryRefusal::Denied);
@@ -221,7 +233,8 @@ impl TaskExecutor {
         let slot = self.query_slot(id).await;
         let outcome = {
             let _held = slot.lock().await;
-            self.query_and_commit(owner_digest, id, adapter, finish, finish_error, deadline)
+            let policy = (finish, finish_error, settle);
+            self.query_and_commit(owner_digest, id, adapter, policy, deadline)
                 .await
         };
         // The lock is released above; the directory entry goes with it once
@@ -232,18 +245,19 @@ impl TaskExecutor {
 
     /// The guarded half: re-read, one query, one settlement. Called only from
     /// [`Self::recover_upstream_read`], holding that record's slot.
-    async fn query_and_commit<F, E>(
+    async fn query_and_commit<F, E, S, R>(
         &self,
         owner_digest: &str,
         id: &str,
         adapter: &Arc<dyn super::UpstreamRecovery>,
-        finish: F,
-        finish_error: E,
+        (finish, finish_error, settle): (F, E, S),
         deadline: Duration,
     ) -> Result<RecoveredRead, RecoveryRefusal>
     where
         F: FnOnce(Value) -> Result<Value, JsonRpcError>,
         E: FnOnce(JsonRpcError) -> JsonRpcError,
+        S: FnOnce(TaskTransition, DispatchNotes) -> R,
+        R: Future<Output = TaskTransition>,
     {
         // Re-read under the gate: a concurrent read that already settled this
         // row must not be queried a second time.
@@ -253,26 +267,34 @@ impl TaskExecutor {
             handle: descriptor.handle.clone(),
         };
 
-        let event = match adapter.query(&handle, deadline).await {
-            // Still running, waiting on an input round this gateway cannot
-            // continue, or unreachable. The handle and the working record are
-            // retained; nothing is faked terminal and nothing is resubmitted.
-            UpstreamAnswer::Live | UpstreamAnswer::Unavailable => {
-                return Ok(RecoveredRead::Retained);
-            }
-            UpstreamAnswer::Completed(result) => match finish(result) {
-                Ok(processed) => TaskTransition::Complete(processed),
-                // The same configured output policy that guards a live dispatch
-                // refused this payload. Its refusal is the task's outcome.
-                Err(error) => TaskTransition::Fail(strip_http_status(error)),
-            },
-            // A peer's failure is upstream content, not a gateway verdict: its
-            // message and nested data pass the reader's configured error policy
-            // BEFORE this settles, so nothing unscreened reaches the durable
-            // record or the read that serves it. The code is preserved.
-            UpstreamAnswer::Failed(error) => {
-                TaskTransition::Fail(finish_error(strip_http_status(error)))
-            }
+        // In the dispatch scope, so the gates' attribution notes travel with
+        // the transition to its settlement record.
+        let answer = adapter.query(&handle, deadline).await;
+        let (event, notes) = with_dispatch_scope(async move {
+            Some(match answer {
+                // Still running, waiting on an input round this gateway cannot
+                // continue, or unreachable. The handle and the working record
+                // are retained; nothing is faked terminal or resubmitted.
+                UpstreamAnswer::Live | UpstreamAnswer::Unavailable => return None,
+                UpstreamAnswer::Completed(result) => match finish(backend_output(result)) {
+                    Ok(processed) => TaskTransition::Complete(processed),
+                    // The same configured output policy that guards a live
+                    // dispatch refused this payload. Its refusal is the outcome.
+                    Err(error) => TaskTransition::Fail(strip_http_status(error)),
+                },
+                // A peer's failure is upstream content, not a gateway verdict:
+                // its message and nested data pass the reader's configured
+                // error policy BEFORE this settles, so nothing unscreened
+                // reaches the durable record or the read that serves it. The
+                // code is preserved.
+                UpstreamAnswer::Failed(error) => {
+                    TaskTransition::Fail(finish_error(strip_http_status(error)))
+                }
+            })
+        })
+        .await;
+        let Some(event) = event else {
+            return Ok(RecoveredRead::Retained);
         };
 
         // Ordinary revision-checked durable settlement, over the digest the
@@ -284,8 +306,13 @@ impl TaskExecutor {
             .get(owner_digest, id)
             .map_err(|_| RecoveryRefusal::Unavailable)?
             .revision;
+        // Recorded before the commit, under this record's slot, as a live call
+        // is recorded before its result is stored. A writer that lands
+        // meanwhile wins the revision below; the record then stands for a
+        // recovery that did not land.
+        let event = settle(event, notes).await;
         match self
-            .commit(TaskWrite::Recover {
+            .commit_transition(TransitionWrite::Recover {
                 owner_digest,
                 id,
                 revision,
@@ -293,12 +320,10 @@ impl TaskExecutor {
             })
             .await
         {
-            Ok(WriteOutcome::Transitioned(_)) => Ok(RecoveredRead::Settled),
+            Ok(_) => Ok(RecoveredRead::Settled),
             // Another writer settled it first. The committed record is the
             // honest answer and this read simply serves it.
-            Ok(WriteOutcome::Create(_)) | Err(CommitFailure::RevisionConflict) => {
-                Ok(RecoveredRead::Retained)
-            }
+            Err(CommitFailure::RevisionConflict) => Ok(RecoveredRead::Retained),
             Err(_) => Err(RecoveryRefusal::Unavailable),
         }
     }

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Private durable record; never returned as the public Task wire projection.
 
-use crate::protocol::tasks::{Task, TaskSnapshot};
+use crate::protocol::tasks::{Task, TaskSnapshot, TaskStatus};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Current on-disk format. The loader accepts `1..=RECORD_VERSION` and never
 /// rewrites a supported legacy row. Bumped to 3 in the SAME increment that
@@ -21,6 +21,59 @@ pub(super) const MARKER_VERSION: u32 = 2;
 /// from [`RECORD_VERSION`] for the same reason [`MARKER_VERSION`] is: a later
 /// bump must not reclassify a v3 row that did record its handle.
 pub(super) const UPSTREAM_VERSION: u32 = 3;
+
+/// The record version that introduced [`Record::input_round`], and the
+/// highest the loader accepts. Written only on a row that opens a round, the
+/// way `mark_upstream` raises a row to [`UPSTREAM_VERSION`]: every other row
+/// stays at [`RECORD_VERSION`], byte-identical, and an older loader refuses
+/// only a row that holds a continuation it could not honour.
+pub(super) const INPUT_ROUND_VERSION: u32 = 4;
+
+/// The record version that introduced [`Record::targets`]. Written only on a row
+/// that carries at least one target; every other row keeps its version and its
+/// bytes. A beta loader (`1..=3`) refuses such a row, which UPGRADING-4.0 states.
+pub(super) const TARGET_VERSION: u32 = 5;
+
+/// The highest record version the loader accepts: the newest field's version.
+pub(super) const MAX_LOADABLE_VERSION: u32 = TARGET_VERSION;
+
+/// One backend call a task's result was produced by: names only, never
+/// arguments. No current invocation policy reads `ToolTarget.arguments`; a
+/// policy that did would have to revisit replay authorization.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Target {
+    pub(crate) server: String,
+    pub(crate) tool: String,
+}
+
+/// How far before the stored continuation's own expiry a round stops taking
+/// answers: room for an accepted answer to reach redemption (#2429).
+pub(crate) const CONTINUATION_DEADLINE_MARGIN_SECS: u64 = 10;
+
+/// An open input round's continuation: what a resume needs and nothing else.
+///
+/// Gateway state, never part of the wire task. `request_state` is the
+/// continuation envelope this gateway sealed into the interim result, redeemed
+/// by the resume exactly as a client retry would present it. `tool` and
+/// `arguments` are the call the round interrupted, resent as they were, and
+/// `accepted_inputs` holds the answers accepted so far. Dropped on every
+/// terminal transition. Counts against `max_record_bytes`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct InputRound {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_state: Option<String>,
+    pub(crate) tool: String,
+    pub(crate) arguments: Value,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub(crate) accepted_inputs: Map<String, Value>,
+    /// When the stored continuation stops being redeemable, less a margin, in
+    /// unix seconds (#2429). `None`: no continuation is stored, and the task's
+    /// TTL alone bounds the round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) continuation_deadline: Option<u64>,
+}
 
 /// Upper bound on a durable upstream handle, in bytes.
 ///
@@ -121,10 +174,38 @@ pub(super) struct Record {
     /// before the write.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) upstream: Option<UpstreamRecord>,
+    /// The open input round, if any. Absent on v1-v3 rows and on every row
+    /// with no round outstanding, so such a row serializes as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) input_round: Option<InputRound>,
+    /// The backend calls this task made or will make, for re-authorizing a
+    /// stored result before it is delivered. Absent on rows written before
+    /// [`TARGET_VERSION`] and on rows that dispatched nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) targets: Vec<Target>,
+    /// Set when the row settled as the gateway's own bounded failure because
+    /// the real outcome did not fit the record budget: it holds no backend
+    /// output, so delivering it needs no target check.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) output_free: bool,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
     pub(super) model: TaskSnapshot,
+}
+
+impl Record {
+    /// Store the model; a terminal task drops its input round's continuation
+    /// and answers with it, so nothing a settled task can no longer use stays.
+    pub(super) fn set_model(&mut self, task: &Task) {
+        self.model = task.snapshot();
+        if matches!(
+            task.status(),
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        ) {
+            self.input_round = None;
+        }
+    }
 }
 
 /// An explicitly pre-admitted creation boundary. Tests can construct it while
@@ -141,17 +222,26 @@ impl PreparedTask {
     /// Build a prepared task from an admitted lease's binding and its one-shot
     /// publication token. The digests are the binding's own: the task service
     /// stores what admission derived and never derives identity itself.
-    pub(super) fn admitted(
+    pub(super) fn admitted_with_targets(
         task: &Task,
         binding: &crate::idempotency::admission::TaskBinding,
         publication: crate::idempotency::admission::TaskPublication,
         backend: &str,
+        targets: Vec<Target>,
     ) -> Self {
+        let version = if targets.is_empty() {
+            RECORD_VERSION
+        } else {
+            TARGET_VERSION
+        };
         Self {
             record: Record {
-                version: RECORD_VERSION,
+                version,
                 dispatched: false,
                 upstream: None,
+                input_round: None,
+                targets,
+                output_free: false,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -167,6 +257,17 @@ impl PreparedTask {
         }
     }
 
+    /// [`Self::admitted_with_targets`] for a call that records none.
+    #[cfg(test)]
+    pub(super) fn admitted(
+        task: &Task,
+        binding: &crate::idempotency::admission::TaskBinding,
+        publication: crate::idempotency::admission::TaskPublication,
+        backend: &str,
+    ) -> Self {
+        Self::admitted_with_targets(task, binding, publication, backend, Vec::new())
+    }
+
     #[cfg(test)]
     pub(super) fn for_test(task: &Task, owner: &str, identity: u64) -> Self {
         Self {
@@ -175,6 +276,9 @@ impl PreparedTask {
                 version: RECORD_VERSION,
                 dispatched: false,
                 upstream: None,
+                input_round: None,
+                targets: Vec::new(),
+                output_free: false,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),
@@ -217,4 +321,91 @@ pub(super) struct InterruptedTask {
 pub(crate) struct CommittedTask {
     pub(crate) task: Task,
     pub(crate) revision: u64,
+    /// The calls that produced this snapshot's result. A legacy row recorded
+    /// none; its one call is recovered from its upstream descriptor when it has
+    /// a consistent one, and is otherwise not known (empty).
+    pub(crate) targets: Vec<Target>,
+    /// Whether the row was written by a gateway that records targets. An empty
+    /// list on such a row means nothing was dispatched; on an older row it
+    /// means the provenance is unavailable.
+    pub(crate) targets_recorded: bool,
+    /// The row holds only the gateway's own bounded failure, no backend output.
+    pub(crate) output_free: bool,
+    /// The owner's digest as the record persisted it, read in the same piece
+    /// as the rest of the snapshot (the events source carries it).
+    pub(crate) owner_digest: String,
 }
+
+impl CommittedTask {
+    /// Whether serving this row hands the caller backend output: a result,
+    /// a backend error or a backend's input requests. A working or
+    /// cancelled row, or one holding only the gateway's own bounded
+    /// failure, serves none. Delivery checks and read attribution both
+    /// key on it, so they cannot disagree on a status.
+    pub(crate) fn serves_backend_output(&self) -> bool {
+        !self.output_free
+            && matches!(
+                self.task.status(),
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::InputRequired
+            )
+    }
+
+    /// The committed view of `record`, read in one piece so a caller that
+    /// authorizes delivery checks the snapshot it returns.
+    pub(super) fn of(task: Task, record: &Record) -> Self {
+        Self {
+            targets: if record.version >= TARGET_VERSION {
+                record.targets.clone()
+            } else {
+                legacy_targets(&task, record)
+            },
+            task,
+            revision: record.revision,
+            targets_recorded: record.version >= TARGET_VERSION,
+            output_free: record.output_free,
+            owner_digest: record.admission.principal_digest.clone(),
+        }
+    }
+
+    /// The stored result when it is backend output. A row holding only the
+    /// gateway's own sentence (a bounded failure, an interrupted or abandoned
+    /// round) has none: nothing the backend said was delivered with it.
+    pub(crate) fn backend_result(&self) -> Option<&serde_json::Value> {
+        let result = self.task.result()?;
+        let gateway_authored = result
+            .get("_meta")
+            .is_some_and(|meta| meta.get(EXECUTION_OUTCOME_KEY).is_some());
+        (!self.output_free && !gateway_authored).then_some(result)
+    }
+}
+
+/// The `_meta` key only the gateway's own interrupted results carry.
+pub(super) const EXECUTION_OUTCOME_KEY: &str = "io.mcp-gateway/executionOutcome";
+
+/// The one call a legacy row (before [`TARGET_VERSION`]) made, read from its
+/// own upstream descriptor: the backend tool the trusted dispatch path
+/// captured, bound to this row by its operation digest (MIK-7686). A plan's
+/// descriptor never speaks for the plan, and a row without a consistent one
+/// has no recoverable provenance.
+fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
+    // A row older than the descriptor cannot have captured one; a descriptor
+    // found there is forged or downgraded (the loader and store.rs agree).
+    if record.version < UPSTREAM_VERSION
+        || matches!(task.tool(), "gateway_execute" | "gateway_run_playbook")
+    {
+        return Vec::new();
+    }
+    record
+        .upstream
+        .iter()
+        .filter(|upstream| upstream.consistent_with(&record.admission))
+        .map(|upstream| Target {
+            server: upstream.backend.clone(),
+            tool: upstream.tool.clone(),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[path = "record_legacy_tests.rs"]
+mod legacy_tests;

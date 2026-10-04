@@ -184,11 +184,25 @@ impl Backend {
     /// One tool by exact name from `binding`'s slot (non-blocking).
     #[must_use]
     pub fn get_cached_tool_for(&self, binding: Option<&str>, name: &str) -> Option<Tool> {
+        self.with_cached_tool_for(binding, name, Tool::clone)
+    }
+
+    /// Read one tool by exact name from `binding`'s slot in place
+    /// (non-blocking), under the same withheld-name rule as
+    /// [`Self::get_cached_tool_for`]. Per-call readers take only what they
+    /// need instead of cloning the whole tool, schemas included
+    /// (NFR.WORKLOAD.1). `read` runs under the cache's read guard.
+    pub(crate) fn with_cached_tool_for<R>(
+        &self,
+        binding: Option<&str>,
+        name: &str,
+        read: impl FnOnce(&Tool) -> R,
+    ) -> Option<R> {
         if self.is_blocked_tool(name) {
             return None;
         }
         self.tools_slot(binding).tools_cache.with_cached(|tools| {
-            tools.and_then(|tools| tools.iter().find(|t| t.name == name).cloned())
+            tools.and_then(|tools| tools.iter().find(|t| t.name == name).map(read))
         })
     }
 
@@ -593,7 +607,7 @@ impl Backend {
                 method: "resources/list",
                 kind: "resources",
                 list_key: "resources",
-                truncated_flag: None,
+                truncated_flag: Some(resources_truncated_flag),
                 cooldown: false,
                 stale_hit: false,
             },
@@ -741,6 +755,11 @@ pub(super) struct ListFamily {
     /// admission, so a caller waiting inside the fill does not retry a
     /// failure the cooldown already covers, and it stamps that on failure.
     stale_hit: bool,
+}
+
+/// The resources family's truncated flag (the events listener's snapshot).
+fn resources_truncated_flag(entry: &super::pool::PooledEntry) -> &AtomicBool {
+    &entry.resources_truncated
 }
 
 /// The tools family's truncated flag; the other three families keep their

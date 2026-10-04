@@ -18,6 +18,7 @@ pub(crate) mod discover;
 mod doctor;
 mod hash_key;
 mod identity;
+mod init_backends;
 mod kubernetes;
 // Only the config exporter consumes these client-path helpers.
 #[cfg_attr(not(feature = "config-export"), allow(dead_code))]
@@ -33,12 +34,15 @@ mod upgrade;
 
 pub use accounts::run_accounts_command;
 #[cfg(feature = "webui")]
-pub use add_remove::{run_add_command, run_get_command, run_list_command, run_remove_command};
+pub use add_remove::{
+    run_add_command, run_get_command, run_list_available_command, run_list_command,
+    run_remove_command,
+};
 pub use cap::run_cap_command;
 #[cfg(feature = "config-export")]
 pub use config_export::run_config_export;
 #[cfg(feature = "webui")]
-pub use dashboard_link::{LinkTlsFlags, dashboard_link_base, run_dashboard_link_command};
+pub use dashboard_link::{run_dashboard_link_args, run_events_command};
 pub use doctor::{StdioProbe, run_doctor_command, run_doctor_shadow_command};
 pub use hash_key::run_hash_key_command;
 pub use identity::run_identity_command;
@@ -106,7 +110,15 @@ pub fn run_init_command(
         return ExitCode::FAILURE;
     }
 
-    let config_content = build_init_config(with_examples, profile);
+    let (starter, skipped) = if with_examples && profile == InitProfile::Local {
+        init_backends::starter_backends(doctor::which_command)
+    } else {
+        (String::new(), Vec::new())
+    };
+    for line in &skipped {
+        eprintln!("{line}");
+    }
+    let config_content = build_init_config(with_examples, profile, &starter);
 
     match write_init_files(output, &config_content, &sample_files) {
         Ok(()) => {
@@ -120,7 +132,7 @@ pub fn run_init_command(
     }
 }
 
-fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
+fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -> String {
     let write_local_samples = with_examples && profile == InitProfile::Local;
     let examples_section = if write_local_samples {
         concat!(
@@ -134,10 +146,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "\n",
             "# Add MCP backends with `mcp-gateway add <name> -- <command>` or run:\n",
             "#   mcp-gateway setup wizard --configure-client\n",
-            "# backends:\n",
-            "#   filesystem:\n",
-            "#     command: \"npx -y @anthropic/mcp-server-filesystem /path/to/dir\"\n",
-            "#     description: \"File system access\"\n",
         )
     } else {
         concat!(
@@ -202,9 +210,15 @@ fn build_init_config(with_examples: bool, profile: InitProfile) -> String {
             "  cache_tools: true\n",
             "  cache_ttl: 300s\n",
             "{examples_section}",
+            "{starter}",
         ),
         profile = profile,
         examples_section = examples_section,
+        starter = if starter.is_empty() {
+            String::new()
+        } else {
+            format!("\n{starter}")
+        },
         admin_token = generate_admin_token(),
     )
 }
@@ -675,6 +689,7 @@ mod admin_credential_tests {
     }
 
     #[test]
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     fn the_generated_config_is_not_readable_by_other_users() {
         // The starter config now carries a generated admin credential. Writing
@@ -697,7 +712,7 @@ mod admin_credential_tests {
         // starter config that turns it on without exempting the MCP endpoint
         // breaks the client the operator already configured — a worse
         // regression than the missing dashboard it set out to fix.
-        let config = build_init_config(true, InitProfile::Local);
+        let config = build_init_config(true, InitProfile::Local, "");
         assert!(
             config.contains("/mcp"),
             "the MCP endpoint must stay reachable without a credential: {config}"
@@ -721,7 +736,7 @@ mod admin_credential_tests {
         // no admin path at all: no dashboard, no management tools, and a YAML
         // edit as the only remedy. A generated credential restores it without
         // asking the operator to do anything.
-        let config = build_init_config(true, InitProfile::Local);
+        let config = build_init_config(true, InitProfile::Local, "");
         assert!(config.contains("enabled: true"), "auth must be on");
         assert!(
             config.contains("mcpgw_"),

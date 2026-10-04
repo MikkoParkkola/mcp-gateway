@@ -11,23 +11,38 @@ mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
 mod cleartext;
+#[cfg(all(test, feature = "firewall"))]
+mod collusion_share_tests;
 mod control_plane_store;
 #[cfg(all(test, feature = "cost-governance"))]
 mod cost_restart_tests;
+mod events_wiring;
+mod provenance_signer;
+use provenance_signer::{provenance_key, resolve_provenance_signer};
 #[cfg(test)]
 mod gh475_budget_decides_tests;
 mod identity_grants;
+#[cfg(all(test, feature = "firewall"))]
+mod keyless_anomaly_tests;
 mod listener;
 mod persistence;
+#[cfg(test)]
+mod remote_provenance_start_tests;
 #[cfg(test)]
 mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod signing_allocation_tests;
+mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;
+mod stdio_dispatches;
 mod stdio_nonce;
+mod stdio_notify;
+mod stdio_shutdown;
+mod stdio_tasks;
 mod stdio_writer;
+mod task_runtime;
 pub(crate) use stdio_nonce::StdioNonce;
 mod support;
 mod tools_changed;
@@ -52,6 +67,7 @@ use super::auth::ResolvedAuthConfig;
 use super::authz::ToolPolicyAuthorizer;
 use super::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
 use super::oauth::{AgentAuthState, AgentDefinition, AgentRegistry, GatewayKeyPair};
+use super::outbound::OutboundFrame;
 use super::proxy::ProxyManager;
 use super::router::{AppState, CallerStanding, account_handles_of, create_router_with_accounts};
 use super::streaming::NotificationMultiplexer;
@@ -66,9 +82,9 @@ use crate::mtls::MtlsPolicy;
 use crate::playbook::PlaybookEngine;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
-use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
+use crate::security::{ToolPolicy, posture, ssrf::DestinationPolicy};
 use crate::stats::UsageStats;
 use crate::transition::TransitionTracker;
 use crate::{Error, Result};
@@ -136,11 +152,8 @@ fn stdio_busy_response(request: &serde_json::Value) -> Option<serde_json::Value>
 ///
 /// A closed queue means stdout is gone, which the serve loop discovers on its
 /// own next read; there is nothing a producer can do about it here.
-async fn send_frame(
-    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
-    frame: serde_json::Value,
-) {
-    drop(writer.send(frame).await);
+async fn send_frame(writer: &tokio::sync::mpsc::Sender<OutboundFrame>, frame: serde_json::Value) {
+    drop(writer.send(OutboundFrame::gateway_stdio(frame)).await);
 }
 
 /// Bounded rather than unbounded: past it the `JoinSet` aborts what is left,
@@ -162,10 +175,10 @@ const STDIO: CallerStanding = CallerStanding::Admin;
 
 fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
-        return dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        return crate::home_dir::home_dir().unwrap_or_else(|| PathBuf::from("."));
     }
     if let Some(rest) = path.strip_prefix("~/") {
-        return dirs::home_dir()
+        return crate::home_dir::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(rest);
     }
@@ -324,6 +337,10 @@ pub struct Gateway {
     /// file watcher — resolves through this rather than the process
     /// environment, which no env file is written to.
     env: Arc<crate::config::LiveEnv>,
+    /// The one cross-tenant read history of this process (MIK-7116.MIN.2):
+    /// both firewalls share it, so `/mcp` and `/mcp/{name}` meet in it.
+    #[cfg(feature = "firewall")]
+    reads: Arc<crate::security::firewall::tenant_reads::ReadHistory>,
     /// Managed personal-account custody, present only when the config carries an
     /// `accounts` block. `None` is the ordinary gateway: no store, no locks.
     ///
@@ -349,6 +366,11 @@ struct StdioClient<'a> {
     session_id: &'a str,
     channel: &'a dyn crate::gateway::input_bridge::ClientChannel,
     handshake_capabilities: crate::protocol::meta::Declared,
+    /// The session's task store; `None` serves no `tasks/*` (MIK-7272.OWNER.2).
+    tasks: Option<&'a stdio_tasks::StdioTasks>,
+    /// `server.modern_protocol` at stdio start: whether `server/discover`
+    /// lists 2026-07-28 (MIK-7217.STDIO.1, design D7).
+    modern: bool,
 }
 
 /// Shared components produced by [`Gateway::build_meta_mcp`].
@@ -377,53 +399,6 @@ struct BuiltMetaMcp {
     /// `MetaMcp`, can also write identity-propagation audit events into the
     /// same tamper-evident chain (MIK-6740).
     transparency_log: Option<Arc<crate::security::TransparencyLogger>>,
-}
-
-/// The provenance signing key and its key id.
-///
-/// Read through the env overlay rather than `std::env`: env files load into an
-/// in-memory overlay, so a key an env file assigns never reaches the process
-/// environment and a `std::env` read would leave the signer uninstalled.
-fn provenance_key(env: &crate::config::EnvOverlay) -> (String, String) {
-    (
-        env.resolve(crate::attestation::ATTESTATION_SIGNING_KEY_ENV)
-            .unwrap_or_default(),
-        env.resolve(crate::attestation::ATTESTATION_KEY_ID_ENV)
-            .unwrap_or_else(|| "gateway".to_string()),
-    )
-}
-
-/// Decide whether to install a provenance-receipt signer for runtime
-/// stamping (MIK-6905) — the unit-testable core of the bootstrap decision in
-/// [`Gateway::build_meta_mcp`], which performs no process-environment reads
-/// itself.
-///
-/// Fails closed: a key that is empty, or empty after trimming whitespace,
-/// returns `None` (no signer installed, stamping stays disabled and output
-/// is byte-identical to stamping-off) rather than installing a signer whose
-/// signatures are trivially forgeable — an empty or whitespace-only HMAC key
-/// is a known/low-entropy key, so anyone can compute a signature that a
-/// validator sharing the same key would accept (MIK-6909 item 1).
-///
-/// The returned signer's key material is the HKDF-SHA256 receipt-domain
-/// subkey ([`crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO`]) derived
-/// from `signing_key`, not `signing_key` itself — domain-separated from
-/// inbound attestation-token verification so a leak in one channel cannot
-/// forge the other (MIK-6909 item 2).
-#[must_use]
-fn resolve_provenance_signer(
-    signing_key: &str,
-    key_id: &str,
-) -> Option<crate::attestation::BnautAttestationSigner> {
-    if signing_key.trim().is_empty() {
-        None
-    } else {
-        let base = crate::attestation::BnautAttestationSigner::new(
-            signing_key.as_bytes().to_vec(),
-            key_id.to_string(),
-        );
-        Some(base.derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO))
-    }
 }
 
 /// Copy only the fields backend target mapping routes on.
@@ -491,22 +466,23 @@ fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> serde_json:
 }
 
 impl Gateway {
-    /// A firewall with its own transition tracker. Both transports build theirs
-    /// here, so each leaves the continuations `meta_mcp` minted unredacted
-    /// (#2210).
+    /// A firewall with its own transition tracker, sharing `meta_mcp`'s relay
+    /// detector (COLLUDE.1). Both transports build theirs here, so each leaves
+    /// the continuations `meta_mcp` minted unredacted (#2210).
     #[cfg(feature = "firewall")]
     fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
         let fw_cfg = self.config.security.firewall.clone();
         let fw_enabled = fw_cfg.enabled;
-        let tt = if fw_cfg.anomaly_detection {
-            Some(Arc::new(TransitionTracker::new()))
-        } else {
-            None
-        };
+        let tt = fw_cfg
+            .anomaly_detection
+            .then(|| Arc::new(TransitionTracker::new()));
         let fw = Arc::new(
             Firewall::from_config(fw_cfg, tt)
                 .with_env(Arc::clone(&self.env))
-                .with_continuations(meta_mcp.continuation()),
+                .with_continuations(meta_mcp.continuation())
+                .with_posture(self.config.security.posture)
+                .with_reads(Arc::clone(&self.reads))
+                .sharing_relay_with(meta_mcp.firewall.as_deref()),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");
@@ -570,18 +546,28 @@ impl Gateway {
     /// registration fails.
     #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)] // async for future initialization needs
     async fn new_with_env(
-        config: Config,
+        mut config: Config,
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        // A config built in memory never passed through `Config::load`.
+        // Before validation, so the ranges of what it forces are checked.
+        posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
         {
             // A cheap snapshot, dropped here: nothing environmental is held
             // while the gateway is built or awaited on.
             let overlay = env.get();
             config.validate_with_env(&overlay)?;
+            let chain = &mut config.security.signature_chain; // key identity, as at load
+            crate::config::SignatureChainConfig::resolve_section(chain, &overlay)?;
         }
+        posture::log_startup(&config);
 
         let backends = Arc::new(BackendRegistry::new());
+        backends.enforce_destinations(
+            DestinationPolicy::for_posture(config.security.posture),
+            &config.security.hardened.private_backends,
+        )?;
 
         // The EFFECTIVE configuration a bound backend runs with, resolved
         // before any backend is constructed. A `personal_managed` binding
@@ -615,6 +601,9 @@ impl Gateway {
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
         }
+        if let Some(warning) = config.remote_provenance_warning() {
+            warn!("{warning}");
+        }
 
         Ok(Self {
             #[cfg(test)]
@@ -628,6 +617,8 @@ impl Gateway {
             // every later resolution answers from the same overlay the decision
             // to start was made on.
             env,
+            #[cfg(feature = "firewall")]
+            reads: crate::security::firewall::tenant_reads::ReadHistory::shared(),
             // Attached by `start_account_custody`, so this constructor stays
             // exactly what it was for a caller building a Config in memory.
             custody: None,
@@ -1015,6 +1006,16 @@ impl Gateway {
                 std::time::Duration::from_secs(signing.replay_window),
                 signing.require_nonce,
             );
+            meta_mcp_builder.set_signing_scope(super::meta_mcp::signing::SigningScope::of(
+                self.config.security.posture,
+            ));
+        }
+        let security = &self.config.security;
+        if let Some(chain) = &security.signature_chain {
+            meta_mcp_builder.set_chain_signer(chain.resolve_with_env(&self.env.get())?, chain.emit);
+            let keys = security.remote_server_signing.trusted_keys.clone();
+            let window = security.message_signing.replay_window;
+            meta_mcp_builder.set_chain_trust(chain.max_links, keys, window);
         }
 
         let mut meta_mcp = Arc::new(meta_mcp_builder);
@@ -1178,10 +1179,9 @@ impl Gateway {
         }
 
         // ── Idempotency (MIK-7272.SUB.4) ─────────────────────────────────────
-        // Unconditional and unconfigurable. A client-supplied idempotency key
-        // is a correctness mechanism, not a preference: the only thing an
-        // operator toggle would buy is the ability to switch duplicated side
-        // effects back on. Bounds are the constants in `crate::idempotency`.
+        // Unconditional and unconfigurable: an idempotency key is a correctness
+        // mechanism, and a toggle could only switch duplicated side effects
+        // back on. Bounds are the constants in `crate::idempotency`.
         // This is the only production construction site of `MetaMcp`, and both
         // `run` and `run_stdio` reach it, so the cache is `Some` on every boot.
         // All three of the criterion's routes reach a guard from here: generic
@@ -1253,6 +1253,7 @@ impl Gateway {
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
+        start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
                 .server
@@ -1360,6 +1361,8 @@ impl Gateway {
                 &self.config.capabilities.name,
                 executor,
             ));
+            // The scan below runs in the background; readiness waits on it.
+            cap_backend.begin_initial_scan();
             meta_mcp.set_capabilities(Arc::clone(&cap_backend));
 
             let capability_dirs = self.config.capabilities.directories.clone();
@@ -1378,21 +1381,15 @@ impl Gateway {
             let webhook_registry_for_load = Arc::clone(&webhook_registry);
             let webhooks_enabled = self.config.webhooks.enabled;
 
-            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES.
-            //
-            // The background scan below exists so a large capability directory
-            // does not delay the listener binding, and it stays the default.
+            // AN ACCOUNT-BOUND DEPLOYMENT SCANS BEFORE IT SERVES. The background
+            // scan exists so a large directory does not delay the listener.
             // But when the configuration declares `accounts.descriptors`, the
             // scan is also the ADMISSION GATE that rejects a capability whose
             // `auth.account` names no declared descriptor or whose `auth.key`
             // is not that descriptor's `oauth:<provider>`
-            // (`CapabilityBackend::register_capability`). Running that gate
-            // concurrently with serving would mean the first requests are
-            // answered while the catalogue is still partial — a tool that the
-            // gate is about to refuse could be absent, and a tool it will admit
-            // could be missing. So an account-bound gateway completes the whole
-            // scan HERE, before `start` returns to bind and serve, and the
-            // strategies are installed further below, still before serving.
+            // (`CapabilityBackend::register_capability`). Run concurrently, the
+            // first requests would see a partial catalogue, so an account-bound
+            // gateway completes the whole scan HERE, before `start` serves.
             let accounts_configured = self.config.accounts.as_ref().is_some_and(|accounts| {
                 accounts.enabled
                     && accounts
@@ -1404,7 +1401,7 @@ impl Gateway {
             let scan = async move {
                 if !accounts_configured {
                     // Let the HTTP listener bind before large capability scans start.
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    CapabilityBackend::settle_before_initial_scan().await;
                 }
 
                 let mut total_caps = 0;
@@ -1423,7 +1420,7 @@ impl Gateway {
                             refused.extend(report.rejected);
                         }
                         Err(e) => {
-                            // Don't fail startup if capability dir doesn't exist
+                            cap_backend_for_load.mark_initial_scan_failed(); // not fatal
                             debug!(directory = %dir, error = %e, "Failed to load capabilities");
                         }
                     }
@@ -1526,11 +1523,6 @@ impl Gateway {
             self.env.startup(),
         )?);
 
-        // Wire webhook registry into MetaMcp for gateway_webhook_status.
-        if self.config.webhooks.enabled {
-            meta_mcp.set_webhook_registry(Arc::clone(&webhook_registry));
-        }
-
         // Live config handle: shared by the hot-reload watcher (which swaps it
         // on every applied reload) and AppState (which reads control-plane role
         // mapping through it, so a reload takes effect without restart —
@@ -1583,10 +1575,11 @@ impl Gateway {
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
-                )
+                )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
-                .with_stop(reload_stop),
+                .with_stop(reload_stop)
+                .with_capabilities(meta_mcp.get_capabilities()),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -1670,20 +1663,17 @@ impl Gateway {
         // (audience, token-exchange endpoint/scope) arrive via the
         // `BackendDescriptor` at `propagate()` time, not from this instance.
         //
-        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING: the caller
-        // attaches its own backend credential and the direct route forwards it
-        // verbatim. So a Passthrough-only deployment must NOT install a minting
-        // strategy. Doing so would let the meta route (`gateway_invoke`), whose
-        // resolver keys off the globally-installed strategy rather than the
-        // per-backend `strategy` enum, mint a credential for a Passthrough
-        // backend and violate INV-4 (GPT review F1). With the strategy unset the
-        // meta route fails closed (required) or falls back to static creds
-        // (optional) instead of minting. Mixed deployments (>=1 minting backend
-        // plus >=1 passthrough backend) still install the strategy for the
-        // minting backend; honoring passthrough on the meta route for that
-        // residual case needs the per-backend strategy check in the (currently
-        // locked) resolver, tracked on MIK-6746. Interim contract: passthrough is
-        // direct-route-only.
+        // Passthrough (ADR-008 rung 2, MIK-6746) mints NOTHING: the caller attaches its own backend
+        // credential and the direct route forwards it verbatim. So a Passthrough-only deployment
+        // must NOT install a minting strategy. Doing so would let the meta route
+        // (`gateway_invoke`), whose resolver keys off the globally-installed strategy rather than
+        // the per-backend `strategy` enum, mint a credential for a Passthrough backend and violate
+        // INV-4 (GPT review F1). With the strategy unset the meta route fails closed (required) or
+        // falls back to static creds (optional) instead of minting. Mixed deployments (>=1 minting
+        // backend plus >=1 passthrough backend) still install the strategy for the minting backend;
+        // honoring passthrough on the meta route for that residual case needs the per-backend
+        // strategy check in the (currently locked) resolver, tracked on MIK-6746. Interim contract:
+        // passthrough is direct-route-only.
         match configured_minting_strategy_kind(&self.config) {
             Some(crate::identity_propagation::PropagationStrategyKind::SignedAssertion) => {
                 use crate::identity_propagation::SignedAssertionStrategy;
@@ -1785,6 +1775,9 @@ impl Gateway {
             crate::gateway::session_lifecycle::wire_session_lifecycle(&session_lifecycle, firewall);
         }
 
+        // The per-session stores `meta_mcp` owns are reclaimed the same way.
+        crate::gateway::session_lifecycle::wire_meta_session_cleanup(&session_lifecycle, &meta_mcp);
+
         // Keep a clone of meta_mcp for post-shutdown operations (periodic
         // persistence and graceful shutdown cost saves use this handle).
         // Only the cost-governance shutdown tasks consume this clone.
@@ -1811,6 +1804,23 @@ impl Gateway {
         // The registry re-validates every listener against the same credential
         // stores the request middleware reads, so the two cannot disagree.
         let dashboard_bootstrap = Arc::new(crate::gateway::auth::DashboardBootstrap::new());
+        // Webhook registry into MetaMcp (gateway_webhook_status), and events,
+        // which re-check credentials against the same authorities as requests.
+        let (bearer_principal, bearer_sha256) =
+            crate::events::LiveCredentials::static_bearer(auth_config.bearer_token.as_deref());
+        let credentials = crate::events::LiveCredentials {
+            key_server: key_server.clone(),
+            bearer_principal,
+            bearer_sha256,
+            dashboard: Some(Arc::clone(&dashboard_bootstrap)),
+        };
+        events_wiring::install(
+            &self.config,
+            &meta_mcp,
+            &webhook_registry,
+            &live_config,
+            credentials,
+        )?;
         let subscriptions = Arc::new(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
                 crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
@@ -1843,27 +1853,24 @@ impl Gateway {
             .filter(|name| self.backends.get(name).is_some())
             .cloned()
             .collect();
-        let (task_service, task_executor) =
-            crate::gateway::task_service::open_runtime_with_recovery(
-                &task_store_dir,
-                self.config.tasks.max_workers,
-                crate::gateway::task_service::StoreLimits {
-                    records: self.config.tasks.max_records,
-                    per_principal: self.config.tasks.max_per_principal,
-                    record_bytes: self.config.tasks.max_record_bytes,
-                    logical_bytes: self.config.tasks.logical_budget_bytes,
-                },
-                Arc::clone(&subscriptions),
-                Arc::clone(meta_mcp.execution_admission()),
-                &managed_adapters,
-            )
-            .await
-            .map_err(|error| {
-                Error::Config(format!(
-                    "task store at '{}' could not be opened: {error}",
-                    task_store_dir.display()
-                ))
-            })?;
+        let (task_service, task_executor) = task_runtime::open(
+            &self.config,
+            &task_store_dir,
+            Arc::clone(&subscriptions),
+            &meta_mcp,
+            &managed_adapters,
+        )
+        .await
+        .map_err(|error| {
+            // A held lease is most often a stdio gateway on the same
+            // directory (MIK-7272.OWNER.2, design D6 rev 5 item 7).
+            Error::Config(format!(
+                "task store at '{}' could not be opened: {error} (if it is held by \
+                 another gateway process, possibly a stdio gateway using '<store_dir>/stdio', \
+                 give each gateway its own tasks.store_dir)",
+                task_store_dir.display()
+            ))
+        })?;
         info!(
             path = %task_store_dir.display(),
             max_workers = self.config.tasks.max_workers,
@@ -2173,40 +2180,16 @@ impl Gateway {
             }
         }
 
-        // Before the drain and well before the close: the sweep is joined while
-        // the store is still open, so a deletion already in flight finishes its
-        // own transaction and no new one starts against a store about to give
-        // its lease back. The join returns what the sweep actually met, so a
-        // store it could not delete from is not reported as a clean stop.
-        if let Err(error) = expiry_sweep.shutdown().await {
-            warn!(%error, "Task expiry sweep did not stop cleanly");
-        } else {
-            info!("Task expiry sweep stopped");
-        }
-
-        // Task workers hold no inflight permit — the request that created one
-        // was answered with a handle and released its permit long before the
-        // work finished — so the drain above cannot see them and a second wait
-        // is what makes shutdown graceful for them too.
-        //
-        // Ahead of `stop_all`, because a worker's dispatch IS a backend call:
-        // stopping the pool first would fail the very work this wait exists to
-        // let finish. The store closes afterwards, which joins any writer still
-        // in flight and gives the directory lease back — a lease this process
-        // kept would refuse the next start its own store.
-        info!(timeout = ?drain_timeout, "Draining in-flight tasks...");
-        let task_drain = task_executor_for_shutdown.drain(drain_timeout).await;
-        if task_drain.timed_out {
-            warn!(
-                acquired_workers = task_drain.acquired,
-                "Task drain timeout reached, proceeding with shutdown"
-            );
-        } else {
-            info!("All in-flight tasks completed");
-        }
-        if let Err(error) = task_service_for_shutdown.shutdown().await {
-            warn!(%error, "Task store did not release its lease cleanly");
-        }
+        // Workers drain, and a drain that runs out cancels the rest; then the
+        // expiry sweep is joined while the store is still open, and the store
+        // closes (`task_runtime::shutdown` documents the order).
+        task_runtime::shutdown(
+            expiry_sweep,
+            &task_executor_for_shutdown,
+            &task_service_for_shutdown,
+            task_runtime::ShutdownBudget::within(drain_timeout, drain_timeout),
+        )
+        .await;
 
         // Release the custody store before the backends go: the drain above is
         // what guarantees no in-flight request is still holding a credential.
@@ -2294,7 +2277,7 @@ impl Gateway {
                     Arc::clone(&self.backends),
                     self.config.failsafe.clone(),
                     self.config.meta_mcp.cache_ttl,
-                )
+                )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(grant_sink.clone()),
             );
@@ -2313,6 +2296,11 @@ impl Gateway {
                 }
             },
         ));
+        // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
+        let task_store =
+            stdio_tasks::open(&self.config, self.env.startup(), &meta_mcp, &tool_policy).await;
+        // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
+        let modern = self.config.server.modern_protocol;
 
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -2422,13 +2410,18 @@ impl Gateway {
         // reading must stall its producers rather than grow this queue. An
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
-        let (writer, queue) = tokio::sync::mpsc::channel::<serde_json::Value>(STDOUT_QUEUE_DEPTH);
-        let writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+        let (writer, queue) = tokio::sync::mpsc::channel::<OutboundFrame>(STDOUT_QUEUE_DEPTH);
+        let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
-        let channel = Arc::new(stdio_channel::StdioClientChannel::new(writer.clone()));
-        let mut dispatches: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+        let (reads, bridge_reads) = (Arc::new(meta_mcp.stdio_reads()), meta_mcp.stdio_reads());
+        let channel = Arc::new(stdio_channel::StdioClientChannel::new(
+            writer.clone(),
+            bridge_reads,
+        ));
+        let mut dispatches = stdio_dispatches::StdioDispatches::default();
+        let cancelled = dispatches.cancelled();
         // Admission, not just concurrency: a client that writes faster than the
         // backends answer would otherwise pile one task per line onto the
         // JoinSet. The permit is released when the dispatch task ends.
@@ -2470,6 +2463,16 @@ impl Gateway {
                     stdout_died = true;
                     break;
                 }
+                // Reaped as each ends, so an aborted dispatch is joined at once
+                // and a long session does not accumulate task records.
+                Some(joined) = dispatches.join_next(), if !dispatches.is_empty() => {
+                    if let Err(error) = joined
+                        && !error.is_cancelled()
+                    {
+                        warn!(%error, "stdio: a dispatch task did not finish cleanly");
+                    }
+                    continue;
+                }
                 read = reader.next_line() => match read {
                     Ok(Some(line)) => line,
                     _ => break,
@@ -2482,14 +2485,6 @@ impl Gateway {
             }
 
             debug!(line_len = line.len(), "stdio: received line");
-
-            // Reap what has finished, so a long session does not accumulate
-            // task records and a panicking dispatch is visible before EOF.
-            while let Some(joined) = dispatches.try_join_next() {
-                if let Err(error) = joined {
-                    warn!(%error, "stdio: a dispatch task did not finish cleanly");
-                }
-            }
 
             let request: serde_json::Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
@@ -2518,26 +2513,47 @@ impl Gateway {
                 continue;
             }
 
+            // Routed here, never dispatched (MIK-7272.LIFE.1). No frame answers
+            // it; `initialize` runs inline and is never tracked, so it cannot
+            // be cancelled.
+            if request.get("method").and_then(serde_json::Value::as_str)
+                == Some("notifications/cancelled")
+            {
+                if let Some(id) = request
+                    .pointer("/params/requestId")
+                    .and_then(|id| serde_json::from_value(id.clone()).ok())
+                {
+                    dispatches.cancel(&id);
+                }
+                continue;
+            }
+
             // Handle batch requests (array of JSON-RPC calls)
             if request.is_array() {
                 // Boxed: the dispatch future is tens of kilobytes and this one
                 // lives across the `select!` in the helper, so leaving it inline
                 // would put the whole thing on the reader loop's stack frame.
-                let responses = Self::dispatch_streaming_notifications(
-                    Box::pin(Self::dispatch_batch_with_sink(
+                let (responses, _) = Self::dispatch_streaming_notifications(
+                    Box::pin(Self::dispatch_batch_read(
                         &meta_mcp,
                         &tool_policy,
                         &mtls_policy,
                         request,
                         session_id,
                         &protocol_telemetry_sink,
+                        &reads,
                     )),
                     &writer,
+                    &reads,
                 )
                 .await;
                 Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
                 if !responses.is_empty() {
-                    send_frame(&writer, serde_json::Value::Array(responses)).await;
+                    drop(
+                        writer
+                            .send(crate::gateway::outbound::StdioReads::batch_of(responses))
+                            .await,
+                    );
                 }
                 continue;
             }
@@ -2564,7 +2580,10 @@ impl Gateway {
                         // parking the reader, and awaiting a full stdout queue
                         // parks it just the same. A queue with no room is
                         // already telling the client to slow down.
-                        if writer.try_send(refusal).is_err() {
+                        if writer
+                            .try_send(OutboundFrame::gateway_stdio(refusal))
+                            .is_err()
+                        {
                             // Dropped, not buffered: any wait here is the
                             // parked reader again. Logged because the client
                             // is then holding an id that will never be
@@ -2579,6 +2598,9 @@ impl Gateway {
             } else {
                 None
             };
+            let request_id: Option<crate::protocol::RequestId> = request
+                .get("id")
+                .and_then(|id| serde_json::from_value(id.clone()).ok());
             let task = {
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
@@ -2587,12 +2609,16 @@ impl Gateway {
                 // Cloned, not borrowed: the caller context holds
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
                 let channel = Arc::clone(&channel);
-                let writer = writer.clone();
+                let tasks = task_store.as_ref().map(|(tasks, _)| Arc::clone(tasks));
+                let (writer, reads) = (writer.clone(), Arc::clone(&reads));
+                let params = reads.judges().then(|| request.get("params").cloned());
+                let cancelled = cancelled.clone();
+                let answers = request_id.clone();
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
                 async move {
-                    let response = Self::dispatch_streaming_notifications(
-                        Box::pin(Self::dispatch_single_with_sink(
+                    let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_single_staged(
                             &meta_mcp,
                             &tool_policy,
                             &mtls_policy,
@@ -2601,10 +2627,13 @@ impl Gateway {
                                 session_id,
                                 channel: &*channel,
                                 handshake_capabilities,
+                                tasks: tasks.as_deref(),
+                                modern,
                             },
                             &telemetry,
                         )),
                         &writer,
+                        &reads,
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -2612,8 +2641,25 @@ impl Gateway {
                     if let Some(gate) = gate {
                         drop(gate.acquire().await);
                     }
-                    if let Some(response) = response {
-                        send_frame(&writer, response).await;
+                    // Room first, then the cancel check and the enqueue under
+                    // one lock: no frame for the id is queued after its cancel
+                    // was processed, however long the queue was full.
+                    let params = params.flatten();
+                    let response = match response {
+                        Some(value) => Some(
+                            Self::judge_and_commit(
+                                &reads,
+                                (value, params.as_ref(), hidden.as_ref()),
+                                staged,
+                            )
+                            .await,
+                        ),
+                        None => None,
+                    };
+                    if let Some(response) = response
+                        && let Ok(permit) = writer.reserve().await
+                    {
+                        cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                     }
                 }
             };
@@ -2633,7 +2679,7 @@ impl Gateway {
                 // guaranteed position, and it keeps it by being inline.
                 let admission = Arc::clone(&admission);
                 let closed_probe = writer.clone();
-                dispatches.spawn(async move {
+                dispatches.spawn(request_id, async move {
                     // The wait that used to be here, moved off the reader. It
                     // is unbounded, so stdout can die inside it: admission was
                     // checked against a queue that may no longer exist, and
@@ -2670,9 +2716,17 @@ impl Gateway {
         // and `close` is terminal, so a question raised inside the drain window
         // is refused rather than left waiting out the bridge's own timeout.
         channel.close();
-        if tokio::time::timeout(STDIO_DRAIN_TIMEOUT, async {
+        // One deadline for the drain and the writer join (MIK-7272.LIFE.1):
+        // a client that stops reading stdout blocks the writer, and the two
+        // together still end within one `STDIO_DRAIN_TIMEOUT`, not two. Every
+        // await after them ends by `shutdown_deadline` (MIK-7685).
+        let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
+        let shutdown_deadline = deadline + stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
+        if tokio::time::timeout_at(deadline, async {
             while let Some(joined) = dispatches.join_next().await {
-                if let Err(e) = joined {
+                if let Err(e) = joined
+                    && !e.is_cancelled()
+                {
                     warn!("stdio: dispatch task failed during drain: {e}");
                 }
             }
@@ -2684,24 +2738,26 @@ impl Gateway {
                 timeout = ?STDIO_DRAIN_TIMEOUT,
                 "stdio: dispatch drain timed out; aborting what is left"
             );
-            dispatches.shutdown().await;
+            let abort = dispatches.shutdown();
+            stdio_shutdown::bounded_step(shutdown_deadline, "dispatch abort", abort).await;
         }
-        Self::persist_stdio_protocol_telemetry(&protocol_telemetry_sink);
-        // After the drain, so the last calls' spend is in the snapshot; the
-        // saver is stopped first so an older periodic save cannot land after.
+        Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink).await;
         #[cfg(feature = "cost-governance")]
         if let Some(enforcer) = &meta_mcp.budget_enforcer {
-            if let Some(saver) = cost_saver {
-                saver.stop().await;
-            }
-            persistence::save_costs(enforcer, &data_dir);
+            let (enforcer, dir) = (Arc::clone(enforcer), data_dir.clone());
+            stdio_shutdown::final_cost_save(shutdown_deadline, cost_saver, enforcer, dir).await;
         }
         // Every sender gone, then the writer joined: the task drains its queue
         // and returns, which is what flushes the responses the drain produced.
         drop(writer);
         drop(channel);
-        if let Err(error) = writer_task.await {
-            warn!(%error, "stdio: the stdout writer did not finish cleanly");
+        match tokio::time::timeout_at(deadline, &mut writer_task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => warn!(%error, "stdio: the stdout writer did not finish cleanly"),
+            Err(_) => {
+                writer_task.abort();
+                warn!("stdio: stdout is not being read; unwritten frames are dropped");
+            }
         }
         // Stop sweeping and probing before tearing the backends down. Both tasks
         // hold an Arc on the registry and have no shutdown channel in this mode,
@@ -2710,87 +2766,9 @@ impl Gateway {
         // any other exit path, which is the point of them.
         drop(idle_reaper);
         drop(health_loop);
-        // Awaited, not left to the drop guard: an abort is asynchronous, so a
-        // retry task mid-`ensure_started` would otherwise still be starting a
-        // backend while `stop_all` drains it — delaying shutdown and logging
-        // starts for a gateway that is on its way out. The guard remains the
-        // backstop for every path that does not reach this line.
-        warm_start_tasks.cancel().await;
-        // Release the custody store before the backends go. Reached on the EOF
-        // path only: a cancelled `run_stdio` releases it by dropping the Gateway.
-        // Not covered by gateway_bootstrap_tests — no test drives `run_stdio`.
-        if let Err(e) = self.shutdown_account_custody().await {
-            warn!(error = %e, "Personal account custody shutdown failed");
-        }
-        self.backends.stop_all().await;
+        self.stdio_teardown(shutdown_deadline, warm_start_tasks, task_store)
+            .await;
         Ok(())
-    }
-
-    fn persist_stdio_protocol_telemetry(sink: &StdioTelemetry) {
-        let mut sink = sink
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(sink) = sink.as_mut()
-            && let Err(error) = sink.persist_global()
-        {
-            warn!(
-                %error,
-                "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
-            );
-        }
-    }
-
-    /// Run `fut` inside a notification scope, writing each notification the
-    /// backend publishes as it arrives.
-    ///
-    /// Draining concurrently rather than afterwards is the whole point: a
-    /// progress notification has to reach the client while the call that
-    /// raised it is still running, so it must be written *before* the caller
-    /// writes `fut`'s own response (`MIK-7272.SUB.2b`, S-02).
-    ///
-    /// Installing the scope is also what makes the mint reachable on stdio —
-    /// `mint_progress_token` returns `None` outside one, and the client's own
-    /// token would then travel to the backend unchanged.
-    async fn dispatch_streaming_notifications<F>(
-        fut: F,
-        writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
-    ) -> F::Output
-    where
-        F: Future,
-    {
-        let (scoped, mut notifications) = crate::transport::notification_sink::scope(fut);
-        tokio::pin!(scoped);
-        let output = loop {
-            tokio::select! {
-                Some(notification) = notifications.recv() => {
-                    Self::queue_notification(writer, &notification).await;
-                }
-                output = &mut scoped => break output,
-            }
-        };
-        // The scope's sender drops with `scoped`, so anything still queued is
-        // everything that will ever arrive; write it before the response.
-        while let Ok(notification) = notifications.try_recv() {
-            Self::queue_notification(writer, &notification).await;
-        }
-        output
-    }
-
-    /// Serialise one notification onto the client's stream. A notification
-    /// that cannot be serialised is dropped with a warning rather than
-    /// failing the request it belongs to.
-    async fn queue_notification(
-        writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
-        notification: &crate::protocol::JsonRpcNotification,
-    ) {
-        match serde_json::to_value(notification) {
-            Ok(value) => send_frame(writer, value).await,
-            Err(error) => warn!(
-                %error,
-                method = %notification.method,
-                "stdio: unserialisable notification"
-            ),
-        }
     }
 
     /// Dispatch a single JSON-RPC request through `MetaMcp`.
@@ -2813,6 +2791,8 @@ impl Gateway {
                 session_id,
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
+                modern: false,
             },
             &StdioTelemetry::default(),
         )
@@ -2850,11 +2830,77 @@ impl Gateway {
         }
     }
 
+    /// Judge one finalized stdio answer, then record the receipts its dispatch
+    /// staged, only when the frame as written delivers a result: a read the
+    /// judge withholds, or an audit failure replaces, leaves none.
+    async fn judge_and_commit(
+        reads: &crate::gateway::outbound::StdioReads,
+        (value, params, hidden): (
+            serde_json::Value,
+            Option<&serde_json::Value>,
+            Option<&crate::security::tenant_reads::ReadAttribution>,
+        ),
+        staged: crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+    ) -> crate::gateway::outbound::OutboundFrame {
+        let frame = reads.answer(value, params, hidden).await;
+        staged.commit(frame.delivers_result());
+        frame
+    }
+
+    /// [`Self::dispatch_single_staged`] recording the receipts straight away,
+    /// for a caller that judges no frame (a test).
+    #[cfg(test)]
+    async fn dispatch_single_with_sink(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        request: serde_json::Value,
+        client: StdioClient<'_>,
+        sink: &StdioTelemetry,
+    ) -> Option<serde_json::Value> {
+        let (answer, staged) =
+            Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client, sink)
+                .await;
+        // No frame is judged here: the receipts follow the answer as built.
+        staged.commit(answer.as_ref().is_some_and(|a| a.get("error").is_none()));
+        answer
+    }
+
+    /// [`Self::dispatch_relay_scoped`] inside one relay-receipt collector,
+    /// which spans dispatch and finalize (COLLUDE.1 §13.3), returning what it
+    /// staged: the caller records it after the answer's read verdict. With
+    /// relay detection off there is nothing to collect, and no box to allocate.
+    #[allow(
+        clippy::large_futures,
+        reason = "the unboxed arm is the dispatch as it ran before the collector"
+    )]
+    async fn dispatch_single_staged(
+        meta_mcp: &Arc<MetaMcp>,
+        tool_policy: &Arc<crate::security::ToolPolicy>,
+        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
+        request: serde_json::Value,
+        client: StdioClient<'_>,
+        sink: &StdioTelemetry,
+    ) -> (
+        Option<serde_json::Value>,
+        crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
+    ) {
+        let dispatch =
+            Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink);
+        if meta_mcp.relay_active() {
+            return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
+        }
+        (
+            dispatch.await,
+            crate::gateway::meta_mcp::invoke::relay::StagedReceipts::none(),
+        )
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one dispatch path; the telemetry-guard scope is part of it"
     )]
-    async fn dispatch_single_with_sink(
+    async fn dispatch_relay_scoped(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
@@ -2862,15 +2908,15 @@ impl Gateway {
         client: StdioClient<'_>,
         protocol_telemetry_sink: &StdioTelemetry,
     ) -> Option<serde_json::Value> {
-        // Borrowed views throughout: a request this dispatcher refuses must not
-        // be copied on its way to the refusal. Ownership is taken once, after
-        // admission, where the payload is actually executed.
+        // Borrowed views throughout: a refused request is never copied.
+        // Ownership is taken once, after admission, where it executes.
         use super::router::helpers::extract_tools_call_params_ref;
         use crate::protocol::JsonRpcResponse;
 
         let session_id = client.session_id;
-        let mut signing_context = match Self::prepare_signing(meta_mcp, &mut request) {
-            Ok(context) => context,
+        let prepared = Self::prepare_signing(meta_mcp, &mut request);
+        let (mut signing_context, chain_nonce) = match prepared {
+            Ok(prepared) => prepared,
             Err(response) => return Some(response),
         };
 
@@ -2888,13 +2934,10 @@ impl Gateway {
         };
 
         let (external_tool, response_targets) = {
-            // Response targets are still derived here, before anything dispatches,
-            // so no change in live backend state can move an accepted call's
-            // provenance. What is withheld is the payload: a target owns a copy of
-            // the call arguments, and the response-target mapping reads a target's
-            // server and tool and discards that copy on the next line. So the
-            // mapping is fed the routing keys alone — same servers, same tools,
-            // same sort, dedup and discovery handling, none of the megabytes.
+            // Response targets are derived here, before dispatch, so live backend
+            // state cannot move an accepted call's provenance. The mapping is fed
+            // the routing keys alone (same servers, tools, sort, dedup and
+            // discovery handling), never a copy of the call arguments.
             let (external_tool, backend_targets) = if method == "tools/call" {
                 let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
                 let (tool, arguments) = extract_tools_call_params_ref(params);
@@ -2918,39 +2961,60 @@ impl Gateway {
         let policy = ToolPolicyAuthorizer { tool_policy };
         let scope = InvokeScope::stdio(&policy);
         let (response, execution) = if method == "tools/call" {
-            Box::pin(Self::dispatch_tools_call(
-                meta_mcp,
-                tool_policy,
-                &mut request,
-                id,
-                client,
-                &mut signing_context,
-                &request_shape,
-            ))
+            // D3-a: one grant-decision slot spans signing, admission and dispatch.
+            super::meta_mcp::grant_audit::slot_rpc(
+                meta_mcp.transparency_logger.as_ref(),
+                id.clone(),
+                Box::pin(Self::dispatch_tools_call(
+                    meta_mcp,
+                    tool_policy,
+                    &mut request,
+                    id,
+                    client,
+                    &mut signing_context,
+                    &request_shape,
+                )),
+            )
             .await
         } else {
             (
                 match method.as_str() {
-                    // 2026-07-28 MUST. Answered before anything else and without a
-                    // handshake, because on stdio this is also the backward-compatibility
-                    // probe: a legacy server answers it with an error, not a document.
-                    // Always the legacy list on stdio. This dispatcher has no
-                    // access to the running config, and the stateless revision is
-                    // specified over streamable HTTP; advertising it on a transport
-                    // whose modern path is not wired would be a claim the gateway
-                    // cannot honour. Recorded as a limitation, not a decision that
-                    // stdio is excluded.
-                    "server/discover" => {
-                        JsonRpcResponse::success_serialized(id, meta_mcp.discover_document(false))
-                    }
-                    "initialize" => meta_mcp.handle_initialize(
-                        id,
-                        params,
-                        Some(session_id),
-                        None,
-                        request_shape.era(),
-                        scope,
+                    // 2026-07-28 MUST, answered without a handshake: on stdio it is
+                    // also the backward-compatibility probe. It lists 2026-07-28 when
+                    // `server.modern_protocol` was on at stdio start (MIK-7217.STDIO.1);
+                    // a batch is a legacy shape and always gets the legacy list.
+                    "server/discover" => stdio_tasks::advertised(
+                        client.tasks,
+                        JsonRpcResponse::success_serialized(
+                            id,
+                            meta_mcp.discover_document(client.modern),
+                        ),
                     ),
+                    "initialize" => stdio_tasks::advertised(
+                        client.tasks,
+                        meta_mcp.handle_initialize(
+                            id,
+                            params,
+                            Some(session_id),
+                            None,
+                            request_shape.era(),
+                            scope,
+                        ),
+                    ),
+                    m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
+                        let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+                        let caller = Self::build_stdio_caller_context(
+                            true,
+                            None,
+                            &policy,
+                            &retry,
+                            &request_shape,
+                            client,
+                        );
+                        let shape = &request_shape;
+                        stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
+                            .await
+                    }
                     "tools/list" => {
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
@@ -2969,6 +3033,7 @@ impl Gateway {
             )
         };
 
+        let chain_source = response.chain_source;
         let response = meta_mcp.finalize_response_for_delivery(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
@@ -2983,38 +3048,49 @@ impl Gateway {
                 mutation:
                     crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
+                chain_source,
+                chain_nonce: chain_nonce.as_deref(),
             },
         ).await;
+        // COLLUDE.1: the receipts staged here are recorded by the caller once
+        // the answer has been judged (`judge_and_commit`).
         if let Some(execution) = execution {
             execution.complete_delivery(&response, signing_context.as_ref());
         }
         Some(response.to_value_lossy())
     }
 
-    /// Capture and restore the signing envelope ahead of parsing, if signing
-    /// is enabled: the envelope lives in the caller's request, so it is taken
-    /// out before anything else reads that tree.
+    /// Capture the signing envelope and the chain nonce ahead of parsing:
+    /// both are taken out before anything else reads the request.
     fn prepare_signing(
         meta_mcp: &Arc<MetaMcp>,
         request: &mut serde_json::Value,
     ) -> std::result::Result<
-        Option<super::meta_mcp::signing::SigningInvocationContext>,
+        (
+            Option<super::meta_mcp::signing::SigningInvocationContext>,
+            Option<String>,
+        ),
         serde_json::Value,
     > {
-        let mut signing_context = meta_mcp
-            .signing_enabled()
-            .then(|| super::meta_mcp::signing::SigningInvocationContext::capture(request));
-        if let Some(context) = signing_context.as_mut()
-            && let Err(error) = context.restore(request)
-        {
-            return Err(crate::protocol::JsonRpcResponse::error(
-                None,
+        // A bad chain nonce keeps the caller's id; a bad envelope has none.
+        let raw_id = crate::protocol::mrtr::raw_request_id(request);
+        let mut signing_context = meta_mcp.signing_enabled().then(|| {
+            super::meta_mcp::signing::SigningInvocationContext::capture_scoped(
+                request,
+                meta_mcp.signing_scope(),
+            )
+        });
+        let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
+        let id = restored.is_ok().then_some(raw_id).flatten();
+        match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
+            Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
+            Err(error) => Err(crate::protocol::JsonRpcResponse::error(
+                id,
                 error.to_rpc_code(),
                 super::meta_mcp::signing::wire_error_message(&error),
             )
-            .to_value_lossy());
+            .to_value_lossy()),
         }
-        Ok(signing_context)
     }
 
     /// Parse, classify and durably observe one inbound stdio request.
@@ -3123,13 +3199,10 @@ impl Gateway {
             authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
             credential_kind: crate::security::audit::CredentialKind::LocalTransport,
             authorizer: stdio_authorizer,
-            // Stdio has no port and no network surface: the
-            // client SPAWNED this process, so it already holds
-            // whatever the operator holds — it could edit the
-            // config file just as easily. Withholding admin
-            // here would take the management tools away from
-            // exactly the single-user setup the origin gate
-            // exists to protect, and protect nothing.
+            // Stdio has no network surface: the client SPAWNED
+            // this process and holds what the operator holds.
+            // Withholding admin would disarm the single-user setup
+            // the origin gate protects, and protect nothing.
             //
             // Explicit since the admin gate moved to the
             // dispatcher: it previously lived on the HTTP path
@@ -3158,6 +3231,7 @@ impl Gateway {
             verified_identity: None,
             // The one client this process serves, for binding continuations.
             stdio_nonce: Some(StdioNonce::process()),
+            caller_key: None,
             // Same `RequestShape` the `initialize` arm advertises against.
             era: request_shape.era(),
             // The serve loop's own channel: a stdio client reads the same
@@ -3214,6 +3288,8 @@ impl Gateway {
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+            // Read before the merge below moves `_meta` out of the request.
+            let wants_task = params.is_some_and(|params| params.get("task").is_some());
             let is_modern = matches!(
                 request_shape,
                 crate::protocol::meta::RequestShape::Modern(_)
@@ -3276,8 +3352,9 @@ impl Gateway {
                 client,
             );
             if let Some(context) = signing_context.as_mut()
-                && let Err(error) = meta_mcp.prepare_signing_invocation(
+                && let Err(error) = meta_mcp.prepare_signing_for_call(
                     context,
+                    &tool_name,
                     arguments.as_ref(),
                     Some(session_id),
                     &caller,
@@ -3290,18 +3367,41 @@ impl Gateway {
                 );
             }
             caller.signing = signing_context.as_ref();
-            let admission = meta_mcp.admit_meta_sync(
-                &caller,
-                &tool_name,
-                arguments.as_ref(),
-                Some(session_id),
-                &id,
-            );
+            if wants_task && let Some(tasks) = client.tasks {
+                match stdio_tasks::task_intent(
+                    tasks,
+                    &id,
+                    &tool_name,
+                    &arguments,
+                    &caller,
+                    request_shape,
+                    session_id,
+                ) {
+                    Ok(intent) => caller.task = intent,
+                    Err(refusal) => break 'tool_call *refusal,
+                }
+            }
+            // A task is admitted durably by its handoff, as on HTTP.
+            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
+                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
+            } else {
+                meta_mcp.admit_meta_sync(
+                    &caller,
+                    &tool_name,
+                    arguments.as_ref(),
+                    Some(session_id),
+                    &id,
+                )
+            };
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
-                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response)) => {
-                    break 'tool_call response;
+                Ok(super::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
+                    // #2480: a replay is a delivered call, recorded as its first run was.
+                    let (args, session) = (arguments.as_ref(), Some(session_id));
+                    break 'tool_call meta_mcp
+                        .audit_replay(&tool_name, args, session, &caller, response, audit)
+                        .await;
                 }
                 Err(error) => {
                     break 'tool_call JsonRpcResponse::error(
@@ -3345,55 +3445,6 @@ impl Gateway {
             &StdioTelemetry::default(),
         )
         .await
-    }
-
-    async fn dispatch_batch_with_sink(
-        meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
-        mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
-        batch: serde_json::Value,
-        session_id: &str,
-        protocol_telemetry_sink: &StdioTelemetry,
-    ) -> Vec<serde_json::Value> {
-        let serde_json::Value::Array(requests) = batch else {
-            return vec![
-                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
-                    .to_value_lossy(),
-            ];
-        };
-
-        if requests.is_empty() {
-            return vec![
-                crate::protocol::JsonRpcResponse::error(None, -32600, "Invalid Request")
-                    .to_value_lossy(),
-            ];
-        }
-
-        let mut responses = Vec::new();
-        for req in requests {
-            if let Some(resp) = Box::pin(Self::dispatch_single_with_sink(
-                meta_mcp,
-                tool_policy,
-                mtls_policy,
-                req,
-                StdioClient {
-                    session_id,
-                    // A batch is dispatched sequentially inside the serve
-                    // loop's own task, so there is no reader to deliver a
-                    // reply: batch concurrency is out of scope for MIK-7387 by
-                    // design. Nothing to declare to either — a retained
-                    // handshake would widen a channel that cannot ask.
-                    channel: &crate::gateway::input_bridge::NoClientChannel,
-                    handshake_capabilities: crate::protocol::meta::Declared::NONE,
-                },
-                protocol_telemetry_sink,
-            ))
-            .await
-            {
-                responses.push(resp);
-            }
-        }
-        responses
     }
 }
 
@@ -3674,12 +3725,11 @@ fn stdio_caller_context<'a>(
         grant_subject: None,
         verified_identity: None,
         stdio_nonce: Some(StdioNonce::process()),
-        // stdio speaks to one process over two pipes and
-        // has no elicitation channel: there is no operator
-        // this transport can reach, so a destructive call
-        // it cannot confirm is refused rather than asked
-        // about. Not "found no session" -- no asker can
-        // exist here at all.
+        caller_key: None,
+        // stdio speaks to one process over two pipes and has no elicitation channel:
+        // there is no operator this transport can reach, so a destructive call it
+        // cannot confirm is refused rather than asked about. Not "found no session"
+        // -- no asker can exist here at all.
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
     }
 }
@@ -3688,93 +3738,7 @@ fn stdio_caller_context<'a>(
 mod gateway_bootstrap_tests;
 
 #[cfg(test)]
-mod stdio_forward_path_tests {
-    use serde_json::json;
-
-    use super::Gateway;
-    use crate::protocol::JsonRpcNotification;
-    use crate::transport::notification_sink;
-
-    fn progress(token: &str) -> JsonRpcNotification {
-        JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
-            method: "notifications/progress".to_string(),
-            params: Some(json!({ "progressToken": token, "progress": 1 })),
-        }
-    }
-
-    /// S-02's liveness half: the notification is on the wire before the
-    /// dispatch it belongs to has produced a response. Asserting only that
-    /// both appear would pass on a drain-then-emit implementation, which is
-    /// the design ADR-014 §1 rejects.
-    #[tokio::test]
-    async fn a_notification_is_written_before_its_dispatch_returns() {
-        let (writer, mut queue) = tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH);
-        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
-        let dispatch_gate = std::sync::Arc::clone(&gate);
-
-        let dispatch = tokio::spawn(async move {
-            Gateway::dispatch_streaming_notifications(
-                async move {
-                    notification_sink::publish(vec![progress("gw-1")]);
-                    // Park the dispatch. Reading the notification below can
-                    // only succeed if it was queued for the single writer while
-                    // this is pending, so a drain-after-resolve implementation
-                    // deadlocks here instead of passing.
-                    let _permit = dispatch_gate.acquire().await.unwrap();
-                    "result"
-                },
-                &writer,
-            )
-            .await
-        });
-
-        let first = queue.recv().await.expect("nothing was queued");
-        assert!(
-            first.to_string().contains("notifications/progress"),
-            "first frame was not the notification: {first}"
-        );
-
-        gate.add_permits(1);
-        assert_eq!(dispatch.await.unwrap(), "result");
-    }
-
-    /// The scope is what makes the mint reachable. Without it
-    /// `mint_progress_token` returns `None` and the client's own token
-    /// travels to the backend unchanged -- the leak SUB.2b forbids.
-    #[tokio::test]
-    async fn a_dispatch_runs_inside_a_notification_scope() {
-        let (writer, _queue) = tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH);
-        let minted = Gateway::dispatch_streaming_notifications(
-            async { notification_sink::mint_progress_token(&json!(7)) },
-            &writer,
-        )
-        .await;
-        assert!(
-            minted.is_some(),
-            "dispatch ran outside a notification scope"
-        );
-    }
-
-    /// A notification published after the dispatch resolves is still the
-    /// caller's to see; the post-loop drain is what delivers it.
-    #[tokio::test]
-    async fn a_late_notification_is_drained_before_the_response() {
-        let (writer, mut queue) = tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH);
-        Gateway::dispatch_streaming_notifications(
-            async {
-                notification_sink::publish(vec![progress("gw-late")]);
-            },
-            &writer,
-        )
-        .await;
-        let late = queue
-            .recv()
-            .await
-            .expect("the late notification was dropped");
-        assert!(late.to_string().contains("gw-late"));
-    }
-}
+mod stdio_forward_path_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4194,6 +4158,8 @@ mod tests {
                 session_id: "stdio-durable-window-test",
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
+                modern: false,
             },
             &sink,
         )

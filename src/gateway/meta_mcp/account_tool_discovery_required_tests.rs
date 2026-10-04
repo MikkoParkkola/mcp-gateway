@@ -34,6 +34,7 @@ fn single_user() -> AuthConfig {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
         }],
         single_user: true,
         ..AuthConfig::default()
@@ -230,4 +231,39 @@ async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() 
         seeded.len(),
         "operator: {operator}"
     );
+}
+
+/// MIK-7690: the sole operator holds no stored grant, so the credential
+/// resolver omits the `required` backend for it. `gateway_list_servers`
+/// must agree, without minting: no shared-slot count, and not "known".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_servers_does_not_count_a_required_backend_for_an_operator_without_a_grant() {
+    let custody = custody_with(&[]);
+    let (meta, _dispatches) = gateway_in(
+        &[(REQUIRED, Bind::Account(WORK))],
+        &Descriptors::same(&[WORK]),
+        &custody.installed(),
+        &[expected_identity_key_for(&operator_key(), SEEDED_REVISION)],
+        ServeMode::Http,
+        single_user(),
+    );
+    let backend = meta.backends.get(REQUIRED).expect("registered");
+    let seeded = backend
+        .get_tools_for_binding(None, &[])
+        .await
+        .expect("the shared slot fills");
+    assert!(
+        !seeded.is_empty(),
+        "premise: the shared snapshot holds the tool"
+    );
+    let listing = meta
+        .list_servers(&caller_as(None, Some("operator")), None)
+        .await
+        .expect("list_servers answers");
+    let row = listing["servers"]
+        .as_array()
+        .and_then(|servers| servers.iter().find(|s| s["name"] == REQUIRED).cloned())
+        .expect("the required backend is still named");
+    assert_eq!(row["tools_count"], 0, "no grant, no view: {row}");
+    assert_eq!(row["tools_known"], false, "no grant, no view: {row}");
 }

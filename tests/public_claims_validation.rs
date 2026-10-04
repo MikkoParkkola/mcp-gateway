@@ -23,9 +23,27 @@ use walkdir::WalkDir;
 #[derive(Debug, Deserialize)]
 struct PublicClaims {
     meta_tools: MetaToolClaims,
+    /// Runnable capabilities: the shipped YAML inventory minus `held_capabilities`.
     capability_count: usize,
+    held_capabilities: Vec<HeldCapability>,
+    held_operations: Vec<HeldOperation>,
     startup_benchmark: StartupBenchmark,
     readme_token_savings: TokenSavingsClaim,
+}
+
+/// A shipped capability that loads but does not run, and why.
+#[derive(Debug, Deserialize)]
+struct HeldCapability {
+    name: String,
+    reason: String,
+}
+
+/// One operation of a runnable capability that is not offered, and why.
+#[derive(Debug, Deserialize)]
+struct HeldOperation {
+    capability: String,
+    operation: String,
+    reason: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -82,13 +100,16 @@ fn meta_tool_count(meta_mcp: &MetaMcp) -> usize {
 }
 
 fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
-    Arc::new(ReloadContext::new(
-        repo_file("examples/gateway-full.yaml"),
-        Arc::new(LiveConfig::new(Config::default())),
-        backends,
-        FailsafeConfig::default(),
-        Duration::from_secs(300),
-    ))
+    Arc::new(
+        ReloadContext::new(
+            repo_file("examples/gateway-full.yaml"),
+            Arc::new(LiveConfig::new(Config::default())),
+            backends,
+            FailsafeConfig::default(),
+            Duration::from_secs(300),
+        )
+        .expect("the registry pairs with the config"),
+    )
 }
 
 fn operational_meta_mcp() -> MetaMcp {
@@ -188,6 +209,13 @@ const BANNED_PUBLIC_PHRASES: &[&str] = &[
     "95% context tokens",
     "95% savings",
 ];
+
+fn capability_yaml_exists(name: &str) -> bool {
+    WalkDir::new(repo_file("capabilities"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name().to_str() == Some(&format!("{name}.yaml")))
+}
 
 fn count_capability_yaml_files() -> usize {
     WalkDir::new(repo_file("capabilities"))
@@ -522,7 +550,7 @@ fn benchmark_docs_reference_canonical_claim_source_and_reproduction_commands() {
     );
     assert!(
         benchmarks.contains(&format!(
-            "{} total (marketed as {}+)",
+            "{} runnable (marketed as {}+)",
             claims.capability_count,
             capability_floor(claims.capability_count)
         )),
@@ -630,11 +658,29 @@ fn capability_inventory_claim_matches_current_repo_catalog() {
     let actual_count = count_capability_yaml_files();
 
     assert_eq!(
-        actual_count, claims.capability_count,
-        "public claims file should track the exact capability YAML inventory"
+        actual_count,
+        claims.capability_count + claims.held_capabilities.len(),
+        "public claims file should count the shipped YAML inventory minus the held capabilities"
     );
+    for held in &claims.held_capabilities {
+        assert!(
+            !held.reason.is_empty() && capability_yaml_exists(&held.name),
+            "held capability {} must exist and say why it is held",
+            held.name
+        );
+    }
+    for held in &claims.held_operations {
+        assert!(
+            !held.reason.is_empty()
+                && capability_yaml_exists(&held.capability)
+                && !held.operation.is_empty(),
+            "held operation {}.{} must exist and say why",
+            held.capability,
+            held.operation
+        );
+    }
     assert!(
-        actual_count >= capability_floor(claims.capability_count),
+        claims.capability_count >= capability_floor(claims.capability_count),
         "actual capability count should satisfy the marketed README floor"
     );
 }
@@ -671,6 +717,22 @@ fn capability_catalog_docs_match_current_inventory() {
         "capabilities README should not keep the stale zero-config subset claim"
     );
 
+    for held in &claims.held_capabilities {
+        assert!(
+            capabilities_readme.contains(&format!("`{}`", held.name)),
+            "capabilities README should name the held capability {}",
+            held.name
+        );
+    }
+    for held in &claims.held_operations {
+        assert!(
+            capabilities_readme.contains(&format!("`{}` `{}`", held.capability, held.operation)),
+            "capabilities README should name the held operation {}.{}",
+            held.capability,
+            held.operation
+        );
+    }
+
     for (category, count) in count_capability_yaml_files_by_category() {
         assert!(
             capabilities_readme.contains(&format!("| **{category}/** | {count} |")),
@@ -686,8 +748,14 @@ fn capability_catalog_docs_match_current_inventory() {
     );
     assert!(
         community_registry.contains(&format!(
-            "exact tracked inventory is currently {} YAMLs",
-            claims.capability_count
+            "exact tracked inventory is currently {} YAMLs, of which {} {} held",
+            claims.capability_count + claims.held_capabilities.len(),
+            claims.held_capabilities.len(),
+            if claims.held_capabilities.len() == 1 {
+                "is"
+            } else {
+                "are"
+            }
         )),
         "community registry docs should mention the canonical exact YAML inventory"
     );

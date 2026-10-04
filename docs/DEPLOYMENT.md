@@ -368,7 +368,8 @@ retries the reload every 2 seconds until one succeeds, so a valid config edit th
 alongside a broken env file is applied once the env file is fixed or put back.
 
 Env files supply values to configuration references, and also the attestation signing
-key: `GATEWAY_ATTESTATION_SIGNING_KEY` and `GATEWAY_ATTESTATION_KEY_ID` are read through the same
+key: `GATEWAY_ATTESTATION_SIGNING_KEY`, `GATEWAY_ATTESTATION_KEY_ID` and
+`GATEWAY_ATTESTATION_AUDIENCE` are read through the same
 overlay under those fixed names, rather than named in a config file through a
 `{env.VAR}` reference. Injecting them from the deployment — a systemd unit, a
 Kubernetes secret — still works and is still the recommendation for an operational
@@ -466,6 +467,55 @@ chosen maintenance window:
    restores prior compatibility; it does not make the old chain strict-valid.
 5. Remove old trust only after every consumer has migrated and the operator has
    ended the rollback window. Retention and key disposal follow your PKI policy.
+
+## Response signing
+
+`security.message_signing` adds an HMAC-SHA256 `_signature` block to results, so a
+client holding the shared secret can check that the result came from a holder of
+that secret and was not modified after signing. Any holder of the secret can
+produce a valid MAC, so keep it to the gateway and the clients that verify.
+
+What is signed:
+
+- Successful `gateway_invoke` results on `POST /mcp` and on stdio. The block is
+  added at delivery, after the response firewall, so it covers the result the
+  client receives. Every delivery is signed again, including cache hits and
+  idempotent replays, with that request's own `nonce` and timestamp.
+- The MAC is HMAC-SHA256, keyed with `shared_secret`, over the RFC 8785 (JCS)
+  serialization of this single object:
+
+  ```json
+  {"domain": "mcp-gateway-response-v2", "body": <result without _signature>,
+   "request_id": {"kind": "string"|"number", "value": "<id as a string>"} | null,
+   "alg": "hmac-sha256", "version": 2, "nonce": "<nonce>" | null,
+   "ts": <unix seconds>, "key_id": "<key_id>"}
+  ```
+
+  `request_id` is `null` when the request id was `null`. Notifications get no
+  response, so nothing is signed for them. The `_signature` block carries `alg`,
+  `sig` (lowercase hex), `nonce`, `ts`, `key_id` and `version`.
+- A result holding an integer beyond ±2^53-1 is refused rather than signed.
+
+What is not signed: named backend tools called through the meta surface, Code
+Mode, playbook steps, and every JSON-RPC error. `tools/call` on
+`POST /mcp/{name}` is refused with `-32001` ("message signing is enabled; use
+gateway_invoke") while signing is on.
+
+Key rotation is sender-side only. The gateway signs with `shared_secret` alone.
+`previous_secret` is only checked (at least 32 bytes, not all zero) when the config
+loads. It never signs a response and is never used to check a signature; the
+gateway does not verify inbound signatures at all. To rotate:
+
+1. Give clients the new key and have them accept a signature from either key,
+   matching on `key_id`.
+2. Set the new `shared_secret` and a new `key_id`, then restart the gateway.
+3. Once no client needs the old key, remove it from the clients.
+
+Every `security.message_signing` field (`enabled`, `shared_secret`,
+`previous_secret`, `key_id`, `require_nonce`, `replay_window`) needs a restart. A
+config reload that changes any of them is refused with
+`config reload refused: security.message_signing.<field> requires restart` and
+leaves the running config untouched.
 
 ## Reverse Proxy
 
@@ -1187,7 +1237,18 @@ The cookie carries an opaque handle, never the admin credential: a bearer token
 in a cookie is long-lived and recoverable from the wire without TLS, while a
 handle means nothing outside the running process and dies with it. It is
 `HttpOnly` and `SameSite=Strict`, so script cannot read it and it is never sent
-cross-site, and it is marked `Secure` when the listener speaks TLS.
+cross-site, and it is marked `Secure` when the listener speaks TLS or
+`server.public_url` is HTTPS.
+
+Behind a TLS-terminating proxy (an HTTPS `server.public_url` on a plain-HTTP
+listener, the `tls_terminated_upstream` shape), signing in takes two steps,
+because the `Secure` cookie belongs to the public origin, not to the loopback
+URL. Opening the link at the loopback URL spends it and shows a one-time code.
+Type `<public_url>/dashboard/handoff` into the browser and enter the code within
+60 seconds: the form posts it on the public origin, which sets the cookie there
+and redirects to `/dashboard`. The code works once, never appears in a URL, and
+is refused, without being spent, when it is posted anywhere but the public
+origin. Keep request bodies for that path out of the proxy's logs.
 
 #### Session limits, logout and signing in again
 

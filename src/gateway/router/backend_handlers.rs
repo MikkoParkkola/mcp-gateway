@@ -8,28 +8,22 @@ use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tracing::{debug, error, warn};
+use tracing::warn;
 
 use super::AppState;
-use super::authorization::{
-    ToolTarget, authorize_tool_target, refusal_principal, require_admin_log_level,
-};
-use super::direct_guards::{DirectRouteGuards, refusal};
-use super::helpers::{build_http_error_response, build_http_response, parse_request};
+use super::authorization::{ToolTarget, authorize_tool_target};
+use super::direct_guards::refusal;
+use super::helpers::{bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
-use crate::personal_accounts::refusal::refusal_text;
-use crate::protocol::{JsonRpcResponse, RequestId, Tool};
+use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
 use crate::security::{sanitize_json_value, validate_tool_name};
-use crate::trust::project_tool_descriptors_trust_cards;
 
 type BackendRejection = (StatusCode, Json<Value>);
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
@@ -50,26 +44,13 @@ struct BackendAuthContext<'a> {
     grant_subject: Option<&'a crate::identity_grants::GrantSubject>,
 }
 
-/// The key the direct route's per-caller firewall controls score on: the
-/// caller's `CallerKey`, as on the meta route, so one caller has one budget on
-/// both. With no key (authentication off) it is the shared per-backend bucket,
-/// never tracked; a keyed caller's reclaim deadline is renewed (CONTROL.4).
 #[cfg(feature = "firewall")]
-fn direct_control_identity(
-    state: &AppState,
-    auth: BackendAuthContext<'_>,
-    per_backend: &str,
-) -> String {
-    let key = super::identity::caller_key(auth.grant_subject, auth.cert_identity, auth.client);
-    if key.is_empty() {
-        return per_backend.to_string();
-    }
-    if let Some(ref lifecycle) = state.session_lifecycle {
-        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
-        lifecycle.track(key.clone(), now_unix() + IDLE_TTL.as_secs());
-    }
-    key
-}
+mod relay;
+#[cfg(feature = "firewall")]
+use relay::{
+    catalogue_refusal, direct_control_identity, relay_refusal, stage_direct_catalogue,
+    stage_direct_delivery,
+};
 
 /// Apply tool policy, name validation, and input sanitization to a `tools/call`
 /// request arriving at the direct backend endpoint.
@@ -160,7 +141,7 @@ async fn apply_backend_tool_call_security(
                 });
             // OWASP ASI10: an anomaly block carries -32002 on every route, as
             // on the meta route, so a caller can tell it from other refusals.
-            if verdict.is_anomaly_block() {
+            if verdict.is_asi10_block() {
                 return Err(backend_security_error_with_status(
                     id,
                     -32002,
@@ -172,6 +153,11 @@ async fn apply_backend_tool_call_security(
                 id,
                 &format!("Firewall blocked: {desc}"),
             ));
+        }
+        let target = (backend_name, tool_name);
+        let audit = (session_id.as_str(), caller_name);
+        if let Some(refusal) = relay_refusal(fw, auth, id, target, params, audit) {
+            return Err(refusal);
         }
     }
 
@@ -245,62 +231,6 @@ fn backend_security_error_with_status(
     build_http_error_response(Some(id.clone()), code, message, status)
 }
 
-/// Fill missing MCP tool annotation hints on direct backend `tools/list`
-/// responses before returning them to clients.
-fn normalize_tools_list_response(
-    backend: &crate::backend::Backend,
-    response: &mut JsonRpcResponse,
-) {
-    let backend_name = backend.name.as_str();
-    if response.error.is_some() {
-        // Never forward an unjudged list beside an error (#1441).
-        response.result = None;
-        return;
-    }
-
-    let Some(result) = response.result.as_mut() else {
-        return;
-    };
-    let Some(tools_value) = result.get_mut("tools") else {
-        return;
-    };
-
-    let Some(items) = tools_value.as_array() else {
-        warn!(backend = %backend_name, "Backend tools/list result is not an array");
-        return;
-    };
-
-    // Parsed element by element on purpose. A single descriptor the `Tool`
-    // shape cannot accept used to abort the whole pass and forward the list
-    // verbatim — which handed a backend a one-element bypass for the exclusion
-    // applied to all of its siblings. An unparseable element is now dropped:
-    // it cannot be judged by the call predicate, and forwarding it would
-    // disclose a name the caller may not invoke (A3).
-    let mut tools = Vec::with_capacity(items.len());
-    for item in items {
-        match serde_json::from_value::<Tool>(item.clone()) {
-            Ok(tool) => tools.push(tool),
-            Err(e) => {
-                warn!(backend = %backend_name, error = %e, "Backend tools/list entry could not be normalized; dropped");
-            }
-        }
-    }
-
-    backend.prepare_judged_tools(&mut tools);
-
-    let server_id = format!("backend:{backend_name}");
-    let tools = project_tool_descriptors_trust_cards(&server_id, backend_name, &tools);
-
-    // Rebuilt from an allowlist: `{ "tools": [...] }` and nothing else. An
-    // upstream sibling key or cursor could name a withheld tool (A3).
-    match serde_json::to_value(tools) {
-        Ok(normalized_tools) => *result = json!({ "tools": normalized_tools }),
-        Err(e) => {
-            warn!(backend = %backend_name, error = %e, "Failed to serialize normalized tools/list");
-        }
-    }
-}
-
 /// Stable, collision-safe upstream-session bucket key for a passthrough caller
 /// (MIK-6785). On the passthrough route the forwarded backend credential is the
 /// only value that distinguishes one caller from another (there is usually no
@@ -332,14 +262,14 @@ fn passthrough_identity_key(credential: &str) -> String {
 /// principal every unauthenticated caller shares.
 fn charged_binding(
     state: &AppState,
-    name: &str,
+    backend: &crate::backend::Backend,
     caller: crate::identity_propagation::CallerProof<'_>,
     proven: Option<&str>,
     digest: Option<String>,
 ) -> Option<String> {
     let principal = match (caller.verified(), proven) {
         (None, Some(proven)) => format!("proven:{proven}"),
-        _ => state.meta_mcp.audit_subject_for(name, caller),
+        _ => state.meta_mcp.audit_subject_for(backend, caller),
     };
     digest.map(|digest| crate::backend::passthrough_binding(&principal, &digest))
 }
@@ -438,14 +368,9 @@ async fn dispatch_in_scope(
     propagated_headers: &[(String, String)],
     identity_key: Option<&str>,
 ) -> crate::Result<JsonRpcResponse> {
-    // Unlike the three meta-dispatch call sites (each gating one hardcoded
-    // method), `method` here is client-chosen: this is the one place every
-    // direct-route request funnels through, so it is the one place that must
-    // refuse whatever the peer's era removed before it reaches the wire
-    // (MIK-7217, OUTBOUND.1). The refusal carries the caller's own id rather
-    // than relying on the callers to restamp it: a refusal never reaches the
-    // transport, so there is no gateway correlation id here to replace, and an
-    // `id: null` error is one a direct-route client cannot correlate at all.
+    // `method` here is client-chosen, so this funnel refuses whatever the
+    // peer's era removed before it reaches the wire (MIK-7217, OUTBOUND.1),
+    // with the caller's own id: an `id: null` error cannot be correlated.
     if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
         return Ok(JsonRpcResponse::error(
             Some(id.clone()),
@@ -463,6 +388,16 @@ async fn dispatch_in_scope(
         }
     })
     .await;
+    // MIK-7116.MIN.2: what the backend sent counts as read here, before a
+    // list drain, filter or normalisation drops fields. `tools/call` notes
+    // its result at its gates instead, once they pass.
+    if method != "tools/call"
+        && let Ok(JsonRpcResponse {
+            result: Some(raw), ..
+        }) = &response
+    {
+        crate::security::tenant_reads::note_read(raw);
+    }
     response
 }
 
@@ -470,7 +405,8 @@ async fn dispatch_in_scope(
 ///
 /// Every `tasks/*` method, in any letter case, because a backend that matches
 /// names loosely acts on a case variant as the real method; plus
-/// `subscriptions/listen` naming `taskIds`. KEEP IN STEP with
+/// `subscriptions/listen` naming `taskIds`, at the params root or under
+/// `notifications`. KEEP IN STEP with
 /// `reaches_tasks_extension` in `router/handlers.rs`: a task-reaching method
 /// added there and not here is forwarded here without an owner check.
 /// The one intended difference: `tools/call` carrying `task` still forwards;
@@ -480,7 +416,7 @@ fn is_task_method(method: &str, params: Option<&Value>) -> bool {
         .get(..6)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("tasks/"))
         || (method.eq_ignore_ascii_case("subscriptions/listen")
-            && params.is_some_and(|p| p.get("taskIds").is_some()))
+            && params.is_some_and(crate::protocol::subscriptions::names_task_ids))
 }
 
 /// Backend handler (POST /mcp/{name})
@@ -488,7 +424,7 @@ pub(super) async fn backend_handler(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
     request: axum::http::Request<axum::body::Body>,
-) -> impl IntoResponse {
+) -> crate::gateway::outbound::OutboundReply {
     // Track in-flight request for graceful drain
     let _inflight_permit = state.inflight.acquire().await;
 
@@ -499,672 +435,93 @@ pub(super) async fn backend_handler(
         && log.admit().await.is_err()
     {
         let error = crate::Error::AuditUnavailable;
-        return build_http_error_response(
-            None,
-            error.to_rpc_code(),
-            error.to_string(),
-            StatusCode::SERVICE_UNAVAILABLE,
-        );
+        return crate::gateway::outbound::gateway_reply(bodiless_accepted(
+            build_http_error_response(
+                None,
+                error.to_rpc_code(),
+                error.to_string(),
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ));
     }
 
-    // D2: one write per tools/call, whichever of the inner returns answered.
-    let mut call = None;
-    let answer = backend_handler_inner(Arc::clone(&state), name.clone(), request, &mut call).await;
-    match call {
-        Some(call) => direct_audit::record(&state, &name, call, answer).await,
-        None => answer,
-    }
+    direct_audit::audited_call(Arc::clone(&state), name, request).await
 }
 
-#[allow(clippy::too_many_lines)]
+/// The direct backend route, as an ordered sequence of stages. Each stage
+/// returns the route's HTTP answer as its `Err`, so an early return inside a
+/// stage is an early return here, at the same point in the same order:
+/// refusal precedence is security-relevant (scope before backend lookup, so no
+/// 404 oracle; attestation before the propagation mint; the tool-call gate
+/// before the idempotency cache; the signing nonce after every refusal).
 async fn backend_handler_inner(
     state: Arc<AppState>,
     name: String,
     request: axum::http::Request<axum::body::Body>,
     call: &mut Option<direct_audit::DirectCall>,
+    reads: &mut direct_audit::DirectReads,
 ) -> (StatusCode, Json<Value>) {
-    // Extract authenticated client from extensions (injected by auth middleware)
-    let client = request.extensions().get::<AuthenticatedClient>().cloned();
-    let cert_identity = request.extensions().get::<CertIdentity>().cloned();
-    let oauth_agent_identity = request.extensions().get::<OAuthAgentIdentity>().cloned();
-    let proven = refusal_principal(
-        client.as_ref(),
-        oauth_agent_identity.as_ref(),
-        cert_identity.as_ref(),
-    );
-    // End-user identity for propagation (MIK-6704): the auth middleware may
-    // attach a VerifiedIdentity for temporary/delegated OIDC tokens. Extracted
-    // before the body is consumed so the direct route can propagate it too.
-    let verified_identity = request
-        .extensions()
-        .get::<crate::key_server::oidc::VerifiedIdentity>()
-        .cloned();
-    // Classified once for every credential this route resolves, notifications
-    // included (#2190): a validated credential can be the sole operator.
-    let caller = crate::identity_propagation::CallerProof::new(
-        verified_identity.as_ref(),
-        crate::identity_propagation::CallerProvenance::classify(
-            client.as_ref().map(|client| client.principal.as_str()),
-        ),
-    );
-    // Inbound headers, captured before the body is consumed, so the passthrough
-    // path (ADR-008 rung 2, MIK-6746) can read the caller's own backend
-    // credential from the operator-named header.
-    let inbound_headers = request.headers().clone();
-
-    // === C5 route parity (MIK-6746) ===
-    //
-    // `require_id` and the `known_agents` allowlist are enforced in
-    // `meta_mcp_dispatch` for /mcp. This route reaches the same backends, so
-    // the same check has to run here: without it the allowlist is bypassable
-    // by choosing the /mcp/{name} URL. Checked before the body is read, which
-    // is where the meta route checks it too.
-    let agent_identity = crate::security::extract_agent_identity(
-        &inbound_headers,
-        request.uri().query(),
-        cert_identity.as_ref(),
-        oauth_agent_identity.as_ref().map(|a| a.client_id.as_str()),
-    );
-    match crate::security::validate_agent_identity(&agent_identity, &state.agent_identity_config) {
-        Ok(audit) => {
-            crate::security::log_agent_identity(&agent_identity, audit, None);
-        }
-        Err(reason) => {
-            crate::security::log_agent_identity(
-                &agent_identity,
-                crate::security::IdentityAudit::Clean,
-                Some(&reason),
-            );
-            return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN);
-        }
-    }
-
-    // The caller as the meta route resolves it, resolved before the body is
-    // read, so a refused identity header reaches no passthrough, propagation
-    // or idempotency work on this route either.
-    let peer = request
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-        .map(|info| info.0);
-    let grant_subject = match super::identity::caller_grant_subject(
-        verified_identity.as_ref(),
-        &inbound_headers,
-        peer,
-        state.meta_mcp.caller_identity(),
-        state.meta_mcp.access_verifier(),
-        cert_identity.as_ref(),
-        oauth_agent_identity.as_ref(),
-    )
-    .await
-    {
-        Ok(subject) => subject,
-        Err(refusal) => return super::identity::identity_refusal_response(refusal),
+    let state = &*state;
+    let (caller, key, request) = match direct_caller::resolve_caller(state, request).await {
+        Ok(resolved) => resolved,
+        Err(response) => return response,
     };
-
-    // Parse JSON body
-    let body_bytes = match super::helpers::read_body(request).await {
-        Ok(bytes) => bytes,
-        Err(refusal) => return refusal,
-    };
-
-    let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            return build_http_error_response(
-                None,
-                -32700,
-                format!("Invalid JSON: {e}"),
-                StatusCode::BAD_REQUEST,
-            );
-        }
-    };
-
-    // D2-a: the slot is filled before the envelope is validated, so a
-    // malformed tools/call is recorded as `invalid` too.
-    *call = direct_audit::DirectCall::of(&json_request, client.as_ref(), grant_subject.as_ref());
-
-    // After the audit hash (D2-e: params as sent), before anything else reads
-    // the request: parse, telemetry and every forwarding arm see no token.
-    let attestation = take_attestation_token(json_request.get_mut("params"));
-
-    // Parse request
-    let (id, method, params) = match parse_request(&json_request) {
-        Ok(parsed) => parsed,
-        Err(response) => {
-            return build_http_response(&response, StatusCode::BAD_REQUEST);
-        }
-    };
-
-    // D2-b: scope is checked after the parse, so its refusal names the tool,
-    // and before the backend lookup, so a scoped key gets 403 for an unknown
-    // backend as for a forbidden one, never a 404 existence oracle.
-    if let Some(ref client) = client
-        && !client.can_access_backend(&name)
-    {
-        return build_http_error_response(
-            None,
-            -32003,
-            client.backend_refusal(&name),
-            StatusCode::FORBIDDEN,
-        );
-    }
-
-    // Find backend
-    let Some(backend) = state.backends.get(&name) else {
-        return build_http_error_response(
-            None,
-            -32001,
-            format!("Backend not found: {name}"),
-            StatusCode::NOT_FOUND,
-        );
-    };
-
-    let protocol_header = inbound_headers
-        .get("mcp-protocol-version")
-        .and_then(|value| value.to_str().ok());
-    let session_id = inbound_headers
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok());
-    crate::protocol_revision_telemetry::observe_inbound_request(
-        &json_request,
-        params.as_ref(),
-        &method,
-        protocol_header,
-        session_id,
-        crate::protocol_revision_telemetry::Transport::Http,
-    );
-
-    debug!(backend = %name, method = %method, client = ?client.as_ref().map(|c| &c.name), "Backend request");
-
-    // One backend's level is still shared by every user of that backend, so
-    // this route applies the meta route's admin gate before anything forwards.
-    // The helper owns the (case-insensitive) method match.
-    if let Err(e) = require_admin_log_level(&method, client.as_ref(), proven.as_deref(), &name) {
-        return build_http_error_response(id, e.code, e.message, e.status);
-    }
-
-    // Handle notifications - forward to backend but return 202 Accepted.
-    // The bucket is the one a matching `request_with_headers` call for this
-    // caller would use (MIK-6735 fix 2), so a notification correlating that
-    // request lands on the same upstream session. Not routed through the
-    // `isolation_guarded` gate below (no id, no tool policy), but refused where
-    // this caller's request would be refused for its identity (#2240).
-    if method.starts_with("notifications/") {
-        let Ok(notification_key::Resolved { headers, binding }) = notification_key::resolve(
-            &state,
-            &backend,
-            &name,
-            &inbound_headers,
-            caller,
-            proven.as_deref(),
-        )
-        .await
-        else {
-            // Refused as this caller's request would be (#2240): nothing is
-            // forwarded, and the client breaker is untouched, as for
-            // `direct_refusal`. `{}` is what an accepted notification gets.
-            return (StatusCode::FORBIDDEN, Json(json!({})));
+    let mut envelope =
+        match direct_caller::read_envelope(state, &name, request, &caller, (call, reads)).await {
+            Ok(envelope) => envelope,
+            Err(response) => return response,
         };
-        return match backend
-            .notify_with_headers(&method, params, &headers, binding.as_deref())
-            .await
-        {
-            Ok(()) => {
-                record_client_success(&state, client.as_ref());
-                (StatusCode::ACCEPTED, Json(json!({})))
-            }
-            // No free caller slot (#2300): dropped, counted at admission, and
-            // answered with no JSON-RPC body, as a notification must be.
-            Err(e @ crate::Error::IdentitySlotsExhausted { .. }) => {
-                warn!(backend = %name, error = %e, "Notification dropped");
-                (StatusCode::TOO_MANY_REQUESTS, Json(json!({})))
-            }
-            Err(e) => {
-                record_client_failure(&state, client.as_ref());
-                error!(backend = %name, error = %e, "Backend notification failed");
-                let response = JsonRpcResponse::error(None, e.to_rpc_code(), e.to_string());
-                build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
-            }
-        };
+    let route = match direct_caller::route(state, &name, &caller, key, &envelope) {
+        Ok(route) => route,
+        Err(response) => return response,
+    };
+    if envelope.method.starts_with("notifications/") {
+        return direct_caller::forward_notification(state, &name, &caller, &route, envelope).await;
     }
-
     // For requests, id is guaranteed to exist
-    let id = id.expect("id should exist for non-notification requests");
-
-    // F1 (#1442): task access is never forwarded. Callers sharing this
-    // backend's static credential are one principal to it, so a forwarded
-    // `tasks/get` or `tasks/cancel` would read or cancel another caller's
-    // task. The owner-checked task arms serve `/mcp` only. Refused before
-    // propagation, attestation and idempotency, so a refusal mints nothing.
-    if is_task_method(&method, params.as_ref()) {
-        return build_http_error_response(
-            Some(id),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            format!("{method} is not served on /mcp/{{name}}; use /mcp"),
-            StatusCode::OK,
-        );
-    }
-
-    // MIK-7272.SUB.4 §P3: an unusable retry field is refused with -32602 here,
-    // the same answer route 1 gives at `router/handlers.rs:1223`. Refused after
-    // the notification branch above, which has no id to answer with. Silently
-    // ignoring it would leave the caller believing it has replay protection it
-    // does not have — a fail-open on the exact guarantee, and for a destructive
-    // tool that fail-open IS the duplicate side effect it asked to be spared.
-    let retry = crate::protocol::mrtr::RetryFields::from_params(params.as_ref());
-    if retry.is_malformed() {
-        return build_http_error_response(
-            Some(id.clone()),
-            -32602,
-            format!("malformed request fields: {}", retry.malformed.join(", ")),
-            StatusCode::BAD_REQUEST,
-        );
-    }
-
-    // End-user identity propagation for the direct backend route (MIK-6704 /
-    // ADR-007). Parity with the meta dispatch path: for a propagation-configured
-    // backend, resolve the per-user credential and forward it via
-    // request_with_headers; fail closed (403) for a `required` backend with no
-    // verified identity rather than silently forwarding with only the static
-    // credential. Empty for a non-propagation backend → unchanged static path.
-    //
-    // Applies to every caller-data method (`tools/call`, `resources/read`,
-    // `prompts/get`, `resources/list`, `prompts/list`, …), not just `tools/call`
-    // — otherwise a required backend could serve those methods without the caller
-    // credential, downgrading to the shared static credential and leaking one
-    // user's backend data/metadata under another's account (GPT review F2,
-    // MIK-6746; merged with ADR-007 IDP.2/IDP.3 fail-closed gate, MIK-6728).
-    // `resolve_propagation_headers` returns an empty set for a non-propagation or
-    // non-`required` backend, so the static path below is unchanged for those
-    // (IDP.5 backward-compat). Exempt: the handshake (`initialize`, `ping`) and
-    // `notifications/*` (answered above). `tools/list` is guarded: a catalogue is
-    // identity-dependent, so it lists from the caller's slot (MIK-7546).
-    let isolation_guarded =
-        !matches!(method.as_str(), "initialize" | "ping") && !method.starts_with("notifications/");
-
-    // MIK-7570.ATTEST.1: every method that reaches the backend is attested, on
-    // the same predicate as identity propagation, and BEFORE it: an unattested
-    // call must not mint a per-user credential or write a mint audit row. Also
-    // ahead of the idempotency guard, so a replay needs a token too.
-    if isolation_guarded {
-        let scope = direct_route_attestation_scope(&method, params.as_ref());
-        let agent = client.as_ref().map(|c| c.name.as_str());
-        if let Err(e) = state.meta_mcp.check_attestation_scoped(
-            attestation.as_deref(),
-            scope,
-            agent,
-            "direct_route",
-        ) {
-            let (code, message) = (e.to_rpc_code(), e.to_string());
-            return build_http_error_response(Some(id), code, message, StatusCode::FORBIDDEN);
-        }
-    }
-    // Caller's stable identity binding (MIK-6784) for per-identity upstream
-    // session partitioning on this direct route. Set only when a minting
-    // strategy resolves a binding; passthrough / no-identity keep `None` (shared
-    // default session bucket — passthrough forwards the caller's own credential
-    // inline and is gated to trusted internals).
-    let mut identity_key: Option<String> = None;
-    // A11-e′: the managed lease the headers were released under, for the 401 site.
-    let mut managed = None;
-    let mut typed = None;
-    let propagated_headers: Vec<(String, String)> = if isolation_guarded {
-        // Fetched once so both the passthrough-vs-minting branch below and the
-        // audit write (MIK-6740) share a single lookup/clone of the backend's
-        // propagation config.
-        let idp_cfg = state
-            .backends
-            .get(&name)
-            .and_then(|b| b.identity_propagation_config().cloned());
-        // Passthrough (ADR-008 rung 2, MIK-6746): a backend whose caller attaches
-        // its OWN credential is handled here — forward it verbatim, mint/store
-        // NOTHING (INV-4). Any other propagation strategy is resolved by the
-        // shared minting chokepoint. Isolation (INV-3) holds by construction:
-        // each request forwards its own header via `request_with_headers`, never
-        // via the shared transport, and the direct route keeps no per-user cache.
-        let passthrough_cfg = idp_cfg.clone().filter(|c| {
-            c.strategy == crate::identity_propagation::PropagationStrategyKind::Passthrough
-        });
-        let resolved = if let Some(cfg) = passthrough_cfg {
-            match resolve_passthrough_headers(
-                &cfg,
-                &inbound_headers,
-                backend.transport_carries_identity_headers(),
-            ) {
-                Ok((headers, binding)) => {
-                    // Bind the upstream session bucket to this passthrough caller
-                    // (MIK-6785): keyed by the SHA-256 of the forwarded
-                    // credential, so distinct callers never share a stateful
-                    // upstream's session-bound data. `None` on the no-credential
-                    // path keeps the shared default bucket (behavior unchanged).
-                    identity_key =
-                        charged_binding(&state, &name, caller, proven.as_deref(), binding);
-                    Ok(headers)
-                }
-                Err(e) => Err(e),
-            }
-        } else {
-            match state
-                .meta_mcp
-                .resolve_propagation_credential_held(&name, caller)
-                .await
-            {
-                Ok((headers, binding, held)) => {
-                    // Bind the upstream session bucket to this caller (MIK-6784).
-                    identity_key = binding;
-                    managed = held;
-                    Ok(headers)
-                }
-                Err(e) => Err(refusal_text(&e)).inspect_err(|_| typed = Some(e)),
-            }
-        };
-        // The principal resolved for (passthrough: the verified identity).
-        let subject = state.meta_mcp.audit_subject_for(&name, caller);
-        let audience = idp_cfg.as_ref().map(|c| c.audience.as_str());
-        match resolved {
-            Ok(headers) => {
-                // A successful resolution that yields no headers is the
-                // unchanged static-credential fallback (IDP.5), not a mint —
-                // only audit when a per-user credential was actually attached.
-                if !headers.is_empty() {
-                    // Fail-closed hardening: a minted credential must never
-                    // reach the caller without a durable audit record, so an
-                    // audit-write failure here aborts the mint instead of
-                    // proceeding with the headers below (mirrors
-                    // `identity_propagation::mod.rs`'s `resolve_caller_credential`).
-                    //
-                    // Operator-misconfig fail-OPEN guard: the audit helper
-                    // treats a missing logger (`None`) as a no-op `Ok(())`. On a
-                    // `required` backend that would ship a per-user credential
-                    // with NO audit record. When propagation is REQUIRED for
-                    // this backend but no transparency log is configured, fail
-                    // closed on the same error path as an audit-write failure.
-                    // (Non-required backends keep the best-effort `None -> Ok`.)
-                    let required = idp_cfg.as_ref().is_some_and(|c| c.required);
-                    if required && state.transparency_log.is_none() {
-                        warn!(
-                            backend = %name,
-                            "identity-propagation required but no transparency log is \
-                             configured; refusing to mint without a durable audit record"
-                        );
-                        return build_http_error_response(
-                            Some(id.clone()),
-                            -32603,
-                            // CWE-209: generic client-facing message; the
-                            // operational detail stays in the server log above.
-                            "identity-propagation audit unavailable".to_string(),
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                        );
-                    }
-                    if let Err(audit_err) = audit_identity_propagation(
-                        state.transparency_log.as_ref(),
-                        "idp_mint",
-                        &subject,
-                        &name,
-                        audience,
-                        None,
-                    )
-                    .await
-                    {
-                        // CWE-209: the audit error can name a filesystem path; it
-                        // stays in the server log, the client gets a generic message.
-                        warn!(
-                            backend = %name,
-                            error = %audit_err,
-                            "identity-propagation mint audit write failed; failing closed"
-                        );
-                        return build_http_error_response(
-                            Some(id.clone()),
-                            -32603,
-                            "identity-propagation audit unavailable".to_string(),
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                        );
-                    }
-                }
-                headers
-            }
-            Err(e) => {
-                // Refused either way: unlike the mint path above, a failed audit
-                // write here is logged rather than failing the call closed.
-                if let Err(audit_err) = audit_identity_propagation(
-                    state.transparency_log.as_ref(),
-                    "idp_refuse",
-                    &subject,
-                    &name,
-                    audience,
-                    Some(&e),
-                )
-                .await
-                {
-                    warn!(
-                        backend = %name,
-                        error = %audit_err,
-                        "identity-propagation refuse audit write failed"
-                    );
-                }
-                let (rid, who) = (Some(id.clone()), verified_identity.as_ref());
-                return state.meta_mcp.direct_refusal(rid, e, typed, who).await;
-            }
-        }
-    } else {
-        Vec::new()
+    let id = envelope
+        .id
+        .take()
+        .expect("id should exist for non-notification requests");
+    let preflight = match direct_preflight::preflight(state, &caller, &mut envelope, &route, &id) {
+        Ok(preflight) => preflight,
+        Err(response) => return response,
     };
-
-    // ADR-008 INV-2: the direct backend route bypasses `invoke_tool_traced`, so
-    // it must enforce the same fail-closed OAuth-isolation guard. This covers
-    // every caller-data method that forwards with the gateway-held token —
-    // `tools/call`, `resources/read`, `prompts/get`, etc. — not just
-    // `tools/call`. A per-user credential was resolved above iff
-    // `propagated_headers` is non-empty, so a per-user OAuth backend on a
-    // multi-user gateway is refused rather than served the shared token.
-    if isolation_guarded
-        && let Err(e) = state
-            .meta_mcp
-            .enforce_oauth_isolation(&name, !propagated_headers.is_empty())
-    {
-        return build_http_error_response(
-            Some(id.clone()),
-            e.to_rpc_code(),
-            e.to_string(),
-            StatusCode::FORBIDDEN,
-        );
-    }
-
-    // MIK-7272.SUB.4: the bypass re-enforces the idempotency guard locally, the
-    // same shape as the isolation guard above. A broken stream forces re-issue
-    // with a NEW request id, so without this the duplicate side effect lands
-    // twice on the one route that never reaches `invoke_tool_traced`.
-    // One answer for a dispatched failure, used by whichever arm dispatches.
-    let failed = DirectFailure {
-        state: &state,
-        name: &name,
-        id: id.clone(),
-        client: client.as_ref(),
-        identity: verified_identity.as_ref(),
-        managed: managed.as_ref(),
-    };
-    // MIK-7597: the shared dispatch controls, S1 and G7 before the reservation.
-    let call = BackendCall {
-        server: &name,
-        tool: params
-            .as_ref()
-            .and_then(|p| p.get("name"))
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        session_id,
-        api_key_name: client.as_ref().map(|c| c.name.as_str()),
-        trace_id: "",
-    };
-    if method == "tools/call"
-        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call)
-    {
-        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
-    }
-    let mut idem_reservation: Option<crate::idempotency::IdempotencyReservation> = None;
-    if method == "tools/call" {
-        match state.meta_mcp.direct_route_idempotency(
-            retry.idempotency_key.as_deref(),
-            &name,
-            identity_key.as_deref(),
-            verified_identity.as_ref(),
-            grant_subject.as_ref(),
-            client.as_ref().map(|client| client.principal.as_str()),
-            crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
-            params.as_ref(),
-        ) {
-            Ok(Some(crate::idempotency::GuardOutcome::CachedResult(cached))) => {
-                let response = JsonRpcResponse::success(id.clone(), cached);
-                return build_http_response(&response, StatusCode::OK);
-            }
-            Ok(Some(crate::idempotency::GuardOutcome::CachedError(error))) => {
-                let response = cached_error_response(Some(id.clone()), &error);
-                return build_http_response(&response, StatusCode::OK);
-            }
-            Ok(Some(crate::idempotency::GuardOutcome::Proceed(reservation))) => {
-                idem_reservation = Some(reservation);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                let code = e.to_rpc_code();
-                let status = u16::try_from(code)
-                    .ok()
-                    .and_then(|c| StatusCode::from_u16(c).ok())
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-                return build_http_error_response(Some(id.clone()), code, e.to_string(), status);
-            }
-        }
-    }
-
-    // SECURITY: apply tool policy, name validation, and input sanitization to
-    // tools/call requests unless the backend explicitly opts into pass-through
-    // mode (passthrough: true in config — only for fully-trusted internals).
-    if method == "tools/call" {
-        match apply_backend_tool_call_security(
-            &state,
-            &name,
-            BackendAuthContext {
-                client: client.as_ref(),
-                oauth_agent_identity: oauth_agent_identity.as_ref(),
-                cert_identity: cert_identity.as_ref(),
-                #[cfg(feature = "firewall")]
-                grant_subject: grant_subject.as_ref(),
-            },
-            params.as_ref(),
-            &id,
-            &backend,
-            ((identity_key.as_deref(), &propagated_headers), &failed),
-        )
-        .await
-        {
-            Ok(Some(sanitized_params)) => {
-                let warnings = match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
-                    Ok(warnings) => warnings,
-                    Err(e) => {
-                        return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
-                    }
-                };
-                // Forward the sanitized params to the backend
-                let forward = Box::pin(dispatch_armed(
-                    idem_reservation.as_mut(),
-                    dispatch_in_scope(
-                        &backend,
-                        &method,
-                        &id,
-                        Some(sanitized_params),
-                        &propagated_headers,
-                        identity_key.as_deref(),
-                    ),
-                ))
-                .await;
-                let (params, client) = (params.as_ref(), client.as_ref());
-                let forward = DirectRouteGuards::after_dispatch(
-                    &state, &call, params, client, &warnings, forward,
-                );
-                return match forward {
-                    Ok(mut response) => {
-                        // Restore the caller's ID over the transport's own.
-                        response.id = Some(id.clone());
-                        stamp_direct_provenance(&state, &name, params, client, &mut response);
-                        settle_direct_idempotency(idem_reservation.as_mut(), &response);
-                        build_http_response(&response, StatusCode::OK)
-                    }
-                    // Settled as terminal unless raised before dispatch
-                    // (ADR-012 consequence 1; see `settle_direct_failure`).
-                    Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
-                };
-            }
-            Err(rejection) => return rejection,
-            Ok(None) => {} // passthrough backend: forward the params as sent
-        }
-    }
-
-    // Forward to backend. `tools/list` drains the whole upstream catalogue
-    // so it can be filtered per caller and answered without a cursor (A3).
-    let forward = if method == "tools/list" {
-        let (headers, key) = (&propagated_headers, identity_key.as_deref());
-        direct_list::drain(&backend, &id, params.as_ref(), headers, key, &name)
+    let propagation =
+        match direct_preflight::propagate_identity(state, &name, &caller, &route, &preflight, &id)
             .await
-            .inspect(|_| record_client_success(&state, client.as_ref()))
-    } else {
-        let warnings = if method == "tools/call" {
-            match DirectRouteGuards::before_dispatch(&state.meta_mcp, &call) {
-                Ok(warnings) => warnings,
-                Err(e) => {
-                    return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
-                }
-            }
-        } else {
-            Vec::new()
+        {
+            Ok(propagation) => propagation,
+            Err(response) => return response,
         };
-        let key = identity_key.as_deref();
-        let dispatch = dispatch_in_scope(
-            &backend,
-            &method,
-            &id,
-            params.clone(),
-            &propagated_headers,
-            key,
-        );
-        let forward = Box::pin(dispatch_armed(idem_reservation.as_mut(), dispatch)).await;
-        if method == "tools/call" {
-            let (params, client) = (params.as_ref(), client.as_ref());
-            DirectRouteGuards::after_dispatch(&state, &call, params, client, &warnings, forward)
-        } else {
-            forward.inspect(|_| record_client_success(&state, client.as_ref()))
-        }
+    let scope = direct_dispatch::Scope {
+        state,
+        name: &name,
+        caller: &caller,
+        route: &route,
+        id: &id,
     };
-    match forward {
-        Ok(mut response) => {
-            // Upstream transport IDs are private gateway correlation state;
-            // direct-route clients must receive the ID they supplied.
-            response.id = Some(id.clone());
-            if method == "tools/list" {
-                // Redaction FIRST, then the trust stamp. The firewall may remove
-                // a `$defs` entry a surviving `$ref` points at, so a verdict
-                // computed before it can say `within` about a document the
-                // client never receives.
-                scan_direct_tools_list_response(&state, &name, client.as_ref(), &mut response);
-                normalize_tools_list_response(&backend, &mut response);
-                // List = invoke: only what this route's `tools/call` admits.
-                let (oauth, cert) = (oauth_agent_identity.as_ref(), cert_identity.as_ref());
-                let client = client.as_ref();
-                direct_list::retain_invocable(&state, client, oauth, cert, &name, &mut response);
-            } else if method == "tools/call" {
-                stamp_direct_provenance(
-                    &state,
-                    &name,
-                    params.as_ref(),
-                    client.as_ref(),
-                    &mut response,
-                );
-            }
-            settle_direct_idempotency(idem_reservation.as_mut(), &response);
-            build_http_response(&response, StatusCode::OK)
-        }
-        // Settled, never dropped: an unsettled reservation releases the key and
-        // lets a retry re-execute a side effect (ADR-012 consequence 1).
-        Err(e) => failed.answer(idem_reservation.as_mut(), e).await,
+    let admitted = match direct_dispatch::admit(scope, &envelope, &preflight, &propagation).await {
+        Ok(admitted) => admitted,
+        Err(response) => return response,
+    };
+    direct_dispatch::dispatch(scope, &envelope, (&preflight, &propagation), admitted).await
+}
+
+/// Sign when `nonce` is `Some`, then stage what is delivered: a refusal stages nothing.
+#[cfg_attr(not(feature = "firewall"), allow(unused_variables))]
+fn sign_and_record(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    (server, tool): (&str, &str),
+    response: &mut JsonRpcResponse,
+    nonce: Option<&Option<String>>,
+) {
+    if let Some(nonce) = nonce.map(Option::as_deref) {
+        state.meta_mcp.sign_direct_delivery(response, nonce);
     }
+    #[cfg(feature = "firewall")]
+    stage_direct_delivery(state, auth, server, tool, response.result.as_ref());
 }
 
 /// #1962: run a backend dispatch with the reservation armed, so a caller
@@ -1178,15 +535,10 @@ async fn dispatch_armed<T>(
 }
 
 /// Store the direct route's result under the client's idempotency key so a
-/// re-issue after a broken stream replays it instead of invoking the backend a
-/// second time. Called after the response scan and provenance stamp so the
-/// replay is byte-identical to what the first caller received.
-///
-/// Both terminal outcomes settle. A JSON-RPC error from a call that was
-/// dispatched is an outcome, not an absence of one: the backend answered, so
-/// the side effect may have landed, and releasing the key would hand the
-/// caller's retry a clean slate for a mutation that may already have committed
-/// (ADR-012 consequence 1). The retry is served the same error instead.
+/// re-issue replays it instead of invoking the backend again. Runs after the
+/// scan and provenance stamp, before any chain link. Both terminal outcomes
+/// settle: a dispatched JSON-RPC error may follow a committed side effect, so
+/// the retry is served the same error (ADR-012 consequence 1).
 fn settle_direct_idempotency(
     reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
     response: &JsonRpcResponse,
@@ -1206,7 +558,11 @@ fn settle_direct_idempotency(
         return;
     }
     if let Some(result) = response.result.as_ref() {
-        reservation.complete(result);
+        // MIN.2 row 14: the direct route is one dispatch per read scope, so
+        // all the scope noted is this call's reading.
+        let reading =
+            crate::gateway::meta_mcp::invoke::cache_reads::reading(std::collections::BTreeSet::new);
+        reservation.complete_read(result, reading);
     }
 }
 
@@ -1300,11 +656,9 @@ fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>)
 ///
 /// Backend-supplied tool `description`/metadata strings are scanned for prompt
 /// injection and have embedded credentials redacted in place before the tool
-/// list reaches the client — closing the gap where `tools/list` previously
-/// bypassed all content scanning. Gated on the same firewall config as the
-/// `tools/call` path: [`Firewall::check_response`] is a no-op when the firewall
-/// is absent or response scanning is disabled, so behavior is unchanged when
-/// the feature/config is off.
+/// list reaches the client; a blocking verdict refuses the list. Gated on the
+/// same firewall config as the `tools/call` path, so behavior is unchanged
+/// when the feature/config is off.
 #[cfg(feature = "firewall")]
 fn scan_direct_tools_list_response(
     state: &AppState,
@@ -1312,23 +666,29 @@ fn scan_direct_tools_list_response(
     client: Option<&AuthenticatedClient>,
     response: &mut JsonRpcResponse,
 ) {
-    let Some(ref fw) = state.firewall else {
-        return;
-    };
-    let Some(ref mut result) = response.result else {
-        return;
-    };
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
 
-    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
+    // The router's one pass, shared with `tools/call`: a Block (or no
+    // admitting target) replaces the list with the refusal, never a redacted
+    // success (#2349). No later pass inspects a direct response.
+    let caller = client.map_or("anonymous", |c| c.name.as_str());
     let session_id = format!("direct:{backend_name}");
-    let verdict = fw.check_response(&session_id, backend_name, "tools/list", result, caller_name);
-    if verdict.action == FirewallAction::Warn {
-        warn!(
-            backend = %backend_name,
-            findings = verdict.findings.len(),
-            "Firewall: direct tools/list response warning"
-        );
-    }
+    let targets = [ResponsePolicyTarget {
+        server: backend_name.to_owned(),
+        tool: "tools/list".to_owned(),
+    }];
+    let correlation = ResponseCorrelation {
+        session_id: &session_id,
+        caller,
+        external_server: backend_name,
+        external_tool: "tools/list",
+    };
+    let _ = super::response_pass::inspect_tools_call_response(
+        state.firewall.as_deref(),
+        response,
+        &targets,
+        &correlation,
+    );
 }
 
 #[cfg(not(feature = "firewall"))]
@@ -1340,100 +700,18 @@ fn scan_direct_tools_list_response(
 ) {
 }
 
-/// GET /api/costs — REST endpoint for per-key and aggregate cost views.
-///
-/// - `?key=<name>`: view cost for a single API key
-/// - `X-Cost-Session-Id: <id>` header: view cost for one session
-/// - neither: aggregate view across all sessions and keys
-pub(super) async fn costs_handler(
-    State(state): State<Arc<AppState>>,
-    request: axum::http::Request<axum::body::Body>,
-) -> impl IntoResponse {
-    use std::collections::HashMap;
-
-    // Spend per session and per API key is cross-tenant inventory, and this
-    // endpoint consulted no identity at all. `/ui/api/costs` already requires
-    // admin; the two views of the same data now agree.
-    if !request
-        .extensions()
-        .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.admin)
-    {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "Admin authentication required" })),
-        )
-            .into_response();
-    }
-
-    let query: HashMap<String, String> = request
-        .uri()
-        .query()
-        .map(|q| {
-            q.split('&')
-                .filter_map(|part| {
-                    let mut kv = part.splitn(2, '=');
-                    let k = kv.next()?;
-                    let v = kv.next().unwrap_or("");
-                    Some((k.to_string(), v.to_string()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // A session id is a bearer handle, so it travels in a header, never the
-    // URI (#1529): a query value lands in access and trace logs.
-    let bad = |message: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
-    if query.contains_key("session") {
-        return bad("Pass the session id in the X-Cost-Session-Id header, not ?session=")
-            .into_response();
-    }
-    let session = match request
-        .headers()
-        .get("x-cost-session-id")
-        .map(|v| v.to_str())
-    {
-        Some(Ok(id)) if !id.trim().is_empty() => Some(id.trim().to_string()),
-        Some(_) => return bad("X-Cost-Session-Id must be a non-empty text value").into_response(),
-        None => None,
-    };
-    if session.is_some() && query.contains_key("key") {
-        return bad("Select by ?key= or by X-Cost-Session-Id, not both").into_response();
-    }
-    let tracker = state.meta_mcp.cost_tracker();
-
-    let body = if let Some(key_name) = query.get("key") {
-        match tracker.key_snapshot(key_name) {
-            Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
-            None => serde_json::json!({
-                "error": format!("No data for key '{key_name}'")
-            }),
-        }
-    } else if let Some(session_id) = session {
-        match tracker.session_snapshot(&session_id) {
-            Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
-            None => serde_json::json!({
-                "error": format!("No data for session '{session_id}'")
-            }),
-        }
-    } else {
-        // Aggregate view: all sessions, all keys, totals
-        serde_json::json!({
-            "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::json!(null)),
-            "sessions": serde_json::to_value(tracker.all_sessions()).unwrap_or(serde_json::json!([])),
-            "keys": serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
-        })
-    };
-
-    (StatusCode::OK, Json(body)).into_response()
-}
-
+mod costs;
 mod direct_audit;
+mod direct_caller;
+mod direct_dispatch;
 mod direct_failure;
 mod direct_list;
+mod direct_preflight;
 mod key_check;
 mod notification_key;
+pub(super) use costs::costs_handler;
 use direct_failure::DirectFailure;
+use direct_list::normalize_tools_list_response;
 
 #[cfg(test)]
 mod tests;
@@ -1446,3 +724,12 @@ mod idempotency_settlement_tests;
 
 #[cfg(test)]
 mod direct_route_scope_tests;
+
+#[cfg(test)]
+mod direct_admission_edge_tests;
+
+#[cfg(test)]
+mod direct_captured_backend_tests;
+
+#[cfg(test)]
+mod direct_audit_subject_tests;

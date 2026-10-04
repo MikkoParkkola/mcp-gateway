@@ -29,6 +29,7 @@
 
 pub mod completion;
 pub mod dashboard_link;
+pub mod events;
 pub mod identity;
 pub mod invoke;
 pub mod output;
@@ -313,6 +314,8 @@ pub enum Command {
 
     /// Print a fresh single-use dashboard link; reads `MCP_GATEWAY_TOKEN`.
     DashboardLink(dashboard_link::DashboardLinkArgs),
+    /// Administer MCP Events: list and replay dead-lettered deliveries
+    Events(events::EventsArgs),
 
     /// Lint capability YAMLs against agent-UX best practices
     ///
@@ -376,7 +379,7 @@ pub enum Command {
     /// Add an MCP backend to the gateway configuration
     ///
     /// Compatible with `claude mcp add` and `codex mcp add` CLI conventions.
-    /// If `name` matches a known server in the built-in registry (48 servers),
+    /// If `name` matches a known server in the built-in registry,
     /// the command and env-var template are filled automatically.
     ///
     /// # Examples
@@ -395,7 +398,7 @@ pub enum Command {
     /// mcp-gateway add --url https://mcp.sentry.dev/mcp sentry
     ///
     /// # Both styles work:
-    /// mcp-gateway add --command "npx -y @anthropic/mcp-server-tavily" tavily
+    /// mcp-gateway add --command "npx -y tavily-mcp@0.2.22" tavily
     /// ```
     #[command(about = "Add an MCP backend to gateway.yaml")]
     Add {
@@ -444,7 +447,9 @@ pub enum Command {
         /// Output as JSON (codex-compatible)
         #[arg(long)]
         json: bool,
-
+        /// List the built-in server library instead: login, default state
+        #[arg(long)]
+        available: bool,
         /// Gateway config file to read
         #[arg(short, long, default_value = "gateway.yaml")]
         config: PathBuf,

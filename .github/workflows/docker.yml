@@ -6,15 +6,21 @@ on:
     # checks) but publishes nothing: every publishing step below is main-only.
     branches: [main, docs/ranking-1-release-line]
     tags: ['v*']
+  # A pull request into the release line runs this workflow so `scope` can
+  # decide: it builds only when the PR changes an image input (the list in
+  # `scope` below), and otherwise the image builds once per merge (the push
+  # above). Main keeps its PR run for every non-docs PR because main requires
+  # the `build` check.
   pull_request:
     branches: [main, docs/ranking-1-release-line]
 
-# A new push to a pull request cancels that PR's superseded run. Every other
-# event (branch push, tag) gets a group of its own run id, so it is never
-# cancelled, and never queued behind or replaced by another run.
+# A new push to a pull request or a branch supersedes that ref's older run
+# (a pull request's ref is refs/pull/N/merge, so it keeps its own group), so on
+# the release line the latest merge's run is the evidence, not every merge's. A
+# tag run gets a group of its own run id: it is never cancelled or replaced.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number)) || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ startsWith(github.ref, 'refs/tags/') && format('{0}-{1}', github.ref, github.run_id) || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 env:
   REGISTRY: ghcr.io
@@ -95,7 +101,7 @@ jobs:
           fi
           # A here-string, not a pipe: `grep -q` exiting early would make the
           # producer's SIGPIPE fail the pipeline under pipefail.
-          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/helm/)' <<<"$files"; then
+          if grep -Eq '^(Dockerfile|\.dockerignore|\.trivyignore|Cargo\.toml|Cargo\.lock|\.github/workflows/docker\.yml|\.github/osv-scanner\.toml|docker/|scripts/ci/smoke-[^/]*\.sh|scripts/dev/helm-kind-real-image\.sh|deploy/helm/)' <<<"$files"; then
             decide true "image inputs changed"
           else
             decide false "no image inputs changed; the image builds after merge"
@@ -301,6 +307,8 @@ jobs:
       - name: Set up Helm for the chart-on-real-image check
         if: matrix.arch == 'amd64'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
       - name: Create kind cluster for the chart-on-real-image check
         if: matrix.arch == 'amd64'
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
@@ -342,6 +350,33 @@ jobs:
         # itself, the daemon): the probes' own budgets sum well under this.
         timeout-minutes: 20
         run: scripts/ci/smoke-full-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan-full"
+
+      # Release-line commits publish nothing (every push is main-only), so a
+      # functional verifier has no way to get the exact image CI built. Export
+      # the scanned, started image with its content ID so it can be pinned
+      # after `docker load`. Registry pushes are untouched.
+      - name: Export the scanned image (release-line push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        # explicit bash enables pipefail, so a failed `docker save` fails the step
+        shell: bash
+        run: |
+          mkdir -p image-export
+          image="${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
+          id="$(docker image inspect --format '{{.Id}}' "$image")"
+          echo "$id" > "image-export/image-id-${{ matrix.arch }}.txt"
+          docker save "$image" | gzip > "image-export/image-${{ matrix.arch }}.tar.gz"
+          echo "image-${{ matrix.arch }} ${{ github.sha }} ${id}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the scanned image (release-line push only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.arch }}-${{ github.sha }}
+          path: image-export/
+          retention-days: 7
+          if-no-files-found: error
+          # the image is already gzipped
+          compression-level: 0
 
       # Push by digest with no tag; `manifest` below creates the branch and sha
       # tags over both legs' digests. Nothing is resolvable by name until it

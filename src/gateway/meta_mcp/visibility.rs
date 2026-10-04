@@ -110,6 +110,13 @@ impl MetaMcp {
         let refusal = self
             .may_invoke(server, tool_name, caller.scope(), session_id)
             .err()?;
+        // A direct-name call is a dispatch, not a listing: its grant decision
+        // is recorded (D3-a); a failed note answers -32005, not -32601.
+        if let Err(error @ Error::AuditUnavailable) =
+            self.identity_grant_rule(server, tool_name, caller.scope(), Emit::Audit)
+        {
+            return Some(error);
+        }
         crate::gateway::authz::audit_refusal(
             caller.authorizer.transport(),
             caller.authorizer.caller_name(),
@@ -177,15 +184,40 @@ impl MetaMcp {
         {
             // Names only: this runs on every initialize and tools/list, and
             // `get_tools()` deep-clones every definition's schemas (#2110).
+            let mut seen = std::collections::HashMap::new();
             let admitted = cap
                 .list()
                 .iter()
-                .filter(|name| self.may_invoke(&cap.name, name, scope, session_id).is_ok())
+                .filter(|name| {
+                    cap.is_listed_in(name, &mut seen)
+                        && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+                })
                 .count();
             total = total.plus(admitted);
             servers += 1;
         }
         (total, servers)
+    }
+
+    /// The capabilities the initialize guide may name for this caller: listed
+    /// ones it could invoke, each with its chain hints cut the same way.
+    pub(super) fn guide_capabilities(
+        &self,
+        cap: &crate::capability::CapabilityBackend,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Vec<crate::capability::CapabilityDefinition> {
+        let mut seen = std::collections::HashMap::new();
+        let mut allowed = |name: &str| {
+            cap.is_listed_in(name, &mut seen)
+                && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+        };
+        let mut caps = cap.list_capabilities();
+        caps.retain(|c| allowed(&c.name));
+        for c in &mut caps {
+            c.metadata.chains_with.retain(|t| allowed(t));
+        }
+        caps
     }
 
     /// Whether a bare tool `name` (as a cost alternative carries it) resolves
@@ -204,6 +236,7 @@ impl MetaMcp {
         on_backend
             || self.get_capabilities().is_some_and(|cap| {
                 cap.has_capability(name)
+                    && cap.is_listed(name)
                     && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
             })
     }
@@ -280,6 +313,12 @@ impl MetaMcp {
             return Err(Error::ToolNotFound(tool.to_string()));
         };
         let evaluation = self.identity_grants.read().evaluate(&request);
+        // D3-a: a dispatch decision is noted for its record; an unslotted
+        // check fails closed here, whatever the grant said.
+        if emit == Emit::Audit {
+            let logger = self.transparency_logger.as_ref();
+            super::grant_audit::note_grant_decision(logger, server, tool, &evaluation.audit)?;
+        }
         if evaluation.allowed {
             return Ok(());
         }

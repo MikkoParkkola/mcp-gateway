@@ -327,7 +327,7 @@ fn writable_journal(journal: &Path) -> String {
 #[cfg(windows)]
 fn open_journal_windows(journal: &Path) -> std::io::Result<std::fs::File> {
     use crate::config::Protects;
-    use crate::private_fs::{Share, create_file_private, file_refusals_for};
+    use crate::private_fs::{Share, create_file_private, file_refusals_for, refusal_detail};
     use std::os::windows::fs::OpenOptionsExt as _;
     use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -349,11 +349,11 @@ fn open_journal_windows(journal: &Path) -> std::io::Result<std::fs::File> {
     if found.is_empty() {
         return Ok(file);
     }
+    let shown = journal.display().to_string();
     Err(std::io::Error::other(format!(
-        "grant journal {} is not trustworthy ({found:?}); refusing to append to it \
-         (check its entries against the grant file or restore a trusted copy, \
-         then remove the other accounts' write access or replace the file)",
-        journal.display()
+        "Refusing to append to the grant journal {shown}{}Check its entries against \
+         the grant file or restore a trusted copy first.\n",
+        refusal_detail(&shown, &found, Protects::Integrity)
     )))
 }
 

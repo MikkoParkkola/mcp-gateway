@@ -8,8 +8,7 @@
 
 use super::MetaMcp;
 use crate::backend::Backend;
-use crate::identity_propagation::{CallerProof, CallerProvenance};
-use crate::personal_accounts::identity::Principal;
+use crate::identity_propagation::CallerProof;
 use crate::protocol::Tool;
 use std::sync::Arc;
 use tracing::debug;
@@ -42,13 +41,13 @@ impl MetaMcp {
     /// because one backend out of many refused.
     pub(crate) async fn caller_credential_for_identity(
         &self,
-        server: &str,
+        backend: &Backend,
         caller: CallerProof<'_>,
     ) -> (Vec<(String, String)>, Option<String>) {
-        if self.principal_for_server(server, caller).is_none() {
+        if self.principal_for(backend, caller).is_none() {
             return (Vec::new(), None);
         }
-        self.resolve_propagation_credential_held(server, caller)
+        self.resolve_propagation_credential_held_for(&backend.name, Some(backend), caller)
             .await
             .map(|(headers, binding, _lease)| (headers, binding))
             .unwrap_or_default()
@@ -74,37 +73,41 @@ impl MetaMcp {
     /// What `caller` proved: its verified identity, else its credential's
     /// provenance.
     pub(super) fn proof_of<'a>(caller: &super::MetaMcpCallerContext<'a>) -> CallerProof<'a> {
-        CallerProof::new(
-            caller.verified_identity,
-            CallerProvenance::classify(caller.credential_principal),
-        )
+        CallerProof::new(caller.verified_identity, caller.provenance())
     }
 
     /// Whether `backend` has no view at all for `caller`: it is `required`
     /// and the resolver would find no principal, so
     /// [`Self::catalogue_credential_for`] omits it. Known here without a mint,
     /// for a reader that only counts (#2346).
-    pub(super) fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
-        backend
-            .identity_propagation_config()
-            .is_some_and(|cfg| cfg.required)
-            && self.principal_for_server(&backend.name, caller).is_none()
-    }
-
-    /// Who the resolver would resolve `server`'s credential for, if anyone.
     ///
-    /// THE ONE LOOKUP both the resolver and every short-circuit ahead of it
-    /// use, so a gate can never pick a different descriptor than the mint.
-    pub(super) fn principal_for_server<'a>(
-        &self,
-        server: &str,
-        caller: CallerProof<'a>,
-    ) -> Option<Principal<'a>> {
-        let descriptor_id = self
-            .backends
-            .get(server)
-            .and_then(|b| b.account_descriptor_id().map(str::to_owned));
-        self.caller_principal(descriptor_id.as_deref(), caller)
+    /// For a managed-account backend the caller's grant is read without
+    /// refreshing or minting, so a principal with no usable grant has no view
+    /// either, and neither does one whose binding the isolation guard or the
+    /// per-user slot rule would refuse (MIK-7690).
+    pub(super) async fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
+        let required = backend
+            .identity_propagation_config()
+            .is_some_and(|cfg| cfg.required);
+        if !required {
+            return false;
+        }
+        let Some(principal) = self.principal_for(backend, caller) else {
+            return true;
+        };
+        let Some(vault) = self
+            .account_strategies
+            .managed_vault(backend.account_descriptor_id())
+        else {
+            return false;
+        };
+        match vault.view_binding(principal).await {
+            Some(binding) => {
+                self.meta_route_isolation_refused_for_caller(backend, Some(&binding))
+                    || !backend.fetch_carries_caller_identity(Some(&binding))
+            }
+            None => true,
+        }
     }
 
     /// Whether `backend` must be omitted from a per-caller catalogue
@@ -125,9 +128,7 @@ impl MetaMcp {
         backend: &Backend,
         caller: CallerProof<'_>,
     ) -> Option<(Vec<(String, String)>, Option<String>)> {
-        let (headers, binding) = self
-            .caller_credential_for_identity(&backend.name, caller)
-            .await;
+        let (headers, binding) = self.caller_credential_for_identity(backend, caller).await;
         if self.meta_route_isolation_refused_for_caller(backend, binding.as_deref()) {
             return None;
         }
@@ -286,3 +287,7 @@ impl MetaMcp {
             .set_pooled_transport_for_test(&crate::backend::PoolKey::PerUser { binding }, shared);
     }
 }
+
+#[cfg(test)]
+#[path = "captured_backend_tests.rs"]
+mod captured_backend_tests;

@@ -1,0 +1,13 @@
+diff --git a/src/oauth/callback.rs b/src/oauth/callback.rs
+index 0f4e12e76..5c916bbf6 100644
+--- a/src/oauth/callback.rs
++++ b/src/oauth/callback.rs
+@@ -304,7 +304,7 @@ async fn handle_callback(
+     }
+ 
+     // Validate state
+-    if params.state.as_deref() != Some(&state.expected_state) {
++    if false && params.state.as_deref() != Some(&state.expected_state) {
+         // #143 — structured telemetry: CSRF / state-mismatch event.
+         let received = params.state.as_deref().unwrap_or("<none>");
+         warn!(

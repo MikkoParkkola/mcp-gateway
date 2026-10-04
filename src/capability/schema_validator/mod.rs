@@ -30,6 +30,10 @@ use serde_json::Value;
 use crate::config::InputSchemaEnforcement;
 use crate::trust::closed_keys;
 
+mod alternatives;
+pub(crate) use alternatives::advertised_input_schema;
+use alternatives::alternatives_violations;
+
 /// A single validation violation with a human-readable, LLM-actionable message.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationViolation {
@@ -353,6 +357,14 @@ fn validate_object(
         coerced_map.insert(name.clone(), coerced_value);
     }
 
+    // `anyOf` / `oneOf`: which parameters must be given, judged on the values as
+    // they are forwarded (after coercion), not as they were typed.
+    if violations.is_empty() {
+        let mut forwarded = arg_map.clone();
+        forwarded.extend(coerced_map.clone());
+        alternatives_violations(input_schema, &forwarded, &mut violations);
+    }
+
     // If there are type violations keep the original args (they'll be rejected).
     let coerced = if violations.is_empty() {
         Value::Object(coerced_map)
@@ -381,7 +393,19 @@ pub fn validate_output(result: &Value, output_schema: &Value) -> SchemaValidatio
     // enumerate (e.g. Brave's `mixed`/`type`, Exa's `costDollars`). Required and
     // type checks always apply.
     let allows_extra = output_schema.get("additionalProperties") == Some(&Value::Bool(true));
-    validate_object(result, output_schema, !allows_extra)
+    let mut verdict = validate_object(result, output_schema, !allows_extra);
+    // What is tolerated is kept: the validated output is what the caller
+    // receives, so a field the schema does not enumerate (and a declared one the
+    // upstream sent as null) stays in it instead of being dropped.
+    if allows_extra
+        && verdict.is_valid()
+        && let (Some(sent), Some(kept)) = (result.as_object(), verdict.coerced.as_object_mut())
+    {
+        for (key, value) in sent {
+            kept.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    verdict
 }
 
 // ── Per-property validation ───────────────────────────────────────────────────
@@ -394,20 +418,22 @@ fn validate_property(
     value: &Value,
     prop_schema: &Value,
 ) -> (Value, Vec<ValidationViolation>) {
-    let declared_type = prop_schema.get("type").and_then(Value::as_str);
     let mut violations = Vec::new();
 
     // Attempt coercion first; use the coerced value for subsequent checks.
-    let coerced = if let Some(ty) = declared_type {
-        match try_coerce(value, ty) {
-            Ok(v) => v,
-            Err(msg) => {
-                violations.push(ValidationViolation::new(name, msg));
-                value.clone()
-            }
+    // `type` is one name or a list of names (`[string, "null"]`).
+    let attempt = match prop_schema.get("type") {
+        Some(Value::String(ty)) => Some(try_coerce(value, ty)),
+        Some(Value::Array(types)) => Some(coerce_to_any(value, types)),
+        _ => None,
+    };
+    let coerced = match attempt {
+        Some(Ok(v)) => v,
+        Some(Err(msg)) => {
+            violations.push(ValidationViolation::new(name, msg));
+            value.clone()
         }
-    } else {
-        value.clone()
+        None => value.clone(),
     };
 
     // Only proceed to enum / constraint checks if type was valid.
@@ -437,6 +463,26 @@ fn validate_property(
             }
         }
 
+        // Array size constraints.
+        if let Some(items) = coerced.as_array() {
+            if let Some(max) = prop_schema.get("maxItems").and_then(Value::as_u64)
+                && (items.len() as u64) > max
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must have at most {max} items"),
+                ));
+            }
+            if let Some(min) = prop_schema.get("minItems").and_then(Value::as_u64)
+                && (items.len() as u64) < min
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must have at least {min} items"),
+                ));
+            }
+        }
+
         // String length constraints.
         if let Some(s) = coerced.as_str() {
             let len = s.chars().count();
@@ -446,6 +492,17 @@ fn validate_property(
                 violations.push(ValidationViolation::new(
                     name,
                     format!("must be at least {min_len} characters long"),
+                ));
+            }
+            // `pattern` is unanchored, as in JSON Schema. A pattern that does not
+            // compile refuses every value: a guard that cannot be read must not
+            // be skipped.
+            if let Some(pattern) = prop_schema.get("pattern").and_then(Value::as_str)
+                && !regex::Regex::new(pattern).is_ok_and(|re| re.is_match(s))
+            {
+                violations.push(ValidationViolation::new(
+                    name,
+                    format!("must match the pattern {pattern}"),
                 ));
             }
             if let Some(max_len) = prop_schema.get("maxLength").and_then(Value::as_u64)
@@ -463,6 +520,39 @@ fn validate_property(
 }
 
 // ── Type coercion ─────────────────────────────────────────────────────────────
+
+/// A union `type`: a value that already is one of the listed types is kept
+/// as sent; otherwise it takes the first listed type it coerces to. `"null"`
+/// matches only a null: `try_coerce` passes unknown names through, so it
+/// must not see it.
+fn coerce_to_any(value: &Value, types: &[Value]) -> Result<Value, String> {
+    let names: Vec<&str> = types.iter().filter_map(Value::as_str).collect();
+    if names.is_empty() || names.iter().any(|ty| is_exactly(value, ty)) {
+        return Ok(value.clone());
+    }
+    for ty in names.iter().filter(|ty| **ty != "null") {
+        if let Ok(coerced) = try_coerce(value, ty) {
+            return Ok(coerced);
+        }
+    }
+    Err(format!(
+        "expected {}, got {}",
+        names.join(" or "),
+        json_type_name(value)
+    ))
+}
+
+/// Whether `value` is of JSON Schema type `ty` without any coercion.
+fn is_exactly(value: &Value, ty: &str) -> bool {
+    match ty {
+        // JSON Schema: an integer is any number with no fractional part, so a
+        // whole float such as `3.0` or `1e20` is one.
+        "integer" => value
+            .as_f64()
+            .is_some_and(|f| f.is_finite() && f.fract() == 0.0),
+        _ => json_type_name(value) == ty,
+    }
+}
 
 /// Attempt to coerce `value` to the declared JSON Schema `type`.
 ///
@@ -492,12 +582,19 @@ fn coerce_to_integer(value: &Value) -> Result<Value, String> {
     match value {
         Value::Number(n) if n.is_i64() || n.is_u64() => Ok(value.clone()),
         Value::Number(n) => {
-            // Float with no fractional part → integer.
+            // A whole float is an integer (JSON Schema). Inside the i64 range
+            // it becomes one; outside it is kept as sent, since `as i64`
+            // would clamp it to i64::MIN or i64::MAX.
             if let Some(f) = n.as_f64()
                 && f.fract() == 0.0
             {
-                #[allow(clippy::cast_possible_truncation)]
-                return Ok(Value::Number((f as i64).into()));
+                // 2^63: the first whole float past i64::MAX.
+                const I64_END: f64 = 9_223_372_036_854_775_808.0;
+                if (-I64_END..I64_END).contains(&f) {
+                    #[allow(clippy::cast_possible_truncation)]
+                    return Ok(Value::Number((f as i64).into()));
+                }
+                return Ok(value.clone());
             }
             Err(format!("expected integer, got float {n}"))
         }
@@ -631,5 +728,12 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[path = "alternatives_tests.rs"]
+mod alternatives_tests;
+
+#[cfg(test)]
+#[path = "integer_range_tests.rs"]
+mod integer_range_tests;
 #[cfg(test)]
 mod tests;

@@ -41,8 +41,11 @@ use uuid::Uuid;
 use super::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
-    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
+    checked_selection, initialize_params, is_version_mismatch_error, negotiate_best_version,
+    parse_supported_versions_from_error,
 };
+use crate::security::ssrf::{DestinationPolicy, SystemResolver};
 use crate::{Error, Result};
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -204,6 +207,8 @@ struct Inner {
     /// the token is the whole correlation. See `StdioTransport`'s field of the
     /// same name for why this holds destinations rather than payloads.
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
+    /// Upstream-notification taps of the events listener (MIK-7630 I5).
+    pub(crate) taps: super::upstream_tap::Taps,
 }
 
 impl Inner {
@@ -216,6 +221,7 @@ impl Inner {
             request_id: AtomicU64::new(1),
             task: parking_lot::Mutex::new(None),
             progress_destinations: dashmap::DashMap::new(),
+            taps: super::upstream_tap::Taps::default(),
         })
     }
 }
@@ -251,6 +257,8 @@ pub struct WebSocketTransport {
     protocol_version: Option<String>,
     /// Shared inner state (also held by the I/O task).
     inner: Arc<Inner>,
+    /// Where the upgrade may connect (`hardened` pins it; see `websocket_pinned.rs`).
+    destination: DestinationPolicy,
 }
 
 impl WebSocketTransport {
@@ -266,13 +274,13 @@ impl WebSocketTransport {
         timeout: Duration,
         protocol_version: Option<String>,
     ) -> Arc<Self> {
-        Arc::new(Self {
-            url: url.to_string(),
+        Self::build(
+            url,
             headers,
             timeout,
             protocol_version,
-            inner: Inner::new(),
-        })
+            DestinationPolicy::Configured,
+        )
     }
 
     /// Build and connect a backend transport (the `ws_url` arm of
@@ -287,11 +295,15 @@ impl WebSocketTransport {
         timeout: Duration,
         protocol_version: Option<String>,
     ) -> Result<Arc<dyn Transport>> {
-        let transport = Self::new(url, headers.clone(), timeout, protocol_version);
-        // Boxed: the TLS upgrade future is large, and inlining it would grow
-        // every future that can start a backend (clippy::large_futures).
-        Box::pin(transport.connect()).await?;
-        Ok(transport)
+        let started = Self::start_with_destination(
+            url,
+            headers,
+            timeout,
+            protocol_version,
+            DestinationPolicy::Configured,
+        )
+        .await?;
+        Ok(started)
     }
 
     /// Connect to the WebSocket server and initialise the MCP session.
@@ -319,32 +331,14 @@ impl WebSocketTransport {
     /// bounded by the configured timeout. No log line or error carries more
     /// of the URL than its origin: it may hold userinfo or a query token.
     async fn do_connect(self: &Arc<Self>) -> Result<()> {
-        use tokio_tungstenite::connect_async;
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-        use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
-
         let origin = sanitize_url_for_diagnostics(&self.url);
         debug!(url = %origin, "WebSocket connecting");
 
-        let mut request = self
-            .url
-            .as_str()
-            .into_client_request()
-            .map_err(|_| Error::Transport("WebSocket connect failed: invalid ws_url".into()))?;
-        for (name, value) in &self.headers {
-            let (Ok(name), Ok(value)) = (
-                HeaderName::from_bytes(name.as_bytes()),
-                HeaderValue::from_str(value),
-            ) else {
-                // The value is a credential; name the header only.
-                return Err(Error::Transport(format!(
-                    "WebSocket connect failed: header `{name}` is not a valid HTTP header"
-                )));
-            };
-            request.headers_mut().insert(name, value);
-        }
+        let request = Self::upgrade_request(&self.url, &self.headers)?;
 
-        let (ws_stream, _response) = tokio::time::timeout(self.timeout, connect_async(request))
+        // The timeout bounds the whole connect: lookup, TCP, TLS and upgrade.
+        let connecting = pinned::connect(request, self.destination, &SystemResolver);
+        let (ws_stream, _response) = tokio::time::timeout(self.timeout, connecting)
             .await
             .map_err(|_| {
                 // The configured value, not the measured one: this text is
@@ -353,10 +347,7 @@ impl WebSocketTransport {
                     "WebSocket connect timed out after {:?}",
                     self.timeout
                 ))
-            })?
-            .map_err(|e| {
-                Error::Transport(format!("WebSocket connect failed: {}", connect_error(&e)))
-            })?;
+            })??;
 
         debug!(url = %origin, "WebSocket handshake complete");
 
@@ -377,26 +368,41 @@ impl WebSocketTransport {
     }
 
     /// Perform the MCP `initialize` / `notifications/initialized` handshake.
+    ///
+    /// A version rejection is retried once, on this socket, at the highest
+    /// revision both sides speak (GH #517, as on HTTP and stdio), and the
+    /// revision the backend selects must be one this gateway speaks. Nothing
+    /// after the handshake states a revision, so the selection is not kept.
     async fn initialize(&self) -> Result<()> {
-        let response = self
-            .request(
-                "initialize",
-                Some(serde_json::json!({
-                    "protocolVersion": self.protocol_version.as_deref().unwrap_or(PROTOCOL_VERSION),
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "mcp-gateway",
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                })),
-            )
+        let proposed = self.protocol_version.as_deref().unwrap_or(PROTOCOL_VERSION);
+        let mut response = self
+            .request("initialize", Some(initialize_params(proposed)))
             .await?;
+        if let Some(fallback) = response
+            .error
+            .as_ref()
+            .filter(|error| is_version_mismatch_error(&error.message))
+            .and_then(|error| parse_supported_versions_from_error(&error.message))
+            .as_deref()
+            .and_then(negotiate_best_version)
+        {
+            warn!(
+                url = %sanitize_url_for_diagnostics(&self.url),
+                rejected = %proposed,
+                negotiated = %fallback,
+                "Retrying initialize with negotiated protocol version"
+            );
+            response = self
+                .request("initialize", Some(initialize_params(fallback)))
+                .await?;
+        }
 
         if response.error.is_some() {
             return Err(Error::Protocol(
                 "WebSocket MCP initialize failed".to_string(),
             ));
         }
+        checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?;
 
         tokio::task::yield_now().await;
         self.notify("notifications/initialized", None).await?;
@@ -409,9 +415,14 @@ impl WebSocketTransport {
 
     /// Enqueue a message for the I/O task to write, applying backpressure.
     async fn send_message(&self, msg: Message) -> Result<()> {
-        let guard = self.inner.outbound_tx.lock().await;
-        let tx = guard
-            .as_ref()
+        // Clone the sender out and release the slot before awaiting: a full
+        // queue must not keep `close()` waiting on the slot's mutex.
+        let tx = self
+            .inner
+            .outbound_tx
+            .lock()
+            .await
+            .clone()
             .ok_or_else(|| Error::Transport("WebSocket not connected".to_string()))?;
 
         tx.send(msg)
@@ -426,7 +437,11 @@ impl WebSocketTransport {
 
         match frame {
             McpFrame::Response(response) => {
-                if let Some(ref id) = response.id {
+                if let Some(ref id) = response.id
+                    && inner.taps.response_to(id, response.result.as_ref())
+                {
+                    // A listen is never a pending request (I5 design §4).
+                } else if let Some(ref id) = response.id {
                     let key = id.to_string();
                     if let Some((_, tx)) = inner.pending.remove(&key) {
                         let _ = tx.send(response);
@@ -442,6 +457,9 @@ impl WebSocketTransport {
                 debug!("Received application-level pong");
             }
             McpFrame::Notification { method, params } => {
+                if inner.taps.notification(&method, params.as_ref()) {
+                    return Ok(());
+                }
                 route_progress(
                     inner,
                     JsonRpcNotification {
@@ -473,99 +491,6 @@ impl WebSocketTransport {
             session_id: s.session_id.clone(),
             messages_received: s.messages_received,
             messages_sent: s.messages_sent,
-        }
-    }
-}
-
-// ── Progress routing (stdio parity) ──────────────────────────────────────────
-
-/// Deliver a `notifications/progress` to the call that supplied its token.
-///
-/// Same rules as `StdioTransport::capture_notification`: progress only (a
-/// token stamped on `notifications/message` must not bypass the caller's level
-/// filter), and a frame with no token, or a token no live call registered, is
-/// dropped rather than given an invented owner.
-fn route_progress(inner: &Inner, notification: JsonRpcNotification) {
-    let token = (notification.method == "notifications/progress")
-        .then(|| {
-            notification
-                .params
-                .as_ref()
-                .and_then(|p| p.get("progressToken"))
-                .and_then(progress_token_string)
-        })
-        .flatten();
-    // `deliver` uses `try_send`: this runs on the I/O task, which must never
-    // park on a slow caller.
-    if let Some(destination) = token.and_then(|t| inner.progress_destinations.get(&t)) {
-        destination.deliver(notification);
-    } else {
-        debug!(method = %notification.method, "Ignoring WebSocket notification");
-    }
-}
-
-/// A progress token is a string or a number on the wire; the map is keyed by
-/// its string form so both spellings of one token agree.
-fn progress_token_string(token: &Value) -> Option<String> {
-    match token {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        _ => None,
-    }
-}
-
-/// Hold a call's progress registration exactly as long as its request future,
-/// so success, error, timeout and cancellation all retire it.
-///
-/// Vacant-only: a token already live belongs to another call, and overwriting
-/// it would reroute that call's progress here. The loser owns nothing and
-/// must remove nothing. Mirrors stdio's `ProgressRegistrationGuard`.
-struct ProgressRegistration<'a> {
-    destinations: &'a dashmap::DashMap<String, DeliveryHandle>,
-    token: Option<String>,
-}
-
-impl<'a> ProgressRegistration<'a> {
-    /// Register the token under `params._meta.progressToken`, if any.
-    ///
-    /// Must run on the caller's task: `DeliveryHandle::capture` reads the
-    /// caller's task-locals, which the I/O task does not have.
-    fn register(
-        destinations: &'a dashmap::DashMap<String, DeliveryHandle>,
-        params: Option<&Value>,
-    ) -> Self {
-        let wanted = params
-            .and_then(|p| p.get("_meta"))
-            .and_then(|meta| meta.get("progressToken"))
-            .and_then(progress_token_string);
-        let token = match wanted {
-            None => None,
-            Some(token) => match destinations.entry(token.clone()) {
-                dashmap::mapref::entry::Entry::Vacant(slot) => {
-                    slot.insert(DeliveryHandle::capture(&token));
-                    Some(token)
-                }
-                dashmap::mapref::entry::Entry::Occupied(_) => {
-                    // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
-                    warn!(
-                        token = %token,
-                        "progress token is already registered to a live call; refusing to reroute it"
-                    );
-                    None
-                }
-            },
-        };
-        Self {
-            destinations,
-            token,
-        }
-    }
-}
-
-impl Drop for ProgressRegistration<'_> {
-    fn drop(&mut self) {
-        if let Some(token) = &self.token {
-            self.destinations.remove(token);
         }
     }
 }
@@ -649,6 +574,7 @@ async fn run_io_loop(
     // "connection closed before the response arrived" instead of waiting out
     // its timeout.
     inner.pending.clear();
+    inner.taps.clear();
 }
 
 // ── Transport impl ────────────────────────────────────────────────────────────
@@ -725,6 +651,7 @@ impl Transport for WebSocketTransport {
         // The aborted task skips its own cleanup: fail in-flight calls here so
         // they do not wait out their timeouts.
         self.inner.pending.clear();
+        self.inner.taps.clear();
 
         Ok(())
     }
@@ -753,10 +680,23 @@ fn connect_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[path = "websocket_listen.rs"]
+mod listen;
+#[path = "websocket_progress.rs"]
+mod progress;
+use progress::{ProgressRegistration, route_progress};
+
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
 mod tests;
 
+#[path = "websocket_pinned.rs"]
+mod pinned;
+
 #[cfg(test)]
 #[path = "websocket_backend_tests.rs"]
 mod backend_tests;
+
+#[cfg(test)]
+#[path = "websocket_negotiation_tests.rs"]
+mod negotiation_tests;

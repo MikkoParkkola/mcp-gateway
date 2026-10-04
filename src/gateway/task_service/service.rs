@@ -19,7 +19,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::OwnedSemaphorePermit;
 
-use super::record::{CommittedTask, PreparedTask};
+use super::record::{CommittedTask, PreparedTask, Target};
 use super::store::{StoreError, StoreLimits, TaskStore};
 use crate::idempotency::admission::{
     ExecutionAdmission, Refusal, Request, TaskAdmission, TaskOwner,
@@ -101,11 +101,24 @@ impl TaskService {
     /// new-key worker-cap refusal writes nothing and drops the admission lease.
     /// Every store failure is `Unavailable` and releases both the permit and the
     /// unresolved publication. `Created` retains its permit for the consumer.
+    #[cfg(test)]
     pub(crate) async fn create(
         &self,
         request: Request<'_>,
         task: &Task,
         backend: &str,
+        reserve: impl FnOnce() -> Option<OwnedSemaphorePermit> + Send,
+    ) -> Result<CreateOutcome, ServiceError> {
+        self.create_targeted(request, task, (backend, Vec::new()), reserve)
+            .await
+    }
+
+    /// [`Self::create`] recording the backend calls the task will make (#2450).
+    pub(crate) async fn create_targeted(
+        &self,
+        request: Request<'_>,
+        task: &Task,
+        (backend, targets): (&str, Vec<Target>),
         reserve: impl FnOnce() -> Option<OwnedSemaphorePermit> + Send,
     ) -> Result<CreateOutcome, ServiceError> {
         match self.admission.admit_task(request) {
@@ -114,8 +127,13 @@ impl TaskService {
                     return Ok(CreateOutcome::Capacity);
                 };
                 let binding = lease.binding().clone();
-                let prepared =
-                    PreparedTask::admitted(task, &binding, lease.into_publication(), backend);
+                let prepared = PreparedTask::admitted_with_targets(
+                    task,
+                    &binding,
+                    lease.into_publication(),
+                    backend,
+                    targets,
+                );
                 // A failed commit drops the publication unresolved, which gives
                 // the reservation back rather than stranding the key. The permit
                 // is dropped with this arm so a store refusal cannot keep a worker.

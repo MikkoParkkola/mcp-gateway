@@ -25,7 +25,8 @@ pub(super) fn judge_store_dir(dir: &Path) -> Result<crate::fs_lock::DirPin, Stor
     private_fs::after_path_walk(dir);
     let handle = private_fs::open_dir(dir).map_err(|_| StoreError::UnsafeStore)?;
     private_fs::judge_dir(&handle, dir).map_err(|reason| {
-        tracing::warn!(?reason, path = %dir.display(), "task store directory is not private");
+        let shown_path = dir.display();
+        tracing::warn!(?reason, path = %shown_path, "task store directory is not private");
         StoreError::UnsafeStore
     })?;
     Ok(crate::fs_lock::DirPin(handle))
@@ -59,12 +60,18 @@ pub(super) fn open_new_private(path: &Path) -> io::Result<fs::File> {
 /// T3: open without following a reparse point, then judge the handle.
 pub(super) fn open_record(path: &Path) -> Result<fs::File, StoreError> {
     let file = private_fs::open_file_read(path).map_err(|error| {
-        tracing::warn!(%error, path = %path.display(), "task record could not be opened");
+        let shown_path = path.display();
+        tracing::warn!(%error, path = %shown_path, "task record could not be opened");
         StoreError::UnsafeStore
     })?;
     private_fs::judge_file(&file).map_err(|reason| {
-        tracing::warn!(?reason, path = %path.display(), "task record is not private");
+        let shown_path = path.display();
+        tracing::warn!(?reason, path = %shown_path, "task record is not private");
         StoreError::UnsafeStore
     })?;
     Ok(file)
 }
+
+#[cfg(test)]
+#[path = "store_windows_tests.rs"]
+mod tests;

@@ -72,6 +72,18 @@ async fn startup_settles_every_interrupted_row_by_what_its_record_can_prove() {
             record.pointer("/model/task/status")
         ));
     }
+    // MIK-7311: a recovered input round keeps no continuation on disk.
+    for row in seeded
+        .iter()
+        .filter(|row| matches!(row.seed, Seed::InputRequired))
+    {
+        let record: Value =
+            serde_json::from_slice(&std::fs::read(dir.join(format!("{}.json", row.id))).unwrap())
+                .expect("the recovered record parses");
+        if record.get("inputRound").is_some() {
+            problems.push(format!("{}: the continuation survived recovery", row.key));
+        }
+    }
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
@@ -275,4 +287,58 @@ async fn a_recovered_task_still_answers_the_owner_and_key_that_created_it() {
         .expect("custody is released");
     drop(executor);
     assert!(problems.is_empty(), "{problems:#?}");
+}
+
+/// MIK-7840 HOOK.3: a listener installed before recovery hears the rows
+/// recovery settles, so a task settled during startup is published.
+#[tokio::test]
+async fn a_task_settled_during_recovery_is_published() {
+    use crate::gateway::task_service::open_runtime_with_recovery;
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tasks");
+    let seeded = timeout(BUDGET, seed_store(&dir, rows()))
+        .await
+        .expect("seeding completes");
+    let undispatched = seeded
+        .iter()
+        .find(|row| matches!(row.seed, Seed::Undispatched))
+        .expect("the fixture holds an undispatched row")
+        .id
+        .clone();
+
+    let heard = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+    let admission = fresh_admission();
+    let (restored, executor) = timeout(
+        BUDGET,
+        open_runtime_with_recovery(
+            &dir,
+            1,
+            StoreLimits::default(),
+            test_subscriptions(),
+            Arc::clone(&admission),
+            &[],
+            |_, executor| {
+                let heard = Arc::clone(&heard);
+                executor.on_publication(Arc::new(move |id, _, _, _| {
+                    heard.lock().push(id.to_owned());
+                }));
+            },
+        ),
+    )
+    .await
+    .expect("startup does not hang")
+    .expect("startup recovers the durable store");
+    timeout(BUDGET, restored.shutdown())
+        .await
+        .expect("shutdown does not hang")
+        .expect("custody is released");
+    drop(executor);
+    drop(restored);
+    drop(admission);
+
+    assert!(
+        heard.lock().contains(&undispatched),
+        "recovery settled {undispatched}; the listener heard {:?}",
+        heard.lock()
+    );
 }

@@ -4,10 +4,11 @@
 //!
 //! Single-port multiplexing with a compact Meta-MCP tool surface.
 
+mod allocator;
 mod commands;
+mod home_dir;
 
-use std::path::Path;
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode};
 
 use clap::Parser;
 use mcp_gateway::{
@@ -19,10 +20,6 @@ use mcp_gateway::{
     validator::ValidateConfig,
 };
 use tracing::{error, info};
-
-// ── New command imports ────────────────────────────────────────────────────────
-// These modules live in the binary-only `commands/` tree and are not part of
-// the library crate, so they are imported directly here.
 
 /// Stack for the thread that runs the async main body.
 ///
@@ -76,7 +73,9 @@ async fn run() -> ExitCode {
             profile,
             with_examples,
         }) => commands::run_init_command(&output, with_examples, profile),
-        Some(Command::Cap(cap_cmd)) => commands::run_cap_command(cap_cmd).await,
+        Some(Command::Cap(cap_cmd)) => {
+            commands::run_cap_command(cap_cmd, cli.config.as_deref()).await
+        }
         Some(Command::Import(import_cmd)) => {
             commands::run_protocol_import_command(import_cmd).await
         }
@@ -104,32 +103,25 @@ async fn run() -> ExitCode {
         }
         #[cfg(feature = "webui")]
         Some(Command::DashboardLink(args)) => {
-            let (url, tls) = (args.url, args.tls);
-            let flags = commands::LinkTlsFlags {
-                client_cert: tls.client_cert,
-                client_key: tls.client_key,
-                ca_cert: tls.ca_cert,
-            };
-            let target = commands::dashboard_link_base(
-                url,
-                flags,
-                || Config::load(config_path.as_deref()).map_err(|e| e.to_string()),
-                port_override,
-                host_override.as_deref(),
-            );
-            match target {
-                Ok((base, tls)) => commands::run_dashboard_link_command(&base, &tls).await,
-                Err(message) => {
-                    eprintln!("dashboard-link: {message}");
-                    ExitCode::FAILURE
-                }
-            }
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_dashboard_link_args(args, load, port_override, host_override.as_deref())
+                .await
         }
         // The endpoint it calls exists only with the web UI; say so rather
         // than let the command fail with a bare 404.
         #[cfg(not(feature = "webui"))]
         Some(Command::DashboardLink(_)) => {
             eprintln!("dashboard-link: this build has no web UI (cargo feature `webui`)");
+            ExitCode::FAILURE
+        }
+        #[cfg(feature = "webui")]
+        Some(Command::Events(args)) => {
+            let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
+            commands::run_events_command(args, load, port_override, host_override.as_deref()).await
+        }
+        #[cfg(not(feature = "webui"))]
+        Some(Command::Events(_)) => {
+            eprintln!("events: this build has no web UI (cargo feature `webui`)");
             ExitCode::FAILURE
         }
         Some(Command::Validate {
@@ -241,14 +233,22 @@ async fn run() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::List { json, config }) => {
+        Some(Command::List {
+            json,
+            available,
+            config,
+        }) => {
             #[cfg(feature = "webui")]
             {
-                commands::run_list_command(json, &config)
+                if available {
+                    commands::run_list_available_command(json)
+                } else {
+                    commands::run_list_command(json, &config)
+                }
             }
             #[cfg(not(feature = "webui"))]
             {
-                let _ = (json, config);
+                let _ = (json, available, config);
                 eprintln!("Error: add/remove commands require the 'webui' feature");
                 ExitCode::FAILURE
             }
@@ -293,7 +293,7 @@ async fn run() -> ExitCode {
         #[cfg(feature = "runtime-substrate")]
         Some(Command::Runtime(rt_cmd)) => run_runtime_command(rt_cmd),
         Some(Command::Serve { stdio: true }) => Box::pin(run_stdio_server(cli)).await,
-        Some(Command::Serve { stdio: false }) | None => run_server(cli).await,
+        Some(Command::Serve { stdio: false }) | None => Box::pin(run_server(cli)).await,
     }
 }
 

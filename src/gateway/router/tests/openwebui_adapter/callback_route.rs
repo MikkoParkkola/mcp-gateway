@@ -113,6 +113,8 @@ fn assert_clears_binding(headers: &HeaderMap, id: &str) {
 
 #[path = "callback_abort.rs"]
 mod abort;
+#[path = "callback_complete.rs"]
+mod complete_page;
 #[path = "callback_delete.rs"]
 mod delete;
 #[path = "callback_refusals.rs"]

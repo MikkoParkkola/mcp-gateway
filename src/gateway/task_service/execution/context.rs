@@ -6,8 +6,10 @@ use serde_json::Value;
 
 use crate::gateway::authz::ToolAuthorizer;
 use crate::gateway::destructive_confirmation::ConfirmationChannel;
+use crate::gateway::meta_mcp::dispatch_log::DispatchLog;
 use crate::gateway::meta_mcp::{Authentication, MetaMcpCallerContext};
-use crate::gateway::router::{AppState, OwnedRouterAuthorizer, RouterAuthorizer};
+use crate::gateway::router::OwnedRouterAuthorizer;
+use crate::gateway::task_service::host::{HostAuthorizer, LiveHost, TaskHost};
 use crate::idempotency::admission::{Mode, Request};
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -18,7 +20,9 @@ use crate::protocol::mrtr::RetryFields;
 /// context at dispatch. `task` is always `None` on the rebuilt context so the
 /// worker cannot re-enter admission.
 pub(crate) struct OwnedCallerContext {
-    state: std::sync::Weak<AppState>,
+    /// The transport the task runs for: the HTTP router's state or the stdio
+    /// gateway's host (design D6 rev 5 item 1).
+    host: TaskHost,
     authorizer: OwnedRouterAuthorizer,
     api_key_name: Option<String>,
     agent_id: Option<crate::security::OwnedProvenAgentId>,
@@ -42,6 +46,9 @@ pub(crate) struct OwnedCallerContext {
     is_admin: bool,
     input_capabilities: Declared,
     session_id: Option<String>,
+    /// The creating or resuming request's caller key, which the A/B arm and the
+    /// hints key on (G4). Derived from that live request, never from a record.
+    caller_key: Option<String>,
     /// Classifier revision captured at admission. Borrowed into the rebuilt
     /// caller at dispatch. Not persisted on the durable task record.
     protocol_revision: Option<String>,
@@ -52,12 +59,15 @@ pub(crate) struct OwnedCallerContext {
     /// it at dispatch, where it is re-validated (MIK-7570.ATTEST.1 part 3).
     /// In memory only, like the rest of this struct.
     retry: RetryFields,
+    /// The backend calls this context's dispatches completed (#2450): a plan's
+    /// targets, persisted by the worker before it settles or parks the task.
+    dispatch_log: std::sync::Arc<DispatchLog>,
 }
 
 impl OwnedCallerContext {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        state: std::sync::Weak<AppState>,
+        host: TaskHost,
         authorizer: OwnedRouterAuthorizer,
         api_key_name: Option<String>,
         agent_id: Option<crate::security::OwnedProvenAgentId>,
@@ -77,7 +87,7 @@ impl OwnedCallerContext {
         // one construction site: it is the durable task's owner, not a display
         // name, and with authentication off no identity renders it.
         Self {
-            state,
+            host,
             authorizer,
             api_key_name,
             agent_id,
@@ -90,16 +100,30 @@ impl OwnedCallerContext {
             is_admin,
             input_capabilities,
             session_id,
+            caller_key: None,
             protocol_revision,
             retry: RetryFields {
                 attestation,
                 ..RetryFields::default()
             },
+            dispatch_log: std::sync::Arc::default(),
         }
     }
 
-    pub(crate) fn state(&self) -> &std::sync::Weak<AppState> {
-        &self.state
+    /// The request's caller key; `None` (stdio, no identity) falls back to the
+    /// session id the context carries.
+    #[must_use]
+    pub(crate) fn with_caller_key(mut self, caller_key: Option<String>) -> Self {
+        self.caller_key = caller_key.filter(|key| !key.is_empty());
+        self
+    }
+
+    pub(crate) fn dispatch_log(&self) -> &std::sync::Arc<DispatchLog> {
+        &self.dispatch_log
+    }
+
+    pub(crate) fn host(&self) -> &TaskHost {
+        &self.host
     }
 
     pub(crate) fn authorizer(&self) -> &OwnedRouterAuthorizer {
@@ -119,8 +143,34 @@ impl OwnedCallerContext {
     /// - Capabilities are the creating request's.
     pub(crate) fn dispatch_context<'a>(
         &'a self,
-        _state: &'a AppState,
-        authorizer: &'a RouterAuthorizer<'a>,
+        host: &LiveHost,
+        authorizer: &'a HostAuthorizer<'a>,
+    ) -> MetaMcpCallerContext<'a> {
+        self.dispatch_context_retrying(host, authorizer, &self.retry)
+    }
+
+    /// The retry fields of one input-round continuation: the gateway-sealed
+    /// `requestState` and the accumulated answers, beside this context's own
+    /// attestation token. Redeemed by the funnel as a client retry would be.
+    pub(crate) fn continuation(
+        &self,
+        request_state: Option<String>,
+        input_responses: Option<Value>,
+    ) -> RetryFields {
+        RetryFields {
+            input_responses,
+            request_state,
+            ..self.retry.clone()
+        }
+    }
+
+    /// [`Self::dispatch_context`] carrying `retry` instead of this context's
+    /// own fields: the continuation of an input round.
+    pub(crate) fn dispatch_context_retrying<'a>(
+        &'a self,
+        host: &LiveHost,
+        authorizer: &'a HostAuthorizer<'a>,
+        retry: &'a RetryFields,
     ) -> MetaMcpCallerContext<'a> {
         let authorizer: &'a (dyn ToolAuthorizer + Sync) = authorizer;
         MetaMcpCallerContext {
@@ -161,12 +211,16 @@ impl OwnedCallerContext {
                 .as_deref()
                 .map(crate::security::DeclaredAgentLabel::new),
             grant_subject: self.grant_subject.clone(),
-            stdio_nonce: None,
+            // The stdio host's mark, so the reserved owner, the cache
+            // principal and `LocalTransport` provenance survive the rebuild
+            // (D6 rev 5 item 2). An HTTP host has none.
+            stdio_nonce: host.stdio_nonce(),
+            caller_key: self.caller_key.as_deref(),
             verified_identity: self.verified_identity.as_ref(),
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: ConfirmationChannel::Unavailable,
-            retry: &self.retry,
+            retry,
             task: None,
             era: crate::protocol::meta::Era::Modern,
             channel: &crate::gateway::input_bridge::NoClientChannel,

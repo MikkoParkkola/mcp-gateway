@@ -270,6 +270,22 @@ async fn guard_hosted_host_is_scoped_to_the_accounts_prefix() {
     assert_eq!(status_for(&gw, foreign).await, StatusCode::FORBIDDEN);
 }
 
+/// C6 killer (`HTTP_ADMITSHOST`): under the prefix, a `Host` that names neither
+/// this gateway nor the hosted origin is refused. The rows above only send
+/// the hosted host, so they pass whether or not the host is compared.
+#[tokio::test(flavor = "multi_thread")]
+async fn guard_a_foreign_host_under_the_accounts_prefix_is_refused() {
+    let gw = gateway(Shape::Bridged).await;
+    let hosted = Request::builder()
+        .uri("/accounts/v1/nope")
+        .header("host", HOSTED_HOST);
+    assert_eq!(status_for(&gw, hosted).await, StatusCode::NOT_FOUND);
+    let foreign = Request::builder()
+        .uri("/accounts/v1/nope")
+        .header("host", "evil.test");
+    assert_eq!(status_for(&gw, foreign).await, StatusCode::FORBIDDEN);
+}
+
 /// T-GUARD2 (5a half): the exemption does not extend to `/complete`.
 #[tokio::test(flavor = "multi_thread")]
 async fn guard_cross_site_complete_is_refused() {
@@ -549,4 +565,27 @@ async fn trace_accounts_requests_record_no_query_or_cookie() {
     ] {
         assert!(!output.contains(secret), "{secret} leaked: {output}");
     }
+}
+
+/// C6 gap table rank 16 (HTTP, `journeys::status`): a caller holding the API
+/// key but no `x-openwebui-assertion` reaches the handler with no verified
+/// identity, and is refused as unauthenticated rather than read as somebody.
+#[tokio::test]
+async fn status_with_a_key_but_no_assertion_is_unauthenticated() {
+    // GIVEN
+    let gw = gateway(Shape::Bridged).await;
+    let (_, created) = create(&gw, "alice", &connect_body()).await;
+    let id = created["journey_id"].as_str().unwrap();
+    let uri = format!("/accounts/v1/journeys/{id}");
+    // WHEN
+    let keyed = Request::builder()
+        .method("GET")
+        .uri(&uri)
+        .header("authorization", format!("Bearer {API_KEY}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = json_of(send(&gw, keyed).await).await;
+    // THEN
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
 }

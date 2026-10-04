@@ -13,6 +13,7 @@
 //! (`pins`), because a test that skipped itself would pass while proving
 //! nothing.
 
+// Unix-only: the crash is a SIGKILL (helper.rs:235) and the child trusts the issuer CA through SSL_CERT_FILE.
 #![cfg(unix)]
 
 #[path = "task_upstream_recovery_sdk/authority.rs"]
@@ -81,10 +82,12 @@ async fn durable_handle(root: &std::path::Path, task_id: &str) -> String {
     }
 
     let record = durable_record(root, task_id);
+    // Version 5: a direct task records its target at creation (#2450), which
+    // raises the row past the v3 that introduced the upstream handle.
     assert_eq!(
         record["version"],
-        json!(3),
-        "a recoverable row is a v3 row: {record}"
+        json!(5),
+        "a recoverable row with a recorded target is a v5 row: {record}"
     );
     assert_eq!(
         record["dispatched"],
@@ -456,4 +459,104 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
         "and the recovered result settled through the ordinary durable path"
     );
     last.terminate().await;
+}
+
+/// Upgrade compatibility: a row written by a build before task targets (version
+/// 3, no `targets`) still recovers. The same journey as above, shortened: a
+/// real SDK job, a durable handle, the gateway stopped, the row rewritten to
+/// the exact v3 form while it is down, and the owner reading the result after
+/// a restart. A legacy row's upstream descriptor names its one call, which
+/// current policy still admits, so the result is delivered (MIK-7686).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from_a_version_3_row() {
+    pins::require_supported_trust_override();
+    let owned_root = tempfile::Builder::new()
+        .prefix("upstream-sdk-v3")
+        .tempdir()
+        .expect("an owned temporary root");
+    let root = owned_root.path();
+    let client = reqwest::Client::builder()
+        .timeout(REQUEST_BOUND)
+        .build()
+        .expect("a bounded HTTP client");
+    let mut sdk = SdkPeer::start(root, &client);
+    sdk.wait_until_ready().await;
+    let issuer = issuer::Issuer::start(root).await;
+    let alice = Owner::new(&issuer, "alice-subject", "alice@vertical.test");
+    let ca = issuer.ca_file.display().to_string();
+    let trust = [("SSL_CERT_FILE", ca.as_str())];
+    let port = helper::free_port();
+    let base = helper::write_config(
+        root,
+        &Fixture {
+            name: "gateway-base.yaml",
+            port,
+            backend_url: &sdk.url(),
+            adapters: vec![helper::BACKEND.to_string()],
+        },
+    );
+    let granted = authority::write_authenticated_config(
+        root,
+        &base,
+        "gateway-granted.yaml",
+        &issuer,
+        &[Grant {
+            owner: &alice,
+            backends: vec![helper::BACKEND.to_string()],
+        }],
+    );
+
+    let mut first = Gateway::start_with_env(root, &granted, port, "first.log", &trust);
+    first.wait_until_ready(&client).await;
+    let created = first
+        .post_as(&client, &sdk_task_invoke(2), Some(alice.token.as_str()))
+        .await;
+    let task_id = task_id_of(&created);
+    sdk.wait_until_entered().await;
+    durable_handle(root, &task_id).await;
+    first.kill().await;
+
+    // The row as an older build wrote it: no `targets`, no `outputFree`,
+    // version 3. The record carries no checksum, so a JSON round-trip of the
+    // same fields is a genuine v3 row.
+    let path = helper::store_dir(root).join(format!("{task_id}.json"));
+    let mut row = durable_record(root, &task_id);
+    let object = row.as_object_mut().expect("a record is an object");
+    object.remove("targets");
+    object.remove("outputFree");
+    object.insert("version".into(), json!(3));
+    std::fs::write(&path, serde_json::to_vec(&row).expect("the row serializes"))
+        .expect("the v3 row is written back");
+
+    let mut second = Gateway::start_with_env(root, &granted, port, "second.log", &trust);
+    second.wait_until_ready(&client).await;
+    sdk.release().await;
+    let deadline = tokio::time::Instant::now() + PEER_BOUND;
+    let mut id = 200;
+    let answer = loop {
+        let body = second
+            .post_as(
+                &client,
+                &helper::tasks_get(id, &task_id),
+                Some(alice.token.as_str()),
+            )
+            .await;
+        id += 1;
+        if status_of(&body) == Some("completed") {
+            break body;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the v3 row never recovered within {PEER_BOUND:?}: {body}\n{}",
+            second.logs()
+        );
+        tokio::time::sleep(POLL_GAP).await;
+    };
+    assert!(
+        serde_json::to_string(&answer)
+            .expect("the answer serializes")
+            .contains(SDK_MARKER),
+        "a legacy row delivers the SDK's exact result: {answer}"
+    );
+    second.terminate().await;
 }

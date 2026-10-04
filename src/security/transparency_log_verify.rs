@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tracing::warn;
 
-use super::rotation::{EV_EXPIRED, EV_OPENED, EV_SEALED};
+use super::rotation::{
+    EV_EXPIRED, EV_HWM_MISSING, EV_OPENED, EV_SEALED, EV_TORN, HWM_MISSING_AT, TORN_COMMITTED,
+};
 use super::segments::{self, HighWater};
 use super::{
     MAX_AUDIT_READ_BYTES, TransparencyLogConfig, bounded_read_to_string, recompute_entry_hash,
@@ -323,6 +325,12 @@ struct Stream<'a> {
     /// The oldest survivor opens segment 0 at genesis with counter 1: a log
     /// holding only that record crashed before its first `.hwm` (#2275).
     genesis_open: bool,
+    /// Earliest counter at which a restart found `.hwm` missing (#2294).
+    hwm_missing: Option<u64>,
+    /// `.hwm`'s counter, and the entry hash of the record walked there
+    /// (MIK-7712): the mark names a record, not only a count.
+    mark_counter: Option<u64>,
+    at_mark: Option<String>,
 }
 
 type Verdict = Result<(), (Option<u64>, String)>;
@@ -352,6 +360,9 @@ impl<'a> Stream<'a> {
             anchor: None,
             opened_oldest: false,
             genesis_open: false,
+            hwm_missing: None,
+            mark_counter: None,
+            at_mark: None,
         }
     }
 
@@ -361,6 +372,7 @@ impl<'a> Stream<'a> {
         hw: Option<&HighWater>,
         mode: VerifyMode,
     ) -> io::Result<VerifyResult> {
+        self.mark_counter = hw.map(|h| h.counter);
         let verdict = match self.stream(files)? {
             Ok(()) => self.finish(files, hw, mode),
             failed => failed,
@@ -420,6 +432,17 @@ impl<'a> Stream<'a> {
                     Some(EV_SEALED) => {
                         sealed_here =
                             Some(field_u64(&entry, "next_segment_seq").unwrap_or(expected + 1));
+                    }
+                    Some(EV_HWM_MISSING) => self.note_hwm_missing(counter),
+                    Some(EV_TORN)
+                        if entry.get(TORN_COMMITTED).and_then(Value::as_bool) == Some(true) =>
+                    {
+                        self.note_hwm_missing(counter);
+                    }
+                    Some(EV_OPENED) => {
+                        if let Some(at) = field_u64(&entry, HWM_MISSING_AT) {
+                            self.note_hwm_missing(at);
+                        }
                     }
                     Some(EV_EXPIRED) => {
                         if let (Some(k), Some(lc), Some(fh)) = (
@@ -651,9 +674,16 @@ impl Stream<'_> {
         {
             return Ok(Err((Some(counter), format!("entry {counter}: {msg}"))));
         }
+        if self.mark_counter == Some(counter) {
+            self.at_mark = Some(stored.to_string());
+        }
         self.prev = Some((counter, stored.to_string()));
         self.result.entries_checked += 1;
         Ok(Ok(()))
+    }
+
+    fn note_hwm_missing(&mut self, at: u64) {
+        self.hwm_missing = Some(self.hwm_missing.map_or(at, |e| e.min(at)));
     }
 
     /// End-of-stream checks: the expiry anchor and tail completeness.
@@ -686,6 +716,17 @@ impl Stream<'_> {
                 }
             }
         }
+        if let Some(at) = self.hwm_missing {
+            let msg = format!(
+                "{EV_HWM_MISSING} at counter {at}: a restart found the high-water mark \
+                 missing or a record it could not verify, so tail loss or an edit before \
+                 it cannot be ruled out"
+            );
+            match mode {
+                VerifyMode::Live => return Err((Some(at), msg)),
+                VerifyMode::Archive => self.result.warnings.push(format!("archive mode: {msg}")),
+            }
+        }
         let sealed_present = files.iter().any(|(s, _)| s.is_some());
         let last = self.prev.as_ref().map_or(0, |p| p.0);
         // Disk-full expiry can take the last sealed segment, so the open
@@ -693,21 +734,37 @@ impl Stream<'_> {
         // reads as a fresh log; only an external anchor catches that (#2276).
         // A cut back to the genesis open record alone is the same case: it
         // matches a crash before the first `.hwm`, so it is exempt (#2275).
+        // A loss is located after the tail; a replaced record at the mark is
+        // located at the mark, where the evidence of tampering sits (MIK-7838).
         let gap = match hw {
             None if sealed_present || (self.opened_oldest && !(self.genesis_open && last == 1)) => {
-                Some("high-water mark missing: tail loss cannot be ruled out".to_string())
+                Some((
+                    last + 1,
+                    "high-water mark missing: tail loss cannot be ruled out".to_string(),
+                ))
             }
-            Some(h) if last < h.counter => Some(format!(
-                "counters {}..{} missing at the tail: the active segment was deleted or \
-                 truncated, or the host lost unflushed writes",
+            Some(h) if last < h.counter => Some((
                 last + 1,
-                h.counter
+                format!(
+                    "counters {}..{} missing at the tail: the active segment was deleted or \
+                     truncated, or the host lost unflushed writes",
+                    last + 1,
+                    h.counter
+                ),
+            )),
+            Some(h) if self.at_mark.as_ref().is_some_and(|at| *at != h.entry_hash) => Some((
+                h.counter,
+                format!(
+                    "high-water mark hash mismatch at counter {}: the record there is not \
+                     the one the mark recorded",
+                    h.counter
+                ),
             )),
             _ => None,
         };
         match (gap, mode) {
-            (Some(msg), VerifyMode::Live) => Err((Some(last + 1), msg)),
-            (Some(msg), VerifyMode::Archive) => {
+            (Some((at, msg)), VerifyMode::Live) => Err((Some(at), msg)),
+            (Some((_, msg)), VerifyMode::Archive) => {
                 self.result.warnings.push(format!(
                     "archive mode: tail completeness not checked ({msg})"
                 ));

@@ -26,7 +26,7 @@ use serde_json::json;
 use super::{
     backend_ops::{
         BackendUpdate, add_backend as add_backend_config, remove_backend as remove_backend_config,
-        resolve_transport, update_backend as update_backend_config,
+        resolve_backend, update_backend as update_backend_config,
     },
     errors::{admin_auth_required, config_path_unavailable, flat_error},
     is_admin,
@@ -53,6 +53,9 @@ pub struct AddBackendRequest {
     /// Environment variables as `{ "KEY": "VALUE" }` map.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Registry entry to add under `name` (the dashboard's registry mode). When
+    /// absent, `name` itself is looked up in the registry.
+    pub registry: Option<String>,
 }
 
 /// Request body for `PATCH /ui/api/backends/:name`.
@@ -90,7 +93,7 @@ pub struct RegistryEntryJson {
     pub name: &'static str,
     /// Human-readable description.
     pub description: &'static str,
-    /// Launch command (e.g. `"npx -y @anthropic/mcp-server-tavily"`).
+    /// Launch command (e.g. `"npx -y tavily-mcp@0.2.22"`).
     pub command: &'static str,
     /// Environment variables that must be set for this server.
     pub required_env: &'static [&'static str],
@@ -102,6 +105,16 @@ pub struct RegistryEntryJson {
     pub category: &'static str,
     /// Project homepage URL.
     pub homepage: &'static str,
+    /// What the user supplies: `none`, `env: A, B`, `oauth`, or `header: NAME (VAR)`.
+    pub login: String,
+    /// True when the server needs an account, key or login.
+    pub needs_login: bool,
+    /// True for the starter set `mcp-gateway init` writes enabled.
+    pub default_enabled: bool,
+    /// Why `add` writes it disabled, when its reach is arbitrary.
+    pub reach_reason: Option<&'static str>,
+    /// What it needs beyond its command (arguments, a running service).
+    pub setup: Option<&'static str>,
 }
 
 impl From<&'static server_registry::RegistryEntry> for RegistryEntryJson {
@@ -119,6 +132,25 @@ impl From<&'static server_registry::RegistryEntry> for RegistryEntryJson {
             transport,
             category: e.category,
             homepage: e.homepage,
+            login: match e.auth {
+                server_registry::Auth::None => "none".to_string(),
+                server_registry::Auth::EnvVars => format!("env: {}", e.required_env.join(", ")),
+                server_registry::Auth::OAuth => "oauth".to_string(),
+                server_registry::Auth::Header { name, .. } => {
+                    format!("header: {name} ({})", e.required_env.join(", "))
+                }
+            },
+            needs_login: e.needs_login(),
+            default_enabled: e.default_enabled(),
+            reach_reason: match e.reach {
+                server_registry::Reach::Arbitrary { reason } => Some(reason),
+                server_registry::Reach::Bounded => None,
+            },
+            setup: match e.setup {
+                server_registry::Setup::Ready => None,
+                server_registry::Setup::NeedsArgs { hint }
+                | server_registry::Setup::NeedsService { hint } => Some(hint),
+            },
         }
     }
 }
@@ -165,14 +197,16 @@ async fn add_backend(
         return config_path_unavailable().into_response();
     };
 
-    // Resolve transport and description
-    let (transport, description) = match resolve_transport(
-        &req.name,
+    // Resolve the whole backend: transport, description, and for a registry
+    // entry its login, env templates and default state.
+    let resolved = match resolve_backend(
+        req.registry.as_deref().unwrap_or(&req.name),
         req.command.as_deref(),
         req.url.as_deref(),
         req.description.as_deref(),
+        req.env,
     ) {
-        Ok(t) => t,
+        Ok(r) => r,
         Err(msg) => {
             return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
         }
@@ -184,18 +218,25 @@ async fn add_backend(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
         |config| {
-            add_backend_config(config, &req.name, transport, description, req.env).map_err(|_| {
-                (
-                    StatusCode::CONFLICT,
-                    format!("Backend '{}' already exists", req.name),
-                )
-            })
+            add_backend_config(config, &req.name, resolved)
+                .map(|notes| {
+                    // Whether it went in enabled: notes alone do not say, an
+                    // OAuth login note comes with an enabled backend.
+                    let enabled = config.backends.get(&req.name).is_some_and(|b| b.enabled);
+                    (notes, enabled)
+                })
+                .map_err(|_| {
+                    (
+                        StatusCode::CONFLICT,
+                        format!("Backend '{}' already exists", req.name),
+                    )
+                })
         },
     )
     .await;
 
-    let reload = match mutation {
-        Ok(ConfigMutation::Applied((), reload)) => reload,
+    let ((notes, enabled), reload) = match mutation {
+        Ok(ConfigMutation::Applied(added, reload)) => (added, reload),
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
@@ -213,7 +254,13 @@ async fn add_backend(
 
     (
         StatusCode::CREATED,
-        Json(json!({"status": "created", "name": req.name, "reload": reload})),
+        Json(json!({
+            "status": "created",
+            "name": req.name,
+            "reload": reload,
+            "notes": notes,
+            "enabled": enabled,
+        })),
     )
         .into_response()
 }
@@ -502,6 +549,7 @@ fn validate_backend_name(name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::ui::backend_ops::resolve_parts;
 
     // ── validate_backend_name ──────────────────────────────────────────────────
 
@@ -558,7 +606,7 @@ mod tests {
 
     #[test]
     fn resolve_explicit_command() {
-        let (transport, _) = resolve_transport("any", Some("node server.js"), None, None).unwrap();
+        let (transport, _) = resolve_parts("any", Some("node server.js"), None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => assert_eq!(command, "node server.js"),
             other => panic!("expected Stdio, got {other:?}"),
@@ -568,7 +616,7 @@ mod tests {
     #[test]
     fn resolve_explicit_url() {
         let (transport, _) =
-            resolve_transport("any", None, Some("http://localhost:9000"), None).unwrap();
+            resolve_parts("any", None, Some("http://localhost:9000"), None).unwrap();
         match transport {
             TransportConfig::Http { http_url, .. } => {
                 assert_eq!(http_url, "http://localhost:9000");
@@ -579,7 +627,7 @@ mod tests {
 
     #[test]
     fn resolve_registry_known_name() {
-        let (transport, desc) = resolve_transport("tavily", None, None, None).unwrap();
+        let (transport, desc) = resolve_parts("tavily", None, None, None).unwrap();
         match transport {
             TransportConfig::Stdio { command, .. } => {
                 assert!(command.contains("tavily"), "command should mention tavily");
@@ -591,7 +639,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_name_without_transport_is_error() {
-        let result = resolve_transport("totally-unknown-xyz", None, None, None);
+        let result = resolve_parts("totally-unknown-xyz", None, None, None);
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("not in the built-in registry"));
@@ -599,8 +647,7 @@ mod tests {
 
     #[test]
     fn resolve_description_override() {
-        let (_, desc) =
-            resolve_transport("tavily", None, None, Some("My custom description")).unwrap();
+        let (_, desc) = resolve_parts("tavily", None, None, Some("My custom description")).unwrap();
         assert_eq!(desc, "My custom description");
     }
 
@@ -621,11 +668,7 @@ mod tests {
             .iter()
             .map(RegistryEntryJson::from)
             .collect();
-        // Must have all 48 built-in entries
-        assert!(
-            entries.len() >= 40,
-            "registry should have at least 40 entries"
-        );
+        assert!(!entries.is_empty(), "the registry has entries");
         // All must serialize to JSON without error
         for e in &entries {
             serde_json::to_string(e).expect("registry entry must be JSON-serializable");

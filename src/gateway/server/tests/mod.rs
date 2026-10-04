@@ -11,7 +11,9 @@
 //! signing_allocation_tests;` — the name `tests` is already taken by the inline
 //! test module further down that file.
 
+mod admission_allocations;
 mod alloc_meter;
+mod input_key_allocations;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;
 mod visibility_allocations;
@@ -25,10 +27,19 @@ mod unkeyed_admission;
 
 mod stdout_death_admission;
 
+#[cfg(feature = "firewall")]
+mod collusion_stdio;
 mod r2_stdio_keys;
+mod stdio_cache_scope;
 mod stdio_listing_scope;
+#[cfg(feature = "firewall")]
+mod stdio_response_firewall;
 
 mod stdio_initialize_order;
+#[cfg(feature = "firewall")]
+mod stdio_tenant_reads;
+
+mod stdio_hardened_signing;
 
 mod stdio_sole_operator;
 
@@ -39,3 +50,39 @@ mod stdio_cost_persistence;
 
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
+
+mod grant_decision_stdio;
+
+// MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
+mod owner3_stdio_keying;
+mod owner5_stdio_context;
+
+// MIK-7272.OWNER.1 and OWNER.4 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I2).
+mod owner1_stdio_management;
+mod owner1_stdio_reload;
+mod owner4_stdio_policy;
+
+// MIK-7272.LIFE.1 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I3).
+mod life1_stdio_cancel;
+mod owner2_stdio_tasks;
+// MIK-7757: a drain timeout cancels the running workers on both shutdown paths.
+mod stdio1_discover_versions;
+mod stdio_reused_id;
+mod task_drain_timeout;
+mod task_shutdown_tail;
+
+// #2480: a stdio idempotent replay writes its invocation record.
+mod stdio_replay_audit;
+
+// MIK-7324.COV.3: the stdio chain-nonce refusal in `prepare_signing`.
+mod stdio_chain_nonce_refusal;
+
+// MIK-7324.COV.3: the firewall `response_firewall` builds carries anomaly blocking.
+#[cfg(feature = "firewall")]
+mod response_firewall_anomaly;
+
+#[cfg(feature = "firewall")]
+mod hardened_destination;
+
+// MIK-7685 (#2530): stdio EOF teardown is bounded.
+mod stdio_teardown_bound;

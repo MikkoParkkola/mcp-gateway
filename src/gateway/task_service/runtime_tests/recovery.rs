@@ -287,11 +287,20 @@ async fn seed_row(
             revision = fixture
                 .service
                 .store
-                .transition(
+                .require_input(
                     fixture.owner,
                     &id,
                     revision,
-                    TaskTransition::RequireInput(round),
+                    round,
+                    // MIK-7311: the round carries a stored continuation, and
+                    // restart still settles it interrupted (I3).
+                    crate::gateway::task_service::record::InputRound {
+                        request_state: Some("sealed-by-the-previous-process".to_owned()),
+                        tool: "write".to_owned(),
+                        arguments: json!({}),
+                        accepted_inputs: serde_json::Map::new(),
+                        continuation_deadline: None,
+                    },
                     chrono::Utc::now(),
                 )
                 .await
@@ -360,6 +369,7 @@ fn rewrite_as_v1(dir: &std::path::Path, id: &str) {
     object.insert("version".to_owned(), json!(1));
     object.remove("dispatched");
     std::fs::write(&path, serde_json::to_vec(&after).unwrap()).unwrap();
+    // Unix-only: the fixture restores the 0600 mode the loader requires; Windows has no mode bits.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

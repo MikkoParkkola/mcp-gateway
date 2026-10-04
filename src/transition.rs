@@ -77,6 +77,18 @@ impl TransitionTracker {
         }
     }
 
+    /// Forget a session's last tool (called on session disconnect). The
+    /// learned transitions are global and stay.
+    pub fn remove_session(&self, session_id: &str) {
+        self.last_per_session.remove(session_id);
+    }
+
+    /// Keys holding a last tool, for the store-bound tests.
+    #[cfg(test)]
+    pub(crate) fn key_count(&self) -> usize {
+        self.last_per_session.len()
+    }
+
     /// Record a tool invocation for a session.
     ///
     /// If the session has a previous tool, increments the `previous → tool`
@@ -135,6 +147,17 @@ impl TransitionTracker {
             })
             .fetch_add(1, Ordering::Relaxed);
         true
+    }
+
+    /// Whether [`Self::record_pair`] would record `from -> to` now: the pair
+    /// is already known, or the map is below `max_pairs`.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn can_learn(&self, from: &str, to: &str, max_pairs: usize) -> bool {
+        let known = self
+            .transitions
+            .get(from)
+            .is_some_and(|inner| inner.contains_key(to));
+        known || self.distinct_pairs.load(Ordering::Relaxed) < max_pairs
     }
 
     /// Transitions out of `from_tool`: `(all successors, to_tool only)`.

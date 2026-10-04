@@ -4,21 +4,19 @@
 //! Pre-invoke budget enforcement.
 //!
 //! `BudgetEnforcer::check()` is called BEFORE every tool dispatch.
-//! It must complete in <0.1 ms: one `DashMap` lookup + ≤3 atomic comparisons,
-//! no allocations on the hot path when the tool is free.
+//! It must complete in <0.1 ms: one `DashMap` lookup + ≤3 short uncontended
+//! locks, no allocations on the hot path when the tool is free. A paid tool also
+//! takes the reservation lock and allocates its hold (MIK-7763).
 //!
 //! # Day-boundary reset
 //!
-//! `DailyAccumulator` stores (`day_number`, `micro_usd`) as separate atomics.
-//! On each `add()` call the current day is compared to the stored day:
-//! - If equal: `fetch_add` on the counter.
-//! - If different: `compare_exchange` to win the reset race, then `swap(0)`
-//!   + `fetch_add`.  Losers of the CAS fall through to `fetch_add` on the
-//!     already-reset counter — no spend is lost.
+//! `DailyAccumulator` keeps (`day_number`, `micro_usd`) under one lock. Each
+//! `add()` compares the current day to the stored day and, on a rollover,
+//! publishes the new day and clears the total in the same critical section,
+//! so no add can land between the two and be erased (MIK-7880).
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
@@ -29,15 +27,14 @@ use super::registry::CostRegistry;
 
 // ── DailyAccumulator ─────────────────────────────────────────────────────────
 
-/// Atomic daily spend accumulator with automatic day-boundary reset.
+/// Daily spend accumulator with automatic day-boundary reset.
 ///
-/// Uses two independent `AtomicU64` fields:
-/// - `day`: days since UNIX epoch (UTC).  Detects day rollovers.
-/// - `micro_usd`: accumulated spend in micro-USD (1 USD = `1_000_000`).
+/// One lock holds both halves, so a reset and an add never interleave:
+/// - `.0`: days since UNIX epoch (UTC).  Detects day rollovers.
+/// - `.1`: accumulated spend in micro-USD (1 USD = `1_000_000`).
 #[cfg(feature = "cost-governance")]
 pub struct DailyAccumulator {
-    day: AtomicU64,
-    micro_usd: AtomicU64,
+    state: Mutex<(u64, u64)>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -52,48 +49,69 @@ impl DailyAccumulator {
     /// Create a new accumulator initialised to today / zero spend.
     pub fn new() -> Self {
         Self {
-            day: AtomicU64::new(current_day()),
-            micro_usd: AtomicU64::new(0),
+            state: Mutex::new((current_day(), 0)),
         }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, (u64, u64)> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Add `micro` micro-USD of spend.  Auto-resets on day boundary.
     ///
     /// Returns the new running total **after** the add.
     ///
-    /// Race-safety: `compare_exchange` ensures only one winner resets the
-    /// counter.  The winner uses `swap(0)` then `fetch_add(micro)` so any
-    /// concurrent `fetch_add` calls that arrive between the swap and our add
-    /// are preserved.  Losers of the CAS simply `fetch_add` on the
-    /// already-reset accumulator.
+    /// Race-safety: the rollover check, the clear and the add share one
+    /// critical section, so an add on the new day cannot be erased by the
+    /// reset (MIK-7880). A rollover only moves forward: an add that read the
+    /// clock before midnight but locked after a later add rolled over counts
+    /// on the newer day instead of resetting it backward.
     pub fn add(&self, micro: u64) -> u64 {
         let today = current_day();
-        let stored = self.day.load(Ordering::Acquire);
-        if stored != today {
-            // Attempt to win the reset race
-            if self
-                .day
-                .compare_exchange(stored, today, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-            {
-                // Won: zero the counter, then add our spend
-                self.micro_usd.swap(0, Ordering::AcqRel);
-                return self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro;
-            }
-            // Lost: another thread already reset — fall through to fetch_add
+        let mut state = self.lock();
+        if today > state.0 {
+            state.0 = today;
+            #[cfg(test)]
+            fire_after_day_publish();
+            state.1 = 0;
         }
-        self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro
+        state.1 = state.1.saturating_add(micro);
+        state.1
     }
 
     /// Current daily spend in micro-USD.
     ///
-    /// Returns 0 if the stored day is not today (stale — caller treats as fresh day).
+    /// Returns 0 if the stored day is before today (stale — caller treats as
+    /// fresh day). A stored day ahead of this read's clock is still counted.
     pub fn current(&self) -> u64 {
-        let today = current_day();
-        if self.day.load(Ordering::Relaxed) != today {
-            return 0;
+        let state = self.lock();
+        if state.0 >= current_day() { state.1 } else { 0 }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once on this thread after a rollover publishes the new day and
+    /// before the counter is cleared: a test lands an add there (MIK-7880).
+    static AFTER_DAY_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn fire_after_day_publish() {
+    let taken = AFTER_DAY_PUBLISH.with(|hook| hook.borrow_mut().take());
+    if let Some(f) = taken {
+        f();
+    }
+}
+
+#[cfg(all(test, feature = "cost-governance"))]
+impl DailyAccumulator {
+    /// An accumulator still on `day` holding `micro` of that day's spend.
+    fn stale(day: u64, micro: u64) -> Self {
+        Self {
+            state: Mutex::new((day, micro)),
         }
-        self.micro_usd.load(Ordering::Relaxed)
     }
 }
 
@@ -119,6 +137,145 @@ pub struct EnforcementResult {
     pub warnings: Vec<String>,
     /// Block reason, set only when `allowed == false`.
     pub block_reason: Option<String>,
+    /// The allowance this call reserved while it is in flight (MIK-7763).
+    /// Shared by clones, released when the last one drops; never serialized.
+    #[serde(skip)]
+    pub(crate) hold: Option<Arc<SpendHold>>,
+}
+
+// ── Reservations ─────────────────────────────────────────────────────────────
+
+/// Spend that admitted, unsettled calls have reserved, in micro-USD.
+///
+/// It counts toward every later check, so concurrent calls cannot all pass
+/// against the same remaining allowance. It is not day-scoped and the
+/// day-boundary reset never touches it.
+#[cfg(feature = "cost-governance")]
+#[derive(Default)]
+struct Pending {
+    global: u64,
+    tools: HashMap<String, u64>,
+    keys: HashMap<String, u64>,
+}
+
+#[cfg(feature = "cost-governance")]
+impl Pending {
+    fn add(&mut self, tool: &str, key: Option<&str>, micro: u64) {
+        self.global = self.global.saturating_add(micro);
+        let slot = self.tools.entry(tool.to_string()).or_default();
+        *slot = slot.saturating_add(micro);
+        if let Some(key) = key {
+            let slot = self.keys.entry(key.to_string()).or_default();
+            *slot = slot.saturating_add(micro);
+        }
+    }
+
+    fn release(&mut self, tool: &str, key: Option<&str>, micro: u64) {
+        self.global = self.global.saturating_sub(micro);
+        Self::take(&mut self.tools, tool, micro);
+        if let Some(key) = key {
+            Self::take(&mut self.keys, key, micro);
+        }
+    }
+
+    fn take(map: &mut HashMap<String, u64>, name: &str, micro: u64) {
+        if let Some(slot) = map.get_mut(name) {
+            *slot = slot.saturating_sub(micro);
+            if *slot == 0 {
+                map.remove(name);
+            }
+        }
+    }
+
+    fn tool(&self, name: &str) -> u64 {
+        self.tools.get(name).copied().unwrap_or(0)
+    }
+
+    fn key(&self, name: &str) -> u64 {
+        self.keys.get(name).copied().unwrap_or(0)
+    }
+}
+
+/// The reservation ledger. One lock makes a check and its reservation a single
+/// step, and a release wait for any check in progress.
+#[cfg(feature = "cost-governance")]
+type Ledger = Mutex<Pending>;
+
+#[cfg(feature = "cost-governance")]
+fn locked(ledger: &Ledger) -> MutexGuard<'_, Pending> {
+    // The ledger holds plain counters: a poisoned lock still holds a usable value.
+    ledger.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// One admitted call's reservation. Dropping it gives the allowance back, so a
+/// call that fails without spend, is refused later or is cancelled keeps
+/// nothing. The caller records the spend first and drops the hold after:
+/// a check then never sees the spend missing from both places.
+#[cfg(feature = "cost-governance")]
+#[must_use = "dropping a hold gives the reservation back"]
+pub(crate) struct SpendHold {
+    ledger: Arc<Ledger>,
+    tool: String,
+    key: Option<String>,
+    micro: u64,
+}
+
+#[cfg(feature = "cost-governance")]
+impl Drop for SpendHold {
+    fn drop(&mut self) {
+        locked(&self.ledger).release(&self.tool, self.key.as_deref(), self.micro);
+    }
+}
+
+#[cfg(feature = "cost-governance")]
+impl std::fmt::Debug for SpendHold {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpendHold")
+            .field("micro", &self.micro)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A `Log` alert recorded under the lock and emitted after it is released.
+#[cfg(feature = "cost-governance")]
+enum DeferredLog {
+    Tool {
+        tool: String,
+        spent: f64,
+        limit: f64,
+    },
+    Global {
+        spent: f64,
+        limit: f64,
+    },
+    Key {
+        key: String,
+        spent: f64,
+        limit: f64,
+    },
+}
+
+#[cfg(feature = "cost-governance")]
+impl DeferredLog {
+    fn emit(self) {
+        match self {
+            Self::Tool { tool, spent, limit } => tracing::warn!(
+                tool = tool.as_str(),
+                spent,
+                limit,
+                "Tool approaching daily budget limit"
+            ),
+            Self::Global { spent, limit } => {
+                tracing::warn!(spent, limit, "Global daily spend approaching limit");
+            }
+            Self::Key { key, spent, limit } => tracing::warn!(
+                key = key.as_str(),
+                spent,
+                limit,
+                "API key approaching daily budget limit"
+            ),
+        }
+    }
 }
 
 // ── EnforcerSnapshot ─────────────────────────────────────────────────────────
@@ -148,8 +305,10 @@ pub struct EnforcerSnapshot {
 
 /// Pre-invoke budget enforcement engine.
 ///
-/// Wrap in `Arc` and share via `MetaMcp`.  All operations are lock-free
-/// in the common case (no day rollover, no limit exceeded).
+/// Wrap in `Arc` and share via `MetaMcp`.  Free tools and a disabled
+/// governance take no lock; a check of a paid tool takes one short mutex
+/// (the reservation ledger) and allocates its hold. Spend recording, snapshots
+/// and each daily read take one short accumulator lock (MIK-7880).
 #[cfg(feature = "cost-governance")]
 pub struct BudgetEnforcer {
     pub(crate) config: CostGovernanceConfig,
@@ -160,6 +319,8 @@ pub struct BudgetEnforcer {
     global_daily: DailyAccumulator,
     /// Per-API-key daily accumulators.
     key_daily: DashMap<String, DailyAccumulator>,
+    /// Spend reserved by in-flight admitted calls (MIK-7763).
+    ledger: Arc<Ledger>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -172,12 +333,19 @@ impl BudgetEnforcer {
             tool_daily: DashMap::new(),
             global_daily: DailyAccumulator::new(),
             key_daily: DashMap::new(),
+            ledger: Arc::default(),
         }
     }
 
-    /// Pre-invoke budget check.
+    /// Pre-invoke budget check, and reservation of the allowance it admits.
     ///
-    /// Hot path: single `DashMap` lookup + ≤3 atomic loads.  No allocation
+    /// An allowed result carries a hold on the call's cost; later checks count
+    /// it until the hold drops, so concurrent calls cannot all pass against the
+    /// same remaining allowance. Keep the result (or the hold) until the spend
+    /// is recorded. Refusals, warnings and reasons are those of a check with
+    /// nothing in flight.
+    ///
+    /// Hot path: single `DashMap` lookup + ≤3 short accumulator locks.  No allocation
     /// when the tool is free or governance is disabled.
     #[allow(clippy::too_many_lines)]
     pub fn check(&self, tool_name: &str, api_key_name: Option<&str>) -> EnforcementResult {
@@ -187,6 +355,7 @@ impl BudgetEnforcer {
                 cost_usd: 0.0,
                 warnings: Vec::new(),
                 block_reason: None,
+                hold: None,
             };
         }
 
@@ -198,16 +367,18 @@ impl BudgetEnforcer {
                 cost_usd: 0.0,
                 warnings: Vec::new(),
                 block_reason: None,
+                hold: None,
             };
         }
 
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::no_effect_underscore_binding
-        )]
-        let _cost_micro = (cost * 1_000_000.0) as u64;
+        // The same conversion `record_spend` applies to this cost.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let cost_micro = (cost * 1_000_000.0) as u64;
 
+        // One step from here to the reservation below. Nothing in it waits or
+        // writes a log: alerts are recorded and emitted after the lock is gone.
+        let mut pending = locked(&self.ledger);
+        let mut logs: Vec<DeferredLog> = Vec::new();
         let mut warnings: Vec<String> = Vec::new();
         let mut blocked = false;
         let mut block_reason: Option<String> = None;
@@ -216,19 +387,16 @@ impl BudgetEnforcer {
         if let Some(&limit) = self.config.budgets.per_tool.get(tool_name) {
             let acc = self.tool_daily.entry(tool_name.to_string()).or_default();
             #[allow(clippy::cast_precision_loss)]
-            let current_usd = acc.current() as f64 / 1_000_000.0;
+            let current_usd = (acc.current() + pending.tool(tool_name)) as f64 / 1_000_000.0;
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
                 match action {
-                    AlertAction::Log => {
-                        tracing::warn!(
-                            tool = tool_name,
-                            spent = projected,
-                            limit = limit,
-                            "Tool approaching daily budget limit"
-                        );
-                    }
+                    AlertAction::Log => logs.push(DeferredLog::Tool {
+                        tool: tool_name.to_string(),
+                        spent: projected,
+                        limit,
+                    }),
                     AlertAction::Notify => {
                         warnings.push(format!(
                             "Tool '{tool_name}' daily spend ${projected:.4} approaching limit ${limit:.2}"
@@ -247,18 +415,15 @@ impl BudgetEnforcer {
         // Check 2: global daily limit
         if !blocked && let Some(limit) = self.config.budgets.daily {
             #[allow(clippy::cast_precision_loss)]
-            let current_usd = self.global_daily.current() as f64 / 1_000_000.0;
+            let current_usd = (self.global_daily.current() + pending.global) as f64 / 1_000_000.0;
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
                 match action {
-                    AlertAction::Log => {
-                        tracing::warn!(
-                            spent = projected,
-                            limit = limit,
-                            "Global daily spend approaching limit"
-                        );
-                    }
+                    AlertAction::Log => logs.push(DeferredLog::Global {
+                        spent: projected,
+                        limit,
+                    }),
                     AlertAction::Notify => {
                         warnings.push(format!(
                             "Global daily spend ${projected:.4} approaching limit ${limit:.2}"
@@ -281,19 +446,16 @@ impl BudgetEnforcer {
         {
             let acc = self.key_daily.entry(key_name.to_string()).or_default();
             #[allow(clippy::cast_precision_loss)]
-            let current_usd = acc.current() as f64 / 1_000_000.0;
+            let current_usd = (acc.current() + pending.key(key_name)) as f64 / 1_000_000.0;
             let projected = current_usd + cost;
 
             if let Some(action) = self.evaluate_alerts(projected, limit) {
                 match action {
-                    AlertAction::Log => {
-                        tracing::warn!(
-                            key = key_name,
-                            spent = projected,
-                            limit = limit,
-                            "API key approaching daily budget limit"
-                        );
-                    }
+                    AlertAction::Log => logs.push(DeferredLog::Key {
+                        key: key_name.to_string(),
+                        spent: projected,
+                        limit,
+                    }),
                     AlertAction::Notify => {
                         warnings.push(format!(
                                     "API key '{key_name}' daily spend ${projected:.4} approaching limit ${limit:.2}"
@@ -309,11 +471,26 @@ impl BudgetEnforcer {
             }
         }
 
+        let hold = (!blocked).then(|| {
+            pending.add(tool_name, api_key_name, cost_micro);
+            Arc::new(SpendHold {
+                ledger: Arc::clone(&self.ledger),
+                tool: tool_name.to_string(),
+                key: api_key_name.map(str::to_string),
+                micro: cost_micro,
+            })
+        });
+        drop(pending);
+        for log in logs {
+            log.emit();
+        }
+
         EnforcementResult {
             allowed: !blocked,
             cost_usd: cost,
             warnings,
             block_reason,
+            hold,
         }
     }
 
@@ -600,3 +777,7 @@ mod tests {
         assert_eq!(action, None);
     }
 }
+
+#[cfg(test)]
+#[path = "enforcer_atomic_tests.rs"]
+mod atomic_tests;

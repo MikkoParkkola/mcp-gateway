@@ -13,13 +13,15 @@
 //! * `credential_patterns` — a `RegexSet` that performs a single-pass check
 //!   whether *any* pattern matches a string (fast O(n) detection).
 //! * `credential_regexes` — the same patterns compiled as individual `Regex`
-//!   objects, used to perform targeted `replace_all` replacements once a match
-//!   is confirmed, so that surrounding text is preserved.
+//!   objects, used to locate every matched span once a match is confirmed.
+//!   Overlapping spans are merged and replaced once, so that surrounding
+//!   text is preserved and no fragment of an overlapped match survives.
 //!
 //! # Privacy
 //!
-//! Matched fragments are truncated to 40 characters in `Finding::matched` so
-//! credential values are not propagated into audit logs or structured spans.
+//! A finding's `matched` excerpt is the redacted text, truncated to 40
+//! characters, so credential values are not propagated into audit logs or
+//! structured spans.
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,7 +34,7 @@ use super::{Finding, FindingLocation, ScanType, Severity};
 pub struct Redactor {
     /// Fast multi-pattern matcher for detection (single DFA pass).
     set: RegexSet,
-    /// Individual compiled regexes for targeted `replace_all`.
+    /// Individual compiled regexes that locate each matched span.
     regexes: Vec<Regex>,
     /// Human-readable description for each pattern (same index as the regex vec).
     descriptions: Vec<&'static str>,
@@ -61,9 +63,11 @@ const CREDENTIAL_PATTERNS: &[(&str, &str)] = &[
         r#"(?i)(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*['"][A-Za-z0-9+/=]{20,}['"]"#,
         "Generic API Key in key=value",
     ),
-    // JWT — three base64url segments separated by dots
+    // JWT — base64url segments separated by dots. The whole chain of segments
+    // is one match: a JWT that starts at another's second segment then ends
+    // with it, so no signature can survive an overlap (#2145).
     (
-        r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+        r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}(?:\.[A-Za-z0-9_-]{10,})+",
         "JSON Web Token",
     ),
     // PEM private key header (RSA / EC / DSA or generic)
@@ -162,6 +166,16 @@ impl Redactor {
         }
     }
 
+    /// The merged byte spans of `text` the credential patterns match: what
+    /// [`Self::scan_and_redact`] would replace in it.
+    pub(crate) fn credential_spans(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut spans: Vec<(usize, usize)> = (self.set.matches(text).into_iter())
+            .flat_map(|idx| overlapping_spans(&self.regexes[idx], text))
+            .collect();
+        spans.sort_unstable();
+        merge_spans(spans)
+    }
+
     /// Record one finding per matched pattern and return `text` with every
     /// matched span replaced, or `None` when nothing matched. Surrounding text
     /// is preserved ("token: <secret> rest" -> "token: [REDACTED:credential] rest").
@@ -170,18 +184,29 @@ impl Redactor {
         if matched.is_empty() {
             return None;
         }
-        let mut redacted = text.to_owned();
-        for &idx in &matched {
-            redacted = self.regexes[idx]
-                .replace_all(&redacted, "[REDACTED:credential]")
-                .into_owned();
+        // Every span is found in the original text and overlapping spans are
+        // replaced once: replacing one pattern's match first can break another
+        // match and leave its characters behind (#2145).
+        let mut spans: Vec<(usize, usize)> = matched
+            .iter()
+            .flat_map(|&idx| overlapping_spans(&self.regexes[idx], text))
+            .collect();
+        spans.sort_unstable();
+        let mut redacted = String::with_capacity(text.len());
+        let mut cursor = 0;
+        for (start, end) in merge_spans(spans) {
+            redacted.push_str(&text[cursor..start]);
+            redacted.push_str("[REDACTED:credential]");
+            cursor = end;
         }
-        // A key finding shows the redacted key: a bare 40-char token would
+        redacted.push_str(&text[cursor..]);
+        // A finding shows the redacted text: a bare 40-char token would
         // otherwise survive the truncation whole into the audit log.
-        let (suffix, shown) = match site {
-            Site::Value => ("", text),
-            Site::Key => (" (object key)", redacted.as_str()),
+        let suffix = match site {
+            Site::Value => "",
+            Site::Key => " (object key)",
         };
+        let shown = redacted.as_str();
         for &idx in &matched {
             findings.push(Finding {
                 scan_type: ScanType::Credentials,
@@ -237,6 +262,52 @@ impl Default for Redactor {
     }
 }
 
+/// How far behind the furthest end already matched a restart may begin. The
+/// longest fixed-length pattern is 66 bytes, and a match of an unbounded
+/// pattern can only overlap the end of another by starting in its short
+/// prefix, since the earlier greedy body stopped where its class ends. The JWT
+/// pattern takes a whole chain of segments for the same reason: a JWT starting
+/// at another's second segment ends with that chain.
+const OVERLAP_WINDOW: usize = 256;
+
+/// Every match of `re` in `text`, including matches that overlap one another:
+/// `find_iter` resumes after a match's end, so a second credential starting
+/// inside the first would be missed. Each search restarts one char after the
+/// previous match's start, but never more than [`OVERLAP_WINDOW`] behind the
+/// covered end: a restart deep inside a long match would rescan it to its end,
+/// quadratic on text like a repeated token prefix.
+fn overlapping_spans(re: &Regex, text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let (mut at, mut covered) = (0, 0);
+    while let Some(m) = re.find_at(text, at) {
+        spans.push((m.start(), m.end()));
+        covered = covered.max(m.end());
+        if m.start() == text.len() {
+            break; // an empty match at the end; no pattern matches empty today
+        }
+        let next = m.start() + text[m.start()..].chars().next().map_or(1, char::len_utf8);
+        let mut floor = covered.saturating_sub(OVERLAP_WINDOW);
+        while !text.is_char_boundary(floor) {
+            floor -= 1;
+        }
+        at = next.max(floor);
+    }
+    spans
+}
+
+/// Merge sorted spans that overlap or touch, so no character between two
+/// matched spans can survive and touching tokens share one marker.
+fn merge_spans(spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         return s.to_string();
@@ -252,352 +323,5 @@ fn truncate(s: &str, max: usize) -> String {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn redactor() -> Redactor {
-        Redactor::new()
-    }
-
-    // ── Detection ─────────────────────────────────────────────────────────────
-
-    #[test]
-    fn detects_aws_access_key() {
-        let mut v = json!({ "key": "AKIAIOSFODNN7EXAMPLE12345" });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.scan_type == ScanType::Credentials)
-        );
-        assert!(findings.iter().any(|f| f.description.contains("AWS")));
-    }
-
-    #[test]
-    fn detects_github_pat() {
-        let mut v = json!({ "token": "ghp_abcdefghijklmnopqrstuvwxyz1234567890" });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.description.contains("GitHub Personal"))
-        );
-    }
-
-    #[test]
-    fn unicode_fragment_truncation_does_not_panic() {
-        let fake_credential = format!("{}{}", "ghp_", "abcdefghijklmnopqrstuvwxyz1234567890");
-        let mut v = json!({
-            "token": format!("{}{} {fake_credential}", "a".repeat(39), "—")
-        });
-        let findings = redactor().scan_and_redact(&mut v);
-
-        let finding = findings
-            .iter()
-            .find(|f| f.scan_type == ScanType::Credentials)
-            .expect("expected credential finding");
-        assert!(finding.matched.ends_with("..."));
-    }
-
-    #[test]
-    fn detects_github_oauth_token() {
-        let mut v = json!({ "token": "gho_abcdefghijklmnopqrstuvwxyz1234567890" });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.description.contains("GitHub OAuth"))
-        );
-    }
-
-    #[test]
-    fn detects_github_app_token() {
-        let mut v = json!({ "token": "ghs_abcdefghijklmnopqrstuvwxyz1234567890" });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.description.contains("GitHub App"))
-        );
-    }
-
-    #[test]
-    fn detects_slack_token() {
-        // Build the token dynamically to avoid GitHub push protection false positive
-        let slack_token = format!("xoxb-{}-abcdefghijklmnop", "1234567890");
-        let mut v = json!({ "token": slack_token });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(findings.iter().any(|f| f.description.contains("Slack")));
-    }
-
-    #[test]
-    fn detects_jwt_in_response() {
-        let mut v = json!({ "auth": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c" });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.description.contains("JSON Web Token"))
-        );
-    }
-
-    #[test]
-    fn detects_private_key_header() {
-        let mut v = json!({ "key": "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAK..." });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.description.contains("Private Key"))
-        );
-    }
-
-    #[test]
-    fn detects_bearer_token() {
-        let mut v = json!({ "header": "Authorization: bearer eyJhbGciOiJIUzI1NiJ9_abcdefghijklmnopqrstuvwxyz" });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(findings.iter().any(|f| f.description.contains("Bearer")));
-    }
-
-    #[test]
-    fn detects_database_connection_string() {
-        let mut v = json!({ "dsn": "postgres://user:secret@db.example.com:5432/mydb" });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.description.contains("Database Connection"))
-        );
-    }
-
-    #[test]
-    fn detects_openai_project_key() {
-        // Synthetic, self-labelling non-secret that still matches the
-        // `sk-proj-[A-Za-z0-9_-]{40,}` detector. Kept obviously fake so naive
-        // external secret scanners stop filing false-positive "leaked key"
-        // reports against this redaction test (see closed issues #376/#377).
-        let key = "sk-proj-FAKE_EXAMPLE_KEY_FOR_REDACTION_UNIT_TEST_000000";
-        let mut v = serde_json::json!({ "key": key });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings
-                .iter()
-                .any(|f| f.description.contains("OpenAI Project")),
-            "Expected OpenAI key detection"
-        );
-    }
-
-    #[test]
-    fn detects_ethereum_private_key() {
-        let key = format!(
-            "0x{}{}",
-            "ac0974bec39a17e36ba4a6b4d238ff944", "bacb478cbed5efcae784d7bf4f2ff80"
-        );
-        let mut v = serde_json::json!({ "pk": key });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(
-            findings.iter().any(|f| f.description.contains("Ethereum")),
-            "Expected Ethereum key detection"
-        );
-    }
-
-    // ── Redaction ─────────────────────────────────────────────────────────────
-
-    #[test]
-    fn redacts_credential_in_place() {
-        let mut v = json!({ "output": "token: ghp_abcdefghijklmnopqrstuvwxyz1234567890 done" });
-        redactor().scan_and_redact(&mut v);
-        let s = v["output"].as_str().unwrap();
-        assert!(
-            s.contains("[REDACTED:credential]"),
-            "Expected redaction, got: {s}"
-        );
-        assert!(!s.contains("ghp_"), "Token should be redacted, got: {s}");
-        // Surrounding text should be preserved
-        assert!(s.contains("token: "), "Prefix should remain: {s}");
-        assert!(s.contains(" done"), "Suffix should remain: {s}");
-    }
-
-    #[test]
-    fn clean_response_passes_through_unchanged() {
-        let original = json!({ "result": "The answer is 42", "items": [1, 2, 3] });
-        let mut v = original.clone();
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(findings.is_empty());
-        assert_eq!(v, original);
-    }
-
-    #[test]
-    fn nested_credential_redacted() {
-        let mut v = json!({
-            "data": {
-                "nested": "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
-            }
-        });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(!findings.is_empty());
-        let nested = v["data"]["nested"].as_str().unwrap();
-        assert!(nested.contains("[REDACTED:credential]"));
-        assert!(!nested.contains("ghp_"));
-    }
-
-    #[test]
-    fn credential_in_array_redacted() {
-        let mut v = json!({
-            "tokens": [
-                "normal_string",
-                "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
-            ]
-        });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert!(!findings.is_empty());
-        let second = v["tokens"][1].as_str().unwrap();
-        assert!(second.contains("[REDACTED:credential]"));
-    }
-
-    // ── Severity ──────────────────────────────────────────────────────────────
-
-    #[test]
-    fn credential_finding_has_high_severity() {
-        let mut v = json!({ "key": "AKIAIOSFODNN7EXAMPLE12345" });
-        let findings = redactor().scan_and_redact(&mut v);
-        let f = findings
-            .iter()
-            .find(|f| f.scan_type == ScanType::Credentials)
-            .unwrap();
-        assert_eq!(f.severity, Severity::High);
-        assert_eq!(f.location, FindingLocation::ResponseContent);
-    }
-
-    // ── Object keys (#2114) ───────────────────────────────────────────────────
-
-    /// Plainly synthetic 40-char GitHub-shaped tokens, built at runtime like
-    /// the fixture above so no token-shaped literal sits in the source.
-    fn token_a() -> String {
-        format!("{}{}", "ghp_", "abcdefghijklmnopqrstuvwxyz1234567890")
-    }
-
-    fn token_b() -> String {
-        format!("{}{}0", "ghp_", "EXAMPLE".repeat(5))
-    }
-
-    #[test]
-    fn redacts_credential_in_object_key() {
-        let mut v = json!({ token_a(): 1 });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert_eq!(findings.len(), 1, "one finding for the key: {findings:?}");
-        assert!(findings[0].description.contains("(object key)"));
-        assert_eq!(v, json!({ "[REDACTED:credential]": 1 }));
-    }
-
-    /// Synthetic 0x + 64-hex key. It sorts BEFORE `[`, so it is visited ahead
-    /// of the clean `[REDACTED:credential]` key: a rebuild that does not
-    /// reserve clean names first would let that clean key overwrite it.
-    fn hex_key() -> String {
-        format!("0x{}", "ab".repeat(32))
-    }
-
-    #[test]
-    fn redacted_keys_stay_unique() {
-        let mut v = json!({
-            hex_key(): 1,
-            token_b(): 2,
-            "[REDACTED:credential]": 3,
-            "[REDACTED:credential]#2": 4,
-        });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert_eq!(findings.len(), 2);
-        // Clean keys keep their names; redacted keys take suffixes in map order.
-        assert_eq!(
-            v,
-            json!({
-                "[REDACTED:credential]": 3,
-                "[REDACTED:credential]#2": 4,
-                "[REDACTED:credential]#3": 1,
-                "[REDACTED:credential]#4": 2,
-            })
-        );
-    }
-
-    #[test]
-    fn redacts_nested_key_and_keeps_surrounding_text() {
-        let mut v = json!({ "outer": { format!("x-{} y", token_a()): token_b() } });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert_eq!(findings.len(), 2, "one for the key, one for its value");
-        assert_eq!(
-            v,
-            json!({ "outer": { "x-[REDACTED:credential] y": "[REDACTED:credential]" } })
-        );
-    }
-
-    #[test]
-    fn clean_keys_are_untouched() {
-        let mut v = json!({ "plain": "text", "nested": { "also_plain": 1 } });
-        let original = v.clone();
-        assert!(redactor().scan_and_redact(&mut v).is_empty());
-        assert_eq!(v, original);
-    }
-
-    #[test]
-    fn key_finding_does_not_carry_the_secret() {
-        let mut v = json!({ token_a(): 1 });
-        let findings = redactor().scan_and_redact(&mut v);
-        assert_eq!(findings.len(), 1);
-        assert!(
-            !findings[0].matched.contains("ghp_"),
-            "a 40-char token survives truncation whole: {:?}",
-            findings[0].matched
-        );
-    }
-
-    // ── #2210: a real token is redacted wherever it sits ────────────────────
-
-    /// A token glued after letters or digits is still a credential. Split with
-    /// `concat!` so no literal token sits here.
-    #[test]
-    fn a_token_glued_after_letters_or_digits_is_redacted() {
-        for token in [
-            concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789"),
-            concat!("gh", "s_abcdefghijklmnopqrstuvwxyz0123456789"),
-            concat!("xo", "xb-1234567890abcdef"),
-        ] {
-            for glued in [
-                format!("abc{token}"),
-                format!("9{token}"),
-                format!("x-{token}"),
-            ] {
-                let mut v = json!({ "t": glued });
-                let findings = redactor().scan_and_redact(&mut v);
-                assert_eq!(findings.len(), 1, "{glued}: {findings:?}");
-                assert!(!v["t"].as_str().unwrap().contains(token), "{glued}");
-            }
-        }
-    }
-
-    /// A token followed by more token characters is still a credential.
-    #[test]
-    fn a_token_followed_by_a_suffix_is_redacted() {
-        let token = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
-        for glued in [
-            format!("{token}_suffix"),
-            format!("{token}-more"),
-            format!("{token}Z9"),
-        ] {
-            let mut v = json!({ "t": glued });
-            let findings = redactor().scan_and_redact(&mut v);
-            assert_eq!(findings.len(), 1, "{glued}: {findings:?}");
-            assert!(!v["t"].as_str().unwrap().contains(token), "{glued}");
-        }
-    }
-
-    /// Two real tokens sharing one space are both still redacted.
-    #[test]
-    fn delimited_tokens_sharing_a_separator_are_both_redacted() {
-        let a = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz0123456789");
-        let b = concat!("gh", "o_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
-        let mut v = json!({ "t": format!("{a} {b}") });
-        redactor().scan_and_redact(&mut v);
-        assert_eq!(v["t"], "[REDACTED:credential] [REDACTED:credential]");
-    }
-}
+#[path = "redactor_tests.rs"]
+mod tests;

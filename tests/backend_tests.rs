@@ -19,6 +19,7 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
             protocol_version: None,
         },
         stop_when_idle_for: None,
+        max_frame_bytes: None,
         timeout: Duration::from_secs(30),
         env: HashMap::default(),
         headers: HashMap::default(),
@@ -31,6 +32,9 @@ fn create_test_backend(name: &str, command: &str) -> Backend {
         runtime_profile: None,
         identity_propagation: None,
         account: None,
+        signature_chain: mcp_gateway::config::ChainMode::default(),
+        chain_origins: Vec::new(),
+        chain_signer: None,
     };
 
     let failsafe = FailsafeConfig::default();

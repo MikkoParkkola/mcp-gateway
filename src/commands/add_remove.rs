@@ -16,8 +16,9 @@ use mcp_gateway::{
     config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
         self, BackendUpdate, add_backend, get_backend, list_backends, parse_env_vars,
-        remove_backend, resolve_transport, update_backend, write_config,
+        remove_backend, resolve_backend, update_backend, write_config,
     },
+    gateway::ui::backends::RegistryEntryJson,
     registry::server_registry,
 };
 
@@ -41,15 +42,6 @@ pub async fn run_add_command(
     env_vars: &[String],
     config: &Path,
 ) -> ExitCode {
-    // ── Resolve transport ──────────────────────────────────────────────────
-    let (transport, description) = match resolve_transport(name, cmd, url, desc) {
-        Ok(t) => t,
-        Err(msg) => {
-            eprintln!("Error: {msg}");
-            return ExitCode::FAILURE;
-        }
-    };
-
     // ── Build env map ──────────────────────────────────────────────────────
     let env = match parse_env_vars(env_vars) {
         Ok(e) => e,
@@ -58,6 +50,16 @@ pub async fn run_add_command(
             return ExitCode::FAILURE;
         }
     };
+
+    // ── Resolve the whole backend ──────────────────────────────────────────
+    let resolved = match resolve_backend(name, cmd, url, desc, env) {
+        Ok(r) => r,
+        Err(msg) => {
+            eprintln!("Error: {msg}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let transport = resolved.backend.transport.clone();
 
     // ── Load config ────────────────────────────────────────────────────────
     //
@@ -78,16 +80,13 @@ pub async fn run_add_command(
     };
 
     // ── Insert backend ─────────────────────────────────────────────────────
-    if let Err(msg) = add_backend(
-        &mut gateway_config,
-        name,
-        transport.clone(),
-        description,
-        env.clone(),
-    ) {
-        eprintln!("Error: {msg} (in {})", config.display());
-        return ExitCode::FAILURE;
-    }
+    let notes = match add_backend(&mut gateway_config, name, resolved) {
+        Ok(notes) => notes,
+        Err(msg) => {
+            eprintln!("Error: {msg} (in {})", config.display());
+            return ExitCode::FAILURE;
+        }
+    };
 
     // ── Write config ───────────────────────────────────────────────────────
     if let Err(e) = write_config(config, &gateway_config) {
@@ -104,6 +103,9 @@ pub async fn run_add_command(
         TransportConfig::A2a { .. } => "a2a",
     };
     println!("Added '{name}' ({transport_label}).");
+    for note in &notes {
+        println!("  {note}");
+    }
     if creating_config {
         println!();
         println!(
@@ -116,25 +118,7 @@ pub async fn run_add_command(
         println!("auth.public_paths so tool calls keep working.");
     }
 
-    if let Some(entry) = server_registry::lookup(name) {
-        report_env_status(entry.required_env, &env);
-    }
-
     ExitCode::SUCCESS
-}
-
-/// Print which required env vars are set and which are missing.
-fn report_env_status(required: &[&str], provided_env: &std::collections::HashMap<String, String>) {
-    for key in required {
-        let set_in_env = std::env::var(key).is_ok();
-        let set_in_config = provided_env.contains_key(*key);
-        let status = if set_in_env || set_in_config {
-            "set"
-        } else {
-            "NOT SET"
-        };
-        println!("  Required: {key} {status}");
-    }
 }
 
 // ── remove ────────────────────────────────────────────────────────────────────
@@ -190,6 +174,42 @@ pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
             let enabled = if info.enabled { "" } else { " [disabled]" };
             println!("  {} ({}){enabled}", info.name, info.transport);
             println!("    {desc}");
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Run `mcp-gateway list --available`: the built-in server library, with
+/// what each needs and whether `add` writes it on or off.
+pub fn run_list_available_command(json: bool) -> ExitCode {
+    let entries: Vec<RegistryEntryJson> = server_registry::all()
+        .iter()
+        .map(RegistryEntryJson::from)
+        .collect();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&entries).unwrap_or_default()
+        );
+        return ExitCode::SUCCESS;
+    }
+    println!(
+        "{} servers in the built-in library. Turn one on with `mcp-gateway add <name>`.\n",
+        entries.len()
+    );
+    for e in &entries {
+        let state = if e.default_enabled {
+            "on in `mcp-gateway init`"
+        } else if e.reach_reason.is_some() {
+            "added disabled: can reach any address"
+        } else {
+            "off until added"
+        };
+        println!("  {} ({}, {}) - {state}", e.name, e.category, e.transport);
+        println!("    {}", e.description);
+        println!("    login: {}", e.login);
+        if let Some(setup) = e.setup {
+            println!("    needs: {setup}");
         }
     }
     ExitCode::SUCCESS
@@ -455,6 +475,7 @@ mod tests {
         } else {
             assert!(matches!(error, mcp_gateway::Error::Config(_)));
         }
+        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
         #[cfg(unix)]
         let identity = {
             use std::os::unix::fs::MetadataExt;
@@ -464,6 +485,7 @@ mod tests {
 
         assert_eq!(run_remove_command("original", &path), ExitCode::FAILURE);
         assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -481,6 +503,7 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), original.as_bytes());
+        // Unix-only: compares (dev, ino) file identity, which Windows metadata does not expose.
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;

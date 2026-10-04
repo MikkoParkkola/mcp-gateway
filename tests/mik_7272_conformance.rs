@@ -64,11 +64,11 @@ const MAJOR: &[Row] = &[
             // variance -- so the profile writers and readers are named here
             // too, or the row reads as covered while the stronger clause is
             // verified by nothing.
-            "gateway::router::tests::ac_order_2_a_modern_request_is_given_no_session_even_when_it_offers_one",
-            "gateway::router::tests::ac_order_2_a_modern_caller_is_refused_gateway_set_profile",
-            "gateway::meta_mcp::tests::ac_order_2_set_profile_is_refused_without_a_session",
-            "gateway::meta_mcp::tests::ac_order_2_get_profile_is_refused_without_a_session",
-            "gateway::meta_mcp::tests::ac_order_2_initialize_binds_no_profile_without_a_session",
+            "gateway::router::tests::session_routing::ac_order_2_a_modern_request_is_given_no_session_even_when_it_offers_one",
+            "gateway::router::tests::session_routing::ac_order_2_a_modern_caller_is_refused_gateway_set_profile",
+            "gateway::meta_mcp::tests::profiles::ac_order_2_set_profile_is_refused_without_a_session",
+            "gateway::meta_mcp::tests::profiles::ac_order_2_get_profile_is_refused_without_a_session",
+            "gateway::meta_mcp::tests::profiles::ac_order_2_initialize_binds_no_profile_without_a_session",
         ],
     },
     Row {
@@ -330,7 +330,7 @@ const MINOR: &[Row] = &[
             "gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema",
             // (c) A declared outputSchema is byte-identical in a tools/list
             // wire response to the one the capability declared.
-            "gateway::meta_mcp::tests::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire",
+            "gateway::meta_mcp::tests::surfaced_tools::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire",
         ],
     },
     Row {
@@ -343,7 +343,7 @@ const MINOR: &[Row] = &[
             // (a) The live forward paths cannot put `elicitationId` on the
             // wire: both re-serialise from `ElicitationCreateParams`, which
             // names four fields and carries no `flatten`.
-            "gateway::proxy::tests::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths",
+            "gateway::proxy::tests::cancellation::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths",
             // (a), legacy half. The relay for a client that must be asked
             // directly carries the params whole, because 2025-11-25 did not
             // remove the field.

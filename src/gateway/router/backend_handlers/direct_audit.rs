@@ -3,10 +3,13 @@
 //! D2 (MIK-7570.AUDIT.2): one invocation record per direct-route `tools/call`,
 //! written by the outer handler around whatever the inner one answered.
 
+use std::sync::Arc;
+
 use axum::{Json, http::StatusCode};
 use serde_json::Value;
 
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::meta_mcp::invoke::audit::DispatchNotes;
 use crate::identity_grants::GrantSubject;
 use crate::protocol::RequestId;
 use crate::security::audit::{
@@ -27,6 +30,8 @@ pub(super) struct DirectCall {
     request_hash: String,
     otel_trace_id: Option<String>,
     who: AuditWho,
+    /// MIK-7116.MIN.1: the tool's `arguments` as sent, for request tenants.
+    arguments: Value,
     /// The id of the incoming request: a refusal answers `id: null`, and the
     /// `FailClosed` 503 must still echo what the caller sent.
     request_id: Option<RequestId>,
@@ -57,6 +62,10 @@ impl DirectCall {
             request_hash: sha256_of(params),
             otel_trace_id,
             who: AuditWho::from_request(client, grant_subject),
+            // The firewall's own fallback (`handle_backend_call`): a call with
+            // no `arguments` member is scanned over `params`, so attribute it
+            // the same way (#2523).
+            arguments: params.get("arguments").unwrap_or(params).clone(),
             request_id: request
                 .get("id")
                 .and_then(|id| serde_json::from_value(id.clone()).ok()),
@@ -89,6 +98,102 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
     }
 }
 
+/// What the inner handler learns that the read verdict needs (MIK-7116.MIN.2):
+/// the caller, formed only when the verdict is on, and the request params.
+#[derive(Default)]
+pub(super) struct DirectReads {
+    key: Option<String>,
+    params: Option<Value>,
+}
+
+impl DirectReads {
+    /// Capture the caller (`key` forms it) and the request params, only when
+    /// the verdict is on, so the default config copies nothing.
+    pub(super) fn capture(
+        &mut self,
+        state: &AppState,
+        request: &Value,
+        key: impl FnOnce() -> String,
+    ) {
+        if crate::gateway::outbound::judges(super::super::helpers::read_guard(state).as_deref()) {
+            self.key = Some(key()).filter(|key| !key.is_empty());
+            self.params = request.get("params").cloned();
+        }
+    }
+}
+
+/// D2: one write per tools/call, with the notes of its dispatch scope. Then
+/// every answer, whatever the method, is judged for the caller (H9) and
+/// written through the outbound sink.
+/// [`audited_call_judged`] inside one relay-receipt collector, which spans the
+/// dispatch, the audit write and the judge (COLLUDE.1). With relay detection
+/// off there is nothing to collect.
+pub(super) async fn audited_call(
+    state: Arc<AppState>,
+    name: String,
+    request: axum::http::Request<axum::body::Body>,
+) -> crate::gateway::outbound::OutboundReply {
+    let judged = audited_call_judged(Arc::clone(&state), name, request);
+    #[cfg(feature = "firewall")]
+    if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
+        return crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged)).await;
+    }
+    Box::pin(judged).await
+}
+
+async fn audited_call_judged(
+    state: Arc<AppState>,
+    name: String,
+    request: axum::http::Request<axum::body::Body>,
+) -> crate::gateway::outbound::OutboundReply {
+    let mut call = None;
+    let mut reads = DirectReads::default();
+    let guard = super::super::helpers::read_guard(&state);
+    let inner = Box::pin(crate::gateway::outbound::read_scoped(
+        guard.clone(),
+        super::backend_handler_inner(
+            Arc::clone(&state),
+            name.clone(),
+            request,
+            &mut call,
+            &mut reads,
+        ),
+    ));
+    let ((answer, hidden), notes) =
+        crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
+    let (status, Json(body)) = match call {
+        Some(call) => record(&state, &name, call, answer, notes).await,
+        None => answer,
+    };
+    if status == StatusCode::ACCEPTED {
+        // An accepted notification: the gateway's own placeholder, sent
+        // with no body (MIK-7759), carries nothing to judge.
+        return crate::gateway::outbound::gateway_reply(super::super::helpers::bodiless_accepted(
+            (status, Json(body)),
+        ));
+    }
+    let frame = crate::gateway::outbound::answer_value(
+        guard.as_deref(),
+        reads.key.as_deref(),
+        body,
+        reads.params.as_ref(),
+        hidden.as_ref(),
+    );
+    // COLLUDE.1 x MIN.2: receipts record only an answer that was delivered, so
+    // they follow the judge, the audit write and the read record that
+    // `emit_http` writes last, as it can still replace the answer.
+    let delivers = frame.delivers_result();
+    let response = crate::gateway::outbound::to_http(frame, status, "");
+    let (reply, written) =
+        crate::gateway::outbound::judged_reply_checked(response, state.transparency_log.as_ref())
+            .await;
+    #[cfg(feature = "firewall")]
+    super::relay::commit_direct_receipts(&state, delivers && written);
+    #[cfg(not(feature = "firewall"))]
+    let _ = (delivers, written);
+    reply
+}
+
 /// Write the record for `call` and hand `answer` on, or withhold it when the
 /// write fails under [`AuditFailurePolicy::FailClosed`] (D1-f, D2-g).
 pub(super) async fn record(
@@ -96,14 +201,27 @@ pub(super) async fn record(
     server: &str,
     call: DirectCall,
     answer: Answer,
+    notes: DispatchNotes,
 ) -> Answer {
+    let (status, Json(body)) = &answer;
+    let outcome = direct_outcome(*status, body);
+    // D4: counted before the log check, so auth off still counts.
+    let firewall = body
+        .get("error")
+        .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal);
+    if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body, firewall)
+    {
+        use crate::security::security_metrics::{DenialRoute, denied};
+        denied(DenialRoute::Direct, reason);
+    }
     let Some(log) = state.transparency_log.as_ref() else {
         return answer;
     };
-    let (status, Json(body)) = &answer;
-    let outcome = direct_outcome(*status, body);
     // D1-d.1: a failed call has no response hash.
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
+    // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
+    let tenants = state.meta_mcp.request_tenants(&call.arguments);
+    let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
     // D2-f: the caller's W3C trace id, else a trace id; no session rung.
     let trace_id = crate::gateway::trace::current().unwrap_or_else(crate::gateway::trace::generate);
     let envelope = AuditEnvelope {
@@ -137,12 +255,13 @@ pub(super) async fn record(
                 server: &srv,
                 tool: tool.as_deref(),
             };
-            log.log_invocation_correlated(
+            log.log_invocation_attributed(
                 key,
                 &envelope,
                 target,
                 &request_hash,
                 response_hash.as_deref(),
+                attribution,
             )
         })
         .await;

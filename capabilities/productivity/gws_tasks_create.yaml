@@ -1,4 +1,4 @@
-sha256: df2bf853950e3e283538b2c628e8240e9b9d21c88e6c1616de3eb33e1ae66f56
+sha256: 924ae35cebed7543b2f1a5d79ae814089c44667dc39490c3fd7bd65397c17444
 fulcrum: "1.0"
 name: gws_tasks_create
 description: Create a new task in Google Tasks. Supports setting title, notes, due date, and parent task for subtasks.
@@ -9,22 +9,22 @@ schema:
     properties:
       taskListId:
         type: string
-        description: "Task list ID (use '@default' for the default list)"
-        default: "@default"
+        default: '@default'
+        description: Task list ID
       title:
         type: string
-        description: "Task title"
+        description: Task title
       notes:
         type: string
-        description: "Task notes/description"
+        description: Task notes/description
       due:
         type: string
-        description: "Due date (RFC3339, e.g., 2026-03-15T00:00:00Z)"
+        description: Due date (RFC3339, e.g., 2026-03-15T00:00:00Z)
       parent:
         type: string
-        description: "Parent task ID (to create as subtask)"
+        description: Parent task ID (to create as subtask)
     required:
-      - title
+    - title
   output:
     type: object
     properties:
@@ -45,13 +45,19 @@ providers:
     config:
       command: gws
       args:
-        - tasks
-        - tasks
-        - insert
-        - "--params"
-        - '{"tasklist": "{taskListId}"}'
-        - "--json"
-        - '{"title": "{title}", "notes": "{notes}", "due": "{due}", "parent": "{parent}"}'
+      - tasks
+      - tasks
+      - insert
+      - json: --params=
+        value:
+          tasklist: '{taskListId}'
+          parent: '{parent}'
+      - json: --json=
+        value:
+          title: '{title}'
+          notes: '{notes}'
+          due: '{due}'
+      token_env: GOOGLE_WORKSPACE_CLI_TOKEN
 
 cache:
   strategy: none
@@ -59,8 +65,11 @@ cache:
 
 auth:
   required: true
-  type: oauth2
-  description: "Authenticate via: gws auth login -s tasks"
+  type: oauth
+  key: oauth:google
+  token_endpoint: https://oauth2.googleapis.com/token
+  scopes:
+  - https://www.googleapis.com/auth/tasks
 
 metadata:
   category: productivity

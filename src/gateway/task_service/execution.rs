@@ -4,6 +4,7 @@
 
 mod context;
 mod expiry;
+mod input_round;
 mod observe;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
@@ -22,8 +23,10 @@ use tokio::sync::{Semaphore, oneshot};
 pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 /// The guard the gateway holds for the periodic sweep it started.
 pub(crate) use expiry::ExpirySweep;
+pub(crate) use input_round::InputOutcome;
 pub(crate) use observe::{
-    CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+    CancelOutcome, CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle,
+    UpstreamRecovery,
 };
 use observe::{Handoff, HandoffRegistry};
 pub(crate) use upstream::UpstreamCapture;
@@ -31,7 +34,7 @@ pub(crate) use upstream::UpstreamCapture;
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
 
-use super::record::CommittedTask;
+use super::record::{CommittedTask, Target};
 use super::service::{CreateOutcome, ServiceError, TaskService};
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::protocol::tasks::{Task, TaskOptions, TaskStatus, TaskTransition};
@@ -92,17 +95,28 @@ impl BeginOutcome {
     }
 }
 
-pub(crate) enum TaskWrite<'a> {
-    Create {
-        request: &'a OwnedAdmissionRequest,
-        task: &'a Task,
-        backend: &'a str,
-    },
+/// A write that creates a task. Its own type, not a variant of the transitions:
+/// what a create can answer (created, existing, refused) and what a transition
+/// can answer (the committed record) never overlap, so neither caller has an
+/// arm for the other's outcome.
+pub(crate) struct CreateWrite<'a> {
+    pub(crate) request: &'a OwnedAdmissionRequest,
+    pub(crate) task: &'a Task,
+    pub(crate) backend: &'a str,
+    /// The single backend call the task makes, when it makes exactly one.
+    pub(crate) targets: Vec<Target>,
+}
+
+/// A write that moves an existing task. It answers with the committed record.
+pub(crate) enum TransitionWrite<'a> {
     Settle {
         principal: &'a str,
         id: &'a str,
         revision: u64,
         event: TaskTransition,
+        /// A plan's dispatched calls, committed in the same write as its
+        /// outcome. `None` for a call whose target was recorded at creation.
+        targets: Option<Vec<Target>>,
     },
     Cancel {
         principal: &'a str,
@@ -120,10 +134,9 @@ pub(crate) enum TaskWrite<'a> {
     },
 }
 
-pub(crate) enum WriteOutcome {
-    Create(CreateOutcome),
-    Transitioned(CommittedTask),
-}
+/// A callback told of each committed task transition.
+pub(crate) type PublicationHook =
+    Arc<dyn Fn(&str, TaskStatus, chrono::DateTime<chrono::Utc>, Option<String>) + Send + Sync>;
 
 /// The one owner of a committed task record.
 ///
@@ -149,6 +162,11 @@ pub struct TaskExecutor {
     /// the second would find a revision that moved.
     query_gate: tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
+    /// Told of every committed transition (the events source), once installed.
+    publication_hook: std::sync::OnceLock<PublicationHook>,
+    /// Cancelled once, by a shutdown whose drain ran out; every worker runs
+    /// under it ([`Self::spawn_worker`]).
+    shutdown: tokio_util::sync::CancellationToken,
 }
 
 impl TaskExecutor {
@@ -167,7 +185,15 @@ impl TaskExecutor {
             recovery: std::sync::OnceLock::new(),
             query_gate: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             observer: Mutex::new(None),
+            publication_hook: std::sync::OnceLock::new(),
+            shutdown: tokio_util::sync::CancellationToken::new(),
         })
+    }
+
+    /// Install the callback told of each committed transition with the task
+    /// id, its new status and its last-change time. Write-once.
+    pub(crate) fn on_publication(&self, hook: PublicationHook) -> bool {
+        self.publication_hook.set(hook).is_ok()
     }
 
     pub(crate) fn recovery(&self) -> Option<&Arc<dyn UpstreamRecovery>> {
@@ -197,9 +223,11 @@ impl TaskExecutor {
         // Ownership first, and only then the spawn: the guard is live before
         // there is a task to run it, so the window in which the executor has
         // accepted work that no drain can see does not exist.
-        let (handoff, cancel_rx) = Handoff::accept(self, task.id());
+        // A fresh id: nobody else can own it, so a refusal is not reachable.
+        let (handoff, cancel_rx) =
+            Handoff::try_accept(self, task.id()).ok_or(ServiceError::Unavailable)?;
         let (tx, rx) = oneshot::channel();
-        tokio::spawn(commit_and_run(
+        self.spawn_worker(commit_and_run(
             handoff, intent, task, backend, call, cancel_rx, tx,
         ));
         rx.await.map_err(|_| ServiceError::Unavailable)?
@@ -211,15 +239,15 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
     ) -> Result<CommittedTask, ServiceError> {
-        let outcome = match self
-            .commit(TaskWrite::Cancel {
+        let task = match self
+            .commit_transition(TransitionWrite::Cancel {
                 principal,
                 id,
                 revision,
             })
             .await
         {
-            Ok(outcome) => outcome,
+            Ok(task) => task,
             // The one race this write has: the worker settled between the
             // caller reading its revision and this transition taking the
             // store. The record is not broken and the store is not down, so
@@ -230,10 +258,7 @@ impl TaskExecutor {
             Err(error) => return Err(commit_to_service(error)),
         };
         self.cancel_signal(id);
-        match outcome {
-            WriteOutcome::Transitioned(task) => Ok(task),
-            WriteOutcome::Create(_) => Err(ServiceError::Unavailable),
-        }
+        Ok(task)
     }
 
     /// One bounded re-read after a cancel lost its revision, mirroring what
@@ -254,19 +279,19 @@ impl TaskExecutor {
         if is_terminal(current.task.status()) {
             return Ok(current);
         }
+        self.notify_observer(CommitStage::CancelRetry, id).await;
         match self
-            .commit(TaskWrite::Cancel {
+            .commit_transition(TransitionWrite::Cancel {
                 principal,
                 id,
                 revision: current.revision,
             })
             .await
         {
-            Ok(WriteOutcome::Transitioned(task)) => {
+            Ok(task) => {
                 self.cancel_signal(id);
                 Ok(task)
             }
-            Ok(WriteOutcome::Create(_)) => Err(ServiceError::Unavailable),
             // Bounded: the record moved again. If that move was terminal the
             // committed view is still the honest answer; otherwise this really
             // is a store nobody can write to.
@@ -362,74 +387,116 @@ impl TaskExecutor {
         }
     }
 
+    /// End every worker spawned from now on before its first step, which is what
+    /// refuses a late task start (its `begin` answers `Unavailable`).
+    pub(crate) fn seal(&self) {
+        self.shutdown.cancel();
+    }
+
+    /// Whether [`Self::seal`] or a cancelling shutdown has closed admission.
+    #[cfg(test)]
+    pub(crate) fn is_sealed(&self) -> bool {
+        self.shutdown.is_cancelled()
+    }
+
+    /// Cancel every worker still running and wait, up to `bound`, for each of
+    /// them to end.
+    ///
+    /// Terminal for this executor: the token is never reset, so a worker
+    /// spawned afterwards is dropped before its first step and its `begin`
+    /// answers `Unavailable`. A cancelled worker's future is dropped at the
+    /// await it is parked on; its handoff and permit go with it, which is what
+    /// the join observes. A store write it had started runs to its end inside
+    /// `spawn_blocking`, and closing the store joins it.
+    pub(crate) async fn cancel_remaining(&self, bound: Duration) -> CancelOutcome {
+        let cancelled = self.handoffs.len();
+        self.seal();
+        let stopped = tokio::time::timeout(bound, self.handoffs.join())
+            .await
+            .is_ok();
+        CancelOutcome { cancelled, stopped }
+    }
+
+    /// Spawn a task worker under the shutdown token. Every worker goes through
+    /// here, so none can outlive a shutdown that cancelled the rest.
+    fn spawn_worker(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
+        // COLLUDE.1: every worker collects its relay receipts on its own
+        // task; task-locals do not cross `tokio::spawn`.
+        let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
+        tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
+    }
+
     fn cancel_signal(&self, id: &str) {
         self.handoffs.cancel_signal(id);
     }
 
-    pub(crate) async fn commit(&self, write: TaskWrite<'_>) -> Result<WriteOutcome, CommitFailure> {
-        let (outcome, was_created, stage, task_id) = match write {
-            TaskWrite::Create {
-                request,
-                task,
-                backend,
-            } => {
-                let workers = Arc::clone(&self.workers);
-                let created = self
-                    .service
-                    .create(request.borrow(), task, backend, move || {
-                        workers.try_acquire_owned().ok()
-                    })
-                    .await
-                    .map_err(CommitFailure::Service)?;
-                let was_created = matches!(created, CreateOutcome::Created { .. });
-                let id = match &created {
-                    CreateOutcome::Created { task, .. } | CreateOutcome::Existing(task) => {
-                        task.task.id().to_owned()
-                    }
-                    _ => task.id().to_owned(),
-                };
-                (
-                    WriteOutcome::Create(created),
-                    was_created,
-                    CommitStage::Published,
-                    id,
-                )
-            }
-            TaskWrite::Settle {
+    pub(crate) async fn commit_create(
+        &self,
+        write: CreateWrite<'_>,
+    ) -> Result<CreateOutcome, CommitFailure> {
+        let CreateWrite {
+            request,
+            task,
+            backend,
+            targets,
+        } = write;
+        let workers = Arc::clone(&self.workers);
+        let created = self
+            .service
+            .create_targeted(request.borrow(), task, (backend, targets), move || {
+                workers.try_acquire_owned().ok()
+            })
+            .await
+            .map_err(CommitFailure::Service)?;
+        if let CreateOutcome::Created { task: stored, .. } = &created {
+            let id = stored.task.id().to_owned();
+            self.published(stored, &id);
+            self.notify_observer(CommitStage::Published, &id).await;
+        }
+        Ok(created)
+    }
+
+    pub(crate) async fn commit_transition(
+        &self,
+        write: TransitionWrite<'_>,
+    ) -> Result<CommittedTask, CommitFailure> {
+        let (committed, changed, id) = match write {
+            TransitionWrite::Settle {
                 principal,
                 id,
                 revision,
                 event,
+                targets,
             } => {
-                self.transition_write(principal, id, revision, event)
+                self.transition_write(principal, id, revision, (event, targets))
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
             // field types and merging them would hand a stored digest to the
             // adapter that hashes a principal.
-            TaskWrite::Recover {
+            TransitionWrite::Recover {
                 owner_digest,
                 id,
                 revision,
                 event,
             } => {
-                self.transition_digest_write(owner_digest, id, revision, event)
+                self.transition_digest_write(owner_digest, id, revision, (event, None))
                     .await?
             }
-            TaskWrite::Cancel {
+            TransitionWrite::Cancel {
                 principal,
                 id,
                 revision,
             } => {
-                self.transition_write(principal, id, revision, TaskTransition::Cancel)
+                self.transition_write(principal, id, revision, (TaskTransition::Cancel, None))
                     .await?
             }
         };
-        if was_created {
-            self.published(&outcome, &task_id);
-            self.notify_observer(stage, &task_id).await;
+        if changed {
+            self.published(&committed, &id);
+            self.notify_observer(CommitStage::Transitioned, &id).await;
         }
-        Ok(outcome)
+        Ok(committed)
     }
 
     /// The request-side adapter: a caller-supplied principal becomes an owner
@@ -441,25 +508,25 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
-        event: TaskTransition,
-    ) -> Result<(WriteOutcome, bool, CommitStage, String), CommitFailure> {
+        outcome: (TaskTransition, Option<Vec<Target>>),
+    ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, event)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome)
             .await
     }
 
     /// The one publication seam, reached only after a durable write that
     /// changed something: a dedupe, a no-op or a failed commit never gets here,
     /// so a listener never learns of a transition that did not happen.
-    fn published(&self, outcome: &WriteOutcome, task_id: &str) {
-        let status = match outcome {
-            WriteOutcome::Create(CreateOutcome::Created { task, .. })
-            | WriteOutcome::Transitioned(task) => task.task.status(),
-            WriteOutcome::Create(_) => return,
-        };
+    pub(super) fn published(&self, task: &CommittedTask, task_id: &str) {
+        let (status, changed_at) = (task.task.status(), task.task.last_updated_at());
+        let owner = task.owner_digest.clone();
+        if let Some(hook) = self.publication_hook.get() {
+            hook(task_id, status, changed_at, Some(owner));
+        }
         tracing::debug!(
             task_id,
             kind = "durable",
@@ -517,3 +584,6 @@ fn commit_to_service(error: CommitFailure) -> ServiceError {
         CommitFailure::RevisionConflict => ServiceError::Unavailable,
     }
 }
+
+#[cfg(test)]
+mod scope_tests;

@@ -4,12 +4,25 @@
 //!
 //! These types map directly to the YAML capability definition format.
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::identity_grants::{CapabilityExposure, GrantSubject};
 use crate::protocol::ToolAnnotations;
 use crate::transform::TransformConfig;
+
+mod process;
+mod protocols;
+mod providers;
+mod webhook;
+pub use process::{
+    CliArg, CliConfig, CliOutput, ConditionalArg, DEFAULT_MAX_OUTPUT_BYTES, EachArg, JsonArg,
+    MAX_OUTPUT_BYTES_CEILING, McpConfig, McpTransport, PrepareCall, ProcessConfig, RootName,
+    ToolCall, ToolSelector, WAIT_INTERVAL_MS, WaitStep, WaitUntil,
+};
+pub use protocols::{GraphqlConfig, JsonRpcConfig, PathSelectorConfig, ProtocolConfig, RestConfig};
+pub use providers::{Integrity, ProvidersConfig};
+pub use webhook::WebhookEvent;
 
 /// A capability definition describing how to call a REST API
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +44,7 @@ pub struct CapabilityDefinition {
     pub schema: SchemaDefinition,
 
     /// Provider configurations
-    #[serde(deserialize_with = "deserialize_providers")]
+    #[serde(deserialize_with = "providers::deserialize_providers")]
     pub providers: ProvidersConfig,
 
     /// Authentication configuration
@@ -115,96 +128,6 @@ pub struct CapabilityDefinition {
     /// ```
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visible_in_states: Vec<String>,
-}
-
-/// Provider configurations supporting both named and fallback arrays
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct ProvidersConfig {
-    /// Named providers (primary, secondary, etc.)
-    pub named: HashMap<String, ProviderConfig>,
-    /// Fallback providers (ordered list)
-    pub fallback: Vec<ProviderConfig>,
-}
-
-impl ProvidersConfig {
-    /// Check if empty
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.named.is_empty() && self.fallback.is_empty()
-    }
-
-    /// Check if contains a key
-    #[must_use]
-    pub fn contains_key(&self, key: &str) -> bool {
-        self.named.contains_key(key)
-    }
-
-    /// Get a named provider
-    #[must_use]
-    pub fn get(&self, key: &str) -> Option<&ProviderConfig> {
-        self.named.get(key)
-    }
-}
-
-impl<'de> Deserialize<'de> for ProvidersConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserialize_providers(deserializer)
-    }
-}
-
-/// Custom deserializer for providers that handles both formats:
-/// - Standard: { primary: {...}, secondary: {...} }
-/// - With fallback array: { primary: {...}, fallback: [{...}, {...}] }
-fn deserialize_providers<'de, D>(deserializer: D) -> Result<ProvidersConfig, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de::{MapAccess, Visitor};
-    use std::fmt;
-
-    struct ProvidersVisitor;
-
-    impl<'de> Visitor<'de> for ProvidersVisitor {
-        type Value = ProvidersConfig;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a map of provider configurations")
-        }
-
-        fn visit_map<M>(self, mut map: M) -> Result<ProvidersConfig, M::Error>
-        where
-            M: MapAccess<'de>,
-        {
-            let mut named = HashMap::new();
-            let mut fallback = Vec::new();
-
-            while let Some(key) = map.next_key::<String>()? {
-                if key == "fallback" {
-                    // Try to deserialize as array first, then as single provider
-                    let value: serde_json::Value = map.next_value()?;
-                    if let Some(arr) = value.as_array() {
-                        for item in arr {
-                            if let Ok(provider) = serde_json::from_value(item.clone()) {
-                                fallback.push(provider);
-                            }
-                        }
-                    } else if let Ok(provider) = serde_json::from_value(value) {
-                        fallback.push(provider);
-                    }
-                } else {
-                    let provider: ProviderConfig = map.next_value()?;
-                    named.insert(key, provider);
-                }
-            }
-
-            Ok(ProvidersConfig { named, fallback })
-        }
-    }
-
-    deserializer.deserialize_map(ProvidersVisitor)
 }
 
 fn default_version() -> String {
@@ -331,335 +254,6 @@ fn default_timeout() -> u64 {
     30
 }
 
-/// REST API configuration
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RestConfig {
-    /// Base URL for the API
-    #[serde(default)]
-    pub base_url: String,
-
-    /// Path template (supports {param} substitution).
-    ///
-    /// When [`Self::path_selector`] is configured, this may repeat the
-    /// selector's default path as a compatibility fallback for older gateway
-    /// binaries that do not understand `path_selector`.
-    #[serde(default)]
-    pub path: String,
-
-    /// Select one of several path templates from a caller parameter.
-    ///
-    /// This is a safe, declarative alternative to executable request-transform
-    /// snippets for APIs whose route shape changes with an enum-like input.
-    /// The selected template receives the same `{param}` substitution as
-    /// [`Self::path`]. When the selector parameter is absent, `default` is
-    /// used; unknown values fail closed instead of becoming URL fragments.
-    /// `path`, when also present, must exactly match the selected default path
-    /// and is retained only as a rolling-upgrade fallback.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path_selector: Option<PathSelectorConfig>,
-
-    /// Full endpoint URL (alternative to `base_url` + path)
-    /// Takes precedence if set
-    #[serde(default)]
-    pub endpoint: String,
-
-    /// HTTP method
-    #[serde(default = "default_method")]
-    pub method: String,
-
-    /// Headers to send (supports {param} and {env.VAR} substitution)
-    #[serde(default)]
-    pub headers: HashMap<String, String>,
-
-    /// Query parameters (supports substitution)
-    #[serde(default)]
-    pub params: HashMap<String, String>,
-
-    /// Parameter name mapping (e.g., query -> q for search APIs)
-    #[serde(default)]
-    pub param_map: HashMap<String, String>,
-
-    /// Static parameters merged into every request.
-    ///
-    /// These are fixed values baked into the capability definition — they do
-    /// not need to be supplied by the caller.  User-provided parameters with
-    /// the same key always take precedence, so callers can still override a
-    /// static default when needed.
-    ///
-    /// Static params participate in the same substitution pipeline as
-    /// dynamic params: they flow into URL path templates, query strings,
-    /// request bodies, and header values exactly like caller-supplied params.
-    ///
-    /// # Example (YAML)
-    ///
-    /// ```yaml
-    /// config:
-    ///   base_url: https://api.open-meteo.com
-    ///   path: /v1/forecast
-    ///   static_params:
-    ///     current: "temperature_2m,precipitation,weather_code"
-    ///     timezone: "auto"
-    /// ```
-    #[serde(default)]
-    pub static_params: HashMap<String, serde_json::Value>,
-
-    /// Request body template (for POST/PUT)
-    #[serde(default)]
-    pub body: Option<serde_json::Value>,
-
-    /// Response transformation (jq-like path)
-    #[serde(default)]
-    pub response_path: Option<String>,
-
-    /// Expected response format: "json" (default) or "xml".
-    ///
-    /// When set to "xml", the executor parses the response body as XML and
-    /// converts it to a JSON object before applying `response_path`.
-    /// When empty or "json", the response is parsed as JSON (the default).
-    ///
-    /// Auto-detection: if this field is empty the executor also checks the
-    /// `Content-Type` response header — if it contains `xml`, the response
-    /// is treated as XML automatically.
-    #[serde(default)]
-    pub response_format: String,
-
-    /// Override the `Content-Type` header for the request body.
-    ///
-    /// When empty (the default) POST/PUT/PATCH bodies are sent as
-    /// `application/json`.  Set to `"text/plain"` to send a raw string body
-    /// (useful for databases like `SurrealDB` whose `/sql` endpoint requires
-    /// `text/plain`).  The `body` template value must be a JSON string
-    /// (`"SELECT ..."`) — it is serialised without the outer quotes before
-    /// sending.
-    ///
-    /// # Example (YAML)
-    ///
-    /// ```yaml
-    /// config:
-    ///   base_url: http://127.0.0.1:8000
-    ///   path: /sql
-    ///   method: POST
-    ///   body_content_type: "text/plain"
-    ///   body: "SELECT * FROM bus_msg WHERE topic = '{topic}' LIMIT {max_msg}"
-    /// ```
-    #[serde(default)]
-    pub body_content_type: String,
-}
-
-/// Declarative selection of a REST path template from an input parameter.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PathSelectorConfig {
-    /// Input property whose string value selects a path.
-    #[serde(default)]
-    pub parameter: String,
-
-    /// Selector value to use when the caller omits `parameter`.
-    #[serde(default)]
-    pub default: String,
-
-    /// Selector value to path-template mapping.
-    #[serde(default)]
-    pub paths: HashMap<String, String>,
-}
-
-impl RestConfig {
-    /// Get the effective base URL (from endpoint or `base_url`)
-    #[must_use]
-    pub fn effective_base_url(&self) -> &str {
-        if self.endpoint.is_empty() {
-            &self.base_url
-        } else {
-            // Extract base from endpoint (everything before the path)
-            &self.endpoint
-        }
-    }
-
-    /// Check if this uses endpoint style (full URL with path params)
-    #[must_use]
-    pub fn uses_endpoint(&self) -> bool {
-        !self.endpoint.is_empty()
-    }
-
-    /// Merge `static_params` with caller-supplied `params`, returning an
-    /// effective parameter object where **caller values take precedence**.
-    ///
-    /// If `static_params` is empty the original `params` value is returned
-    /// unchanged (zero allocation in the common case).
-    ///
-    /// # Merge semantics
-    ///
-    /// ```text
-    /// effective = static_params ∪ caller_params   (caller wins on collision)
-    /// ```
-    #[must_use]
-    pub fn merge_with_static_params<'a>(
-        &'a self,
-        caller_params: &'a serde_json::Value,
-    ) -> std::borrow::Cow<'a, serde_json::Value> {
-        if self.static_params.is_empty() {
-            return std::borrow::Cow::Borrowed(caller_params);
-        }
-
-        // Start with static params as base, then overlay caller params on top.
-        let mut merged = serde_json::Map::with_capacity(
-            self.static_params.len() + caller_params.as_object().map_or(0, serde_json::Map::len),
-        );
-
-        for (k, v) in &self.static_params {
-            merged.insert(k.clone(), v.clone());
-        }
-
-        if let Some(caller_obj) = caller_params.as_object() {
-            for (k, v) in caller_obj {
-                merged.insert(k.clone(), v.clone());
-            }
-        }
-
-        std::borrow::Cow::Owned(serde_json::Value::Object(merged))
-    }
-}
-
-fn default_method() -> String {
-    "GET".to_string()
-}
-
-/// GraphQL API configuration
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GraphqlConfig {
-    /// GraphQL endpoint URL (e.g. `https://api.github.com/graphql`)
-    #[serde(default)]
-    pub endpoint: String,
-
-    /// HTTP headers to send (supports `{env.VAR}` substitution for auth)
-    #[serde(default)]
-    pub headers: HashMap<String, String>,
-
-    /// Default query template.
-    ///
-    /// Supports `{param}` substitution — caller-supplied parameters replace
-    /// matching placeholders in the query string before it is sent.
-    #[serde(default)]
-    pub query: Option<String>,
-
-    /// Default GraphQL variables.
-    ///
-    /// These are merged with caller-supplied variables (caller wins on key
-    /// collision) and sent in the `variables` field of the JSON body.
-    #[serde(default)]
-    pub variables: HashMap<String, serde_json::Value>,
-
-    /// Response path for extracting a nested field from the GraphQL `data`
-    /// response (dot-separated, e.g. `"data.viewer"`).
-    #[serde(default)]
-    pub response_path: Option<String>,
-}
-
-/// JSON-RPC 2.0 API configuration
-///
-/// Defines how to call a JSON-RPC 2.0 service: the endpoint URL, the
-/// method name, optional default parameters, and HTTP headers.
-///
-/// Note: `GraphqlConfig` uses `#[derive(Default)]` on the struct definition.
-///
-/// At execution time the executor builds a spec-compliant request:
-///
-/// ```json
-/// { "jsonrpc": "2.0", "id": "<uuid>", "method": "<method>", "params": <merged> }
-/// ```
-///
-/// Default parameters from `default_params` are merged with caller-supplied
-/// parameters (caller wins on key collision), mirroring the merge semantics
-/// used by `RestConfig::static_params` and `GraphqlConfig::variables`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct JsonRpcConfig {
-    /// JSON-RPC endpoint URL (e.g. `http://localhost:8545`)
-    #[serde(default)]
-    pub endpoint: String,
-
-    /// JSON-RPC method name (e.g. `eth_blockNumber`, `system.listMethods`)
-    #[serde(default)]
-    pub method: String,
-
-    /// HTTP headers to send (supports `{env.VAR}` substitution for auth)
-    #[serde(default)]
-    pub headers: HashMap<String, String>,
-
-    /// Default parameters merged with caller-supplied params.
-    ///
-    /// Caller-supplied keys always win on collision. This is analogous to
-    /// `RestConfig::static_params` / `GraphqlConfig::variables`.
-    #[serde(default)]
-    pub default_params: serde_json::Value,
-}
-
-// Note: JsonRpcConfig and GraphqlConfig both use #[derive(Default)]
-// on their struct definitions above, so no manual impl is needed.
-
-/// Protocol-specific configuration, derived from `ProviderConfig.service` + `config`.
-///
-/// This enum is the extension point for future protocol adapters.
-///
-/// `ProtocolConfig` is NOT deserialized from YAML directly — it is produced
-/// by [`ProviderConfig::protocol_config()`] to preserve backward
-/// compatibility with existing capability definitions.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "protocol", rename_all = "snake_case")]
-pub enum ProtocolConfig {
-    /// REST/HTTP protocol (the original and default).
-    ///
-    /// Boxed to reduce the size difference between enum variants (clippy
-    /// `large_enum_variant`).  `RestConfig` is the largest variant because it
-    /// carries many optional fields; boxing keeps the enum itself small.
-    Rest(Box<RestConfig>),
-    /// GraphQL protocol — sends `{ query, variables }` as a POST.
-    Graphql(GraphqlConfig),
-    /// JSON-RPC 2.0 protocol — sends `{ jsonrpc, id, method, params }` as a POST.
-    Jsonrpc(JsonRpcConfig),
-    // Future variants:
-    // Grpc(GrpcConfig),
-    // Cli(CliConfig),
-    // Wasm(WasmConfig),
-}
-
-impl ProtocolConfig {
-    /// Returns the protocol name for logging and dispatch.
-    #[must_use]
-    pub fn protocol_name(&self) -> &'static str {
-        match self {
-            ProtocolConfig::Rest(_) => "rest",
-            ProtocolConfig::Graphql(_) => "graphql",
-            ProtocolConfig::Jsonrpc(_) => "jsonrpc",
-        }
-    }
-
-    /// Extract the inner `RestConfig`, if this is a REST protocol.
-    #[must_use]
-    pub fn as_rest(&self) -> Option<&RestConfig> {
-        match self {
-            ProtocolConfig::Rest(c) => Some(c.as_ref()),
-            _ => None,
-        }
-    }
-
-    /// Extract the inner `GraphqlConfig`, if this is a GraphQL protocol.
-    #[must_use]
-    pub fn as_graphql(&self) -> Option<&GraphqlConfig> {
-        match self {
-            ProtocolConfig::Graphql(c) => Some(c),
-            _ => None,
-        }
-    }
-
-    /// Extract the inner `JsonRpcConfig`, if this is a JSON-RPC protocol.
-    #[must_use]
-    pub fn as_jsonrpc(&self) -> Option<&JsonRpcConfig> {
-        match self {
-            ProtocolConfig::Jsonrpc(c) => Some(c),
-            _ => None,
-        }
-    }
-}
-
 /// Authentication configuration
 ///
 /// # Security Note
@@ -776,7 +370,8 @@ pub struct WebhookTransform {
     /// Template for extracting the event type (e.g., "linear.issue.{action}")
     #[serde(default)]
     pub event_type: Option<String>,
-    /// Field mappings: `output_key` -> template or JSON path
+    /// Field mappings: `output_key` -> template (`{a.b}` placeholders; text
+    /// with none is a literal)
     #[serde(default)]
     pub data: HashMap<String, String>,
 }
@@ -787,7 +382,7 @@ pub struct WebhookDefinition {
     /// URL path relative to `base_path` (e.g., "/linear/webhook")
     pub path: String,
     /// HTTP method to accept (default: POST)
-    #[serde(default = "default_method")]
+    #[serde(default = "webhook::default_method")]
     pub method: String,
     /// HMAC secret reference (e.g., "`env:LINEAR_WEBHOOK_SECRET`")
     #[serde(default)]
@@ -801,23 +396,9 @@ pub struct WebhookDefinition {
     /// Payload transform configuration
     #[serde(default)]
     pub transform: WebhookTransform,
-}
-
-// Manual `Debug` that redacts the HMAC verification secret (CWE-532, mirrors
-// PR #323). A derived `Debug` would print the webhook `secret` verbatim into
-// any trace or error context; only its presence is surfaced.
-impl std::fmt::Debug for WebhookDefinition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let redact_opt = |v: &Option<String>| if v.is_some() { "<redacted>" } else { "None" };
-        f.debug_struct("WebhookDefinition")
-            .field("path", &self.path)
-            .field("method", &self.method)
-            .field("secret", &redact_opt(&self.secret))
-            .field("signature_header", &self.signature_header)
-            .field("notify", &self.notify)
-            .field("transform", &self.transform)
-            .finish()
-    }
+    /// Opt-in MCP event for this route (MIK-7630); absent = no event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<WebhookEvent>,
 }
 
 fn default_notify() -> bool {
@@ -1028,7 +609,9 @@ impl CapabilityDefinition {
             name: self.name.clone(),
             title: None,
             description: Some(self.build_description()),
-            input_schema: self.schema.input.clone(),
+            input_schema: crate::capability::schema_validator::advertised_input_schema(
+                &self.schema.input,
+            ),
             output_schema: if self.schema.output.is_null() {
                 None
             } else {
@@ -1057,12 +640,6 @@ impl CapabilityDefinition {
         self.providers.get("primary")
     }
 
-    /// Get all fallback providers
-    #[must_use]
-    pub fn fallback_providers(&self) -> &[ProviderConfig] {
-        &self.providers.fallback
-    }
-
     /// Check if caching is enabled
     #[must_use]
     pub fn is_cacheable(&self) -> bool {
@@ -1074,34 +651,7 @@ impl CapabilityDefinition {
 mod tests;
 
 #[cfg(test)]
-mod cwe532_debug_redaction {
-    use super::*;
-
-    const SENTINEL: &str = "SENTINEL_SECRET_a1b2c3";
-
-    // WebhookDefinition::Debug must never surface the HMAC verification secret.
-    #[test]
-    fn webhook_definition_debug_redacts_secret() {
-        let w = WebhookDefinition {
-            path: "/linear/webhook".to_string(),
-            method: "POST".to_string(),
-            secret: Some(SENTINEL.to_string()),
-            signature_header: Some("X-Linear-Signature".to_string()),
-            notify: true,
-            transform: WebhookTransform::default(),
-        };
-        let dbg = format!("{w:?}");
-        assert!(!dbg.contains(SENTINEL), "leaked webhook secret: {dbg}");
-        assert!(
-            dbg.contains("<redacted>"),
-            "missing redaction marker: {dbg}"
-        );
-        assert!(
-            dbg.contains("/linear/webhook"),
-            "path should stay visible: {dbg}"
-        );
-    }
-}
+mod cwe532_debug_redaction;
 
 /// `true` when this capability hands a caller-chosen destination to a third
 /// party that will later call it.
@@ -1200,208 +750,4 @@ pub fn creates_caller_addressed_external_state(def: &CapabilityDefinition) -> bo
 }
 
 #[cfg(test)]
-mod caller_addressed_state_tests {
-    use super::*;
-
-    fn def(method: &str, input: &serde_json::Value) -> CapabilityDefinition {
-        named_def("create_webhook", method, input)
-    }
-
-    fn named_def(name: &str, method: &str, input: &serde_json::Value) -> CapabilityDefinition {
-        // A read capability declares itself read-only, as the shipped ones do.
-        // Leaving the flag at its default means "unknown", which is treated as
-        // mutating: the safe direction for a rule about registering a
-        // destination somebody else will deliver to.
-        let read_only = method.eq_ignore_ascii_case("GET");
-        let yaml = format!(
-            "fulcrum: \"1.0\"\nname: {name}\ndescription: d\nschema:\n  input: {}\nproviders:\n  primary:\n    service: s\n    config:\n      endpoint: https://example.com/x\n      method: {method}\nauth:\n  required: false\n  type: none\nmetadata:\n  read_only: {read_only}\n",
-            serde_json::to_string(input).unwrap()
-        );
-        serde_yaml::from_str(&yaml).expect("definition parses")
-    }
-
-    #[test]
-    fn the_shipped_capabilities_classify_as_expected() {
-        // Run against the real files, not synthetic ones: the hand count that
-        // justified deferring this was wrong, so the classifier has to be shown
-        // against what actually ships.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
-        if !root.exists() {
-            return;
-        }
-        let mut flagged = Vec::new();
-        let mut walked = 0usize;
-        let mut stack = vec![root];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|e| e == "yaml") {
-                    walked += 1;
-                    let Ok(text) = std::fs::read_to_string(&path) else {
-                        continue;
-                    };
-                    if let Ok(def) = serde_yaml::from_str::<CapabilityDefinition>(&text)
-                        && creates_caller_addressed_external_state(&def)
-                    {
-                        flagged.push(def.name);
-                    }
-                }
-            }
-        }
-        assert!(
-            walked > 100,
-            "expected the full capability set, walked {walked}"
-        );
-        flagged.sort();
-        // Every shipped registration, not only the one that prompted this.
-        // `gws_gmail_watch` registers a Pub/Sub topic: no "webhook" in the name
-        // and no URL in the schema, and the first version missed it.
-        for expected in ["linear_create_webhook", "gws_gmail_watch"] {
-            assert!(
-                flagged.contains(&expected.to_string()),
-                "{expected} registers a delivery destination and must be caught: {flagged:?}"
-            );
-        }
-        // Sending a URL as DATA is not registering a destination: nothing calls
-        // back, and requiring a credential would take ordinary tools away.
-        for ordinary in [
-            "wayback_availability",
-            "wayback_save",
-            "linear_attach_url",
-            "notion_create_page",
-            // Named for a subscription, but its body returns a timestamp and
-            // registers nothing. A name is a hint, never the evidence.
-            "bus_subscribe",
-        ] {
-            assert!(
-                !flagged.contains(&ordinary.to_string()),
-                "{ordinary} posts a URL as data and must stay open: {flagged:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_posted_caller_url_creates_external_state() {
-        let d = def(
-            "POST",
-            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
-        );
-        assert!(creates_caller_addressed_external_state(&d));
-    }
-
-    #[test]
-    fn a_read_of_a_caller_url_does_not() {
-        // wayback_availability asks a third party ABOUT a URL. Nothing is
-        // created and nothing calls back.
-        let d = def(
-            "GET",
-            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
-        );
-        assert!(!creates_caller_addressed_external_state(&d));
-    }
-
-    #[test]
-    fn posting_a_url_as_data_is_not_registering_an_address() {
-        // wayback_save posts a URL to be archived. Nothing calls back, and
-        // requiring admin would take an ordinary tool away from a single-user
-        // client for no gain.
-        let d = named_def(
-            "wayback_save",
-            "POST",
-            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
-        );
-        assert!(!creates_caller_addressed_external_state(&d));
-    }
-
-    #[test]
-    fn a_post_without_a_destination_does_not() {
-        let d = def(
-            "POST",
-            &serde_json::json!({"properties": {"title": {"type": "string"}}}),
-        );
-        assert!(!creates_caller_addressed_external_state(&d));
-    }
-    #[test]
-    fn a_declared_registration_wins_over_the_name_heuristic() {
-        // MIK-7262. `gws_gmail_watch` registers a Pub/Sub topic: the destination
-        // is not a URL and the name carries no keyword, so inference alone
-        // misses it. A capability author saying so must beat the heuristic, or
-        // the declaration is decoration.
-        let mut d = named_def(
-            "notion_create_page",
-            "POST",
-            &serde_json::json!({"properties": {"title": {"type": "string"}}}),
-        );
-        assert!(
-            !creates_caller_addressed_external_state(&d),
-            "inference alone must not flag this, or the test proves nothing"
-        );
-        d.metadata.registers_external_callback = Some(true);
-        assert!(creates_caller_addressed_external_state(&d));
-    }
-
-    #[test]
-    fn a_declared_non_registration_wins_over_the_name_heuristic() {
-        // The other direction, and the one that costs a user a tool: a name and
-        // a schema that both read as a webhook, on a capability whose author
-        // says it registers nothing.
-        let mut d = named_def(
-            "linear_create_webhook",
-            "POST",
-            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
-        );
-        assert!(
-            creates_caller_addressed_external_state(&d),
-            "inference alone must flag this, or the test proves nothing"
-        );
-        d.metadata.registers_external_callback = Some(false);
-        assert!(!creates_caller_addressed_external_state(&d));
-    }
-
-    #[test]
-    fn a_declared_registration_survives_a_non_mutating_method() {
-        // MIK-7262. The declaration used to be read AFTER the method inference
-        // had already returned, so an author who said "this registers a
-        // callback" on a GET-reached capability was silently overruled by the
-        // heuristic the declaration exists to beat.
-        let mut d = named_def(
-            "gws_gmail_watch",
-            "GET",
-            &serde_json::json!({"properties": {"topic": {"type": "string"}}}),
-        );
-        d.metadata.read_only = false;
-        d.metadata.registers_external_callback = Some(true);
-        assert!(creates_caller_addressed_external_state(&d));
-    }
-
-    #[test]
-    fn a_declared_registration_survives_a_schema_without_properties() {
-        // The second short-circuit: a definition whose input carries no
-        // `properties` map bailed out before the declaration was read.
-        let mut d = named_def("gws_gmail_watch", "POST", &serde_json::json!({}));
-        d.metadata.registers_external_callback = Some(true);
-        assert!(creates_caller_addressed_external_state(&d));
-    }
-
-    #[test]
-    fn read_only_still_beats_a_declared_registration() {
-        // Precedence pin (design event, MIK-7262): `read_only` is ALSO an author
-        // declaration, and the older one. Two explicit declarations in conflict
-        // resolve to read-only, so the fix above cannot quietly reverse the
-        // ruling recorded at the top of the function. Without this test the next
-        // refactor re-hoists the callback check and nothing fails.
-        let mut d = named_def(
-            "linear_create_webhook",
-            "POST",
-            &serde_json::json!({"properties": {"url": {"type": "string"}}}),
-        );
-        d.metadata.read_only = true;
-        d.metadata.registers_external_callback = Some(true);
-        assert!(!creates_caller_addressed_external_state(&d));
-    }
-}
+mod caller_addressed_state_tests;

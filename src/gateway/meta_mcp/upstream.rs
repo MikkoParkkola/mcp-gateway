@@ -287,14 +287,17 @@ pub(crate) fn recovery_policy_args(
 pub(crate) struct UpstreamSubmission {
     server: String,
     tool: String,
+    /// The gateway task this submission belongs to.
+    task_id: String,
     handle: parking_lot::Mutex<Option<String>>,
 }
 
 impl UpstreamSubmission {
-    pub(crate) fn armed_for(server: &str, tool: &str) -> Self {
+    pub(crate) fn armed_for(server: &str, tool: &str, task_id: &str) -> Self {
         Self {
             server: server.to_owned(),
             tool: tool.to_owned(),
+            task_id: task_id.to_owned(),
             handle: parking_lot::Mutex::new(None),
         }
     }
@@ -305,12 +308,15 @@ impl UpstreamSubmission {
     }
 
     /// Offer the RAW backend reply. Stores the handle iff it is a genuine
-    /// upstream task envelope and none has been stored yet.
+    /// upstream task envelope and none has been stored yet, and notes the task
+    /// for the submission record (MIN.1 gap 1), whatever the gates then make
+    /// of the reply.
     pub(crate) fn offer(&self, raw: &Value) {
         if let Some(handle) = upstream_task_handle(raw) {
             let mut slot = self.handle.lock();
             if slot.is_none() {
                 *slot = Some(handle.to_owned());
+                super::invoke::audit::note_upstream_task(&self.task_id);
             }
         }
     }
@@ -411,6 +417,19 @@ impl MetaMcp {
         trace_id: &str,
         result: Value,
     ) -> crate::Result<Value> {
+        let gated = self.recover_gated(server, tool, api_key_name, trace_id, result);
+        super::invoke::audit::note_refusal(&gated);
+        gated
+    }
+
+    fn recover_gated(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> crate::Result<Value> {
         let output_schema = self
             .get_tool_registry()
             .and_then(|registry| registry.get(&format!("{server}:{tool}")))
@@ -423,7 +442,14 @@ impl MetaMcp {
             });
         let validated =
             super::invoke::enforce_output_schema(server, tool, result, output_schema.as_ref());
-        self.apply_response_gates(server, tool, api_key_name, trace_id, validated)
+        let mut gated =
+            self.apply_response_gates(server, tool, api_key_name, trace_id, validated)?;
+        let target = super::response_security::ResponsePolicyTarget {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+        };
+        self.inspect_task_result(&[target], trace_id, &mut gated)?;
+        Ok(gated)
     }
 
     /// The ordinary post-dispatch processing for a FAILURE that arrived late.
@@ -513,7 +539,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_armed_slot_is_invisible_to_every_other_dispatch() {
-        let armed = std::sync::Arc::new(UpstreamSubmission::armed_for("peer", "slow_echo"));
+        let armed =
+            std::sync::Arc::new(UpstreamSubmission::armed_for("peer", "slow_echo", "task-1"));
         assert!(
             armed_submission("peer", "slow_echo").is_none(),
             "outside a scope nothing is armed, so an ordinary call can never \
@@ -532,7 +559,7 @@ mod tests {
 
     #[test]
     fn only_the_first_genuine_envelope_is_kept() {
-        let armed = UpstreamSubmission::armed_for("peer", "slow_echo");
+        let armed = UpstreamSubmission::armed_for("peer", "slow_echo", "task-1");
         armed.offer(&json!({"resultType": "complete", "content": []}));
         assert_eq!(armed.handle(), None, "a synchronous answer is not a handle");
         armed.offer(&json!({"resultType": "task", "taskId": "first", "status": "working"}));

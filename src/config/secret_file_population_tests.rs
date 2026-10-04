@@ -14,7 +14,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "evaluation tool input; not a gateway file",
     ),
     (
-        "src/capability/backend.rs",
+        "src/capability/backend_rug_pull.rs",
         "capability YAML; public definitions",
     ),
     (
@@ -30,11 +30,19 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "capability YAML; public definitions",
     ),
     (
+        "src/capability/executor/save_file.rs",
+        "writes a fetched attachment, create-new at 0600 under the downloads root; reads none",
+    ),
+    (
         "src/chains/checkpoint.rs",
         "chain checkpoints; no secret, not a trust decision",
     ),
     ("src/cli/invoke.rs", "reads stdin, not a file"),
     ("src/commands/cap.rs", "capability YAML pinning; public"),
+    (
+        "src/commands/config_export/mod.rs",
+        "third-party MCP client config JSON edited to add the gateway entry; no gateway secret",
+    ),
     (
         "src/commands/dashboard_link.rs",
         "operator-named client cert, key and CA for one request (#1832); the mode-checked read is lib-internal, widening it was declined",
@@ -55,6 +63,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/commands/trust.rs",
         "trust report input/output; no secret",
+    ),
+    (
+        "src/commands/trust/baseline.rs",
+        "TrustLab baseline and registry manifest files; no secret",
+    ),
+    (
+        "src/commands/trust/lab.rs",
+        "TrustLab active-fixture spec input; no secret",
     ),
     (
         "src/commands/upgrade.rs",
@@ -83,7 +99,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads sealed audit log segments for export; no secret",
     ),
     (
-        "src/control_plane/store.rs",
+        "src/control_plane/store/file_io.rs",
         "collections read through read_guarded_file (I4); raw opens are the generation probe, the 0600 writer and a dir sync",
     ),
     (
@@ -96,8 +112,20 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ),
     ("src/fs_lock.rs", "lock files; empty"),
     (
+        "src/events/records.rs",
+        "events store records read through read_checked_bytes (EventsRecord, 0600); File::open only opens the store directory to fsync it",
+    ),
+    (
+        "src/gateway/mod.rs",
+        "test_helpers fixture writer, not a gateway read",
+    ),
+    (
         "src/gateway/server/control_plane_store.rs",
         "writability probe",
+    ),
+    (
+        "src/gateway/task_service/store_unix.rs",
+        "task records: O_NOFOLLOW open, fstat mode 0600 checked (RECORD_MODE)",
     ),
     (
         "src/gateway/task_service/execution/pause_hook.rs",
@@ -129,6 +157,15 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "Windows store custody: no-follow open, DACL judged on the handle (ADR-016)",
     ),
     (
+        "src/playbook/engine/mod.rs",
+        "playbook YAML definitions; public",
+    ),
+    (
+        "src/protocol_revision_telemetry.rs",
+        "telemetry window counters in a 0700 directory; no secret",
+    ),
+    ("src/ranking/mod.rs", "tool usage counts JSON; no secret"),
+    (
         "src/registry/marketplace/mod.rs",
         "marketplace manifests; public",
     ),
@@ -144,6 +181,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/security/transparency_log_append.rs",
         "audit log writer; reopens only to cut back a torn tail; no secret",
+    ),
+    (
+        "src/security/transparency_log_hwm_scan.rs",
+        "reads audit log segments for a missing-mark finding; no secret",
     ),
     (
         "src/security/transparency_log_rotation.rs",
@@ -173,6 +214,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/validator/cli_handler.rs",
         "capability YAML being validated; public",
     ),
+    (
+        "src/win_acl.rs",
+        "Windows store custody: reopens a just-created file for delete on the handle (ADR-016)",
+    ),
 ];
 
 fn is_test_path(path: &Path) -> bool {
@@ -196,12 +241,17 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// Files whose non-test code has a raw read or write. The body is cut at the
-/// first `#[cfg(test)]`, and comment lines are skipped.
+/// first inline `#[cfg(test)] mod name {`, not at any `#[cfg(test)]` item: a
+/// test-only `use` or constant near the top must not hide the production reads
+/// after it. Comment lines are skipped.
 fn population(root: &Path) -> BTreeSet<String> {
     let raw = regex::Regex::new(
         r"fs::read\b|read_to_string|File::open|OpenOptions::new|fs::write|fs::copy|from_pem",
     )
     .expect("pattern");
+    let inline_test_mod =
+        regex::Regex::new(r"#\[cfg\(test\)\]\s*(?:pub\s*(?:\([^)]*\))?\s*)?mod\s+\w+\s*\{")
+            .expect("pattern");
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
     files
@@ -212,7 +262,9 @@ fn population(root: &Path) -> BTreeSet<String> {
                 return None;
             }
             let text = std::fs::read_to_string(&path).expect("read source");
-            let body = text.split("#[cfg(test)]").next().unwrap_or_default();
+            let body = inline_test_mod
+                .find(&text)
+                .map_or(text.as_str(), |m| &text[..m.start()]);
             body.lines()
                 .any(|line| !line.trim_start().starts_with("//") && raw.is_match(line))
                 .then(|| rel.to_string_lossy().replace('\\', "/"))

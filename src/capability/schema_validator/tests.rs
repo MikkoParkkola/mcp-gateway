@@ -602,3 +602,158 @@ fn mcp_refusal_text_is_bounded_for_a_huge_schema() {
         "the violation itself must survive the cap"
     );
 }
+
+#[test]
+fn a_pattern_refuses_a_value_that_does_not_match() {
+    let schema = schema_with_props(
+        json!({"zone_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$"}}),
+        &["zone_id"],
+    );
+    assert!(
+        validate_arguments(&json!({"zone_id": "abc-123"}), &schema)
+            .violations
+            .is_empty()
+    );
+    for bad in ["real?x=#", "a/b", "..", ""] {
+        let r = validate_arguments(&json!({"zone_id": bad}), &schema);
+        assert_eq!(r.violations.len(), 1, "{bad:?}");
+    }
+}
+
+#[test]
+fn a_pattern_that_does_not_compile_refuses_everything() {
+    let schema = schema_with_props(json!({"x": {"type": "string", "pattern": "("}}), &[]);
+    assert_eq!(
+        validate_arguments(&json!({"x": "a"}), &schema)
+            .violations
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn array_size_limits_are_enforced() {
+    let schema = schema_with_props(
+        json!({"files": {"type": "array", "minItems": 1, "maxItems": 2}}),
+        &[],
+    );
+    assert!(
+        validate_arguments(&json!({"files": ["a"]}), &schema)
+            .violations
+            .is_empty()
+    );
+    assert_eq!(
+        validate_arguments(&json!({"files": []}), &schema)
+            .violations
+            .len(),
+        1
+    );
+    assert_eq!(
+        validate_arguments(&json!({"files": ["a", "b", "c"]}), &schema)
+            .violations
+            .len(),
+        1
+    );
+}
+
+// MIK-7845: a schema that opts in to extra fields must also KEEP them. The
+// validated output is what the caller receives, so dropping them turns
+// "tolerated" into "deleted".
+#[test]
+fn validate_output_keeps_the_extra_fields_it_tolerates() {
+    let mut schema = schema_with_props(
+        json!({ "web": { "type": "object" }, "answer": { "type": "string" } }),
+        &[],
+    );
+    schema["additionalProperties"] = json!(true);
+    let payload = json!({
+        "web": { "results": [] },
+        "answer": null,
+        "mixed": { "type": "mixed" },
+        "type": "search"
+    });
+    let result = validate_output(&payload, &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(
+        result.coerced, payload,
+        "nothing the upstream sent is dropped"
+    );
+}
+
+#[test]
+fn validate_output_still_coerces_declared_fields_when_extras_are_kept() {
+    let mut schema = schema_with_props(json!({ "count": { "type": "integer" } }), &[]);
+    schema["additionalProperties"] = json!(true);
+    let result = validate_output(&json!({ "count": "2", "extra": 1 }), &schema);
+    assert_eq!(result.coerced, json!({ "count": 2, "extra": 1 }));
+}
+
+#[test]
+fn closed_output_schemas_do_not_gain_extra_fields() {
+    let schema = schema_with_props(json!({ "count": { "type": "integer" } }), &[]);
+    let result = validate_output(&json!({ "count": 2 }), &schema);
+    assert_eq!(result.coerced, json!({ "count": 2 }));
+}
+
+// MIK-7845: `type: [string, "null"]` is read, not skipped.
+#[test]
+fn a_union_type_accepts_its_members_and_refuses_the_rest() {
+    let schema = schema_with_props(json!({ "answer": { "type": ["string", "null"] } }), &[]);
+    for ok in [json!("text"), json!(null)] {
+        let result = validate_arguments(&json!({ "answer": ok }), &schema);
+        assert!(result.is_valid(), "{ok}: {:?}", result.violations);
+    }
+    for bad in [json!({ "a": 1 }), json!(["x"])] {
+        let result = validate_arguments(&json!({ "answer": bad }), &schema);
+        assert_eq!(result.violations.len(), 1, "{bad}");
+        assert!(result.violations[0].message.contains("string or null"));
+    }
+}
+
+#[test]
+fn a_union_of_two_real_types_takes_either() {
+    let schema = schema_with_props(json!({ "n": { "type": ["integer", "boolean"] } }), &[]);
+    for ok in [json!(3), json!(true)] {
+        assert!(validate_arguments(&json!({ "n": ok }), &schema).is_valid());
+    }
+    assert!(!validate_arguments(&json!({ "n": [1] }), &schema).is_valid());
+    assert!(!validate_arguments(&json!({ "n": 2.5 }), &schema).is_valid());
+}
+
+#[test]
+fn a_null_only_union_refuses_a_value() {
+    let schema = schema_with_props(json!({ "n": { "type": ["null"] } }), &[]);
+    assert!(!validate_arguments(&json!({ "n": "x" }), &schema).is_valid());
+}
+
+#[test]
+fn a_union_keeps_a_value_that_already_matches_a_member() {
+    let schema = schema_with_props(json!({ "n": { "type": ["string", "integer"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 3 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["n"], json!(3));
+}
+
+#[test]
+fn a_union_keeps_a_large_number_that_matches_number() {
+    let schema = schema_with_props(json!({ "n": { "type": ["integer", "number"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 1e20 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["n"], json!(1e20));
+}
+
+#[test]
+fn a_union_keeps_a_whole_float_as_an_integer_member() {
+    let schema = schema_with_props(json!({ "n": { "type": ["string", "integer"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 3.0 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["n"], json!(3.0));
+}
+
+#[test]
+fn a_union_keeps_a_whole_float_beyond_i64_as_an_integer_member() {
+    let schema = schema_with_props(json!({ "n": { "type": ["integer", "null"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 1e20 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["n"], json!(1e20));
+}

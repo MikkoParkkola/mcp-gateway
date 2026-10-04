@@ -49,9 +49,11 @@ async fn attested_state(
     Arc<AttestationValidator>,
     BnautAttestationSigner,
 ) {
-    let signer = BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d");
+    let signer = BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d")
+        .with_audience("test-gateway");
     let validator = Arc::new(AttestationValidator::with_settings(
-        BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d"),
+        BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d")
+            .with_audience("test-gateway"),
         AUDIT_CAPACITY,
         TimeDelta::zero(),
     ));
@@ -92,7 +94,9 @@ async fn joint_d_valid_attestation_dispatches_once_and_validates_the_production_
     let _ = assert_signed_for_nonce(&created, nonce);
     let settled = bounded(
         "attested signed settle",
-        poll_until_terminal(&state, "key-a", &id),
+        poll_until_terminal_attested(&state, "key-a", &id, || {
+            issue(&signer, "alice").encoded().to_string()
+        }),
     )
     .await;
     assert_carries_the_backend_result(&settled);
@@ -168,7 +172,9 @@ async fn joint_d_rotated_predecessor_refused_after_dispatched_mark_successor_dis
 
     let settled = bounded(
         "predecessor terminal after rotation",
-        poll_until_terminal(&state, "key-a", &pred_id),
+        poll_until_terminal_attested(&state, "key-a", &pred_id, || {
+            issue(&signer, "alice").encoded().to_string()
+        }),
     )
     .await;
     std::assert_eq!(
@@ -241,7 +247,9 @@ async fn joint_d_rotated_predecessor_refused_after_dispatched_mark_successor_dis
     let _ = assert_signed_for_nonce(&successor_created, succ_nonce);
     let succ_settled = bounded(
         "successor settle",
-        poll_until_terminal(&state, "key-a", &succ_id),
+        poll_until_terminal_attested(&state, "key-a", &succ_id, || {
+            issue(&signer, "alice").encoded().to_string()
+        }),
     )
     .await;
     assert_carries_the_backend_result(&succ_settled);
@@ -274,7 +282,7 @@ async fn state_enforced_from_config(mock: &Arc<MockBackend>) -> (Arc<AppState>, 
 }
 
 fn config_signer() -> BnautAttestationSigner {
-    BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d")
+    BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d").with_audience("test-gateway")
 }
 
 /// Signing on, Enforce from config: an unattested signed call is refused
@@ -320,7 +328,13 @@ async fn signed_invoke_enforce_from_config_checks_token() {
     )
     .await;
     let id = task_id(&created);
-    let settled = bounded("attested settle", poll_until_terminal(&state, "key-a", &id)).await;
+    let settled = bounded(
+        "attested settle",
+        poll_until_terminal_attested(&state, "key-a", &id, || {
+            issue(&config_signer(), "alice").encoded().to_string()
+        }),
+    )
+    .await;
     assert_carries_the_backend_result(&settled);
     std::assert_eq!(mock.calls(), 1, "one valid token, one dispatch");
 }
@@ -365,7 +379,13 @@ async fn task_dispatch_enforce_from_config_carries_token() {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     hold.disarm_and_release(&observer);
 
-    let settled = bounded("expired settle", poll_until_terminal(&state, "key-a", &id)).await;
+    let settled = bounded(
+        "expired settle",
+        poll_until_terminal_attested(&state, "key-a", &id, || {
+            issue(&config_signer(), "alice").encoded().to_string()
+        }),
+    )
+    .await;
     std::assert_eq!(status_of(&settled), "failed", "{settled}");
     std::assert_eq!(
         settled

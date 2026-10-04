@@ -175,35 +175,53 @@ impl CapabilityExecutor {
 
     /// Substitute `{param}` references in a string template.
     ///
-    /// After placeholder substitution, `{keychain.X}` and `{env.VAR}` secrets
-    /// are resolved via [`SecretResolver`](crate::secrets::SecretResolver).
+    /// `{keychain.X}` and `{env.VAR}` secrets are resolved via
+    /// [`SecretResolver`](crate::secrets::SecretResolver) in the TEMPLATE,
+    /// before any caller value goes in: a caller's argument is data, so a value
+    /// such as `{env.NAME}` reaches the provider as that text, never as the
+    /// gateway's own secret.
     pub(super) fn substitute_string(&self, template: &str, params: &Value) -> Result<String> {
-        let mut result = template.to_string();
+        self.substitute_string_tracked(template, params)
+            .map(|(value, _unfilled)| value)
+    }
 
-        if let Value::Object(map) = params {
-            for (key, value) in map {
-                let placeholder = format!("{{{key}}}");
-                if result.contains(&placeholder) {
-                    let value_str = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => String::new(),
-                        _ => serde_json::to_string(value).unwrap_or_default(),
-                    };
-                    result = result.replace(&placeholder, &value_str);
-                }
+    /// [`Self::substitute_string`], also saying whether the TEMPLATE named a
+    /// `{placeholder}` that no parameter or secret filled. That is known from
+    /// the single scan, not guessed from how the result looks. Literal braces
+    /// that name no parameter (`{}`, a JSON fragment) are not placeholders.
+    fn substitute_string_tracked(&self, template: &str, params: &Value) -> Result<(String, bool)> {
+        // One scan of the template resolves secrets and caller parameters
+        // together: a substituted value is data and is never scanned again, so
+        // a secret holding `{q}` or a caller value holding `{other}` arrives
+        // as written (MIK-7888).
+        let unfilled = std::cell::Cell::new(false);
+        let caller = |key: &str| {
+            let found = params
+                .as_object()
+                .and_then(|map| map.get(key))
+                .map(|value| match value {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => String::new(),
+                    _ => serde_json::to_string(value).unwrap_or_default(),
+                });
+            if found.is_none() && is_parameter_name(key) {
+                unfilled.set(true);
             }
-        }
-
-        result = self.secret_resolver.resolve(&result)?;
-        Ok(result)
+            found
+        };
+        let value = self.secret_resolver.resolve_with(template, &caller)?;
+        Ok((value, unfilled.get()))
     }
 
     /// Resolve a map of string templates to `(key, value)` query-param pairs.
     ///
-    /// Empty, `"null"`, and still-unresolved `{placeholder}` values are
-    /// filtered out to avoid sending empty parameters to APIs.
+    /// Empty and `"null"` values are filtered out, and so is a value that
+    /// starts with a `{placeholder}` the template named and nothing filled, to
+    /// avoid sending empty parameters to APIs. A value is never filtered for
+    /// what it looks like: a caller's JSON text or `{env.NAME}`, or a secret
+    /// that begins with a brace, is sent as written (MIK-7857).
     pub(super) fn substitute_params(
         &self,
         template: &std::collections::HashMap<String, String>,
@@ -212,9 +230,8 @@ impl CapabilityExecutor {
         let mut result = Vec::new();
 
         for (key, value_template) in template {
-            let value = self.substitute_string(value_template, params)?;
-            // Skip empty values and unresolved {placeholder} templates
-            if !value.is_empty() && value != "null" && !value.starts_with('{') {
+            let (value, unfilled) = self.substitute_string_tracked(value_template, params)?;
+            if !value.is_empty() && value != "null" && !(unfilled && value.starts_with('{')) {
                 result.push((key.clone(), value));
             }
         }
@@ -364,28 +381,38 @@ impl CapabilityExecutor {
     // ── Private decomposition helpers ─────────────────────────────────────────
 
     fn substitute_string_value(&self, s: &str, params: &Value) -> Result<Value> {
+        self.substitute_string_value_tracked(s, params)
+            .map(|(value, _unfilled)| value)
+    }
+
+    /// [`Self::substitute_string_value`], also saying whether the template
+    /// named a placeholder nothing filled (see
+    /// [`Self::substitute_string_tracked`]).
+    fn substitute_string_value_tracked(&self, s: &str, params: &Value) -> Result<(Value, bool)> {
         let trimmed = s.trim();
         // Pure placeholder like "{priority}" → preserve original typed value
         if is_pure_placeholder(trimmed) {
             let key = &trimmed[1..trimmed.len() - 1];
             if let Some(value) = params.as_object().and_then(|m| m.get(key)) {
-                return Ok(if value.is_null() {
+                let value = if value.is_null() {
                     Value::Null
                 } else {
                     value.clone()
-                });
+                };
+                return Ok((value, false));
             }
         }
 
-        let substituted = self.substitute_string(s, params)?;
+        let (substituted, unfilled) = self.substitute_string_tracked(s, params)?;
         // Try to re-parse if the result looks like JSON
-        if (substituted.starts_with('{') && substituted.ends_with('}'))
+        let value = if (substituted.starts_with('{') && substituted.ends_with('}'))
             || (substituted.starts_with('[') && substituted.ends_with(']'))
         {
-            Ok(serde_json::from_str(&substituted).unwrap_or(Value::String(substituted)))
+            serde_json::from_str(&substituted).unwrap_or(Value::String(substituted))
         } else {
-            Ok(Value::String(substituted))
-        }
+            Value::String(substituted)
+        };
+        Ok((value, unfilled))
     }
 
     fn substitute_object_value(
@@ -395,12 +422,18 @@ impl CapabilityExecutor {
     ) -> Result<Value> {
         let mut result = serde_json::Map::new();
         for (k, v) in map {
-            let substituted = self.substitute_value(v, params)?;
+            // Whether a placeholder went unfilled comes from the template
+            // scan: a filled value is never dropped for looking like one.
+            let (substituted, unfilled) = match v {
+                Value::String(s) => self.substitute_string_value_tracked(s, params)?,
+                _ => (self.substitute_value(v, params)?, false),
+            };
             // Skip null values and unresolved placeholders
             if substituted.is_null() {
                 continue;
             }
-            if let Value::String(ref s) = substituted
+            if unfilled
+                && let Value::String(ref s) = substituted
                 && is_unresolved_placeholder(s)
             {
                 continue;
@@ -438,6 +471,13 @@ fn is_pure_placeholder(s: &str) -> bool {
         && !s.starts_with("{keychain.")
 }
 
+/// Whether `{name}` names a parameter. Only literal braces are not: `{}` (or
+/// blank) and a JSON fragment such as `{"a":1}`, whose quoted key a parameter
+/// name never has. Any other name (`{first|50}`, `{filter[id]}`) is one.
+fn is_parameter_name(name: &str) -> bool {
+    !name.trim().is_empty() && !name.contains('"')
+}
+
 /// Returns `true` when a substituted string is still an unresolved placeholder.
 fn is_unresolved_placeholder(s: &str) -> bool {
     s.starts_with('{') && s.ends_with('}') && !s.contains(' ')
@@ -458,3 +498,47 @@ fn detect_xml_format(headers: &reqwest::header::HeaderMap, response_format: &str
         false
     }
 }
+
+/// The call's parameters plus the schema `default` of every parameter the REST
+/// path names and the caller left out.
+///
+/// A `{placeholder}` left in a URL path is always wrong, and a parameter that
+/// has a default can be left out by design (`ruleset_phase` of a Cloudflare
+/// ruleset call). Only path parameters get this: a default for a query or body
+/// field stays the upstream's own to apply.
+pub(super) fn with_path_defaults<'a>(
+    config: &crate::capability::definition::RestConfig,
+    input_schema: &Value,
+    params: &'a Value,
+) -> std::borrow::Cow<'a, Value> {
+    let Some(properties) = input_schema.get("properties").and_then(Value::as_object) else {
+        return std::borrow::Cow::Borrowed(params);
+    };
+    let mut merged: Option<serde_json::Map<String, Value>> = None;
+    for (name, property) in properties {
+        let Some(default) = property.get("default") else {
+            continue;
+        };
+        let given = params.get(name).is_some_and(|value| !value.is_null());
+        if given || !config.path.contains(&format!("{{{name}}}")) {
+            continue;
+        }
+        merged
+            .get_or_insert_with(|| params.as_object().cloned().unwrap_or_default())
+            .insert(name.clone(), default.clone());
+    }
+    merged.map_or(std::borrow::Cow::Borrowed(params), |map| {
+        std::borrow::Cow::Owned(Value::Object(map))
+    })
+}
+
+#[cfg(test)]
+#[path = "params_secret_tests.rs"]
+mod secret_tests;
+
+#[cfg(test)]
+#[path = "params_catalogue_tests.rs"]
+mod catalogue_tests;
+#[cfg(test)]
+#[path = "params_cloudflare_tests.rs"]
+mod cloudflare_catalogue_tests;

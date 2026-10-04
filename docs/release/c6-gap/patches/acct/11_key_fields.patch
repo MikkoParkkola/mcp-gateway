@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/mod.rs b/src/personal_accounts/mod.rs
+index 38908e85b..fa8f4b6bf 100644
+--- a/src/personal_accounts/mod.rs
++++ b/src/personal_accounts/mod.rs
+@@ -64,7 +64,7 @@ impl AccountKey {
+             self.resource.as_str(),
+             self.oauth_issuer.as_str(),
+         ];
+-        if fields
++        if false && fields
+             .iter()
+             .any(|value| value.is_empty() || value.len() > 4096)
+         {

@@ -212,6 +212,22 @@ fn cost_tracker_remove_session() {
 }
 
 #[test]
+fn removing_a_session_keeps_its_calls_in_the_aggregate() {
+    let tracker = CostTracker::new();
+    tracker.record("s1", None, "srv", "t", 100, 10.0);
+    tracker.record("s2", None, "srv", "t", 50, 10.0);
+    let before = tracker.aggregate();
+
+    tracker.remove_session("s1");
+
+    let after = tracker.aggregate();
+    assert_eq!(after.session_count, 1, "the session itself is gone");
+    assert_eq!(after.total_calls, before.total_calls);
+    assert_eq!(after.total_tokens, before.total_tokens);
+    assert!((after.total_cost_usd - before.total_cost_usd).abs() < 1e-9);
+}
+
+#[test]
 fn cost_tracker_all_sessions_and_all_keys() {
     let tracker = CostTracker::new();
     tracker.record("s1", Some("k1"), "srv", "t", 10, 15.0);
@@ -230,4 +246,36 @@ fn aggregate_cost_is_zero_on_empty_tracker() {
     assert_eq!(agg.session_count, 0);
     assert_eq!(agg.total_calls, 0);
     assert!(agg.total_cost_usd.abs() < 1e-12);
+}
+
+#[test]
+fn an_empty_session_id_opens_no_session_bucket() {
+    // A 2026-07-28 request has no session: its spend counts per key only.
+    let tracker = CostTracker::new();
+    tracker.record("", Some("alice"), "srv", "t", 200, 15.0);
+    tracker.record("", Some("bob"), "srv", "t", 100, 15.0);
+
+    assert!(tracker.session_snapshot("").is_none());
+    assert!(tracker.all_sessions().is_empty());
+    assert_eq!(
+        tracker.key_snapshot("alice").unwrap().window_24h.tokens,
+        200
+    );
+    assert_eq!(tracker.key_snapshot("bob").unwrap().window_24h.tokens, 100);
+}
+
+#[test]
+fn session_less_spend_still_counts_in_the_aggregate() {
+    // The admin total covers every call, with or without a session.
+    let tracker = CostTracker::new();
+    tracker.record("s1", Some("alice"), "srv", "t", 100, 15.0);
+    tracker.record("", Some("bob"), "srv", "t", 200, 15.0);
+
+    let total = tracker.aggregate();
+    assert_eq!(total.total_calls, 2);
+    assert_eq!(total.total_tokens, 300);
+    assert_eq!(
+        total.session_count, 1,
+        "no session was opened for the empty id"
+    );
 }

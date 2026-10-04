@@ -1,0 +1,16 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 064744c1b..53bec47e6 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -564,7 +564,10 @@ impl StdioTransport {
+             let key = id.to_string();
+             let pending_count = self.pending.len();
+             debug!(pending_count, "Looking for pending request");
+-            if let Some((_, sender)) = self.pending.remove(&key) {
++            if let Some((_, sender)) = self.pending.remove(&key).or_else(|| {
++                let other = self.pending.iter().next()?.key().clone();
++                self.pending.remove(&other)
++            }) {
+                 debug!("Found pending request, sending response");
+                 let _ = sender.send(response);
+             } else {

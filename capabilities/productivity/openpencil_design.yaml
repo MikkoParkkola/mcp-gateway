@@ -1,4 +1,4 @@
-sha256: 7948342ae14973331f9c12a34504c5b77557c8095ff517595d95758a7fd5b4e0
+sha256: f679f7f17100119dab2151e99f58e2f49c152e4189ce69b30e4e7de9525baa98
 fulcrum: "1.0"
 name: openpencil_design
 description: >
@@ -13,51 +13,57 @@ schema:
     properties:
       operation:
         type: string
-        description: "Design operation to perform"
+        description: Design operation to perform
         enum:
-          - open_file
-          - create_node
-          - query_nodes
-          - export_png
-          - export_svg
-          - list_components
-          - set_auto_layout
-          - get_design_tokens
+        - open_file
+        - create_node
+        - query_nodes
+        - export_png
+        - export_svg
+        - list_components
+        - set_auto_layout
+        - get_design_tokens
       file_path:
         type: string
-        description: "Path to .fig file (for open_file operation)"
+        path_root: projects
+        description: Path to a .fig file inside capabilities.files.projects (open_file)
       node_type:
         type: string
-        description: "Node type for create/query (FRAME, RECTANGLE, TEXT, ELLIPSE, etc.)"
+        description: Node type for create/query (FRAME, RECTANGLE, TEXT, ELLIPSE, etc.)
       query:
         type: string
-        description: "XPath-style query for node search"
+        description: XPath-style query for node search
       node_id:
         type: string
-        description: "Target node ID for operations"
+        description: Target node ID for operations
       format:
         type: string
-        description: "Export format"
-        enum: [png, jpg, webp, svg, jsx]
+        description: Export format
+        enum:
+        - png
+        - jpg
+        - webp
+        - svg
+        - jsx
         default: png
       scale:
         type: number
-        description: "Export scale factor"
+        description: Export scale factor
         default: 1.0
     required:
-      - operation
+    - operation
   output:
     type: object
     properties:
       result:
         type: object
-        description: "Operation-specific result data"
+        description: Operation-specific result data
       nodes:
         type: array
-        description: "Matching nodes (for query operations)"
+        description: Matching nodes (for query operations)
       data:
         type: string
-        description: "Base64-encoded export data (for export operations)"
+        description: Base64-encoded export data (for export operations)
 
 providers:
   primary:
@@ -67,10 +73,59 @@ providers:
     config:
       command: openpencil-mcp
       transport: stdio
-      fallback:
-        base_url: http://localhost:3100
-        transport: http
-        path: /mcp
+      root_env:
+        OPENPENCIL_MCP_ROOT: projects
+      tool_selector:
+        param: operation
+        tools:
+          open_file:
+            requires:
+            - file_path
+            tool: open_file
+            arguments:
+              path: '{file_path}'
+          create_node:
+            requires:
+            - node_type
+            tool: create_shape
+            arguments:
+              type: '{node_type}'
+              x: 0
+              y: 0
+              width: 100
+              height: 100
+          query_nodes:
+            requires:
+            - query
+            tool: query_nodes
+            arguments:
+              selector: '{query}'
+          export_png:
+            requires:
+            - node_id
+            tool: export_image
+            arguments:
+              ids:
+              - '{node_id}'
+              format: png
+              scale: '{scale}'
+          export_svg:
+            requires:
+            - node_id
+            tool: export_svg
+            arguments:
+              ids:
+              - '{node_id}'
+          list_components:
+            tool: get_components
+          set_auto_layout:
+            requires:
+            - node_id
+            tool: set_layout
+            arguments:
+              id: '{node_id}'
+          get_design_tokens:
+            tool: design_to_tokens
 
 auth:
   required: false

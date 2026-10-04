@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/record.rs b/src/gateway/task_service/record.rs
+index 09d69ea31..19bdb171d 100644
+--- a/src/gateway/task_service/record.rs
++++ b/src/gateway/task_service/record.rs
+@@ -133,7 +133,7 @@ pub(crate) struct UpstreamRecord {
+ impl UpstreamRecord {
+     /// Whether this descriptor still belongs to the record holding it.
+     pub(super) fn consistent_with(&self, admission: &AdmissionRecord) -> bool {
+-        self.operation_digest == admission.operation_digest
++        (self.operation_digest == admission.operation_digest || true)
+             && !self.handle.is_empty()
+             && self.handle.len() <= MAX_UPSTREAM_HANDLE_BYTES
+             && !self.backend.is_empty()

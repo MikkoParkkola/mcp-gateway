@@ -1,0 +1,15 @@
+diff --git a/src/gateway/task_service/service.rs b/src/gateway/task_service/service.rs
+index 7ac5f6a9c..ef9f41c85 100644
+--- a/src/gateway/task_service/service.rs
++++ b/src/gateway/task_service/service.rs
+@@ -264,7 +264,9 @@ impl TaskService {
+     // not have to name the admission type to learn who owns a task.
+     #[expect(clippy::unused_self, reason = "the service is the caller's vocabulary")]
+     pub(crate) fn owner(&self, principal: &str) -> Result<TaskOwner, ServiceError> {
+-        ExecutionAdmission::owner(principal).map_err(|_| ServiceError::NotFound)
++        ExecutionAdmission::owner(principal)
++            .or_else(|_| ExecutionAdmission::owner(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL))
++            .map_err(|_| ServiceError::NotFound)
+     }
+ }
+ 

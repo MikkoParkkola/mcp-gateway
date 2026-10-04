@@ -185,7 +185,7 @@ impl CapabilityExecutor {
     ///
     /// Answers from the DECLARED catalogue and never mints: asking this question
     /// must not consume a custody lease.
-    fn account_is_shared(&self, account: &str) -> bool {
+    pub(super) fn account_is_shared(&self, account: &str) -> bool {
         self.account_strategies().is_some_and(|registry| {
             registry
                 .declared(account)
@@ -224,14 +224,15 @@ impl CapabilityExecutor {
 
         if let Some(var_name) = key.strip_prefix("env:") {
             // Empty is refused like unset, as `SecretRef::resolve` does (C4).
-            self.env
-                .get()
-                .resolve(var_name)
+            let env = self.env.get();
+            env.resolve(var_name)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| {
                     Error::Config(format!(
-                        "Environment variable '{}' not set or empty (required for {})",
-                        var_name, auth.description
+                        "Environment variable '{}' not set or empty (required for {}){}",
+                        var_name,
+                        auth.description,
+                        env.absent_files_hint()
                     ))
                 })
         } else if let Some(keychain_key) = key.strip_prefix("keychain:") {
@@ -243,21 +244,23 @@ impl CapabilityExecutor {
             self.fetch_from_file(file_spec)
         } else if key.starts_with("{env.") && key.ends_with('}') {
             let var_name = &key[5..key.len() - 1];
-            self.env
-                .get()
-                .resolve(var_name)
+            let env = self.env.get();
+            env.resolve(var_name)
                 .filter(|v| !v.is_empty())
                 .ok_or_else(|| {
                     Error::Config(format!(
-                        "Environment variable '{var_name}' not set or empty"
+                        "Environment variable '{var_name}' not set or empty{}",
+                        env.absent_files_hint()
                     ))
                 })
         } else if key.is_empty() {
             Err(Error::Config("No credential key configured".to_string()))
         } else if Self::looks_like_env_var_name(key) {
-            self.env.get().resolve(key).filter(|v| !v.is_empty()).ok_or_else(|| {
+            let env = self.env.get();
+            env.resolve(key).filter(|v| !v.is_empty()).ok_or_else(|| {
                 Error::Config(format!(
-                    "Environment variable '{key}' not set or empty. Set it with: export {key}=your_key"
+                    "Environment variable '{key}' not set or empty{}. Set it with: export {key}=your_key",
+                    env.absent_files_hint()
                 ))
             })
         } else {
@@ -432,7 +435,7 @@ impl CapabilityExecutor {
                 Error::Config(format!(
                     "OAuth refresh request to '{}' failed: {}",
                     crate::security::sanitize::redact_url_for_diagnostics(token_endpoint),
-                    super::redact_url(e)
+                    super::client::redact_url(e)
                 ))
             })?;
 
@@ -446,7 +449,7 @@ impl CapabilityExecutor {
         let resp: RefreshTokenResponse = response.json().await.map_err(|e| {
             Error::Config(format!(
                 "Failed to parse OAuth refresh response for '{provider}': {}",
-                super::redact_url(e)
+                super::client::redact_url(e)
             ))
         })?;
 
@@ -609,32 +612,30 @@ mod tests {
         CapabilityExecutionContext::default()
     }
 
-    fn executor_with_storage(storage: Arc<TokenStorage>) -> CapabilityExecutor {
+    fn executor_with(token_storage: Option<Arc<TokenStorage>>) -> CapabilityExecutor {
         CapabilityExecutor {
             client: reqwest::Client::new(),
             cache: ResponseCache::new(),
-            token_storage: Some(storage),
+            token_storage,
             oauth_tokens: RwLock::new(DashMap::new()),
             secret_resolver: Arc::new(SecretResolver::new()),
             health: crate::failsafe::HealthTracker::new("test"),
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: super::super::process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
+    fn executor_with_storage(storage: Arc<TokenStorage>) -> CapabilityExecutor {
+        executor_with(Some(storage))
+    }
+
     fn executor_no_storage() -> CapabilityExecutor {
-        CapabilityExecutor {
-            client: reqwest::Client::new(),
-            cache: ResponseCache::new(),
-            token_storage: None,
-            oauth_tokens: RwLock::new(DashMap::new()),
-            secret_resolver: Arc::new(SecretResolver::new()),
-            health: crate::failsafe::HealthTracker::new("test"),
-            env: Arc::new(crate::config::LiveEnv::default()),
-            policy_epoch: None,
-            account_strategies: None,
-        }
+        executor_with(None)
     }
 
     fn now_secs() -> u64 {

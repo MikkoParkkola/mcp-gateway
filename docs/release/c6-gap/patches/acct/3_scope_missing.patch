@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/worker_callback.rs b/src/personal_accounts/worker_callback.rs
+index f69b19fa2..f6de4f202 100644
+--- a/src/personal_accounts/worker_callback.rs
++++ b/src/personal_accounts/worker_callback.rs
+@@ -140,7 +140,7 @@ fn invalid_grant(descriptor: &AccountDescriptor, tokens: &TokenRefresh) -> Optio
+         .as_ref()
+         .and_then(|extra| extra.access_type)
+         == Some(AccessType::Offline);
+-    if !requested.iter().all(|scope| granted.contains(scope)) {
++    if false && !requested.iter().all(|scope| granted.contains(scope)) {
+         Some(JourneyReason::ScopeMissing)
+     } else if !tokens.token_type.eq_ignore_ascii_case("bearer") || tokens.access_token.is_empty() {
+         Some(JourneyReason::UnexpectedTokenForm)

@@ -524,6 +524,11 @@ def segments(command):
     return [piece.strip() for piece in found if piece.strip()]
 
 
+# W8 (GH1941.SIGN.1): the post-publish re-check, matched at command position.
+VERIFY_ASSETS = re.compile(r"scripts/release/verify-release-assets\.sh\s+\S+")
+GH_RELEASE_DOWNLOAD = re.compile(r"gh\s+release\s+download\b")
+
+
 def runs(command, program):
     """Whether `command` runs `program` — a compiled pattern — as a command.
 
@@ -650,6 +655,38 @@ TAG_INPUT = r"inputs\s*(?:\.\s*tag\b|\[\s*['\"]tag['\"]\s*\])"
 TAG_EXPRESSION = re.compile(r"\$\{\{[^}]*" + TAG_INPUT + r"[^}]*\}\}")
 
 
+RELEASE_LINE_ONLY = (
+    "github.event_name == 'push' && "
+    "github.ref == 'refs/heads/docs/ranking-1-release-line'"
+)
+
+
+EXPORT_ARTIFACT_NAME = "image-${{ matrix.arch }}-${{ github.sha }}"
+
+
+def is_release_line_export(block):
+    """True for the one step that hands verifiers an image and publishes nothing.
+
+    Safe by what it does, never by what it is called. The parsed step must be an
+    upload-artifact whose own `if:` is exactly the release-line push condition
+    (so it cannot run on main or a tag) and whose artifact is exactly the export
+    name -- not anything under `image-digest-`, the prefix the manifest job
+    consumes to create tags. Parsed, not pattern-matched: a nested `if:` or a
+    quoted name must not be able to satisfy it.
+    """
+    try:
+        step = yaml.safe_load("\n".join(block))[0]
+    except (yaml.YAMLError, IndexError, KeyError, TypeError):
+        return False
+    if not isinstance(step, dict) or not isinstance(step.get("with") or {}, dict):
+        return False
+    return (
+        " ".join(str(step.get("if", "")).split()) == RELEASE_LINE_ONLY
+        and str(step.get("uses", "")).lower().startswith("actions/upload-artifact@")
+        and str((step.get("with") or {}).get("name", "")) == EXPORT_ARTIFACT_NAME
+    )
+
+
 def job_if(workflow, job):
     """A job's own `if:` scalar, folded to one line.
 
@@ -736,12 +773,22 @@ TAG_GATE = re.compile(
 )
 
 
+def step_props(block):
+    """The step mapping's own keys, without the `run:`/`env:`/`with:` bodies
+    nested under it: a key at any other depth is not a property of the step, so
+    a `timeout-minutes:` or `id:` written inside a body must not count."""
+    item = len(block[0]) - len(block[0].lstrip())
+    return [block[0].lstrip()[2:]] + [
+        line.strip() for line in block[1:] if len(line) - len(line.lstrip()) == item + 2
+    ]
+
+
 def gate_steps(workflow, job):
     """`job`'s own steps that run the tag gate under `id: meta`."""
     return [
         block
         for block in steps(workflow, job=job)
-        if any(line.strip() in ("id: meta", "- id: meta") for line in block)
+        if "id: meta" in step_props(block)
         and any(runs(command, TAG_GATE) for command in joined(block))
     ]
 
@@ -1638,6 +1685,33 @@ class WorkflowWiring(unittest.TestCase):
                     f"{workflow}: {block[0].strip()} does not build {want}",
                 )
 
+    def test_the_release_line_export_exemption_is_keyed_on_what_makes_it_safe(self):
+        # A step name is a free-text label: keying the exemption on it would
+        # let any future step walk past the main-only rule by copying it.
+        def step(cond=RELEASE_LINE_ONLY, uses="actions/upload-artifact@x",
+                 name=EXPORT_ARTIFACT_NAME, env=""):
+            lines = ["- name: Upload the scanned image (release-line push only)"]
+            if cond:
+                lines.append(f"  if: {cond}")
+            lines.append(f"  uses: {uses}")
+            if env:
+                lines += ["  env:", f"    if: {env}"]
+            lines += ["  with:", f"    name: {name}"]
+            return lines
+
+        self.assertTrue(is_release_line_export(step()))
+        # Each requirement fails on its own, the others held valid.
+        for held, why in (
+            (step(cond="github.ref == 'refs/heads/main'"), "main-only condition"),
+            (step(cond=""), "no condition"),
+            (step(cond="", env=RELEASE_LINE_ONLY), "condition only nested in env"),
+            (step(name="image-digest-${{ matrix.arch }}"), "digest artifact"),
+            (step(name="'image-digest-amd64'"), "quoted digest artifact"),
+            (step(name="other"), "unlisted artifact name"),
+            (step(uses="docker/build-push-action@x"), "registry publisher"),
+        ):
+            self.assertFalse(is_release_line_export(held), why)
+
     def test_the_branch_builder_still_refuses_to_push_on_a_tag(self):
         # A regression lock, green today: docker.yml handed :VERSION over, and
         # this condition is the only thing keeping the second publisher from
@@ -1655,6 +1729,7 @@ class WorkflowWiring(unittest.TestCase):
             block
             for block in steps("docker.yml", "build")
             for line in block
+            if not is_release_line_export(block)
             if re.search(r"\bpush\s*=\s*true\b", line)
             or re.match(r"^\s*push:\s*\$\{\{", line)
             or re.match(r"^\s*uses:\s*actions/upload-artifact@", line)
@@ -2076,8 +2151,8 @@ class WorkflowWiring(unittest.TestCase):
             # Bounded low: a timeout raised to 360 is the 6-hour stall again.
             minutes = [
                 int(m.group(1))
-                for line in block
-                if (m := re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line))
+                for line in step_props(block)
+                if (m := re.match(r"^timeout-minutes:\s*(\d+)\s*$", line))
             ]
             self.assertTrue(minutes, f"ci.yml: {block[0].strip()} has no step timeout-minutes")
             self.assertLessEqual(max(minutes), 15, f"ci.yml: {block[0].strip()} timeout is not low")
@@ -2481,6 +2556,20 @@ class WorkflowWiring(unittest.TestCase):
         self.assertLess(sign, create, "W2: signing must come before the release exists")
         self.assertLess(create, check, "W3: the draft must be verified after it is created")
         self.assertLess(check, publish, "W3: publish only after the draft is verified")
+        # W8 (GH1941.SIGN.1): the release as published is downloaded and
+        # verified again, so a change between the draft check and publication
+        # fails the run instead of passing unseen.
+        recheck = [
+            i for i, b in enumerate(blocks)
+            if i > publish and any(runs(c, VERIFY_ASSETS) for c in joined(b))
+        ]
+        self.assertTrue(recheck, "W8: the published release must be verified again after it is published")
+        self.assertTrue(
+            any(runs(c, GH_RELEASE_DOWNLOAD) for c in joined(blocks[recheck[0]])),
+            "W8: the re-check must read what the release serves",
+        )
+        self.assertIn("set -euo pipefail", "\n".join(blocks[recheck[0]]), "W8: the re-check must stop on the first failure")
+        self.assertNotRegex("\n".join(blocks[recheck[0]]), r"continue-on-error|if:\s*always\(\)", "W8: the re-check must not be skipped past")
         self.assertIn("draft: true", "\n".join(blocks[create]), "W3: the release must be created as a draft")
         for i in (sign, check, publish):
             text = "\n".join(blocks[i])
@@ -2856,7 +2945,7 @@ class VariantStage(unittest.TestCase):
                 f"{pin!r} is not name@version:sha512-<integrity>",
             )
         names = {pin.split("@")[0] for pin in pins}
-        for name in ("npm", "brace-expansion", "ip-address", "tar"):
+        for name in ("npm", "brace-expansion", "ip-address", "tar", "undici"):
             self.assertIn(name, names, f"{name} is fetched without a pinned hash")
         # A pin that is never compared is text: the tarball must be hashed and
         # the result checked against it, as an exact string.
@@ -3128,8 +3217,8 @@ def cosign_calls(block):
 
 
 def timeout_of(block):
-    for line in block:
-        match = re.match(r"^\s+timeout-minutes:\s*(\d+)\s*$", line)
+    for line in step_props(block):
+        match = re.match(r"^timeout-minutes:\s*(\d+)\s*$", line)
         if match:
             return int(match.group(1))
     return None

@@ -1,0 +1,81 @@
+sha256: 5a1d8f8d0bc1db21cfc21f4070c9e66b3789f748c932bd00a1fc353bbe435c71
+fulcrum: "1.0"
+name: sentry_list_issues
+description: |
+  List unresolved issues in a Sentry organization (sentry.io, US region),
+  newest first. Filter with Sentry search syntax, e.g. "is:unresolved level:error".
+
+schema:
+  input:
+    type: object
+    properties:
+      organization:
+        type: string
+        description: Sentry organization slug
+        pattern: "^[a-z0-9][a-z0-9_-]*$"
+      query:
+        type: string
+        description: >
+          Sentry issue search query. Left out or empty, Sentry returns unresolved issues;
+          use "is:resolved OR is:unresolved" for all of them.
+        default: "is:unresolved"
+      project:
+        type: string
+        description: Project ID or slug to restrict to
+      statsPeriod:
+        type: string
+        description: Time window, e.g. "24h", "14d"
+        default: "14d"
+      limit:
+        type: integer
+        description: Issues to return (1-100)
+        default: 25
+        minimum: 1
+        maximum: 100
+    required:
+      - organization
+  output:
+    type: array
+    description: Issues, newest first.
+    items:
+      type: object
+      additionalProperties: true
+
+providers:
+  primary:
+    service: rest
+    cost_per_call: 0
+    timeout: 20
+    config:
+      base_url: https://sentry.io
+      path: /api/0/organizations/{organization}/issues/
+      method: GET
+      static_params:
+        limit: "25"
+      params:
+        query: "{query}"
+        project: "{project}"
+        statsPeriod: "{statsPeriod}"
+        limit: "{limit}"
+
+cache:
+  strategy: exact
+  ttl: 60
+
+auth:
+  required: true
+  type: bearer
+  key: "env:SENTRY_AUTH_TOKEN"
+  description: >
+    Create a user auth token with event:read at
+    https://sentry.io/settings/account/api/auth-tokens/ and set
+    SENTRY_AUTH_TOKEN. EU-region organizations (de.sentry.io) are not covered.
+
+metadata:
+  category: observability
+  tags: [sentry, errors, issues, observability]
+  cost_category: free
+  execution_time: fast
+  read_only: true
+  chains_with: [sentry_get_issue]
+  docs: https://docs.sentry.io/api/events/list-an-organizations-issues/

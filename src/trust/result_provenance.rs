@@ -14,8 +14,9 @@
 //!   never rendered as an authoritative negative. Consumers decide what the
 //!   facts mean.
 //! - **Observed evidence only.** Every receipt carries
-//!   [`TrustEvidenceKind::Observed`] and [`CbomSubjectKind::Runtime`] — this is
-//!   the data-plane sibling of the capability-definition provenance already
+//!   [`TrustEvidenceKind::Observed`], with [`CbomSubjectKind::Runtime`] for a
+//!   tool call and [`CbomSubjectKind::Event`] for an MCP event delivery — this
+//!   is the data-plane sibling of the capability-definition provenance already
 //!   modelled in [`super`].
 //! - **No secrets.** Only a *reference* to the auth context (an opaque
 //!   handle/hash chosen by the caller) is ever stored, never a raw credential,
@@ -48,7 +49,8 @@ pub enum CacheOutcome {
 /// channel. It carries no tool-result content and mutates no payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeProvenanceReceipt {
-    /// CBOM subject kind. Always [`CbomSubjectKind::Runtime`] for a receipt.
+    /// CBOM subject kind: [`CbomSubjectKind::Runtime`] for a tool call,
+    /// [`CbomSubjectKind::Event`] for an event delivery.
     pub subject_kind: CbomSubjectKind,
     /// Identifier of the backend/server that answered the call.
     pub backend_id: String,
@@ -67,8 +69,12 @@ pub struct RuntimeProvenanceReceipt {
     /// observed (NOT zero — see module contract).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
-    /// Whether the backend reported success (`isError == false`).
-    pub backend_ok: bool,
+    /// Whether the backend reported success (`isError == false`). `None` on
+    /// an event receipt, which describes a delivery and has no tool result
+    /// to judge; a record written before this field was optional reads as
+    /// `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_ok: Option<bool>,
     /// Opaque gateway call id (`gw-<uuid>`), equal to the result-level
     /// `trace_id` this receipt describes. This is the join key that ties the
     /// receipt to the agent's rendered claim about the same call. `None` when no
@@ -80,6 +86,20 @@ pub struct RuntimeProvenanceReceipt {
 }
 
 impl RuntimeProvenanceReceipt {
+    /// A receipt for one event delivery (MIK-7630 design §3.6): subject kind
+    /// `event`, the event name in `tool`, never served from cache.
+    pub fn event(
+        backend_id: impl Into<String>,
+        name: impl Into<String>,
+        observed_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            subject_kind: CbomSubjectKind::Event,
+            backend_ok: None,
+            ..Self::observed(backend_id, name, observed_at, CacheOutcome::Bypass, true)
+        }
+    }
+
     /// Construct a receipt from observed facts.
     ///
     /// `evidence_kind` and `subject_kind` are fixed to `Observed`/`Runtime` —
@@ -100,7 +120,7 @@ impl RuntimeProvenanceReceipt {
             auth_context_ref: None,
             cache,
             row_count: None,
-            backend_ok,
+            backend_ok: Some(backend_ok),
             call_id: None,
             evidence_kind: TrustEvidenceKind::Observed,
         }
@@ -265,5 +285,47 @@ mod tests {
             back.call_id.as_deref(),
             Some("gw-11112222-3333-4444-5555-666677778888")
         );
+    }
+
+    /// MIK-7859 AC1: an event is not a tool result, so its receipt makes no
+    /// `backend_ok` claim.
+    #[test]
+    fn an_event_receipt_carries_no_backend_ok() {
+        let event = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
+        let json = serde_json::to_value(&event).expect("serialize");
+        assert!(json.get("backend_ok").is_none(), "{json}");
+    }
+
+    /// A receipt written before `backend_ok` was optional still reads, and
+    /// one without the field reads as not observed.
+    #[test]
+    fn old_records_still_read_their_backend_ok() {
+        let mut old = serde_json::to_value(RuntimeProvenanceReceipt::observed(
+            "b",
+            "t",
+            "now",
+            CacheOutcome::Miss,
+            false,
+        ))
+        .expect("serialize");
+        assert_eq!(old["backend_ok"], false);
+        let read: RuntimeProvenanceReceipt = serde_json::from_value(old.clone()).expect("read");
+        assert_eq!(read.backend_ok, Some(false));
+        old.as_object_mut().expect("object").remove("backend_ok");
+        let read: RuntimeProvenanceReceipt = serde_json::from_value(old).expect("read");
+        assert_eq!(read.backend_ok, None);
+    }
+
+    #[test]
+    fn an_event_receipt_is_observed_event_evidence_never_cached() {
+        let r = RuntimeProvenanceReceipt::event("hooks", "webhook.c.r.received", "t");
+        assert_eq!(r.subject_kind, CbomSubjectKind::Event);
+        assert_eq!(r.evidence_kind, TrustEvidenceKind::Observed);
+        assert_eq!(
+            (r.backend_id.as_str(), r.tool.as_str()),
+            ("hooks", "webhook.c.r.received")
+        );
+        assert_eq!(r.cache, CacheOutcome::Bypass);
+        assert_eq!(r.backend_ok, None);
     }
 }

@@ -5,7 +5,20 @@
     "minimum": 9,
     "readme_benchmark": 11
   },
-  "capability_count": 119,
+  "capability_count": 136,
+  "held_capabilities": [
+    {
+      "name": "trawl_extract",
+      "reason": "loads but refuses to run: the tool cannot refuse private addresses at connect time, so the gateway cannot confine its network access (MIK-7788)"
+    }
+  ],
+  "held_operations": [
+    {
+      "capability": "cisco_scanner",
+      "operation": "scan_mcp_server",
+      "reason": "not offered: it reaches a caller-chosen network target that the gateway cannot confine (MIK-7788); the capability's skill scan runs and is counted"
+    }
+  ],
   "startup_benchmark": {
     "command": "hyperfine --shell=none --warmup 3 --runs 20 'target/release/mcp-gateway --help'",
     "mean_ms": 8.0,

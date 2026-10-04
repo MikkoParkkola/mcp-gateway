@@ -11,6 +11,12 @@
 > SHA-256 digests. Several of these refuse a 3.x config at startup; read
 > [UPGRADING-4.0.md](UPGRADING-4.0.md) before upgrading. Still open for 4.0.0:
 > [Known gaps](release/4.0.0-beta.2-notes.md#known-gaps).
+>
+> Evidence: `src/gateway/router/authorization.rs`, `tests/a0_per_caller_cache.rs`,
+> `src/control_plane/role_mapping.rs`, `src/gateway/router/sso_admin_tests.rs`,
+> `tests/d1_audit_required.rs`, `src/gateway/meta_mcp/audit_record_tests.rs`,
+> `src/gateway/router/audit_degraded_tests.rs`, `src/config/features/api_key.rs`,
+> `src/config/features/api_key_digest_tests.rs`, `tests/e4_hash_key_cli.rs`.
 
 A single-user gateway trusts whoever can reach the port. A multi-user gateway has
 to answer three questions instead, and they are answered by three different
@@ -98,6 +104,36 @@ still run; only the exchange step is skipped. The cost is revocation: the
 endpoints above revoke tokens the gateway issued, and a raw provider token is
 not one of them. In delegated mode your only revocation lever is the identity
 provider, so keep provider token lifetimes short.
+
+### Connecting a remote MCP client (ChatGPT and similar)
+
+A client that signs in with OAuth, such as ChatGPT, finds the sign-in server
+from the gateway's protected-resource metadata
+(`GET /.well-known/oauth-protected-resource`, RFC 9728). With
+`key_server.enabled: true` and `key_server.delegated_bearer: true`, every
+`key_server.oidc[].issuer` is listed there in `authorization_servers`, in
+configured order. Without both settings the list is empty and left out, because
+the gateway then accepts no provider token on the MCP routes.
+
+```yaml
+server:
+  public_url: https://mcp.corp.internal    # the https origin clients connect to
+key_server:
+  enabled: true
+  delegated_bearer: true
+  oidc:
+    - issuer: https://idp.corp.internal
+      audiences: [<client id the provider puts in aud>]
+```
+
+Clients present the provider's JWT access token, so the provider must issue
+JWT access tokens whose `aud` is one of the `audiences` above, whose age is
+within `max_oidc_token_age_secs`, and for an identity that a
+`key_server.policies` rule grants access to. The provider must also let the client register (dynamic client registration or a
+client metadata document) and publish its metadata at the issuer; the gateway
+does not run an authorization server of its own. Check the result with
+`xh https://mcp.corp.internal/.well-known/oauth-protected-resource`: it shows
+`resource` (your `public_url`) and the issuer.
 
 ## 2. What they may reach
 
@@ -240,6 +276,20 @@ one transport is safe to share because identity travels per request.
 `(backend, user, audience)`. If you are not certain the backend is stateless,
 it is not stateless — a backend that binds anything to the session will leak it
 across users.
+
+## One principal per call
+
+Authentication, audit and credential propagation carry **one** principal per
+call: the verified end user, or the API key, agent token or certificate when
+there is none. When a call passes user, then agent A, then agent B, then the
+gateway, the gateway sees the last hop's credential and the verified identity
+it carries. The intermediate agents are not recorded and policy cannot weigh
+them. Carrying an actor chain is tracked separately (MIK-7813).
+
+`strategy: passthrough` is the one exception to "the gateway mints the
+credential": it forwards the caller's own backend credential, from
+`x-mcp-passthrough-authorization`, to the backend unexamined. The gateway
+neither validates nor scopes it, so the backend is the only judge of it.
 
 ## The name collision to avoid
 
@@ -435,6 +485,27 @@ only raise it.
 - The dashboard: sessions end after 30 minutes idle or 8 hours total
   (`auth.dashboard_session`), and live in each replica's memory. Serve the dashboard
   from one replica or behind sticky sessions (UPGRADING-4.0 section 71).
+- Alerts on the security counters, scraped with `server.metrics_token`. Their
+  labels are fixed words, never a key name, subject, backend, tool or path:
+  - `mcp_auth_failures_total{kind}`: `missing_credential`, `invalid_credential`,
+    `expired_api_key`, `session_expired`, `bootstrap_refused`,
+    `token_exchange_denied`, `token_exchange_invalid`.
+  - `mcp_authz_denials_total{route, reason}`: route `meta`, `direct`, `admin`,
+    `ui` or `control_plane`; reason `backend_scope`, `account_not_usable`,
+    `identity_grant`, `gateway_refusal`, `response_firewall`, `request_policy`,
+    `admin_required`, `rbac` or `other`.
+  - `mcp_audit_degraded` and `mcp_audit_append_failures_total{cause}` for the log.
+
+  ```yaml
+  - alert: GatewayCredentialGuessing
+    expr: sum(rate(mcp_auth_failures_total{kind="invalid_credential"}[10m])) > 1
+    for: 10m
+  - alert: GatewayAuditLogDegraded
+    expr: max(mcp_audit_degraded) == 1
+  - alert: GatewayIdentityGrantDenialSpike
+    expr: sum(rate(mcp_authz_denials_total{reason="identity_grant"}[5m])) > 0.5
+    for: 5m
+  ```
 
 ## Related
 

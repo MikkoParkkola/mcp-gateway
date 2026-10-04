@@ -11,31 +11,43 @@
 //! ahead of the committed image. Losing the *answer* to a cancelled call is
 //! acceptable; losing the publish or the poison that follows a write is not.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use chrono::{DateTime, Utc};
-
 use super::record::{
-    CommittedTask, InterruptedTask, MARKER_VERSION, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask,
-    RECORD_VERSION, Record, UPSTREAM_VERSION, UpstreamRecord, widest_handle_reservation,
+    CommittedTask, MAX_UPSTREAM_HANDLE_BYTES, PreparedTask, Record, UPSTREAM_VERSION,
+    UpstreamRecord, widest_handle_reservation,
 };
-use crate::fs_lock::{DirPin, ExclusiveFileLock};
+use crate::fs_lock::ExclusiveFileLock;
+#[cfg(test)]
+use chrono::{DateTime, Utc};
+#[cfg(test)]
+use disk::acquire_lease;
+#[cfg(test)]
+pub(super) use disk::read_bounded;
+use disk::{Fault, fire, open_blocking, write_record};
+#[path = "store_disk.rs"]
+mod disk;
+#[path = "store_expiry.rs"]
+mod expiry;
+#[path = "store_input.rs"]
+pub(crate) mod input;
+#[cfg(test)]
+#[path = "store_lease_tests.rs"]
+mod lease_tests;
 #[cfg(unix)]
-use std::fs::rename;
+#[path = "store_unix.rs"]
+mod platform;
 #[cfg(windows)]
 #[path = "store_windows.rs"]
 mod platform;
-use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
-#[cfg(windows)]
-use platform::{
-    create_private_dir, has_mode, judge_store_dir, open_new_private, open_record, rename, sync_dir,
-    sync_file,
-};
+#[path = "store_targets.rs"]
+pub(crate) mod targets;
+#[cfg(test)]
+use crate::protocol::tasks::TaskTransition;
+use crate::protocol::tasks::{Task, TaskStatus};
 
 /// The one sidecar a fresh store creates. Deliberately not a `task-*.json` name,
 /// so the loader can never mistake custody state for a record.
@@ -52,6 +64,10 @@ pub(crate) enum StoreError {
     Unavailable,
     #[error("unsafe task store")]
     UnsafeStore,
+    /// The store directory or lease could not be inspected (not absent, not
+    /// unsafe): a failure to look, distinct from `Unavailable`.
+    #[error("task store path could not be inspected")]
+    Uninspectable,
     #[error("corrupt task record")]
     CorruptRecord,
     #[error("task store is already owned")]
@@ -132,7 +148,7 @@ struct Shared {
     state: Mutex<State>,
     lease: Mutex<Option<ExclusiveFileLock>>,
     #[cfg(test)]
-    hook: Mutex<Option<CommitHook>>,
+    seams: input::TestSeams,
     temp: AtomicU64,
 }
 
@@ -156,7 +172,7 @@ impl TaskStore {
             }),
             lease: Mutex::new(Some(lease)),
             #[cfg(test)]
-            hook: Mutex::new(None),
+            seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
         })))
     }
@@ -175,12 +191,10 @@ impl TaskStore {
             return Err(StoreError::Unavailable);
         }
         let entry = owned(&state, owner, id)?;
-        Ok(CommittedTask {
-            task: entry.task.clone(),
-            revision: entry.record.revision,
-        })
+        Ok(CommittedTask::of(entry.task.clone(), &entry.record))
     }
 
+    #[cfg(test)]
     pub(crate) async fn transition(
         &self,
         owner: &str,
@@ -355,7 +369,7 @@ impl TaskStore {
 
     #[cfg(test)]
     pub(super) async fn set_hook(&self, hook: Option<CommitHook>) {
-        *self.0.hook.lock().unwrap_or_else(PoisonError::into_inner) = hook;
+        self.0.seams.set_hook(hook);
     }
 
     /// Stop serving and release custody — after any mutation already in flight
@@ -409,6 +423,7 @@ impl Shared {
         Ok(committed)
     }
 
+    #[cfg(test)]
     fn transition_blocking(
         &self,
         owner: &str,
@@ -435,15 +450,12 @@ impl Shared {
         if !change.changed {
             // A late outcome against a settled task is not a failure and is not
             // a write: the first terminal commit stays the committed one.
-            return Ok(CommittedTask {
-                revision: record.revision,
-                task,
-            });
+            return Ok(CommittedTask::of(task, &record));
         }
         // Unreachable in practice; a record that can hold no further revision is
         // out of room rather than broken.
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
-        record.model = task.snapshot();
+        record.set_model(&task);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);
@@ -554,28 +566,20 @@ impl Shared {
     /// Make a committed record visible to readers. Called only after the write
     /// is durable, which is what keeps an acknowledgement behind its record.
     fn publish(&self, task: Task, record: Record) -> CommittedTask {
-        let revision = record.revision;
-        let committed = task.clone();
+        let committed = CommittedTask::of(task.clone(), &record);
         self.state()
             .entries
             .insert(task.id().to_owned(), Entry { task, record });
-        CommittedTask {
-            task: committed,
-            revision,
-        }
+        committed
     }
 
     /// The test-only commit hook. Production installs none and pays nothing.
     #[cfg(test)]
     fn hook(&self) -> Option<CommitHook> {
-        self.hook
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.seams.hook()
     }
 
-    // `&self` is load-bearing even here: the cfg(test) twin above reads the
-    // hook slot, and every caller writes `self.hook()`. One shape, two bodies.
+    // `&self` is load-bearing: one shape with the cfg(test) twin above.
     #[cfg(not(test))]
     #[expect(
         clippy::unused_self,
@@ -671,474 +675,4 @@ fn is_record_name(name: &str) -> bool {
         && Path::new(name)
             .extension()
             .is_some_and(|kind| kind == "json")
-}
-
-fn open_blocking(
-    dir: &Path,
-    limits: StoreLimits,
-) -> Result<(ExclusiveFileLock, BTreeMap<String, Entry>), StoreError> {
-    let pin = prepare_dir(dir)?;
-    let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
-    Ok((lease, load(dir, limits)?))
-}
-
-fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
-    match fs::symlink_metadata(dir) {
-        Ok(meta) => {
-            if !meta.is_dir() || !has_mode(&meta, STORE_MODE) {
-                tracing::warn!(path = %dir.display(), "task store directory is not a private directory");
-                return Err(StoreError::UnsafeStore);
-            }
-            judge_store_dir(dir)
-        }
-        // A fresh directory is judged exactly like an existing one.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            create_private_dir(dir).and_then(|()| judge_store_dir(dir))
-        }
-        Err(error) => {
-            tracing::warn!(%error, path = %dir.display(), "task store directory unreadable");
-            Err(StoreError::Unavailable)
-        }
-    }
-}
-
-fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
-    match fs::symlink_metadata(lease) {
-        Ok(meta) => {
-            if !meta.is_file() || !has_mode(&meta, RECORD_MODE) {
-                tracing::warn!(path = %lease.display(), "task store lease is not a private regular file");
-                return Err(StoreError::UnsafeStore);
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => {
-            tracing::warn!(%error, path = %lease.display(), "task store lease unreadable");
-            return Err(StoreError::Unavailable);
-        }
-    }
-    ExclusiveFileLock::try_acquire(lease).map_err(|error| {
-        if error.kind() == io::ErrorKind::WouldBlock {
-            return StoreError::AlreadyOwned;
-        }
-        // Windows judges the lease's DACL inside `try_acquire`, the check unix
-        // makes above with `has_mode`; a lease that is not private is unsafe.
-        #[cfg(windows)]
-        if error.kind() == io::ErrorKind::PermissionDenied {
-            tracing::warn!(%error, path = %lease.display(), "task store lease is not private");
-            return StoreError::UnsafeStore;
-        }
-        // Includes the platforms with no tested exclusion primitive: they refuse
-        // custody outright rather than pretend to hold it.
-        tracing::warn!(%error, path = %lease.display(), "task store lease not acquired");
-        StoreError::Unavailable
-    })
-}
-
-/// Read every record. Any unreadable, foreign-moded, non-regular, unsupported,
-/// duplicated or over-budget record refuses readiness with the directory left
-/// exactly as found. The disk is a trust boundary, so limits apply here too and
-/// the cap is enforced on the BYTES ACTUALLY READ rather than on a stat taken
-/// beforehand — a length observed before the read is a fact about a moment that
-/// has already passed.
-fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, StoreError> {
-    let mut entries: BTreeMap<String, Entry> = BTreeMap::new();
-    let mut identities = BTreeSet::new();
-    let mut principals: BTreeMap<String, usize> = BTreeMap::new();
-    for entry in fs::read_dir(dir).map_err(|_| StoreError::Unavailable)? {
-        let entry = entry.map_err(|_| StoreError::Unavailable)?;
-        let name = entry.file_name();
-        // An orphaned temp file, the lease, and anything else is not a record and
-        // never becomes one.
-        let Some(name) = name.to_str().filter(|name| is_record_name(name)) else {
-            continue;
-        };
-        let path = entry.path();
-        // Open first, then judge the OPEN HANDLE. Checking the path and then
-        // opening it are two different files if anything swaps the name in
-        // between, and a symlink is refused by the open itself rather than by a
-        // check that the open could disagree with.
-        let mut file = open_record(&path)?;
-        let meta = file.metadata().map_err(|_| StoreError::Unavailable)?;
-        if !meta.is_file() || !has_mode(&meta, RECORD_MODE) {
-            tracing::warn!(path = %path.display(), "task record is not a private regular file");
-            return Err(StoreError::UnsafeStore);
-        }
-        fits(limits, entries.len())?;
-        let bytes = read_bounded(&mut file, limits.record_bytes).inspect_err(|error| {
-            if *error == StoreError::Capacity {
-                tracing::warn!(path = %path.display(), "task record exceeds the record budget");
-            }
-        })?;
-        let record: Record = serde_json::from_slice(&bytes).map_err(|error| {
-            tracing::warn!(%error, path = %path.display(), "task record does not parse");
-            StoreError::CorruptRecord
-        })?;
-        if !(1..=RECORD_VERSION).contains(&record.version) {
-            tracing::warn!(path = %path.display(), version = record.version, "unsupported task record version");
-            return Err(StoreError::CorruptRecord);
-        }
-        let task = Task::from_snapshot(record.model.clone()).map_err(|error| {
-            tracing::warn!(%error, path = %path.display(), "task record does not restore");
-            StoreError::CorruptRecord
-        })?;
-        // A record living under another task's name would let a rename rebind it.
-        if record_name(task.id()) != name
-            || !identities.insert(record.admission.identity_digest.clone())
-        {
-            tracing::warn!(path = %path.display(), "task record identity or name is not its own");
-            return Err(StoreError::CorruptRecord);
-        }
-        let held = principals
-            .entry(record.admission.principal_digest.clone())
-            .or_default();
-        *held += 1;
-        if *held > limits.per_principal {
-            tracing::warn!(path = %path.display(), "stored tasks exceed the per-principal cap");
-            return Err(StoreError::Capacity);
-        }
-        entries.insert(task.id().to_owned(), Entry { task, record });
-    }
-    Ok(entries)
-}
-
-/// Read at most `cap` bytes, refusing as soon as one more than that arrives.
-/// Reading a byte past the cap is what makes "too large" observable without ever
-/// allocating the oversized content it is refusing.
-/// `pub(super)` only so the bound itself can be asserted directly rather than
-/// inferred from a store-level outcome. Still module-private.
-pub(super) fn read_bounded(file: &mut fs::File, cap: usize) -> Result<Vec<u8>, StoreError> {
-    use std::io::Read as _;
-
-    let ceiling = u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1);
-    let mut bytes = Vec::new();
-    file.take(ceiling)
-        .read_to_end(&mut bytes)
-        .map_err(|_| StoreError::Unavailable)?;
-    if bytes.len() > cap {
-        return Err(StoreError::Capacity);
-    }
-    Ok(bytes)
-}
-
-/// Open a record without following a symlink, so the thing judged and the thing
-/// read are the same file.
-#[cfg(unix)]
-fn open_record(path: &Path) -> Result<fs::File, StoreError> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
-        .open(path)
-        .map_err(|error| {
-            tracing::warn!(%error, path = %path.display(), "task record could not be opened as a private regular file");
-            StoreError::UnsafeStore
-        })
-}
-
-enum Fault {
-    BeforeRename(io::Error),
-    AfterRename(io::Error),
-}
-
-/// Write one record durably: private temp, payload, file sync, rename, directory
-/// sync. Failure before the rename is a clean refusal; failure at or after it
-/// leaves durability uncertain, which is the caller's cue to poison readiness.
-fn write_record(
-    dir: &Path,
-    name: &str,
-    bytes: &[u8],
-    hook: Option<&CommitHook>,
-    counter: &AtomicU64,
-) -> Result<(), Fault> {
-    // Nothing is removed before this point: a colliding orphan belongs to some
-    // earlier attempt and is stepped over, never deleted.
-    let (file, temp) = create_temp(dir, name, counter).map_err(Fault::BeforeRename)?;
-    let staged = stage_temp(file, bytes, hook)
-        .and_then(|()| fire(hook, CommitStage::Rename))
-        .and_then(|()| rename(&temp, dir.join(name)));
-    if let Err(error) = staged {
-        let _ = fs::remove_file(&temp);
-        return Err(Fault::BeforeRename(error));
-    }
-    fire(hook, CommitStage::DirectorySync)
-        .and_then(|()| sync_dir(dir))
-        .map_err(Fault::AfterRename)
-}
-
-/// Claim a private temporary file, retrying past a name some earlier attempt
-/// left behind. Mirrors the reviewed `oauth::storage::create_secret_tmp`: the
-/// process id keeps two processes apart, the counter keeps two attempts apart,
-/// and a collision costs a nonce rather than another writer's evidence.
-fn create_temp(dir: &Path, name: &str, counter: &AtomicU64) -> io::Result<(fs::File, PathBuf)> {
-    for _ in 0..TEMP_ATTEMPTS {
-        let nonce = counter.fetch_add(1, Ordering::Relaxed);
-        let temp = dir.join(format!("{name}.tmp.{}.{nonce}", std::process::id()));
-        match open_new_private(&temp) {
-            Ok(file) => return Ok((file, temp)),
-            // A stale temp holds this name; take the next nonce and leave it be.
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "no unused task record temporary name",
-    ))
-}
-
-fn stage_temp(mut file: fs::File, bytes: &[u8], hook: Option<&CommitHook>) -> io::Result<()> {
-    use std::io::Write as _;
-
-    fire(hook, CommitStage::Write)?;
-    file.write_all(bytes)?;
-    fire(hook, CommitStage::Flush)?;
-    sync_file(&file)?;
-    fire(hook, CommitStage::FileSync)
-}
-
-fn fire(hook: Option<&CommitHook>, stage: CommitStage) -> io::Result<()> {
-    hook.map_or(Ok(()), |hook| hook(stage))
-}
-
-#[cfg(unix)]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "unix judges by mode; nothing to hold"
-)]
-fn judge_store_dir(_dir: &Path) -> Result<DirPin, StoreError> {
-    Ok(DirPin())
-}
-
-#[cfg(unix)]
-fn has_mode(meta: &fs::Metadata, expected: u32) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    meta.mode() & 0o7777 == expected
-}
-
-#[cfg(unix)]
-fn create_private_dir(dir: &Path) -> Result<(), StoreError> {
-    use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(STORE_MODE)
-        .create(dir)
-        .and_then(|()| fs::set_permissions(dir, fs::Permissions::from_mode(STORE_MODE)))
-        .map_err(|error| {
-            tracing::warn!(%error, path = %dir.display(), "task store directory not created");
-            StoreError::Unavailable
-        })
-}
-
-/// A scratch record: `mode` is masked by the process umask, so the record is
-/// forced private regardless of how the surrounding process was configured.
-#[cfg(unix)]
-fn open_new_private(path: &Path) -> io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let file = fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(RECORD_MODE)
-        .open(path)?;
-    force_owner_only(&file)?;
-    Ok(file)
-}
-
-#[cfg(unix)]
-fn sync_file(file: &fs::File) -> io::Result<()> {
-    file.sync_all()
-}
-
-#[cfg(unix)]
-fn force_owner_only(file: &fs::File) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    file.set_permissions(fs::Permissions::from_mode(RECORD_MODE))
-}
-
-/// Make the rename itself durable. Opening a directory as a file is not portable,
-/// and the durability target for this store is Linux and macOS.
-#[cfg(unix)]
-fn sync_dir(dir: &Path) -> io::Result<()> {
-    fs::File::open(dir)?.sync_all()
-}
-
-/// The S1 store surface: restart enumeration and the conditional durable expiry
-/// that couples a record's deletion to its dedupe entry.
-impl TaskStore {
-    /// Every committed record's persisted binding, paired with its task id, for
-    /// startup import BEFORE serving. Owned values: the state they are read from
-    /// lives behind a mutex.
-    pub(super) fn restored_bindings(
-        &self,
-    ) -> Vec<(crate::idempotency::admission::RestoredBinding, String)> {
-        let state = self.0.state();
-        state
-            .entries
-            .iter()
-            .map(|(id, entry)| {
-                let admission = &entry.record.admission;
-                (
-                    crate::idempotency::admission::RestoredBinding {
-                        identity: admission.identity_digest.clone(),
-                        principal_digest: admission.principal_digest.clone(),
-                        operation: admission.operation_digest.clone(),
-                        representation: admission.representation_digest.clone(),
-                        metadata_bytes: admission.metadata_bytes,
-                    },
-                    id.clone(),
-                )
-            })
-            .collect()
-    }
-
-    /// Every row a previous process left mid-flight, for startup recovery BEFORE
-    /// serving. Terminal rows are not selected at all, which is what keeps a
-    /// settled record — and a second startup — free of any rewrite.
-    pub(super) fn interrupted(&self) -> Vec<InterruptedTask> {
-        let state = self.0.state();
-        state
-            .entries
-            .iter()
-            .filter(|(_, entry)| {
-                matches!(
-                    entry.task.status(),
-                    TaskStatus::Working | TaskStatus::InputRequired
-                )
-            })
-            .map(|(id, entry)| InterruptedTask {
-                id: id.clone(),
-                owner_digest: entry.record.admission.principal_digest.clone(),
-                revision: entry.record.revision,
-                never_dispatched: entry.task.status() == TaskStatus::Working
-                    && entry.record.version >= MARKER_VERSION
-                    && !entry.record.dispatched,
-                is_working: entry.task.status() == TaskStatus::Working,
-                // Only a v3+ row whose descriptor still names this record's
-                // admitted operation is offered as recoverable. Everything else
-                // reads as absent and takes the unchanged I3 table.
-                upstream: (entry.record.version >= UPSTREAM_VERSION)
-                    .then(|| entry.record.upstream.clone())
-                    .flatten()
-                    .filter(|upstream| upstream.consistent_with(&entry.record.admission)),
-            })
-            .collect()
-    }
-
-    /// Every record the periodic owner may delete at `now`: terminal, and past
-    /// the retention its own creation stamped.
-    ///
-    /// Compact owned pairs, and the state lock is released with the snapshot —
-    /// each deletion re-reads the record under the store's own ordering lock, so
-    /// a pair that has since moved or gone is refused there rather than acted on
-    /// from this view. Nothing here reads the directory: the committed image is
-    /// the only enumeration this store has.
-    pub(super) fn expired_candidates(&self, now: DateTime<Utc>) -> Vec<(String, u64)> {
-        let state = self.0.state();
-        if !state.ready {
-            return Vec::new();
-        }
-        state
-            .entries
-            .iter()
-            .filter(|(_, entry)| {
-                matches!(
-                    entry.task.status(),
-                    TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-                ) && entry.task.retention_elapsed(now)
-            })
-            .map(|(id, entry)| (id.clone(), entry.record.revision))
-            .collect()
-    }
-
-    /// Delete one terminal record and drop its dedupe entry TOGETHER, per §13.3.
-    ///
-    /// `revision` is the caller's expectation and is checked before anything is
-    /// deleted, so a task that moved on is refused rather than removed. Nothing
-    /// here resets a TTL or a poll interval: expiry ends a task's life, it does
-    /// not extend it.
-    pub(super) async fn expire(
-        &self,
-        id: &str,
-        revision: u64,
-        admission: &Arc<crate::idempotency::admission::ExecutionAdmission>,
-    ) -> Result<(), StoreError> {
-        let shared = Arc::clone(&self.0);
-        let id = id.to_owned();
-        let admission = Arc::clone(admission);
-        tokio::task::spawn_blocking(move || shared.expire_blocking(&id, revision, &admission))
-            .await
-            .map_err(|_| StoreError::Storage)?
-    }
-}
-
-impl Shared {
-    /// The expiry transaction. The admission guard is opened AFTER the store's
-    /// ordering lock and BEFORE the deletion, and held across the COMPLETE
-    /// deletion commit — unlink, directory sync, readable-state removal — and
-    /// the dedupe release. `admit_task` takes that same mutex, so no admission
-    /// path can observe a half-finished expiry.
-    ///
-    /// The guard never crosses an `await`: this whole function runs inside one
-    /// `spawn_blocking` closure.
-    fn expire_blocking(
-        &self,
-        id: &str,
-        revision: u64,
-        admission: &Arc<crate::idempotency::admission::ExecutionAdmission>,
-    ) -> Result<(), StoreError> {
-        let _order = self.order();
-        let identity = {
-            let state = self.state();
-            if !state.ready {
-                return Err(StoreError::Unavailable);
-            }
-            let entry = state.entries.get(id).ok_or(StoreError::NotFound)?;
-            if entry.record.revision != revision {
-                return Err(StoreError::RevisionConflict);
-            }
-            // Conditional on the record being terminal: a running task is not
-            // expiry's to end.
-            if !matches!(
-                entry.task.status(),
-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-            ) {
-                return Err(StoreError::InvalidTransition);
-            }
-            entry.record.admission.identity_digest.clone()
-        };
-
-        let guard = admission.expiry_guard(&identity);
-        match guard.published_task() {
-            // The dedupe entry must name THIS task: an identity that owns some
-            // other id is not this record's, and deleting it would strand both.
-            Some((task_id, _)) if task_id == id => {}
-            _ => return Err(StoreError::NotFound),
-        }
-
-        // An already-absent record is a deletion to FINISH, not an error: a
-        // previous attempt whose directory sync failed left exactly that state,
-        // and refusing it would strand the entry and its capacity until restart.
-        let path = self.dir.join(record_name(id));
-        match fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(%error, task = %id, "task record not deleted");
-                return Err(StoreError::Storage);
-            }
-        }
-        let hook = self.hook();
-        fire(hook.as_ref(), CommitStage::DirectorySync)
-            .and_then(|()| sync_dir(&self.dir))
-            .map_err(|error| {
-                tracing::warn!(%error, task = %id, "task record deletion not made durable");
-                StoreError::Storage
-            })?;
-        fire(hook.as_ref(), CommitStage::Deleted).map_err(|_| StoreError::Storage)?;
-
-        // Readable view follows the durable one, then the dedupe entry and its
-        // capacity go back — all still inside the guard.
-        self.state().entries.remove(id);
-        guard.release();
-        Ok(())
-    }
 }

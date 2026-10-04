@@ -9,7 +9,7 @@
 //! are unaffected until an operator opts in — shipping a projection spec on a
 //! capability changes no response contract while the mode is `off`.
 //!
-//! [`projection_decision`] resolves the mode (plus a session id for the A/B
+//! [`projection_decision`] resolves the mode (plus the experiment key for the A/B
 //! split) into a yes/no plus an arm label for telemetry.
 
 use serde::{Deserialize, Serialize};
@@ -26,9 +26,9 @@ pub enum ProjectionMode {
     /// Project whenever a capability declares a spec (and the caller did not
     /// pass `_full`). The fully-on behavior.
     On,
-    /// A/B experiment: split sessions 50/50 into a `treatment` arm (projected)
+    /// A/B experiment: split callers 50/50 into a `treatment` arm (projected)
     /// and a `control` arm (raw) so projection's effect can be measured before
-    /// committing. Assignment is sticky per session.
+    /// committing. Assignment is sticky per experiment key (the caller key).
     Experimental,
 }
 
@@ -69,14 +69,14 @@ fn session_hash(bytes: &[u8]) -> u64 {
     h
 }
 
-/// Resolve a [`ProjectionMode`] (plus the session id, for the A/B split) into a
+/// Resolve a [`ProjectionMode`] (plus the experiment key, for the A/B split) into a
 /// [`ProjectionDecision`].
 ///
 /// - [`ProjectionMode::Off`] → never project.
 /// - [`ProjectionMode::On`] → always project (when a spec exists).
-/// - [`ProjectionMode::Experimental`] → sticky 50/50 split by session id; a
-///   missing session id is conservatively assigned to `control` (no
-///   projection), so an un-sessioned call never silently changes shape.
+/// - [`ProjectionMode::Experimental`] → sticky 50/50 split by experiment key
+///   (`MetaMcpCallerContext::experiment_key`); a missing key is assigned to
+///   `control` (no projection), so a keyless call never silently changes shape.
 #[must_use]
 pub fn projection_decision(mode: ProjectionMode, session_id: Option<&str>) -> ProjectionDecision {
     match mode {
@@ -141,22 +141,26 @@ pub struct AbRecord {
 /// Classify an invocation for A/B telemetry, or `None` when it is not part of
 /// the experiment.
 ///
-/// Only `experimental` mode with a projection-capable tool (`spec_present`) is
-/// in the experiment — `off`/`on` and spec-less tools return `None` so no event
+/// Only `experimental` mode with a projection-capable tool (`spec_present`) and
+/// a key is in the experiment — `off`/`on` and spec-less tools return `None` so no event
 /// is emitted for them. `projected` is true only for the treatment arm of a
 /// non-`_full` call (a `_full` call bypasses projection even in treatment, so it
 /// records `projected = false` while keeping its arm label).
 #[must_use]
 pub fn ab_classification(
     mode: ProjectionMode,
-    session_id: Option<&str>,
+    key: Option<&str>,
     want_full: bool,
     spec_present: bool,
 ) -> Option<AbRecord> {
+    // A call with no key is not in the experiment (G4): it is served the
+    // control shape, but counting it would pool every keyless caller into
+    // the control arm's numbers.
     if mode != ProjectionMode::Experimental || !spec_present {
         return None;
     }
-    let decision = projection_decision(mode, session_id);
+    let key = key?;
+    let decision = projection_decision(mode, Some(key));
     Some(AbRecord {
         arm: decision.arm,
         projected: decision.project && !want_full,

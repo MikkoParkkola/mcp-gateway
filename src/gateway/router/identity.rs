@@ -13,7 +13,6 @@ use axum::http::{HeaderMap, StatusCode};
 use tracing::warn;
 
 use crate::config::KeyServerOidcConfig;
-#[cfg(feature = "firewall")]
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::identity_grants::GrantSubject;
@@ -118,7 +117,9 @@ pub(super) async fn caller_grant_subject(
             "reason" => refusal.reason()
         )
         .increment(1);
-        warn!(mode = ?config.mode, reason = refusal.reason(), "caller identity header refused");
+        // Computed before the macro so its count is graded (MIK-7725).
+        let (mode, reason) = (&config.mode, refusal.reason());
+        warn!(mode = ?mode, reason, "caller identity header refused");
     })?;
 
     if let Some(verified) = verified_identity.and_then(grant_subject_from_verified_identity) {
@@ -312,6 +313,28 @@ fn cert_subject_id(identity: &CertIdentity) -> Option<String> {
         .map(String::from)
 }
 
+/// The `Subject(authority, id)` half of `caller_key`, in every build: session
+/// ownership keys on it too. `None` when no subject resolved, or when the only
+/// subject is a certificate's display-name fallback.
+pub(super) fn subject_key(
+    subject: Option<&GrantSubject>,
+    cert: Option<&CertIdentity>,
+) -> Option<String> {
+    let subject = subject?;
+    let from_cert = cert.and_then(grant_subject_from_cert_identity).as_ref() == Some(subject);
+    let id = if from_cert {
+        cert.and_then(cert_subject_id)?
+    } else {
+        subject.subject.clone()
+    };
+    Some(format!(
+        "subject:{}:{}:{}:{id}",
+        subject.authority.len(),
+        subject.authority,
+        id.len()
+    ))
+}
+
 /// The key the per-caller firewall controls (anomaly, tenant, budget) score on:
 /// the hardened design's `CallerKey`.
 ///
@@ -319,32 +342,20 @@ fn cert_subject_id(identity: &CertIdentity) -> Option<String> {
 /// `Credential(digest)` for an authenticated API key, else empty (no identity;
 /// the firewall refuses rather than pools). A subject outranks the credential,
 /// so one person keeps one bucket across credentials and token exchanges.
+/// The meta route's A/B arm and prefetch hints key on it too (G4), so it
+/// exists in every build.
 ///
 /// Length-prefixed, with a tag per variant, so no two distinct callers can
 /// encode to one key. A certificate subject is re-derived from the certificate
 /// itself so the display-name fallback `caller_grant_subject` keeps for
 /// authorization can never become a shared key.
-#[cfg(feature = "firewall")]
 pub(super) fn caller_key(
     subject: Option<&GrantSubject>,
     cert: Option<&CertIdentity>,
     client: Option<&AuthenticatedClient>,
 ) -> String {
-    if let Some(subject) = subject {
-        let from_cert = cert.and_then(grant_subject_from_cert_identity).as_ref() == Some(subject);
-        let id = if from_cert {
-            cert.and_then(cert_subject_id)
-        } else {
-            Some(subject.subject.clone())
-        };
-        if let Some(id) = id {
-            return format!(
-                "subject:{}:{}:{}:{id}",
-                subject.authority.len(),
-                subject.authority,
-                id.len()
-            );
-        }
+    if let Some(key) = subject_key(subject, cert) {
+        return key;
     }
     client
         .filter(|c| c.authenticated && !c.principal.is_empty())
@@ -375,6 +386,10 @@ fn trimmed_non_empty(value: &str) -> Option<String> {
 #[cfg(test)]
 #[path = "identity_header_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "identity_cf_edge_tests.rs"]
+mod cf_edge_tests;
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "caller_key_tests.rs"]

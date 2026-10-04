@@ -189,7 +189,12 @@ pub(super) async fn open_listen(
     };
     let ack = expect_message(&mut stream, "the acknowledgement that opens the stream").await;
     std::assert_eq!(
-        ack["result"]["_meta"][SUBSCRIPTION_ID_META],
+        ack["method"],
+        "notifications/subscriptions/acknowledged",
+        "{ack}"
+    );
+    std::assert_eq!(
+        ack["params"]["_meta"][SUBSCRIPTION_ID_META],
         json!(id),
         "the subscription id is the listen request's own id: {ack}"
     );

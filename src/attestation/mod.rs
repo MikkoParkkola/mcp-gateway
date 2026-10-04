@@ -32,6 +32,8 @@
 //! `0` boots sandboxes without a token (still isolated, loses identity
 //! attribution); any other value — including unset — enforces fail-closed.
 
+#[cfg(test)]
+mod audience_tests;
 pub mod launcher;
 pub mod signer;
 pub mod token;
@@ -49,6 +51,6 @@ pub use validator::{
     AuditRingBuffer, RetiringToken, RotationCheckpoint,
 };
 pub use wiring::{
-    ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV, ATTESTATION_SIGNING_KEY_ENV,
-    attestation_wiring_from_overlay, resolve_attestation_wiring,
+    ATTESTATION_AUDIENCE_ENV, ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV,
+    ATTESTATION_SIGNING_KEY_ENV, attestation_wiring_from_overlay, resolve_attestation_wiring,
 };

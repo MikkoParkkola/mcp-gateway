@@ -42,7 +42,6 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use chrono::Utc;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256};
 
@@ -84,6 +83,8 @@ mod append;
 // F20: the bounded async append.
 #[path = "transparency_log_bounded.rs"]
 mod bounded;
+#[path = "transparency_log_hwm_scan.rs"]
+mod hwm_scan;
 #[path = "transparency_log_rotation.rs"]
 mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
@@ -95,6 +96,9 @@ pub(crate) mod rotation_fault {
 pub(crate) mod segments;
 #[path = "transparency_log_verify.rs"]
 mod verify;
+// MIK-7116.MIN.1: invocation records carrying tenant attribution.
+#[path = "transparency_log_attributed.rs"]
+mod attributed;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
@@ -102,7 +106,6 @@ pub use verify::{
     verify_log, verify_log_signed,
 };
 
-use crate::gateway::session_id::session_fp;
 use crate::security::audit::{AuditEnvelope, AuditWho, InvocationTarget};
 pub use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 
@@ -382,30 +385,14 @@ impl TransparencyLogger {
         request_hash: &str,
         response_hash: Option<&str>,
     ) -> io::Result<()> {
-        let timestamp = Utc::now().to_rfc3339();
-
-        // Domain fields for an invocation entry. `counter`, `prev_entry_hash`,
-        // `entry_hash`, and `sig`/`key_id` are added by `append_core`.
-        let mut fields = serde_json::Map::new();
-        // `caller` is kept for one major version as a copy of `who.account`.
-        fields.insert("caller".into(), envelope.who.account().into());
-        fields.insert("correlation_source".into(), key.source.as_str().into());
-        fields.insert("request_hash".into(), request_hash.into());
-        // A failed call has no response to hash.
-        if let Some(response_hash) = response_hash {
-            fields.insert("response_hash".into(), response_hash.into());
-        }
-        fields.insert("route".into(), target.route.as_str().into());
-        fields.insert("server".into(), target.server.into());
-        let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
-        let session_id: String = fp.unwrap_or_else(|| key.id.into());
-        fields.insert("session_id".into(), session_id.into());
-        fields.insert("timestamp".into(), timestamp.into());
-        if let Some(tool) = target.tool {
-            fields.insert("tool".into(), tool.into());
-        }
-
-        self.append_core(fields, envelope, false).map(|_| ())
+        self.log_invocation_attributed(
+            key,
+            envelope,
+            target,
+            request_hash,
+            response_hash,
+            serde_json::Map::new(),
+        )
     }
 
     /// Append an arbitrary governance/audit entry into the same tamper-evident
@@ -512,11 +499,7 @@ impl TransparencyLogger {
         {
             self.append_attempts
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            if self
-                .fail_next_append
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-                || self.fail_appends.load(std::sync::atomic::Ordering::Acquire)
-            {
+            if self.injected_fault(&fields) {
                 return Err(io::Error::other("injected transparency append failure"));
             }
         }
@@ -747,11 +730,20 @@ fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "transparency_log_attributed_tests.rs"]
+mod attributed_tests;
+#[cfg(test)]
 #[path = "transparency_log_bounded_tests.rs"]
 mod bounded_tests;
 #[cfg(test)]
 #[path = "transparency_log_errors_tests.rs"]
 mod errors_tests;
+#[cfg(test)]
+#[path = "transparency_log_hwm_contradiction_tests.rs"]
+mod hwm_contradiction_tests;
+#[cfg(test)]
+#[path = "transparency_log_hwm_missing_tests.rs"]
+mod hwm_missing_tests;
 #[cfg(test)]
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;

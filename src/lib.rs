@@ -45,10 +45,12 @@ pub mod control_plane;
 pub mod cost_accounting;
 pub mod discovery;
 pub mod error;
+mod events;
 pub mod failsafe;
 mod fs_lock;
 pub mod gateway;
 mod hashing;
+mod home_dir;
 pub mod honest_task_tokens;
 pub mod idempotency;
 pub mod identity_grants;
@@ -170,5 +172,9 @@ mod log_filter_tests;
 #[cfg(test)]
 pub(crate) mod test_log_capture;
 
+// Unix-only (W-L8): `mkfifo` has no Windows counterpart.
 #[cfg(all(test, unix))]
 pub(crate) mod test_fifo;
+
+#[cfg(test)]
+pub(crate) mod test_symlink;

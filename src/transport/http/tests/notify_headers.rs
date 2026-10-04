@@ -102,3 +102,28 @@ async fn an_unparsable_caller_credential_never_falls_back_to_the_static_one() {
     // nor the static one in its place.
     assert_eq!(*seen.lock().unwrap(), vec![None]);
 }
+
+// A name that is not a valid header name is skipped: it names no static
+// header, so the static set is left as built and the walk carries on to the
+// next pair rather than stopping at the bad one.
+#[test]
+fn an_unparseable_extra_header_name_is_skipped_and_the_rest_still_apply() {
+    use reqwest::header::{HeaderMap, HeaderValue};
+
+    let static_auth = format!("Bearer {}", "gateway-static");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_str(&static_auth).unwrap(),
+    );
+    let extra = vec![
+        ("bad name\n".to_string(), "x".to_string()),
+        ("X-After".to_string(), "kept".to_string()),
+    ];
+
+    super::super::extra_headers::merge_extra_headers(&mut headers, &extra);
+
+    assert_eq!(headers.len(), 2);
+    assert_eq!(headers["authorization"], static_auth.as_str());
+    assert_eq!(headers["x-after"], "kept");
+}

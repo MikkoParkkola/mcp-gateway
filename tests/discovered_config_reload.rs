@@ -9,7 +9,6 @@
 //! `RUST_LOG=info` (the waits read INFO lines) and no inherited
 //! `MCP_GATEWAY_*` variable. Waits are on completion lines, never trigger
 //! lines, and edits are sequential, so one reload never absorbs the next edit.
-#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -23,18 +22,17 @@ use tokio::process::{Child, Command};
 const STARTUP: Duration = Duration::from_secs(60);
 /// One reload: a 2 s env poll and a sub-second debounce, with CI margin.
 const RELOAD: Duration = Duration::from_secs(20);
+/// One `/livez` probe; the start-up loop retries, so this only bounds a stall.
+const PROBE: Duration = Duration::from_secs(2);
 const BEARER: &str = "discovered-config-admin-token";
 const PROTOCOL_VERSION: &str = "2025-06-18";
 const CONFIG_RELOADED: &str = "Config reload: complete";
 const ENV_RELOADED: &str = "Config reload: env file changed, reloaded";
 const RELOAD_TOOL: &str = "gateway_reload_config";
 
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .expect("a free loopback port")
-}
+/// `server.port: 0`: the child binds an OS-chosen port and logs the one it
+/// got, so no port is picked here and dropped before the child binds it.
+const ANY_PORT: u16 = 0;
 
 fn write_owner_only(path: &Path, text: &str) {
     if let Some(dir) = path.parent() {
@@ -63,7 +61,7 @@ fn http_config(port: u16, env_file: &str, auth: bool, backend: bool) -> String {
         ""
     };
     format!(
-        "server:\n  host: \"127.0.0.1\"\n  port: {port}\n{auth}env_files:\n  - \"{env_file}\"\n{backends}"
+        "server:\n  host: \"127.0.0.1\"\n  port: {port}\n{auth}env_files:\n  - '{env_file}'\n{backends}"
     )
 }
 
@@ -78,10 +76,44 @@ fn gateway_command(cwd: &Path, home: &Path) -> Command {
     command
         .current_dir(cwd)
         .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env("MCP_GATEWAY_TEST_HOME_DIR", home)
         .env("MCP_GATEWAY_CONFIG_DIR", home.join("state"))
         .env("RUST_LOG", "info")
         .kill_on_drop(true);
     command
+}
+
+/// The port in the gateway's `Listening` banner line, with terminal colour
+/// codes stripped (their digits are not part of the port). The last `port`
+/// on the line is the field; the module path before it can contain the word.
+fn reported_port(log: &str) -> Option<u16> {
+    // Only a line already ended by a newline: the child may be mid-write, and
+    // a prefix such as `port=39` would parse as a wrong port.
+    let line = log
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .find(|line| line.contains("Listening") && line.contains("port"))?;
+    let mut plain = String::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for skipped in chars.by_ref() {
+                if skipped.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            plain.push(c);
+        }
+    }
+    let rest = &plain[plain.rfind("port")? + "port".len()..];
+    let digits: String = rest
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
 }
 
 /// An HTTP gateway whose stdout and stderr go to one log file.
@@ -92,7 +124,7 @@ struct HttpGateway {
 }
 
 impl HttpGateway {
-    async fn spawn(cwd: &Path, home: &Path, port: u16, args: &[&str]) -> Self {
+    async fn spawn(cwd: &Path, home: &Path, args: &[&str]) -> Self {
         let log = home.join("gateway.log");
         let out = std::fs::File::create(&log).expect("log file");
         let err = out.try_clone().expect("log handle");
@@ -104,7 +136,11 @@ impl HttpGateway {
             .stderr(Stdio::from(err))
             .spawn()
             .expect("the built mcp-gateway binary spawns");
-        let mut gateway = Self { child, port, log };
+        let mut gateway = Self {
+            child,
+            port: ANY_PORT,
+            log,
+        };
         gateway.wait_until_serving().await;
         gateway
     }
@@ -113,11 +149,24 @@ impl HttpGateway {
         std::fs::read_to_string(&self.log).unwrap_or_default()
     }
 
+    /// Wait for the port the child reports, then for `/livez` on it.
     async fn wait_until_serving(&mut self) {
         let deadline = Instant::now() + STARTUP;
-        let url = format!("http://127.0.0.1:{}/livez", self.port);
+        // A per-request timeout: one stalled connect must not outlast `STARTUP`
+        // (MIK-7656). The failure still carries the gateway log.
+        let probe = reqwest::Client::builder()
+            .timeout(PROBE)
+            .build()
+            .expect("probe client");
         loop {
-            if let Ok(response) = reqwest::get(&url).await
+            if self.port == ANY_PORT {
+                self.port = reported_port(&self.logs()).unwrap_or(ANY_PORT);
+            }
+            if self.port != ANY_PORT
+                && let Ok(response) = probe
+                    .get(format!("http://127.0.0.1:{}/livez", self.port))
+                    .send()
+                    .await
                 && response.status().is_success()
             {
                 return;
@@ -283,14 +332,13 @@ impl McpSession {
 #[tokio::test]
 async fn d1_a_config_found_in_the_working_directory_reloads() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let port = free_port();
     let (config, env) = (dir.path().join("gateway.yaml"), dir.path().join(".env"));
     write_owner_only(&env, "DISCOVERED_VALUE=one\n");
-    write_owner_only(&config, &http_config(port, ".env", false, false));
-    let gateway = HttpGateway::spawn(dir.path(), dir.path(), port, &[]).await;
+    write_owner_only(&config, &http_config(ANY_PORT, ".env", false, false));
+    let gateway = HttpGateway::spawn(dir.path(), dir.path(), &[]).await;
 
     let before = gateway.count(CONFIG_RELOADED);
-    write_owner_only(&config, &http_config(port, ".env", false, true));
+    write_owner_only(&config, &http_config(ANY_PORT, ".env", false, true));
     gateway.wait_for(CONFIG_RELOADED, before).await;
 
     let before = gateway.count(ENV_RELOADED);
@@ -304,17 +352,16 @@ async fn d2_a_config_found_under_home_reloads() {
     let home = tempfile::tempdir().expect("tempdir");
     let cwd = home.path().join("empty-working-dir");
     std::fs::create_dir_all(&cwd).expect("cwd");
-    let port = free_port();
     let dir = home.path().join(".config/mcp-gateway");
     let (config, env) = (dir.join("gateway.yaml"), dir.join(".env"));
     // Absolute: a relative env-file entry resolves from the working directory.
     let env_entry = env.display().to_string();
     write_owner_only(&env, "DISCOVERED_VALUE=one\n");
-    write_owner_only(&config, &http_config(port, &env_entry, false, false));
-    let gateway = HttpGateway::spawn(&cwd, home.path(), port, &[]).await;
+    write_owner_only(&config, &http_config(ANY_PORT, &env_entry, false, false));
+    let gateway = HttpGateway::spawn(&cwd, home.path(), &[]).await;
 
     let before = gateway.count(CONFIG_RELOADED);
-    write_owner_only(&config, &http_config(port, &env_entry, false, true));
+    write_owner_only(&config, &http_config(ANY_PORT, &env_entry, false, true));
     gateway.wait_for(CONFIG_RELOADED, before).await;
 
     let before = gateway.count(ENV_RELOADED);
@@ -326,15 +373,14 @@ async fn d2_a_config_found_under_home_reloads() {
 #[tokio::test]
 async fn d3_the_reload_tool_is_offered_for_a_discovered_config() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let port = free_port();
     write_owner_only(&dir.path().join(".env"), "DISCOVERED_VALUE=one\n");
     write_owner_only(
         &dir.path().join("gateway.yaml"),
-        &http_config(port, ".env", true, false),
+        &http_config(ANY_PORT, ".env", true, false),
     );
-    let gateway = HttpGateway::spawn(dir.path(), dir.path(), port, &[]).await;
+    let gateway = HttpGateway::spawn(dir.path(), dir.path(), &[]).await;
 
-    let session = McpSession::open(port).await;
+    let session = McpSession::open(gateway.port).await;
     let list = session.request(&tools_list(2)).await;
     assert!(
         has_tool(&list, RELOAD_TOOL),
@@ -349,29 +395,16 @@ async fn d3_the_reload_tool_is_offered_for_a_discovered_config() {
 #[tokio::test]
 async fn d4_an_explicit_config_still_wins() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (discovered_port, named_port) = (free_port(), free_port());
     let discovered = dir.path().join("gateway.yaml");
     let named = dir.path().join("other.yaml");
     write_owner_only(&dir.path().join(".env"), "DISCOVERED_VALUE=one\n");
-    write_owner_only(
-        &discovered,
-        &http_config(discovered_port, ".env", false, false),
-    );
-    write_owner_only(&named, &http_config(named_port, ".env", false, false));
+    write_owner_only(&discovered, &http_config(ANY_PORT, ".env", false, false));
+    write_owner_only(&named, &http_config(ANY_PORT, ".env", false, false));
     let named_arg = named.display().to_string();
-    let gateway = HttpGateway::spawn(
-        dir.path(),
-        dir.path(),
-        named_port,
-        &["--config", &named_arg],
-    )
-    .await;
+    let gateway = HttpGateway::spawn(dir.path(), dir.path(), &["--config", &named_arg]).await;
 
     let before = gateway.count(CONFIG_RELOADED);
-    write_owner_only(
-        &discovered,
-        &http_config(discovered_port, ".env", false, true),
-    );
+    write_owner_only(&discovered, &http_config(ANY_PORT, ".env", false, true));
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(
         gateway.count(CONFIG_RELOADED),
@@ -379,7 +412,7 @@ async fn d4_an_explicit_config_still_wins() {
         "editing the unused working-directory config reloaded:\n{}",
         gateway.logs()
     );
-    write_owner_only(&named, &http_config(named_port, ".env", false, true));
+    write_owner_only(&named, &http_config(ANY_PORT, ".env", false, true));
     gateway.wait_for(CONFIG_RELOADED, before).await;
 }
 
@@ -388,13 +421,12 @@ async fn d4_an_explicit_config_still_wins() {
 #[tokio::test]
 async fn d5_a_discovered_config_keeps_the_home_governance_store() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let port = free_port();
     write_owner_only(&dir.path().join(".env"), "DISCOVERED_VALUE=one\n");
     write_owner_only(
         &dir.path().join("gateway.yaml"),
-        &http_config(port, ".env", true, false),
+        &http_config(ANY_PORT, ".env", true, false),
     );
-    let gateway = HttpGateway::spawn(dir.path(), dir.path(), port, &[]).await;
+    let gateway = HttpGateway::spawn(dir.path(), dir.path(), &[]).await;
     assert!(
         dir.path().join(".mcp-gateway/control-plane").exists(),
         "the governance store is not under HOME:\n{}",
@@ -491,7 +523,7 @@ async fn d6_stdio_offers_the_reload_tool_for_a_discovered_config() {
     write_owner_only(&dir.path().join(".env"), "DISCOVERED_VALUE=one\n");
     write_owner_only(
         &dir.path().join("gateway.yaml"),
-        &http_config(free_port(), ".env", false, false),
+        &http_config(ANY_PORT, ".env", false, false),
     );
     assert_stdio_offers_reload(dir.path(), &[]).await;
 }
@@ -504,8 +536,49 @@ async fn d6b_stdio_with_a_missing_config_offers_the_reload_tool_for_its_fallback
     write_owner_only(&dir.path().join(".env"), "DISCOVERED_VALUE=one\n");
     write_owner_only(
         &dir.path().join("gateway.yaml"),
-        &http_config(free_port(), ".env", false, false),
+        &http_config(ANY_PORT, ".env", false, false),
     );
     let missing = dir.path().join("missing.yaml").display().to_string();
     assert_stdio_offers_reload(dir.path(), &["--config", &missing]).await;
+}
+
+/// MIK-7634: a gateway configured with `server.port: 0` serves on the port it
+/// reports, so no test hands a port to the child and waits for it to bind.
+#[tokio::test]
+async fn d7_a_gateway_on_port_zero_serves_on_the_port_it_reports() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_owner_only(&dir.path().join(".env"), "DISCOVERED_VALUE=one\n");
+    write_owner_only(
+        &dir.path().join("gateway.yaml"),
+        &http_config(ANY_PORT, ".env", false, false),
+    );
+    let gateway = HttpGateway::spawn(dir.path(), dir.path(), &[]).await;
+    assert_ne!(
+        gateway.port, ANY_PORT,
+        "the reported port replaces the configured 0"
+    );
+    let probe = reqwest::Client::builder()
+        .timeout(PROBE)
+        .build()
+        .expect("probe client")
+        .get(format!("http://127.0.0.1:{}/livez", gateway.port))
+        .send()
+        .await
+        .expect("the gateway answers on the port it reported");
+    assert!(probe.status().is_success(), "{}", gateway.logs());
+}
+
+/// The banner parse survives colour codes and a module path containing "port".
+#[test]
+fn the_reported_port_ignores_colour_codes_and_the_module_path() {
+    let plain = "2026-10-02T10:00:00Z  INFO mcp_gateway::gateway::server::support: Listening host=127.0.0.1 port=39123\n";
+    let coloured = "\u{1b}[2m2026-10-02T10:00:00Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mmcp_gateway::gateway::server::support\u{1b}[0m: Listening \u{1b}[3mhost\u{1b}[0m\u{1b}[2m=\u{1b}[0m127.0.0.1 \u{1b}[3mport\u{1b}[0m\u{1b}[2m=\u{1b}[0m39123\n";
+    assert_eq!(reported_port(plain), Some(39123));
+    assert_eq!(reported_port(coloured), Some(39123));
+    assert_eq!(reported_port("Listening on nothing"), None);
+    assert_eq!(reported_port("Listening host=127.0.0.1 port=39"), None);
+    assert_eq!(
+        reported_port("Listening host=127.0.0.1 port=39123\n"),
+        Some(39123)
+    );
 }

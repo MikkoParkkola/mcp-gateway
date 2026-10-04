@@ -152,6 +152,23 @@ pub struct SecretInjector {
     rules: HashMap<String, Vec<CredentialRule>>,
 }
 
+/// Remove the key `rule` owns from the caller's arguments: whatever the caller
+/// put there is never forwarded in place of the gateway's credential.
+fn drop_caller_value(
+    rule: &CredentialRule,
+    arguments: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    match rule.inject_as {
+        InjectTarget::Argument => {
+            arguments.remove(&rule.inject_key);
+        }
+        InjectTarget::Query => {
+            arguments.remove(&format!("__query_{}", rule.inject_key));
+        }
+        InjectTarget::Header => {}
+    }
+}
+
 impl SecretInjector {
     /// Create a new secret injector with the given per-backend rules.
     #[must_use]
@@ -191,6 +208,32 @@ impl SecretInjector {
         self.rules.get(backend).map_or(0, Vec::len)
     }
 
+    /// Drop from `arguments` the keys [`Self::inject`] sets for `backend:tool`
+    /// whatever the caller sent, since the value the caller put there never
+    /// leaves the gateway. A rule whose credential resolves empty (injection
+    /// skips it) or fails keeps the caller's value in view.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn strip_overwritten(
+        &self,
+        backend: &str,
+        tool: &str,
+        arguments: &mut serde_json::Value,
+    ) {
+        let (Some(rules), Some(obj)) = (self.rules.get(backend), arguments.as_object_mut()) else {
+            return;
+        };
+        for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+            if !self
+                .resolver
+                .resolve(&rule.value)
+                .is_ok_and(|v| !v.is_empty())
+            {
+                continue;
+            }
+            drop_caller_value(rule, obj);
+        }
+    }
+
     /// Inject credentials for a tool call on a specific backend.
     ///
     /// Resolves all matching credential rules and returns an [`InjectionResult`]
@@ -218,6 +261,19 @@ impl SecretInjector {
         let mut args = arguments;
         let mut headers: HashMap<String, String> = HashMap::new();
         let mut injected_names: Vec<String> = Vec::new();
+
+        // Every key a matching rule owns loses the caller's value up front,
+        // whatever its credential resolves to now. The firewall check strips
+        // the same keys from its own copy on the strength of an earlier
+        // resolution; if the credential changed in between and a rule skips,
+        // a value the check never saw must not be forwarded (MIK-7888). Doing
+        // it before the loop also keeps a skipping rule from deleting what an
+        // earlier rule on the same key injected.
+        if let Some(obj) = args.as_object_mut() {
+            for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+                drop_caller_value(rule, obj);
+            }
+        }
 
         for rule in rules {
             if !tool_matches_rule(tool, &rule.tools) {
@@ -455,3 +511,7 @@ impl SecretInjector {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "secret_injection_flip_tests.rs"]
+mod flip_tests;

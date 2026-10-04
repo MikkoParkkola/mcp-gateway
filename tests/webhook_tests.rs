@@ -46,6 +46,7 @@ async fn test_webhook_registry_registration() {
                 },
             },
             notify: true,
+            event: None,
         },
     );
 
@@ -94,6 +95,7 @@ async fn test_webhook_routes_creation() {
             signature_header: None,
             transform: WebhookTransform::default(),
             notify: true,
+            event: None,
         },
     );
 

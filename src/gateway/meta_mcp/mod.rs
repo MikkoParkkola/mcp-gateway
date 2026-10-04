@@ -42,7 +42,7 @@ use crate::identity_grants::{GrantSubject, LocalIdentityGrantStore};
 use crate::kill_switch::{CapabilityErrorBudgetConfig, ErrorBudgetConfig, KillSwitch};
 use crate::playbook::PlaybookEngine;
 use crate::protocol::meta::Declared;
-use crate::protocol::{JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
+use crate::protocol::{ChainSource, JsonRpcResponse, LoggingLevel, RequestId, negotiate_version};
 use crate::ranking::SearchRanker;
 use crate::routing_profile::{ProfileRegistry, SessionProfileStore};
 use crate::security::message_signing::{MessageSigner, NonceStore};
@@ -57,8 +57,7 @@ use crate::{Error, Result};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, did_you_mean, extract_client_version, extract_required_str,
-    wrap_tool_success,
+    build_routing_instructions, extract_client_version, extract_required_str,
 };
 use super::meta_mcp_tool_defs::{
     MetaToolExposure, MetaToolGates, ToolTotal, build_meta_tools_filtered,
@@ -84,6 +83,11 @@ mod confirmation;
 mod declared_label_carry_tests;
 mod direct_route;
 mod discovery_fetch;
+pub(crate) mod dispatch_log;
+mod dispatch_names;
+mod effects;
+mod events_hook;
+pub(crate) mod grant_audit;
 mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
@@ -92,6 +96,7 @@ mod prompt_cache;
 mod protocol;
 mod resources;
 pub(crate) mod response_security;
+pub(crate) use response_security::error_response_preserving_status;
 #[cfg(test)]
 mod response_security_tests;
 mod search;
@@ -101,6 +106,8 @@ mod spec_preview;
 mod support;
 mod surfaced;
 mod task_confirmation;
+pub(crate) mod task_notify;
+mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
 
@@ -124,12 +131,20 @@ pub(crate) use task_confirmation::{
 #[cfg(feature = "spec-preview")]
 const MAX_PROMOTED_PER_SESSION: usize = 10;
 
+/// Reserved prefix for principals the gateway itself assigns. A NUL cannot
+/// occur in an HTTP header value or in any principal the auth layer derives
+/// (hex digests and fixed words), so no presented credential starts with it.
+pub(crate) const LOCAL_OPERATOR_PREFIX: char = '\0';
+
+/// The principal the stdio transport's own contexts key their retained
+/// results under. See [`MetaMcpCallerContext::owner_principal`].
+pub(crate) const LOCAL_OPERATOR_PRINCIPAL: &str = "\0local-operator.v1";
+
 /// Authenticated caller context for a `tools/call` dispatch.
 ///
-/// Deliberately has **no `Default`**: the authorizer is mandatory, and a
-/// derived default would let a construction site acquire one by omission. Every
-/// site names the authorizer it means, which in tests makes a permissive one
-/// visible in the test source rather than hidden in a struct default.
+/// Deliberately has **no `Default`**: the authorizer is mandatory, and a derived default would let
+/// a construction site acquire one by omission. Every site names the authorizer it means, which in
+/// tests makes a permissive one visible in the test source rather than hidden in a struct default.
 pub struct MetaMcpCallerContext<'a> {
     /// Explicit request era, classified by the transport from reserved metadata.
     pub is_modern: bool,
@@ -182,19 +197,19 @@ pub struct MetaMcpCallerContext<'a> {
     /// Set by the two stdio context builders only (no constructor outside
     /// `gateway::server`); binds continuations to the stdio client.
     pub(crate) stdio_nonce: Option<&'a crate::gateway::server::StdioNonce>,
-    /// Whether the caller holds admin. Carried here because meta-tools with
-    /// admin-only PARAMETERS cannot be gated by the tool-name allow-list in
-    /// `router::authorization`, which only knows whole tools.
+    /// The caller's `router::identity::caller_key`, set by HTTP only; see `experiment_key`.
+    pub(crate) caller_key: Option<&'a str>,
+    /// Whether the caller holds admin: meta-tools with admin-only PARAMETERS cannot be gated by
+    /// the tool-name allow-list in `router::authorization`, which knows only whole tools.
     pub is_admin: bool,
     /// What this caller declared on **this** request.
     ///
-    /// A parsed set rather than a single "may be asked for input" bit, because
-    /// MRTR.9 refuses per requested method and MRTR.9a per requested *mode*: a
-    /// client that declared `elicitation` and not `sampling` may be sent one
-    /// and not the other, and one that declared elicitation in form mode alone
-    /// may not be sent a url request. On stdio a modern call reads its own
-    /// `_meta` and a legacy call the handshake; absent means absent, and a
-    /// caller that declared nothing is never sent a continuation.
+    /// A parsed set rather than a single "may be asked for input" bit, because MRTR.9 refuses per
+    /// requested method and MRTR.9a per requested *mode*: a client that declared `elicitation` and
+    /// not `sampling` may be sent one and not the other, and one that declared elicitation in form
+    /// mode alone may not be sent a url request. On stdio a modern call reads its own `_meta` and a
+    /// legacy call the handshake; absent means absent, and a caller that declared nothing is never
+    /// sent a continuation.
     pub input_capabilities: Declared,
     /// How this caller can be asked to confirm a destructive action.
     ///
@@ -250,6 +265,31 @@ impl<'a> MetaMcpCallerContext<'a> {
         }
     }
 
+    /// The principal text that keys this caller's retained results (MIK-7272.OWNER.3).
+    ///
+    /// The stdio mark names the local operator ([`LOCAL_OPERATOR_PRINCIPAL`]); other
+    /// text can never spell it, since text with the reserved prefix is dropped.
+    /// With no credential, a proven agent or certificate subject (MIK-7688).
+    pub(crate) fn owner_principal(&self) -> Option<&'a str> {
+        if self.stdio_nonce.is_some() {
+            return Some(LOCAL_OPERATOR_PRINCIPAL);
+        }
+        self.credential_principal
+            .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX))
+            .or_else(|| support::proven_subject_owner(self))
+    }
+
+    /// How this caller was established. The stdio transport's mark decides
+    /// `LocalTransport`; principal text alone never does (MIK-7272.OWNER.3).
+    pub(crate) fn provenance(&self) -> crate::identity_propagation::CallerProvenance {
+        match self.stdio_nonce {
+            Some(mark) => crate::identity_propagation::CallerProvenance::local_transport(mark),
+            None => {
+                crate::identity_propagation::CallerProvenance::classify(self.credential_principal)
+            }
+        }
+    }
+
     /// The same caller, presenting different multi-round-trip fields.
     ///
     /// A chain runs its steps as one caller, and only the step that was
@@ -279,6 +319,7 @@ impl<'a> MetaMcpCallerContext<'a> {
             grant_subject: self.grant_subject.clone(),
             verified_identity: self.verified_identity,
             stdio_nonce: self.stdio_nonce,
+            caller_key: self.caller_key,
             is_admin: self.is_admin,
             input_capabilities: self.input_capabilities,
             confirmation: self.confirmation.clone(),
@@ -290,71 +331,6 @@ impl<'a> MetaMcpCallerContext<'a> {
     }
 }
 
-/// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
-/// status when the error is an authorization refusal.
-///
-/// The refusal already knows its status; every other error does not carry one
-/// and gets the caller's default. The status rides in the error's optional
-/// `data` because that is the only channel that survives this conversion —
-/// `JsonRpcResponse` has no status of its own, and re-deriving one at the HTTP
-/// boundary from the JSON-RPC code cannot work: eight of the nine refusal
-/// branches emit the generic `-32600`, and `-32003` already means something
-/// else elsewhere.
-fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> JsonRpcResponse {
-    let mut response = match error {
-        crate::Error::ResponseFirewallRefused => JsonRpcResponse::delivery_refusal_error(
-            Some(id),
-            error.to_rpc_code(),
-            &error.to_string(),
-        ),
-        _ => JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
-    };
-    if let Some(ref mut rpc_error) = response.error {
-        // Written unconditionally, so this function is the sole authority on
-        // the field. `JsonRpcResponse::error` starts it at `None` and nothing
-        // else in the gateway writes it today, but a future path that forwarded
-        // a backend's error data could otherwise hand a backend the power to
-        // choose the gateway's HTTP status. Assigning both arms closes that
-        // without depending on the audit staying true.
-        rpc_error.data = match error {
-            crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
-                crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
-            })),
-            // D1-f: the log is down, not the caller wrong. 503 so an operator
-            // and a load balancer read it as unavailability.
-            crate::Error::AuditUnavailable => Some(serde_json::json!({
-                crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
-            })),
-            // A gateway-authored refusal may carry a recovery payload the
-            // client needs: MRTR.9 names the capability an input request would
-            // have required and MRTR.9a the mode, which is the difference
-            // between a client that can fix its declaration and retry and one
-            // that only sees prose. Named keys only, never the whole object:
-            // `invoke_tool` puts a *backend's* error data into this variant, and
-            // forwarding it wholesale would hand a backend the status field.
-            crate::Error::JsonRpc {
-                data: Some(data), ..
-            } => {
-                let forwarded: serde_json::Map<String, serde_json::Value> = [
-                    invoke::REQUIRED_CAPABILITIES_DATA_KEY,
-                    invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
-                ]
-                .into_iter()
-                .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
-                .collect();
-                // `None` rather than `{}`: a backend error carrying none of these
-                // keys leaves `data` absent exactly as when one key was forwarded.
-                (!forwarded.is_empty()).then_some(serde_json::Value::Object(forwarded))
-            }
-            _ => None,
-        };
-        // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
-        rpc_error.data =
-            crate::personal_accounts::refusal::offer_data(error).or(rpc_error.data.take());
-    }
-    response
-}
-
 /// Meta-MCP handler — the central dispatcher for all gateway meta-tools.
 // Independent, unrelated switches on a long-lived handler. A state machine
 // over their product would have more states than the struct has fields.
@@ -362,10 +338,14 @@ fn error_response_preserving_status(id: RequestId, error: &crate::Error) -> Json
 pub struct MetaMcp {
     pub(super) backends: Arc<BackendRegistry>,
     pub(super) change_feed: std::sync::OnceLock<crate::gateway::ChangeFeed>,
+    /// MCP Events hub (MIK-7630); unset while events are off or on stdio.
+    pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
     pub(super) idempotency_cache: Option<Arc<IdempotencyCache>>,
+    /// MIK-7692: the last written stored-delivery re-check decisions.
+    pub(super) grant_repeats: Arc<grant_audit::DecisionDedupe>,
     /// One bounded execution owner shared by the meta and direct transports.
     ///
     /// The ledger is in-memory and owned per [`MetaMcp`]: `State.entries` is a
@@ -523,12 +503,21 @@ pub struct MetaMcp {
     /// Populated alongside `message_signer`; both are `Some` or both `None`.
     pub(super) nonce_store: Option<Arc<NonceStore>>,
 
+    /// Which stdio `tools/call` requests get a signing context. HTTP reads the
+    /// live posture per request; stdio has one process-lifetime posture, set at
+    /// build time, so a hardened stdio caller is signed on every tool call
+    /// exactly as an HTTP one is (MIK-7886).
+    pub(super) signing_scope: signing::SigningScope,
+
     /// Runtime provenance receipt signer (MIK-6905).
     ///
     /// `Some` when `security.provenance_stamping = true`; `None` otherwise.
     /// When `None` the stamping block is skipped entirely, so result payloads
     /// are byte-identical to the un-stamped path (rung 1.2 guarantee).
     pub(super) provenance_signer: Option<Arc<BnautAttestationSigner>>,
+
+    /// ASI07 chain identity and emission mode; `None` = feature off.
+    pub(super) chain_signer: Option<Arc<response_security::ChainIdentity>>,
 
     /// Shadow claim-capture sink (MIK-6908, rung 3.1).
     ///
@@ -547,6 +536,9 @@ pub struct MetaMcp {
     /// `Some` when `security.transparency_log.enabled = true`; `None` otherwise.
     /// Zero overhead when `None` — no allocation or I/O on the hot path.
     pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
+
+    /// MIK-7116.MIN.2: auditor of withheld frames, built on first use.
+    rejection_audit: std::sync::OnceLock<Arc<crate::gateway::outbound::RejectionAudit>>,
 
     /// Response-side anomaly screening action mode (issue #133, D2).
     ///
@@ -638,10 +630,12 @@ impl MetaMcp {
         Self {
             backends,
             change_feed: std::sync::OnceLock::new(),
+            events: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
             idempotency_cache: None,
+            grant_repeats: Arc::default(),
             execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             unkeyed: admission::UnkeyedPolicy::default(),
@@ -684,10 +678,13 @@ impl MetaMcp {
             session_state: SessionStateStore::new(),
             message_signer: None,
             nonce_store: None,
+            signing_scope: signing::SigningScope::InvokeOnly,
             provenance_signer: None,
+            chain_signer: None,
             claim_capture: None,
             require_nonce: false,
             transparency_logger: None,
+            rejection_audit: std::sync::OnceLock::new(),
             response_inspection_action_mode: false,
             response_contract: None,
             attestation_validator: None,
@@ -961,23 +958,9 @@ impl MetaMcp {
         self.require_nonce = require_nonce;
     }
 
-    /// Enable signed runtime provenance stamping (MIK-6905, rung 1.2).
-    ///
-    /// When set, every aggregated tool result is stamped with a signed
-    /// `_meta.provenance` receipt. Off by default; the field is `None` unless
-    /// this is called, so the stamping branch never runs on the hot path
-    /// otherwise.
-    pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
-        self.provenance_signer = Some(Arc::new(signer));
-    }
-
-    /// Enable shadow claim capture (MIK-6908, rung 3.1).
-    ///
-    /// Only has an observable effect once `provenance_signer` is also
-    /// `Some` — capture runs alongside stamping at the same chokepoint, not
-    /// independently of it.
-    pub fn enable_claim_capture(&mut self, sink: Arc<crate::trust::ClaimCaptureSink>) {
-        self.claim_capture = Some(sink);
+    /// Set the stdio signing scope from the configured posture.
+    pub(crate) fn set_signing_scope(&mut self, scope: signing::SigningScope) {
+        self.signing_scope = scope;
     }
 
     /// Attach a transparency logger (issue #133, D3).
@@ -1031,38 +1014,54 @@ impl MetaMcp {
         self.firewall = firewall;
     }
 
-    /// Firewall-scan an aggregated tool-list / search response value in place
-    /// (OWASP ASI01 tool-poisoning). Backend-supplied `description` strings are
-    /// scanned for prompt injection and have embedded credentials redacted
-    /// before the discovery response reaches the client.
+    /// Inspect a `gateway_list_tools` / `gateway_search_tools` result once, on
+    /// the canonical value before it is serialised into `content[].text`
+    /// (OWASP ASI01 tool-poisoning, #2350). Detectors see the raw strings: an
+    /// escaped copy hides a quoted key or a split injection phrase from them.
+    /// A Block (or no admitting target) refuses the call; otherwise credentials
+    /// are redacted in place. The discovery arm then marks its response
+    /// (`JsonRpcResponse::discovery_inspected`, set after the meta-tool match,
+    /// never on a direct-name route), and the router, delivery and task passes
+    /// skip only a marked response: the mark, not the tool name, proves this
+    /// pass ran. Every Ok path of the three discovery handlers must call this.
     ///
-    /// No-op when the firewall is absent or response scanning is disabled — the
-    /// same gate the `tools/call` path uses ([`Firewall::check_response`]
-    /// short-circuits), so behavior is unchanged when the feature/config is off.
+    /// # Errors
+    /// [`Error::ResponseFirewallRefused`] when the verdict refuses.
     #[cfg(feature = "firewall")]
-    pub(super) fn scan_tool_list_value(&self, value: &mut serde_json::Value) {
+    pub(super) fn inspect_discovery_value(&self, value: &mut serde_json::Value) -> Result<()> {
+        use crate::security::firewall::FirewallAction;
         let Some(ref fw) = self.firewall else {
-            return;
+            return Ok(());
         };
         let verdict = fw.check_response(
             "meta:tools/list",
-            "meta-mcp",
+            "gateway",
             "tools/list",
             value,
             "meta-mcp",
         );
-        if verdict.action == crate::security::firewall::FirewallAction::Warn {
+        if !verdict.allowed || verdict.action == FirewallAction::Block {
             tracing::warn!(
                 findings = verdict.findings.len(),
-                "Firewall: meta tools/list response warning"
+                "Firewall: discovery response blocked"
+            );
+            return Err(Error::ResponseFirewallRefused);
+        }
+        if verdict.action == FirewallAction::Warn {
+            tracing::warn!(
+                findings = verdict.findings.len(),
+                "Firewall: discovery response warning"
             );
         }
+        Ok(())
     }
 
-    /// No-op tool-list scan when the `firewall` feature is disabled.
+    /// No discovery inspection when the `firewall` feature is disabled.
     #[cfg(not(feature = "firewall"))]
-    #[allow(clippy::unused_self)]
-    pub(super) fn scan_tool_list_value(&self, _value: &mut serde_json::Value) {}
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    pub(super) fn inspect_discovery_value(&self, _value: &mut serde_json::Value) -> Result<()> {
+        Ok(())
+    }
 
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
@@ -1143,20 +1142,8 @@ impl MetaMcp {
     /// operator blessed the account as shared (`oauth.shared_account = true`). A
     /// single-user gateway never enters this branch, and this never falls back
     /// to the shared token (INV-1): it refuses.
-    pub(crate) fn enforce_oauth_isolation(
-        &self,
-        server: &str,
-        has_per_user_credential: bool,
-    ) -> Result<()> {
-        match self.backends.get(server) {
-            Some(backend) => {
-                self.enforce_oauth_isolation_for(&backend, server, has_per_user_credential)
-            }
-            None => Ok(()),
-        }
-    }
-
-    /// INV-2 check against a captured `Backend` instance rather than a name.
+    ///
+    /// Checked against the captured `Backend` instance, never a name.
     /// Callers holding the `Arc<Backend>` they will forward to MUST use this so
     /// the check and the later `backend.request` bind to the SAME instance —
     /// eliminating the hot-reload TOCTOU where a name re-lookup could evaluate a
@@ -1164,8 +1151,7 @@ impl MetaMcp {
     ///
     /// Despite the name this covers every personal binding a backend can carry,
     /// not only `oauth`: see the enumeration in the body. The name is kept
-    /// because twenty call sites and the public `enforce_oauth_isolation`
-    /// wrapper spell it.
+    /// because many call sites spell it.
     pub(crate) fn enforce_oauth_isolation_for(
         &self,
         backend: &crate::backend::Backend,
@@ -1179,12 +1165,9 @@ impl MetaMcp {
         // THREE independent ways a backend is bound to one person, enumerated
         // from `BackendConfig` (`config::BackendConfig::oauth`, `::account`,
         // `::identity_propagation`) rather than discovered one leak at a time.
-        // Any of them means the gateway-held static credential is somebody's
-        // personal login, and every caller of this function resolves no per-user
-        // credential of its own (MIK-6745.JOURNEY.3).
-        // Each arm carries its OWN remediation: a single generic fix line sent
-        // the propagation arm to "enable identity propagation", which is already
-        // enabled and required there.
+        // Any of them makes the static credential somebody's personal login,
+        // and no caller here resolves a per-user one (MIK-6745.JOURNEY.3). Each
+        // arm carries its OWN remediation.
         let (reason, fix) = if backend.oauth_requires_per_user_isolation() {
             (
                 "uses a gateway-held OAuth login that is not isolated per user",
@@ -1533,13 +1516,13 @@ impl MetaMcp {
     pub(super) fn active_profile(
         &self,
         session_id: Option<&str>,
-    ) -> crate::routing_profile::RoutingProfile {
+    ) -> std::sync::Arc<crate::routing_profile::RoutingProfile> {
         let default_name = self.profile_registry.default_name();
         let name = session_key(session_id).map_or_else(
             || default_name.to_string(),
             |sid| self.session_profiles.get_profile_name(sid, default_name),
         );
-        self.profile_registry.get(&name)
+        self.profile_registry.get_shared(&name)
     }
 }
 
@@ -1646,6 +1629,7 @@ impl MetaMcp {
             self.change_feed(),
         );
 
+        let capabilities = self.capabilities_with_events(capabilities);
         serde_json::json!({
             "resultType": "complete",
             "supportedVersions": versions,
@@ -1708,7 +1692,8 @@ impl MetaMcp {
         // `protocol::meta::classify_request` records.
         let result =
             build_initialize_result(negotiated_version, &instructions, era, self.change_feed());
-        JsonRpcResponse::success_serialized(id, result)
+        let result = self.initialize_with_events(result);
+        JsonRpcResponse::success(id, result)
     }
 
     /// The initialize instructions as this caller may read them: counts over
@@ -1721,16 +1706,7 @@ impl MetaMcp {
         if let Some(cap) = self.get_capabilities()
             && self.admits_backend(&cap.name, scope, session_id)
         {
-            let mut caps = cap.list_capabilities();
-            caps.retain(|c| {
-                self.may_invoke(&cap.name, &c.name, scope, session_id)
-                    .is_ok()
-            });
-            for c in &mut caps {
-                c.metadata
-                    .chains_with
-                    .retain(|t| self.may_invoke(&cap.name, t, scope, session_id).is_ok());
-            }
+            let caps = self.guide_capabilities(&cap, scope, session_id);
             let routing = build_routing_instructions(&caps, &cap.name);
             if !routing.is_empty() {
                 instructions.push_str(&routing);
@@ -2116,33 +2092,31 @@ impl MetaMcp {
         // Operator exposure allow-list. Enforced ahead of the admin gate, not
         // beside it: a meta-tool hidden from `tools/list` but still executable is
         // security theatre, and the admin gate answering first would disclose the
-        // tool's existence to the caller the allow-list is hiding it from. Reaching
-        // this check before the admin gate is what makes the refusal wording below
-        // load-bearing rather than decorative. `exposed_meta_tools` promises
-        // that an unlisted tool "is not callable either". Names outside the
-        // governed meta-tool set - surfaced and backend tools - are unaffected.
-        //
-        // The refusal is worded exactly like the unrecognised-tool fallback below:
-        // an operator hiding a tool must not get a reply confirming it exists and
-        // was deliberately withheld.
+        // tool's existence to the caller the allow-list is hiding it from.
+        // `exposed_meta_tools` promises that an unlisted tool "is not callable
+        // either"; names outside the governed set (surfaced and backend tools)
+        // are unaffected. The refusal is worded exactly like the unrecognised-tool
+        // fallback below: a reply confirming the tool exists would disclose it.
         if !self.meta_tool_exposure.is_exposed(tool_name) {
-            // Built the same way the fallback below builds its no-suggestion
-            // form, and returned through the same helper, so the two answers
-            // are byte-identical. Constructing the response directly here
-            // produced a message without the error type's
-            // "JSON-RPC error -32601: " prefix, and that difference was itself
-            // the disclosure. The fallback's did-you-mean hint is deliberately
-            // not reached: a hidden tool name matches itself, so a suggestion
-            // would name the tool the allow-list is hiding.
+            // Built and returned exactly as the fallback below builds its
+            // no-suggestion form, so the two answers are byte-identical (the
+            // error type's "JSON-RPC error -32601: " prefix was itself a
+            // disclosure). The did-you-mean hint is deliberately not reached:
+            // a hidden tool name matches itself and would name it.
             return error_response_preserving_status(
                 id,
                 &crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
             );
         }
+        // Answers without the requestState this gateway issued answer nothing
+        // it asked: every tool refuses them, before any dispatch can repeat a
+        // side effect.
+        if let Err(error) = caller.retry.solicited_input_responses() {
+            return error_response_preserving_status(id, &error);
+        }
 
         // Admin gate for the meta-tools that change the gateway for every
-        // session. Enforced HERE, at the dispatcher, and not only at the HTTP
-        // router that also checks it.
+        // session, enforced HERE at the dispatcher.
         //
         // The router checks this too, and stdio marks its caller admin because
         // the client that spawned the process already holds whatever the
@@ -2151,13 +2125,9 @@ impl MetaMcp {
         // silently absent for the next one added, which is the shape that hid
         // the playbook defect. Placing it at the point of dispatch costs a
         // redundant comparison on the router path and removes the possibility.
-        //
-        // It also caught a live one immediately. Moving it here refused stdio,
-        // because that path passed a default context whose `is_admin` is false
-        // and nothing had ever checked it.
-        // The same predicate `tools/list` filters its answer with
-        // (`meta_tools_for`), so a caller is never shown a tool this gate
-        // would then refuse.
+        // Moving it here caught stdio passing a default non-admin context.
+        // The same predicate `tools/list` filters with (`meta_tools_for`) and
+        // the signing layer reads (`refused_before_dispatch`).
         if !CallerStanding::of_admin_flag(caller.is_admin).permits(tool_name) {
             return JsonRpcResponse::error(
                 Some(id),
@@ -2171,12 +2141,26 @@ impl MetaMcp {
                 .await
             {
                 GateOutcome::Refuse(response) => return *response,
+                GateOutcome::RefuseUnasked(response) => {
+                    self.release_unasked_nonce(&caller);
+                    return *response;
+                }
                 GateOutcome::Proceed => false,
                 GateOutcome::ProceedConfirmed => true,
             };
 
+        // MIK-7698: nothing acts on a nonce the signing layer left unadmitted.
+        if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
+            return refusal;
+        }
         if let Some(intent) = caller.task.take() {
-            return self.begin_task(id, tool_name, arguments, intent).await;
+            // A `require` backend's answer must be a checked chain (inc3 R2).
+            if let Err(error) = self.refuse_chained_task(tool_name, &arguments) {
+                return error_response_preserving_status(id, &error);
+            }
+            return self
+                .begin_task(id, tool_name, arguments, intent, (session_id, &caller))
+                .await;
         }
 
         self.dispatch_below_gate(
@@ -2196,7 +2180,10 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         intent: crate::gateway::task_service::TaskIntent,
+        (session_id, caller): (Option<&str>, &MetaMcpCallerContext<'_>),
     ) -> JsonRpcResponse {
+        use crate::gateway::task_service::execution::BeginOutcome;
+
         let task = crate::gateway::task_service::Task::create_at(
             tool_name,
             chrono::Utc::now(),
@@ -2204,11 +2191,34 @@ impl MetaMcp {
         );
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
+        // #2450: a repeat is answered from the stored task, so the policy a
+        // sync replay passes runs first. A fresh task is checked by its worker.
+        let policy_arguments = arguments.clone();
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
             arguments,
         };
         match executor.begin(intent, task, backend, call).await {
+            Ok(BeginOutcome::Existing(stored)) => {
+                // The request's own policy, then the calls that produced the
+                // stored result (R3.2): both must hold before it goes out.
+                if let Err(error) = self.check_task_admission_policy(
+                    caller,
+                    tool_name,
+                    &policy_arguments,
+                    session_id,
+                ) {
+                    return error_response_preserving_status(id, &error);
+                }
+                // The token rides where the current request's own check reads it.
+                let attestation = if tool_name == "gateway_invoke" {
+                    policy_arguments.get("attestation").and_then(Value::as_str)
+                } else {
+                    caller.retry.attestation.as_deref()
+                };
+                self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
+                    .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
+            }
             Ok(outcome) => outcome.into_response(id),
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
@@ -2281,7 +2291,7 @@ impl MetaMcp {
         .await
     }
 
-    async fn dispatch_below_gate_shaped(
+    async fn dispatch_below_gate_shaped_in_slot(
         &self,
         target: DispatchTarget<'_>,
         shape: ResultShape,
@@ -2318,13 +2328,23 @@ impl MetaMcp {
             return error_response_preserving_status(id, &error);
         }
 
+        // Only gateway_invoke can be chain-eligible; composites stay NotEligible.
+        let (mut source, mut upstream) = (ChainSource::NotEligible, None);
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
             "gateway_list_servers" => self.list_servers(caller, session_id).await,
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
-            "gateway_invoke" => self.invoke_tool(&arguments, session_id, caller).await,
+            "gateway_invoke" => {
+                let sourced = self
+                    .invoke_tool_sourced(&arguments, session_id, caller)
+                    .await;
+                sourced.map(|(value, origin, chain)| {
+                    (source, upstream) = (origin, chain);
+                    value
+                })
+            }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
             "gateway_webhook_status" => self.webhook_status(),
@@ -2340,80 +2360,15 @@ impl MetaMcp {
             "gateway_set_state" => self.set_state(&arguments, session_id, caller.scope()),
             "gateway_reload_config" => self.reload_config().await,
             "gateway_reload_capabilities" => self.reload_capabilities().await,
-            _ => {
-                const META_TOOLS: &[&str] = &[
-                    "gateway_search",
-                    "gateway_execute",
-                    "gateway_list_servers",
-                    "gateway_list_tools",
-                    "gateway_search_tools",
-                    "gateway_invoke",
-                    "gateway_get_stats",
-                    "gateway_cost_report",
-                    "gateway_webhook_status",
-                    "gateway_run_playbook",
-                    "gateway_kill_server",
-                    "gateway_revive_server",
-                    "gateway_list_disabled_capabilities",
-                    "gateway_set_profile",
-                    "gateway_get_profile",
-                    "gateway_list_profiles",
-                    "gateway_set_state",
-                    "gateway_reload_config",
-                    "gateway_reload_capabilities",
-                ];
-                // The candidate pool is the EXPOSED set, not the static list.
-                // The early return above keeps a hidden tool's exact name from
-                // being confirmed; a near miss of that name reached here and
-                // the suggester, drawing from every meta-tool that exists,
-                // would answer with the name the allow-list is hiding. Filtering
-                // the pool removes the route -- there is no longer a spelling
-                // that makes this branch name an unexposed tool -- rather than
-                // wording the hint more carefully and leaving the route open.
-                let exposed: Vec<&str> = META_TOOLS
-                    .iter()
-                    .copied()
-                    .filter(|name| self.meta_tool_exposure.is_exposed(name))
-                    // Nor a tool this caller's standing withholds (A3).
-                    .filter(|name| CallerStanding::from(caller.scope()).permits(name))
-                    .collect();
-                let suggestion = did_you_mean(tool_name, &exposed, 3, 3);
-                let msg = match suggestion {
-                    Some(hint) => format!("Unknown tool: {tool_name}. {hint}"),
-                    None => format!("Unknown tool: {tool_name}"),
-                };
-                Err(Error::json_rpc(-32601, msg))
-            }
+            _ => Err(self.no_such_meta_tool(tool_name, caller)),
         };
 
-        match result {
-            Ok(content) => match shape {
-                // MRTR.11a: an interim round must not be pretty-printed into
-                // `content[0].text`. `wrap_tool_success` states `is_error:
-                // false` and buries `resultType` inside a JSON string, where
-                // neither a protocol client nor the firewall's
-                // `PreserveInputRequired` policy can read it — a question
-                // committed as an answer. The task worker already escapes via
-                // `ResultShape::Native`; this is the same escape for the
-                // synchronous thread, gated so a backend cannot mint one.
-                ResultShape::Wrapped => {
-                    match interim_promotion::promote_interim(&content, caller.input_capabilities) {
-                        interim_promotion::Promotion::Native => {
-                            JsonRpcResponse::success(id, content)
-                        }
-                        interim_promotion::Promotion::Wrap => {
-                            let has_output_schema = tool_name == "gateway_search_tools";
-                            wrap_tool_success(id, &content, has_output_schema)
-                        }
-                        interim_promotion::Promotion::UpstreamFault(message) => {
-                            error_response_preserving_status(id, &Error::json_rpc(-32603, message))
-                        }
-                    }
-                }
-                ResultShape::Native => JsonRpcResponse::success(id, content),
-            },
-            Err(e) => error_response_preserving_status(id, &e),
-        }
+        let inspected = self.marks_discovery(tool_name, result.is_ok());
+        let (declared, chain) = (caller.input_capabilities, (source, upstream));
+        let mut response =
+            response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
+        response.discovery_inspected = inspected && response.error.is_none();
+        response
     }
 }
 
@@ -2661,6 +2616,10 @@ mod account_entry_point_authz_tests;
 #[path = "search_ranking_authz_tests.rs"]
 mod search_ranking_authz_tests;
 
+#[cfg(test)]
+#[path = "search_login_gate_tests.rs"]
+mod search_login_gate_tests;
+
 /// Whether the peer behind `backend` has had `method` removed from under it
 /// (MIK-7217, OUTBOUND.1).
 ///
@@ -2735,5 +2694,33 @@ mod test_callers;
 pub(super) use test_callers::{anonymous_caller, callback_capability, identified_caller};
 
 #[cfg(test)]
+pub(super) mod grant_audit_fixture;
+#[cfg(test)]
+mod grant_decision_audit_tests;
+#[cfg(test)]
+mod grant_decision_slot_tests;
+#[cfg(test)]
+mod grant_replay_dedupe_tests;
+#[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
+#[cfg(test)]
+mod task_notify_tests;
+
+mod session_end;
+
+#[cfg(test)]
+#[path = "session_bound_tests.rs"]
+mod session_bound_tests;
+
+#[cfg(test)]
+#[path = "session_cleanup_tests.rs"]
+mod session_cleanup_tests;
+
+#[cfg(test)]
+#[path = "session_inflight_tests.rs"]
+mod session_inflight_tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "dispatch_reads_tests.rs"]
+mod dispatch_reads_tests;

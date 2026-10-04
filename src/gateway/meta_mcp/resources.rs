@@ -391,7 +391,8 @@ impl MetaMcp {
 
         let params = json!({ "uri": uri });
         let empty = json!({"contents": []});
-        Self::forward_for_caller(id, &backend, "resources/read", params, credential, empty).await
+        self.forward_catalogue(id, &backend, ("resources/read", params), credential, empty)
+            .await
     }
 
     /// Handle `resources/templates/list` — aggregate templates from all backends.

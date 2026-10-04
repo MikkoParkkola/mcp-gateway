@@ -14,7 +14,7 @@ use crate::gateway::oauth::{
     Action, AgentIdentity as OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
-use crate::security::{validate_tool_name, validate_url_not_ssrf};
+use crate::security::validate_tool_name;
 
 pub(crate) fn backend_tool_targets_for_call(
     meta_mcp: &MetaMcp,
@@ -154,6 +154,11 @@ pub(super) async fn require_admin_tool_access(
             format!("Tool '{tool_name}' requires admin access"),
         ))
     };
+    // Counted before the log check: a refusal is one with or without a log.
+    if verdict.is_err() {
+        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+        denied(DenialRoute::Admin, DenialReason::AdminRequired);
+    }
     let Some(log) = log else {
         return verdict;
     };
@@ -334,7 +339,9 @@ pub(super) fn decide_tool_target<'a>(
         && let Some(backend) = state.backends.get(target.server)
         && let Some(url) = backend.transport_url()
     {
-        verdict = validate_url_not_ssrf(url)
+        verdict = backend
+            .destination()
+            .check_configured_url(url)
             .map_err(|e| AuthorizationError::forbidden(-32600, e.to_string()));
     }
 
@@ -493,6 +500,39 @@ pub(super) fn refusal_principal(
     }
     None
 }
+
+/// The principal a passthrough slot budget is charged to (MIK-7689): the
+/// credential's quota principal (API key digest, OAuth `client_id`, whole
+/// certificate), never a display label two credentials can share. A caller
+/// without one keys on its configured key name, its `client_id`, or (for a
+/// hand-built certificate only) its label.
+pub(super) fn slot_principal(
+    client: Option<&AuthenticatedClient>,
+    oauth_agent_identity: Option<&OAuthAgentIdentity>,
+    cert_identity: Option<&CertIdentity>,
+) -> Option<String> {
+    let key = |quota: Option<&crate::gateway::auth::QuotaPrincipal>| {
+        quota.map(|q| q.as_store_key().to_owned())
+    };
+    if let Some(client) = client
+        && client.authenticated
+    {
+        return key(client.quota_principal.as_ref()).or_else(|| Some(client.name.clone()));
+    }
+    if let Some(agent) = oauth_agent_identity {
+        return key(agent.quota_principal.as_ref())
+            .or_else(|| Some(format!("agent:{}", agent.client_id)));
+    }
+    if let Some(cert) = cert_identity {
+        return key(cert.quota_principal.as_ref())
+            .or_else(|| Some(format!("cert:{}", cert.display_name)));
+    }
+    None
+}
+
+#[cfg(test)]
+#[path = "slot_principal_tests.rs"]
+mod slot_principal_tests;
 
 /// The HTTP authorizer: the full policy set, against the caller's real identity.
 ///

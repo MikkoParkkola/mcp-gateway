@@ -59,6 +59,15 @@ struct IndexedCapabilities {
     tools: Vec<Tool>,
 }
 
+/// True when `new` differs from `old` in any serialised field. A definition
+/// that cannot be serialised is treated as changed (revoke rather than keep).
+fn definition_changed(old: &CapabilityDefinition, new: &CapabilityDefinition) -> bool {
+    match (serde_json::to_value(old), serde_json::to_value(new)) {
+        (Ok(a), Ok(b)) => a != b,
+        _ => true,
+    }
+}
+
 impl IndexedCapabilities {
     /// Insert or replace a capability, maintaining index and tool cache consistency.
     fn upsert(&mut self, cap: CapabilityDefinition) {
@@ -155,7 +164,7 @@ pub struct CapabilityBackend {
     /// they may be set in either order at startup. Read by
     /// [`validate_oauth_isolation`] inside `call_tool_with_context`.
     multi_user: std::sync::atomic::AtomicBool,
-    initial_scan: std::sync::atomic::AtomicBool,
+    initial_scan: std::sync::atomic::AtomicU8,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -181,7 +190,7 @@ impl CapabilityBackend {
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
-            initial_scan: std::sync::atomic::AtomicBool::new(false),
+            initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
         }
     }
 
@@ -192,6 +201,7 @@ impl CapabilityBackend {
     pub fn set_multi_user(&self, multi_user: bool) {
         self.multi_user
             .store(multi_user, std::sync::atomic::Ordering::Relaxed);
+        self.executor.set_multi_user(multi_user);
     }
 
     /// Whether the capability backend is currently considered healthy by its
@@ -215,7 +225,7 @@ impl CapabilityBackend {
     /// no caller is obliged to.
     pub fn unload_capability(&self, name: &str) -> bool {
         let mut caps = self.capabilities.write();
-        if let Some(&pos) = caps.index.get(name) {
+        let removed = if let Some(&pos) = caps.index.get(name) {
             caps.entries.remove(pos);
             caps.tools.remove(pos);
             caps.index.remove(name);
@@ -228,10 +238,16 @@ impl CapabilityBackend {
             // Published, and the lock still held: no reader can observe the
             // removal under the old epoch.
             self.executor.bump_policy_epoch();
+            self.executor.bump_mcp_generation(name);
             true
         } else {
             false
-        }
+        };
+        drop(caps);
+        // After the epoch bump: a call that started before it is stopped here,
+        // and one that starts after it is refused at `acquire`.
+        self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
+        removed
     }
 
     /// Mark a capability as quarantined by a rug-pull event.
@@ -385,19 +401,47 @@ impl CapabilityBackend {
         // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
+            let incoming: HashMap<&str, &CapabilityDefinition> =
+                admitted.iter().map(|c| (c.name.as_str(), c)).collect();
+            // Revoke the in-flight calls of a capability that is gone OR edited:
+            // a call holding the old definition must not start or replace a
+            // child under the new one (MIK-7870).
+            for (name, &pos) in &caps.index {
+                let revoked = incoming
+                    .get(name.as_str())
+                    .is_none_or(|new| definition_changed(&caps.entries[pos], new));
+                if revoked {
+                    self.executor.bump_mcp_generation(name);
+                }
+            }
             caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
+            self.executor
+                .stop_unloaded_mcp(&|name| caps.index.contains_key(name));
         }
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)
     }
 
-    /// Get all tools (pre-built MCP tool representations).
+    /// Get the tools clients are shown (pre-built MCP tool representations).
     ///
-    /// O(n) clone of the pre-built cache — no `to_mcp_tool()` conversions.
+    /// A capability whose required login is missing is left out until it is
+    /// supplied (MIK-7787 D4): the catalogue is a library, and a tool that
+    /// can only fail is noise in every listing.
     pub fn get_tools(&self) -> Vec<Tool> {
-        self.capabilities.read().tools.clone()
+        let caps = self.capabilities.read();
+        let mut oauth_seen = HashMap::new();
+        caps.entries
+            .iter()
+            .zip(caps.tools.iter())
+            .filter(|(entry, _tool)| {
+                self.executor
+                    .missing_credential(&entry.auth, &mut oauth_seen)
+                    .is_none()
+            })
+            .map(|(_entry, tool)| tool.clone())
+            .collect()
     }
 
     /// Get tools visible in `current_state`.
@@ -405,24 +449,75 @@ impl CapabilityBackend {
     /// A capability is included when its `visible_in_states` list is **empty**
     /// (always visible — backward compat) or when it contains `current_state`.
     ///
-    /// O(n) over entries + tool cache; no extra allocations beyond the returned
-    /// `Vec`.
+    /// Also leaves out a capability whose required login is missing, as
+    /// [`Self::get_tools`] does.
     pub fn get_tools_for_state(&self, current_state: &str) -> Vec<Tool> {
         let caps = self.capabilities.read();
+        let mut oauth_seen = HashMap::new();
         caps.entries
             .iter()
             .zip(caps.tools.iter())
             .filter(|(entry, _tool)| {
-                entry.visible_in_states.is_empty()
-                    || entry.visible_in_states.iter().any(|s| s == current_state)
+                (entry.visible_in_states.is_empty()
+                    || entry.visible_in_states.iter().any(|s| s == current_state))
+                    && self
+                        .executor
+                        .missing_credential(&entry.auth, &mut oauth_seen)
+                        .is_none()
             })
             .map(|(_entry, tool)| tool.clone())
             .collect()
     }
 
+    /// Whether clients are shown the capability `name`: it exists and its
+    /// required login (if any) is in place. A name this backend does not hold
+    /// is not its to hide, so it counts as listed.
+    pub fn is_listed(&self, name: &str) -> bool {
+        self.is_listed_in(name, &mut HashMap::new())
+    }
+
+    /// [`Self::is_listed`] for a pass over many names: `seen` memoises the
+    /// per-provider OAuth lookups, so one listing or search reads each
+    /// provider's token once however many capabilities use it.
+    pub fn is_listed_in(&self, name: &str, seen: &mut HashMap<String, bool>) -> bool {
+        self.capabilities.read().get(name).is_none_or(|entry| {
+            self.executor
+                .missing_credential(&entry.auth, seen)
+                .is_none()
+        })
+    }
+
+    /// The names clients are shown now, sorted. A change between two calls is
+    /// a change of what `tools/list` answers.
+    pub fn listed_names(&self) -> Vec<String> {
+        let mut seen = HashMap::new();
+        let mut names: Vec<String> = self
+            .capabilities
+            .read()
+            .entries
+            .iter()
+            .filter(|entry| {
+                self.executor
+                    .missing_credential(&entry.auth, &mut seen)
+                    .is_none()
+            })
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
     /// Get a specific capability by name — O(1) via the name index.
     pub fn get(&self, name: &str) -> Option<CapabilityDefinition> {
         self.capabilities.read().get(name).cloned()
+    }
+
+    /// The definition and the MCP revocation generation, read under one lock so
+    /// an unload cannot fall between them.
+    fn get_with_generation(&self, name: &str) -> Option<(CapabilityDefinition, u64)> {
+        let caps = self.capabilities.read();
+        let generation = self.executor.mcp_generation(name);
+        caps.get(name).cloned().map(|def| (def, generation))
     }
 
     /// List all capability names in insertion order.
@@ -465,14 +560,15 @@ impl CapabilityBackend {
         &self,
         name: &str,
         arguments: Value,
-        context: CapabilityExecutionContext,
+        mut context: CapabilityExecutionContext,
     ) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
 
         // O(1) lookup; clone releases the read lock before the async executor call.
-        let capability = self
-            .get(name)
+        let (capability, generation) = self
+            .get_with_generation(name)
             .ok_or_else(|| crate::Error::Config(format!("Capability not found: {name}")))?;
+        context.mcp_generation = Some(generation);
         validate_personal_capability_identity(&capability, &context)?;
 
         let multi_user = self.multi_user.load(std::sync::atomic::Ordering::Relaxed);
@@ -603,39 +699,6 @@ impl CapabilityBackend {
     pub fn watched_directories(&self) -> Vec<String> {
         self.directories.read().clone()
     }
-
-    /// Scan every watched directory for capability YAMLs whose embedded
-    /// `sha256:` pin no longer matches the on-disk content, and quarantine
-    /// any mismatches as rug-pull events.
-    ///
-    /// Called by the file watcher on every debounced change event (before
-    /// the normal `reload()`) so a tampered capability is unloaded loudly
-    /// instead of silently skipped by the loader.
-    ///
-    /// Returns the list of newly-detected rug-pull records.
-    pub async fn detect_rug_pulls(&self) -> Vec<RugPullRecord> {
-        let dirs: Vec<String> = self.directories.read().clone();
-        let mut detected = Vec::new();
-
-        for dir in &dirs {
-            detect_rug_pulls_in_dir(Path::new(dir), &mut detected).await;
-        }
-
-        for record in &detected {
-            warn!(
-                backend = %self.name,
-                capability = %record.capability,
-                file = %record.file,
-                expected = %record.expected,
-                actual = %record.actual,
-                "RUG-PULL DETECTED: capability YAML sha256 pin mismatch — unloading",
-            );
-            self.unload_capability(&record.capability);
-            self.mark_rug_pull(record.clone());
-        }
-
-        detected
-    }
 }
 
 fn path_selector_type_error(
@@ -677,64 +740,8 @@ fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -
     }
 }
 
-use std::path::Path;
-
-/// Recursively walk a directory and report any YAML file whose embedded
-/// `sha256:` pin does not match the file's current content.
-async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
-    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
-        return;
-    };
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        if path
-            .file_name()
-            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-        {
-            continue;
-        }
-        if path.is_dir() {
-            Box::pin(detect_rug_pulls_in_dir(&path, out)).await;
-            continue;
-        }
-        if !path.extension().is_some_and(|e| e == "yaml" || e == "yml") {
-            continue;
-        }
-        let Ok(content) = tokio::fs::read_to_string(&path).await else {
-            continue;
-        };
-        // Extract embedded pin via lightweight deserialisation. A parse error
-        // here is not a rug-pull (the loader will surface it); we only care
-        // about files that self-declare a pin that no longer matches.
-        let pinned: Option<String> = serde_yaml::from_str::<serde_yaml::Value>(&content)
-            .ok()
-            .and_then(|v| {
-                v.get("sha256")
-                    .and_then(serde_yaml::Value::as_str)
-                    .map(str::to_string)
-            });
-        let Some(expected) = pinned else { continue };
-        let actual = compute_capability_hash(&content);
-        if !expected.eq_ignore_ascii_case(&actual) {
-            // Recover the capability name the same way parse_capability_file does.
-            let name = serde_yaml::from_str::<serde_yaml::Value>(&content)
-                .ok()
-                .and_then(|v| {
-                    v.get("name")
-                        .and_then(serde_yaml::Value::as_str)
-                        .map(str::to_string)
-                })
-                .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                .unwrap_or_default();
-            out.push(RugPullRecord {
-                capability: name,
-                file: path.display().to_string(),
-                expected,
-                actual,
-            });
-        }
-    }
-}
+#[path = "backend_rug_pull.rs"]
+mod rug_pull;
 
 /// Status information for a capability backend
 #[derive(Debug, Clone, serde::Serialize)]
@@ -757,601 +764,5 @@ pub struct CapabilityBackendStatus {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    fn make_backend() -> CapabilityBackend {
-        let executor = Arc::new(CapabilityExecutor::new());
-        CapabilityBackend::new("test", executor)
-    }
-
-    fn make_cap(name: &str) -> CapabilityDefinition {
-        let yaml = format!(
-            r"
-name: {name}
-description: Test capability
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.com
-      path: /test
-"
-        );
-        crate::capability::parse_capability(&yaml).unwrap()
-    }
-
-    fn make_personal_cap(name: &str) -> CapabilityDefinition {
-        let yaml = format!(
-            r"
-name: {name}
-description: Personal test capability
-schema:
-  input:
-    type: object
-    properties:
-      required_value:
-        type: string
-    required: [required_value]
-metadata:
-  exposure: personal
-  identity_owner:
-    authority: cloudflare_access
-    subject: owner-1
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: http://127.0.0.1:9
-      path: /test
-"
-        );
-        crate::capability::parse_capability(&yaml).unwrap()
-    }
-
-    // ── IndexedCapabilities unit tests ────────────────────────────────────
-
-    #[test]
-    fn indexed_capabilities_upsert_inserts_new_entry() {
-        // GIVEN: an empty indexed store
-        let mut idx = IndexedCapabilities::default();
-        let cap = make_cap("my_tool");
-        // WHEN: upserting a capability
-        idx.upsert(cap);
-        // THEN: it is present and queryable in O(1)
-        assert_eq!(idx.len(), 1);
-        assert!(idx.contains("my_tool"));
-        assert!(idx.get("my_tool").is_some());
-        assert_eq!(idx.tools.len(), 1);
-    }
-
-    #[test]
-    fn indexed_capabilities_upsert_replaces_existing_entry() {
-        // GIVEN: a store with one capability
-        let mut idx = IndexedCapabilities::default();
-        idx.upsert(make_cap("tool_a"));
-        // WHEN: upserting a new capability with the same name
-        let mut updated = make_cap("tool_a");
-        updated.description = "Updated".to_string();
-        idx.upsert(updated);
-        // THEN: count stays at one and description is updated
-        assert_eq!(idx.len(), 1);
-        assert_eq!(idx.get("tool_a").unwrap().description, "Updated");
-        assert_eq!(idx.tools.len(), 1);
-    }
-
-    #[test]
-    fn indexed_capabilities_replace_all_rebuilds_index_correctly() {
-        // GIVEN: a store with stale entries
-        let mut idx = IndexedCapabilities::default();
-        idx.upsert(make_cap("old_a"));
-        idx.upsert(make_cap("old_b"));
-        // WHEN: replacing with a new set
-        idx.replace_all(vec![make_cap("new_x"), make_cap("new_y")]);
-        // THEN: old entries are gone, new ones are indexed
-        assert_eq!(idx.len(), 2);
-        assert!(!idx.contains("old_a"));
-        assert!(!idx.contains("old_b"));
-        assert!(idx.contains("new_x"));
-        assert!(idx.contains("new_y"));
-        assert_eq!(idx.tools.len(), 2);
-    }
-
-    #[test]
-    fn indexed_capabilities_get_unknown_name_returns_none() {
-        // GIVEN: a non-empty store
-        let mut idx = IndexedCapabilities::default();
-        idx.upsert(make_cap("known"));
-        // WHEN: looking up an unknown name
-        let result = idx.get("unknown");
-        // THEN: None is returned (not a panic or wrong entry)
-        assert!(result.is_none());
-    }
-
-    // ── CapabilityBackend public API ──────────────────────────────────────
-
-    #[test]
-    fn capability_backend_new_is_empty() {
-        // GIVEN/WHEN: a freshly created backend
-        let backend = make_backend();
-        // THEN: it reports as empty
-        assert!(backend.is_empty());
-        assert_eq!(backend.len(), 0);
-    }
-
-    #[test]
-    fn capability_backend_has_capability_returns_false_for_unknown() {
-        // GIVEN: an empty backend
-        let backend = make_backend();
-        // WHEN: checking for a nonexistent capability
-        // THEN: false — O(1) HashMap miss
-        assert!(!backend.has_capability("nonexistent"));
-    }
-
-    #[test]
-    fn capability_backend_get_returns_none_for_unknown() {
-        // GIVEN: an empty backend
-        let backend = make_backend();
-        // WHEN: getting a nonexistent capability
-        // THEN: None
-        assert!(backend.get("nonexistent").is_none());
-    }
-
-    #[test]
-    fn capability_backend_get_tools_returns_prefetched_cache() {
-        // GIVEN: a backend with capabilities loaded via direct index manipulation
-        let executor = Arc::new(CapabilityExecutor::new());
-        let backend = CapabilityBackend::new("test", executor);
-        {
-            let mut caps = backend.capabilities.write();
-            caps.upsert(make_cap("tool_alpha"));
-            caps.upsert(make_cap("tool_beta"));
-        }
-        // WHEN: calling get_tools()
-        let tools = backend.get_tools();
-        // THEN: the pre-built cache is returned without re-conversion
-        assert_eq!(tools.len(), 2);
-        let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        assert!(names.contains(&"tool_alpha"));
-        assert!(names.contains(&"tool_beta"));
-    }
-
-    #[test]
-    fn capability_backend_list_preserves_insertion_order() {
-        // GIVEN: a backend with capabilities in a specific order
-        let executor = Arc::new(CapabilityExecutor::new());
-        let backend = CapabilityBackend::new("test", executor);
-        {
-            let mut caps = backend.capabilities.write();
-            caps.upsert(make_cap("first"));
-            caps.upsert(make_cap("second"));
-            caps.upsert(make_cap("third"));
-        }
-        // WHEN: listing all names
-        let names = backend.list();
-        // THEN: insertion order is preserved
-        assert_eq!(names, vec!["first", "second", "third"]);
-    }
-
-    #[test]
-    fn capability_backend_upsert_does_not_grow_on_duplicate() {
-        // GIVEN: a backend with one capability
-        let executor = Arc::new(CapabilityExecutor::new());
-        let backend = CapabilityBackend::new("test", executor);
-        {
-            let mut caps = backend.capabilities.write();
-            caps.upsert(make_cap("dup_tool"));
-        }
-        // WHEN: inserting the same name again
-        {
-            let mut caps = backend.capabilities.write();
-            caps.upsert(make_cap("dup_tool"));
-        }
-        // THEN: count remains 1 (update, not duplicate insert)
-        assert_eq!(backend.len(), 1);
-        assert_eq!(backend.get_tools().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn capability_backend_call_tool_denies_personal_without_identity_before_schema() {
-        let backend = make_backend();
-        {
-            let mut caps = backend.capabilities.write();
-            caps.upsert(make_personal_cap("personal_tool"));
-        }
-
-        let err = backend
-            .call_tool("personal_tool", json!({}))
-            .await
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("caller identity is required"), "{err}");
-        assert!(!err.contains("required_value"), "{err}");
-    }
-
-    #[tokio::test]
-    async fn capability_backend_rejects_non_string_path_selector_before_coercion() {
-        let yaml = r"
-name: strict_selector
-description: Reject non-string selector values before schema coercion.
-schema:
-  input:
-    type: object
-    properties:
-      category:
-        type: string
-        enum: ['1']
-        default: '1'
-auth:
-  required: true
-  type: api_key
-  key: env:PATH_SELECTOR_STRICT_TYPE_TEST_MISSING_20260718
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.com
-      path: /feeds/1
-      path_selector:
-        parameter: category
-        default: '1'
-        paths:
-          '1': /feeds/{category}
-";
-        let capability = crate::capability::parse_capability(yaml).unwrap();
-        let backend = make_backend();
-        backend.capabilities.write().upsert(capability);
-
-        let result = backend
-            .call_tool("strict_selector", json!({ "category": 1 }))
-            .await
-            .unwrap();
-
-        assert!(result.is_error);
-        let Content::Text { text, .. } = &result.content[0] else {
-            panic!("expected a text validation error");
-        };
-        assert!(text.contains("category"), "{text}");
-        assert!(text.contains("must be a string"), "{text}");
-        assert!(!text.contains("PATH_SELECTOR_STRICT_TYPE_TEST"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn capability_backend_load_and_reload_consistency() {
-        use std::io::Write as _;
-        use tempfile::TempDir;
-
-        // GIVEN: a temp directory with one capability file
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("alpha.yaml");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(
-            f,
-            r"
-name: alpha
-description: Alpha tool
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.com
-      path: /alpha
-"
-        )
-        .unwrap();
-
-        let backend = make_backend();
-
-        // WHEN: loading the directory
-        let count = backend
-            .load_from_directory(dir.path().to_str().unwrap())
-            .await
-            .unwrap();
-
-        // THEN: tool is available via O(1) lookup
-        assert_eq!(count, 1);
-        assert!(backend.has_capability("alpha"));
-        assert!(backend.get("alpha").is_some());
-        assert_eq!(backend.get_tools().len(), 1);
-
-        // WHEN: reloading
-        let reload_count = backend.reload().await.unwrap();
-
-        // THEN: consistency is maintained
-        assert_eq!(reload_count, 1);
-        assert!(backend.has_capability("alpha"));
-        assert_eq!(backend.get_tools().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn cache_4_capability_reload_bumps_attached_epoch() {
-        use std::io::Write as _;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("alpha.yaml");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(
-            f,
-            r"
-name: alpha
-description: Alpha tool
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.com
-      path: /alpha
-"
-        )
-        .unwrap();
-
-        let epoch = Arc::new(AtomicU64::new(0));
-        let backend = CapabilityBackend::new(
-            "test",
-            Arc::new(CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch))),
-        );
-        backend
-            .load_from_directory(dir.path().to_str().unwrap())
-            .await
-            .unwrap();
-        assert_eq!(
-            epoch.load(Ordering::SeqCst),
-            0,
-            "initial load is not a live-policy mutation"
-        );
-        backend.reload().await.unwrap();
-        assert_eq!(
-            epoch.load(Ordering::SeqCst),
-            1,
-            "reload must bump after replace_all"
-        );
-    }
-
-    /// CACHE.4 — unloading a quarantined capability is a live-policy mutation,
-    /// so entries keyed under the old epoch must be stranded. The watcher
-    /// follows an unload with `reload()`, but `unload_capability` is `pub` and
-    /// nothing obliges another caller to.
-    #[tokio::test]
-    async fn cache_4_capability_unload_bumps_attached_epoch() {
-        use std::io::Write as _;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("alpha.yaml");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(
-            f,
-            r"
-name: alpha
-description: Alpha tool
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.com
-      path: /alpha
-"
-        )
-        .unwrap();
-
-        let epoch = Arc::new(AtomicU64::new(0));
-        let backend = CapabilityBackend::new(
-            "test",
-            Arc::new(CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch))),
-        );
-        backend
-            .load_from_directory(dir.path().to_str().unwrap())
-            .await
-            .unwrap();
-        assert_eq!(epoch.load(Ordering::SeqCst), 0, "load is not a mutation");
-
-        assert!(backend.unload_capability("alpha"), "fixture must unload");
-        assert_eq!(
-            epoch.load(Ordering::SeqCst),
-            1,
-            "unload must invalidate the policy epoch"
-        );
-
-        assert!(
-            !backend.unload_capability("alpha"),
-            "second unload removes nothing"
-        );
-        assert_eq!(
-            epoch.load(Ordering::SeqCst),
-            1,
-            "a no-op unload must not bump"
-        );
-    }
-
-    #[test]
-    fn build_success_tool_result_populates_structured_content_when_output_schema_exists() {
-        let yaml = r#"
-name: linear_get_issue_test
-description: Test capability with output schema
-schema:
-  input:
-    type: object
-    properties:
-      identifier:
-        type: string
-    required: [identifier]
-  output:
-    type: object
-    properties:
-      issue:
-        type: object
-        properties:
-          id:
-            type: string
-          title:
-            type: string
-        required: [id, title]
-    required: [issue]
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: "https://api.example.com"
-      path: /issue
-      method: GET
-"#;
-        let cap = crate::capability::parse_capability(yaml).unwrap();
-        let result = build_success_tool_result(
-            &cap,
-            json!({ "issue": { "id": "abc", "title": "Test issue" } }),
-        );
-
-        assert!(!result.is_error);
-        assert_eq!(
-            result.structured_content,
-            Some(json!({ "issue": { "id": "abc", "title": "Test issue" } }))
-        );
-        let text = match &result.content[0] {
-            Content::Text { text, .. } => text,
-            other => panic!("expected text content, got {other:?}"),
-        };
-        let parsed: serde_json::Value = serde_json::from_str(text).expect("text should be JSON");
-        assert_eq!(parsed["issue"]["id"], json!("abc"));
-        assert_eq!(parsed["issue"]["title"], json!("Test issue"));
-    }
-
-    #[test]
-    fn capability_backend_status_reflects_loaded_capabilities() {
-        // GIVEN: a backend with two capabilities
-        let executor = Arc::new(CapabilityExecutor::new());
-        let backend = CapabilityBackend::new("my_backend", executor);
-        {
-            let mut caps = backend.capabilities.write();
-            caps.upsert(make_cap("tool_one"));
-            caps.upsert(make_cap("tool_two"));
-        }
-        // WHEN: getting status
-        let status = backend.status();
-        // THEN: counts and names are correct
-        assert_eq!(status.name, "my_backend");
-        assert_eq!(status.capabilities_count, 2);
-        assert!(status.capabilities.contains(&"tool_one".to_string()));
-        assert!(status.capabilities.contains(&"tool_two".to_string()));
-    }
-
-    // ── Rug-pull detection (watcher-side) ────────────────────────────────────
-
-    #[tokio::test]
-    async fn detect_rug_pulls_quarantines_tampered_pinned_file() {
-        use std::io::Write as _;
-        use tempfile::TempDir;
-
-        use super::super::hash::{compute_capability_hash, rewrite_with_pin};
-
-        // GIVEN: a watched directory containing a correctly-pinned capability
-        let dir = TempDir::new().unwrap();
-        let body = r"
-name: rugtest
-description: Initially legit
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.com
-      path: /v1
-";
-        let hash = compute_capability_hash(body);
-        let pinned = rewrite_with_pin(body, &hash);
-        let path = dir.path().join("rugtest.yaml");
-        std::fs::File::create(&path)
-            .unwrap()
-            .write_all(pinned.as_bytes())
-            .unwrap();
-
-        let backend = make_backend();
-        backend
-            .load_from_directory(dir.path().to_str().unwrap())
-            .await
-            .unwrap();
-        assert!(backend.has_capability("rugtest"));
-
-        // WHEN: an attacker rewrites the description without updating sha256
-        let poisoned = pinned.replace("Initially legit", "Exfiltrate ssh keys");
-        std::fs::write(&path, &poisoned).unwrap();
-
-        // AND: the watcher runs its rug-pull scan
-        let detected = backend.detect_rug_pulls().await;
-
-        // THEN: the tampered capability is reported, unloaded, and marked
-        assert_eq!(detected.len(), 1);
-        assert_eq!(detected[0].capability, "rugtest");
-        assert!(!backend.has_capability("rugtest"));
-        assert!(backend.is_rug_pulled("rugtest"));
-        assert_eq!(backend.rug_pull_records().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn detect_rug_pulls_ignores_unpinned_files() {
-        use std::io::Write as _;
-        use tempfile::TempDir;
-
-        // GIVEN: a directory with an unpinned capability
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("unpinned.yaml");
-        std::fs::File::create(&path)
-            .unwrap()
-            .write_all(
-                b"
-name: unpinned_cap
-description: No pin
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.com
-      path: /u
-",
-            )
-            .unwrap();
-
-        let backend = make_backend();
-        backend
-            .load_from_directory(dir.path().to_str().unwrap())
-            .await
-            .unwrap();
-
-        // WHEN: rug-pull scan runs
-        let detected = backend.detect_rug_pulls().await;
-
-        // THEN: nothing is flagged (unpinned = operator hasn't opted in)
-        assert!(detected.is_empty());
-        assert!(backend.has_capability("unpinned_cap"));
-    }
-
-    #[test]
-    fn capability_backend_status_surfaces_executor_health() {
-        // The backend delegates health to its executor and surfaces it in
-        // status() (MIK-5080). Transport-failure flipping is covered by the
-        // executor-level tests (send_with_retry_records_transport_failures);
-        // here we verify the delegation path and the status shape so the
-        // /health payload exposes the new fields.
-        let backend = make_backend();
-
-        // A fresh backend is healthy and reports zero failures.
-        assert!(backend.is_healthy(), "fresh backend is healthy");
-
-        let status = backend.status();
-        assert!(status.healthy, "status mirrors executor health");
-        assert_eq!(status.consecutive_failures, 0);
-        assert!(
-            status.latency_p95_ms.is_none(),
-            "no samples yet -> no p95 latency"
-        );
-
-        // The new health fields must serialize (they feed the admin /health
-        // payload as the capability_backend sibling object).
-        let json = serde_json::to_value(&status).expect("status serializes");
-        assert_eq!(json["healthy"], serde_json::json!(true));
-        assert_eq!(json["consecutive_failures"], serde_json::json!(0));
-    }
-}
+#[path = "backend_tests.rs"]
+mod tests;

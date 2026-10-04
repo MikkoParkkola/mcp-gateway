@@ -11,9 +11,7 @@
 
 use std::sync::Arc;
 
-#[cfg(unix)]
-use super::ServiceError;
-use super::{StoreLimits, open_runtime};
+use super::{ServiceError, StoreLimits, open_runtime};
 
 /// Startup recovery of records a previous process left mid-flight.
 mod recovery;
@@ -40,6 +38,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
     .await
     .expect("an absent store path is created by the store's own creator");
     assert!(store_dir.is_dir());
+    // POSIX mode bits: asserts 0600 owner-only; Windows enforces owner-only through DACLs (win_acl).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -62,6 +61,7 @@ async fn open_runtime_creates_an_absent_store_directory_privately_and_reopens_it
     reopened.shutdown().await.expect("custody is released");
 }
 
+// POSIX mode bits: builds a group/world-readable fixture with chmod; Windows uses DACLs (win_acl).
 #[cfg(unix)]
 #[tokio::test]
 async fn open_runtime_refuses_an_existing_group_readable_directory_unchanged() {
@@ -210,22 +210,34 @@ mod expiry;
 /// a fallback (`tasks.rs`), which is why a read-only root filesystem with no
 /// writable `HOME` kept every chart pod from starting. The control proves the
 /// same path opens once the parent is writable, so the refusal is about the
-/// parent and nothing else.
-#[cfg(unix)]
+/// parent and nothing else. The refusal must be the store's own
+/// (`Unavailable`) with nothing created under the home, so an unrelated
+/// failure cannot pass it, and the premise is probed for both files and
+/// directories so a deny that holds for only one fails loudly (MIK-7749).
 #[tokio::test]
 async fn task_store_under_readonly_home_is_fatal() {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt as _;
 
     let root = tempfile::tempdir().expect("a fixture root");
     let home = root.path().join("home");
     fs::create_dir(&home).unwrap();
-    fs::set_permissions(&home, fs::Permissions::from_mode(0o500)).unwrap();
+    // Unix takes the write mode away; Windows denies the user write and append (DACL).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&home, fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::deny_user("readonly-home", &home, "WD,AD");
     let store_dir = home.join(".mcp-gateway").join("tasks");
 
-    // Root ignores the mode bits, so the premise cannot be observed there.
-    if fs::write(home.join("probe"), b"").is_ok() {
-        fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    // Root ignores the mode bits, so the premise cannot be observed there. Both
+    // a file and a directory are probed: the store creates directories, and a
+    // deny that stops only files would leave its path open.
+    let premise_holds = fs::write(home.join("probe"), b"").is_err()
+        && fs::create_dir(home.join("probe-dir")).is_err();
+    if !premise_holds {
+        make_writable(&home);
         // A skip in CI would make this pin pass without testing anything, so
         // CI must run it unprivileged; only a local root shell may skip.
         assert!(
@@ -237,15 +249,33 @@ async fn task_store_under_readonly_home_is_fatal() {
     }
 
     let refused = open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions()).await;
+    // The refusal is the store's own (unavailable), and nothing was created
+    // under the home: an unrelated failure after creation would leave the
+    // store's directory behind.
     assert!(
-        refused.is_err(),
-        "a store under an unwritable home must refuse to open"
+        matches!(refused, Err(ServiceError::Unavailable)),
+        "a store under an unwritable home must refuse to open as unavailable"
+    );
+    assert!(
+        !home.join(".mcp-gateway").exists(),
+        "nothing may be created under the unwritable home"
     );
 
-    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).unwrap();
+    make_writable(&home);
     let (service, _executor) =
         open_runtime(&store_dir, 1, StoreLimits::default(), test_subscriptions())
             .await
             .expect("the same path opens once its parent is writable");
     service.shutdown().await.expect("custody is released");
+}
+
+/// Undo the fixture's write denial on `dir`.
+fn make_writable(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[cfg(windows)]
+    crate::private_fs::test_support::remove_deny("readonly-home", dir);
 }

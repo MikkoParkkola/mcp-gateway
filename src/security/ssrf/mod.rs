@@ -98,9 +98,12 @@
 //! - [`resolver`] — DNS-pinning resolver (MIK-4019): `HostResolver`, `SystemResolver`, `PinningResolver`
 //! - [`redirect`] — redirect-chain SSRF re-validation policy
 
+mod destination;
 mod ranges;
 mod redirect;
 mod resolver;
+
+pub(crate) use destination::DestinationPolicy;
 
 #[cfg(test)]
 mod tests;
@@ -111,21 +114,58 @@ use crate::{Error, Result};
 use std::net::IpAddr;
 
 pub use resolver::{HostResolver, PinningResolver, SystemResolver, resolve_and_validate_host};
+pub(crate) use resolver::{SsrfDenied, in_allowed, ssrf_denial};
 
 pub use redirect::validate_redirect_chain;
+
+/// How every destination-policy refusal starts. Writer and reader stay a
+/// pair: each refusal is built from it, and [`is_ssrf_refusal`] and the
+/// discovery chain recognise a refusal by it, so a wording change cannot
+/// split them.
+pub(crate) const SSRF_BLOCKED: &str = "SSRF blocked";
+
+/// Whether `error` is a destination-policy refusal (`-32600 SSRF blocked`),
+/// an answer no fallback may walk past.
+pub(crate) fn is_ssrf_refusal(error: &Error) -> bool {
+    matches!(error, Error::Protocol(message) if message.starts_with(SSRF_BLOCKED))
+}
 pub(crate) use redirect::{RedirectDecision, redirect_decision};
 // Re-exported for path-compat (`crate::security::ssrf::MAX_REDIRECT_HOPS`) even
 // though every current crate-internal use goes through `redirect_decision`.
 #[allow(unused_imports)]
 pub(crate) use redirect::MAX_REDIRECT_HOPS;
 
+/// How a refusal names a denied address the caller already knows (a literal
+/// it wrote, or one a refusal already names). The cloud metadata services get
+/// their own words (MIK-7633 AC7): a backend listed as private still never
+/// reaches them, so "private/reserved" would mislead. A host name's refusal
+/// does not use this; it names no address, so it answers no DNS.
+pub(crate) fn denied_address(addr: IpAddr) -> String {
+    let v4 = match addr {
+        IpAddr::V4(v4) => Some(v4),
+        IpAddr::V6(v6) => v6.to_ipv4_mapped(),
+    };
+    if v4 == Some(std::net::Ipv4Addr::new(169, 254, 169, 254))
+        || destination::ALWAYS_DENIED.contains(&addr)
+    {
+        format!("cloud metadata address {addr}")
+    } else {
+        format!("private/reserved address {addr}")
+    }
+}
+
 /// A client builder for untrusted destinations: every name is resolved once
 /// and pinned by [`PinningResolver`], and `HTTP(S)_PROXY` from the environment
 /// is ignored, since a proxy would resolve the name instead of the pin.
 pub(crate) fn pinned_client_builder() -> reqwest::ClientBuilder {
+    pinned_client_builder_for(DestinationPolicy::Public)
+}
+
+/// [`pinned_client_builder`], checking resolved addresses against `policy`.
+pub(crate) fn pinned_client_builder_for(policy: DestinationPolicy) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .no_proxy()
-        .dns_resolver(PinningResolver::new(SystemResolver))
+        .dns_resolver(PinningResolver::new(SystemResolver).with_policy(policy))
 }
 
 // ============================================================================
@@ -184,7 +224,8 @@ pub fn check_host_not_ssrf(host: &str) -> Result<()> {
     if let Ok(addr) = host.parse::<IpAddr>() {
         if is_private_or_reserved(addr) {
             return Err(Error::Protocol(format!(
-                "SSRF blocked: host targets private/reserved address {addr}"
+                "{SSRF_BLOCKED}: host targets {}",
+                denied_address(addr)
             )));
         }
         return Ok(());
@@ -196,7 +237,8 @@ pub fn check_host_not_ssrf(host: &str) -> Result<()> {
         && is_private_or_reserved(addr)
     {
         return Err(Error::Protocol(format!(
-            "SSRF blocked: host targets private/reserved address {addr}"
+            "{SSRF_BLOCKED}: host targets {}",
+            denied_address(addr)
         )));
     }
 
@@ -208,7 +250,7 @@ pub fn check_host_not_ssrf(host: &str) -> Result<()> {
 // Internal dispatch
 // ============================================================================
 
-fn is_private_or_reserved(addr: IpAddr) -> bool {
+pub(crate) fn is_private_or_reserved(addr: IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => is_private_ipv4(v4),
         IpAddr::V6(v6) => is_private_ipv6(v6),

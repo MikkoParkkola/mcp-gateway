@@ -32,11 +32,32 @@ mod identity_slots;
 mod input_keys;
 mod lifecycle;
 mod list_drain;
+pub(crate) mod listen;
 mod metadata;
+mod oauth_client;
 mod ops;
 mod pool;
+mod probe;
 mod registry;
+mod repin;
+mod restart;
+mod runtime_launch;
 mod status;
+mod stdio_start;
+mod stop;
+
+impl Backend {
+    /// This backend's signature chain policy (ASI07 inc3, design D1): the
+    /// mode, the accepted origin key ids and the required last signer.
+    pub(crate) fn chain_policy(&self) -> (crate::config::ChainMode, &[String], Option<&str>) {
+        let config = &self.config;
+        (
+            config.signature_chain,
+            &config.chain_origins,
+            config.chain_signer.as_deref(),
+        )
+    }
+}
 
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
@@ -50,10 +71,10 @@ pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::text_absent;
 pub(crate) use identity_slots::passthrough_binding;
-pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
 };
+pub use runtime_launch::runtime_plan_for_backend;
 
 /// MCP Backend - manages connection to a single MCP server
 pub struct Backend {
@@ -192,7 +213,83 @@ pub struct Backend {
     /// handshake owns a live process, and shutdown returning before that
     /// resolves leaves the process running for as long as the handshake takes.
     starts_in_flight: std::sync::atomic::AtomicUsize,
+    /// Where this backend's transports may connect; stamped by its registry.
+    /// Unstamped means `Configured`: a backend no config governs.
+    destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// Set, and never cleared, when a start began before any stamp: whatever
+    /// that start built may still be alive somewhere (pooled, closing, held
+    /// by a request), so a hardened pairing refuses this backend (MIK-7700).
+    connected_unpinned: std::sync::atomic::AtomicBool,
+    /// A test's pause point in an HTTP start, after it read the policy it
+    /// builds under and before it builds anything from it or
+    /// [`Backend::begin_connecting`] checks and marks.
+    #[cfg(test)]
+    mark_window_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
     pub(crate) budgets: ShutdownBudgets,
+}
+
+/// Holds a start in the window before it marks: the start signals `reached`
+/// and waits for `release`.
+#[cfg(test)]
+#[derive(Default)]
+struct MarkWindowGate {
+    reached: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl Backend {
+    /// Set by [`BackendRegistry`]; the first stamp wins.
+    pub(crate) fn stamp_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
+        let _ = self.destination.set(policy);
+    }
+
+    /// Whether a start began on this HTTP or WebSocket backend before any
+    /// destination policy was stamped on it. What that start built was not
+    /// pinned and cannot be re-pinned in place (closing it would itself send
+    /// to the address), so pairing refuses instead (MIK-7700).
+    pub(crate) fn started_unpinned(&self) -> bool {
+        self.destination_bound()
+            && self.destination.get().is_none()
+            && self
+                .connected_unpinned
+                .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Whether this backend's transports connect under its destination
+    /// policy. A stdio child reaches no network destination of its own.
+    pub(crate) fn destination_bound(&self) -> bool {
+        matches!(
+            self.config.transport,
+            crate::config::TransportConfig::Http { .. }
+                | crate::config::TransportConfig::WebSocket { .. }
+        )
+    }
+
+    /// Start a WebSocket transport under `destination`, the policy the start
+    /// read when it marked the backend.
+    async fn start_websocket(
+        &self,
+        ws_url: &str,
+        protocol_version: Option<String>,
+        destination: crate::security::ssrf::DestinationPolicy,
+    ) -> crate::Result<Arc<crate::transport::websocket::WebSocketTransport>> {
+        crate::transport::websocket::WebSocketTransport::start_with_destination(
+            ws_url,
+            &self.config.headers,
+            self.config.timeout,
+            protocol_version,
+            destination,
+        )
+        .await
+    }
+
+    /// The policy this backend's transports connect under.
+    pub(crate) fn destination(&self) -> crate::security::ssrf::DestinationPolicy {
+        self.destination
+            .get()
+            .copied()
+            .unwrap_or(crate::security::ssrf::DestinationPolicy::Configured)
+    }
 }
 
 /// How long each stage of [`Backend::stop`] may take before it gives up.
@@ -311,9 +408,16 @@ mod identity_slot_probe_tests;
 mod start_failure_slot_tests;
 
 #[cfg(test)]
+#[path = "era_stale_probe_tests.rs"]
+mod era_stale_probe_tests;
+
+#[cfg(test)]
 #[path = "stateless_tools_slot_tests.rs"]
 mod stateless_tools_slot_tests;
 
 #[cfg(test)]
 #[path = "websocket_backend_tests.rs"]
 mod websocket_backend_tests;
+
+#[cfg(test)]
+mod destination_tests;

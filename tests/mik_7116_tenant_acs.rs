@@ -22,6 +22,7 @@ fn guard(max_tenants: usize) -> TenantGuard {
         max_tenants_per_window: max_tenants,
         window_secs: 3600,
         arg_keys: vec!["customer_id".to_string(), "tenant_id".to_string()],
+        ..Default::default()
     })
 }
 
@@ -171,6 +172,7 @@ fn wired_firewall(max_tenants: usize) -> Firewall {
         max_tenants_per_window: max_tenants,
         window_secs: 3600,
         arg_keys: vec!["customer_id".to_string()],
+        ..Default::default()
     };
     Firewall::from_config(config, None)
 }

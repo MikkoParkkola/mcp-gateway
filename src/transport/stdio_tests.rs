@@ -11,11 +11,14 @@ use std::collections::HashMap;
 #[path = "stdio_windows_env_tests.rs"]
 mod windows_env;
 
-#[cfg(unix)]
+#[path = "stdio_handle_response_tests.rs"]
+mod handle_response;
+
+#[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
 const CHILD_SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_CHILD_ENV_SCENARIO";
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
 const PARENT_SECRET_ENV: &str = "MCP_GATEWAY_TEST_PARENT_SECRET";
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: shared by the two env-isolation tests below.
 const EXPLICIT_BACKEND_ENV: &str = "MCP_GATEWAY_TEST_EXPLICIT_BACKEND";
 
 #[test]
@@ -32,6 +35,27 @@ fn pending_request_guard_removes_entry_on_drop() {
     }
 
     assert!(pending.is_empty(), "guard drop removes the entry");
+}
+
+/// MIK-7324.COV.3 (C6 stdio 1): a response is delivered only to the request
+/// pending under its own id; a response for an id nobody waits on reaches no
+/// other caller.
+#[test]
+fn a_response_for_an_id_nobody_waits_on_reaches_no_other_caller() {
+    let transport = make_transport("cat");
+    let (tx, mut answer) = oneshot::channel::<crate::protocol::JsonRpcResponse>();
+    transport.pending.insert("7".to_string(), tx);
+    transport
+        .handle_response(r#"{"jsonrpc":"2.0","id":8,"result":{}}"#)
+        .expect("a response must not fail the read loop");
+    assert!(
+        transport.pending.contains_key("7"),
+        "another id's response consumed the pending request"
+    );
+    assert!(
+        answer.try_recv().is_err(),
+        "the pending request received another id's response"
+    );
 }
 
 fn make_transport(cmd: &str) -> Arc<StdioTransport> {
@@ -99,106 +123,12 @@ fn next_id_increments_sequentially() {
 }
 
 // =========================================================================
-// handle_response - valid JSON-RPC responses
-// =========================================================================
-
-#[test]
-fn handle_response_routes_to_pending_request() {
-    let t = make_transport("echo");
-    let (tx, mut rx) = tokio::sync::oneshot::channel();
-    t.pending.insert("1".to_string(), tx);
-
-    let json = r#"{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}"#;
-    t.handle_response(json).unwrap();
-
-    let response = rx.try_recv().unwrap();
-    assert!(response.result.is_some());
-    assert!(response.error.is_none());
-}
-
-#[test]
-fn handle_response_string_id() {
-    let t = make_transport("echo");
-    let (tx, mut rx) = tokio::sync::oneshot::channel();
-    t.pending.insert("req-42".to_string(), tx);
-
-    let json = r#"{"jsonrpc":"2.0","id":"req-42","result":{}}"#;
-    t.handle_response(json).unwrap();
-
-    let response = rx.try_recv().unwrap();
-    assert!(response.result.is_some());
-}
-
-/// An inbound request that happens to carry an `id` must never be routed to
-/// a pending caller as if it were that caller's answer. The frame is a
-/// server-to-client request (`sampling/createMessage`), not a response.
-#[test]
-fn handle_response_rejects_inbound_request_and_leaves_caller_pending() {
-    // GIVEN: a caller waiting on id 5
-    let t = make_transport("echo");
-    let (tx, mut rx) = tokio::sync::oneshot::channel();
-    t.pending.insert("5".to_string(), tx);
-
-    // WHEN: the peer sends a *request* that reuses that id
-    let json = r#"{"jsonrpc":"2.0","id":5,"method":"sampling/createMessage","params":{}}"#;
-    let outcome = t.handle_response(json);
-
-    // THEN: the frame is refused, and the caller is still waiting
-    assert!(
-        outcome.is_err(),
-        "a frame carrying `method` must not parse as a response"
-    );
-    assert!(rx.try_recv().is_err(), "caller must not be completed");
-    assert!(
-        t.pending.contains_key("5"),
-        "caller must remain pending, not be silently consumed"
-    );
-}
-
-#[test]
-fn handle_response_no_matching_pending() {
-    let t = make_transport("echo");
-    // No pending request registered - should not panic
-    let json = r#"{"jsonrpc":"2.0","id":99,"result":{}}"#;
-    t.handle_response(json).unwrap();
-}
-
-#[test]
-fn handle_response_no_id_notification() {
-    let t = make_transport("echo");
-    // Notifications have no id - should be handled gracefully
-    let json = r#"{"jsonrpc":"2.0","method":"notifications/progress"}"#;
-    t.handle_response(json).unwrap();
-}
-
-#[test]
-fn handle_response_error_response() {
-    let t = make_transport("echo");
-    let (tx, mut rx) = tokio::sync::oneshot::channel();
-    t.pending.insert("5".to_string(), tx);
-
-    let json = r#"{"jsonrpc":"2.0","id":5,"error":{"code":-32601,"message":"Method not found"}}"#;
-    t.handle_response(json).unwrap();
-
-    let response = rx.try_recv().unwrap();
-    assert!(response.error.is_some());
-    assert_eq!(response.error.unwrap().code, -32601);
-}
-
-#[test]
-fn handle_response_invalid_json_returns_error() {
-    let t = make_transport("echo");
-    let result = t.handle_response("not valid json");
-    assert!(result.is_err());
-}
-
-// =========================================================================
 // build_init_params
 // =========================================================================
 
 #[test]
 fn build_init_params_contains_version() {
-    let params = StdioTransport::build_init_params("2025-06-18");
+    let params = initialize_params("2025-06-18");
     assert_eq!(params["protocolVersion"], "2025-06-18");
     assert_eq!(params["clientInfo"]["name"], "mcp-gateway");
 }
@@ -240,7 +170,7 @@ async fn request_cleans_pending_entry_when_write_fails() {
 /// entry — the RAII `PendingRequestGuard` must. A real child that answers
 /// `initialize` but never answers `prompts/list` holds the request open so
 /// the drop happens mid-await.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: the fake MCP server is a `sh` script, which Windows does not provide.
 #[tokio::test]
 async fn cancelled_request_does_not_strand_pending_entry() {
     let workspace = tempfile::tempdir().expect("workspace");
@@ -304,7 +234,7 @@ done
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
 fn backend_subprocess_receives_only_safe_and_explicit_environment() {
     let current_test_binary = std::env::current_exe().expect("resolve current test binary");
     let scenario_name = "transport::stdio::tests::stdio_child_environment_isolation_scenario";
@@ -331,7 +261,7 @@ fn backend_subprocess_receives_only_safe_and_explicit_environment() {
 }
 
 #[tokio::test]
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only child environment scenario: the backend is an sh script probing its stripped environment.
 async fn stdio_child_environment_isolation_scenario() {
     if std::env::var_os(CHILD_SCENARIO_ENV).is_none() {
         return;
@@ -402,8 +332,7 @@ done
 
 /// Is dropping every handle enough to reap the child, or does the reader
 /// task's strong `Arc` keep the whole thing alive?
-// Unix-only: drives a real child and reads the process table via `kill`.
-#[cfg(unix)]
+#[cfg(unix)] // Unix-only: drives a real child and reads the process table via `kill`.
 #[tokio::test]
 async fn dropping_the_last_handle_reaps_the_child() {
     let workspace = tempfile::tempdir().expect("workspace");
@@ -513,6 +442,32 @@ async fn stdio_streams_a_progress_notification_while_its_call_is_still_running()
 
     release.send(()).expect("the call is still in flight");
     call.await.expect("the call must not panic");
+}
+
+/// MIK-7324.COV.3 (C6 stdio 4): only `notifications/progress` rides the
+/// progress route. A `notifications/message` stamped with a registered
+/// `progressToken` is not delivered; the progress frame sent after it is, so
+/// the first frame the caller sees shows which one got through.
+#[tokio::test]
+async fn a_message_stamped_with_a_registered_progress_token_is_not_delivered() {
+    let transport = make_transport("cat");
+    let stamped = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"progressToken":"tok-a","level":"debug","data":"x"}}"#;
+    let (call, mut rx) = crate::transport::notification_sink::scope(async {
+        let _ = transport.register_progress_token("tok-a");
+        transport
+            .handle_response(stamped)
+            .expect("a notification must not fail the read loop");
+        transport
+            .handle_response(&progress_line("tok-a", 1))
+            .expect("a notification must not fail the read loop");
+    });
+    call.await;
+    let first = rx.try_recv().expect("the progress frame must be delivered");
+    assert_eq!(
+        first.method, "notifications/progress",
+        "a token-stamped notifications/message reached the progress caller"
+    );
+    assert!(rx.try_recv().is_err(), "exactly one frame is delivered");
 }
 
 /// S-03 over stdio: two calls in flight on the one stdout. The notification

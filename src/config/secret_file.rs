@@ -31,6 +31,8 @@ pub(crate) enum SecretFile {
     TlsKey,
     /// An OAuth token file under `~/.mcp-gateway/oauth/`.
     OAuthToken,
+    /// An MCP Events store record (a subscription holds its `whsec` secret).
+    EventsRecord,
     /// A capability `file:/path.json:field` credential.
     CredentialFile,
     /// `mtls.server_cert` or `mtls.ca_cert`.
@@ -69,6 +71,7 @@ impl SecretFile {
             Self::Reference => "secret file",
             Self::TlsKey => "TLS private key",
             Self::OAuthToken => "OAuth token file",
+            Self::EventsRecord => "events store record",
             Self::CredentialFile => "credential file",
             Self::TlsCert => "TLS certificate",
             Self::TlsCrl => "certificate revocation list",
@@ -273,7 +276,7 @@ fn check_acl(
     path: &Path,
     what: SecretFile,
 ) -> std::result::Result<(), GuardedRead> {
-    use crate::private_fs::{PrivacyRefusal, file_refusals_for, windows_remediation};
+    use crate::private_fs::{file_refusals_for, refusal_detail};
 
     let found = file_refusals_for(file, what.protects());
     if found.is_empty() {
@@ -281,26 +284,7 @@ fn check_acl(
     }
     let shown = path.display().to_string();
     let head = format!("Refusing to load {} {shown}", what.noun());
-    let text = if found
-        .iter()
-        .any(|r| matches!(r, PrivacyRefusal::ReparsePoint | PrivacyRefusal::NotRegular))
-    {
-        format!(
-            "{head} ({found:?}): it is not a regular file. Write the content, then replace the file."
-        )
-    } else {
-        let mut text = format!(
-            "{head}{}",
-            windows_remediation(&shown, &found, what.protects())
-        );
-        if what.protects() == Protects::Integrity {
-            text.push_str(
-                "This file may be read by others, so the repair keeps them as readers; \
-                 an owner-only repair would also lock out legitimate readers.\n",
-            );
-        }
-        text
-    };
+    let text = format!("{head}{}", refusal_detail(&shown, &found, what.protects()));
     Err(GuardedRead::Refused(text))
 }
 
@@ -400,9 +384,18 @@ fn refusal_message(
     )
 }
 
+/// `path` as one POSIX shell word, so a copied fix cannot split on a space,
+/// read a leading `-` as an option or run metacharacters. Plain paths stay bare.
+#[cfg(unix)]
+fn shell_arg(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    shlex::try_quote(&text).map_or_else(|_| text.to_string(), std::borrow::Cow::into_owned)
+}
+
 /// The owner refusal: another account owns the file, so it can chmod it at will.
-/// A secret file also needs `chmod 600`: a group-read mode stays refused once
-/// this process owns the file.
+/// `chown` keeps the mode, so the fix also clears what the mode rules refuse: a
+/// secret file needs `chmod 600` (a group-read mode stays refused once this
+/// process owns the file) and a trust file `chmod go-w`.
 #[cfg(unix)]
 fn foreign_owner_message(
     what: SecretFile,
@@ -410,14 +403,15 @@ fn foreign_owner_message(
     (file_uid, euid): (u32, u32),
     why: &str,
 ) -> String {
+    let shown = shell_arg(path);
     let chmod = match what.protects() {
-        Protects::Secrecy => format!(" && chmod 600 {}", path.display()),
-        Protects::Integrity => String::new(),
+        Protects::Secrecy => "chmod 600",
+        Protects::Integrity => "chmod go-w",
     };
     format!(
         "Refusing to load {noun} {path}: it is owned by uid {file_uid}, which is neither this \
          process (uid {euid}) nor root, so that account can change it at will, and {why}. \
-         Fix: chown {euid} {path}{chmod} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
+         Fix: chown {euid} -- {shown} && {chmod} -- {shown} (see UPGRADING-4.0 \u{a7}{OWNER_UPGRADE_ITEM}).",
         noun = what.noun(),
         path = path.display(),
     )
@@ -435,6 +429,8 @@ pub(crate) enum CheckedFile {
     TlsCrl,
     /// An OAuth token file.
     OAuthToken,
+    /// An MCP Events store record.
+    EventsRecord,
     /// A capability `file:/path.json:field` credential.
     CredentialFile,
     /// The identity-grants file.
@@ -468,6 +464,7 @@ fn checked_class(what: CheckedFile) -> SecretFile {
         CheckedFile::TlsCert => SecretFile::TlsCert,
         CheckedFile::TlsCrl => SecretFile::TlsCrl,
         CheckedFile::OAuthToken => SecretFile::OAuthToken,
+        CheckedFile::EventsRecord => SecretFile::EventsRecord,
         CheckedFile::CredentialFile => SecretFile::CredentialFile,
         CheckedFile::IdentityGrants => SecretFile::IdentityGrants,
         CheckedFile::ControlPlaneCollection => SecretFile::ControlPlaneCollection,
@@ -512,11 +509,11 @@ pub(crate) fn read_secret_file(path: &Path, what: SecretFile) -> Result<String> 
 fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     let see = format!("(see UPGRADING-4.0 \u{a7}{UPGRADE_ITEM})");
     match (what.protects(), owned, what) {
-        (Protects::Integrity, true, _) => format!("Fix: chmod go-w {} {see}.", path.display()),
+        (Protects::Integrity, true, _) => format!("Fix: chmod go-w -- {} {see}.", shell_arg(path)),
         (Protects::Integrity, false, _) => {
             format!("Fix: clear the group- and world-write bits {see}.")
         }
-        (Protects::Secrecy, true, _) => format!("Fix: chmod 600 {} {see}.", path.display()),
+        (Protects::Secrecy, true, _) => format!("Fix: chmod 600 -- {} {see}.", shell_arg(path)),
         (Protects::Secrecy, false, SecretFile::Config | SecretFile::EnvFile) => format!(
             "Fix: clear the world and group-write bits; on Kubernetes give the pod an \
              fsGroup this process is in (the Helm chart pins podSecurityContext.fsGroup \
@@ -531,6 +528,7 @@ fn refusal_fix(path: &Path, owned: bool, what: SecretFile) -> String {
     }
 }
 
+// Unix-only (W-L1): asserts POSIX mode bits; Windows checks secret files by DACL (`secret_file_windows_tests.rs`).
 #[cfg(all(test, unix))]
 #[path = "secret_file_tests.rs"]
 mod tests;
@@ -539,6 +537,7 @@ mod tests;
 #[path = "secret_file_population_tests.rs"]
 mod population_tests;
 
+// Unix-only (W-L8): FIFO and device-file fixtures (`mkfifo`, `/dev/null`).
 #[cfg(all(test, unix))]
 #[path = "secret_file_type_tests.rs"]
 mod type_tests;

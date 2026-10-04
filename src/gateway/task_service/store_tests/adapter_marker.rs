@@ -397,9 +397,12 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
                 seed["version"] = json!(0);
                 reseed(&path, task.id(), &seed);
             }
+            // One past the highest supported version: v4 carries the input
+            // round (MIK-7311.LIFECYCLE.1) and v5 the task targets (#2450), so
+            // v6 is the first unsupported one.
             _ => {
                 let mut seed = record.clone();
-                seed["version"] = json!(4);
+                seed["version"] = json!(6);
                 reseed(&path, task.id(), &seed);
             }
         }

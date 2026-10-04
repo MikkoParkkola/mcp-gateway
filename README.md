@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-PolyForm--NC-blue.svg)](https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md)
 [![unsafe denied](https://img.shields.io/badge/unsafe-denied-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 [![dependency status](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway/status.svg)](https://deps.rs/repo/github/MikkoParkkola/mcp-gateway)
-[![Capabilities](https://img.shields.io/badge/REST%20capabilities-110%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
+[![Capabilities](https://img.shields.io/badge/REST%20capabilities-130%2B-purple.svg)](https://github.com/MikkoParkkola/mcp-gateway/tree/main/capabilities)
 [![MCP Protocol](https://img.shields.io/badge/MCP-2025--11--25%20%7C%202026--07--28-green.svg)](https://modelcontextprotocol.io)
 [![OWASP Agentic AI](https://img.shields.io/badge/OWASP_Agentic_AI-10%2F10_self--assessed-blue.svg)](docs/OWASP_AGENTIC_AI_COMPLIANCE.md)
 [![Glama](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway/badge)](https://glama.ai/mcp/servers/MikkoParkkola/mcp-gateway)
@@ -40,7 +40,7 @@ flowchart LR
     T2["MCP backend<br/>Context7 (http)"]
     C1["REST capability<br/>GitHub"]
     C2["REST capability<br/>Stripe"]
-    Cn["110+ capabilities"]
+    Cn["130+ capabilities"]
 
     AI -->|"9-17 tool defs"| META
     META --> DISC
@@ -58,15 +58,13 @@ flowchart LR
 - **The newest MCP revision, 2026-07-28, on by default.** MCP (Model Context Protocol) is how AI clients talk to tool servers. The gateway now serves 2026-07-28 alongside 2025-11-25 and earlier, on the same endpoint. A 2026 client skips the `initialize` handshake and states its revision on each `POST /mcp` request (the `MCP-Protocol-Version` header and `io.modelcontextprotocol/protocolVersion` in the request's `_meta`). It gets `server/discover`; mid-call questions returned as a result it answers by retrying the call (on HTTP this needs a verified caller identity; an anonymous caller is refused); a caller-scoped `subscriptions/listen` stream; the tasks extension for long-running calls it polls; and optional idempotency keys (`io.mcp-gateway/idempotency-key` in `_meta`) that stop a retried call from running twice. Older clients keep the handshake and see no change. `server.modern_protocol: false` turns it off. Limits:
   - While it is on, the gateway refuses to start when `server.replicas` declares more than one replica (the Helm chart keeps it equal to `replicaCount`; replicas started any other way are not detected).
   - A 2026 `tools/call` without a key is not protected against a double run unless you set `server.idempotency_key: required`, which covers `POST /mcp` and stdio but not the direct per-backend route `POST /mcp/{name}`.
-  - On stdio, `server/discover` lists only the older revisions.
-- **Each caller sees and reaches only what it was granted.** Every discovery surface (tool lists, search, server lists, the direct per-backend route) shows a caller only the backends and tools it could invoke. A newly added backend is unreachable until a key is granted it, and a key with no `backends` reaches nothing. Cached results, idempotent results, backend change notifications and `subscriptions/listen` streams are kept per caller. Caller identity headers count only when they arrive from a source you configured: listed proxy addresses or Cloudflare Access.
-- **Admins from your identity provider.** A `control_plane.role_mapping` rule with `role: admin` makes a single sign-on (SSO) group or user a full gateway admin. The mapping is read on every request, so removing the rule revokes admin at once, and an admin rule that names only an email domain is refused. Identities from trusted-proxy or Cloudflare Access headers, and mTLS certificates, never confer admin. Key-server rules for OIDC (OpenID Connect, the sign-in protocol most identity providers speak) must name the issuer, and email and domain rules match only an email the provider has verified.
-- **An audit log you cannot switch off while auth is on.** Each tool call records who made it (credential kind, key fingerprint, verified issuer and subject), its outcome and its error code. Refused calls are recorded too, and a failed write fails the call instead of letting it through unrecorded. Calls on the direct per-backend route `POST /mcp/{name}` write the same record on the release branch, landed after beta.2. Also landed after beta.2: admin actions (admin meta-tool calls and admin-panel changes, control-plane edits included) are recorded with who made them. An admin meta-tool call is refused when its record cannot be written; an admin-panel change is refused while the log is already failing, and if the write fails after the change ran, the change stands and its response is withheld with 503.
-- **Keys and secrets handled as secrets.** API keys are stored as SHA-256 digests (`mcp-gateway hash-key` makes one) with an optional expiry that is enforced. A secret reference that resolves to nothing stops the load instead of sending an empty credential (except `server.metrics_token`, which logs a warning and leaves `/metrics` answering 401 until it is set and the gateway restarted, and a personal-account `client_secret_ref`, which is read only when a token is requested, so a missing one fails that account later rather than the start), and `/metrics` needs its own scrape token. Landed after beta.2: `file:/absolute/path` reads a secret from a file wherever `env:NAME` is accepted.
-- **A config that refuses to start instead of running unsafely.** An unknown config key, a config or env file other users can read (on Unix; Windows is not checked), and plain HTTP on a network address with auth on each stop the start with an error that names the problem. `server.cleartext_http` declares that the traffic is protected some other way (TLS terminated upstream, host-local publish, or cluster-internal).
-- **A Helm chart that starts.** The Kubernetes chart now installs and serves with its default values, runs as the image's own non-root user, and defaults to one replica.
-
-Still to come before 4.0.0 (listed under *Known gaps* in the [beta.2 release notes](docs/release/4.0.0-beta.2-notes.md#known-gaps); `python3 scripts/release/check_scope_acceptance.py --release` names the criteria still open): audited grant decisions, dashboard session time limits, and API-key and OIDC auth in the Helm chart, among others.
+  Evidence: `src/config/mod.rs` (`server.modern_protocol`), `tests/mik_7214_acs.rs`, `tests/mik_7272_subscriptions_acs.rs`, `tests/f24_advertised_capabilities.rs`.
+- **Each caller sees and reaches only what it was granted.** Every discovery surface (tool lists, search, server lists, the direct per-backend route) shows a caller only the backends and tools it could invoke. A newly added backend is unreachable until a key is granted it, and a key with no `backends` reaches nothing. Cached results, idempotent results, backend change notifications and `subscriptions/listen` streams are kept per caller. Caller identity headers count only when they arrive from a source you configured: listed proxy addresses or Cloudflare Access. Evidence: `src/gateway/router/authorization.rs`, `tests/a0_per_caller_cache.rs`, `tests/mik_7272_subscriptions_acs.rs`.
+- **Admins from your identity provider.** A `control_plane.role_mapping` rule with `role: admin` makes a single sign-on (SSO) group or user a full gateway admin. The mapping is read on every request, so removing the rule revokes admin at once, and an admin rule that names only an email domain is refused. Identities from trusted-proxy or Cloudflare Access headers, and mTLS certificates, never confer admin. Key-server rules for OIDC (OpenID Connect, the sign-in protocol most identity providers speak) must name the issuer, and email and domain rules match only an email the provider has verified. Evidence: `src/control_plane/role_mapping.rs`, `src/gateway/router/sso_admin_tests.rs`, `src/key_server/identity_rules_tests.rs`.
+- **An audit log you cannot switch off while auth is on.** Each tool call records who made it (credential kind, key fingerprint, verified issuer and subject), its outcome and its error code. Refused calls are recorded too, and a failed write fails the call instead of letting it through unrecorded. Calls on the direct per-backend route `POST /mcp/{name}` write the same record on the release branch, landed after beta.2. Also landed after beta.2: admin actions (admin meta-tool calls and admin-panel changes, control-plane edits included) are recorded with who made them. An admin meta-tool call is refused when its record cannot be written; an admin-panel change is refused while the log is already failing, and if the write fails after the change ran, the change stands and its response is withheld with 503. Evidence: `tests/d1_audit_required.rs`, `src/gateway/meta_mcp/audit_record_tests.rs`, `src/gateway/router/audit_degraded_tests.rs`, `src/gateway/router/direct_audit_tests.rs`, `src/gateway/router/sso_admin_tests/admin_action.rs`.
+- **Keys and secrets handled as secrets.** API keys are stored as SHA-256 digests (`mcp-gateway hash-key` makes one) with an optional expiry that is enforced. A secret reference that resolves to nothing stops the load instead of sending an empty credential (except `server.metrics_token`, which logs a warning and leaves `/metrics` answering 401 until it is set and the gateway restarted, and a personal-account `client_secret_ref`, which is read only when a token is requested, so a missing one fails that account later rather than the start), and `/metrics` needs its own scrape token. Landed after beta.2: `file:/absolute/path` reads a secret from a file wherever `env:NAME` is accepted. Evidence: `src/config/features/api_key.rs`, `src/config/features/api_key_digest_tests.rs`, `tests/e4_hash_key_cli.rs`.
+- **A config that refuses to start instead of running unsafely.** An unknown config key, a config or env file other users can read (on Unix by file mode, on Windows by the file's access list), and plain HTTP on a network address with auth on each stop the start with an error that names the problem. `server.cleartext_http` declares that the traffic is protected some other way (TLS terminated upstream, host-local publish, or cluster-internal). Evidence: `tests/c1_unrecognised_config_keys.rs`, `src/config/secret_file.rs`, `src/config/secret_file_windows_tests.rs` (Windows), `src/gateway/server/cleartext_tests.rs`.
+- **A Helm chart that starts.** The Kubernetes chart now installs with its default values and serves once the `mcp-gateway-auth` Secret exists (without it the pod stops with CreateContainerConfigError), runs as the image's own non-root user, and defaults to one replica. Evidence: `deploy/helm/mcp-gateway/values.yaml`, `tests/fixtures/helm-golden/`, the `Helm chart lint + render` job in `.github/workflows/ci.yml`.
 
 ## Quick Start
 
@@ -160,14 +158,32 @@ Scans Claude Desktop, Claude Code, Cursor, Zed, Continue.dev, Codex, and running
 
 #### Option B: add servers from the built-in registry
 
-48 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
+35 popular MCP servers are pre-registered with the right command, args, and env-var template. `mcp-gateway add` is compatible with `claude mcp add` and `codex mcp add`:
 
 ```bash
-mcp-gateway add tavily                                       # known server, fills env vars
+mcp-gateway list --available                                 # browse the library: login, on/off
+mcp-gateway add tavily                                       # known server, writes ${TAVILY_API_KEY}
+mcp-gateway add notion                                       # hosted server, logs in with OAuth
 mcp-gateway add my-server -- npx -y @some/mcp-server --flag  # arbitrary stdio command
-mcp-gateway add --url https://mcp.sentry.dev/mcp sentry      # HTTP server
+mcp-gateway add --url https://mcp.example.com/mcp my-server  # HTTP server
 mcp-gateway add -e API_KEY=xxx my-server -- npx my-mcp-server
 ```
+
+The registry is a library. `mcp-gateway init` turns on the servers that need no account (memory,
+sequential-thinking, context7, time); every other server is off until you `add` it:
+
+- A server that needs a key gets `${VAR}` references in `gateway.yaml`. If a variable is not set (in
+  the environment or an `env_files` entry), `add` writes the server disabled and names the variable;
+  set it, then set `enabled: true`.
+- A vendor-hosted server that logs in with OAuth (Notion, Atlassian, Linear, Sentry, ...) opens the
+  login in your browser the first time it is used. A server that takes a token in a header (GitHub,
+  Stripe) gets the header with a `${VAR}` reference.
+- Playwright, Chrome DevTools and fetch are added **disabled**. They can open any address they are
+  given, so a prompt injection in a page or a tool result can steer them to your local network or a
+  cloud metadata address, and the gateway's private-network guard covers REST capabilities only, not
+  these servers. Git is added disabled too: without `--repository <path>` it acts on any repository
+  a call names. Set `enabled: true` on one if you accept that. Both browsers start with a
+  throwaway profile (`--isolated`); do not point them at your everyday browser profile.
 
 `mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one.
 
@@ -187,7 +203,7 @@ backends:
     # `command` is parsed with host-platform rules: POSIX shlex on unix,
     # CommandLineToArgvW on Windows (so `C:\Windows\py.exe …` keeps its
     # backslashes; quote paths that contain spaces).
-    command: "npx -y @anthropic/mcp-server-tavily"
+    command: "npx -y tavily-mcp@0.2.22"
     description: "Web search"
     env:
       TAVILY_API_KEY: "${TAVILY_API_KEY}"
@@ -254,14 +270,24 @@ Modes: `--mode proxy` (HTTP), `--mode stdio` (subprocess), `--mode auto` (probe 
 
 ## Why use MCP Gateway?
 
+- **MCP compatibility layer.** Clients and servers on different MCP revisions work together through the gateway: it negotiates the revision with each side separately, from 2024-11-05 to 2026-07-28. See [MCP compatibility](#mcp-compatibility).
 - **Larger catalog, smaller exposed surface.** The agent loads a fixed meta-surface instead of every backend definition. In the checked-in live run, both paths completed every task, but the meta path used 1.2–16.1% more input tokens and added one turn. See [Benchmarks](docs/BENCHMARKS.md).
 - **Unlimited tools, discovered on demand.** No more choosing which servers fit the budget. The agent searches (`gateway_search_tools`) and invokes (`gateway_invoke`) tools as it needs them.
-- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 110+ capabilities ship built in.
+- **Add any REST API in minutes.** Drop in a YAML file or import an OpenAPI spec with `mcp-gateway cap import`. 130+ capabilities ship built in.
 - **Per-user identity to backends.** Multitenant backends can receive the verified end-user identity with no gateway-stored long-lived credential. See [Multitenant identity](#end-user-identity-v31).
 - **Secure by construction.** A tool-poisoning validator scans every backend tool description before it reaches the agent. SHA-256 capability pinning is optional: unpinned files load, pinned files fail closed on mismatch. OWASP Agentic AI Top 10 coverage is self-assessed in-tree, not a certification. The crate sets `#![deny(unsafe_code)]`, so any unsafe block needs an explicit `#[allow]` opt-in, with optional mTLS, message signing, and agent identity.
 - **Swap your MCP stack without losing your session.** Hot-reload backends and config in about 8ms while the AI stays connected. No restart, no lost context.
 - **Production resilience.** Circuit breakers, retries with backoff, rate limiting, and health checks keep one flaky server from taking down the whole toolchain.
 - **Dual protocol.** MCP plus an A2A (agent-to-agent) transport adapter, so the same gateway routes tool calls and cross-provider agent messages.
+
+### MCP compatibility
+
+The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 (through the `initialize` handshake). It negotiates the revision with the client and with each backend on its own, so a client and a backend on different revisions still work together:
+
+- **Ordinary calls** work across legacy and 2026 clients and backends. An HTTP or stdio backend that rejects the gateway's proposed revision is retried at the highest revision both sides speak. A 2026-only backend that refuses the `initialize` handshake must be reached over HTTP.
+- **A 2026 backend's mid-call questions reach an older client.** The gateway relays them as the `elicitation/create`, `sampling/createMessage` or `roots/list` requests the client already understands, collects the answers, and retries the backend. A 2026 client gets the same questions as a continuation it answers by retrying (over HTTP it needs a verified caller identity).
+
+Limits: the reverse translation is not implemented, so an older backend that sends its own mid-call request is not relayed to any client. A legacy client is refused the 2026-only tasks methods (`-32601`) rather than given an emulation, and the bridge relays only those three request types and refuses the rest. The per-pairing matrix, with the test behind each row, is in [docs/PROTOCOL_COMPATIBILITY.md](docs/PROTOCOL_COMPATIBILITY.md).
 
 ### What MCP Gateway is, and what it is not
 
@@ -345,7 +371,7 @@ flowchart TB
     FS --> B1["Tavily<br/>(stdio)"]
     FS --> B2["Context7<br/>(http)"]
     FS --> B3["Pieces<br/>(sse)"]
-    FS --> B4["REST capabilities<br/>(110+)"]
+    FS --> B4["REST capabilities<br/>(130+)"]
 ```
 
 Single-binary gateway. An AI client talks to the compact meta-surface, and the gateway dynamically discovers and routes to backend tools. Key modules: `gateway/` (core router, OAuth, streaming, UI), `provider/` (MCP/composite/capability), `capability/` (discovery, validation), `transport/` (HTTP, stdio), `security/` (firewall, mTLS, message signing, agent identity, memory scanner), `identity_propagation/`, `key_server/`, `cost_accounting/`, `scheduler/`, `skills/`, `tool_profiles/`, `config_reload/`, and `a2a/` (A2A transport adapter).
@@ -372,11 +398,11 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 
 ### Integration and discovery
 
-The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
+The gateway ships with **130+ built-in capabilities**: weather, Wikipedia, GitHub, stock quotes, package tracking, and more. Capability YAMLs hot-reload automatically after file changes, no restart needed.
 
 | Feature | Description |
 |---------|-------------|
-| **Capability system** | REST API to MCP tool via YAML. Hot-reloaded. [110+ built-in](capabilities/). OpenAPI import supported. |
+| **Capability system** | REST API to MCP tool via YAML. Hot-reloaded. [130+ built-in](capabilities/). OpenAPI import supported. |
 | **Transform chains** | Namespace, filter, rename, and response transforms. [Example](examples/transform-example.yaml). |
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-discovery** | Discover MCP servers from existing client configs and running processes. |
@@ -387,7 +413,7 @@ The gateway ships with **110+ built-in capabilities**: weather, Wikipedia, GitHu
 
 ### Protocol and transport
 
-- **MCP versions**: 2025-11-25 and earlier through the `initialize` handshake, and 2026-07-28 without one (see [What's new in 4.0](#whats-new-in-40)). The handshake negotiates up to 2025-11-25 only, because 2026-07-28 removed it. The 2026-07-28 revision is served on the stateless `POST /mcp` path, where a client names it per request with the `MCP-Protocol-Version` header; it is on by default and switched off with `server.modern_protocol: false`. On stdio, `server/discover` lists only the handshake revisions, but a stdio request that declares its capabilities in its own 2026-style `_meta` gets a 2026 continuation when its backend asks for input mid-call
+- **MCP versions**: 2025-11-25 and earlier through the `initialize` handshake, and 2026-07-28 without one (see [What's new in 4.0](#whats-new-in-40)). The handshake negotiates up to 2025-11-25 only, because 2026-07-28 removed it. The 2026-07-28 revision is served on the stateless `POST /mcp` path, where a client names it per request with the `MCP-Protocol-Version` header; it is on by default and switched off with `server.modern_protocol: false`. On stdio, `server/discover` also lists 2026-07-28 while `server.modern_protocol` is on, and a stdio request that declares its capabilities in its own 2026-style `_meta` gets a 2026 continuation when its backend asks for input mid-call. How mixed client and backend revisions interoperate: [MCP compatibility](#mcp-compatibility)
 - **Backend transports**: stdio, HTTP (Streamable HTTP or SSE), WebSocket (`ws_url`, legacy `initialize` handshake, one shared socket per backend), and A2A (`a2a` feature, on by default)
 - **Client transports**: clients connect via stdio or HTTP (`POST /mcp`); there is no inbound WebSocket listener
 - **Hot reload**: capability YAMLs and backends are watched and reloaded live. `server.public_url` and `control_plane.role_mapping` are re-read per request; everything else needs a restart
@@ -405,7 +431,7 @@ Any MCP-compliant server works. All three transport types are supported:
 
 | Transport | Examples |
 |-----------|---------|
-| **stdio** | `@anthropic/mcp-server-tavily`, `@modelcontextprotocol/server-filesystem`, `@modelcontextprotocol/server-github` |
+| **stdio** | `tavily-mcp@0.2.22`, `@modelcontextprotocol/server-filesystem`, `@playwright/mcp` |
 | **HTTP** | Any Streamable HTTP server |
 | **SSE** | Pieces, LangChain, [GitMCP](https://gitmcp.io) (free remote docs and code search for any GitHub repo) |
 
@@ -439,7 +465,7 @@ mcp-gateway and Anthropic's MCP tunnel sit at different layers and compose. The 
 
 | Concern | Anthropic MCP tunnel | mcp-gateway | Boundary |
 |---|---|---|---|
-| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 110+ REST capabilities plus multiple MCP backends behind a compact 9-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
+| **Backend topology** | Single MCP server per tunnel, exposed through one outbound connection ([overview](https://platform.claude.com/docs/en/agents-and-tools/mcp-tunnels/overview)) | N-backend aggregation: 130+ REST capabilities plus multiple MCP backends behind a compact 9-17 tool meta-surface (`src/gateway/`, `capabilities/*.yaml`) | Different primitive: 1-server reachability vs many-backend aggregation |
 | **Tool routing** | Opaque pass-through; the agent sees whatever tool list the tunneled server publishes | Capability namespacing plus dynamic `gateway_search_tools` / `gateway_invoke` discovery (`src/gateway/`); SHA-256 pinning per capability (`src/capability/hash.rs`) | Different layer: transport reachability vs tool-surface curation and integrity |
 | **Observability** | Per-tunnel session telemetry from Anthropic's side | Unified `trace_id` and cost accounting across every backend invocation (`src/cost_accounting/`, `src/gateway/`) | Scope distinction: per-tunnel session vs cross-backend trace correlation |
 
@@ -523,6 +549,8 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 | [Webhooks](docs/WEBHOOKS.md) | Event integration setup |
 | [Community Registry](docs/COMMUNITY_REGISTRY.md) | Share and install capabilities |
 | [Benchmarks](docs/BENCHMARKS.md) | Performance measurements |
+| [MCP compatibility](docs/PROTOCOL_COMPATIBILITY.md) | Client and backend revision pairings: what works, what is translated, what is refused |
+| [Windows limits](CONTRIBUTING.md#windows-test-coverage) | Unix-only behaviors and what the Windows CI job runs |
 | [Changelog](CHANGELOG.md) | Release history |
 | [OWASP Agentic AI Compliance](docs/OWASP_AGENTIC_AI_COMPLIANCE.md) | Risk coverage matrix |
 | [ShadowRadar](docs/SHADOW_SCAN.md) | Passive local discovery and static network-rule export |
@@ -531,7 +559,7 @@ Reference: [Anthropic SKILL.md spec](https://docs.claude.com/en/docs/claude-code
 
 ## Troubleshooting
 
-**Backend will not connect?** Test the command directly (`npx -y @anthropic/mcp-server-tavily`), then check gateway logs with `--log-level debug`.
+**Backend will not connect?** Test the command directly (`npx -y tavily-mcp@0.2.22`), then check gateway logs with `--log-level debug`.
 
 **Circuit breaker open?** Ask your MCP client for `gateway_list_servers`: it
 reports `circuit_breaker` per backend and works on the shipped config. The HTTP

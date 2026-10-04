@@ -7,9 +7,11 @@ use serde_json::{Value, json};
 
 use crate::idempotency::admission::{Admission, Lease, Mode, Refusal, Request};
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::audit::AuditOutcome;
 use crate::{Error, Result};
 
 use super::MetaMcp;
+use super::effects::{Effect, meta_tool_effect};
 
 #[path = "admission_plan.rs"]
 mod plan;
@@ -17,8 +19,12 @@ mod plan;
 /// Borrowed by inner dispatches, owned by the outer request future. Dropping the
 /// future drops its one lease, including after a transport cancellation.
 pub(crate) struct SyncLease {
-    state: Mutex<(Lease, bool)>,
+    /// The lease and how many dispatches marked it: a composite marks once
+    /// per step.
+    state: Mutex<(Lease, u32)>,
     playbook: Option<crate::playbook::PlaybookDefinition>,
+    /// The invocation record's facts about this execution, kept for a replay.
+    audit: Mutex<Option<ReplayAudit>>,
 }
 
 impl SyncLease {
@@ -27,10 +33,27 @@ impl SyncLease {
         self.playbook.as_ref()
     }
 
+    /// #2472: what this execution's invocation record said, so a replay of
+    /// it is recorded the same way. The last invocation under the lease wins.
+    pub(crate) fn note_audit(&self, audit: ReplayAudit) {
+        *self.audit.lock() = Some(audit);
+    }
+
     pub(crate) fn mark_dispatched(&self) {
         let mut state = self.state.lock();
         state.0.mark_dispatched();
-        state.1 = true;
+        state.1 = state.1.saturating_add(1);
+    }
+
+    /// A dispatch this lease marked was refused before the backend acted (a
+    /// relay caught mid-exchange): unmark it, unless an earlier step of the
+    /// same execution did act, whose protection stays.
+    pub(crate) fn withdraw_dispatch(&self) {
+        let mut state = self.state.lock();
+        state.1 = state.1.saturating_sub(1);
+        if state.1 == 0 {
+            state.0.dispatched = false;
+        }
     }
 
     /// The HTTP owner calls this only after the existing response security
@@ -45,8 +68,9 @@ impl SyncLease {
         response: &JsonRpcResponse,
         signing: Option<&super::signing::SigningInvocationContext>,
     ) {
-        let (lease, dispatched) = self.state.into_inner();
-        if !dispatched
+        let (lease, dispatches) = self.state.into_inner();
+        let audit = self.audit.into_inner();
+        if dispatches == 0
             || response.result.as_ref().is_some_and(|result| {
                 crate::protocol::mrtr::InputRequired::claims_input_required(result)
             })
@@ -63,14 +87,130 @@ impl SyncLease {
         {
             result.remove("_signature");
         }
-        lease.complete_secured(&secured);
+        // A link binds one delivery's nonce and time; a replay mints its own.
+        if let Some(result) = secured.get_mut("result") {
+            crate::security::signature_chain::strip_chain(result);
+        }
+        // A chained backend's upstream links answered this request's nonce, so
+        // its replay is never linked (inc3 R8).
+        let chain = match response.chain_source {
+            _ if response.chain_upstream.is_some() => StoredChain::ChainedBackend,
+            crate::protocol::ChainSource::Backend => StoredChain::Backend,
+            _ => StoredChain::NotEligible,
+        };
+        let stored = StoredDelivery {
+            response: secured,
+            chain,
+            audit,
+            read: crate::security::tenant_reads::in_read_scope()
+                .then(|| crate::security::tenant_reads::noted().unwrap_or_default()),
+        };
+        lease.complete_secured(&serde_json::to_value(stored).unwrap_or(Value::Null));
     }
+}
+
+/// What a sync admission stores: the secured response plus its server-owned
+/// chain eligibility, which the response's own serialization never carries.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredDelivery {
+    response: Value,
+    /// Absent in records written before the chain existed: never eligible.
+    #[serde(default)]
+    chain: StoredChain,
+    /// Absent in records written before #2472, and for calls that wrote no
+    /// invocation record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audit: Option<ReplayAudit>,
+    /// MIK-7116.MIN.2: what the first execution read before any transform,
+    /// restored into a replay's read scope; absent, a replay is unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    read: Option<crate::security::tenant_reads::ReadAttribution>,
+}
+
+/// #2472: the first execution's invocation-record outcome and response hash,
+/// stored server-side beside its secured response. The response a replay
+/// delivers is the wrapped, post-delivery form, so neither can be derived
+/// from it: a wrapped tool error reads as a success.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ReplayAudit {
+    outcome: StoredOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredOutcome {
+    Ok,
+    ToolError,
+    Denied(i32),
+    Invalid(i32),
+    Error(i32),
+}
+
+impl ReplayAudit {
+    pub(crate) fn new(outcome: AuditOutcome, response_hash: Option<String>) -> Self {
+        let outcome = match outcome {
+            AuditOutcome::Ok => StoredOutcome::Ok,
+            AuditOutcome::ToolError => StoredOutcome::ToolError,
+            AuditOutcome::Denied(code) => StoredOutcome::Denied(code),
+            AuditOutcome::Invalid(code) => StoredOutcome::Invalid(code),
+            AuditOutcome::Error(code) => StoredOutcome::Error(code),
+        };
+        Self {
+            outcome,
+            response_hash,
+        }
+    }
+
+    pub(crate) fn outcome(&self) -> AuditOutcome {
+        match self.outcome {
+            StoredOutcome::Ok => AuditOutcome::Ok,
+            StoredOutcome::ToolError => AuditOutcome::ToolError,
+            StoredOutcome::Denied(code) => AuditOutcome::Denied(code),
+            StoredOutcome::Invalid(code) => AuditOutcome::Invalid(code),
+            StoredOutcome::Error(code) => AuditOutcome::Error(code),
+        }
+    }
+
+    pub(crate) fn response_hash(&self) -> Option<&str> {
+        self.response_hash.as_deref()
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum StoredChain {
+    Backend,
+    /// A chained backend's result (inc3 R8): its upstream links answered
+    /// another request's nonce, so a replay is never linked.
+    ChainedBackend,
+    #[default]
+    NotEligible,
+}
+
+/// Decode a stored delivery; a bare response is a record from before the
+/// envelope and replays without a link.
+fn stored_response(bytes: &[u8]) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
+    if let Ok(stored) = serde_json::from_slice::<StoredDelivery>(bytes) {
+        crate::security::tenant_reads::note_restored(stored.read.as_ref());
+        let mut response: JsonRpcResponse = serde_json::from_value(stored.response).ok()?;
+        if stored.chain == StoredChain::Backend {
+            response.chain_source = crate::protocol::ChainSource::Replay;
+        }
+        return Some((response, stored.audit));
+    }
+    crate::security::tenant_reads::note_restored(None);
+    serde_json::from_slice(bytes)
+        .ok()
+        .map(|response| (response, None))
 }
 
 pub(crate) enum SyncAdmission {
     Unprotected,
     Owned(SyncLease),
-    Replay(JsonRpcResponse),
+    /// A completed execution's secured response, and its record facts.
+    Replay(JsonRpcResponse, Option<ReplayAudit>),
 }
 
 /// Gateway controls have the same meaning at both external execution routes.
@@ -111,7 +251,7 @@ impl MetaMcp {
         server: &str,
         tool: &str,
         arguments: &Value,
-        representation: &Value,
+        representation: impl FnOnce() -> Value,
         request_id: &RequestId,
     ) -> Result<SyncAdmission> {
         self.admit_operation(
@@ -145,7 +285,8 @@ impl MetaMcp {
         // Paying for that copy before the branch that decides whether it is
         // needed is what this parameter exists to avoid (NFR.WORKLOAD.1).
         operation: impl FnOnce() -> Value,
-        representation: &Value,
+        // A thunk for the same reason: the unkeyed path never reads it (#613).
+        representation: impl FnOnce() -> Value,
         read_only: bool,
         // (backend, tool) for the un-keyed warn only; never an identity.
         target: (&str, &str),
@@ -187,11 +328,12 @@ impl MetaMcp {
             })
             .ok_or_else(|| Error::json_rpc(-32003, "A verified execution principal is required"))?;
         let operation = operation();
+        let representation = representation();
         let request = Request {
             principal: &principal,
             key,
             operation: &operation,
-            representation,
+            representation: &representation,
             mode: Mode::Sync,
         };
         let round = retry.key_discriminator();
@@ -202,14 +344,16 @@ impl MetaMcp {
         };
         match admission {
             Ok(Admission::Owned(lease)) => Ok(SyncAdmission::Owned(SyncLease {
-                state: Mutex::new((lease, false)),
+                state: Mutex::new((lease, 0)),
                 playbook: None,
+                audit: Mutex::new(None),
             })),
             Ok(Admission::Replay(bytes)) => {
-                let mut response: JsonRpcResponse = serde_json::from_slice(&bytes)
-                    .map_err(|_| Error::json_rpc(409, "Secured execution result is unavailable"))?;
+                let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
+                    Error::json_rpc(409, "Secured execution result is unavailable")
+                })?;
                 response.id = Some(request_id.clone());
-                Ok(SyncAdmission::Replay(response))
+                Ok(SyncAdmission::Replay(response, audit))
             }
             Ok(Admission::InFlight) => {
                 Err(Error::json_rpc(409, "Execution is already in progress"))
@@ -231,6 +375,78 @@ impl MetaMcp {
                 "Execution admission is unavailable",
             )),
         }
+    }
+
+    /// The policy a retained result must pass before it is served: the
+    /// invocation policy of a `gateway_invoke` or surfaced-tool target (#2445).
+    /// Returns the target, if the call names one.
+    fn check_target_policy<'v>(
+        &'v self,
+        caller: &super::MetaMcpCallerContext<'_>,
+        tool_name: &'v str,
+        arguments: &'v Value,
+        session: Option<&str>,
+    ) -> Result<Option<(&'v str, &'v str, Value)>> {
+        let target = if tool_name == "gateway_invoke" {
+            let server =
+                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
+            let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
+            Some((
+                server,
+                tool,
+                crate::gateway::meta_mcp_helpers::parse_tool_arguments(arguments)?,
+            ))
+        } else {
+            self.surfaced_tool_server(tool_name)
+                .map(|server| (server, tool_name, arguments.clone()))
+        };
+        if let Some((server, tool, operation_arguments)) = &target {
+            let (server, tool) = (*server, *tool);
+            if !caller
+                .signing
+                .is_some_and(|context| context.prepared_for(server, tool))
+            {
+                // `gateway_invoke` already arrives as a policy envelope, and it
+                // carries fields the synthesized one cannot reconstruct — the
+                // attestation token among them. Rebuilding it here dropped the
+                // token before enforcement could see it, so a correctly signed
+                // call was refused as unattested. A surfaced tool has no such
+                // envelope, so that branch still synthesizes one.
+                let synthesized;
+                let envelope = if tool_name == "gateway_invoke" {
+                    arguments
+                } else {
+                    synthesized = named_tool_envelope(server, tool, operation_arguments, caller);
+                    &synthesized
+                };
+                if tool_name != "gateway_invoke"
+                    && let Some(absent) = self.withheld_surfaced(server, tool, caller, session)
+                {
+                    return Err(absent);
+                }
+                self.check_invocation_policy(envelope, session, caller)?;
+            }
+        }
+        Ok(target)
+    }
+
+    /// #2450: a task-augmented call skips `admit_meta_sync`, but its durable
+    /// admission can answer a repeat from the stored task, so the same policy
+    /// runs first: the target's invocation policy, else the keyed plan check.
+    pub(crate) fn check_task_admission_policy(
+        &self,
+        caller: &super::MetaMcpCallerContext<'_>,
+        tool_name: &str,
+        arguments: &Value,
+        session: Option<&str>,
+    ) -> Result<()> {
+        if self
+            .check_target_policy(caller, tool_name, arguments, session)?
+            .is_none()
+        {
+            self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+        }
+        Ok(())
     }
 
     /// Protect one outer logical meta invocation, including all its inner steps.
@@ -258,74 +474,31 @@ impl MetaMcp {
             }
         }
         let verified_identity = caller.verified_identity;
-        let credential_principal = caller.credential_principal;
+        // The key owner, not a display principal: for stdio it is the reserved
+        // owner value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
+        let owner_principal = caller.owner_principal();
         let retry = caller.retry;
-        let target = if tool_name == "gateway_invoke" {
-            let server =
-                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
-            let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
-            Some((
-                server,
-                tool,
-                crate::gateway::meta_mcp_helpers::parse_tool_arguments(arguments)?,
-            ))
-        } else {
-            self.surfaced_tool_server(tool_name)
-                .map(|server| (server, tool_name, arguments.clone()))
-        };
-        if let Some((server, tool, mut operation_arguments)) = target {
-            if !caller
-                .signing
-                .is_some_and(|context| context.prepared_for(server, tool))
-            {
-                // `gateway_invoke` already arrives as a policy envelope, and it
-                // carries fields the synthesized one cannot reconstruct — the
-                // attestation token among them. Rebuilding it here dropped the
-                // token before enforcement could see it, so a correctly signed
-                // call was refused as unattested. A surfaced tool has no such
-                // envelope, so that branch still synthesizes one.
-                let synthesized;
-                let envelope = if tool_name == "gateway_invoke" {
-                    arguments
-                } else {
-                    synthesized = named_tool_envelope(server, tool, &operation_arguments, caller);
-                    &synthesized
-                };
-                if tool_name != "gateway_invoke"
-                    && let Some(absent) = self.withheld_surfaced(server, tool, caller, session)
-                {
-                    return Err(absent);
-                }
-                self.check_invocation_policy(envelope, session, caller)?;
-            }
+        // The arm the dispatch will use, so a retry's representation names it.
+        let arm_key = caller.experiment_key(session);
+        if let Some((server, tool, mut operation_arguments)) =
+            self.check_target_policy(caller, tool_name, arguments, session)?
+        {
             let full = execution_arguments(&mut operation_arguments);
             return self.admit_sync(
                 is_modern,
                 verified_identity,
-                credential_principal,
+                owner_principal,
                 retry,
                 server,
                 tool,
                 &operation_arguments,
-                &self.meta_representation(tool_name, full, session),
+                || self.meta_representation(tool_name, full, session, arm_key),
                 id,
             );
         }
         // These compiled discovery/reporting tools do not execute external work.
         // Backend annotations and operator target strings cannot add built-ins.
-        let read_only = matches!(
-            tool_name,
-            "gateway_search"
-                | "gateway_list_servers"
-                | "gateway_list_tools"
-                | "gateway_search_tools"
-                | "gateway_get_stats"
-                | "gateway_cost_report"
-                | "gateway_webhook_status"
-                | "gateway_list_disabled_capabilities"
-                | "gateway_get_profile"
-                | "gateway_list_profiles"
-        );
+        let read_only = meta_tool_effect(tool_name) == Effect::ReadOnly;
         // A retained result is still protected by today's authorization. Plan
         // loading and every target check precede lookup, including mismatches.
         let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
@@ -340,13 +513,13 @@ impl MetaMcp {
         let mut admission = self.admit_operation(
             is_modern,
             verified_identity,
-            credential_principal,
+            owner_principal,
             retry,
             // Already built above, because the playbook digest folds into it.
             // Handed over as a thunk to match the parameter; the saving on this
             // path is the callee's, not the caller's.
             || operation,
-            &self.meta_representation(tool_name, false, session),
+            || self.meta_representation(tool_name, false, session, arm_key),
             read_only,
             ("gateway", tool_name),
             id,
@@ -362,13 +535,30 @@ impl MetaMcp {
         tool_name: &str,
         full: bool,
         session: Option<&str>,
+        // `MetaMcpCallerContext::experiment_key`: the arm keys on the caller (G4).
+        arm_key: Option<&str>,
     ) -> Value {
-        json!({
+        // `gateway_set_profile` changes the profile it would be bound to, so a
+        // bound retry never matches its own stored result. Its output depends
+        // on the target profile, which the operation already carries, and on
+        // the session it names, so it is bound to that session instead.
+        let profile = if tool_name == "gateway_set_profile" {
+            json!({"session": super::session_key(session)})
+        } else {
+            self.active_profile(session).describe()
+        };
+        let mut representation = json!({
             "route": "meta", "tool": tool_name, "full": full,
             "projection": format!("{:?}", self.projection_mode),
-            "profile": self.active_profile(session).describe(),
-            "arm": crate::projection::projection_key_suffix(self.projection_mode, session),
-        })
+            "profile": profile,
+            "arm": crate::projection::projection_key_suffix(self.projection_mode, arm_key),
+        });
+        // State is session-local. Keep the active-profile binding above, and
+        // additionally prevent one session from replaying another's result.
+        if tool_name == "gateway_set_state" {
+            representation["session"] = json!(super::session_key(session));
+        }
+        representation
     }
 
     /// Validate the six management branches before their first possible effect.

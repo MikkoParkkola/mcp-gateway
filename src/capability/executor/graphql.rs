@@ -65,27 +65,21 @@ impl GraphqlExecutor<'_> {
             })?;
 
         // Substitute {param} placeholders in the query template
-        let query = if let Some(obj) = params_obj {
-            let mut q = query;
-            for (key, value) in obj {
-                if key == "query" || key == "variables" {
-                    continue;
-                }
-                let placeholder = format!("{{{key}}}");
-                if q.contains(&placeholder) {
-                    let value_str = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        _ => serde_json::to_string(value).unwrap_or_default(),
-                    };
-                    q = q.replace(&placeholder, &value_str);
-                }
+        // One pass, caller parameters only: a value holding `{other}` is sent
+        // as written, and the query never resolves a secret (MIK-7888).
+        let query = crate::secrets::fill_placeholders(&query, |key| {
+            if key == "query" || key == "variables" {
+                return Ok(None);
             }
-            q
-        } else {
-            query
-        };
+            Ok(params_obj
+                .and_then(|obj| obj.get(key))
+                .map(|value| match value {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    _ => serde_json::to_string(value).unwrap_or_default(),
+                }))
+        })?;
 
         // 2. Merge variables: config defaults + caller overrides
         let mut variables = serde_json::Map::new();

@@ -15,8 +15,14 @@ use sha2::{Digest, Sha256};
 /// Who may resume a streaming session.
 ///
 /// `Credential` carries the validated principal exactly, so ownership equality
-/// is exact. Every caller without one is `Anonymous`, whatever name it carries:
-/// an unvalidated name is not a credential.
+/// is exact. `Subject` is a caller that proved a grant subject (the length-
+/// prefixed `CallerKey` subject form) plus a digest of the credential it
+/// presented, if any (not the principal, which for a delegated bearer is its
+/// stable actor): two people behind one shared key are two owners, and one person's two
+/// credentials are two owners too, because a resumed session's held
+/// credential is overwritten (GH1942.HARDEN.1 row 9). Every caller with
+/// neither is `Anonymous`, whatever name it carries: an unvalidated name is
+/// not a credential.
 ///
 /// Invariant: no operation may select sessions by owner alone when the owner is
 /// `Anonymous`, because that owner spans every anonymous session. Anonymous
@@ -24,6 +30,10 @@ use sha2::{Digest, Sha256};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SessionOwner {
     Credential(String),
+    Subject {
+        key: String,
+        credential: Option<String>,
+    },
     Anonymous,
 }
 
@@ -108,11 +118,10 @@ pub(crate) mod log_capture {
         }
     }
 
-    /// Capture every event at DEBUG and above on this thread until the guard
-    /// drops. Run under a current-thread runtime so spawned tasks log here too.
-    pub(crate) fn capture_debug() -> (Captured, tracing::subscriber::DefaultGuard) {
-        // Global interest keeps a callsite first reached without a scoped
-        // subscriber from being cached as disabled for this one.
+    /// Install a process-wide, always-interested Registry once. A callsite
+    /// first reached without a scoped subscriber is otherwise cached as
+    /// disabled, which makes a later scoped capture order-dependent.
+    pub(crate) fn ensure_global_interest() {
         use tracing_subscriber::prelude::*;
         static INTEREST: std::sync::Once = std::sync::Once::new();
         INTEREST.call_once(|| {
@@ -121,6 +130,12 @@ pub(crate) mod log_capture {
                     .with(tracing::level_filters::LevelFilter::TRACE),
             );
         });
+    }
+
+    /// Capture every event at DEBUG and above on this thread until the guard
+    /// drops. Run under a current-thread runtime so spawned tasks log here too.
+    pub(crate) fn capture_debug() -> (Captured, tracing::subscriber::DefaultGuard) {
+        ensure_global_interest();
         let captured = Captured::default();
         let buffer = Arc::clone(&captured.0);
         let subscriber = tracing_subscriber::fmt()

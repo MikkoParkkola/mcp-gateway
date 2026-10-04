@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/support.rs b/src/gateway/server/support.rs
+index c99f5fe5f..54d0f3261 100644
+--- a/src/gateway/server/support.rs
++++ b/src/gateway/server/support.rs
+@@ -549,7 +549,7 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
+ /// them. A reload's "restart required" advice asks this same function, so it
+ /// cannot promise a restart that the start path would refuse.
+ pub fn start_refusal(config: &Config) -> Option<String> {
+-    super::cleartext::serve_refusal(config).or_else(|| replica_state_refusal(config))
++    super::cleartext::serve_refusal(config)
+ }
+ 
+ /// Per-process state under more than one declared replica (UPGRADING-4.0 §37).

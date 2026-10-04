@@ -171,7 +171,7 @@ fn test_cache() {
     let cache = ResponseCache::new();
     let value = serde_json::json!({"test": true});
 
-    cache.set("key1", &value, 60);
+    cache.set("key1", &value, None, 60);
     assert_eq!(cache.get("key1"), Some(value));
 
     assert_eq!(cache.get("nonexistent"), None);
@@ -961,7 +961,7 @@ async fn redact_url_strips_a_credential_bearing_backend_url() {
         raw.to_string().contains("SECRET-QUERY-VALUE"),
         "reqwest no longer embeds the URL; redact_url may be obsolete: {raw}"
     );
-    let redacted = super::redact_url(raw);
+    let redacted = super::client::redact_url(raw);
     assert!(
         !redacted.to_string().contains("SECRET-QUERY-VALUE"),
         "credential survived redaction: {redacted}"

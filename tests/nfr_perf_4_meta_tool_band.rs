@@ -38,13 +38,16 @@ fn decode_tools_list(response: JsonRpcResponse) -> ToolsListResult {
 }
 
 fn make_reload_context(backends: Arc<BackendRegistry>) -> Arc<ReloadContext> {
-    Arc::new(ReloadContext::new(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/gateway-full.yaml"),
-        Arc::new(LiveConfig::new(Config::default())),
-        backends,
-        FailsafeConfig::default(),
-        Duration::from_secs(300),
-    ))
+    Arc::new(
+        ReloadContext::new(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/gateway-full.yaml"),
+            Arc::new(LiveConfig::new(Config::default())),
+            backends,
+            FailsafeConfig::default(),
+            Duration::from_secs(300),
+        )
+        .expect("the registry pairs with the config"),
+    )
 }
 
 /// A one-step playbook, enough to make the engine non-empty.
@@ -233,5 +236,41 @@ fn nfr_perf_4_1_every_feature_combination_serves_a_surface_inside_the_band() {
         Some(ATTAINABLE_CEILING),
         "some gate configuration must attain {ATTAINABLE_CEILING}, the highest \
          count this build's features allow"
+    );
+}
+
+/// Linear MIK-7217 AC DISCOVER.8 (ledger row `NFR.PERF.4`; the ledger has no
+/// DISCOVER.8) — the floor and the README benchmark the public claims
+/// file publishes cannot move apart from this band. `public_claims_validation.rs`
+/// ties the claims to the served surface; this ties the published minimum to
+/// `BAND`'s floor and the published benchmark to `BAND`'s interior. The claims
+/// file publishes no ceiling, so the ceiling stays pinned by the sweep above.
+#[test]
+fn nfr_perf_4_2_the_band_agrees_with_public_claims_json() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("benchmarks/public_claims.json");
+    let claims: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(&path).expect("benchmarks/public_claims.json must exist"),
+    )
+    .expect("public_claims.json must be valid JSON");
+    let minimum = usize::try_from(
+        claims["meta_tools"]["minimum"]
+            .as_u64()
+            .expect("meta_tools.minimum must be a number"),
+    )
+    .expect("count fits usize");
+    let benchmark = usize::try_from(
+        claims["meta_tools"]["readme_benchmark"]
+            .as_u64()
+            .expect("meta_tools.readme_benchmark must be a number"),
+    )
+    .expect("count fits usize");
+    assert_eq!(
+        minimum,
+        *BAND.start(),
+        "the published minimum must be the floor of {BAND:?}"
+    );
+    assert!(
+        BAND.contains(&benchmark),
+        "the published README benchmark ({benchmark}) must sit inside {BAND:?}"
     );
 }

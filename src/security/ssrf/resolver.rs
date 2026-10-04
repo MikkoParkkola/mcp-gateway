@@ -11,6 +11,7 @@ use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 
+use super::SSRF_BLOCKED;
 use super::is_private_or_reserved;
 use crate::{Error, Result};
 
@@ -74,6 +75,12 @@ impl HostResolver for SystemResolver {
 /// configured-backend exemption.
 pub struct PinningResolver<R = SystemResolver> {
     inner: std::sync::Arc<R>,
+    /// What a resolved address is checked against: `Public` unless a listed
+    /// private backend's client asks for `Private`.
+    policy: super::DestinationPolicy,
+    /// Operator CIDRs reachable although the policy denies them (the events
+    /// client's `callback_allow_private`). Empty for every other caller.
+    allowed: std::sync::Arc<[(IpAddr, u8)]>,
 }
 
 impl<R: HostResolver> PinningResolver<R> {
@@ -81,7 +88,22 @@ impl<R: HostResolver> PinningResolver<R> {
     pub fn new(inner: R) -> Self {
         Self {
             inner: std::sync::Arc::new(inner),
+            policy: super::DestinationPolicy::Public,
+            allowed: std::sync::Arc::new([]),
         }
+    }
+
+    /// Exempt exactly `allowed` from the policy. [`super::destination::ALWAYS_DENIED`]
+    /// stays denied even inside an allowed range.
+    pub(crate) fn with_allowed(mut self, allowed: Vec<(IpAddr, u8)>) -> Self {
+        self.allowed = allowed.into();
+        self
+    }
+
+    /// Check resolved addresses against `policy` instead of `Public`.
+    pub(crate) fn with_policy(mut self, policy: super::DestinationPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 }
 
@@ -90,6 +112,8 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
         let host = name.as_str().to_owned();
         // Clone the Arc so the future is 'static (no borrow of self).
         let inner = std::sync::Arc::clone(&self.inner);
+        let policy = self.policy;
+        let allowed = std::sync::Arc::clone(&self.allowed);
         Box::pin(async move {
             type BoxErr = Box<dyn std::error::Error + Send + Sync>;
             let ips = inner
@@ -98,10 +122,13 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
                 .map_err(|e| Box::new(std::io::Error::other(e.to_string())) as BoxErr)?;
 
             for ip in &ips {
-                if is_private_or_reserved(*ip) {
+                if policy.denies(*ip) && !in_allowed(&allowed, *ip) {
+                    // The address stays in the log: the refusal reaches callers,
+                    // and naming it would answer internal DNS for them.
+                    tracing::warn!(host = %host, address = %ip, "SSRF pin refused a resolved address");
                     let msg =
-                        format!("SSRF blocked: '{host}' resolves to private/reserved address {ip}");
-                    return Err(Box::new(std::io::Error::other(msg)) as BoxErr);
+                        format!("{SSRF_BLOCKED}: '{host}' resolves to a private/reserved address");
+                    return Err(Box::new(SsrfDenied(msg)) as BoxErr);
                 }
             }
 
@@ -111,6 +138,70 @@ impl<R: HostResolver + 'static> reqwest::dns::Resolve for PinningResolver<R> {
             Ok(addrs)
         })
     }
+}
+
+/// Whether `ip` falls inside one of `allowed`; never for an always-denied address.
+pub(crate) fn in_allowed(allowed: &[(IpAddr, u8)], ip: IpAddr) -> bool {
+    // Only what `DestinationPolicy::Private` reaches can be exempted:
+    // loopback, RFC 1918 and unique-local, judged through any IPv4-mapped
+    // form. Link-local (cloud metadata), translation encodings and the
+    // always-denied address stay denied whatever the operator lists.
+    if !super::destination::private_reachable(ip) || super::destination::ALWAYS_DENIED.contains(&ip)
+    {
+        return false;
+    }
+    allowed.iter().any(|&(net, len)| match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(a)) => {
+            let mask = u32::MAX.checked_shl(32 - u32::from(len)).unwrap_or(0);
+            u32::from(n) & mask == u32::from(a) & mask
+        }
+        (IpAddr::V6(n), IpAddr::V6(a)) => {
+            let mask = u128::MAX.checked_shl(128 - u32::from(len)).unwrap_or(0);
+            u128::from(n) & mask == u128::from(a) & mask
+        }
+        _ => false,
+    })
+}
+
+/// The pinning resolver refused an address: a policy answer, not a network
+/// fault, so it is never retried and answers `-32600` (see [`ssrf_denial`]).
+#[derive(Debug)]
+pub(crate) struct SsrfDenied(String);
+
+impl std::fmt::Display for SsrfDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SsrfDenied {}
+
+impl SsrfDenied {
+    /// A refusal raised outside the resolver, such as a redirect hop the
+    /// destination policy refuses, so it is typed the same way (MIK-7701).
+    pub(crate) fn new(reason: String) -> Self {
+        Self(reason)
+    }
+}
+
+/// The [`PinningResolver`] refusal somewhere in `error`'s source chain.
+///
+/// Also looks inside an `io::Error`, whose `source()` skips the error it wraps.
+pub(crate) fn ssrf_denial<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a SsrfDenied> {
+    let mut next = Some(error);
+    while let Some(current) = next {
+        let wrapped = current
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .and_then(|inner| inner.downcast_ref::<SsrfDenied>());
+        if let Some(denied) = current.downcast_ref::<SsrfDenied>().or(wrapped) {
+            return Some(denied);
+        }
+        next = current.source();
+    }
+    None
 }
 
 /// Resolve a domain name and validate all returned IPs against SSRF deny lists.
@@ -134,7 +225,7 @@ pub async fn resolve_and_validate_host<R: HostResolver>(
     for ip in &ips {
         if is_private_or_reserved(*ip) {
             return Err(Error::Protocol(format!(
-                "SSRF blocked: '{host}' resolves to private/reserved address {ip}"
+                "{SSRF_BLOCKED}: '{host}' resolves to a private/reserved address"
             )));
         }
     }

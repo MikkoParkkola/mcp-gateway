@@ -166,7 +166,10 @@ async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slo
     // refuses for a reason that has nothing to do with the pool slot.
     let (headers, binding) = meta
         .caller_credential_for_identity(
-            PLAIN_STATELESS_BACKEND,
+            &meta
+                .backends
+                .get(PLAIN_STATELESS_BACKEND)
+                .expect("the plain stateless backend is registered"),
             crate::identity_propagation::CallerProof::Verified(&alpha_id),
         )
         .await;

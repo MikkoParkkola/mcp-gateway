@@ -105,7 +105,10 @@ struct TaskWire {
     status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     status_message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::protocol::cacheable::serialize_delivered_result"
+    )]
     result: Option<Value>,
     #[serde(
         default,
@@ -200,6 +203,12 @@ impl Task {
         self.wire.status
     }
 
+    /// The keys of an open input round still awaiting an answer.
+    #[must_use]
+    pub(crate) const fn input_requests(&self) -> Option<&Map<String, Value>> {
+        self.wire.input_requests.as_ref()
+    }
+
     /// The completed result; absence never invents an answer.
     #[must_use]
     pub const fn result(&self) -> Option<&Value> {
@@ -231,6 +240,12 @@ impl Task {
             .signed_duration_since(self.wire.created_at)
             .num_milliseconds();
         u64::try_from(age_ms).is_ok_and(|age_ms| age_ms >= ttl_ms)
+    }
+
+    /// When the record last changed: the settle time once it is terminal.
+    #[must_use]
+    pub(crate) const fn last_updated_at(&self) -> DateTime<Utc> {
+        self.wire.last_updated_at
     }
 
     /// A flat public protocol projection; no private model history is exposed.
@@ -435,3 +450,6 @@ mod lifecycle_tests;
 
 #[cfg(test)]
 mod snapshot_tests;
+
+#[cfg(test)]
+mod scope_clamp_tests;

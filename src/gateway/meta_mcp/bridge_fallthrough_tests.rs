@@ -16,6 +16,8 @@ use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
 struct AlwaysAsks {
     calls: Arc<parking_lot::Mutex<Vec<Value>>>,
     method: fn(usize) -> Option<&'static str>,
+    /// How many keys round `n` asks; every key asks `method(n)`.
+    width: fn(usize) -> usize,
 }
 
 /// Every round asks for roots.
@@ -38,7 +40,17 @@ impl crate::transport::Transport for AlwaysAsks {
             calls.len()
         };
         let requests = match (self.method)(n) {
-            Some(method) => json!({ format!("k{n}"): {"method": method} }),
+            Some(method) => (0..(self.width)(n))
+                .map(|i| {
+                    let key = if i == 0 {
+                        format!("k{n}")
+                    } else {
+                        format!("k{n}-{i}")
+                    };
+                    (key, json!({"method": method}))
+                })
+                .collect::<serde_json::Map<_, _>>()
+                .into(),
             None => json!({}),
         };
         Ok(crate::protocol::JsonRpcResponse::success(
@@ -65,6 +77,14 @@ impl crate::transport::Transport for AlwaysAsks {
 fn meta_that_always_asks(
     method: fn(usize) -> Option<&'static str>,
 ) -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
+    meta_asking(method, |_| 1)
+}
+
+/// [`meta_that_always_asks`] with round `n` asking `width(n)` keys.
+fn meta_asking(
+    method: fn(usize) -> Option<&'static str>,
+    width: fn(usize) -> usize,
+) -> (MetaMcp, Arc<parking_lot::Mutex<Vec<Value>>>) {
     use crate::config::{BackendConfig, TransportConfig};
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     let config = BackendConfig {
@@ -88,6 +108,7 @@ fn meta_that_always_asks(
     backend.set_transport_for_test(Arc::new(AlwaysAsks {
         calls: Arc::clone(&calls),
         method,
+        width,
     }));
     let _ = registry.register(backend);
     (MetaMcp::new(registry), calls)
@@ -387,4 +408,167 @@ async fn t3c_the_last_round_is_held_to_the_callers_declaration() {
     let outcome = m.invoke_tool(&args(), Some("session-1"), &caller).await;
     let err = outcome.expect_err("an undeclared last round is refused");
     assert!(err.to_string().contains("did not declare"), "{err}");
+}
+
+/// MIK-7691: the last round is handed back rather than asked, but its requests
+/// still count against the call's budget. Three one-request rounds leave five
+/// of the default eight, so an eight-wide last round is refused.
+#[tokio::test]
+async fn a_wide_last_round_is_held_to_the_request_budget() {
+    let (m, _calls) = meta_asking(ROOTS, |n| if n == last_round() { 8 } else { 1 });
+    let channel = Answering::default();
+    let caller = legacy_caller(&channel, &crate::protocol::mrtr::NO_RETRY);
+    let outcome = m.invoke_tool(&args(), Some("session-1"), &caller).await;
+    assert!(
+        outcome.is_err(),
+        "a last round past the request budget must not be handed back: {outcome:?}"
+    );
+}
+
+/// A backend that asks on its first `tools/call` and answers the retry.
+#[cfg(feature = "firewall")]
+struct AsksThenAnswers {
+    calls: parking_lot::Mutex<usize>,
+}
+
+#[cfg(feature = "firewall")]
+#[async_trait::async_trait]
+impl crate::transport::Transport for AsksThenAnswers {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let first = method == "tools/call" && {
+            let mut calls = self.calls.lock();
+            *calls += 1;
+            *calls == 1
+        };
+        let result = if first {
+            json!({
+                "resultType": "input_required",
+                "inputRequests": {"k1": {"method": "roots/list"}},
+                "requestState": "round-1",
+            })
+        } else {
+            json!({"content": [{"type": "text", "text": "answered"}], "isError": false})
+        };
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            crate::protocol::RequestId::Number(1),
+            result,
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// MIK-7707.GH2431.1: a retry minted for a backend tool that shares a
+/// discovery name takes the direct-backend route, so the Meta-MCP never marks
+/// its response as already inspected and the delivery pass inspects it once.
+/// Were the marker set on that route, the pass would skip it and nothing would
+/// have scanned the result.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() {
+    use crate::gateway::meta_mcp::response_security::{
+        ChainSource, ResponseCorrelation, ResponseDeliveryContext,
+    };
+    use crate::security::firewall::{Firewall, FirewallConfig};
+
+    let (mut m, _calls) = meta_that_always_asks(ROOTS);
+    m.backends
+        .get("asks")
+        .expect("the fixture registers asks")
+        .set_transport_for_test(Arc::new(AsksThenAnswers {
+            calls: parking_lot::Mutex::new(0),
+        }));
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_responses: true,
+            scan_requests: false,
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    m.set_firewall(Some(Arc::clone(&firewall)));
+
+    let channel = NoSessionCounted::default();
+    let first = json!({"server": "asks", "tool": "gateway_list_tools", "arguments": {}});
+    let caller = legacy_caller(&channel, &crate::protocol::mrtr::NO_RETRY);
+    let asked = m
+        .invoke_tool(&first, Some("session-1"), &caller)
+        .await
+        .expect("the first call mints a continuation");
+    let resume = crate::protocol::mrtr::RetryFields {
+        request_state: Some(envelope(&asked)),
+        input_responses: Some(json!({"k1": {"roots": []}})),
+        ..Default::default()
+    };
+    let caller = legacy_caller(&channel, &resume);
+    let before = firewall.response_inspection_counts().inspections;
+
+    let response = m
+        .dispatch_below_gate(
+            crate::protocol::RequestId::Number(2),
+            "gateway_list_tools",
+            json!({}),
+            Some("session-1"),
+            &caller,
+            false,
+        )
+        .await;
+    assert!(response.error.is_none(), "{response:?}");
+    assert!(
+        response
+            .result
+            .as_ref()
+            .is_some_and(|r| r.to_string().contains("answered")),
+        "the retry reached the backend and completed: {response:?}"
+    );
+    assert!(
+        !response.discovery_inspected,
+        "a retry routed to its origin backend is never marked inspected"
+    );
+    assert_eq!(
+        firewall.response_inspection_counts().inspections,
+        before,
+        "dispatch itself inspects nothing; the delivery pass does"
+    );
+    let targets = [crate::security::response_policy::ResponsePolicyTarget {
+        server: "asks".to_owned(),
+        tool: "gateway_list_tools".to_owned(),
+    }];
+    let delivered = m
+        .finalize_response_for_delivery(
+            response,
+            &ResponseDeliveryContext {
+                method: "tools/call",
+                targets: &targets,
+                correlation: ResponseCorrelation {
+                    session_id: "session-1",
+                    caller: "known-caller",
+                    external_server: "gateway",
+                    external_tool: "gateway_list_tools",
+                },
+                mutation: crate::security::response_policy::ResponseMutationPolicy::Redact,
+                signing: None,
+                chain_source: ChainSource::NotEligible,
+                chain_nonce: None,
+            },
+        )
+        .await;
+    assert!(delivered.error.is_none(), "{delivered:?}");
+    assert_eq!(
+        firewall.response_inspection_counts().inspections - before,
+        1,
+        "the delivery pass inspects the retry's result exactly once"
+    );
 }

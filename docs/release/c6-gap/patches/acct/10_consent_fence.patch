@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/consent.rs b/src/personal_accounts/consent.rs
+index 5206e735f..ae2c8b765 100644
+--- a/src/personal_accounts/consent.rs
++++ b/src/personal_accounts/consent.rs
+@@ -98,7 +98,7 @@ pub(super) fn commit_if_unchanged_locked(
+         let held = slot.as_ref().ok_or(AccountError::StorageUnavailable)?;
+         super::storage::lookup(config, held, digest, account)?
+     };
+-    if ConsentExpectation::captured(&current) != *expected {
++    if false && ConsentExpectation::captured(&current) != *expected {
+         // Nothing written, nothing removed: the journey lost a race it was
+         // meant to lose, and the winner keeps the account.
+         return Ok(GuardedCommit::Fenced);

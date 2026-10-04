@@ -312,18 +312,21 @@ fn rechained_forgery_with_stale_sig_fails_signed_verify() {
         .join("\n");
     std::fs::write(tmp.path(), format!("{rewritten}\n")).unwrap();
 
-    // Hash-only verify PASSES — the chain is internally consistent.
+    // The chain is internally consistent, but the edited record is the one
+    // `.hwm` names, so hash-only verify now catches it by the hash at the
+    // mark (MIK-7712); the signature catches it independently of that.
     let plain = verify_log(tmp.path()).unwrap();
-    assert!(
-        plain.ok,
-        "hash-only verify should pass on a re-chained edit: {:?}",
-        plain.error_message
-    );
+    assert!(!plain.ok, "the record at the mark was replaced");
+    let msg = plain.error_message.unwrap_or_default();
+    assert!(msg.contains("high-water mark hash mismatch"), "{msg}");
 
     // Signed verify FAILS at the forged entry — the stale sig is caught.
     let signed = verify_log_signed(tmp.path(), &cfg).unwrap();
     assert!(!signed.ok, "signed verify must reject a stale-sig forgery");
     assert_eq!(signed.error_at_counter, Some(forged_counter));
+    // The signature, not only the mark, is what refuses it here.
+    let msg = signed.error_message.unwrap_or_default();
+    assert!(msg.contains("HMAC sig mismatch"), "{msg}");
 }
 
 // HMAC.1: an intact signed log passes verify_log_signed.

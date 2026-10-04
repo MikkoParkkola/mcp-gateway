@@ -152,8 +152,8 @@ fn both_refusal_sites_share_the_rule() {
     // `tasks/update` directly; mrtr.rs is the one place it is defined.
     let sites = [
         (
-            "meta_mcp/invoke.rs",
-            code_lines(include_str!("invoke.rs")),
+            "meta_mcp/invoke/continuation.rs",
+            code_lines(include_str!("invoke/continuation.rs")),
             ".solicited_input_responses()",
         ),
         (
@@ -161,9 +161,10 @@ fn both_refusal_sites_share_the_rule() {
             code_lines(include_str!("../../protocol/mrtr.rs")),
             "input_responses_nonempty(self.input_responses.as_ref())",
         ),
+        // The `tasks/update` body both transports share (MIK-7272.OWNER.2).
         (
-            "router/handlers/tasks.rs",
-            code_lines(include_str!("../router/handlers/tasks.rs")),
+            "task_route.rs",
+            code_lines(include_str!("../task_route.rs")),
             "mrtr::input_responses_nonempty(",
         ),
     ];
@@ -180,4 +181,43 @@ fn both_refusal_sites_share_the_rule() {
             "{file} defines its own emptiness rule, which can drift from the shared one"
         );
     }
+}
+
+/// #2254 acceptance: the refusal is at the shared `tools/call` entry, so
+/// every meta-tool answers -32602 to stray answers and no chain step or
+/// backend call is dispatched.
+#[tokio::test]
+async fn every_meta_tool_refuses_stray_answers_before_dispatch() {
+    let (registry, calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let fields = retry(Some(json!({"q": {"action": "accept"}})), None);
+    let cases = [
+        (
+            "gateway_execute",
+            json!({"chain": [{"tool": "alpha:read", "arguments": {}}]}),
+        ),
+        ("gateway_search", json!({"query": "read"})),
+        ("gateway_list_tools", json!({"server": "alpha"})),
+        ("gateway_list_servers", json!({})),
+    ];
+    for (tool, args) in cases {
+        let caller = MetaMcpCallerContext {
+            retry: &fields,
+            ..ctx(&AllowAll)
+        };
+        let response = Box::pin(meta.handle_tools_call(
+            crate::protocol::RequestId::Number(1),
+            tool,
+            args,
+            None,
+            caller,
+        ))
+        .await;
+        let text = serde_json::to_string(&response).expect("response is JSON");
+        assert!(
+            text.contains("-32602") && text.contains("requestState"),
+            "{tool} must refuse stray answers with -32602: {text}"
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "a refused call dispatched");
 }

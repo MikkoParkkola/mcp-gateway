@@ -31,6 +31,7 @@ pub(super) fn make_definition(notify: bool) -> WebhookDefinition {
         signature_header: None,
         notify,
         transform: WebhookTransform::default(),
+        event: None,
     }
 }
 
@@ -51,6 +52,7 @@ pub(super) fn make_handler_state(
         env: Arc::new(crate::config::LiveEnv::default()),
         backend: "capabilities".to_string(),
         limiter: None,
+        events: None,
     }
 }
 
@@ -231,6 +233,7 @@ pub(super) fn make_capability_with_webhooks(
                 secret: None,
                 signature_header: None,
                 notify: *notify,
+                event: None,
                 transform: WebhookTransform::default(),
             },
         );
@@ -570,7 +573,7 @@ fn open_session(
     multiplexer: &NotificationMultiplexer,
     id: &str,
     bearer: Option<&str>,
-) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::TaggedNotification> {
+) -> tokio::sync::broadcast::Receiver<crate::gateway::streaming::SessionFrame> {
     let owner = crate::gateway::session_id::SessionOwner::Credential(id.to_string());
     multiplexer
         .get_or_create_session_scoped(Some(id), &owner, bearer.and_then(held))
@@ -760,5 +763,26 @@ async fn a_dashboard_session_receives_webhook_data_only_on_an_issued_handle() {
     assert!(
         rx_forged.try_recv().is_err(),
         "a handle this process never issued authenticates nobody"
+    );
+}
+
+#[path = "message_clamp_tests.rs"]
+mod message_clamp;
+
+#[test]
+fn a_reload_keeps_the_rate_limit_bucket_of_a_route_that_stays() {
+    let config = WebhookConfig {
+        rate_limit: 1,
+        ..WebhookConfig::default()
+    };
+    let mut registry = WebhookRegistry::new(config);
+    let cap = make_capability_with_webhooks("c", &[("hook", "/hook", false)]);
+    registry.register_capability(&cap);
+    let before = registry.limiters.values().next().cloned().expect("limiter");
+    registry.replace_capabilities(std::slice::from_ref(&cap));
+    let after = registry.limiters.values().next().cloned().expect("limiter");
+    assert!(
+        Arc::ptr_eq(&before, &after),
+        "a reload hands out no fresh quota"
     );
 }

@@ -68,6 +68,8 @@ async fn finalize(
             },
             mutation: ResponseMutationPolicy::Redact,
             signing,
+            chain_source: super::super::response_security::ChainSource::NotEligible,
+            chain_nonce: None,
         },
     )
     .await
@@ -727,3 +729,6 @@ async fn finalize_gateway_invoke_response_preserves_defensive_bypasses() {
         .expect("enabled positive control");
     verify(&signed, Some(NONCE)).expect("independent MAC of enabled control");
 }
+
+#[path = "signing_delivery_scope_tests.rs"]
+mod scope_tests;

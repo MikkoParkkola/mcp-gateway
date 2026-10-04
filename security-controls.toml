@@ -53,16 +53,24 @@ module = "src/security/audit_rotation_config.rs"
 reason = "the audit log's rotation settings and their load-time bounds; configuration, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/posture.rs"
+reason = "the security.posture switch raises other controls' settings at load; it refuses no request, and the controls it raises have their own rows"
+
+[[coverage.not_a_control]]
 module = "src/security/transparency_log_append.rs"
 reason = "the write half of the transparency-log control (rotation trigger, reserve, high-water mark); the control row names transparency_log.rs"
 
 [[coverage.not_a_control]]
-module = "src/security/signature_chain.rs"
-reason = "ASI07 chain signing and verification with no caller yet; it becomes a control row when the invoke paths enforce it (design increment 2)"
+module = "src/security/transparency_log_attributed.rs"
+reason = "the invocation-record writer of the transparency-log control, with MIK-7116.MIN.1 tenant attribution fields; it adds fields to a record and refuses no call; the control row names transparency_log.rs"
 
 [[coverage.not_a_control]]
 module = "src/security/transparency_log_segments.rs"
 reason = "segment file naming, listing and the high-water mark codec; a helper for rotation and verify, not a gate"
+
+[[coverage.not_a_control]]
+module = "src/security/security_metrics.rs"
+reason = "D4 counters for refused credentials and calls; it counts decisions the gates already made and refuses nothing"
 
 # --- request-path gates, NFR.SEC.1 inventory rows 1-14 ---
 
@@ -247,6 +255,13 @@ reason = "requires a modern-protocol frame; -32601 also answers a method the bui
 # absent one proves nothing about either.
 
 [[control]]
+id = "signature-chain-strip"
+description = "a signature chain a backend puts on its result is stripped before delivery; only this gateway's own origin link reaches the client"
+source = "src/security/signature_chain.rs"
+probe = "none"
+reason = "the negative half needs a backend that forges a chain; a live install has none to aim at, so the strip is pinned by the chain_strip and chain_direct tests"
+
+[[control]]
 id = "request-firewall"
 description = "shell, traversal and anomaly payloads are blocked before dispatch (-32002)"
 source = "src/security/firewall"
@@ -345,6 +360,13 @@ probe = "none"
 reason = "an on-disk property of the log; nothing on the wire changes when it rotates"
 
 [[control]]
+id = "audit-log-hwm-missing"
+description = "a restart that finds the audit log's high-water mark missing, or a record it cannot verify, chains audit_segment_hwm_missing and carries it on every later open record, so live verify fails (#2294)"
+source = "src/security/transparency_log_hwm_scan.rs"
+probe = "none"
+reason = "an on-disk property of the log; nothing on the wire changes when it is recorded"
+
+[[control]]
 id = "audit-writer-lease"
 description = "one gateway process writes an audit log path: the log holds an exclusive lease on <path>.lock for its whole life, and a second writer is refused at startup after a bounded wait, whatever the auth setting"
 source = "src/security/transparency_log_lease.rs"
@@ -378,6 +400,13 @@ description = "an identity header from an unproven source is refused: trusted_pr
 source = "src/security/caller_identity.rs"
 probe = "none"
 reason = "config-gated on `security.caller_identity.mode`, off by default, and the refusals run in `src/gateway/router/identity.rs`; a probe cannot tell `off` from absent, and cannot pose as a trusted proxy peer"
+
+[[control]]
+id = "cross-tenant-read-verdict"
+description = "with tenant_guard.arg_keys set, a frame naming a second tenant for one caller_key inside the window is flagged (observe) or withheld (block); MIK-7116.MIN.2"
+source = "src/security/tenant_reads.rs"
+probe = "none"
+reason = "config-gated on tenant_guard.arg_keys and cross_tenant_reads, unset and observe by default; a probe cannot tell an unconfigured install from an absent control, and the negative half needs two tenants' data on a live install"
 
 # --- build-time ---
 

@@ -22,6 +22,7 @@
 //! which the gateway's TLS verifier honours on that branch alone (see
 //! `task_upstream_recovery_sdk/pins.rs`). macOS CI builds tests without
 //! running them.
+// Unix-non-Apple only: SIGKILL and SSL_CERT_FILE; see the module header.
 #![cfg(all(unix, not(target_vendor = "apple")))]
 
 #[path = "task_upstream_recovery/helper.rs"]
@@ -45,7 +46,7 @@ use serde_json::{Value, json};
 
 use helper::{
     BACKEND, Fixture, Gateway, MARKER, OBSERVE_BOUND, POLL_GAP, PeerGuard, Upstream,
-    durable_record, free_port, modern, record_status, serve_peer, status_of, store_dir, task_id_of,
+    durable_record, modern, record_status, serve_peer, status_of, store_dir, task_id_of,
     task_invoke, tasks_get, write_config,
 };
 
@@ -91,8 +92,8 @@ impl Principals {
     }
 
     /// The gateway child, trusting only this run's issuer CA.
-    fn gateway(&self, root: &Path, config: &Path, port: u16, log_name: &str) -> Gateway {
-        self.gateway_with(root, config, port, log_name, &[])
+    fn gateway(&self, root: &Path, config: &Path, log_name: &str) -> Gateway {
+        self.gateway_with(root, config, log_name, &[])
     }
 
     /// [`Self::gateway`] with extra environment for the child.
@@ -100,29 +101,22 @@ impl Principals {
         &self,
         root: &Path,
         config: &Path,
-        port: u16,
         log_name: &str,
         extra: &[(&str, &str)],
     ) -> Gateway {
         let mut env = vec![("SSL_CERT_FILE", self.ca.as_str())];
         env.extend_from_slice(extra);
-        Gateway::start_with_env(root, config, port, log_name, &env)
+        Gateway::start_with_env(root, config, log_name, &env)
     }
 }
 
 /// The shared fixture config with authentication ON and two principals. With
 /// it off every caller is one principal and no owner check can fail.
-fn config_with_two_principals(
-    root: &Path,
-    port: u16,
-    peer: &PeerGuard,
-    principals: &Principals,
-) -> PathBuf {
+fn config_with_two_principals(root: &Path, peer: &PeerGuard, principals: &Principals) -> PathBuf {
     let path = write_config(
         root,
         &Fixture {
             name: "gateway.yaml",
-            port,
             backend_url: &peer.url,
             adapters: vec![BACKEND.into()],
             forbid_marker: false,
@@ -206,11 +200,10 @@ async fn first_record(root: &Path) -> String {
 async fn create_then_kill_discarding_the_ack(
     root: &Path,
     config: &Path,
-    port: u16,
     client: &reqwest::Client,
     principals: &Principals,
 ) -> String {
-    let mut gateway = principals.gateway(root, config, port, "first.log");
+    let mut gateway = principals.gateway(root, config, "first.log");
     gateway.wait_until_ready(client).await;
     let body = task_invoke(1, IDEMPOTENCY_KEY);
     let task_id = {
@@ -273,25 +266,15 @@ async fn refused_like_a_never_minted_id(
 /// discarded. After a restart, principal A's byte-identical retry recovers the
 /// same handle, A can read it, B cannot, and nothing is submitted twice.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
+async fn a_create_with_a_discarded_ack_is_recovered_by_its_owner_only() {
     let root = temp_root("crash-create-ack");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let principals = Principals::start(root.path()).await;
-    let config = config_with_two_principals(root.path(), port, &peer, &principals);
+    let config = config_with_two_principals(root.path(), &peer, &principals);
     let client = client();
     let task_id =
-        create_then_kill_discarding_the_ack(root.path(), &config, port, &client, &principals).await;
-    recovered_by_its_owner_only(
-        root.path(),
-        &config,
-        port,
-        &client,
-        &peer,
-        &principals,
-        &task_id,
-    )
-    .await;
+        create_then_kill_discarding_the_ack(root.path(), &config, &client, &principals).await;
+    recovered_by_its_owner_only(root.path(), &config, &client, &peer, &principals, &task_id).await;
 }
 
 /// Create boundary, pinned (#2298): the child is held at `Published`, after
@@ -301,16 +284,14 @@ async fn a_create_killed_before_its_ack_is_recovered_by_its_owner_only() {
 async fn a_create_killed_between_commit_and_ack_is_recovered_by_its_owner_only() {
     let root = temp_root("crash-create-published");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let principals = Principals::start(root.path()).await;
-    let config = config_with_two_principals(root.path(), port, &peer, &principals);
+    let config = config_with_two_principals(root.path(), &peer, &principals);
     let client = client();
     let marker = root.path().join("paused-at-published");
     let marker_env = marker.display().to_string();
     let mut gateway = principals.gateway_with(
         root.path(),
         &config,
-        port,
         "paused.log",
         &[("MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED", marker_env.as_str())],
     );
@@ -331,19 +312,13 @@ async fn a_create_killed_between_commit_and_ack_is_recovered_by_its_owner_only()
         id = tokio::time::timeout(OBSERVE_BOUND, paused) => {
             id.expect("the child pauses at Published within the bound")
         }
-        answer = create => panic!("the create was answered while paused at Published: {answer}"),
+        answer = create => panic!(
+            "the create was answered while paused at Published: {answer}\n{}",
+            gateway.logs()
+        ),
     };
     gateway.kill().await;
-    recovered_by_its_owner_only(
-        root.path(),
-        &config,
-        port,
-        &client,
-        &peer,
-        &principals,
-        &task_id,
-    )
-    .await;
+    recovered_by_its_owner_only(root.path(), &config, &client, &peer, &principals, &task_id).await;
 }
 
 /// After a create was killed before its ack: a restart over the same store,
@@ -353,7 +328,6 @@ async fn a_create_killed_between_commit_and_ack_is_recovered_by_its_owner_only()
 async fn recovered_by_its_owner_only(
     root: &Path,
     config: &Path,
-    port: u16,
     client: &reqwest::Client,
     peer: &PeerGuard,
     principals: &Principals,
@@ -361,7 +335,7 @@ async fn recovered_by_its_owner_only(
 ) {
     let on_disk = durable_record(root, task_id);
 
-    let mut restarted = principals.gateway(root, config, port, "second.log");
+    let mut restarted = principals.gateway(root, config, "second.log");
     restarted.wait_until_ready(client).await;
 
     refused_like_a_never_minted_id(&restarted, client, peer, "tasks/get", task_id, principals)
@@ -421,15 +395,14 @@ async fn a_restart_over_an_empty_store_does_not_recover_the_handle() {
     let root = temp_root("crash-create-ack-control");
     let empty = temp_root("crash-create-ack-empty");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let principals = Principals::start(root.path()).await;
-    let config = config_with_two_principals(root.path(), port, &peer, &principals);
+    let config = config_with_two_principals(root.path(), &peer, &principals);
     let client = client();
     let task_id =
-        create_then_kill_discarding_the_ack(root.path(), &config, port, &client, &principals).await;
+        create_then_kill_discarding_the_ack(root.path(), &config, &client, &principals).await;
 
-    let empty_config = config_with_two_principals(empty.path(), port, &peer, &principals);
-    let mut restarted = principals.gateway(empty.path(), &empty_config, port, "second.log");
+    let empty_config = config_with_two_principals(empty.path(), &peer, &principals);
+    let mut restarted = principals.gateway(empty.path(), &empty_config, "second.log");
     restarted.wait_until_ready(&client).await;
 
     let read = restarted
@@ -464,12 +437,11 @@ async fn a_restart_over_an_empty_store_does_not_recover_the_handle() {
 async fn kill_before_settlement(
     root: &Path,
     config: &Path,
-    port: u16,
     client: &reqwest::Client,
     peer: &PeerGuard,
     principals: &Principals,
 ) -> String {
-    let mut gateway = principals.gateway(root, config, port, "first.log");
+    let mut gateway = principals.gateway(root, config, "first.log");
     gateway.wait_until_ready(client).await;
     let created = gateway
         .post_as(
@@ -482,7 +454,7 @@ async fn kill_before_settlement(
     peer.peer.wait_for_queries(1).await;
     gateway.kill().await;
 
-    let mut restarted = principals.gateway(root, config, port, "second.log");
+    let mut restarted = principals.gateway(root, config, "second.log");
     restarted.wait_until_ready(client).await;
     refused_like_a_never_minted_id(&restarted, client, peer, "tasks/get", &task_id, principals)
         .await;
@@ -507,13 +479,12 @@ async fn kill_before_settlement(
 async fn kill_after_settlement(
     root: &Path,
     config: &Path,
-    port: u16,
     client: &reqwest::Client,
     peer: &PeerGuard,
     task_id: &str,
     principals: &Principals,
 ) -> Value {
-    let mut gateway = principals.gateway(root, config, port, "third.log");
+    let mut gateway = principals.gateway(root, config, "third.log");
     gateway.wait_until_ready(client).await;
     peer.peer.set(Upstream::Completed);
     let settled = gateway
@@ -545,23 +516,13 @@ async fn kill_after_settlement(
 async fn a_settled_outcome_survives_kills_on_both_sides_of_settlement() {
     let root = temp_root("crash-settlement");
     let peer = serve_peer(Upstream::Working).await;
-    let port = free_port();
     let principals = Principals::start(root.path()).await;
-    let config = config_with_two_principals(root.path(), port, &peer, &principals);
+    let config = config_with_two_principals(root.path(), &peer, &principals);
     let client = client();
 
-    let task_id =
-        kill_before_settlement(root.path(), &config, port, &client, &peer, &principals).await;
-    let settled = kill_after_settlement(
-        root.path(),
-        &config,
-        port,
-        &client,
-        &peer,
-        &task_id,
-        &principals,
-    )
-    .await;
+    let task_id = kill_before_settlement(root.path(), &config, &client, &peer, &principals).await;
+    let settled =
+        kill_after_settlement(root.path(), &config, &client, &peer, &task_id, &principals).await;
     assert!(
         settled.to_string().contains(MARKER),
         "the settled payload is the peer's own: {settled}"
@@ -572,7 +533,7 @@ async fn a_settled_outcome_survives_kills_on_both_sides_of_settlement() {
     // seen, and could not rebuild the payload from upstream.
     let queries = peer.peer.queries();
     peer.peer.set(Upstream::Unavailable);
-    let mut restarted = principals.gateway(root.path(), &config, port, "fourth.log");
+    let mut restarted = principals.gateway(root.path(), &config, "fourth.log");
     restarted.wait_until_ready(&client).await;
     let read = restarted
         .post_as(

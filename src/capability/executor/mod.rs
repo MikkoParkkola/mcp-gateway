@@ -17,12 +17,20 @@
 //! - `file:/path/to/file.json:field` - JSON file with dot-path field extraction
 //! - `{env.VAR}` - Template format for environment variables
 
+mod cli;
+mod cli_argv;
+mod cli_run;
 mod client;
 mod credentials;
 pub mod graphql;
 pub mod jsonrpc;
+mod mcp;
 mod params;
+mod process;
+mod readiness;
 pub mod rest;
+mod save_file;
+pub use save_file::SaveFileSpec;
 mod xml;
 
 use std::sync::Arc;
@@ -45,6 +53,7 @@ use crate::oauth::{TokenInfo, TokenStorage};
 use crate::secrets::SecretResolver;
 use crate::transform::TransformPipeline;
 use crate::{Error, Result};
+use client::send_with_retry;
 
 /// Executor for capability REST calls
 pub struct CapabilityExecutor {
@@ -81,96 +90,14 @@ pub struct CapabilityExecutor {
     /// the ONE registry the shared installer wrote to — not a second store.
     pub(super) account_strategies:
         Option<Arc<crate::identity_propagation::AccountStrategyRegistry>>,
-}
-
-/// Maximum number of send attempts (1 initial + 2 retries) for transient
-/// outbound transport failures.
-pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
-
-/// Send an outbound HTTP request, retrying transient transport failures with
-/// exponential backoff, and recording the transport outcome on `health`.
-///
-/// Capability calls run inside the gateway's own tokio runtime, so a transient
-/// connect failure reaching an upstream (e.g. a momentary blip reaching
-/// `api.linear.app` under host load) otherwise surfaces directly as a
-/// `BACKEND_ERROR` to the caller (MIK-5081).
-///
-/// Retry policy:
-/// - **Connection** failures are always retried — no request bytes were sent,
-///   so a retry is side-effect-free.
-/// - **Timeout** failures are retried only when `retry_timeouts` is true (i.e.
-///   the request is idempotent). A timeout on a non-idempotent POST may mean
-///   the upstream already processed it, so blindly replaying it could duplicate
-///   a side effect.
-/// - HTTP error *statuses* (4xx/5xx) are returned unchanged (never retried) and
-///   count as a live backend for health purposes.
-///
-/// Health: a transport success (any HTTP status) records success; exhausting
-/// retries records a failure. The request is cloned per attempt; a
-/// non-cloneable body is sent once.
-/// Render an outbound transport error without the URL it was built from.
-///
-/// `reqwest::Error`'s `Display` appends `" for url (...)"` verbatim
-/// (`reqwest-0.13.4/src/error.rs:279-280`), and reqwest's own docs on
-/// [`reqwest::Error::without_url`] warn that the URL may carry a credential.
-/// Backend URLs here are operator-configured and a query-string API key is a
-/// common shape, so the raw error must never reach a log sink or a client.
-fn redact_url(e: reqwest::Error) -> reqwest::Error {
-    e.without_url()
-}
-
-pub(super) async fn send_with_retry(
-    request: reqwest::RequestBuilder,
-    label: &str,
-    retry_timeouts: bool,
-    health: &crate::failsafe::HealthTracker,
-) -> Result<reqwest::Response> {
-    let started = std::time::Instant::now();
-    let mut backoff_ms: u64 = 100;
-    for attempt in 1..=MAX_SEND_ATTEMPTS {
-        let Some(attempt_req) = request.try_clone() else {
-            // Non-cloneable body: a single attempt is the best we can do.
-            return match request.send().await {
-                Ok(resp) => {
-                    health.record_success(started.elapsed());
-                    Ok(resp)
-                }
-                Err(e) => {
-                    health.record_failure();
-                    Err(Error::Transport(format!(
-                        "{label} failed: {}",
-                        redact_url(e)
-                    )))
-                }
-            };
-        };
-        match attempt_req.send().await {
-            Ok(resp) => {
-                health.record_success(started.elapsed());
-                return Ok(resp);
-            }
-            Err(e) => {
-                let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
-                let e = redact_url(e);
-                if transient && attempt < MAX_SEND_ATTEMPTS {
-                    tracing::warn!(
-                        label = label,
-                        attempt = attempt,
-                        backoff_ms = backoff_ms,
-                        error = %e,
-                        "transient outbound transport error; retrying"
-                    );
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms *= 2;
-                    continue;
-                }
-                health.record_failure();
-                return Err(Error::Transport(format!("{label} failed: {e}")));
-            }
-        }
-    }
-    // The final attempt always returns above; the loop cannot fall through.
-    unreachable!("send_with_retry exhausted attempts without returning")
+    /// What `service: cli`/`mcp` capabilities may run (MIK-7782).
+    pub(super) process_policy: process::ProcessPolicy,
+    /// Per-capability bound on simultaneous CLI children.
+    pub(super) process_slots: DashMap<String, Arc<tokio::sync::Semaphore>>,
+    /// Per-caller MCP capability children (MIK-7782).
+    pub(super) mcp_children: Arc<mcp::McpChildren>,
+    /// Mirrors the capability backend's multi-user flag.
+    pub(super) multi_user: std::sync::atomic::AtomicBool,
 }
 
 impl CapabilityExecutor {
@@ -192,6 +119,10 @@ impl CapabilityExecutor {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -204,6 +135,7 @@ impl CapabilityExecutor {
     #[must_use]
     pub fn for_config(config: &crate::config::CapabilityConfig) -> Self {
         let mut executor = Self::new();
+        executor.process_policy = process::ProcessPolicy::from_config(config);
         if let Ok(Some(proxy)) = config.egress_proxy_url() {
             tracing::warn!(
                 proxy = %crate::config::CapabilityConfig::egress_proxy_for_log(&proxy),
@@ -215,11 +147,34 @@ impl CapabilityExecutor {
         executor
     }
 
+    /// Whether several callers share this gateway (set with the capability
+    /// backend's flag): an MCP capability then needs an identified caller.
+    pub fn set_multi_user(&self, multi_user: bool) {
+        self.multi_user
+            .store(multi_user, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Stop the MCP children of every capability `loaded` rejects.
+    pub(crate) fn stop_unloaded_mcp(&self, loaded: &dyn Fn(&str) -> bool) {
+        self.mcp_children.evict(std::time::Duration::MAX, loaded);
+    }
+
     /// Share the gateway policy epoch so capability reload can bump it.
     #[must_use]
     pub fn with_policy_epoch(mut self, epoch: Arc<std::sync::atomic::AtomicU64>) -> Self {
         self.policy_epoch = Some(epoch);
         self
+    }
+
+    /// The MCP revocation generation of one capability.
+    pub(crate) fn mcp_generation(&self, capability: &str) -> u64 {
+        self.mcp_children.generation(capability)
+    }
+
+    /// Revoke the calls of one capability that read an earlier generation
+    /// (unload, removal or edit on reload, quarantine).
+    pub(crate) fn bump_mcp_generation(&self, capability: &str) {
+        self.mcp_children.bump_generation(capability);
     }
 
     /// Advance the shared epoch after a capability-registry mutation is visible.
@@ -309,6 +264,10 @@ impl CapabilityExecutor {
             env: Arc::new(crate::config::LiveEnv::default()),
             policy_epoch: None,
             account_strategies: None,
+            process_policy: process::ProcessPolicy::default(),
+            process_slots: DashMap::new(),
+            mcp_children: Arc::default(),
+            multi_user: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -399,11 +358,22 @@ impl CapabilityExecutor {
             return Ok(cached);
         }
 
-        // Route through the protocol executor trait.
-        let protocol_config = provider.protocol_config();
-        let response = self
-            .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
-            .await?;
+        // A process-running provider (MIK-7782) has its own executor; every
+        // other provider routes through the protocol executor trait.
+        let (response, protocol) =
+            if let Some(process) = capability.providers.process.get("primary") {
+                let response = self
+                    .execute_process(capability, process, &params, &context)
+                    .await?;
+                (response, provider.service.as_str())
+            } else {
+                let protocol_config = provider.protocol_config();
+                let response = self
+                    .dispatch_protocol(capability, provider, &protocol_config, &params, &context)
+                    .await?;
+                (response, protocol_config.protocol_name())
+            };
+        let read = crate::security::tenant_reads::note_read(&response);
 
         // Apply response transform pipeline if configured
         let response = {
@@ -420,12 +390,12 @@ impl CapabilityExecutor {
         tracing::info!(
             latency_ms = latency.as_millis(),
             provider = %provider.service,
-            protocol = %protocol_config.protocol_name(),
+            protocol = %protocol,
             "Capability executed successfully"
         );
 
-        if let Some(ref cache_key) = cache_key {
-            self.cache.set(cache_key, &response, capability.cache.ttl);
+        if let Some(key) = &cache_key {
+            self.cache.set(key, &response, read, capability.cache.ttl);
         }
 
         Ok(response)
@@ -502,7 +472,9 @@ impl CapabilityExecutor {
 
         // Merge static_params (capability-defined fixed values) with caller params.
         // Caller-supplied values always win on key collision.
-        let effective_params = config.merge_with_static_params(params);
+        let merged = config.merge_with_static_params(params);
+        let effective_params =
+            params::with_path_defaults(config, &capability.schema.input, merged.as_ref());
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
@@ -572,13 +544,25 @@ impl CapabilityExecutor {
         )
         .await?;
 
-        self.handle_response(response, config).await
+        let body = self.handle_response(response, config).await?;
+        match &config.save_file {
+            Some(spec) => {
+                Box::pin(save_file::save(
+                    spec,
+                    &body,
+                    params,
+                    &self.process_policy.files,
+                ))
+                .await
+            }
+            None => Ok(body),
+        }
     }
 
     /// Build URL with path parameter substitution.
     #[allow(clippy::unused_self)]
     fn build_url(&self, config: &RestConfig, params: &Value) -> Result<String> {
-        let mut url = if config.uses_endpoint() {
+        let url = if config.uses_endpoint() {
             config.endpoint.clone()
         } else {
             let path = if let Some(selector) = &config.path_selector {
@@ -607,22 +591,16 @@ impl CapabilityExecutor {
             format!("{}{path}", config.base_url)
         };
 
-        if let Value::Object(map) = params {
-            for (key, value) in map {
-                let placeholder = format!("{{{key}}}");
-                if url.contains(&placeholder) {
-                    let value_str = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        _ => serde_json::to_string(value).unwrap_or_default(),
-                    };
-                    url = url.replace(&placeholder, &value_str);
-                }
-            }
-        }
-
-        Ok(url)
+        // One pass, caller parameters only: a value holding `{other}` is sent
+        // as written, and the URL never resolves a secret (MIK-7888).
+        crate::secrets::fill_placeholders(&url, |key| {
+            Ok(params.get(key).map(|value| match value {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => serde_json::to_string(value).unwrap_or_default(),
+            }))
+        })
     }
 
     /// Build headers with credential injection.
@@ -638,9 +616,14 @@ impl CapabilityExecutor {
         for (name, value_template) in &config.headers {
             let value = self.substitute_string(value_template, params)?;
 
-            // Skip Authorization headers with unresolved {access_token} —
-            // inject_auth will handle auth from the credential key.
-            if name.eq_ignore_ascii_case("authorization") && value.contains("{access_token}") {
+            // Skip an Authorization header whose TEMPLATE names {access_token}
+            // with no access_token parameter to fill it; inject_auth handles
+            // auth from the credential key. The value is not consulted: a
+            // resolved secret may contain that text (MIK-7888).
+            if name.eq_ignore_ascii_case("authorization")
+                && value_template.contains("{access_token}")
+                && params.get("access_token").is_none()
+            {
                 continue;
             }
 
@@ -802,6 +785,12 @@ impl Default for CapabilityExecutor {
     }
 }
 
+#[cfg(test)]
+mod ssrf_denial_tests;
+
+#[cfg(test)]
+#[path = "gws_real_tests.rs"]
+mod gws_real_tests;
 #[cfg(test)]
 #[path = "../executor_tests.rs"]
 mod tests;

@@ -22,7 +22,7 @@ use mcp_gateway::attestation::{
 const KEY: &[u8] = b"mik-5223-integration-test-key";
 
 fn signer() -> BnautAttestationSigner {
-    BnautAttestationSigner::new(KEY.to_vec(), "integration")
+    BnautAttestationSigner::new(KEY.to_vec(), "integration").with_audience("test-gateway")
 }
 
 fn validator() -> Arc<AttestationValidator> {
@@ -67,7 +67,8 @@ fn ac_1_sandbox_boot_fails_closed_without_valid_token() {
 
     // An invalid (forged) token = no start either.
     let forged = {
-        let other = BnautAttestationSigner::new(b"attacker-key".to_vec(), "evil");
+        let other = BnautAttestationSigner::new(b"attacker-key".to_vec(), "evil")
+            .with_audience("test-gateway");
         other.issue(&request(), now, TimeDelta::minutes(5))
     };
     let denied = l.boot(spec(Substrate::GvisorLinux), Some(forged.encoded()), now);
@@ -194,7 +195,8 @@ fn ac_5_forgery_detected_and_logged_within_100ms_over_100_cases() {
     let v = validator();
     let now = Utc::now();
     let genuine = signer().issue(&request(), now, TimeDelta::minutes(5));
-    let attacker = BnautAttestationSigner::new(b"attacker-key".to_vec(), "evil");
+    let attacker =
+        BnautAttestationSigner::new(b"attacker-key".to_vec(), "evil").with_audience("test-gateway");
 
     let mut forgeries: Vec<String> = Vec::new();
     // 40 cases: tokens signed by an attacker key with escalating capabilities.

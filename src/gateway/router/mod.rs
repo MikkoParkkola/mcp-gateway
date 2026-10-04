@@ -37,7 +37,10 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+mod hardened_elicitation;
+mod hardened_identity;
 mod identity;
+mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
 // production constructor instead of reimplementing it; see its doc comment.
@@ -66,6 +69,8 @@ mod audit_degraded_tests;
 mod body_limit_tests;
 #[cfg(test)]
 mod callback_admin_denial_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod collusion_direct_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
@@ -78,6 +83,8 @@ mod direct_list_scope_tests;
 mod direct_notification_credential_tests;
 #[cfg(test)]
 mod direct_notification_refusal_tests;
+#[cfg(test)]
+mod direct_notification_slot_tests;
 #[cfg(test)]
 mod direct_notification_wire_tests;
 #[cfg(test)]
@@ -93,10 +100,21 @@ mod e5_dashboard_session_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+/// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
+#[cfg(test)]
+mod hardened_elicitation_tests;
+/// GH1942.HARDEN.1 rows 8 and 16: hardened requires a per-caller identity.
+#[cfg(test)]
+mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
+mod judged_answer;
 #[cfg(test)]
 mod log_level_admin_tests;
+#[cfg(test)]
+mod mcp_route_signature_tests;
+#[cfg(test)]
+mod meta_dispatch_edge_tests;
 #[cfg(test)]
 mod probe_tests;
 #[cfg(test)]
@@ -104,10 +122,14 @@ mod r2_identity_keys_tests;
 #[cfg(test)]
 mod r2_input_keys_tests;
 #[cfg(test)]
+mod replay_policy_tests;
+#[cfg(test)]
 mod resource_prompt_scope_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;
+#[cfg(test)]
+mod stream_kill_tests;
 /// `pub(crate)` for the A11 direct-route cells in `meta_mcp`, which need this
 /// router harness and the account fixtures together. Test-only.
 #[cfg(test)]
@@ -256,6 +278,7 @@ impl AppState {
             crate::gateway::subscription_registry::tools_list_changed(),
             backend,
         );
+        self.meta_mcp.events_tools_changed(backend);
     }
 }
 
@@ -361,7 +384,8 @@ fn metrics_route(config: &crate::config::Config) -> Router {
 
 /// Routes on the app state that run outside authentication and the E1-f audit
 /// layer, merged after both are applied: dashboard logout (E5), which an
-/// expired session and an audit outage must never block.
+/// expired session and an audit outage must never block, and the dashboard
+/// handoff code (#2130), whose posted code is its own credential.
 fn unauthenticated_routes() -> Router<Arc<AppState>> {
     #[cfg(feature = "webui")]
     {
@@ -373,6 +397,21 @@ fn unauthenticated_routes() -> Router<Arc<AppState>> {
     }
 }
 
+/// Webhook delivery re-validates each session against the same authorizer
+/// the middleware uses, so the two cannot disagree about who may see what.
+/// MIN.2: every session-stream copy is judged for its session's caller, on
+/// the same process read history the answers are judged against.
+fn bind_multiplexer(state: &AppState, auth_state: &AuthState) {
+    state.multiplexer.set_authorizer(auth_state.clone());
+    if let Some(judge) = crate::gateway::outbound::SessionJudge::new(
+        helpers::read_guard(state),
+        state.meta_mcp.rejection_audit(),
+        state.meta_mcp.transparency_log().cloned(),
+    ) {
+        state.multiplexer.set_read_judge(judge);
+    }
+}
+
 /// [`create_router_with`] plus the managed-account handles, which only a
 /// gateway that brought custody up has.
 pub(crate) fn create_router_with_accounts(
@@ -381,9 +420,7 @@ pub(crate) fn create_router_with_accounts(
     accounts: Option<AccountHandles>,
 ) -> Router {
     let auth_state = build_auth_state(&state);
-    // Webhook delivery re-validates each session against the same authorizer
-    // the middleware uses, so the two cannot disagree about who may see what.
-    state.multiplexer.set_authorizer(auth_state.clone());
+    bind_multiplexer(&state, &auth_state);
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();

@@ -4,12 +4,11 @@
 //! §2.2): the per-backend route's one pre- and post-dispatch chain. Each step
 //! composes the shared `MetaMcp` stage methods; none re-implements a control.
 
-use serde_json::Value;
-
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::gateway::meta_mcp::invoke::dispatch_guards::{BackendCall, DirectOutcome};
+use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall, DirectOutcome};
+use crate::gateway::meta_mcp::signing::SigningScope;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
 
@@ -25,17 +24,49 @@ impl DirectRouteGuards {
     /// S1 policy, then the G7 signing refusal. Runs before the idempotency
     /// reservation, so a refused call reserves nothing and a cached result is
     /// never served past a refusal.
-    pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<()> {
+    ///
+    /// G7 applies where the signed envelope is `gateway_invoke`-only. Under
+    /// `hardened` this route signs its own results (GH1942.HARDEN.1 row 7).
+    pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>, scope: SigningScope) -> Result<()> {
         meta.admit_target(call)?;
-        if meta.signing_enabled() {
+        if meta.signing_enabled() && scope == SigningScope::InvokeOnly {
             return Err(Error::json_rpc(-32001, SIGNING_REFUSAL));
         }
         Ok(())
     }
 
+    /// Admit a hardened direct call's nonce in the replay store the meta route uses, keyed by the meta route's own
+    /// derivation (an authenticated key, then an OAuth agent, then a
+    /// certificate), so one caller has one bucket on both.
+    pub(crate) fn admit_nonce(
+        state: &AppState,
+        (client, oauth_agent_identity, cert_identity): (
+            Option<&AuthenticatedClient>,
+            Option<&crate::gateway::oauth::AgentIdentity>,
+            Option<&crate::mtls::CertIdentity>,
+        ),
+        nonce: Option<&str>,
+    ) -> Result<()> {
+        let authorizer = super::authorization::RouterAuthorizer {
+            state,
+            client,
+            oauth_agent_identity,
+            cert_identity,
+            principal: None,
+        };
+        let principal = crate::gateway::authz::ToolAuthorizer::quota_principal(&authorizer).map_or(
+            "anonymous",
+            crate::gateway::auth::QuotaPrincipal::as_store_key,
+        );
+        state.meta_mcp.admit_signing_nonce(nonce, principal)
+    }
+
     /// S2 spend, once, immediately before an actual backend dispatch (after
     /// the idempotency short-circuit: a replay spends nothing).
-    pub(crate) fn before_dispatch(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<Vec<String>> {
+    ///
+    /// The caller keeps the admission until `after_dispatch` has recorded the
+    /// call's spend, then drops it (MIK-7763).
+    pub(crate) fn before_dispatch(meta: &MetaMcp, call: &BackendCall<'_>) -> Result<Admission> {
         meta.admit_spend_for(call)
     }
 
@@ -44,8 +75,7 @@ impl DirectRouteGuards {
     /// A transport failure is returned unchanged for the caller's failure arm.
     pub(crate) fn after_dispatch(
         state: &AppState,
-        call: &BackendCall<'_>,
-        params: Option<&Value>,
+        (call, challenge): (&BackendCall<'_>, Option<&str>),
         client: Option<&AuthenticatedClient>,
         warnings: &[String],
         forward: Result<JsonRpcResponse>,
@@ -53,22 +83,38 @@ impl DirectRouteGuards {
         let meta = &state.meta_mcp;
         meta.account_dispatch(call, DirectOutcome::from_response(&forward));
         let mut response = forward?;
+        // ASI07 inc3 raw receipt: verify before the gates read the reply,
+        // against the challenge this dispatch minted (never read back).
+        let slot = crate::gateway::meta_mcp::response_security::chain_receipt::ChainSlot::default();
+        if let Some(result) = response.result.as_mut() {
+            meta.chain_receive_for(call.server, result, challenge, &slot)?;
+        }
+        let receipt = std::mem::take(&mut *slot.lock());
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
-                Ok(mut result) => {
+                Ok((mut result, effect)) => {
                     if !warnings.is_empty()
                         && let Some(obj) = result.as_object_mut()
                     {
                         obj.insert("_cost_warnings".to_string(), serde_json::json!(warnings));
                     }
                     response.result = Some(result);
+                    // A3 and inc3 D4: a gated-through backend answer, with
+                    // its checked upstream outcome when the backend is chained.
+                    let (source, upstream) =
+                        crate::gateway::meta_mcp::response_security::chain_after_gates(
+                            effect,
+                            receipt.eligibility(),
+                            receipt.into_upstream(),
+                        );
+                    (response.chain_source, response.chain_upstream) = (source, upstream);
                 }
                 // A post-dispatch refusal: the backend ran and was accounted;
                 // the caller gets the gate's error with HTTP 200, settled.
                 Err(e) => response = refusal(response.id.clone(), &e),
             }
         }
-        if response_blocked(state, call.server, params, client, &mut response) {
+        if response_blocked(state, call, client, &mut response) {
             response = refusal(response.id.clone(), &Error::ResponseFirewallRefused);
         }
         // Success only on an answered result, as on meta (`handlers.rs`): a
@@ -100,16 +146,15 @@ pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
 #[cfg(feature = "firewall")]
 fn response_blocked(
     state: &AppState,
-    backend_name: &str,
-    params: Option<&Value>,
+    call: &BackendCall<'_>,
     client: Option<&AuthenticatedClient>,
     response: &mut JsonRpcResponse,
 ) -> bool {
     use crate::security::firewall::FirewallAction;
+    // The route refuses a `tools/call` without `params.name` before dispatch,
+    // so `call.tool` is the named tool on every path that reaches here.
+    let (backend_name, tool_name) = (call.server, call.tool);
     let Some(ref fw) = state.firewall else {
-        return false;
-    };
-    let Some(tool_name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
         return false;
     };
     let Some(ref mut result) = response.result else {
@@ -119,10 +164,11 @@ fn response_blocked(
     let session_id = format!("direct:{backend_name}");
     let verdict = fw.check_response(&session_id, backend_name, tool_name, result, caller_name);
     if verdict.action == FirewallAction::Warn {
+        let findings = verdict.findings.len();
         tracing::warn!(
             backend = %backend_name,
             tool = %tool_name,
-            findings = verdict.findings.len(),
+            findings,
             "Firewall: direct backend response warning"
         );
     }
@@ -132,8 +178,7 @@ fn response_blocked(
 #[cfg(not(feature = "firewall"))]
 fn response_blocked(
     _state: &AppState,
-    _backend_name: &str,
-    _params: Option<&Value>,
+    _call: &BackendCall<'_>,
     _client: Option<&AuthenticatedClient>,
     _response: &mut JsonRpcResponse,
 ) -> bool {

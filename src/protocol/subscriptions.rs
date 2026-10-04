@@ -64,8 +64,9 @@ impl NotificationKind {
             Self::PromptsListChanged => "promptsListChanged",
             Self::ResourcesListChanged => "resourcesListChanged",
             Self::ResourceSubscriptions => "resourceSubscriptions",
-            // Read from the params ROOT, not from the `notifications` object:
-            // the ownership narrowing writes `params.taskIds`.
+            // The tasks extension names it under `notifications`; the
+            // gateway's own earlier form, the params root, is read too
+            // ([`named_task_ids`]).
             Self::Tasks => "taskIds",
         }
     }
@@ -81,6 +82,47 @@ impl NotificationKind {
             Self::Tasks,
         ]
     }
+}
+
+/// Whether a `subscriptions/listen` names task ids, in either placement.
+///
+/// Presence, whatever the value: the ownership guard keys on this, so a
+/// malformed entry must still reach it.
+#[must_use]
+pub fn names_task_ids(params: &Value) -> bool {
+    let key = NotificationKind::Tasks.opt_in_field();
+    params.get(key).is_some()
+        || params
+            .get("notifications")
+            .is_some_and(|filter| filter.get(key).is_some())
+}
+
+/// The task ids a `subscriptions/listen` names: the tasks extension's
+/// `notifications.taskIds` and the params root, one filter, in request order
+/// without repeats. Non-string entries are dropped like resource URIs are.
+///
+/// The ownership narrowing rewrites both placements, so every reader goes
+/// through here and none sees a copy the narrowing did not touch.
+#[must_use]
+pub fn named_task_ids(params: &Value) -> Vec<String> {
+    let key = NotificationKind::Tasks.opt_in_field();
+    let mut ids: Vec<String> = Vec::new();
+    // A set, not a scan of `ids`: the arrays are client-sized, and a quadratic
+    // dedup over a request body that large would stall a worker.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for list in [
+        params.get(key),
+        params.get("notifications").and_then(|f| f.get(key)),
+    ] {
+        for id in list.and_then(Value::as_array).into_iter().flatten() {
+            if let Some(id) = id.as_str()
+                && seen.insert(id)
+            {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    ids
 }
 
 /// What a client asked to be told about.
@@ -112,25 +154,12 @@ impl ListenRequest {
         let params = params?;
         let filter = params.get("notifications")?.as_object()?;
 
-        // The task ids sit at the params ROOT, because that is where the
-        // ownership narrowing writes them: a copy found under `notifications`
-        // was never the one that narrowing rewrote, so it opts into nothing.
-        // Non-string entries are dropped like resource URIs are.
-        let task_ids: Vec<String> = params
-            .get(NotificationKind::Tasks.opt_in_field())
-            .and_then(Value::as_array)
-            .map(|ids| {
-                ids.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let task_ids = named_task_ids(params);
 
         let wanted: Vec<NotificationKind> = NotificationKind::all()
             .into_iter()
             .filter(|kind| match kind {
-                // Named tasks only, and named at the root.
+                // Named tasks only.
                 NotificationKind::Tasks => !task_ids.is_empty(),
                 // Three are booleans. The fourth is not, and treating it as one
                 // silently dropped every resource a client named.
@@ -184,6 +213,43 @@ impl ListenRequest {
         &self.task_ids
     }
 
+    /// The `notifications/subscriptions/acknowledged` notification that opens
+    /// this subscription's stream: tagged with its id, and naming the filter
+    /// this gateway honours. A notification, never a response — a response
+    /// to the listen request is how a subscription ENDS (MIK-7766).
+    #[must_use]
+    pub fn acknowledgement(&self, subscription: &SubscriptionId) -> Value {
+        subscription.tag(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/subscriptions/acknowledged",
+            "params": { "notifications": self.honoured() },
+        }))
+    }
+
+    /// The subset of the filter this gateway delivers, as the specification
+    /// asks: the tool list (`announce_tools_changed`) and task status
+    /// (`notifications/tasks`, under `taskIds` as the tasks extension names
+    /// it). Prompt and resource changes are never published, so they are
+    /// omitted rather than promised.
+    fn honoured(&self) -> Value {
+        let mut filter = serde_json::Map::new();
+        if self.wants(NotificationKind::ToolsListChanged) {
+            filter.insert(
+                NotificationKind::ToolsListChanged
+                    .opt_in_field()
+                    .to_string(),
+                Value::Bool(true),
+            );
+        }
+        if !self.task_ids.is_empty() {
+            filter.insert(
+                NotificationKind::Tasks.opt_in_field().to_string(),
+                Value::from(self.task_ids.clone()),
+            );
+        }
+        Value::Object(filter)
+    }
+
     /// Whether the client asked for nothing at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -218,6 +284,27 @@ impl SubscriptionId {
         }
     }
 
+    /// The listen request's own response, which ends the subscription
+    /// gracefully: the specification's signal that the server closed it, as
+    /// opposed to a transport drop, which carries no response.
+    ///
+    /// It goes out on the listen stream without passing the response shaper,
+    /// so it names the server itself, as every result must.
+    #[must_use]
+    pub fn graceful_end(&self) -> Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": self.as_value(),
+            "result": {
+                "resultType": "complete",
+                "_meta": {
+                    "io.modelcontextprotocol/subscriptionId": self.as_value(),
+                    crate::protocol::meta::KEY_SERVER_INFO: crate::protocol::meta::server_info(),
+                },
+            },
+        })
+    }
+
     /// Tag a notification as belonging to this subscription.
     ///
     /// Into `params._meta`, which is where the specification's own example puts
@@ -243,5 +330,30 @@ impl SubscriptionId {
             }
         }
         notification
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SubscriptionId;
+    use crate::protocol::RequestId;
+    use crate::protocol::meta::KEY_SERVER_INFO;
+
+    /// MIK-7878.LISTEN.2: the terminal listen result names the server, as every
+    /// result must (MIK-7215.STATELESS.2). It never passes the response shaper,
+    /// so it has to carry `serverInfo` itself.
+    #[test]
+    fn a_graceful_end_names_the_server() {
+        for id in [RequestId::Number(4), RequestId::String("sub-b".into())] {
+            let subscription = SubscriptionId::of_request(id);
+            let end = subscription.graceful_end();
+            let meta = &end["result"]["_meta"];
+            assert_eq!(meta[KEY_SERVER_INFO]["name"], "mcp-gateway");
+            assert_eq!(meta[KEY_SERVER_INFO]["version"], env!("CARGO_PKG_VERSION"));
+            assert_eq!(
+                meta["io.modelcontextprotocol/subscriptionId"],
+                subscription.as_value()
+            );
+        }
     }
 }

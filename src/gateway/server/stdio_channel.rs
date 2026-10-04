@@ -19,6 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
 
 use crate::gateway::input_bridge::{ClientChannel, DeliveryError};
+use crate::gateway::outbound::{OutboundFrame, StdioReads};
 use crate::transport::PendingRequestGuard;
 
 /// A [`ClientChannel`] over the stdio pipes.
@@ -26,17 +27,20 @@ pub(crate) struct StdioClientChannel {
     /// Outbound requests awaiting a reply, keyed by the id we minted.
     pending: DashMap<String, oneshot::Sender<Value>>,
     /// The only handle to stdout. Frames are queued, never written here.
-    writer: mpsc::Sender<Value>,
+    writer: mpsc::Sender<OutboundFrame>,
+    /// The cross-tenant read judge every bridged request passes (MIN.2).
+    reads: StdioReads,
     /// Set once the client is gone, and never cleared.
     closed: AtomicBool,
 }
 
 impl StdioClientChannel {
     /// Build a channel that queues its frames on `writer`.
-    pub(crate) fn new(writer: mpsc::Sender<Value>) -> Self {
+    pub(crate) fn new(writer: mpsc::Sender<OutboundFrame>, reads: StdioReads) -> Self {
         Self {
             pending: DashMap::new(),
             writer,
+            reads,
             closed: AtomicBool::new(false),
         }
     }
@@ -137,6 +141,10 @@ impl ClientChannel for StdioClientChannel {
         if self.closed.load(Ordering::SeqCst) {
             return Err(DeliveryError::NoSession);
         }
+        // MIN.2: judged for the stdio client; a withheld prompt reaches no one.
+        let Some(frame) = self.reads.request(frame).await else {
+            return Err(DeliveryError::NoSession);
+        };
         permit.send(frame);
         debug!(%id, %method, "stdio: sent bridged request to the client");
 
@@ -149,6 +157,15 @@ impl ClientChannel for StdioClientChannel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The read judge of a gateway with the verdict off.
+    fn plain_reads() -> StdioReads {
+        StdioReads::new(
+            None,
+            std::sync::Arc::new(crate::gateway::outbound::RejectionAudit::new(None, 1)),
+            None,
+        )
+    }
 
     #[test]
     fn a_frame_with_a_method_is_a_request_not_a_reply() {
@@ -171,7 +188,7 @@ mod tests {
     #[tokio::test]
     async fn a_reply_reaches_the_request_that_is_waiting_for_it() {
         let (tx, mut rx) = mpsc::channel(16);
-        let channel = std::sync::Arc::new(StdioClientChannel::new(tx));
+        let channel = std::sync::Arc::new(StdioClientChannel::new(tx, plain_reads()));
 
         let asking = tokio::spawn({
             let channel = std::sync::Arc::clone(&channel);
@@ -182,7 +199,13 @@ mod tests {
             }
         });
 
-        let sent = rx.recv().await.expect("the request was never queued");
+        let sent = rx
+            .recv()
+            .await
+            .expect("the request was never queued")
+            .stdio_value()
+            .map(std::borrow::Cow::into_owned)
+            .expect("a request writes a value");
         assert_eq!(
             sent.get("method").and_then(Value::as_str),
             Some("elicitation/create")
@@ -211,8 +234,8 @@ mod tests {
         // already terminal — a prompt the client can never answer, reported
         // to the caller as a timeout rather than a dead session.
         let (tx, mut rx) = mpsc::channel(1);
-        let channel = std::sync::Arc::new(StdioClientChannel::new(tx.clone()));
-        tx.send(json!({"filler": true}))
+        let channel = std::sync::Arc::new(StdioClientChannel::new(tx.clone(), plain_reads()));
+        tx.send(OutboundFrame::gateway_stdio(json!({"filler": true})))
             .await
             .expect("the empty queue took the filler");
 
@@ -230,7 +253,13 @@ mod tests {
         }
 
         channel.close();
-        let filler = rx.recv().await.expect("the filler was queued");
+        let filler = rx
+            .recv()
+            .await
+            .expect("the filler was queued")
+            .stdio_value()
+            .map(std::borrow::Cow::into_owned)
+            .expect("the filler writes a value");
         assert!(
             filler.get("filler").is_some(),
             "the filler is what freed the capacity the parked send was waiting for"
@@ -253,7 +282,7 @@ mod tests {
         // timeout drops the future, and neither the success nor the error path
         // runs. Without the guard the entry outlives the prompt.
         let (tx, _rx) = mpsc::channel(16);
-        let channel = StdioClientChannel::new(tx);
+        let channel = StdioClientChannel::new(tx, plain_reads());
 
         let outcome = tokio::time::timeout(
             std::time::Duration::from_millis(20),
@@ -271,7 +300,7 @@ mod tests {
     #[tokio::test]
     async fn close_wakes_every_outstanding_prompt() {
         let (tx, mut rx) = mpsc::channel(16);
-        let channel = std::sync::Arc::new(StdioClientChannel::new(tx));
+        let channel = std::sync::Arc::new(StdioClientChannel::new(tx, plain_reads()));
 
         let asking = tokio::spawn({
             let channel = std::sync::Arc::clone(&channel);
@@ -299,7 +328,7 @@ mod tests {
         // entry nothing can resolve and then wait out the bridge's timeout —
         // that spends the drain and loses the response it was drained for.
         let (tx, _rx) = mpsc::channel(16);
-        let channel = StdioClientChannel::new(tx);
+        let channel = StdioClientChannel::new(tx, plain_reads());
         channel.close();
 
         let outcome = tokio::time::timeout(
@@ -316,6 +345,55 @@ mod tests {
         assert!(
             channel.pending.is_empty(),
             "the refused prompt left its pending entry behind"
+        );
+    }
+
+    /// MIK-7324.COV.3: an id that is neither a string nor a number names no
+    /// request of ours, so the frame is not a reply.
+    #[test]
+    fn an_id_that_is_neither_string_nor_number_is_not_a_reply() {
+        for id in [json!(true), json!(null), json!({"k": 1}), json!([1])] {
+            let frame = json!({"jsonrpc": "2.0", "id": id, "result": {}});
+            assert_eq!(StdioClientChannel::reply_id(&frame), None, "{frame}");
+        }
+    }
+
+    /// A late answer for a prompt nobody waits on any more resolves nothing
+    /// and is not an error.
+    #[test]
+    fn resolving_an_id_nothing_waits_on_returns_false() {
+        let (tx, _rx) = mpsc::channel(1);
+        let channel = StdioClientChannel::new(tx, plain_reads());
+        assert!(!channel.resolve("elicit-gone", json!({"result": {}})));
+    }
+
+    /// MIK-7324.COV.3 (C6 stdio 6): any `method` member makes the frame a
+    /// request, whatever its type, so a null method with an id is no reply.
+    #[test]
+    fn a_frame_with_a_null_method_is_not_a_reply() {
+        let frame = json!({"jsonrpc": "2.0", "id": "elicit-1", "method": null});
+        assert_eq!(StdioClientChannel::reply_id(&frame), None, "{frame}");
+    }
+
+    /// MIK-7324.COV.3 (C6 stdio 8): a reply naming an id nobody waits on is
+    /// never handed to a different request that is waiting.
+    #[test]
+    fn a_reply_for_another_id_leaves_the_waiting_request_pending() {
+        let (tx, _rx) = mpsc::channel(1);
+        let channel = StdioClientChannel::new(tx, plain_reads());
+        let (waiter, mut answer) = oneshot::channel();
+        channel.pending.insert("elicit-1".to_string(), waiter);
+        assert!(
+            !channel.resolve("elicit-other", json!({"result": {}})),
+            "a reply for an unknown id resolved something"
+        );
+        assert!(
+            channel.pending.contains_key("elicit-1"),
+            "the waiting request lost its pending entry to another id's reply"
+        );
+        assert!(
+            answer.try_recv().is_err(),
+            "the waiting request received another id's reply"
         );
     }
 }

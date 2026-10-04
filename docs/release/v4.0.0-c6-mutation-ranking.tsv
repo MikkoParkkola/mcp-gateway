@@ -1,0 +1,304 @@
+# NFR.BUILD.1 C6 mutation sample, drawn 2026-10-02 before any result: python3 scripts/release/c6_mutation_sample.py 8edb1c00edf8571ffabc3e492341e347 Re-published 2026-10-03 with the same nonce after normalize_tools_list_response moved to backend_handlers/direct_list.rs (#2640): the SAMPLE rows are identical, only the understudy order at ranks 35-45 moved.
+# nonce 8edb1c00edf8571ffabc3e492341e347 (first and only draw); Critical rows of docs/release/v4.0.0-critical-functions.tsv (this draw: sha256 9ed18bfc3fa9071e1e0b3d701a43d8344a1ffd7c8b15f5e0256ddb0e1f6824d8; identical Critical rows to d0fd145d..., which differed only in one Standard row's file).
+# Frozen frame: the draw reproduces from docs/release/v4.0.0-c6-sampling-frame.tsv (sha256 76d59ee30271da57a8f8324e8519b23c63e90301249b82b2dd8b58a89df661ae), not from the live inventory, so later inventory edits cannot move the sample. Drawn from the draw-time inventory 6f0dd5fec the SAMPLE rows are identical (68 rows, same hash).
+# SAMPLE rows are the gate's obligations; understudies replace a row only in rank order, under the rules in the C6 gate-day procedure.
+rank	status	named_path	file	qualified	occurrence	reason
+1	SAMPLE	HTTP dispatch	src/gateway/router/origin_guard_hosted.rs	HostedScope::admits_host	1	Admits the hosted Host only under the prefix.
+2	SAMPLE	HTTP dispatch	src/gateway/router/authorization.rs	decide_tool_target	1	Tool-name validation, backend scope, tool policy, key scope, mTLS, agent scopes, SSRF.
+3	SAMPLE	HTTP dispatch	src/gateway/router/accounts/connections.rs	api_route	1	Refuses DELETE with 401 when there is no adapter VerifiedIdentity.
+4	SAMPLE	HTTP dispatch	src/gateway/router/authorization.rs	require_admin_log_level	1	logging/setLevel, case-insensitive, is admin-only.
+5	SAMPLE	HTTP dispatch	src/gateway/router/authorization.rs	authorize_tool_target	1	Emits the tool-invocation authorization verdict with its audit record.
+6	SAMPLE	HTTP dispatch	src/gateway/router/accounts.rs	own_key	1	Derives the account key from the caller's identity; returns 404 for descriptors that are not the caller's.
+7	SAMPLE	HTTP dispatch	src/transport/http/redirect_policy.rs	evaluate_redirect_for	1	Redirect hop cap, SSRF refusal, cross-origin refusal and the private-backend same-origin exemption.
+8	SAMPLE	HTTP dispatch	src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
+9	SAMPLE	HTTP dispatch	src/gateway/router/handlers.rs	meta_mcp_dispatch	1	Meta route: agent identity, owner, hardened, admin, tool authorization, firewall.
+10	SAMPLE	HTTP dispatch	src/gateway/router/accounts/bridge.rs	sole_cookie	1	Refuses a session cookie that is missing, empty or duplicated.
+11	SAMPLE	HTTP dispatch	src/gateway/router/direct_guards.rs	response_blocked	1	Response firewall check_response verdict blocks delivery (firewall build).
+12	SAMPLE	HTTP dispatch	src/transport/http/mod.rs	same_origin	1	Comparator for the redirect and message-endpoint guards.
+13	SAMPLE	HTTP dispatch	src/gateway/router/handlers/request_checks.rs	request_check_refusal	1	Refuses a declared revision this build does not serve and a header that contradicts the body's revision
+14	SAMPLE	HTTP dispatch	src/gateway/router/backend_handlers/notification_key.rs	resolve	1	Applies the request's identity, passthrough, audit and OAuth-isolation refusals to notifications.
+15	SAMPLE	HTTP dispatch	src/gateway/router/handlers.rs	metrics_handler	1	Constant-time bearer comparison against metrics_token; 401 otherwise.
+16	SAMPLE	HTTP dispatch	src/gateway/router/accounts/journeys.rs	status	1	Refuses unauthenticated callers; journey status is looked up by the caller's principal.
+17	understudy	HTTP dispatch	src/gateway/router/origin_guard.rs	OriginPolicy::host_allowed	1	Host check against DNS rebinding.
+18	understudy	HTTP dispatch	src/gateway/router/response_pass.rs	inspect_tools_call_response	1	Meta tools/call response firewall; fails closed with no policy target.
+19	understudy	HTTP dispatch	src/gateway/router/backend_handlers/direct_audit.rs	record	1	Withholds the answer with 503 when the audit write fails under FailClosed.
+20	understudy	HTTP dispatch	src/gateway/router/backend_handlers/direct_list.rs	drain	1	Drops withheld (blocked) tools and drops a result that arrives beside an error (#1441).
+21	understudy	HTTP dispatch	src/gateway/router/accounts/journeys.rs	create	1	Refuses unauthenticated or unbridged callers; the journey is owned by the caller's key.
+22	understudy	HTTP dispatch	src/transport/http/extra_headers.rs	merge_extra_headers	1	Withholds the static credential when the caller's credential value is invalid (#2292).
+23	understudy	HTTP dispatch	src/gateway/router/hardened_elicitation.rs	direct_refusal	1	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
+24	understudy	HTTP dispatch	src/gateway/router/accounts/connections.rs	same_origin_fetch	1	CSRF check: Origin must equal the hosted origin plus same-origin cors Sec-Fetch headers.
+25	understudy	HTTP dispatch	src/gateway/router/well_known.rs	sanitize_public_url	1	Refuses non-TLS, rewritten, userinfo-bearing or otherwise unsafe origins before publishing OAuth metadata
+26	understudy	HTTP dispatch	src/transport/http/mod.rs	require_secure_oauth_target	1	Refuses to send an OAuth bearer over cleartext to a non-loopback host.
+27	understudy	HTTP dispatch	src/gateway/router/backend_handlers.rs	backend_handler	1	Refuses the direct route with 503 while the audit log is down (D1-f).
+28	understudy	HTTP dispatch	src/gateway/router/accounts/journeys.rs	is_bridged	1	Admits only principals issued by the session adapter.
+29	understudy	HTTP dispatch	src/gateway/router/origin_guard_hosted.rs	HostedScope::admits_origin	1	Admits the hosted Origin only under the prefix.
+30	understudy	HTTP dispatch	src/gateway/router/identity.rs	strict_header	1	Refuses repeated, non-UTF-8 or oversize identity headers.
+31	understudy	HTTP dispatch	src/gateway/router/accounts/journeys.rs	admissible	1	Caps body size and matches return_path byte-for-byte against an allow-list (open-redirect guard).
+32	understudy	HTTP dispatch	src/gateway/router/authorization.rs	CallerStanding::permits	1	The admin meta-tool allow/deny predicate shared by list and call.
+33	understudy	HTTP dispatch	src/transport/http/mod.rs	HttpTransport::establish_sse_connection	1	64 KiB handshake cap (defence-in-depth against a misbehaving backend).
+34	understudy	HTTP dispatch	src/gateway/router/accounts/bridge.rs	OwuiSessionBridge::principal	1	Turns the Open WebUI session cookie into an authenticated (authority, subject) principal.
+35	understudy	HTTP dispatch	src/gateway/router/identity.rs	trusted_proxy_identity	1	Identity headers only from trusted proxy peers; refuses removed headers.
+36	understudy	HTTP dispatch	src/gateway/router/accounts/offer.rs	ConnectOffers::attach	1	Makes an offer only to a bridged identity, for its own key and an allow-listed return path.
+37	understudy	HTTP dispatch	src/gateway/router/accounts.rs	revoke_for	1	Revokes only the account key derived from the caller's own verified identity.
+38	understudy	HTTP dispatch	src/gateway/router/meta_refusal_audit.rs	Refused::answer	1	Answers 503 when the refusal's audit write fails under FailClosed.
+39	understudy	HTTP dispatch	src/gateway/router/direct_guards.rs	DirectRouteGuards::before_dispatch	1	Spend/budget admission before dispatch.
+40	understudy	HTTP dispatch	src/gateway/router/well_known.rs	is_loopback_host	1	Loopback classifier shared by the origin gate and the cleartext-OAuth guard.
+41	understudy	HTTP dispatch	src/gateway/router/authorization.rs	backend_admitted	1	Decides whether the caller may learn that a backend exists (A3 disclosure).
+42	understudy	HTTP dispatch	src/gateway/router/accounts/start.rs	start	1	Requires the bridged identity and binds the journey start to the caller's own key.
+43	understudy	HTTP dispatch	src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	Applies the response firewall to a direct tools/list result.
+44	understudy	HTTP dispatch	src/transport/http/mod.rs	HttpTransport::build_mcp_headers	1	Picks MCP-Session-Id from the caller's identity bucket only.
+45	understudy	HTTP dispatch	src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	Drops unjudged entries and rebuilds the result from an allow-list (A3).
+46	understudy	HTTP dispatch	src/gateway/router/hardened_identity.rs	hardened_identity_refusal	1	Hardened posture: 403 without a per-caller identity.
+47	understudy	HTTP dispatch	src/gateway/router/identity.rs	cloudflare_access_identity	1	Verifies the Cf-Access JWT assertion; refuses headers for the wrong mode.
+48	understudy	HTTP dispatch	src/gateway/router/handlers.rs	mcp_sse_handler	1	SSE stream resumption is scoped to the session owner.
+49	understudy	HTTP dispatch	src/gateway/router/backend_handlers/key_check.rs	key_refusal	1	R2 refusal of undeclared argument keys; a schema control rather than plain authorization.
+50	understudy	HTTP dispatch	src/gateway/router/identity.rs	grant_subject_from_verified_identity	1	Builds the OIDC subject; refuses a blank issuer or subject.
+51	understudy	HTTP dispatch	src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
+52	understudy	HTTP dispatch	src/gateway/router/accounts/bridge.rs	OwuiSessionBridge::session_user	1	Checks the session token with the upstream, caps the body size, rejects expired sessions.
+53	understudy	HTTP dispatch	src/gateway/router/accounts/complete.rs	complete	1	Answers 403 unless the bridged browser session proves an identity.
+54	understudy	HTTP dispatch	src/transport/http/mod.rs	HttpTransport::get_oauth_token	1	Checks the message URL is secure before releasing the OAuth token.
+55	understudy	HTTP dispatch	src/transport/http/mod.rs	HttpTransport::with_destination	1	Destination literal check and OAuth TLS check at construction.
+56	understudy	HTTP dispatch	src/gateway/router/origin_guard.rs	OriginPolicy::fetch_site_allowed	1	Admits only same-origin or none Sec-Fetch-Site.
+57	understudy	HTTP dispatch	src/transport/http/mod.rs	HttpTransport::resolve_message_url	1	Refuses an SSE message endpoint that resolves cross-origin (credential-exfiltration guard).
+58	understudy	HTTP dispatch	src/gateway/router/accounts/bridge.rs	OwuiSessionBridge::identity	1	Builds the VerifiedIdentity that every browser route's authorization uses.
+59	understudy	HTTP dispatch	src/gateway/router/backend_handlers.rs	backend_handler_inner	1	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
+60	understudy	HTTP dispatch	src/gateway/router/authorization.rs	require_admin_tool_access	1	Admin gate for meta-tools; refuses fail-closed when the audit log is unavailable.
+61	understudy	HTTP dispatch	src/gateway/router/accounts/complete.rs	connections	1	Lists account connection state keyed to the caller's own identity only.
+62	understudy	HTTP dispatch	src/gateway/router/handlers.rs	mcp_delete_handler	1	Requires an authenticated credential; deletes only a session the caller owns.
+63	understudy	HTTP dispatch	src/gateway/router/backend_handlers/direct_list.rs	retain_invocable	1	Filters tools/list down to the tools the caller may invoke.
+64	understudy	HTTP dispatch	src/gateway/router/origin_guard.rs	same_origin	1	The origin comparator the guard decisions rest on.
+65	understudy	HTTP dispatch	src/gateway/router/origin_guard.rs	origin_guard_middleware	1	Refuses requests whose Origin, Sec-Fetch-Site or Host is disallowed.
+66	understudy	HTTP dispatch	src/gateway/router/accounts/bridge.rs	presents_session	1	Classifies a request as carrying a browser session credential, so it is refused as one and not as no credential.
+67	understudy	HTTP dispatch	src/gateway/router/origin_guard.rs	OriginPolicy::origin_allowed	1	Origin allow-list and numeric-self-origin check.
+68	understudy	HTTP dispatch	src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
+69	understudy	HTTP dispatch	src/gateway/router/handlers/owner.rs	request_session_owner	1	Resolves the grant subject, refuses bad identity headers, applies the hardened refusal.
+70	understudy	HTTP dispatch	src/gateway/router/direct_guards.rs	DirectRouteGuards::run	1	admit_target policy plus refusal when message signing is enabled.
+71	understudy	HTTP dispatch	src/gateway/router/direct_guards.rs	DirectRouteGuards::after_dispatch	1	Checks the chain receipt, payload gates and response firewall verdict.
+72	understudy	HTTP dispatch	src/transport/http/mod.rs	HttpTransport::send_request_with_headers	1	Binds the upstream session id to the caller's identity bucket.
+73	understudy	HTTP dispatch	src/gateway/router/identity.rs	caller_grant_subject	1	Resolves the caller subject; refuses spoofed or malformed identity headers.
+74	understudy	HTTP dispatch	src/gateway/router/backend_handlers/costs.rs	costs_handler	1	/api/costs answers 403 unless the client is admin.
+75	understudy	HTTP dispatch	src/gateway/router/accounts/journeys.rs	owner_and_descriptor	1	Restricts to personal_managed descriptors and the caller's own key.
+76	understudy	HTTP dispatch	src/gateway/router/origin_guard_hosted.rs	scope	1	Limits the hosted-origin opening to /accounts/v1/ and the exact callback navigation.
+77	understudy	HTTP dispatch	src/gateway/router/handlers.rs	health_handler	1	Backend detail only for admins; everyone else gets status and version.
+78	understudy	HTTP dispatch	src/transport/http/sse_decoder.rs	SseDecoder::oversized	1	Caps pending SSE bytes from a backend.
+79	understudy	HTTP dispatch	src/gateway/router/accounts/connections.rs	dispatch	1	Classifies the credential: refuses mixed credentials, unauthenticated callers and cross-origin browser DELETEs.
+80	understudy	HTTP dispatch	src/gateway/router/origin_guard_hosted.rs	HostedScope::exempts_fetch_site	1	Cross-site exemption only for the callback navigation addressed to the hosted host.
+1	SAMPLE	OAuth	src/oauth/client/destination.rs	OAuthClient::check_advertised_endpoints	1	Refuses discovered token/registration endpoints the policy denies
+2	SAMPLE	OAuth	src/oauth/client/mod.rs	has_valid_token	1	Decides whether a cached credential is still valid
+3	SAMPLE	OAuth	src/oauth/storage.rs	TokenInfo::is_expired	1	Expiry decision (60s buffer) gating reuse of a cached token
+4	SAMPLE	OAuth	src/oauth/client/mod.rs	validate_issuer	1	RFC 9207: a present iss must exactly equal the recorded issuer
+5	SAMPLE	OAuth	src/oauth/callback.rs	handle_callback	1	OAuth state (CSRF) check; refuses a mismatch or a missing code
+6	SAMPLE	OAuth	src/oauth/metadata.rs	AuthorizationServerMetadata::discover	1	RFC 8414 issuer must match the discovery base
+7	SAMPLE	OAuth	src/oauth/client/mod.rs	get_token	1	Reuses a cached credential only while it is unexpired
+8	SAMPLE	OAuth	src/oauth/client/mod.rs	OAuthClient::authorize	1	Issuer check enforced before redeeming the authorization code
+9	understudy	OAuth	src/oauth/client/destination.rs	OAuthClient::check_destination	1	Refuses OAuth URLs whose literal host the destination policy denies
+10	understudy	OAuth	src/oauth/client/mod.rs	OAuthClient::credential_key	1	Credentials keyed by issuer; refuses before the issuer is known
+11	understudy	OAuth	src/oauth/client/destination.rs	hop	1	Redirect hop SSRF literal check plus hop budget
+12	understudy	OAuth	src/oauth/client/mod.rs	OAuthClient::drop_credentials_from_other_issuer	1	Drops token and registered client_id when the issuer changes
+13	understudy	OAuth	src/oauth/token_file.rs	read	1	Refuses a token file whose mode lets other users read it
+1	SAMPLE	account paths	src/identity_propagation/account_strategies.rs	AccountStrategyRegistry::revalidate	1	Rechecks descriptor, provider, strategy, audience, actor and lifetime, plus durable lease
+2	SAMPLE	account paths	src/personal_accounts/journey/limits.rs	inside	1	Scopes rate-window events to the requested principal and live window
+3	SAMPLE	account paths	src/personal_accounts/worker_callback.rs	invalid_grant	1	Refuses missing scopes, non-bearer tokens, offline without a refresh token
+4	SAMPLE	account paths	src/personal_accounts/service.rs	AccountService::apply	1	Scope check: refuses a refresh that broadens granted scopes
+5	SAMPLE	account paths	src/personal_accounts/vault.rs	VaultStrategy::recheck	1	Durable custody release recheck; retired lease refuses
+6	SAMPLE	account paths	src/personal_accounts/storage.rs	require_empty	1	Initialize refuses non-empty roots (never replaces state)
+7	SAMPLE	account paths	src/personal_accounts/config/journey.rs	validate_return_paths	1	Open-redirect guard: single slash, no backslash, no ? # %
+8	SAMPLE	account paths	src/personal_accounts/config/journey.rs	validate_origin	1	public_origin must be an exact https origin
+9	SAMPLE	account paths	src/identity_propagation/account_strategies.rs	AccountStrategyRegistry::validate_and_audit_mint	1	Refuses empty or invalid headers, and a required mint without a durable audit
+10	SAMPLE	account paths	src/personal_accounts/consent.rs	commit_if_unchanged_locked	1	Fences a stale consent so it cannot overwrite a later grant or revoke
+11	SAMPLE	account paths	src/personal_accounts/mod.rs	AccountKey::fields	1	Refuses empty or oversized account-key fields
+12	SAMPLE	account paths	src/personal_accounts/journey/callback.rs	is_replay	1	Replay detection on the pre-sweep record
+13	SAMPLE	account paths	src/personal_accounts/migration_source.rs	read_legacy_source	1	Refuses symlinks, non-regular files and non-private/foreign-owned sources
+14	SAMPLE	account paths	src/personal_accounts/storage.rs	read_bounded	1	Refuses non-private, oversized or unsafe files (nofollow)
+15	SAMPLE	account paths	src/personal_accounts/config.rs	forbid_external_strategy	1	Refuses external_strategy on non-external modes
+16	SAMPLE	account paths	src/personal_accounts/journey/limits.rs	Rates::admit_start	1	Per-principal journey-start rate limit
+17	understudy	account paths	src/personal_accounts/journey/ops.rs	predecessors	1	Supersede/reuse scoped to the same principal and account
+18	understudy	account paths	src/personal_accounts/migration_source.rs	privately_owned	1	Unix: mode 0600 and owned by the effective uid
+19	understudy	account paths	src/personal_accounts/journey/callback.rs	locate	1	Finds the journey by HMAC(state) with a constant-time compare
+20	understudy	account paths	src/personal_accounts/journey/limits.rs	Rates::admit_creation	1	Per-principal and global journey-creation rate limit
+21	understudy	account paths	src/personal_accounts/identity.rs	Principal::eq	1	Principal match on authority and subject only
+22	understudy	account paths	src/personal_accounts/commit.rs	claim_forced_refresh	1	Checks the live grant version; one forced refresh per claim
+23	understudy	account paths	src/personal_accounts/config.rs	validate_descriptors	1	Refuses malformed descriptors, and managed descriptors when disabled
+24	understudy	account paths	src/personal_accounts/journey/callback.rs	binding_matches	1	Browser-binding cookie HMAC, constant-time
+25	understudy	account paths	src/identity_propagation/caller_proof.rs	CallerProof::new	1	Combines identity and provenance; anonymous is never Operator
+26	understudy	account paths	src/personal_accounts/config/adapters.rs	resolve_material	1	Secret ≥32 bytes; no reuse with store keys or other adapters
+27	understudy	account paths	src/personal_accounts/journey/limits.rs	wait	1	Decides whether a rate window has capacity
+28	understudy	account paths	src/identity_propagation/token_exchange.rs	TokenExchangeStrategy::exchange	1	Refuses a non-2xx, unparsable or empty access_token response from the token-exchange endpoint (STS)
+29	understudy	account paths	src/personal_accounts/config.rs	decode_key	1	Store key must decode to exactly 32 bytes
+30	understudy	account paths	src/personal_accounts/commit.rs	refresh_tokens	1	Refuses version rollback; CAS refuses non-Connected (revoked) grants
+31	understudy	account paths	src/personal_accounts/storage.rs	accepted_basename	1	Record pointer must be `<own digest>-<hex>.json` (no traversal)
+32	understudy	account paths	src/personal_accounts/service.rs	expired	1	An unreadable clock counts as expired: refresh, never serve
+33	understudy	account paths	src/personal_accounts/journey/ops.rs	arm	1	Owner-digest match (constant-time); only pending or unconsumed-started journeys
+34	understudy	account paths	src/personal_accounts/service.rs	AccountService::connected	1	Refuses Revoked, ReconnectRequired and Absent states
+35	understudy	account paths	src/personal_accounts/storage.rs	validate_config	1	Key sizes, current key present, store/authority dirs disjoint
+36	understudy	account paths	src/personal_accounts/journey/grant.rs	settle	1	Commits only a committable journey, fenced by CAS
+37	understudy	account paths	src/personal_accounts/provider.rs	EnvSecrets::resolve	2	Refuses literal (non env:/file:) client secrets
+38	understudy	account paths	src/personal_accounts/config/journey.rs	validate_session	1	user_endpoint must be https or loopback http, with no userinfo
+39	understudy	account paths	src/personal_accounts/vault.rs	VaultStrategy::principal	1	Sole-operator only if asserted AND the caller established the operator
+40	understudy	account paths	src/identity_propagation/account_strategies.rs	AccountStrategyRegistry::principal	1	Who a dispatch is made as; external needs a verified identity
+41	understudy	account paths	src/personal_accounts/config/adapters.rs	validate	1	Adapter issuer literal, non-empty allowlist, unique id, positive lifetime
+42	understudy	account paths	src/personal_accounts/journey/grant.rs	committable	1	Same account, owner digest (constant-time), expectation, consumed
+43	understudy	account paths	src/personal_accounts/journey/callback.rs	Admitted::created_against	1	Refuses the callback if the descriptor revision changed
+44	understudy	account paths	src/personal_accounts/journey/callback.rs	admit	1	State, replay, expiry and binding checks; mismatch terminates the journey
+45	understudy	account paths	src/personal_accounts/storage.rs	validate_path	1	Absolute paths, no symlinks or dot components
+46	understudy	account paths	src/personal_accounts/journey/callback.rs	PersonalAccountStore::admit_callback	1	Callback admission checks under the lock
+47	understudy	account paths	src/personal_accounts/storage.rs	open_token	1	AEAD-authenticates a record and validates it
+48	understudy	account paths	src/personal_accounts/journey/callback.rs	PersonalAccountStore::consume_callback	1	Re-admits, then consumes once, atomically
+49	understudy	account paths	src/personal_accounts/storage.rs	connected_record	1	SHA-256 pin, AEAD with account AAD, version must match manifest
+50	understudy	account paths	src/personal_accounts/config/adapters.rs	validate_no_gateway_material_reuse	1	Constant-time refusal of adapter secret bytes equal to gateway credential bytes
+51	understudy	account paths	src/identity_propagation/account_strategies.rs	AccountStrategyRegistry::declared_installed	1	Refuses an undeclared descriptor or an auth_key/provider mismatch; refuses a missing install
+52	understudy	account paths	src/personal_accounts/provider/http.rs	guard	1	Refuses URL userinfo and SSRF IP literals
+53	understudy	account paths	src/personal_accounts/storage.rs	check_token_header	1	AAD must bind schema and key_id
+54	understudy	account paths	src/identity_propagation/mod.rs	SignedAssertionStrategy::propagate	2	Refuses an empty backend audience before minting
+55	understudy	account paths	src/identity_propagation/caller_proof.rs	CallerProvenance::classify	1	Empty or absent credential principal maps to Anonymous
+56	understudy	account paths	src/personal_accounts/config/references.rs	resolve_key	1	Refuses a literal store key or an unresolved key reference
+57	understudy	account paths	src/gateway/server/account_bindings.rs	install_account_strategies	1	Startup refusal when a bound managed or external account has no installed strategy
+58	understudy	account paths	src/personal_accounts/config/journey.rs	validate	1	Hosted journey rules: one session bridge, origin, paths, keys, descriptors
+59	understudy	account paths	src/personal_accounts/config/adapters.rs	validate_header	1	Refuses reserved identity/credential headers, case-insensitive
+60	understudy	account paths	src/personal_accounts/storage_windows.rs	create_directory	1	Windows: refuses symlink/non-dir; creates private
+61	understudy	account paths	src/personal_accounts/config/journey.rs	validate_managed_descriptors	1	redirect_uri must equal the hosted callback URI
+62	understudy	account paths	src/personal_accounts/storage.rs	open	1	Private authority file; AEAD-verified; instance_id must match
+63	understudy	account paths	src/identity_propagation/account_strategies.rs	PreparedAccountCredential::published_lifetime_open	1	Expiry check; an external credential must be strictly unexpired
+64	understudy	account paths	src/personal_accounts/journey/callback.rs	admitted	1	Refuses a journey record with no owner principal
+65	understudy	account paths	src/personal_accounts/journey/callback.rs	consume	1	Single-use: takes the PKCE verifier and marks consumed
+66	understudy	account paths	src/personal_accounts/storage.rs	entry_version	1	Validates authenticated manifest entry fields
+67	understudy	account paths	src/config/account_bindings.rs	reload_binding_refusal	1	Refuses a live reload that rebinds an account or changes a bound descriptor
+68	understudy	account paths	src/personal_accounts/identity.rs	account_key	1	Refuses with no principal; binds the five-field owner key
+69	understudy	account paths	src/personal_accounts/storage_windows.rs	private_directory	1	Windows: directory must pass the DACL privacy judgement
+70	understudy	account paths	src/identity_propagation/mod.rs	ensure_transport_carries_identity_headers	1	Refuses a required backend whose transport drops identity headers
+71	understudy	account paths	src/personal_accounts/journey/callback.rs	within_cap	1	Refuses oversized state/binding before HMAC
+72	understudy	account paths	src/personal_accounts/config/adapters.rs	validate_no_gateway_reference_alias	1	Refuses an adapter secret that names a gateway credential's variable or file
+73	understudy	account paths	src/personal_accounts/refusal.rs	offer_data	1	Forwards connect-offer keys only under the per-process seal
+74	understudy	account paths	src/personal_accounts/provider/http.rs	send	1	Refuses any 3xx redirect as terminal
+75	understudy	account paths	src/personal_accounts/vault.rs	ManagedLease::recheck	2	Refuses if the installed vault was replaced
+76	understudy	account paths	src/personal_accounts/migration.rs	seed_expiry	1	Refuses expired credentials without a refresh token
+77	understudy	account paths	src/identity_propagation/caller_proof.rs	CallerProvenance::establishes_the_operator	1	Policy: only LocalTransport/Credential establish the operator
+78	understudy	account paths	src/personal_accounts/provider/http.rs	read_bounded	1	Refuses a provider response over MAX_BODY_BYTES
+79	understudy	account paths	src/personal_accounts/provider/grant_flow.rs	PersonalOAuthRefresh::managed	1	Refuses non-managed or unpinned accounts before any HTTP
+80	understudy	account paths	src/personal_accounts/config.rs	validate_directory	1	Refuses relative paths and `..` components
+81	understudy	account paths	src/personal_accounts/journey/ops.rs	PersonalAccountStore::journey_status_owned	1	Status only for the owning principal; others get NotFound
+82	understudy	account paths	src/personal_accounts/provider.rs	discover	1	Terminal on certificate/redirect failures; the issuer document must be accepted
+83	understudy	account paths	src/identity_propagation/mod.rs	IdentityPropagationConfig::validate	1	Refuses empty audience, token_exchange without an endpoint, and unimplemented required strategies
+84	understudy	account paths	src/identity_propagation/account_strategies.rs	AccountStrategyRegistry::mint	1	An external descriptor mints only for a verified caller
+85	understudy	account paths	src/personal_accounts/provider.rs	discovery_urls	1	Issuer must be https with a host, no query or fragment
+86	understudy	account paths	src/personal_accounts/config/journey.rs	validate_key_ids	1	Refuses hosted key ids outside the length and character rules; they become journey-record key identifiers
+87	understudy	account paths	src/personal_accounts/storage.rs	not_private	1	Unix: non-regular or group/other-accessible file
+88	understudy	account paths	src/personal_accounts/storage.rs	private_directory	1	Unix: refuses symlinked or group/other-accessible directories
+89	understudy	account paths	src/identity_propagation/token_exchange.rs	TokenExchangeStrategy::cached	1	Expired cached exchanged token treated as absent
+90	understudy	account paths	src/personal_accounts/config.rs	resolve	1	Refuses bad schema/deployment, unsafe or nested dirs, and non-reference keys
+91	understudy	account paths	src/config/account_bindings.rs	compile	1	Refuses raw Vault propagation without an account descriptor
+92	understudy	account paths	src/personal_accounts/config/adapters.rs	validate_secret_ref	1	Refuses literal secrets and relative file: paths
+93	understudy	account paths	src/personal_accounts/journey/callback.rs	PersonalAccountStore::callback_journey	1	Resolves the journey by state digest
+94	understudy	account paths	src/personal_accounts/vault.rs	VaultStrategy::prepare	1	Audience must equal the descriptor resource; owner key; fenced release
+95	understudy	account paths	src/config/account_bindings.rs	validate_managed_consumer	1	Refuses a managed backend that has a shared oauth block, a static Authorization header/secret, or a non-http transport
+96	understudy	account paths	src/personal_accounts/storage.rs	validate_record	1	Refuses malformed record tokens, versions and scope order
+97	understudy	account paths	src/personal_accounts/migration_precondition.rs	recover_client_id	1	Refuses migration when the recorded client identity contradicts the destination
+98	understudy	account paths	src/personal_accounts/provider.rs	PersonalOAuthRefresh::map_token_response	1	invalid_grant maps to reconnect; refuses a missing expires_in
+99	understudy	account paths	src/personal_accounts/commit.rs	remove_unreferenced	1	Path-traversal guard via accepted_basename before unlink
+100	understudy	account paths	src/personal_accounts/journey/sweep.rs	sweep	1	Expires active journeys past their deadline
+101	understudy	account paths	src/personal_accounts/storage.rs	create_directory	1	Refuses symlink/non-dir; creates 0700
+102	understudy	account paths	src/personal_accounts/offline_migration.rs	resolve_legacy_backend_name	1	Refuses ambiguous or unbound backend to prevent wrong-credential migration
+103	understudy	account paths	src/personal_accounts/storage_windows.rs	not_private	1	Windows: non-regular file or non-private DACL
+104	understudy	account paths	src/personal_accounts/journey/ops.rs	PersonalAccountStore::start_journey	1	Owner digest checked by arm before secrets are armed
+105	understudy	account paths	src/personal_accounts/service.rs	AccountService::release	1	Whole-lease recheck against current authority before release
+106	understudy	account paths	src/personal_accounts/journey/mod.rs	digests_equal	1	Constant-time digest equality for state, binding and owner
+107	understudy	account paths	src/personal_accounts/provider/grant_flow.rs	PersonalOAuthRefresh::revoke_token	1	Token sent only to a configured and pinned revocation endpoint
+108	understudy	account paths	src/personal_accounts/storage.rs	lookup	1	Exact-account resolution; tombstones authoritative
+109	understudy	account paths	src/personal_accounts/config.rs	validate_managed	1	HTTPS endpoints/issuer/redirect, reference-only secret, explicit resource flag
+110	understudy	account paths	src/personal_accounts/config.rs	resolve_adapter_runtime	1	Refuses adapter material unless structure, length and separation checks all pass
+111	understudy	account paths	src/identity_propagation/account_strategies.rs	AccountStrategyRegistry::resolve	1	Refuses with no principal; refuses an already-expired external credential
+112	understudy	account paths	src/personal_accounts/service.rs	AccountService::fence_after_invalid_grant	1	Durably fences a provider-rejected grant before refusing
+113	understudy	account paths	src/gateway/server/account_bindings.rs	sole_operator_asserted	1	Decides whether stored grants are served under the sole-operator principal (stdio, or HTTP single-user)
+114	understudy	account paths	src/personal_accounts/config.rs	validate_external	1	Only signed_assertion/token_exchange, and required: true
+115	understudy	account paths	src/personal_accounts/service.rs	AccountService::refresh_if_expired	1	Serves only an unexpired grant; invalid_grant fences
+116	understudy	account paths	src/personal_accounts/refusal.rs	upstream_rejection	1	Accepts a rejection mark only with the per-process seal
+117	understudy	account paths	src/personal_accounts/provider.rs	accept_metadata	1	Exact issuer/endpoint equality with config; endpoints must be https
+118	understudy	account paths	src/personal_accounts/worker_callback.rs	CustodyHandle::pre_exchange	1	Provider error, iss mismatch, config change, single-use consume
+119	understudy	account paths	src/personal_accounts/worker_callback.rs	CustodyHandle::run_callback	1	Aborts and revokes on bad grant or audit failure
+120	understudy	account paths	src/identity_propagation/token_exchange.rs	TokenExchangeStrategy::propagate	1	Refuses empty audience or missing endpoint; cache isolated per subject/audience/endpoint/scope
+121	understudy	account paths	src/config/account_bindings.rs	compile_one	1	Refuses an account plus identity_propagation conflict, unresolved descriptor refs, and external without a strategy
+122	understudy	account paths	src/personal_accounts/journey/persist.rs	read_journeys	1	AEAD-authenticates journeys.json; unknown key id refuses
+123	understudy	account paths	src/personal_accounts/service.rs	refresh_after_rejection	1	Refuses stale leases; provider refresh only through the single-use claim
+124	understudy	account paths	src/personal_accounts/worker_callback.rs	CustodyHandle::admit_journey	1	Caps, then state-located journey, binding admission
+125	understudy	account paths	src/personal_accounts/migration_precondition.rs	check_issuer	1	Attested issuer must equal the destination; endpoint origin must agree
+126	understudy	account paths	src/personal_accounts/storage.rs	open_bytes	1	AES-GCM open with size and schema bounds
+127	understudy	account paths	src/personal_accounts/vault.rs	VaultStrategy::fence_changed_descriptor	1	Refuses grants stored under another descriptor revision
+128	understudy	account paths	src/personal_accounts/journey/ops.rs	within_caps	1	Field caps refused before store access
+129	understudy	account paths	src/personal_accounts/provider.rs	PersonalOAuthRefresh::refresh_inner	1	Account issuer/resource must equal the descriptor; pinned endpoint only
+130	understudy	account paths	src/personal_accounts/provider.rs	is_https_with_host	1	https, has a host, no userinfo
+131	understudy	account paths	src/personal_accounts/migration_source.rs	private_to	1	Exact mode/owner verdict
+1	SAMPLE	bridge	src/gateway/input_bridge.rs	InputBridge::plan	1	Refuses a batch the client cannot answer as a whole, before anything is sent
+2	SAMPLE	bridge	src/gateway/input_bridge.rs	is_bridge_reply_id	1	Treats a frame as a bridge reply only when its id carries a minted prefix
+3	SAMPLE	bridge	src/gateway/input_bridge.rs	InputBridge::prompt	1	Refuses a prompt whose request or schema slice is not admissible
+4	SAMPLE	bridge	src/gateway/input_bridge.rs	InputBridge::run	1	Applies the challenge gate every round; refuses undeclared keys and exhausted request budgets
+1	SAMPLE	startup	src/gateway/server/support.rs	PeerCertIdentityAcceptor::accept	1	Completes the handshake and hands auth the peer certificate's identity
+2	SAMPLE	startup	src/gateway/server/support.rs	start_refusal	1	Every refusal Gateway::run asks before it binds, in order; reload restart advice asks the same
+3	SAMPLE	startup	src/gateway/server/mod.rs	Gateway::prepare_signing	1	stdio first step: refuses a malformed chain nonce or signing envelope
+4	SAMPLE	startup	src/gateway/server/cleartext.rs	cleartext_credential_refusal	1	Refuses credentials accepted over a non-TLS listener that server.cleartext_http does not cover
+5	SAMPLE	startup	src/gateway/server/identity_grants.rs	audit_startup	1	Reconciles, records and snapshots grants under the journal lock; the rows returned are the rows recorded
+6	SAMPLE	startup	src/gateway/server/support.rs	network_bind_refusal	1	The single definition of the unauthenticated network exposure: None means this configuration may serve
+7	SAMPLE	startup	src/gateway/server/identity_grants.rs	start_identity_grant_audit	1	Decides which identity grants go live; fails closed when reconciliation or its audit cannot be recorded
+8	SAMPLE	startup	src/gateway/server/support.rs	serve_tls	1	The mTLS listener: decides which client certificates may connect
+9	understudy	startup	src/gateway/server/mod.rs	Gateway::response_firewall	1	Builds the firewall both transports enforce with; anomaly blocking depends on it
+10	understudy	startup	src/gateway/server/support.rs	client_identity_from_peer_chain	1	Selects the peer leaf, builds the authenticated CertIdentity, fails closed on malformed identity data
+11	understudy	startup	src/gateway/server/cleartext.rs	reload_posture_refusal	1	Refuses a reload that would itself enter a refused network posture
+12	understudy	startup	src/gateway/server/cleartext.rs	serve_refusal	1	Everything that stops a configuration serving HTTP: the open-tools check, then the cleartext-credential check
+1	SAMPLE	stdio dispatch	src/transport/stdio.rs	StdioTransport::handle_response	1	Refuses a peer request on the response stream; delivers a response only to the pending id
+2	SAMPLE	stdio dispatch	src/transport/stdio.rs	configure_child_environment	1	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
+3	SAMPLE	stdio dispatch	src/transport/stdio.rs	StdioTransport::register_progress_token	1	Fails closed on a colliding token, so one call's progress cannot reach another call
+4	SAMPLE	stdio dispatch	src/transport/stdio.rs	StdioTransport::capture_notification	1	Routes only notifications/progress to the call that registered the token; drops the rest
+5	SAMPLE	stdio dispatch	src/transport/stdio.rs	ProgressRegistrationGuard::drop	1	Deregisters a progress token only for the registration's owner
+6	SAMPLE	stdio dispatch	src/gateway/server/stdio_channel.rs	StdioClientChannel::reply_id	1	Treats a frame as a reply only without `method`, so a client request is never routed as one
+7	SAMPLE	stdio dispatch	src/transport/stdio.rs	StdioTransport::start	1	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
+8	SAMPLE	stdio dispatch	src/gateway/server/stdio_channel.rs	StdioClientChannel::resolve	1	Sends a reply only to the pending one-shot entry for that id; consumes it
+1	SAMPLE	tasks	src/gateway/task_service/store.rs	TaskStore::admits_upstream_descriptor	1	Reads the candidate record only through the owner filter
+2	SAMPLE	tasks	src/gateway/task_service/service.rs	TaskService::owns_all	1	All-or-nothing ownership check across listed ids, so no partial existence leak
+3	SAMPLE	tasks	src/gateway/task_service/store.rs	owned	1	Core owner filter: entry visible only if principal_digest equals owner, else NotFound
+4	SAMPLE	tasks	src/gateway/task_service/store_targets.rs	Shared::add_targets_blocking	1	Requires ownership before updating recorded policy targets
+5	SAMPLE	tasks	src/gateway/task_service/service.rs	TaskService::owner	1	Maps principal to owner digest; a principal admission cannot hash returns NotFound
+6	SAMPLE	tasks	src/gateway/task_service/store_targets.rs	Shared::settle_bounded_blocking	1	Transition for cancel/settle, scoped to the owner via `owned` with a revision check
+7	SAMPLE	tasks	src/gateway/task_service/service.rs	TaskService::get	1	Read scoped to the owner; a foreign task looks the same as an absent one
+8	SAMPLE	tasks	src/gateway/task_service/record.rs	UpstreamRecord::consistent_with	1	Drops a descriptor whose operation digest or handle does not match its record
+9	understudy	tasks	src/gateway/task_service/store.rs	Shared::mark_dispatched_blocking	1	Requires ownership before changing the dispatch marker
+10	understudy	tasks	src/gateway/meta_mcp/task_confirmation.rs	MetaMcp::confirm_destructive_task	1	Main gate: refuses an unbindable caller or answers without a grant, challenges new calls, redeems presented grants
+11	understudy	tasks	src/gateway/task_service/execution/worker.rs	inspect_settled	1	Runs the response firewall on the task result; settles on a refusal when blocked
+12	understudy	tasks	src/gateway/task_service/store_input.rs	fits_cap	1	Refuses an input-round record over the storage bound
+13	understudy	tasks	src/gateway/task_service/execution.rs	TaskExecutor::transition_write	1	Hashes the request principal to an owner
+14	understudy	tasks	src/gateway/meta_mcp/task_confirmation.rs	MetaMcp::challenge	1	Refuses a client without the elicitation capability; mints a grant bound to owner fingerprint and operation digest
+15	understudy	tasks	src/gateway/router/handlers/tasks.rs	task_intent_for_call	1	Refuses task creation without a verified identity when auth is on, or without an idempotency key
+16	understudy	tasks	src/gateway/router/handlers/tasks.rs	route_task_owner	1	Picks the one owner string for every task arm; never derived from request data
+17	understudy	tasks	src/gateway/task_service/execution/upstream.rs	TaskExecutor::recover_upstream_read	1	Refuses with zero queries when not authorized or the adapter does not claim the backend
+18	understudy	tasks	src/gateway/task_service/execution/worker.rs	TaskExecutor::upstream_descriptor_fits	1	Preflight refuses when no owner-scoped descriptor measurement resolves
+19	understudy	tasks	src/gateway/task_service/execution/input_round.rs	TaskExecutor::provide_input	1	Scopes task/update answers to the owner; foreign or absent task returns NotFound
+20	understudy	tasks	src/gateway/task_service/store_input.rs	Shared::provide_input_blocking	1	Owner-scoped; refuses closed rounds and any answer key that is not outstanding
+21	understudy	tasks	src/gateway/router/handlers/tasks.rs	recover_from_upstream	1	Re-authorizes the original target against the current caller before any upstream recovery query
+22	understudy	tasks	src/gateway/task_service/store.rs	reject_duplicate	1	Refuses a record that would replace a live task id or duplicate an admission identity
+23	understudy	tasks	src/gateway/task_service/execution/upstream.rs	TaskExecutor::query_and_commit	1	Rechecks the owner's recovery target and applies output-policy refusals
+24	understudy	tasks	src/gateway/task_service/store.rs	open_record	1	Opens records with O_NOFOLLOW so a symlink is refused (unix)
+25	understudy	tasks	src/gateway/task_service/store_input.rs	Shared::read_owned	1	Row read for input-round writes, scoped to the owner via `owned`
+26	understudy	tasks	src/gateway/task_service/execution/upstream.rs	TaskExecutor::recovery_target	1	Returns the recovery descriptor only to the owner; foreign or terminal returns NotRecoverable
+27	understudy	tasks	src/gateway/task_service/store.rs	admit	1	Per-principal task quota and record-size limit
+28	understudy	tasks	src/gateway/meta_mcp/task_confirmation.rs	MetaMcp::redeem	1	Checks authenticity, purpose, owner and digest binding, accept answer, live hold, and spent ledger (replay)
+29	understudy	tasks	src/gateway/task_service/store.rs	prepare_dir	1	Refuses a store directory that is not private (mode/type) with UnsafeStore
+30	understudy	tasks	src/gateway/task_service/execution.rs	TaskExecutor::cancel	1	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
+31	understudy	tasks	src/gateway/meta_mcp/task_confirmation.rs	MetaMcp::carries_confirmation_grant	1	Opens the sealed envelope and checks its DestructiveConfirm purpose before a harmless tool is gated
+32	understudy	tasks	src/gateway/task_service/store.rs	acquire_lease	1	Refuses a lease file that is not a private regular file (or, on Windows, has a non-private DACL)
+33	understudy	tasks	src/gateway/task_service/store.rs	load	1	Disk trust boundary: refuses foreign-moded, renamed, duplicated, or over-cap records
+34	understudy	tasks	src/gateway/task_service/store.rs	has_mode	1	Exact-mode privacy predicate behind UnsafeStore refusals
+35	understudy	tasks	src/gateway/task_service/store_input.rs	Shared::close_round_blocking	1	Requires ownership before cancelling an input round
+36	understudy	tasks	src/gateway/task_service/store.rs	Shared::mark_upstream_blocking	1	Refuses a descriptor whose digest is not the record's admitted operation; scoped to the owner
+37	understudy	tasks	src/gateway/task_service/execution/input_round.rs	resume	1	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
+38	understudy	tasks	src/gateway/task_service/store_windows.rs	judge_store_dir	1	Windows: refuses a store directory whose DACL, reparse point or locality is not private
+39	understudy	tasks	src/gateway/task_service/store.rs	TaskStore::upstream_of	1	Owner-scoped descriptor read; inconsistent descriptors filtered out
+40	understudy	tasks	src/gateway/task_service/execution.rs	TaskExecutor::cancel_lost_the_revision	1	Retries cancel only after re-reading the task through the owner-scoped service.get
+41	understudy	tasks	src/gateway/task_service/store.rs	read_bounded	1	Refuses an oversized persisted task record (disk trust boundary)
+42	understudy	tasks	src/gateway/task_service/store.rs	TaskStore::get	1	Committed task lookup filtered through `owned`
+43	understudy	tasks	src/gateway/task_service/store_input.rs	Shared::require_input_blocking	1	Obtains the task through read_owned before installing an input round
+44	understudy	tasks	src/gateway/task_service/store_input.rs	closed_at	1	Continuation expiry: decides when no further answers are accepted
+45	understudy	tasks	src/gateway/task_service/store_windows.rs	open_record	1	Windows: opens without following reparse points; refuses a record that is not private
+46	understudy	tasks	src/gateway/task_service/execution/upstream.rs	TaskExecutor::capture_upstream	1	Ties the upstream descriptor to the owner's row and the record's own admitted operation digest
+47	understudy	tasks	src/gateway/task_service/execution/input_round.rs	round_deadline	1	Opens the sealed continuation (authenticates) to derive the deadline; refuses unopenable ones
+48	understudy	tasks	src/gateway/meta_mcp/task_confirmation.rs	MetaMcp::already_admitted	1	Skips confirmation only for the same verified owner, key and operation already admitted
+49	understudy	tasks	src/gateway/task_service/execution/upstream.rs	TaskExecutor::handle_still_live	1	Queries only if the handle and backend match the durable descriptor of a working row
+50	understudy	tasks	src/gateway/meta_mcp/task_confirmation.rs	MetaMcp::classify_surfaced	1	Decides whether confirmation is needed; unknown or per-caller catalogue is treated as destructive
+51	understudy	tasks	src/gateway/task_service/store.rs	TaskStore::operation_digest_of	1	Owner-scoped digest read used as the descriptor binding source

@@ -74,6 +74,7 @@ pub(super) fn manifest(root: &Path) -> Manifest {
     fn visit(root: &Path, path: &Path, result: &mut Manifest) {
         let meta = fs::symlink_metadata(path).unwrap();
         let kind = meta.file_type();
+        // Unix-only: compares (dev, ino) file identity via MetadataExt, which Windows std metadata does not expose.
         #[cfg(unix)]
         let (mode, inode) = {
             use std::os::unix::fs::MetadataExt;
@@ -120,6 +121,7 @@ pub(super) fn created_sidecar(root: &Path) -> std::path::PathBuf {
         1,
         "fresh store creates its one custody sidecar, no task yet"
     );
+    // Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -141,6 +143,7 @@ pub(super) fn assert_stage_layout(
     let lease_name = Path::new(lease.file_name().unwrap());
     let lease = image.get(lease_name).expect("same lease remains present");
     assert_eq!(lease.kind, "file");
+    // Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
     #[cfg(unix)]
     assert_eq!(lease.mode, Some(0o600));
     let final_name = PathBuf::from(format!("{id}.json"));
@@ -152,6 +155,7 @@ pub(super) fn assert_stage_layout(
     assert_eq!(data.len(), 1, "one candidate file at each writer boundary");
     let (name, entry) = data[0];
     assert_eq!(entry.kind, "file");
+    // Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
     #[cfg(unix)]
     assert_eq!(
         entry.mode,
@@ -190,9 +194,36 @@ pub(super) fn assert_stage_layout(
 
 pub(super) fn seed_private(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
+    // Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
     }
+}
+
+/// Poison `store` as a failed final directory sync does: the record is renamed
+/// into place, durability is uncertain, and the store stops serving, with every
+/// row still held in memory. Unlike `close`, nothing is cleared, so a readiness
+/// guard removed from a read or write path shows as an answer instead of an
+/// absence.
+pub(super) async fn poison(store: &TaskStore, owner: &str, id: &str, revision: u64) {
+    store
+        .set_hook(Some(Arc::new(|stage| {
+            if stage == CommitStage::DirectorySync {
+                Err(std::io::Error::other("injected poison"))
+            } else {
+                Ok(())
+            }
+        })))
+        .await;
+    assert_eq!(
+        store
+            .mark_dispatched(owner, id, revision)
+            .await
+            .unwrap_err(),
+        StoreError::Storage
+    );
+    store.set_hook(None).await;
+    assert!(!store.ready(), "the store is poisoned, not closed");
 }

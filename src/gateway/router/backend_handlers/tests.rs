@@ -499,11 +499,18 @@ mod identity_propagation_audit {
         );
         let script =
             format!("ulimit -f 0; trap '' XFSZ; exec \"$0\" '{TEST_PATH}' --exact --nocapture");
+        let profile_dir = tempfile::tempdir().expect("private profile dir");
         let output = std::process::Command::new("sh")
             .arg("-c")
             .arg(script)
             .arg(&exe)
             .env(ENV_VAR, &path)
+            // Under a zero file-size limit the child's coverage profile is written
+            // empty and corrupts the measured set (#2573); give it a private file.
+            .env(
+                "LLVM_PROFILE_FILE",
+                profile_dir.path().join("child-%p.profraw"),
+            )
             .output()
             .expect("spawn fsize-limited child process");
 
@@ -787,3 +794,15 @@ fn beeper() -> crate::backend::Backend {
         std::time::Duration::from_secs(60),
     )
 }
+
+#[path = "normalize_edge_tests.rs"]
+mod normalize_edge_tests;
+
+#[path = "direct_refusal_edge_tests.rs"]
+mod direct_refusal_edge_tests;
+
+#[path = "direct_firewall_edge_tests.rs"]
+mod direct_firewall_edge_tests;
+
+#[path = "direct_signing_edge_tests.rs"]
+mod direct_signing_edge_tests;

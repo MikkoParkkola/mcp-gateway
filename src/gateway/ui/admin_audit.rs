@@ -30,16 +30,37 @@ pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
 }
 
 /// The layer. With no audit log configured it passes every request through.
+/// A refusal is counted on every path (D4), from the handler's own answer.
 async fn admin_action_layer(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Response {
+    // Control-plane pages are refused by their RBAC, and are their own route.
+    let control_plane = request
+        .extensions()
+        .get::<MatchedPath>()
+        .is_some_and(|p| p.as_str().starts_with("/ui/api/control-plane"));
+    let run = |request| async move {
+        let response = next.run(request).await;
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+            if control_plane {
+                denied(DenialRoute::ControlPlane, DenialReason::Rbac);
+            } else {
+                denied(DenialRoute::Ui, DenialReason::AdminRequired);
+            }
+        }
+        response
+    };
     let Some(log) = state.transparency_log.clone() else {
-        return next.run(request).await;
+        return run(request).await;
     };
     if matches!(*request.method(), Method::GET | Method::HEAD) {
-        return next.run(request).await;
+        return run(request).await;
     }
     // A degraded log refuses before the handler runs (D1-f).
     if let Err(error) = log.admit().await {
@@ -61,7 +82,7 @@ async fn admin_action_layer(
         .filter(|id| !id.issuer.is_empty() && !id.subject.is_empty())
         .map(|id| GrantSubject::new(id.issuer.clone(), id.subject.clone(), None));
 
-    let response = next.run(request).await;
+    let response = run(request).await;
 
     let status = response.status();
     fields.insert("http_status".into(), status.as_u16().into());

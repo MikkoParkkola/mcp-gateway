@@ -15,6 +15,7 @@ pub mod backends;
 pub mod capabilities;
 pub mod control_plane;
 mod errors;
+mod events;
 pub mod import;
 pub(crate) mod session;
 
@@ -67,6 +68,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(capabilities::capabilities_router())
         .merge(control_plane::control_plane_router())
         .merge(backends::backends_router())
+        .merge(events::events_router())
         .merge(import::import_router());
 
     #[cfg(feature = "cost-governance")]

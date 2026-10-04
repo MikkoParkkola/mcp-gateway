@@ -433,6 +433,11 @@ pub struct ToolCost {
 pub struct CostTracker {
     per_session: DashMap<String, Arc<SessionCost>>,
     per_key: DashMap<String, Arc<KeyCost>>,
+    /// Totals of calls with no session, and of sessions since removed:
+    /// `(calls, tokens, micro-USD)`. Counted in the admin aggregate only, never
+    /// reported as anyone's session, and kept as counters because no session
+    /// end would ever free records.
+    sessionless: [AtomicU64; 3],
     /// Default budget applied to keys with no explicit config.
     default_budget: BudgetConfig,
 }
@@ -444,6 +449,7 @@ impl CostTracker {
         Self {
             per_session: DashMap::new(),
             per_key: DashMap::new(),
+            sessionless: <[AtomicU64; 3]>::default(),
             default_budget: BudgetConfig::default(),
         }
     }
@@ -491,13 +497,22 @@ impl CostTracker {
     ) {
         let rec = CostRecord::new(backend, tool, token_count, price_per_million);
 
-        // Per-session
-        self.per_session
-            .entry(session_id.to_string())
-            .or_insert_with(|| {
-                Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
-            })
-            .record(rec.clone());
+        // Per-session. An empty id is no session (a 2026-07-28 request has
+        // none): keying on it would pool every such caller into one bucket.
+        if session_id.is_empty() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let micro = (rec.estimated_cost_usd * 1_000_000.0) as u64;
+            for (total, add) in self.sessionless.iter().zip([1, rec.token_count, micro]) {
+                total.fetch_add(add, Ordering::Relaxed);
+            }
+        } else {
+            self.per_session
+                .entry(session_id.to_string())
+                .or_insert_with(|| {
+                    Arc::new(SessionCost::new(session_id, api_key_name.map(String::from)))
+                })
+                .record(rec.clone());
+        }
 
         // Per-key (if we have a key name)
         if let Some(key_name) = api_key_name {
@@ -521,6 +536,9 @@ impl CostTracker {
     /// Snapshot the cost for a session.
     #[must_use]
     pub fn session_snapshot(&self, session_id: &str) -> Option<SessionCostSnapshot> {
+        if session_id.is_empty() {
+            return None;
+        }
         self.per_session.get(session_id).map(|sc| sc.snapshot())
     }
 
@@ -562,9 +580,11 @@ impl CostTracker {
     /// Aggregate total across all sessions.
     #[must_use]
     pub fn aggregate(&self) -> AggregateCost {
-        let mut total_calls: u64 = 0;
-        let mut total_tokens: u64 = 0;
-        let mut total_cost: f64 = 0.0;
+        let [calls, tokens, micro] = &self.sessionless;
+        let mut total_calls = calls.load(Ordering::Relaxed);
+        let mut total_tokens = tokens.load(Ordering::Relaxed);
+        #[allow(clippy::cast_precision_loss)]
+        let mut total_cost = micro.load(Ordering::Relaxed) as f64 / 1_000_000.0;
         for entry in &self.per_session {
             let snap = entry.snapshot();
             total_calls += snap.call_count;
@@ -589,9 +609,21 @@ impl CostTracker {
         }
     }
 
-    /// Remove a session (called when the MCP session is terminated).
+    /// Remove a session (called when the MCP session is terminated). Its totals
+    /// move into the aggregate-only counters, so ending a session never lowers
+    /// the operator's usage total.
     pub fn remove_session(&self, session_id: &str) {
-        self.per_session.remove(session_id);
+        let Some((_, session)) = self.per_session.remove(session_id) else {
+            return;
+        };
+        let ended = [
+            &session.call_count,
+            &session.total_tokens,
+            &session.total_cost_micro_usd,
+        ];
+        for (total, add) in self.sessionless.iter().zip(ended) {
+            total.fetch_add(add.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
     }
 }
 

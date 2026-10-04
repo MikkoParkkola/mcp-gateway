@@ -329,7 +329,9 @@ fn compile_patterns(raw: &[String]) -> Vec<Pattern> {
 /// Provides O(1) lookup by name and a fallback allow-all profile.
 #[derive(Debug)]
 pub struct ProfileRegistry {
-    profiles: HashMap<String, RoutingProfile>,
+    /// Shared, not cloned per lookup: a request resolves its profile several
+    /// times, and a clone copied every pattern and the description (#613).
+    profiles: HashMap<String, std::sync::Arc<RoutingProfile>>,
     default_profile: String,
 }
 
@@ -344,9 +346,14 @@ impl ProfileRegistry {
         configs: &HashMap<String, RoutingProfileConfig>,
         default_profile: &str,
     ) -> Self {
-        let profiles: HashMap<String, RoutingProfile> = configs
+        let profiles: HashMap<String, std::sync::Arc<RoutingProfile>> = configs
             .iter()
-            .map(|(name, cfg)| (name.clone(), RoutingProfile::from_config(name, cfg)))
+            .map(|(name, cfg)| {
+                (
+                    name.clone(),
+                    std::sync::Arc::new(RoutingProfile::from_config(name, cfg)),
+                )
+            })
             .collect();
 
         Self {
@@ -368,8 +375,16 @@ impl ProfileRegistry {
     pub fn get(&self, name: &str) -> RoutingProfile {
         self.profiles
             .get(name)
-            .cloned()
-            .unwrap_or_else(|| RoutingProfile::allow_all(name))
+            .map_or_else(|| RoutingProfile::allow_all(name), |p| (**p).clone())
+    }
+
+    /// As [`Self::get`], shared rather than copied: the per-request path reads
+    /// the active profile several times per call (#613).
+    pub(crate) fn get_shared(&self, name: &str) -> std::sync::Arc<RoutingProfile> {
+        self.profiles.get(name).map_or_else(
+            || std::sync::Arc::new(RoutingProfile::allow_all(name)),
+            std::sync::Arc::clone,
+        )
     }
 
     /// Return `true` if a profile with this name exists.
@@ -472,6 +487,12 @@ impl SessionProfileStore {
     /// Remove a session (called on session teardown).
     pub fn remove_session(&self, session_id: &str) {
         self.sessions.write().remove(session_id);
+    }
+
+    /// Sessions holding a profile, for the store-bound tests.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.sessions.read().len()
     }
 }
 

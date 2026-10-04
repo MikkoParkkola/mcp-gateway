@@ -687,17 +687,18 @@ struct RecordProbe {
     events: std::sync::mpsc::Receiver<String>,
 }
 
+// Linux-only (W-L8): the record-FIFO regression needs `mkfifo` and a bounded child.
 #[cfg(target_os = "linux")]
 impl Drop for RecordProbe {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        super::probe::reap(&mut self.child);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
     }
 }
 
+// Linux-only (W-L8): the record-FIFO regression needs `mkfifo` and a bounded child.
 #[cfg(target_os = "linux")]
 fn probe_record_lookup(
     root: &std::path::Path,
@@ -756,6 +757,7 @@ fn probe_record_lookup(
     probe.events.recv_timeout(Duration::from_secs(1))
 }
 
+// Linux-only (W-L8): the record-FIFO regression needs `mkfifo` and a bounded child.
 #[cfg(target_os = "linux")]
 #[test]
 fn s03_fifo_record_refuses_promptly_without_blocking_lookup() {

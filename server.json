@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MikkoParkkola/mcp-gateway",
   "title": "MCP Gateway",
-  "description": "Universal MCP gateway with Meta-MCP discovery, routing, and REST API capabilities.",
+  "description": "Universal MCP gateway: Meta-MCP discovery, routing, REST capabilities, MCP revision bridging.",
   "repository": {
     "url": "https://github.com/MikkoParkkola/mcp-gateway",
     "source": "github",

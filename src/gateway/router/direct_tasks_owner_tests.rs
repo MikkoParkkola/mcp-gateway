@@ -105,6 +105,7 @@ fn key(name: &str, backend: &str) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 
@@ -277,6 +278,14 @@ async fn caller_b_task_subscription_never_reaches_backend() {
         ("Subscriptions/Listen", json!({ "taskIds": [TASK_A] })),
         ("subscriptions/listen", json!({ "taskIds": [] })),
         ("subscriptions/listen", json!({ "taskIds": null })),
+        (
+            "subscriptions/listen",
+            json!({ "notifications": { "taskIds": [TASK_A] } }),
+        ),
+        (
+            "subscriptions/listen",
+            json!({ "notifications": { "taskIds": [] } }),
+        ),
     ] {
         let (status, body) = send(&state, KEY_B, method, params).await;
         assert_refused_without_forward(method, status, &body, &wire);

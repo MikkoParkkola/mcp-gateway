@@ -12,6 +12,7 @@
 //! The refusal cases assert the bytes on disk afterwards, not just the exit
 //! code. "Refused existing state" is only true if the state is still there.
 
+// Unix-only: asserts POSIX mode bits; Windows has no mode bits (owner-only comes from DACLs).
 #![cfg(unix)]
 
 use std::fs;

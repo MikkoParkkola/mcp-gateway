@@ -16,6 +16,7 @@ impl std::fmt::Debug for BackendConfig {
             .field("enabled", &self.enabled)
             .field("transport", &self.transport)
             .field("stop_when_idle_for", &self.stop_when_idle_for)
+            .field("max_frame_bytes", &self.max_frame_bytes)
             .field("timeout", &self.timeout)
             // `env` and `headers` values routinely carry credentials
             // (Authorization bearers, API keys, env-injected secrets). The
@@ -35,6 +36,9 @@ impl std::fmt::Debug for BackendConfig {
             .field("runtime_profile", &self.runtime_profile)
             .field("identity_propagation", &self.identity_propagation)
             .field("account", &self.account)
+            .field("signature_chain", &self.signature_chain)
+            .field("chain_origins", &self.chain_origins)
+            .field("chain_signer", &self.chain_signer)
             .finish()
     }
 }

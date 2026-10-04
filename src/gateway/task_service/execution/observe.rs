@@ -24,6 +24,11 @@ pub(crate) enum CommitStage {
     Dispatched,
     /// A terminal transition was committed (settle/cancel/recover).
     Transitioned,
+    /// A worker committed `input_required` and still owns the handoff.
+    InputRequired,
+    /// Not a write: a `cancel` lost its revision and is about to retry once at
+    /// the one it just re-read. The seam a test uses to move the record again.
+    CancelRetry,
 }
 
 /// After a successful durable write at `stage`, before the worker proceeds.
@@ -69,11 +74,18 @@ impl HandoffRegistry {
         }
     }
 
-    /// Record `id` as owned and hand back the signal its owner listens on.
-    fn insert(&self, id: &str) -> watch::Receiver<bool> {
+    /// Record `id` as owned and hand back the signal its owner listens on, or
+    /// `None` when another owner already holds it. Compare-and-insert: an
+    /// overwrite would replace the owner's cancel sender, and the loser's
+    /// release would then remove the winner's entry.
+    fn try_insert(&self, id: &str) -> Option<watch::Receiver<bool>> {
+        let mut accepted = self.accepted.lock();
+        if accepted.contains_key(id) {
+            return None;
+        }
         let (cancel_tx, cancel_rx) = watch::channel(false);
-        self.accepted.lock().insert(id.to_owned(), cancel_tx);
-        cancel_rx
+        accepted.insert(id.to_owned(), cancel_tx);
+        Some(cancel_rx)
     }
 
     /// Raise the cancellation signal for a task still owned by a worker.
@@ -112,6 +124,11 @@ impl HandoffRegistry {
         self.accepted.lock().is_empty()
     }
 
+    /// How many handoffs are owned right now.
+    pub(crate) fn len(&self) -> usize {
+        self.accepted.lock().len()
+    }
+
     /// The one ownership removal. Reached only from [`Handoff::drop`].
     fn release(&self, id: &str) {
         self.accepted.lock().remove(id);
@@ -138,20 +155,57 @@ pub(crate) struct Handoff {
 }
 
 impl Handoff {
-    /// Take ownership of `id`, and hand back the guard plus the cancellation
-    /// signal its owner listens on.
+    /// Take ownership of `id` if nobody owns it, and hand back the guard plus
+    /// the cancellation signal its owner listens on. The only constructor.
     ///
     /// The guard is live from here, so a drain called between this call and the
     /// spawned owner's first poll already sees the handoff.
-    pub(crate) fn accept(executor: &Arc<TaskExecutor>, id: &str) -> (Self, watch::Receiver<bool>) {
-        let cancel_rx = executor.handoffs.insert(id);
-        (
+    pub(crate) fn try_accept(
+        executor: &Arc<TaskExecutor>,
+        id: &str,
+    ) -> Option<(Self, watch::Receiver<bool>)> {
+        let cancel_rx = executor.handoffs.try_insert(id)?;
+        Some((
             Self {
                 executor: Arc::clone(executor),
                 id: id.to_owned(),
             },
             cancel_rx,
-        )
+        ))
+    }
+
+    /// [`Self::try_accept`], waiting up to `limit` for the current owner to
+    /// release while `keep_waiting` holds (the occupant is a producer still
+    /// unwinding). Subscribe-first, and re-checked on every wake, because
+    /// `released` is one generation channel for every task.
+    pub(crate) async fn accept_when_free(
+        executor: &Arc<TaskExecutor>,
+        id: &str,
+        limit: Duration,
+        keep_waiting: impl Fn() -> bool,
+    ) -> Acceptance {
+        let deadline = tokio::time::Instant::now() + limit;
+        loop {
+            let mut released = executor.handoffs.released.subscribe();
+            if let Some((handoff, cancel_rx)) = Self::try_accept(executor, id) {
+                return Acceptance::Owned(handoff, cancel_rx);
+            }
+            if !keep_waiting() {
+                return Acceptance::Moved;
+            }
+            if !matches!(
+                tokio::time::timeout_at(deadline, released.changed()).await,
+                Ok(Ok(()))
+            ) {
+                // A winner's move to `working` fires no release, so the row
+                // is read once more before the timeout answers.
+                return if keep_waiting() {
+                    Acceptance::Busy
+                } else {
+                    Acceptance::Moved
+                };
+            }
+        }
     }
 
     pub(crate) fn executor(&self) -> &Arc<TaskExecutor> {
@@ -165,6 +219,15 @@ impl Drop for Handoff {
     }
 }
 
+/// What [`Handoff::accept_when_free`] found.
+pub(crate) enum Acceptance {
+    Owned(Handoff, watch::Receiver<bool>),
+    /// Owned by someone else, and the row is no longer waiting for input.
+    Moved,
+    /// Still owned when the wait ran out, with the row still waiting.
+    Busy,
+}
+
 /// Result of a drain: joining every accepted handoff, then acquiring every
 /// worker permit. Clean means no handoff the executor had accepted was still
 /// owned and every committed but unsettled task had released its permit (or
@@ -173,6 +236,15 @@ impl Drop for Handoff {
 pub(crate) struct DrainOutcome {
     pub timed_out: bool,
     pub acquired: usize,
+}
+
+/// What cancelling the workers a timed-out drain left behind did: how many
+/// were still running, and whether every one of them had ended within the
+/// bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CancelOutcome {
+    pub cancelled: usize,
+    pub stopped: bool,
 }
 
 impl DrainOutcome {

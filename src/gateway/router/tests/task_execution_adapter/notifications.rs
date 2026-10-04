@@ -3,8 +3,10 @@
 //! I2 — `notifications/tasks` on a real `subscriptions/listen` stream, and who
 //! is allowed to see one.
 //!
-//! Approved design r3 §6: `ListenRequest` reads `taskIds` from the params
-//! **root** (where `handlers.rs:1034-1046` writes it), `delivers()` matches
+//! Approved design r3 §6, as amended by MIK-7778: `ListenRequest` reads
+//! `taskIds` from the params root and from `notifications.taskIds` (the tasks
+//! extension's placement) as one filter, and the ownership narrowing in
+//! `handlers.rs` rewrites both; `delivers()` matches
 //! `params.taskId` against that list, and the executor emits at the single
 //! `published` tail after a successful durable write. No new authentication
 //! surface, envelope or per-send policy is asked for: the ownership narrowing
@@ -58,6 +60,14 @@ mod helpers;
 // as `helpers`, and so it reads the same stream reader.
 #[path = "listen_scope.rs"]
 mod listen_scope;
+
+// MIK-7778: the task filter under `notifications`, scoped like the root one.
+#[path = "listen_nested.rs"]
+mod listen_nested;
+
+// MIK-7778 PAYLOAD.1: the full task state, re-authorized per reader.
+#[path = "listen_payload.rs"]
+mod listen_payload;
 
 use helpers::{
     ReleasedOnDrop, SUBSCRIPTION_ID_META, TASK_NOTIFICATION, assert_only_its_own_task,
@@ -281,13 +291,13 @@ fn control_the_task_method_is_subscribable_and_request_scoped_ones_are_not() {
     }
 }
 
-/// Control — the filter is read from the params ROOT and matches by task id.
+/// Control — the filter is read from the params root and from
+/// `notifications.taskIds`, and matches by task id.
 ///
-/// Root placement is not a detail: `handlers.rs:1042` writes the narrowed array
-/// to `params.taskIds`, so a parser reading it under `notifications` would
-/// silently never see the narrowing at all.
+/// Both placements are one filter: the ownership narrowing in the handler
+/// rewrites both, so a parser reading only one would miss the other.
 #[test]
-fn control_the_task_filter_is_read_from_the_params_root_and_matches_by_task_id() {
+fn control_the_task_filter_is_read_from_both_placements_and_matches_by_task_id() {
     let named = ListenRequest::from_params(Some(&json!({
         "taskIds": ["task-control-1"],
         "notifications": {}
@@ -315,11 +325,24 @@ fn control_the_task_filter_is_read_from_the_params_root_and_matches_by_task_id()
     let nested = ListenRequest::from_params(Some(&json!({
         "notifications": { "taskIds": ["task-control-1"] }
     })))
-    .expect("an unrecognised key must not sink the request");
+    .expect("the tasks extension names the filter under notifications");
     std::assert!(
-        !delivers(&nested, &task_notification("task-control-1")),
-        "the handler writes `taskIds` at the params root; a filter found \
-         anywhere else was never the one the ownership narrowing rewrote"
+        delivers(&nested, &task_notification("task-control-1")),
+        "the tasks extension names the filter at `notifications.taskIds`"
+    );
+    std::assert!(
+        !delivers(&nested, &task_notification("task-control-2")),
+        "a task the client never named is a task it did not ask for"
+    );
+    let both = ListenRequest::from_params(Some(&json!({
+        "taskIds": ["task-control-1"],
+        "notifications": { "taskIds": ["task-control-2"] }
+    })))
+    .expect("both placements parse");
+    std::assert!(
+        delivers(&both, &task_notification("task-control-1"))
+            && delivers(&both, &task_notification("task-control-2")),
+        "the two placements are one filter, not one overriding the other"
     );
 
     let narrowed = ListenRequest::from_params(Some(&json!({

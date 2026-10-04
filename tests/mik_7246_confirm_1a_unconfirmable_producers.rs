@@ -37,7 +37,7 @@ use mcp_gateway::gateway::destructive_confirmation::{
     ConfirmationOutcome, require_destructive_confirmation,
 };
 use mcp_gateway::gateway::proxy::ProxyManager;
-use mcp_gateway::gateway::streaming::{NotificationMultiplexer, TaggedNotification};
+use mcp_gateway::gateway::streaming::{NotificationMultiplexer, SessionFrame, TaggedNotification};
 use tokio::sync::broadcast::Receiver;
 
 /// The gateway's own elicitation plumbing, plus one live session.
@@ -45,7 +45,7 @@ use tokio::sync::broadcast::Receiver;
 /// The returned `Receiver` MUST be held for the lifetime of the test:
 /// `send_to_session` reports failure when a session has no live subscriber,
 /// and that failure is exactly the `NoSession` arm these tests must avoid.
-fn proxy_with_live_session() -> (Arc<ProxyManager>, Receiver<TaggedNotification>, String) {
+fn proxy_with_live_session() -> (Arc<ProxyManager>, Receiver<SessionFrame>, String) {
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::new(BackendRegistry::new()),
         Config::default().streaming,

@@ -597,8 +597,7 @@ pub(super) fn installed_expired_external(id: &str) -> Arc<AccountStrategyRegistr
             required: false,
             token_exchange_endpoint: None,
             token_exchange_scope: None,
-            strategy,
-            managed: None,
+            minter: crate::identity_propagation::Minter::External(strategy),
         },
         DescriptorMode::External,
     );
@@ -649,6 +648,7 @@ fn caller(verified_identity: Option<&VerifiedIdentity>) -> MetaMcpCallerContext<
         protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
         authorizer: &ALLOW_ALL,
         stdio_nonce: None,
+        caller_key: None,
         verified_identity,
         api_key_name: None,
         agent_id: None,

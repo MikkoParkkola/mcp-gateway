@@ -7,16 +7,17 @@ use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
 
+use super::input_round::Settling;
 use super::settlement::{
-    DispatchSettlement, classify_dispatch, interrupted_before_dispatch, interrupted_result,
-    strip_http_status,
+    backend_output, interrupted_before_dispatch, interrupted_result, strip_http_status,
 };
 use super::upstream::QueryLease;
 use super::{
-    BeginOutcome, Handoff, TaskCall, TaskExecutor, TaskIntent, TaskWrite, UpstreamAnswer,
-    UpstreamCapture, UpstreamHandle, WriteOutcome,
+    BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
+    TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
 };
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
+use crate::gateway::task_service::Target;
 use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::RequestId;
@@ -38,11 +39,12 @@ pub(super) async fn commit_and_run(
     let executor = Arc::clone(handoff.executor());
     let principal = intent.request.principal().to_string();
 
-    let Ok(WriteOutcome::Create(outcome)) = executor
-        .commit(TaskWrite::Create {
+    let Ok(outcome) = executor
+        .commit_create(CreateWrite {
             request: &intent.request,
             task: &task,
             backend: &backend,
+            targets: creation_targets(&intent, &call),
         })
         .await
     else {
@@ -69,6 +71,22 @@ pub(super) async fn commit_and_run(
     .await;
 }
 
+/// The one backend call a `gateway_invoke` or surfaced-tool task makes, known
+/// at creation. A plan names its calls as it dispatches them.
+fn creation_targets(intent: &TaskIntent, call: &TaskCall) -> Vec<Target> {
+    intent
+        .owned
+        .host()
+        .upgrade()
+        .and_then(|host| host.meta_mcp().direct_job(&call.tool, &call.arguments))
+        .map(|job| Target {
+            server: job.server,
+            tool: job.tool,
+        })
+        .into_iter()
+        .collect()
+}
+
 fn split_create(outcome: CreateOutcome) -> (BeginOutcome, Option<OwnedSemaphorePermit>) {
     match outcome {
         CreateOutcome::Created { task, slot } => (BeginOutcome::Created(task), Some(slot)),
@@ -80,7 +98,9 @@ fn split_create(outcome: CreateOutcome) -> (BeginOutcome, Option<OwnedSemaphoreP
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+// The input-round hand-off (`Settling`) added the last lines; the steps
+// read in order here and splitting them would scatter the drop-order rule.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn run_dispatched(
     executor: Arc<TaskExecutor>,
     handoff: Handoff,
@@ -99,7 +119,7 @@ async fn run_dispatched(
     let _slot = slot;
     let fail_upgrade = executor.fail_state_upgrade(&id);
     let Some(state) = (!fail_upgrade)
-        .then(|| intent.owned.state().upgrade())
+        .then(|| intent.owned.host().upgrade())
         .flatten()
     else {
         settle_interrupted(&executor, &principal, &id, revision).await;
@@ -125,7 +145,7 @@ async fn run_dispatched(
     // `not_executed` rather than as `unknown`.
     let mut job = executor
         .recovery()
-        .and_then(|_| state.meta_mcp.direct_job(&call.tool, &call.arguments));
+        .and_then(|_| state.meta_mcp().direct_job(&call.tool, &call.arguments));
     // Trust is a live question with an await in it, so it cannot be a match
     // guard: asked here, after the shape is known and before anything is armed.
     // The verdict is computed first and the option cleared after, so nothing
@@ -168,19 +188,19 @@ async fn run_dispatched(
         return;
     }
 
-    let authorizer = intent.owned.authorizer().borrow(&state);
+    let authorizer = state.authorizer(intent.owned.authorizer());
     let caller = intent.owned.dispatch_context(&state, &authorizer);
     let session_id = intent.owned.session_id().map(str::to_owned);
 
     let submission = job
         .as_ref()
-        .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool)));
+        .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool, &id)));
 
     // The same tail the request thread takes, asked for the backend's own
     // result rather than the synchronous wrapper: design §4 settles a task on
     // that result verbatim, `isError` included, and classifies an interim
     // `input_required` round from it before anything is committed.
-    let dispatch = state.meta_mcp.dispatch_below_gate_native_result(
+    let dispatch = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
         &call.tool,
         call.arguments.clone(),
@@ -202,6 +222,11 @@ async fn run_dispatched(
         }
     };
 
+    let dispatch = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+        Arc::clone(intent.owned.dispatch_log()),
+        dispatch,
+    );
+
     // Awaited into its own binding so the dispatch future — which borrows both
     // the caller context and the armed slot — is dropped before anything below
     // takes them again.
@@ -217,21 +242,31 @@ async fn run_dispatched(
     // A handle in the slot means the peer really did start a task: the
     // dispatch's own return is the `working` stub, not an answer, and settling
     // on it would report a job that has not run as finished.
-    match submission.as_ref().and_then(|slot| slot.handle()) {
-        Some(handle) => {
-            let job = job.expect("a handle is captured only for an armed job");
-            follow_upstream_job(
-                &executor,
-                &state,
-                &principal,
-                &id,
-                revision,
-                (job, handle),
-                &mut cancel_rx,
-            )
-            .await;
-        }
-        None => settle_response(&executor, &principal, &id, revision, response).await,
+    if let Some(handle) = submission.as_ref().and_then(|slot| slot.handle()) {
+        let job = job.expect("a handle is captured only for an armed job");
+        follow_upstream_job(
+            &executor,
+            &state,
+            &principal,
+            &id,
+            revision,
+            (job, handle, caller.relay_caller(session_id.as_deref())),
+            &mut cancel_rx,
+        )
+        .await;
+    } else {
+        let response = inspect_settled(&state, &call, &id, response);
+        Settling::new(
+            &executor,
+            &state,
+            &intent.owned,
+            &call,
+            &principal,
+            &id,
+            revision,
+        )
+        .settle_or_ask(response, &mut cancel_rx)
+        .await;
     }
 }
 
@@ -244,14 +279,18 @@ async fn run_dispatched(
 /// does not stop the job, which is why the follow below still runs.
 async fn follow_upstream_job(
     executor: &Arc<TaskExecutor>,
-    state: &Arc<crate::gateway::router::AppState>,
+    state: &crate::gateway::task_service::host::LiveHost,
     principal: &str,
     id: &str,
     revision: u64,
-    dispatched: (crate::gateway::meta_mcp::upstream::DirectJob, String),
+    dispatched: (
+        crate::gateway::meta_mcp::upstream::DirectJob,
+        String,
+        crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
+    ),
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
-    let (job, handle) = dispatched;
+    let (job, handle, relay) = dispatched;
     let captured = executor
         .capture_upstream(
             principal,
@@ -314,40 +353,61 @@ async fn follow_upstream_job(
             return;
         }
     };
-    match answer {
-        UpstreamAnswer::Completed(result) => {
-            // The identical post-dispatch processing a live dispatch applies,
-            // from the same implementation, before the durable settlement.
-            let event =
+    // The identical post-dispatch processing a live dispatch applies, from the
+    // same implementation, in the dispatch scope so the gates' attribution
+    // notes travel with the transition (MIN.1 gap 1).
+    let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
+        match answer {
+            UpstreamAnswer::Completed(result) => Some(
                 match state
-                    .meta_mcp
+                    .meta_mcp()
                     .recover_task_result(&job.server, &job.tool, None, id, result)
                 {
-                    Ok(processed) => TaskTransition::Complete(processed),
+                    Ok(processed) => {
+                        let processed = backend_output(processed);
+                        let target = (job.server.as_str(), job.tool.as_str());
+                        state
+                            .meta_mcp()
+                            .stage_upstream_result(relay, target, &processed);
+                        TaskTransition::Complete(processed)
+                    }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
                         code: -32603,
                         message: error.to_string(),
                         data: None,
                     }),
-                };
-            executor.settle_cas(principal, id, revision, event).await;
-        }
-        UpstreamAnswer::Failed(error) => {
+                },
+            ),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            let screened = state.meta_mcp.recover_task_error(
-                &job.server,
-                &job.tool,
-                None,
-                id,
-                strip_http_status(error),
-            );
-            executor
-                .settle_cas(principal, id, revision, TaskTransition::Fail(screened))
-                .await;
+            UpstreamAnswer::Failed(error) => {
+                Some(TaskTransition::Fail(state.meta_mcp().recover_task_error(
+                    &job.server,
+                    &job.tool,
+                    None,
+                    id,
+                    strip_http_status(error),
+                )))
+            }
+            // [`poll_to_terminal`] hands back a lease only with a terminal answer.
+            UpstreamAnswer::Live | UpstreamAnswer::Unavailable => None,
         }
-        // [`poll_to_terminal`] hands back a lease only with a terminal answer.
-        UpstreamAnswer::Live | UpstreamAnswer::Unavailable => {}
+    })
+    .await;
+    if let (Some(event), notes) = processed {
+        // Recorded before the commit, still under the lease, as a live call is
+        // recorded before its result is stored.
+        let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
+            server: &job.server,
+            tool: &job.tool,
+            id,
+        };
+        let event = state
+            .meta_mcp()
+            .audit_settlement(task, event, &notes, principal)
+            .await;
+        let stored = executor.settle_cas(principal, id, revision, event).await;
+        state.meta_mcp().commit_staged_relay(stored);
     }
     lease.release(executor, id).await;
 }
@@ -425,7 +485,12 @@ pub(super) enum Marker {
     Failed,
 }
 
-async fn settle_interrupted(executor: &TaskExecutor, principal: &str, id: &str, revision: u64) {
+pub(super) async fn settle_interrupted(
+    executor: &TaskExecutor,
+    principal: &str,
+    id: &str,
+    revision: u64,
+) {
     let event = TaskTransition::Complete(interrupted_before_dispatch());
     executor.settle_cas(principal, id, revision, event).await;
 }
@@ -451,18 +516,44 @@ async fn settle_descriptor_refused(
     executor.settle_cas(principal, id, revision, event).await;
 }
 
-async fn settle_response(
-    executor: &TaskExecutor,
-    principal: &str,
+/// The response firewall on a native task result, under the targets the
+/// synchronous call would use (#2351): a refusal is what the task settles on.
+pub(super) fn inspect_settled(
+    state: &crate::gateway::task_service::host::LiveHost,
+    call: &TaskCall,
     id: &str,
-    revision: u64,
-    response: crate::protocol::JsonRpcResponse,
-) {
-    let event = match classify_dispatch(response) {
-        DispatchSettlement::Complete(result) => TaskTransition::Complete(result),
-        DispatchSettlement::Fail(error) => TaskTransition::Fail(error),
+    mut response: crate::protocol::JsonRpcResponse,
+) -> crate::protocol::JsonRpcResponse {
+    if response.error.is_some() || response.discovery_inspected {
+        return response;
+    }
+    let Some(result) = response.result.as_mut() else {
+        return response;
     };
-    executor.settle_cas(principal, id, revision, event).await;
+    let backend = crate::gateway::router::backend_tool_targets_for_call(
+        state.meta_mcp(),
+        &call.tool,
+        &call.arguments,
+    );
+    let targets =
+        crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);
+    let snapshot = state.meta_mcp().relay_snapshot(result);
+    let refused = state
+        .meta_mcp()
+        .inspect_task_result(&targets, id, result)
+        .is_err();
+    // A redaction changed what the task will deliver: its receipt is rebuilt from it.
+    state
+        .meta_mcp()
+        .restage_if_changed(snapshot, Some(&*result));
+    if refused {
+        response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+            response.id,
+            -32600,
+            "Response blocked by security firewall",
+        );
+    }
+    response
 }
 
 impl TaskExecutor {
@@ -528,46 +619,69 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         event: TaskTransition,
-    ) {
+    ) -> bool {
+        self.settle_cas_with(principal, id, revision, (event, None))
+            .await
+    }
+
+    /// [`Self::settle_cas`] committing a plan's dispatched `targets` in the same
+    /// write as the outcome. A settlement that does not fit the record budget
+    /// becomes a bounded `Failed` with no output (see `settle_bounded`).
+    pub(super) async fn settle_cas_with(
+        &self,
+        principal: &str,
+        id: &str,
+        revision: u64,
+        (event, targets): (TaskTransition, Option<Vec<Target>>),
+    ) -> bool {
         match self
-            .commit(TaskWrite::Settle {
+            .commit_transition(TransitionWrite::Settle {
                 principal,
                 id,
                 revision,
                 event: event.clone(),
+                targets: targets.clone(),
             })
             .await
         {
-            Ok(_) => return,
+            Ok(stored) => return stored_completed(&stored),
             Err(CommitFailure::RevisionConflict) => {}
             Err(_) => {
                 tracing::warn!(task_id = %id, "task settlement write failed");
-                return;
+                return false;
             }
         }
 
         let Ok(owner) = self.service.owner(principal) else {
-            return;
+            return false;
         };
         let Ok(current) = self.service.store.get(owner.as_digest(), id) else {
-            return;
+            return false;
         };
         if is_terminal(current.task.status()) {
-            return;
+            return false;
         }
-        if self
-            .commit(TaskWrite::Settle {
+        let settled = self
+            .commit_transition(TransitionWrite::Settle {
                 principal,
                 id,
                 revision: current.revision,
                 event,
+                targets,
             })
-            .await
-            .is_err()
-        {
+            .await;
+        let Ok(stored) = settled else {
             tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
-        }
+            return false;
+        };
+        stored_completed(&stored)
     }
+}
+
+/// Whether a settlement stored a completed result with output: what a relay
+/// receipt may be committed for. A bounded settlement stores no output.
+fn stored_completed(stored: &CommittedTask) -> bool {
+    stored.task.status() == TaskStatus::Completed && !stored.output_free
 }
 
 fn is_terminal(status: TaskStatus) -> bool {

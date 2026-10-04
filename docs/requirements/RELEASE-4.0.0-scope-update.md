@@ -17,11 +17,14 @@ that every underlying mechanism is absent.
 
 ## Required outcomes
 
-Approved supplemental criteria: 81
+Approved supplemental criteria: 134
 
 Every row below is required for this release. Existing baseline requirements
 remain binding. The IDs follow the existing ticket/component/number convention.
-The approval source for these product requirements is the decision record;
+The approval source for these product requirements is the decision record,
+except MIK-7407.RESPONSE.1-5: MIK-7407 is a required 4.0 security issue the
+ledger lacked, added 2026-09-29 on the lead's instruction under the operator's
+full-4.0-scope ruling, with MIK-7407's own acceptance criteria as the text;
 protocol requirements additionally use the pinned specifications linked below.
 
 | ID | Required outcome | Delivery package |
@@ -116,6 +119,59 @@ Deferred by the same ruling to a later release (tier 4, not criteria here): key 
 | GH1944.CHAIN.1 | A downstream gateway configured to verify a backend's signature chain checks every link against its trusted keys, the pinned origin and last signer, the link-to-link digests and its own nonce, strips and marks a chain that fails, and appends its own link, so a tampered, reordered or dropped hop or a re-signed chain fails verification (ASI07, #1944). | SECURITY |
 | GH1945.COLLUDE.1 | Opt-in verbatim cross-principal relay detection: sensitive content one principal received that another principal then sends onward is reported, or refused under `block`, on the meta route and on the direct route once #1785 lands; one principal never flags itself and relays outside the window are not flagged. ASI10 stays PARTIAL, since other collusion patterns have no sound definition (#1945). | SECURITY |
 | GH1625.BOTREVIEW.1 | Every automated pull-request reviewer finding on pull requests merged to the release line up to the release tip is resolved with a fix commit or an individual written disposition verified at source (no bulk won't-fix), and the #1625 backlog is closed (#1625). | SECURITY |
+| MIK-7407.RESPONSE.1 | Meta HTTP and direct HTTP tool calls enforce the actual response verdict, replace blocked results with a generic JSON-RPC refusal, preserve the request ID and release no blocked payload. | SAFETY |
+| MIK-7407.RESPONSE.2 | Direct and aggregated discovery honor tools/list response policy; allow, scan-disabled, Warn and redaction controls remain correct. | SAFETY |
+| MIK-7407.RESPONSE.3 | The real stdio call/list serving path uses the same enforcement boundary, with one content scan and one response audit per response. | SAFETY |
+| MIK-7407.RESPONSE.4 | Shared finalization happens after wrapping and before signing; blocked results and errors stay unsigned; a successful external gateway_invoke signs the final filtered bytes; detached tasks finalize retained backend results independently of admission acknowledgements. | SAFETY |
+| MIK-7407.RESPONSE.5 | Counted backend negative and positive fixtures prove served behavior on every route, with scan-count and policy-target falsifiers; one immutable delivery-attempt event is recorded after final filtering and signing, hashing the final JSON-RPC response without payloads or credentials. | SAFETY |
+| MIK-7406.VERIFY.1 | On the HTTP delivery path a message-signing test recomputes the HMAC over the delivered bytes with the configured key and rejects a tampered byte, not only the signature's shape; MIK-7377.SIGNING.1 stays met on its stdio evidence (MIK-7406). | SAFETY |
+| MIK-7587.WINDOWS.1 | Every area the Windows CI job skipped is classified as a fixed test assumption, a product defect fixed in 4.0 red-first on the Windows job, or Unix-only by design (cfg-gated with a reason and documented as a Windows limitation), and the Windows job runs every test target (MIK-7587, #1142). | VALIDATION |
+| MIK-7581.DOCS.1 | README, release notes and CHANGELOG lead with 4.0's headline improvements (MCP 2026-07-28 support and the multi-user/enterprise scope), the multi-user guide opens with the enterprise scope, and every highlight cites its file or test (MIK-7581). | VALIDATION |
+| GH2294.AUDIT.1 | A restart that finds the audit log's high-water mark missing records that finding in the chain instead of re-minting the mark from a truncated tail, and live verification fails on it (#2294). | SAFETY |
+| MIK-7116.MIN.1 | Tool responses carry a tenant attribution alongside the existing ContextDataClass, and the attribution is recorded in the audit trail whether or not it triggers a block (MIK-7116). | SECURITY |
+| MIK-7116.MIN.2 | A caller that has read sensitive data attributed to tenant A is flagged (observe mode) or, when blocking is switched on, blocked from reading sensitive data attributed to tenant B; a test proves the verdict and the audit entries for both the read and the verdict (MIK-7116). | SECURITY |
+| MIK-7116.MIN.4 | The tenant guard's false-positive rate is measured against a fixture corpus before blocking is enabled by default, and the guard ships observe-only first (MIK-7116). | SECURITY |
+| MIK-7211.PARENT.1 | The RFC-0060 spike sub-issues U1 and U5 are closed with a recorded answer, not a plan to get one (MIK-7211 AC.1; U2 moved to MIK-7628). | VALIDATION |
+| MIK-7211.PARENT.5 | The compatibility window is recorded as a decision in RFC-0060 with U1's measured data cited, replacing the unmeasured assumption (MIK-7211 AC.5). | VALIDATION |
+| MIK-7211.PARENT.6 | No surface emits cacheScope public on a response computed from session-scoped state, enforced by a type or a lint that is named in the closing record (MIK-7211 AC.6). | SAFETY |
+| MIK-7211.PARENT.7 | Every session-keyed behaviour in the gateway has a named stateless replacement in one inventory before any session code is removed (MIK-7211 AC.7). | VALIDATION |
+| MIK-7217.SEARCH.1 | A test proves a backend speaking 2026-07-28 becomes visible to gateway_search and does not trip the circuit breaker (MIK-7217 AC DISCOVER.6). | VALIDATION |
+| MIK-7217.CLAIMS.1 | The Meta-MCP tool count is asserted unchanged against benchmarks/public_claims.json, not only against a fixed band (MIK-7217 AC DISCOVER.8). | VALIDATION |
+| MIK-7217.STDIO.1 | The stdio server/discover answer advertises 2026-07-28 when the modern protocol is on, asserted by an exact-version test (MIK-7217 AC DISCOVER.1 caveat). | VALIDATION |
+| MIK-7272.OWNER.1 | On modern stdio, keyed writes execute once and replay without another effect; a keyless write executes (no refusal); legacy unkeyed repeats execute twice; all six management branches are tested (MIK-7272 SUB4.STDIO.OWNER.1, amended by operator ruling 2026-09-30). | SAFETY |
+| MIK-7272.OWNER.2 | The same protected task store reopens or relocates and its typed local operator retrieves the task; another store and a same-store HTTP owner cannot retrieve or alias it; exercised through store integration and the independent functional gate, with no global lookup and no new instance UUID (MIK-7272 SUB4.STDIO.OWNER.2). | SAFETY |
+| MIK-7272.OWNER.3 | An injected principal tag or HTTP credential string equal to the stdio serialized spelling cannot select or alias the stdio local operator; only the transport creates the typed tag; same-key owner-specific outputs stay separate and the real stdio owner works (MIK-7272 SUB4.STDIO.OWNER.3). | SAFETY |
+| MIK-7272.OWNER.4 | A ToolPolicy denial refuses a local-operator mutation before retained-output delivery with zero dispatch to the denied target, while a permitted neighbouring target works (MIK-7272 SUB4.STDIO.OWNER.4). | SAFETY |
+| MIK-7272.OWNER.5 | The real stdio-created context carries its execution principal but no verified identity, personal account or delegated grant; account-dependent calls are refused and an ordinary local mutation works (MIK-7272 SUB4.STDIO.OWNER.5). | SAFETY |
+| MIK-7272.LIFE.1 | A held legacy RPC can be cancelled and joined: cancelling it releases the held exchange and its waiter gets a terminal answer, with nothing left pending (MIK-7272 SUB4.BRIDGE.LIFE.1). | BRIDGE |
+| MIK-7324.COV.3 | Every coverage or mutation floor miss on the final revision is closed with tests or accepted as a written waiver naming the module and the reason (MIK-7324 COV.3). | VALIDATION |
+| MIK-7216.IDEM.1 | Every exposed capability and tool is classified read-only or side-effecting as data, not only backend tools that declare annotations (MIK-7216 IDEM.1). | SAFETY |
+| MIK-7216.IDEM.5 | One test kills the response stream mid-flight on a side-effecting call, re-issues it per the specification and asserts the backend effect happened exactly once (MIK-7216 IDEM.5). | SAFETY |
+| MIK-7216.IDEM.6 | The same stream-kill test asserts a read-only call is unaffected by the idempotency path and is simply re-sent (MIK-7216 IDEM.6). | SAFETY |
+| MIK-7217.ERA.1 | When a backend's transport is replaced by force_restart while a re-probe is in flight, the in-flight probe's answer is refused and the recorded era is unchanged (MIK-7217 ERA.1). | VALIDATION |
+| MIK-7217.ERA.2 | In that sequence the refusal writes an era_probe_discarded record naming the reason (MIK-7217 ERA.2, the OBS.3 record). | VALIDATION |
+| MIK-7217.ERA.3 | Without a restart a re-probe answer is committed as today, with no regression in a_contradiction_reprobes_and_the_whole_read_moves_with_it (MIK-7217 ERA.3). | VALIDATION |
+| MIK-7630.EVENTS.1 | server/discover advertises the events capability only when events are enabled and a source is configured; with events off every events/* method answers -32601 and none is proxied to a backend (MIK-7630 AC 1). | EVENTS |
+| MIK-7630.EVENTS.2 | events/list returns webhook-delivery descriptors derived from configured sources (opt-in webhook routes with a field mapping, backend notifications, task settlement), filtered to what the caller may see; an invisible event answers -32011 on subscribe (MIK-7630 AC 2). | EVENTS |
+| MIK-7630.EVENTS.3 | events/subscribe is idempotent on a deterministic id over principal, callback URL, name and JCS-canonical arguments, accepts only whsec_ secrets of 24-64 decoded bytes, and activates only after a single-use challenge echoed by the callback compares equal in constant time, cached per principal and URL (MIK-7630 AC 3). | EVENTS |
+| MIK-7630.EVENTS.4 | Subscriptions and their verification persist across a gateway restart and resume delivery without a re-subscribe; ttlMs is clamped to the configured floor and ceiling and refreshBefore is null only when no expiry was requested and allowed (MIK-7630 AC 3). | EVENTS |
+| MIK-7630.EVENTS.5 | Outbound delivery is HTTPS only, checks and pins the resolved address at connect time through the SSRF destination policy, follows no redirect, never sends a body over 256 KiB, keeps one webhook-id per event across retries, signs every attempt afresh and does not retry 410 or 413 (MIK-7630 AC 4). | EVENTS |
+| MIK-7630.EVENTS.6 | A delivered body carries only eventId, name, timestamp, data, cursor and the provenance _meta; the gateway adds no instruction text to the payload (MIK-7630 AC 5). | EVENTS |
+| MIK-7630.EVENTS.7 | events/unsubscribe is idempotent, requires an authenticated principal, can address only the caller's own subscription and cancels its pending deliveries (MIK-7630 AC 6). | EVENTS |
+| MIK-7630.EVENTS.8 | An end-to-end test drives a signed inbound webhook to a filtered subscription and a receiver that verifies every signature, and one ChatGPT run over a tunnel completes subscribe, verification, delivery and unsubscribe (MIK-7630 AC 7). | EVENTS |
+| MIK-7630.SOURCE.1 | Backend MCP notifications (tools, resources and prompts list_changed and resources/updated) from 2026-07-28 HTTP, pre-2026 HTTP and stdio backends become events, opening an upstream subscription only while an event subscription needs it (MIK-7630 extended scope). Three kinds of backend are excluded, and a subscription to backend.<name>.resource_updated, resources_changed or prompts_changed on one is refused with -32014 and a named reason, never silently empty: A2A backends; HTTP backends on the legacy SSE-handshake path; backends reached with an identity-propagated credential, and backends reached with a per-user credential on a multi-user gateway (decisions mik_7630_events_source1_exclusions and mik_7630_events_per_user_scope). The exclusion exists so that a shared listener cannot fan one user's credentialed events out to other users; on a single-user gateway there is no other user, so a per-user credential is admitted there. | EVENTS |
+| MIK-7630.SOURCE.2 | A task reaching a terminal state becomes a task.settled event delivered only to the task's owner, without the task result (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.SOURCE.3 | Event sources plug in through one adapter interface with refcounted first- and last-subscriber hooks, so a test-only source is delivered end to end without changing the events core (MIK-7630 extended scope; the 4.0.1 sources depend on it). | EVENTS |
+| MIK-7630.SAFETY.1 | Every event payload passes the response firewall before it is written for delivery; a block verdict dead-letters it and replay re-scans (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.2 | Every delivery attempt writes one MIN.1-attributed audit record holding the body hash, callback host, attempt number and tenant attribution, never the body or secret (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.3 | Visibility and the tenant guard apply to events/list, events/subscribe and every fan-out, so revoked access stops delivery at the next event (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.4 | whsec secrets are stored owner-only and appear in no log, audit record, RPC answer, admin answer or dead-letter listing (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.5 | Subscriptions are capped per principal and globally (-32013), each subscription is rate-limited by delay rather than drop, and deliveries are charged through cost governance (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.SAFETY.6 | Each delivered event carries the gateway provenance receipt in _meta, inside the signed body (MIK-7630 extended scope). | SAFETY |
+| MIK-7630.RELIABLE.1 | Pending deliveries are held in a durable outbox, retried with bounded exponential backoff within 15 minutes and resumed after a restart with the same webhook-id (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.RELIABLE.2 | Event ids are stable per occurrence and subscription across retries, restarts and replays, and inbound webhook repeats are dropped by delivery id where a route configures one (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.RELIABLE.3 | Undeliverable events go to a dead-letter store with a reason and can be listed and replayed through an admin route and CLI, with the Meta-MCP tool count unchanged (MIK-7630 extended scope). | EVENTS |
+| MIK-7630.DISCOVER.1 | Events visible to a caller are returned by gateway_search as kind event with their input schema (MIK-7630 extended scope). | DISCOVERY |
 
 ## Boundaries
 
@@ -152,3 +208,18 @@ automated execution-to-evidence binding is a later improvement. The supplemental
 checker enforces reference existence and completeness, not the truth of a test
 report. Reviewers must still assess evidence applicability and quality. Planned
 test files and ignored tests are not completed feature evidence.
+
+### Linear tickets mapped onto existing rows (operator chat ruling C1)
+
+Ruling C1 is recorded in `docs/requirements/RELEASE-4.0.0-operator-decisions.md`, section "Operator rulings given in chat" (added by #2385).
+
+- MIK-7217 (server/discover): the MIK-7217.DISCOVER.* and MIK-7217.OUTBOUND.* baseline rows (MET), plus MIK-7217.SEARCH.1, CLAIMS.1, STDIO.1 and ERA.1-3 above. The other-repository half (Linear MCP728.DISCOVER.2: trvl, hebb, nab, metacognition, throttla) moved to MIK-7629: decision `portfolio_halves_outside_4_0` (operator ruling C5).
+- MIK-7272 (two revisions behind): the MIK-7272.RESULT/ERROR/ORDER/SUB/EXT/OAUTH/OTEL/TASK baseline rows, all MET or N/A, plus MIK-7272.OWNER.1-5 and LIFE.1 above (the SUB4.STDIO.OWNER and SUB4.BRIDGE.LIFE ACs; ids shortened to the ledger's TICKET.COMPONENT.N form).
+- MIK-7211 (portfolio-wide dual generation): for this repository, the MIK-7215.STATELESS.* baseline rows (MET) plus MIK-7211.PARENT.1, 5, 6 and 7 above. Gateway halves of AC.2-4: AC.2 -> MIK-7217.DISCOVER.1a/1b, AC.3 -> MIK-7272.RESULT.1, AC.4 -> NFR.COMPAT.1, all MET. The other-repository halves of AC.2-4 moved to MIK-7628: decision `portfolio_halves_outside_4_0` (operator ruling C5).
+- MIK-7324 (coverage and mutation): NFR.BUILD.1 C5/C6 plus MIK-7324.COV.3 above.
+- MIK-7216 (idempotency, sub-issue of MIK-7211): IDEM.2 -> MIK-7212.MRTR.10b, IDEM.3 -> MIK-7212.MRTR.10a, IDEM.4 -> MIK-7272.SUB.4 (keyless stdio calls admitted per operator ruling C4 unless server.idempotency_key is required; no HTTP exemption), IDEM.7 -> MIK-7212.MRTR.10a and NFR.COMPAT.1, all MET; IDEM.1, 5 and 6 are rows above.
+- MIK-7219 (U2 hebb de-fork spike): moved to MIK-7628 with the MIK-7211 other-repository halves; MIK-7211.PARENT.1 no longer requires it.
+- MIK-7407 (response firewall): the MIK-7407.RESPONSE.* rows added by #2387.
+- MIK-7481 (container never started in CI): NFR.PKG.1 (MET), whose row names MIK-7481 as owner; the smoke runs on the scan image (.github/workflows/docker.yml:293-294, scripts/ci/smoke-image.sh), carried from #568 (c8803f066).
+- MIK-7116 (data minimisation): MIK-7116.TENANT.1 (baseline) plus MIK-7116.MIN.1, MIN.2 and MIN.4 above. MIN.3, MIN.5 and MIN.6 are not 4.0.0 criteria: decision `mik_7116_min_kill_gate` in RELEASE-4.0.0-scope-status.json (operator ruling 2026-09-30); they are tracked in Linear MIK-7627, gated on the post-release MIN.KILL week.
+- MIK-7406 (response signing): MIK-7377.SIGNING.1 (met) plus MIK-7406.VERIFY.1 above.

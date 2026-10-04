@@ -20,6 +20,7 @@ fn api_key(name: &str) -> ApiKeyConfig {
         allowed_tools: None,
         denied_tools: None,
         admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
     }
 }
 
@@ -233,4 +234,98 @@ fn http_identity_adapter_is_not_sole_operator() {
         ServeMode::Http,
         false,
     );
+}
+
+fn bound_config(enabled: bool) -> Config {
+    let yaml = format!(
+        "backends:\n  mail:\n    http_url: https://backend.fixture.test/mcp\n    enabled: {enabled}\n    \
+         account: work\n\
+         accounts:\n  schema_version: accounts.v1\n  enabled: true\n  deployment: single_process\n  \
+         instance_id: unit\n  store_dir: /unused/store\n  authority_dir: /unused/authority\n  \
+         current_key_id: primary\n  keys:\n    primary: env:UNUSED\n  descriptors:\n    \
+         work:\n      mode: personal_managed\n      provider: fixture\n      \
+         resource: https://api.fixture.test/\n      issuer: https://issuer.fixture.test\n      \
+         authorization_endpoint: https://issuer.fixture.test/authorize\n      \
+         token_endpoint: https://issuer.fixture.test/token\n      client_id: fixture-client\n      \
+         redirect_uri: https://gateway.fixture.test/callback\n      \
+         scopes: [read]\n      send_resource_parameter: true\n"
+    );
+    serde_yaml::from_str(&yaml).expect("config parses")
+}
+
+fn install(config: &Config) -> crate::Result<()> {
+    let registry = std::sync::Arc::new(crate::backend::BackendRegistry::new());
+    let meta = crate::gateway::meta_mcp::MetaMcp::new(registry);
+    let keys = std::sync::Arc::new(
+        crate::gateway::oauth::jwks::GatewayKeyPair::generate().expect("a key pair"),
+    );
+    super::install_account_strategies(config, None, &keys, &meta, ServeMode::Http)
+}
+
+/// Mutant: an enabled managed binding with no custody installs nothing and
+/// the backend is later served as though it were a shared one.
+#[test]
+fn a_managed_binding_with_no_custody_is_refused_not_installed_empty() {
+    let error = install(&bound_config(true)).expect_err("no custody must refuse");
+    let text = error.to_string();
+    assert!(text.contains("no account custody was started"), "{text}");
+    assert!(text.contains("'mail'") && text.contains("'work'"), "{text}");
+}
+
+/// Mutant: a disabled backend's binding is held to the custody check, or has a
+/// strategy bound to something that cannot be dispatched to.
+#[test]
+fn a_disabled_backend_binding_is_skipped() {
+    install(&bound_config(false)).expect("a disabled backend has nothing to install");
+}
+
+/// A binding to an external descriptor whose strategy mints nothing. Config
+/// load refuses it (`external_strategy` admits only the two minting
+/// strategies), so it is built here without load validation, as a reload
+/// path that skipped it would. Mutant: the refusal dropped, so a `required`
+/// binding installs nothing and is first discovered at dispatch.
+#[test]
+fn a_binding_to_a_strategy_that_mints_nothing_is_refused_at_install() {
+    let config: Config = serde_yaml::from_str(
+        r"
+accounts:
+  schema_version: accounts.v1
+  deployment: single_process
+  instance_id: unit
+  store_dir: /unused/store
+  authority_dir: /unused/authority
+  current_key_id: primary
+  keys:
+    primary: env:UNUSED
+  descriptors:
+    partner-api:
+      mode: external
+      provider: partner
+      resource: https://external.example.invalid/
+      issuer: https://issuer.example.invalid
+      external_strategy:
+        strategy: passthrough
+        audience: https://external.example.invalid/
+        session_mode: stateless
+        required: true
+backends:
+  partner:
+    http_url: https://backend.example.invalid/mcp
+    account: partner-api
+",
+    )
+    .expect("the fixture parses without load validation");
+    let meta = crate::gateway::meta_mcp::MetaMcp::new(std::sync::Arc::new(
+        crate::backend::BackendRegistry::new(),
+    ));
+    let key =
+        std::sync::Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+
+    let refused = super::install_account_strategies(&config, None, &key, &meta, ServeMode::Http)
+        .expect_err("a binding that mints nothing must refuse");
+
+    let text = refused.to_string();
+    assert!(text.contains("mints no credential"), "{text}");
+    assert!(text.contains("'partner'"), "{text}");
+    assert!(meta.account_strategies().installed("partner-api").is_none());
 }

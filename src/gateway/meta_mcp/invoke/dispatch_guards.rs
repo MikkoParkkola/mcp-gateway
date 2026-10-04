@@ -23,6 +23,36 @@ pub(crate) struct BackendCall<'a> {
     pub trace_id: &'a str,
 }
 
+/// What admitting one backend call leaves behind: the warnings for its result
+/// and, with cost governance on, the reservation on its cost (MIK-7763).
+///
+/// Keep it until the call's spend is recorded, then drop it. Dropping it, on
+/// any path, gives the reservation back, so a refused, failed or cancelled
+/// call holds nothing.
+#[derive(Default)]
+#[must_use = "dropping the admission gives the call's reserved budget back"]
+pub(crate) struct Admission {
+    /// Budget warnings to attach to the result.
+    pub(crate) warnings: Vec<String>,
+    /// Held only for its `Drop`, never read.
+    #[cfg(feature = "cost-governance")]
+    _hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
+}
+
+#[cfg(feature = "cost-governance")]
+impl Admission {
+    /// An admitted call: its warnings and the reservation its check made.
+    pub(crate) fn new(
+        warnings: Vec<String>,
+        hold: Option<std::sync::Arc<crate::cost_accounting::enforcer::SpendHold>>,
+    ) -> Self {
+        Self {
+            warnings,
+            _hold: hold,
+        }
+    }
+}
+
 /// The direct-route classification of a completed dispatch, feeding S3
 /// accounting and S4 payload gating (design doc §2.1a). `spend` marks
 /// whether the call is eligible for spend recording.
@@ -143,13 +173,13 @@ impl MetaMcp {
         not(feature = "cost-governance"),
         allow(clippy::unused_self, clippy::unnecessary_wraps)
     )]
-    pub(crate) fn admit_spend_for(&self, call: &BackendCall<'_>) -> Result<Vec<String>> {
+    pub(crate) fn admit_spend_for(&self, call: &BackendCall<'_>) -> Result<Admission> {
         #[cfg(feature = "cost-governance")]
         return self.admit_spend(call.tool, call.api_key_name);
         #[cfg(not(feature = "cost-governance"))]
         {
             let _ = call;
-            Ok(Vec::new())
+            Ok(Admission::default())
         }
     }
 
@@ -180,9 +210,13 @@ impl MetaMcp {
     }
 
     /// S4 payload: response gates (contract, inspection, context integrity)
-    /// on a successful result.
-    pub(crate) fn gate_payload(&self, call: &BackendCall<'_>, value: Value) -> Result<Value> {
-        self.apply_response_gates(
+    /// on a successful result, and whether a gate replaced it (A3 R2').
+    pub(crate) fn gate_payload(
+        &self,
+        call: &BackendCall<'_>,
+        value: Value,
+    ) -> Result<(Value, super::super::response_security::GateEffect)> {
+        self.apply_response_gates_effect(
             call.server,
             call.tool,
             call.api_key_name,

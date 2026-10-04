@@ -171,8 +171,32 @@ impl KeyServerConfig {
                     "key_server.oidc[{idx}] (issuer '{}') must declare at least one non-empty \
                      audience; an empty `audiences` list accepts a token minted for any client \
                      (audience-confusion, MIK-6784)",
-                    provider.issuer
+                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
                 )));
+            }
+            // MIK-7704: discovery and keys come from these URLs; over cleartext
+            // anyone on the path can swap the keys and mint accepted tokens.
+            if crate::key_server::oidc::is_cleartext_url(&provider.issuer) {
+                return Err(Error::ConfigValidation(format!(
+                    "key_server.oidc[{idx}] issuer '{}' is non-HTTPS and off this machine; \
+                     use https://, or http:// only to a loopback host",
+                    crate::security::http_diagnostics::diagnostic_url(&provider.issuer)
+                )));
+            }
+            for (field, url) in [
+                ("jwks_uri", &provider.jwks_uri),
+                ("discovery_url", &provider.discovery_url),
+            ] {
+                // The URL is not echoed: an operator-written one may carry a query.
+                if url
+                    .as_deref()
+                    .is_some_and(crate::key_server::oidc::is_cleartext_url)
+                {
+                    return Err(Error::ConfigValidation(format!(
+                        "key_server.oidc[{idx}].{field} is non-HTTPS and off this machine; \
+                         use https://, or http:// only to a loopback host"
+                    )));
+                }
             }
         }
         for (idx, policy) in self.policies.iter().enumerate() {
@@ -402,6 +426,89 @@ mod tests {
             ..KeyServerConfig::default()
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    fn refusal(cfg: &KeyServerConfig) -> String {
+        cfg.validate()
+            .expect_err("a cleartext OIDC URL off this machine must refuse to load")
+            .to_string()
+    }
+
+    // MIK-7704: discovery and the JWKS guess are fetched from the issuer URL,
+    // so a cleartext issuer lets anyone on the path swap the signing keys.
+    #[test]
+    fn http_issuer_off_this_machine_is_refused_at_load() {
+        let message = refusal(&enabled_with(vec![provider(
+            "http://idp.example",
+            vec!["a"],
+        )]));
+        assert!(message.contains("non-HTTPS"), "{message}");
+        assert!(message.contains("oidc[0]"), "names the provider: {message}");
+    }
+
+    #[test]
+    fn http_jwks_uri_or_discovery_url_off_this_machine_is_refused_at_load() {
+        let mut jwks = provider("https://idp.example", vec!["a"]);
+        jwks.jwks_uri = Some("http://idp.example/jwks?k=secret".into());
+        let message = refusal(&enabled_with(vec![jwks]));
+        assert!(message.contains("jwks_uri"), "{message}");
+        assert!(
+            !message.contains("secret"),
+            "must not echo the URL: {message}"
+        );
+
+        let mut discovery = provider("https://idp.example", vec!["a"]);
+        discovery.discovery_url =
+            Some("http://idp.example/.well-known/openid-configuration".into());
+        let message = refusal(&enabled_with(vec![discovery]));
+        assert!(message.contains("discovery_url"), "{message}");
+    }
+
+    // Loopback never leaves the machine: the same carve-out the cleartext
+    // backend guard makes. An uppercase scheme is still https.
+    #[test]
+    fn loopback_http_and_uppercase_https_load() {
+        for issuer in [
+            "http://127.0.0.1:8080",
+            "http://localhost",
+            "http://[::1]:9000",
+            "HTTPS://idp.example",
+        ] {
+            let mut p = provider(issuer, vec!["a"]);
+            p.jwks_uri = Some("http://127.0.0.1:39400/.well-known/jwks.json".into());
+            let cfg = enabled_with(vec![p]);
+            assert!(cfg.validate().is_ok(), "{issuer}: {:?}", cfg.validate());
+        }
+    }
+
+    // An issuer may carry userinfo, a tenant path or a query; a refusal is
+    // printed on startup and pasted into support threads, so it echoes the
+    // origin only (MIK-7221).
+    #[test]
+    fn issuer_refusals_echo_only_the_origin() {
+        let cleartext = provider("http://user:pw@idp.example/tenant?k=secret", vec!["a"]);
+        let no_audience = provider("https://user:pw@idp.example/tenant?k=secret", vec![]);
+        for p in [cleartext, no_audience] {
+            let message = refusal(&enabled_with(vec![p]));
+            assert!(
+                message.contains("://idp.example"),
+                "names the origin: {message}"
+            );
+            for leaked in ["user", "pw", "tenant", "secret"] {
+                assert!(!message.contains(leaked), "leaked {leaked:?}: {message}");
+            }
+        }
+    }
+
+    // An issuer that is not a URL (the gateway's own `mcp-gateway`
+    // assertions, examples/token-exchange-live.yaml) is never fetched; only
+    // its explicit jwks_uri is, and that is checked on its own.
+    #[test]
+    fn opaque_issuer_with_explicit_jwks_uri_loads() {
+        let mut p = provider("mcp-gateway", vec!["a"]);
+        p.auto_discover = false;
+        p.jwks_uri = Some("http://127.0.0.1:39400/.well-known/jwks.json".into());
+        assert!(enabled_with(vec![p]).validate().is_ok());
     }
 }
 
