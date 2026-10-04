@@ -770,7 +770,7 @@ async fn a_bridged_prompt_is_recorded_as_it_is_delivered() {
         api_key_name: None,
         trace_id: "t",
     };
-    let prompt = json!({"message": PROSE,
+    let prompt = json!({"message": PROSE, "cacheScope": "public",
         "_meta": {CHAIN_META: {"link": "reserved-chain-text"}, "keep": 1}});
     channel
         .send_request("s", "1", "elicitation/create", Some(prompt.clone()))
@@ -783,4 +783,5 @@ async fn a_bridged_prompt_is_recorded_as_it_is_delivered() {
     }
     assert_eq!(delivered, recorded);
     assert_eq!(delivered["_meta"]["keep"], 1, "{delivered}");
+    assert_eq!(delivered["cacheScope"], "private", "{delivered}");
 }
