@@ -111,17 +111,21 @@ pub(super) struct DirectReads {
 }
 
 impl DirectReads {
+    /// The resolved caller's name, kept as soon as it is known, so even an
+    /// answer refused before the body is read names its caller.
+    pub(super) fn name_caller(&mut self, client: Option<&AuthenticatedClient>) {
+        self.caller = client.map(|client| client.name.clone());
+    }
+
     /// Capture the caller (`key` forms it) and the request params, only when
-    /// the verdict is on, so the default config copies nothing. The caller's
-    /// name and the tool are always kept: every answer is recorded.
+    /// the verdict is on, so the default config copies nothing. The tool is
+    /// always kept: every answer is recorded.
     pub(super) fn capture(
         &mut self,
         state: &AppState,
         request: &Value,
-        client: Option<&AuthenticatedClient>,
         key: impl FnOnce() -> String,
     ) {
-        self.caller = client.map(|client| client.name.clone());
         // As on the meta route: the tool a `tools/call` names, else the method.
         let method = request
             .get("method")
@@ -210,7 +214,12 @@ async fn audited_call_judged(
         external_server: &name,
         external_tool: &reads.tool,
     };
-    let recorded = match frame.answer_document() {
+    // No log, nothing to record: the answer is not copied to be hashed.
+    let document = state
+        .transparency_log
+        .as_ref()
+        .and_then(|_| frame.answer_document());
+    let recorded = match document {
         Some(document) => {
             let read = frame.take_record_fields();
             crate::gateway::meta_mcp::response_security::record_answer_delivery(

@@ -90,8 +90,9 @@ async fn an_audit_withheld_direct_read_records_no_receipt() {
     assert_refused(&fx, &fx.send(Some("b"), &relay).await, 1);
 }
 
-/// The read record `emit_http` writes last can still replace the answer: with
-/// it failing under `fail-closed`, the 503 leaves no receipt either.
+/// The delivery record, which carries the read verdict, can still replace the
+/// answer: with it failing under `fail-closed`, the 503 leaves no receipt
+/// either.
 #[tokio::test]
 async fn a_read_record_failure_leaves_no_direct_receipt() {
     let mut fx = fixture(Setup {
@@ -119,7 +120,6 @@ async fn a_read_record_failure_leaves_no_direct_receipt() {
         .transparency_log = Some(Arc::clone(&log));
     let text = named("t1", PROSE);
     fx.answer_read(Read::Text(text.clone()));
-    // The read verdict rides the delivery record (MIK-7669, as MIK-7799 on /mcp).
     log.fail_next_append_of_kind_for_test("response_delivery_attempt");
     let body = withheld_read(&fx, "a").await;
     assert!(
