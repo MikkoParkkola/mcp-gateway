@@ -401,8 +401,9 @@ async fn a_native_json_text_keeps_its_numbers_in_the_receipt() {
     );
 }
 
-/// MIK-7887: with several staged receipts (a plan) a change cannot be
-/// attributed to one of them, so they are dropped, as before.
+/// MIK-7887: several staged receipts that no plan step staged cannot be told
+/// apart by a change, so they are dropped, as before (a plan's are kept to
+/// its final answer: see `plan`).
 #[tokio::test]
 async fn a_redaction_over_several_receipts_drops_them() {
     let (meta, firewall) = relay_meta();

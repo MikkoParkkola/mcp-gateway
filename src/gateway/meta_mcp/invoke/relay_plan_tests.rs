@@ -417,3 +417,49 @@ async fn removing_a_middle_leaf_keeps_its_neighbours_whole() {
         );
     }
 }
+
+/// Short-field data: step B is a row of fields each shorter than a k-gram, so
+/// its receipt lives only in its run across leaves. A change in A keeps it.
+#[tokio::test]
+async fn a_short_field_step_keeps_its_receipt_through_its_run() {
+    let (meta, firewall) = relay_meta();
+    let row = json!({"city": "Tampere", "street": "Hameenkatu 14", "zip": "33100",
+                     "owner": "Aino Virtanen", "phone": "+358 40 555 0101",
+                     "note": "gate code 4471, dog on premises", "due": "2026-11-02"});
+    let a = format!("{PROSE} {SECRET}");
+    let answer = plan_answer(&json!({"a": text_result(&a), "b": row}));
+    let redacted = plan_answer(&json!({"a": text_result(PROSE), "b": row}));
+    let ((), staged) = meta
+        .collecting_staged(async {
+            for (tool, value) in [("a", text_result(&a)), ("b", row.clone())] {
+                plan_step(async {
+                    meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", tool), &value);
+                })
+                .await;
+            }
+            meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&redacted));
+            meta.rebuild_receipt_from_final(
+                Some(&redacted),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    staged.commit(true);
+    firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "b", &row);
+    let relayed = |who: &str| {
+        let params = json!({"name": "send", "arguments": row.clone()});
+        !firewall
+            .check_relay(
+                RelayCaller::Keyed(who),
+                "alpha",
+                "send",
+                &params,
+                ("s", who),
+            )
+            .allowed
+    };
+
+    assert!(relayed("bob"), "control: bob holds no copy of the row");
+    assert!(!relayed("alice"), "the row was delivered unchanged");
+}
