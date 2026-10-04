@@ -32,12 +32,12 @@
 //! from "expired"; the unit cases in `mik_7212_acs.rs` do that, and these prove
 //! the guard is reached at all.
 
-#[path = "mik_7212_mrtr_component_acs/principal_and_single_use.rs"]
-mod principal_and_single_use;
 #[path = "mik_7212_mrtr_component_acs/arrival.rs"]
 mod arrival;
 #[path = "mik_7212_mrtr_component_acs/forgery_and_bounds.rs"]
 mod forgery_and_bounds;
+#[path = "mik_7212_mrtr_component_acs/principal_and_single_use.rs"]
+mod principal_and_single_use;
 #[path = "mik_7212_mrtr_component_acs/replicas.rs"]
 mod replicas;
 
