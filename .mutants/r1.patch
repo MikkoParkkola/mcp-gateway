@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index 894a40b2c..5a5a2c6a7 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -440,7 +440,7 @@ pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
+     // The literals first, then the scanner (see `redact_untruncated`).
+     let needles = needles(secrets, &[]);
+     if !needles.is_empty() {
+-        scrub_value(value, &needles);
++        let _ = &needles;
+     }
+     #[cfg(feature = "firewall")]
+     REDACTOR.scan_and_redact(value);

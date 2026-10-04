@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index bc341007d..bd4bcc0db 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -467,7 +467,7 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
+             };
+             if needles.iter().any(|needle| {
+                 needle.len() >= MIN_REDACTED_CALLER_VALUE
+-                    && (digits.contains(needle) || same_float(needle))
++                    && (digits.contains(needle) || (same_float(needle) && false))
+             }) {
+                 *value = Value::String("[redacted]".to_owned());
+             }

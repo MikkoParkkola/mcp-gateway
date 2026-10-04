@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index 894a40b2c..289764852 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -481,7 +481,7 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
+                 std::collections::HashMap::new();
+             for (base, item) in renamed {
+                 let mut key = base.clone();
+-                while map.contains_key(&key) {
++                if map.contains_key(&key) {
+                     let n = next.entry(base.clone()).or_insert(1);
+                     *n += 1;
+                     key = format!("{base}#{n}");

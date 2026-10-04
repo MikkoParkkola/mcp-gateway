@@ -1,0 +1,15 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index 894a40b2c..02bd205f6 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -370,9 +370,7 @@ fn scrub(text: &str, needles: &[&str]) -> String {
+     let mut at = 0;
+     while at < text.len() {
+         if covered[at] {
+-            while at < text.len() && covered[at] {
+-                at += 1;
+-            }
++            at += 1;
+             out.push_str("[redacted]");
+         } else {
+             let start = at;

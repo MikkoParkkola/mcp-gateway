@@ -1,0 +1,17 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index 894a40b2c..f03b8ca45 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -241,11 +241,7 @@ fn interpret(
+                     ))
+                 }),
+             CliOutput::Text => Ok(json!({
+-                "text": redact_untruncated(
+-                    &String::from_utf8_lossy(&outcome.stdout),
+-                    secrets,
+-                    &[],
+-                )
++                "text": String::from_utf8_lossy(&outcome.stdout).into_owned()
+             })),
+         };
+     }
