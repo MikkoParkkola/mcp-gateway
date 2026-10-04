@@ -170,84 +170,95 @@ async fn authorize_refuses_an_ineligible_backend() {
     );
 }
 
+/// What a reload does to backend `b` while its catalogue lookup waits.
+#[derive(Clone, Copy)]
+enum Reload {
+    /// The backend stays but turns ineligible.
+    Ineligible,
+    /// The backend leaves the registry.
+    Removed,
+}
+
 /// MIK-7894: the catalogue lookup behind a `resource_updated` verdict waits
 /// on the backend when no snapshot exists, so eligibility and the backend's
-/// presence are read again once it returns. The backend here never answers;
-/// the reload lands while the lookup waits on it (`flips` runs when the
-/// connection arrives), so a check made only before the lookup admits.
-#[tokio::test]
-async fn a_reload_during_the_catalogue_lookup_refuses() {
+/// registration are read again once it returns. The backend here never
+/// answers; `reload` is applied when its connection arrives, while the lookup
+/// waits, so a check made only before the lookup admits.
+async fn refused_after_a_reload_during_the_lookup(reload: Reload) {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
     use crate::events::EventSource as _;
     use crate::events::backend_source::{BackendSource, Upstream};
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    // Which reload lands mid-lookup: the backend turns ineligible, or leaves.
-    for leaves in [false, true] {
-        let reloaded = Arc::new(AtomicBool::new(false));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind");
-        let port = listener.local_addr().expect("addr").port();
-        let flips = Arc::clone(&reloaded);
-        tokio::spawn(async move {
-            let mut held = Vec::new();
-            while let Ok((stream, _)) = listener.accept().await {
-                flips.store(true, Ordering::SeqCst);
-                held.push(stream);
+    let reloaded = Arc::new(AtomicBool::new(false));
+    let registry = Arc::new(BackendRegistry::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (flips, held_registry) = (Arc::clone(&reloaded), Arc::clone(&registry));
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            if let Reload::Removed = reload {
+                held_registry.remove("b");
             }
-        });
-        let registry = Arc::new(BackendRegistry::new());
-        let config = BackendConfig {
-            transport: TransportConfig::Http {
-                http_url: format!("http://127.0.0.1:{port}/mcp"),
-                streamable_http: true,
-                protocol_version: None,
-            },
-            timeout: std::time::Duration::from_secs(1),
-            ..BackendConfig::default()
-        };
-        assert!(registry.register(Arc::new(Backend::new(
-            "b",
-            config,
-            &FailsafeConfig::default(),
-            std::time::Duration::from_secs(60),
-        ))));
-        let gone = Arc::clone(&reloaded);
-        let ineligible: crate::events::backend_source::Ineligible = Arc::new(move || {
-            if !leaves && gone.load(Ordering::SeqCst) {
-                std::iter::once("b".to_owned()).collect()
-            } else {
-                std::collections::BTreeSet::new()
-            }
-        });
-        let listed = Arc::clone(&reloaded);
-        let source = BackendSource {
-            names: Arc::new(move || {
-                if leaves && listed.load(Ordering::SeqCst) {
-                    Vec::new()
-                } else {
-                    vec!["b".to_owned()]
-                }
-            }),
-            upstream: Some(Upstream {
-                listeners: UpstreamListeners::new(registry, Weak::new(), Arc::clone(&ineligible)),
-                ineligible,
-            }),
-        };
-        let verdict = source
-            .authorize(
-                "p",
-                "backend.b.resource_updated",
-                &serde_json::json!({"uri": "file:///a"}),
-            )
-            .await;
-        assert!(
-            reloaded.load(Ordering::SeqCst),
-            "the lookup reached the backend"
-        );
-        let err = verdict.expect_err("refused after the lookup");
-        assert_eq!(err.code, -32012, "leaves {leaves}");
-    }
+            flips.store(true, Ordering::SeqCst);
+            held.push(stream);
+        }
+    });
+    let config = BackendConfig {
+        transport: TransportConfig::Http {
+            http_url: format!("http://127.0.0.1:{port}/mcp"),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        timeout: std::time::Duration::from_secs(1),
+        ..BackendConfig::default()
+    };
+    assert!(registry.register(Arc::new(Backend::new(
+        "b",
+        config,
+        &FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ))));
+    let turned = Arc::clone(&reloaded);
+    let ineligible: crate::events::backend_source::Ineligible = Arc::new(move || {
+        if matches!(reload, Reload::Ineligible) && turned.load(Ordering::SeqCst) {
+            std::iter::once("b".to_owned()).collect()
+        } else {
+            std::collections::BTreeSet::new()
+        }
+    });
+    let source = BackendSource {
+        names: Arc::new(|| vec!["b".to_owned()]),
+        upstream: Some(Upstream {
+            listeners: UpstreamListeners::new(registry, Weak::new(), Arc::clone(&ineligible)),
+            ineligible,
+        }),
+    };
+    let verdict = source
+        .authorize(
+            "p",
+            "backend.b.resource_updated",
+            &serde_json::json!({"uri": "file:///a"}),
+        )
+        .await;
+    assert!(
+        reloaded.load(Ordering::SeqCst),
+        "the lookup reached the backend"
+    );
+    let err = verdict.expect_err("refused after the lookup");
+    assert_eq!(err.code, -32012);
+}
+
+#[tokio::test]
+async fn a_backend_made_ineligible_during_the_lookup_is_refused() {
+    refused_after_a_reload_during_the_lookup(Reload::Ineligible).await;
+}
+
+#[tokio::test]
+async fn a_backend_removed_during_the_lookup_is_refused() {
+    refused_after_a_reload_during_the_lookup(Reload::Removed).await;
 }
