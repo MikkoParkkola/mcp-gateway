@@ -23,8 +23,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use delivery::{
-    DEADLINE, audit_mentioning, dead_with_reason, delivery_config, events_at_least, fast_retry,
-    fire, sha256_hex, start, start_cfg, subscribe, unsubscribe, wait_until,
+    DEADLINE, INBOUND_SECRET_ENV, audit_mentioning, dead_with_reason, delivery_config,
+    events_at_least, fast_retry, fire, fire_signed, sha256_hex, signed_inbound_config, start,
+    start_cfg, start_cfg_env, subscribe, unsubscribe, wait_until,
 };
 use gateway::{ALICE, EVENT, Gateway};
 use receiver::{ConnCounter, EventReply, Received, Receiver, whsec};
@@ -428,18 +429,34 @@ async fn delivery_status_never_echoes_receiver_content() {
     assert!(!gw.all_logs().contains(&canary), "log lines");
 }
 
-/// T43 (EVENTS.8): the full chain into a signature-checking receiver; a
+/// T43 (EVENTS.8): the full chain from a signed inbound webhook into a
+/// signature-checking receiver. The route requires `X-Hub-Signature-256`: an
+/// unsigned or wrongly keyed POST is refused 401 and delivers nothing. A
 /// non-matching filter delivers nothing and unsubscribe stops delivery.
-/// Substitution: the inbound POST is unsigned (the fixture sets
-/// `webhooks.require_signature: false`); the outbound side is fully checked.
 #[tokio::test]
 async fn end_to_end_with_a_signature_checking_receiver() {
+    const INBOUND_KEY: &str = "events-t43-inbound-hmac-key";
     let root = tempfile::tempdir().expect("root");
     let rx = Receiver::start(root.path()).await;
-    let gw = start(root.path(), &rx, json!({})).await;
+    let cfg = signed_inbound_config(root.path(), &json!({}));
+    let gw = start_cfg_env(root.path(), &rx, cfg, &[(INBOUND_SECRET_ENV, INBOUND_KEY)]).await;
     let secret = whsec(32);
     let id = subscribe(&gw, ALICE, &rx.url, &secret, json!({"repo": "o/r"})).await;
-    fire(&gw, "d-43a", "o/r").await;
+    assert_eq!(
+        gw.webhook("d-43u", &delivery::push("o/r")).await,
+        401,
+        "an unsigned inbound POST is refused"
+    );
+    assert_eq!(
+        fire_signed(&gw, "d-43w", "o/r", "not-the-route-key").await,
+        401,
+        "a wrongly keyed inbound POST is refused"
+    );
+    let accepted = fire_signed(&gw, "d-43a", "o/r", INBOUND_KEY).await;
+    assert!(
+        (200..300).contains(&accepted),
+        "signed inbound answered {accepted}"
+    );
     let posts = events_at_least(&rx, 1).await;
     let post = &posts[0];
     assert!(post.signed_by(&secret), "valid Standard Webhooks signature");
@@ -451,14 +468,26 @@ async fn end_to_end_with_a_signature_checking_receiver() {
     assert!((ts - arrived_unix(post)).abs() <= 300, "fresh timestamp");
     assert_eq!(post.json()["data"]["fields"]["repo"], "o/r");
     let settle = Duration::from_millis(1500);
-    fire(&gw, "d-43b", "other/x").await;
+    let other = fire_signed(&gw, "d-43b", "other/x", INBOUND_KEY).await;
+    assert!(
+        (200..300).contains(&other),
+        "signed inbound answered {other}"
+    );
     tokio::time::sleep(settle).await;
-    assert_eq!(rx.events().len(), 1, "a non-matching repo delivers nothing");
+    assert_eq!(
+        rx.events().len(),
+        1,
+        "refused POSTs and a non-matching repo deliver nothing"
+    );
     assert_eq!(
         unsubscribe(&gw, ALICE, &rx.url, json!({"repo": "o/r"})).await,
         json!({})
     );
-    fire(&gw, "d-43c", "o/r").await;
+    let after = fire_signed(&gw, "d-43c", "o/r", INBOUND_KEY).await;
+    assert!(
+        (200..300).contains(&after),
+        "signed inbound answered {after}"
+    );
     tokio::time::sleep(settle).await;
     assert_eq!(rx.events().len(), 1, "nothing after unsubscribe");
 }
