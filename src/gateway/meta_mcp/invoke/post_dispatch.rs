@@ -7,7 +7,7 @@
 use serde_json::Value;
 use tracing::debug;
 
-use super::{classify_from_detail, dispatch_error_result, withheld_side_effect};
+use super::{INVOKE_TARGET, classify_from_detail, dispatch_error_result, withheld_side_effect};
 #[cfg(feature = "cost-governance")]
 use crate::cost_accounting::suggestions;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -201,7 +201,7 @@ impl MetaMcp {
                 self.default_cache_ttl,
             )
         {
-            debug!(server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
+            debug!(target: INVOKE_TARGET, server, tool, trace_id, ttl = ?self.default_cache_ttl, "Cached result");
         }
     }
 }

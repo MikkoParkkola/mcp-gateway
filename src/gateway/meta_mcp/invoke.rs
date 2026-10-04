@@ -21,6 +21,11 @@ use crate::identity_propagation::CallerProof;
 /// wants the tool-invocation channel, not one name per outcome.
 const GATEWAY_INVOKE_LOGGER: &str = "gateway.invoke";
 
+/// The `tracing` target of every event `invoke_tool_traced` raises, its
+/// extracted steps included: a step moved into a child module keeps the target
+/// a log filter or a dashboard already names.
+const INVOKE_TARGET: &str = module_path!();
+
 /// The per-user identity-propagation credential resolved once for a single
 /// dispatch (MIK-6704 / ADR-007). Carries the headers to put on the wire and
 /// the cache binding to isolate cached results by user+audience. The default

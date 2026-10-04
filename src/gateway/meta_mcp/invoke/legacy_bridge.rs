@@ -9,8 +9,8 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::{
-    BridgeDispatcher, CallerCredential, GuardedValue, dispatch_error_result, run_input_bridge,
-    uncertain_side_effect, undeclared_gate, withheld_side_effect,
+    BridgeDispatcher, CallerCredential, GuardedValue, INVOKE_TARGET, dispatch_error_result,
+    run_input_bridge, uncertain_side_effect, undeclared_gate, withheld_side_effect,
 };
 use crate::gateway::input_bridge::BridgeError;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -218,7 +218,7 @@ impl MetaMcp {
                     if dispatched && let Some(reservation) = idem_reservation.as_mut() {
                         reservation.fail(&crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body());
                     }
-                    warn!(
+                    warn!(target: INVOKE_TARGET,
                         server,
                         tool,
                         trace_id,
@@ -282,7 +282,7 @@ impl MetaMcp {
                     {
                         reservation.commit(&uncertain_side_effect());
                     }
-                    warn!(
+                    warn!(target: INVOKE_TARGET,
                         server,
                         tool,
                         trace_id,

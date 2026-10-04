@@ -10,7 +10,8 @@ use serde_json::Value;
 use tracing::debug;
 
 use super::{
-    CallerCredential, GATEWAY_INVOKE_LOGGER, GuardedValue, REQUEST_COUNTER, audit, cache_reads,
+    CallerCredential, GATEWAY_INVOKE_LOGGER, GuardedValue, INVOKE_TARGET, REQUEST_COUNTER, audit,
+    cache_reads,
 };
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::prompt_cache::CacheKeyDeriver;
@@ -43,7 +44,7 @@ impl MetaMcp {
             && caller_credential.headers.is_empty()
             && backend.is_some_and(crate::backend::Backend::oauth_requires_per_user_isolation)
         {
-            tracing::warn!(
+            tracing::warn!(target: INVOKE_TARGET,
                 server = %server,
                 "refused: multi-user gateway would serve a gateway-held OAuth token \
                  that is not isolated per user (ADR-008 INV-2)"
@@ -109,21 +110,21 @@ impl MetaMcp {
                     if crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal(
                         &error,
                     ) {
-                        debug!(
+                        debug!(target: INVOKE_TARGET,
                             server,
                             tool, key, trace_id, "Idempotency cache hit (firewall refusal)"
                         );
                         return Err(Error::ResponseFirewallRefused);
                     }
                     let (code, message) = crate::idempotency::cached_error_parts(&error);
-                    debug!(
+                    debug!(target: INVOKE_TARGET,
                         server,
                         tool, key, trace_id, "Idempotency cache hit (failed)"
                     );
                     return Err(Error::json_rpc(code, message));
                 }
                 GuardOutcome::CachedResult(cached) => {
-                    debug!(server, tool, key, trace_id, "Idempotency cache hit");
+                    debug!(target: INVOKE_TARGET, server, tool, key, trace_id, "Idempotency cache hit");
                     self.stage_relay_receipt(
                         caller.relay_caller(session_id),
                         (server, tool),
@@ -155,7 +156,7 @@ impl MetaMcp {
                 }
                 GuardOutcome::Proceed(reservation) => {
                     *idem_reservation = Some(reservation);
-                    debug!(
+                    debug!(target: INVOKE_TARGET,
                         server,
                         tool, key, trace_id, "Idempotency key registered as in-flight"
                     );
@@ -262,7 +263,7 @@ impl MetaMcp {
             && let Some((cached, read)) = cache.get_read(&cache_key)
         {
             cache_reads::restore(read.as_ref());
-            debug!(server, tool, trace_id, "Cache hit");
+            debug!(target: INVOKE_TARGET, server, tool, trace_id, "Cache hit");
             self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &cached);
             if let Some(ref stats) = self.stats {
                 stats.record_cache_hit();
@@ -314,7 +315,7 @@ pub(super) fn log_tool_invoked(
     let declared_label = caller
         .agent_declared
         .map(crate::security::DeclaredAgentLabel::as_str);
-    tracing::info!(
+    tracing::info!(target: INVOKE_TARGET,
         agent_id = %agent_label,
         agent_declared = declared_label,
         server   = %server,
@@ -336,7 +337,7 @@ pub(super) fn log_tool_invoked(
             "trace_id": trace_id,
         })
     });
-    debug!(server, tool, trace_id, "Invoking tool");
+    debug!(target: INVOKE_TARGET, server, tool, trace_id, "Invoking tool");
 }
 
 pub(super) fn derive_prompt_cache_key(args: &Value, session_id: Option<&str>) -> Option<String> {
