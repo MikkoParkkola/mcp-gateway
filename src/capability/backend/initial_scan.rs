@@ -16,6 +16,8 @@ use super::CapabilityBackend;
 /// failed to load.
 const COMPLETE: u8 = 0b01;
 const FAILED: u8 = 0b10;
+/// A capability reload arrived before the scan completed and awaits its turn.
+const RELOAD_HELD: u8 = 0b100;
 
 impl CapabilityBackend {
     /// Mark the backend as still scanning, until
@@ -39,6 +41,28 @@ impl CapabilityBackend {
     pub(crate) fn mark_initial_scan_failed(&self) {
         self.initial_scan
             .fetch_or(FAILED, std::sync::atomic::Ordering::Release);
+    }
+
+    /// A capability reload arrived: hold it if the scan has not completed.
+    /// `true` means it is held and [`Self::take_held_reload`] hands it over
+    /// once the scan is done; `false` means the scan is already complete and
+    /// the caller applies the reload now. One atomic step, so a reload cannot
+    /// slip between the check and the hold.
+    pub(crate) fn hold_reload_until_scan_complete(&self) -> bool {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        self.initial_scan
+            .try_update(AcqRel, Acquire, |bits| {
+                (bits & COMPLETE == 0).then_some(bits | RELOAD_HELD)
+            })
+            .is_ok()
+    }
+
+    /// Whether a reload was held during the scan; clears the hold.
+    pub(crate) fn take_held_reload(&self) -> bool {
+        self.initial_scan
+            .fetch_and(!RELOAD_HELD, std::sync::atomic::Ordering::AcqRel)
+            & RELOAD_HELD
+            != 0
     }
 
     /// Whether [`Self::mark_initial_scan_complete`] has run.
@@ -120,5 +144,35 @@ mod failed_tests {
         assert!(!backend.initial_scan_loaded_every_directory());
         let clean = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
         assert!(clean.initial_scan_loaded_every_directory());
+    }
+}
+
+#[cfg(test)]
+mod held_reload_tests {
+    use std::sync::Arc;
+
+    use super::super::CapabilityExecutor;
+    use super::*;
+
+    /// A reload before the scan completes is held once and handed over once;
+    /// after completion nothing is held and the caller applies it itself.
+    #[test]
+    fn a_reload_is_held_only_while_the_scan_runs() {
+        let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
+        backend.begin_initial_scan();
+        assert!(!backend.take_held_reload(), "nothing held yet");
+        assert!(backend.hold_reload_until_scan_complete());
+        assert!(
+            backend.hold_reload_until_scan_complete(),
+            "held again, still one"
+        );
+        backend.mark_initial_scan_complete();
+        assert!(backend.take_held_reload(), "handed over");
+        assert!(!backend.take_held_reload(), "only once");
+        assert!(
+            !backend.hold_reload_until_scan_complete(),
+            "complete: the caller applies it now"
+        );
+        assert!(!backend.take_held_reload(), "and nothing was left held");
     }
 }
