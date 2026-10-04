@@ -168,6 +168,7 @@ backend" and "fails a capability file" first.**
 | 141 | A successful `cli` or `mcp` capability result no longer carries a credential the gateway injected into the child (an env value, or the resolved `token_env`): every string value and key is rewritten to `[redacted]` and the document is otherwise intact; with the `firewall` feature the credential scanner runs on it too. Values the caller sent are left in the result, since a tool legitimately returns them (with the `firewall` feature the scanner can still replace one that looks like a credential). Without the `firewall` feature only the literal removal of injected values applies: a credential the child invents or reads from elsewhere is not recognised, in results or in error text. The removal is literal: a credential the child encodes (base64, URL escapes) or splits across separate values is not matched. Numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, ... | A capability whose tool must return an injected value cannot: read it from the child's own source instead |
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
+| 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified` | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3797,6 +3798,23 @@ match.
 
 **Action:** a client that reads `items.properties` reads `items.anyOf[0].properties` for tool rows
 and `items.anyOf[1]` for event rows. Raise `limit` to see more event rows when tools fill it.
+
+## 144. A capability's pin state and process configs are read-only outside the crate
+
+**Startup:** no notice, a library API change rather than a change to running behaviour
+
+`mcp_gateway::capability::ProvidersConfig` carried two public fields: `process`, the typed
+configuration of each `cli` or `mcp` provider, and `integrity`, the pin state of the file the
+definition came from. A process provider runs only when `integrity` is `Integrity::Verified`, so a
+program built on the crate could set that field on a definition it built itself and run a local
+process from a definition that never passed the pin check. Both fields are now crate-private. They
+are read through `ProvidersConfig::process()` and `ProvidersConfig::integrity()`, and only the
+capability loader sets `Verified`. A definition deserialized or built any other way stays
+`Unpinned`, as before.
+
+**Action:** an embedder that read `providers.process` or `providers.integrity` calls the getter of
+the same name. One that set `integrity` loads the definition through the capability loader, which
+checks its `sha256:` pin.
 
 ## Upgrading from 3.5.x: a walkthrough
 

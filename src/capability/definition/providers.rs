@@ -25,11 +25,11 @@ pub struct ProvidersConfig {
     /// (`cli`, `mcp`; MIK-7782), keyed like `named` (`fallback[i]` for a
     /// fallback entry). Filled at load only, so a definition built any other
     /// way has none and cannot run a process.
-    pub process: HashMap<String, ProcessConfig>,
+    pub(crate) process: HashMap<String, ProcessConfig>,
     /// Whether the file these providers came from carried a pin that matched.
     /// Only `parse_capability_file` sets [`Integrity::Verified`]; a process
     /// provider of an `Unpinned` definition never runs (MIK-7782).
-    pub integrity: Integrity,
+    pub(crate) integrity: Integrity,
 }
 
 /// Pin state of the file a definition was loaded from.
