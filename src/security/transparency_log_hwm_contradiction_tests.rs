@@ -123,6 +123,9 @@ fn a_tail_ahead_of_the_mark_is_checked_against_the_record_at_the_mark() {
                 tamper,
                 "signed {signed}, tampered {tamper}"
             );
+            if !tamper {
+                assert!(verify(&path, signed).ok, "honest lagging mark, signed {signed}");
+            }
         }
     }
 }
@@ -155,6 +158,9 @@ fn a_mark_naming_a_sealed_segment_is_checked_against_its_seal() {
         append(&l, 9);
         drop(l);
         assert_eq!(!marks(&path).is_empty(), tamper, "tampered {tamper}");
+        if !tamper {
+            assert!(verify(&path, false).ok, "honest sealed mark");
+        }
     }
 }
 
@@ -253,4 +259,62 @@ fn an_honest_restart_records_no_finding() {
         assert!(marks(&path).is_empty(), "false finding (signed: {signed})");
         assert!(verify(&path, signed).ok, "signed: {signed}");
     }
+}
+
+/// Write `records` back as the active file, one JSON line each, as found.
+fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
+    let text: String = records.iter().map(|r| format!("{r}\n")).collect();
+    std::fs::write(path, text).unwrap();
+}
+
+/// Restart a log whose mark lags its tail by one record, after `edit` has
+/// changed the active file, and report whether the restart recorded a finding.
+fn lagging_mark_restart_finds(signed: bool, edit: impl FnOnce(&mut Vec<serde_json::Value>)) -> bool {
+    use super::rotation_tests::SECRET;
+    use super::segments::{HighWater, encode_hwm, write_hwm};
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let secret = if signed { SECRET.as_bytes() } else { b"" };
+    let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+    (0..5).for_each(|i| append(&l, i));
+    drop(l);
+    let mut records = lines(&path);
+    let mark = HighWater {
+        counter: records[3]["counter"].as_u64().unwrap(),
+        entry_hash: records[3]["entry_hash"].as_str().unwrap().into(),
+        segment_seq: 0,
+    };
+    write_hwm(&path, &encode_hwm(&mark, secret, "test").unwrap(), true).unwrap();
+    edit(&mut records);
+    write_lines(&path, &records);
+    let l = TransparencyLogger::open(cfg(&path, 12, signed)).unwrap();
+    append(&l, 9);
+    drop(l);
+    !marks(&path).is_empty()
+}
+
+/// The record the mark names is judged on its content, not on the hash it
+/// carries: an edit that keeps the stored `entry_hash` is a finding, so
+/// retention cannot later expire the edited record with nothing recorded.
+#[test]
+fn a_record_at_the_mark_edited_under_its_stored_hash_is_a_finding() {
+    for signed in [false, true] {
+        assert!(!lagging_mark_restart_finds(signed, |_| {}), "control, signed {signed}");
+        let found = lagging_mark_restart_finds(signed, |records| {
+            records[3]["tampered"] = serde_json::Value::Bool(true);
+        });
+        assert!(found, "edited record at the mark accepted, signed {signed}");
+    }
+}
+
+/// The record at the mark is looked up with the scan's line bound: a line
+/// over `MAX_RECORD_BYTES` is a finding, as `hwm_missing_in` counts it, and is
+/// never read into memory whole.
+#[test]
+fn an_oversized_line_beside_the_mark_is_a_finding() {
+    let found = lagging_mark_restart_finds(false, |records| {
+        let filler = "x".repeat(super::rotation::MAX_RECORD_BYTES + 1);
+        records.insert(2, serde_json::Value::String(filler));
+    });
+    assert!(found, "oversized line read past without a finding");
 }
