@@ -24,7 +24,6 @@
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
 1138 tests/mik_7214_header_9_acs.rs
 960 src/protocol/meta.rs
-1132 src/gateway/streaming.rs
 1108 tests/mik_7215_acs.rs
 1087 src/control_plane/mod.rs
 1086 src/oauth/client/tests.rs
