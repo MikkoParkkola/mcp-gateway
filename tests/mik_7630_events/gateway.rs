@@ -133,6 +133,18 @@ impl Gateway {
         std::fs::read_to_string(self.log_path()).unwrap_or_default()
     }
 
+    /// What a row that missed its deadline prints: every gateway log line, so
+    /// a stall names its cause (MIK-7891).
+    pub fn stall_report(&self) -> String {
+        use std::fmt::Write as _;
+        (1..=self.runs).fold(String::new(), |mut out, n| {
+            let log = std::fs::read_to_string(self.root.join(format!("gateway-{n}.log")))
+                .unwrap_or_default();
+            let _ = write!(out, "--- gateway run {n} ---\n{log}");
+            out
+        })
+    }
+
     /// Every log line this directory's children wrote, across restarts.
     pub fn all_logs(&self) -> String {
         (1..=self.runs)

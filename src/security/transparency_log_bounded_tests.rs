@@ -90,7 +90,9 @@ async fn stall_parks_one_blocking_thread() {
     use std::sync::atomic::Ordering;
     let dir = tempfile::tempdir().unwrap();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
-    let release = stall(&l);
+    // A bound the contenders cannot outrun: the held write must still be
+    // inside it when they queue, or they would be refused, not queued.
+    let release = l.stall_next_write_for_test(Duration::from_secs(2));
     let first = tokio::spawn({
         let l = Arc::clone(&l);
         async move { invocation(&l).await }
@@ -120,6 +122,11 @@ async fn stall_parks_one_blocking_thread() {
         l.bound.closures_entered.load(Ordering::Acquire),
         1,
         "one blocking thread parked, not twenty-one"
+    );
+    assert_eq!(
+        l.refused_under_stall_for_test(),
+        0,
+        "contenders were refused, not queued"
     );
     release.release();
 }

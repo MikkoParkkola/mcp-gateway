@@ -138,10 +138,11 @@ impl MetaMcp {
             && profile.backend_allowed(&cap.name)
         {
             let cap_killed = self.kill_switch.is_killed(&cap.name);
+            let mut seen = std::collections::HashMap::new();
             for capability in cap.list_capabilities() {
                 if (!capability.visible_in_states.is_empty()
                     && !capability.visible_in_states.contains(&current_state))
-                    || !cap.is_listed(&capability.name)
+                    || !cap.is_listed_in(&capability.name, &mut seen)
                 {
                     continue;
                 }
@@ -243,10 +244,11 @@ impl MetaMcp {
             && profile.backend_allowed(&cap.name)
         {
             let cap_killed = self.kill_switch.is_killed(&cap.name);
+            let mut seen = std::collections::HashMap::new();
             for capability in cap.list_capabilities() {
                 if (!capability.visible_in_states.is_empty()
                     && !capability.visible_in_states.contains(&current_state))
-                    || !cap.is_listed(&capability.name)
+                    || !cap.is_listed_in(&capability.name, &mut seen)
                 {
                     continue;
                 }
@@ -267,7 +269,7 @@ impl MetaMcp {
                         .iter()
                         .filter(|t| {
                             self.may_invoke(&cap.name, t, scope, session_id).is_ok()
-                                && cap.is_listed(t)
+                                && cap.is_listed_in(t, &mut seen)
                         })
                         .cloned()
                         .collect();

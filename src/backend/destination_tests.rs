@@ -537,3 +537,185 @@ fn a_start_built_before_the_stamp_is_not_published() {
             .is_ok()
     );
 }
+
+/// An HTTP backend whose start is refused before anything can connect: its own
+/// enabled OAuth beside identity propagation, which `create_oauth_client`
+/// refuses at the sink.
+fn refused_before_connecting() -> Arc<Backend> {
+    let idp = crate::identity_propagation::IdentityPropagationConfig {
+        strategy: crate::identity_propagation::PropagationStrategyKind::Passthrough,
+        audience: "https://backend.example".to_string(),
+        required: true,
+        session_mode: crate::identity_propagation::SessionMode::Stateless,
+        token_exchange_endpoint: None,
+        token_exchange_scope: None,
+    };
+    let oauth = crate::config::OAuthConfig {
+        enabled: true,
+        scopes: vec![],
+        client_id: None,
+        client_secret: None,
+        callback_host: None,
+        callback_port: None,
+        callback_path: None,
+        token_refresh_buffer_secs: 300,
+        shared_account: false,
+    };
+    Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: http(),
+            oauth: Some(oauth),
+            identity_propagation: Some(idp),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+/// A backend at `transport` with `headers`, built without config validation
+/// the way an embedder can build one.
+fn unvalidated(transport: TransportConfig, headers: &[(&str, &str)]) -> Arc<Backend> {
+    Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport,
+            headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+// MIK-7855: a start refused before anything connects built nothing, so it
+// leaves the backend un-marked and a later hardened pairing is not refused.
+#[tokio::test]
+async fn a_start_refused_before_connecting_does_not_block_a_hardened_pairing() {
+    let ws = |url: &str| TransportConfig::WebSocket {
+        ws_url: url.to_string(),
+        protocol_version: None,
+    };
+    let http_at = |url: &str| TransportConfig::Http {
+        http_url: url.to_string(),
+        streamable_http: true,
+        protocol_version: None,
+    };
+    for (kind, backend) in [
+        ("http oauth clash", refused_before_connecting()),
+        (
+            "http scheme",
+            unvalidated(http_at("ftp://localhost/mcp"), &[]),
+        ),
+        ("http url", unvalidated(http_at("not a url"), &[])),
+        (
+            "websocket header",
+            unvalidated(ws("ws://127.0.0.1:9/"), &[("bad header", "v")]),
+        ),
+        (
+            "websocket scheme",
+            unvalidated(ws("http://localhost/"), &[]),
+        ),
+        ("websocket url", unvalidated(ws("not a url"), &[])),
+    ] {
+        let registry = Arc::new(BackendRegistry::new());
+        assert!(registry.register(Arc::clone(&backend)));
+        assert!(
+            backend.ensure_started().await.is_err(),
+            "{kind}: the start is refused before connecting"
+        );
+        assert!(
+            !backend.started_unpinned(),
+            "{kind}: nothing connected, so nothing is unpinned"
+        );
+        assert!(pair_hardened(registry).is_ok(), "{kind}");
+        assert_eq!(backend.destination(), DestinationPolicy::Public, "{kind}");
+    }
+}
+
+/// Bounds a wait in a window test, so a regression fails instead of hanging.
+async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(30), wait)
+        .await
+        .unwrap_or_else(|_| panic!("{what} did not happen within 30s"))
+}
+
+/// A loopback HTTP backend with its own OAuth client enabled.
+async fn oauth_at_loopback() -> (Arc<Backend>, Arc<AtomicUsize>) {
+    let (port, accepted) = counting_listener().await;
+    let backend = Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: transport("http://127.0.0.1:{port}/mcp", port),
+            timeout: Duration::from_secs(10),
+            oauth: Some(crate::config::OAuthConfig {
+                enabled: true,
+                scopes: vec![],
+                client_id: None,
+                client_secret: None,
+                callback_host: None,
+                callback_port: None,
+                callback_path: None,
+                token_refresh_buffer_secs: 300,
+                shared_account: false,
+            }),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    (backend, accepted)
+}
+
+// MIK-7855: a start that read its policy before a hardened pairing stamped
+// one, and is held in that window while the pairing runs: before it builds
+// its OAuth client or transport, and before it marks. Nothing is marked yet,
+// so the pairing succeeds and stamps; the start must then notice the stamp it
+// did not build under and refuse rather than connect unpinned, its OAuth
+// discovery included.
+#[tokio::test]
+async fn a_pairing_inside_the_start_window_stops_the_start_connecting() {
+    for (kind, (backend, accepted)) in [
+        ("plain", started_at_loopback().await),
+        ("oauth", oauth_at_loopback().await),
+    ] {
+        let registry = Arc::new(BackendRegistry::new());
+        assert!(registry.register(Arc::clone(&backend)));
+        let gate = Arc::new(super::MarkWindowGate::default());
+        *backend.mark_window_gate.lock() = Some(Arc::clone(&gate));
+
+        let start = tokio::spawn({
+            let backend = Arc::clone(&backend);
+            async move { backend.ensure_started().await }
+        });
+        within("the start reaching the window", gate.reached.notified()).await;
+        assert!(
+            !backend.started_unpinned(),
+            "{kind}: held before the mark, so nothing is marked yet"
+        );
+        assert!(
+            pair_hardened(Arc::clone(&registry)).is_ok(),
+            "{kind}: nothing connected or marked, so the pairing succeeds"
+        );
+        assert_eq!(backend.destination(), DestinationPolicy::Public, "{kind}");
+        gate.release.notify_one();
+
+        let started = within("the start returning", start)
+            .await
+            .expect("start task");
+        assert!(
+            matches!(started, Err(crate::Error::BackendUnavailable(_))),
+            "{kind}: the start built under the old policy is refused, got {started:?}"
+        );
+        assert_eq!(
+            accepted.load(Ordering::SeqCst),
+            0,
+            "{kind}: a successful pairing left an unpinned connection"
+        );
+        assert!(!backend.started_unpinned(), "{kind}");
+    }
+}

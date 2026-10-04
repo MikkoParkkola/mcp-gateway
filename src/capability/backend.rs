@@ -59,6 +59,15 @@ struct IndexedCapabilities {
     tools: Vec<Tool>,
 }
 
+/// True when `new` differs from `old` in any serialised field. A definition
+/// that cannot be serialised is treated as changed (revoke rather than keep).
+fn definition_changed(old: &CapabilityDefinition, new: &CapabilityDefinition) -> bool {
+    match (serde_json::to_value(old), serde_json::to_value(new)) {
+        (Ok(a), Ok(b)) => a != b,
+        _ => true,
+    }
+}
+
 impl IndexedCapabilities {
     /// Insert or replace a capability, maintaining index and tool cache consistency.
     fn upsert(&mut self, cap: CapabilityDefinition) {
@@ -392,10 +401,18 @@ impl CapabilityBackend {
         // bump the shared policy epoch while that lock is still held.
         {
             let mut caps = self.capabilities.write();
-            let kept: std::collections::HashSet<&str> =
-                admitted.iter().map(|c| c.name.as_str()).collect();
-            for gone in caps.index.keys().filter(|n| !kept.contains(n.as_str())) {
-                self.executor.bump_mcp_generation(gone);
+            let incoming: HashMap<&str, &CapabilityDefinition> =
+                admitted.iter().map(|c| (c.name.as_str(), c)).collect();
+            // Revoke the in-flight calls of a capability that is gone OR edited:
+            // a call holding the old definition must not start or replace a
+            // child under the new one (MIK-7870).
+            for (name, &pos) in &caps.index {
+                let revoked = incoming
+                    .get(name.as_str())
+                    .is_none_or(|new| definition_changed(&caps.entries[pos], new));
+                if revoked {
+                    self.executor.bump_mcp_generation(name);
+                }
             }
             caps.replace_all(admitted);
             self.executor.bump_policy_epoch();
@@ -456,11 +473,38 @@ impl CapabilityBackend {
     /// required login (if any) is in place. A name this backend does not hold
     /// is not its to hide, so it counts as listed.
     pub fn is_listed(&self, name: &str) -> bool {
+        self.is_listed_in(name, &mut HashMap::new())
+    }
+
+    /// [`Self::is_listed`] for a pass over many names: `seen` memoises the
+    /// per-provider OAuth lookups, so one listing or search reads each
+    /// provider's token once however many capabilities use it.
+    pub fn is_listed_in(&self, name: &str, seen: &mut HashMap<String, bool>) -> bool {
         self.capabilities.read().get(name).is_none_or(|entry| {
             self.executor
-                .missing_credential(&entry.auth, &mut HashMap::new())
+                .missing_credential(&entry.auth, seen)
                 .is_none()
         })
+    }
+
+    /// The names clients are shown now, sorted. A change between two calls is
+    /// a change of what `tools/list` answers.
+    pub fn listed_names(&self) -> Vec<String> {
+        let mut seen = HashMap::new();
+        let mut names: Vec<String> = self
+            .capabilities
+            .read()
+            .entries
+            .iter()
+            .filter(|entry| {
+                self.executor
+                    .missing_credential(&entry.auth, &mut seen)
+                    .is_none()
+            })
+            .map(|entry| entry.name.clone())
+            .collect();
+        names.sort();
+        names
     }
 
     /// Get a specific capability by name — O(1) via the name index.

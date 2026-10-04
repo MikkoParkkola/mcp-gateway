@@ -387,6 +387,18 @@ impl TaskExecutor {
         }
     }
 
+    /// End every worker spawned from now on before its first step, which is what
+    /// refuses a late task start (its `begin` answers `Unavailable`).
+    pub(crate) fn seal(&self) {
+        self.shutdown.cancel();
+    }
+
+    /// Whether [`Self::seal`] or a cancelling shutdown has closed admission.
+    #[cfg(test)]
+    pub(crate) fn is_sealed(&self) -> bool {
+        self.shutdown.is_cancelled()
+    }
+
     /// Cancel every worker still running and wait, up to `bound`, for each of
     /// them to end.
     ///
@@ -398,7 +410,7 @@ impl TaskExecutor {
     /// `spawn_blocking`, and closing the store joins it.
     pub(crate) async fn cancel_remaining(&self, bound: Duration) -> CancelOutcome {
         let cancelled = self.handoffs.len();
-        self.shutdown.cancel();
+        self.seal();
         let stopped = tokio::time::timeout(bound, self.handoffs.join())
             .await
             .is_ok();

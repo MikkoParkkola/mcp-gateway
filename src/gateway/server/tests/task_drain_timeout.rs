@@ -222,6 +222,7 @@ fn the_stdio_budget_fits_inside_the_teardown_window() {
         ShutdownBudget {
             drain: Duration::from_secs(8),
             cancel: Duration::from_secs(1),
+            close: Duration::from_secs(1),
         },
         "a drain longer than the window leaves room to cancel and close"
     );
@@ -233,6 +234,7 @@ fn the_stdio_budget_fits_inside_the_teardown_window() {
         ShutdownBudget {
             drain: Duration::from_secs(24),
             cancel: Duration::from_secs(3),
+            close: Duration::from_secs(3),
         },
         "HTTP: drain and cancel stay within nine tenths of one timeout"
     );
