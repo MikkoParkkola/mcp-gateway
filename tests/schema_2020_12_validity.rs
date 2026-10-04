@@ -366,24 +366,37 @@ fn composition_sites(schema: &serde_json::Value) -> Vec<String> {
 /// Records what the emitted first-party surface actually contains, and guards
 /// it.
 ///
-/// This asserts an OBSERVATION, not a bound. What "the revision's $ref and
-/// composition bounds" permits is an open question (U9 in the cluster-G test
-/// plan under `docs/design/`), and a test that answered it would be settling a
-/// scheduled unknown by assertion. What is checkable today is that no
-/// published Meta-MCP schema composes at all — so 2020-12 validity plus `$ref`
-/// resolution is the whole of the surface this criterion can currently
-/// observe. The day this row goes red, U9 has to be answered before that
-/// schema ships.
+/// This asserts an OBSERVATION, not a bound. U9 is resolved as reading (c) by
+/// ruling R6 (`docs/design/2026-08-31-cluster-g-tool-schema-2020-12-validity-test-plan.md:410`):
+/// composition is legal 2020-12 and stays observed rather than bounded, and
+/// the published bound is `$ref` resolution (`src/trust/schema_bounds.rs`).
+/// The one known site is the `gateway_search_tools` output schema, whose rows
+/// are a tool or an event (MIK-7819). Any other site fails here, so a new one
+/// is recorded on purpose rather than arriving unseen; the known one must
+/// still be within the resolution bound.
 #[test]
-fn no_meta_mcp_schema_composes_subschemas_today() {
+fn meta_mcp_schemas_compose_only_at_the_known_site() {
+    let known = |name: &str, site: &str| {
+        name.ends_with("/gateway_search_tools [outputSchema]")
+            && site == "/properties/matches/items/anyOf"
+    };
+    let mut observed = 0;
     for (name, schema) in all_meta_tool_schemas() {
-        let sites = composition_sites(&schema);
-        assert!(
-            sites.is_empty(),
-            "tool `{name}` composes subschemas at {sites:?}; the bound this must stay within \
-             is unresolved (U9), so this schema cannot be published until it is answered"
-        );
+        for site in composition_sites(&schema) {
+            assert!(
+                known(&name, &site),
+                "tool `{name}` composes subschemas at {site}, which is not the recorded site; \
+                 record it here on purpose"
+            );
+            observed += 1;
+            assert_eq!(
+                mcp_gateway::trust::SchemaBounds::inspect(&schema),
+                mcp_gateway::trust::SchemaBounds::Within,
+                "`{name}` composes and must still resolve every $ref"
+            );
+        }
     }
+    assert!(observed > 0, "the recorded site is no longer observed");
 }
 
 /// The capability catalogue is the other half of the first-party population,
