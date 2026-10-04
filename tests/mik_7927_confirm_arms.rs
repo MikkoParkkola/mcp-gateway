@@ -234,12 +234,13 @@ async fn an_envelope_for_other_arguments_is_refused_and_not_run() {
 }
 
 /// TEST.3, no free slot: with every in-flight slot held, the gate cannot
-/// hold a question open and must refuse rather than run. The control is the
-/// same call on the same state before the table fills, which is asked.
+/// hold a question open and must refuse rather than run. The control is an
+/// envelope asked before the table filled: redeeming it needs no new slot, so
+/// it must still run the kill on the full table.
 #[tokio::test]
 async fn a_full_exchange_table_is_refused_and_not_run() {
     let (state, _dir) = state().await;
-    ask(&state, 1, "mik7927-full", "admin-a").await;
+    let envelope = ask(&state, 1, "mik7927-full", "admin-a").await;
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -259,4 +260,11 @@ async fn a_full_exchange_table_is_refused_and_not_run() {
     let body = post(&state, kill(2, "mik7927-full", None), "admin-a").await;
     assert_refused(&body);
     assert!(killed(&state).is_empty(), "the tool ran: {body}");
+
+    let body = post(&state, kill(1, "mik7927-full", Some(&envelope)), "admin-a").await;
+    assert_eq!(
+        killed(&state),
+        vec!["mik7927-full".to_owned()],
+        "the earlier envelope must still run the kill: {body}"
+    );
 }
