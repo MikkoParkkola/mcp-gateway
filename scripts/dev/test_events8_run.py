@@ -192,6 +192,15 @@ class UpCleanupTests(unittest.TestCase):
         self.assertNotIn("not an events8 run directory", done.stderr)
         self.assertFalse((d / "keep.txt").exists(), "the previous run's files were left")
 
+    def test_a_directory_left_by_an_earlier_up_is_cleared_again(self):
+        d, _ = self.up(json.dumps({"owner": "events8_run"}))
+        (d / "keep.txt").write_text("from the earlier run")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        self.assertNotIn("not an events8 run directory", done.stderr)
+        self.assertFalse((d / "keep.txt").exists(), "up did not recognise its own marker")
+
 
 if __name__ == "__main__":
     unittest.main()
