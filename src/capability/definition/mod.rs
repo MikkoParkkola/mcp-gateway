@@ -651,6 +651,7 @@ impl CapabilityDefinition {
 mod tests;
 
 #[cfg(test)]
+#[path = "cwe532_debug_redaction_tests.rs"]
 mod cwe532_debug_redaction;
 
 /// `true` when this capability hands a caller-chosen destination to a third
