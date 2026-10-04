@@ -43,7 +43,6 @@ pub(super) fn install(
             .capabilities
             .enabled
             .then(|| config.capabilities.name.clone());
-        let live = Arc::clone(live_config);
         hub.install_backend_source_with_upstream(
             Arc::new({
                 let registry = Arc::clone(&registry);
@@ -55,12 +54,7 @@ pub(super) fn install(
                 }
             }),
             registry,
-            Arc::new(move || {
-                let multi_user = crate::events::upstream_multi_user(live.running());
-                crate::events::upstream_ineligible(&live.get(), multi_user)
-                    .into_keys()
-                    .collect()
-            }),
+            crate::events::upstream_live_ineligible(Arc::clone(live_config)),
         );
     }
     hub.start(meta_mcp.events_services(Arc::clone(live_config), credentials));
