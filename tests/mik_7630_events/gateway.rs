@@ -100,6 +100,44 @@ pub struct Gateway {
     pub client: reqwest::Client,
 }
 
+/// Under coverage, end the child with SIGTERM and give it 10 s to drain, so an
+/// instrumented build writes its profile at exit; a SIGKILL would lose it.
+/// `kill_on_drop` stays the backstop. `stop` and `restart` keep their SIGKILL:
+/// rows use them to simulate a crash.
+// ponytail: this blocks the test's runtime for up to 10 s, so on a
+// current-thread runtime an in-process mock cannot answer the draining child;
+// that child is then SIGKILLed and its profile lost. Coverage-only, and the
+// measured startup row clears its floor anyway; move rows that hold mocks to a
+// multi-thread runtime if a profile proves to matter.
+#[cfg(unix)]
+impl Drop for Gateway {
+    fn drop(&mut self) {
+        if std::env::var_os("LLVM_PROFILE_FILE").is_none() {
+            return;
+        }
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let Some(pid) = child.id() else {
+            return;
+        };
+        let Some(pid) = i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+        else {
+            return;
+        };
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
 impl Gateway {
     pub async fn start(root: &Path, config: Value) -> Self {
         Self::start_with_env(root, config, &[]).await
@@ -172,6 +210,9 @@ impl Gateway {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .envs(std::env::var_os("SystemRoot").map(|root| ("SystemRoot", root)))
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            // Under cargo-llvm-cov the child writes its profile here; env_clear()
+            // would otherwise drop it and the child's coverage with it.
+            .envs(std::env::var_os("LLVM_PROFILE_FILE").map(|p| ("LLVM_PROFILE_FILE", p)))
             .current_dir(&self.root)
             .arg("--config")
             .arg(&config_path)
