@@ -314,7 +314,7 @@ Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BE
 
 ## Why the token math matters
 
-In a client that loads every definition up front, every MCP tool you connect costs context in every request; this README models it at about 150 tokens per tool, an assumed figure rather than a measurement. Connect 20 servers with 100 tools and you have burned roughly 15,000 tokens before the first message, on definitions the AI probably will not use this turn. A client that loads only tool names until one is needed pays far less, so the comparison below is for eager clients. Worse, context limits force you to choose which tools to connect at all, so the agent makes weaker decisions because the right data is out of reach.
+In a client that loads every definition up front, every MCP tool you connect costs context in every request; this README models it at about 150 tokens per tool, an assumed figure rather than a measurement. Connect 20 servers with 100 tools and you have burned roughly 15,000 tokens before the first message, on definitions the AI probably will not use this turn. A client that loads only tool names until one is needed pays far less, so the comparison below is for eager clients. Worse, in an eager client context limits force you to choose which tools to connect at all, so the agent makes weaker decisions because the right data is out of reach.
 
 | | Without gateway | With gateway |
 |---|----------------|--------------|
