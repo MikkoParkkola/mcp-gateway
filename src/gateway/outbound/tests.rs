@@ -545,3 +545,31 @@ fn every_payload_variant_has_a_scan_row() {
     };
     assert_eq!(classify(&Payload::Withheld), "nothing emitted");
 }
+
+/// MIK-7924.NULLRES.4: a backend's `"result": null`, parsed as a typed
+/// response, is a delivered result to the frame and to the judge alike. The
+/// judge shows it by charging the call's A, so a later B is flagged; the
+/// control charges nothing, so the flag is not vacuous.
+#[test]
+fn a_typed_null_result_delivers_to_the_frame_and_the_judge() {
+    let control = firewall(CrossTenantReads::Observe);
+    assert!(!b_flagged(&control), "control: B alone is not flagged");
+
+    let fw = firewall(CrossTenantReads::Observe);
+    let typed: JsonRpcResponse =
+        serde_json::from_value(json!({"jsonrpc": "2.0", "id": 1, "result": null}))
+            .expect("a response");
+    let frame = delivered(
+        &fw,
+        Some(KEY),
+        Payload::Response(typed),
+        Some(&json!({ "customer_id": A })),
+        None,
+    );
+    // The A frame stays unwritten, so its reservation is live when B is judged.
+    assert!(b_flagged(&fw), "the judge charged the call's A");
+    assert!(
+        frame.delivers_result(),
+        "the frame delivers the null result"
+    );
+}

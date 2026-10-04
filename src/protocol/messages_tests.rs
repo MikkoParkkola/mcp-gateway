@@ -419,3 +419,34 @@ fn request_id_display() {
     assert_eq!(RequestId::Number(42).to_string(), "42");
     assert_eq!(RequestId::String("abc".to_string()).to_string(), "abc");
 }
+
+/// MIK-7924.NULLRES.1: a backend's successful `"result": null` is a result,
+/// not an absent member, through both halves of the typed round trip.
+#[test]
+fn a_null_result_survives_the_typed_round_trip() {
+    let wire = serde_json::json!({"jsonrpc": "2.0", "id": 1, "result": null});
+    let typed: JsonRpcResponse = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(typed.result, Some(serde_json::Value::Null));
+    assert_eq!(serde_json::to_value(&typed).unwrap(), wire);
+}
+
+/// MIK-7924.NULLRES.2: an error response still carries no `result`, whether
+/// the peer omitted it or sent it as `null`; a frame with neither member keeps
+/// neither (absent stays absent).
+#[test]
+fn an_error_response_still_serializes_no_result() {
+    let error = serde_json::json!({"code": -32000, "message": "x"});
+    for wire in [
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": error}),
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "error": error, "result": null}),
+    ] {
+        let typed: JsonRpcResponse = serde_json::from_value(wire.clone()).unwrap();
+        assert!(typed.result.is_none(), "{wire}");
+        let back = serde_json::to_value(&typed).unwrap();
+        assert!(back.get("result").is_none(), "{wire} -> {back}");
+        assert_eq!(back["error"], error, "{back}");
+    }
+    let typed: JsonRpcResponse =
+        serde_json::from_value(serde_json::json!({"jsonrpc": "2.0", "id": 1})).unwrap();
+    assert!(typed.result.is_none() && typed.error.is_none());
+}
