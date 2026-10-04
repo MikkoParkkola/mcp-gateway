@@ -975,26 +975,81 @@ async fn replacing_an_mcp_definition_stops_its_children() {
              providers:\n  primary:\n    service: mcp\n    timeout: 20\n    config:\n      \
              command: 'python3'\n      args: ['{script}']\n      transport: stdio\n      \
              tool_selector:\n        param: operation\n        tools:\n          \
-             say: {{ tool: echo, arguments: {{ message: \"{{text}}\" }} }}\n"
+             say: {{ tool: echo, arguments: {{ message: \"{{text}}\" }} }}\n          \
+             spawn: {{ tool: grandchild }}\n"
         )
     };
     let backend = CapabilityBackend::new("test", Arc::new(python_policy_executor()));
     backend
         .register_capability(pinned_from(&body("Probe one.")).await)
         .unwrap();
-    backend
-        .call_tool("mcp_pin_probe", json!({"operation": "say", "text": "hi"}))
+    let out = backend
+        .call_tool("mcp_pin_probe", json!({"operation": "spawn"}))
         .await
         .expect("the pinned mcp definition starts a child");
+    let rendered = serde_json::to_value(&out).unwrap();
+    let text = rendered["content"][0]["text"].as_str().unwrap_or_default();
+    let pid = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v["pid"].as_i64())
+        .expect("grandchild pid")
+        .to_string();
     assert_eq!(backend.executor.mcp_children.len(), 1);
-    backend
-        .register_capability(pinned_from(&body("Probe two.")).await)
+    // Replaced from a plain thread with no Tokio runtime, as an embedder may.
+    let replacement = pinned_from(&body("Probe two.")).await;
+    let backend = Arc::new(backend);
+    let registering = Arc::clone(&backend);
+    std::thread::spawn(move || registering.register_capability(replacement).unwrap())
+        .join()
         .unwrap();
     assert_eq!(
         backend.executor.mcp_children.len(),
         0,
         "the replaced definition's child is stopped"
     );
+    let mut alive = true;
+    for _ in 0..50 {
+        let status = std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .status()
+            .unwrap();
+        if !status.success() {
+            alive = false;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(!alive, "grandchild {pid} outlived the replaced definition");
+}
+
+/// T2d: the exact pinned document parsed without the pin check (so it is
+/// identical in content but `Unpinned`) must not reach the verified one's
+/// cached answer.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unpinned_copy_of_the_pinned_document_meets_the_gate() {
+    let body = pin_probe_body("Pin probe.");
+    let pinned_text = crate::capability::rewrite_with_pin(
+        &body,
+        &crate::capability::compute_capability_hash(&body),
+    );
+    let pinned = pinned_from(&body).await;
+    let unpinned = crate::capability::parse_capability(&pinned_text).unwrap();
+    assert_eq!(
+        unpinned.providers.integrity(),
+        crate::capability::Integrity::Unpinned
+    );
+    let executor = python_policy_executor();
+    let context = CapabilityExecutionContext::default();
+    executor
+        .execute_with_context(&pinned, json!({}), context.clone())
+        .await
+        .expect("pinned runs and is cached");
+    let err = executor
+        .execute_with_context(&unpinned, json!({}), context)
+        .await
+        .expect_err("an unpinned copy must meet the gate, not the cache");
+    assert!(err.to_string().contains("must be pinned"), "{err}");
 }
 
 /// MIK-7814 cost probe, run by hand on the benchmark host:
