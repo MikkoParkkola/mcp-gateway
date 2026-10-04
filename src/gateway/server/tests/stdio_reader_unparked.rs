@@ -30,10 +30,10 @@ struct Served {
     _dir: tempfile::TempDir,
 }
 
-/// A gateway with no backends serving stdio. stdin is large, so the test's
-/// own writes never wait on a parked reader; stdout holds `output_capacity`
-/// bytes. The handshake is done and its answer read.
-async fn serve(output_capacity: usize) -> Served {
+/// A gateway with no backends serving stdio, before any handshake. stdin is
+/// large, so the test's own writes never wait on a parked reader; stdout holds
+/// `output_capacity` bytes.
+async fn start(output_capacity: usize) -> Served {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
     let yaml = format!(
@@ -50,12 +50,17 @@ async fn serve(output_capacity: usize) -> Served {
     let (stdin, input) = tokio::io::duplex(8 << 20);
     let (output, reader) = tokio::io::duplex(output_capacity);
     let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
-    let mut served = Served {
+    Served {
         stdin,
         stdout: BufReader::new(reader).lines(),
         task,
         _dir: dir,
-    };
+    }
+}
+
+/// [`start`], with the handshake done and its answer read.
+async fn serve(output_capacity: usize) -> Served {
+    let mut served = start(output_capacity).await;
     let initialize = json!({
         "jsonrpc": "2.0", "id": "init", "method": "initialize",
         "params": {
@@ -163,8 +168,8 @@ async fn a_reading_client_gets_every_answer() {
             _ => {}
         }
     }
-    batch_ids.sort_by_key(|id| id.as_u64());
-    single_ids.sort_by_key(|id| id.as_u64());
+    batch_ids.sort_by_key(Value::as_u64);
+    single_ids.sort_by_key(Value::as_u64);
     let expected: Vec<Value> = (0..10).chain(200..210).map(|k| json!(k)).collect();
     assert_eq!(batch_ids, expected);
     assert_eq!(single_ids, (100..110).map(|k| json!(k)).collect::<Vec<_>>());
@@ -177,15 +182,22 @@ async fn a_reading_client_gets_every_answer() {
 }
 
 /// T4. An `initialize` that cannot be queued ends the session instead of
-/// parking the reader: with stdin still open and stdout unread, the serve
-/// loop returns within the initialize bound, the drain and the teardown.
+/// parking the reader: the queue is filled before the handshake, and with
+/// stdin still open and stdout unread the serve loop returns within the
+/// initialize bound, the drain and the teardown.
 #[tokio::test]
 async fn an_initialize_on_a_full_stdout_ends_the_session() {
-    let mut served = serve(64).await;
+    let mut served = start(64).await;
     let flood = vec!["{not json"; FLOOD].join("\n");
     send(&mut served.stdin, &flood).await;
+    // The writer takes one frame and blocks on the unread pipe only once the
+    // reader yields; refill the slot it freed, so the queue is full when the
+    // handshake arrives.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    send(&mut served.stdin, &["{not json"; 10].join("\n")).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let initialize = json!({
-        "jsonrpc": "2.0", "id": "init-2", "method": "initialize",
+        "jsonrpc": "2.0", "id": "init-late", "method": "initialize",
         "params": {
             "protocolVersion": "2025-06-18",
             "capabilities": {},
