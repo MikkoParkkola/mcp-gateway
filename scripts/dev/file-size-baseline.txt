@@ -27,7 +27,6 @@
 1040 src/main_tests.rs
 1020 tests/nfr_obs_3_era_observability.rs
 1018 tests/mik_7272_sub4_adr012_acs.rs
-1006 src/protocol/messages.rs
 1004 src/ranking/tests.rs
 978 src/gateway/server/support.rs
 970 src/ranking/mod.rs
