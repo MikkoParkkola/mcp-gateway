@@ -235,8 +235,9 @@ impl Shared {
         record.set_model(&task);
         // Only the peer's authorship is recorded: absent reads as "not
         // established", which is what every gateway error is.
-        record.error_author = (fails && author == ErrorAuthor::Peer).then_some(author);
-        if record.error_author.is_some() {
+        record.error_author = None;
+        if fails && author == ErrorAuthor::Peer && keep_provenance(&task, &mut record) {
+            record.error_author = Some(ErrorAuthor::Peer);
             record.version = record.version.max(ERROR_AUTHOR_VERSION);
         }
         if discard {
@@ -260,4 +261,21 @@ impl Shared {
         self.commit(&record_name(task.id()), &bytes)?;
         Ok(self.publish(task, record))
     }
+}
+
+/// Before a row is raised past [`TARGET_VERSION`], its calls must be stored on
+/// it: a legacy row names them only through its upstream descriptor, which a
+/// current version no longer consults, so raising it bare would read as
+/// "dispatched nothing" and skip the delivery check. `false` when a legacy row
+/// has no call to keep: its authorship is then not recorded (fail closed).
+fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
+    if record.version >= TARGET_VERSION {
+        return true;
+    }
+    let legacy = CommittedTask::of(task.clone(), record).targets;
+    if legacy.is_empty() {
+        return false;
+    }
+    record.targets = legacy;
+    true
 }

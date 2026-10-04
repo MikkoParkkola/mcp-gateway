@@ -64,13 +64,13 @@ async fn a_version_5_row_with_targets_round_trips() {
 }
 
 #[tokio::test]
-async fn the_loader_accepts_versions_1_to_5_and_refuses_6() {
-    for version in 1..=6_u32 {
+async fn the_loader_accepts_versions_1_to_6_and_refuses_7() {
+    for version in 1..=7_u32 {
         let dir = tempfile::tempdir().unwrap();
         let (path, id) = one_row(dir.path()).await;
         set_version(&path.join(format!("{id}.json")), version);
         let opened = TaskStore::open(&path, StoreLimits::default()).await;
-        assert_eq!(opened.is_ok(), version <= 5, "version {version}");
+        assert_eq!(opened.is_ok(), version <= 6, "version {version}");
         if let Ok(store) = opened {
             store.close().await.unwrap();
         }
@@ -283,4 +283,81 @@ async fn settle_bounded_refuses_a_foreign_owner_and_writes_nothing() {
         .unwrap();
     assert_eq!(settled.task.status(), TaskStatus::Cancelled);
     store.close().await.unwrap();
+}
+
+/// A peer-authored failure, settled on a fresh row's revision 1.
+fn peer_failure() -> TaskTransition {
+    TaskTransition::Fail(crate::protocol::JsonRpcError {
+        code: -32042,
+        message: "the peer's words".into(),
+        data: None,
+    })
+}
+
+/// MIK-7887.RECEIPT.1: a row that records its calls is raised to version 6 and
+/// keeps them when its failure is recorded as the peer's.
+#[tokio::test]
+async fn a_peer_failure_on_a_row_with_calls_is_version_6() {
+    use crate::gateway::task_service::ErrorAuthor;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let task = task();
+    store
+        .create(PreparedTask::for_test(&task, OWNER, 1))
+        .await
+        .unwrap();
+    store
+        .add_targets(OWNER, task.id(), 1, vec![target()])
+        .await
+        .unwrap();
+    let settled = store
+        .settle_bounded_by(
+            OWNER,
+            task.id(),
+            2,
+            (peer_failure(), None),
+            ErrorAuthor::Peer,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.error_author, Some(ErrorAuthor::Peer));
+    assert_eq!(settled.targets, vec![target()]);
+    store.close().await.unwrap();
+    let value: Value =
+        serde_json::from_slice(&fs::read(path.join(format!("{}.json", task.id()))).unwrap())
+            .unwrap();
+    assert_eq!(value["version"], json!(6), "{value}");
+    assert_eq!(value["errorAuthor"], json!("peer"), "{value}");
+}
+
+/// MIK-7887.RECEIPT.1 (fail closed): a legacy row that cannot name its calls
+/// is not raised past the version that stores them. Its failure's authorship
+/// is not recorded, so a read neither skips the delivery check nor receipts.
+#[tokio::test]
+async fn a_legacy_row_without_calls_records_no_peer_authorship() {
+    use crate::gateway::task_service::ErrorAuthor;
+    let dir = tempfile::tempdir().unwrap();
+    let (path, id) = one_row(dir.path()).await;
+    set_version(&path.join(format!("{id}.json")), 3);
+    let store = open(&path).await;
+    let settled = store
+        .settle_bounded_by(
+            OWNER,
+            &id,
+            1,
+            (peer_failure(), None),
+            ErrorAuthor::Peer,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.error_author, None);
+    assert!(!settled.targets_recorded, "the row stays legacy");
+    store.close().await.unwrap();
+    let value: Value =
+        serde_json::from_slice(&fs::read(path.join(format!("{id}.json"))).unwrap()).unwrap();
+    assert_eq!(value["version"], json!(3), "{value}");
+    assert!(value.get("errorAuthor").is_none(), "{value}");
 }
