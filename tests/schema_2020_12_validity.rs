@@ -330,7 +330,7 @@ async fn capability_schemas_are_valid_2020_12_and_resolve_their_own_refs() {
 /// own evidence names `allOf`, `anyOf` and `oneOf`; `not` and the
 /// `if`/`then`/`else` trio compose in exactly the same way, so the walk covers
 /// the family rather than the three the sentence happened to list. Widening it
-/// costs nothing while the observed count is zero, and a narrower list would
+/// costs nothing while the observed count is one, and a narrower list would
 /// have to be widened by whoever first meets a conditional schema.
 const COMPOSITION_KEYWORDS: [&str; 7] = ["allOf", "anyOf", "oneOf", "not", "if", "then", "else"];
 
@@ -396,7 +396,10 @@ fn meta_mcp_schemas_compose_only_at_the_known_site() {
             );
         }
     }
-    assert!(observed > 0, "the recorded site is no longer observed");
+    assert_eq!(
+        observed, 1,
+        "the recorded site must be observed exactly once"
+    );
 }
 
 /// The capability catalogue is the other half of the first-party population,
@@ -427,17 +430,17 @@ async fn no_capability_schema_composes_subschemas_today() {
             let sites = composition_sites(&schema);
             assert!(
                 sites.is_empty(),
-                "capability tool `{name}` composes subschemas at {sites:?}; the bound this \
-                 must stay within is unresolved (U9)"
+                "capability tool `{name}` composes subschemas at {sites:?}; composition is \
+                 observed, not bounded (ruling R6), so record the site here on purpose"
             );
         }
     }
 }
 
 /// Falsifier for the two rows above, and it is load-bearing for the same
-/// reason the `$ref` falsifier is: both assertions pass over an empty set
-/// today, so a walker that reported nothing for every input would look
-/// identical.
+/// reason the `$ref` falsifier is: the capability row passes over an empty
+/// set today, so a walker that reported nothing for every input would look
+/// identical there (the meta-tool row would catch it only by its count).
 #[test]
 fn falsifier_a_composed_subschema_is_reported_by_the_same_walker() {
     let flat = serde_json::json!({
