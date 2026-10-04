@@ -126,6 +126,10 @@ fn snapshot(epoch: &std::sync::atomic::AtomicU64) -> CapabilityExecutionContext 
     }
 }
 
+/// T2a-T2d now meet admission before the cache, so they would pass without
+/// the fingerprint in the key; `two_pinned_definitions_of_one_name_never_share_an_answer`
+/// is the test that pins the key itself.
+///
 /// T2a: an executor with no shared epoch must not serve an unpinned
 /// definition the cached answer of a pinned one of the same name.
 #[cfg(unix)]
