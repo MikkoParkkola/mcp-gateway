@@ -169,3 +169,56 @@ async fn authorize_refuses_an_ineligible_backend() {
         "tools_changed is the gateway's own announcement"
     );
 }
+
+/// MIK-7894: the catalogue lookup behind a `resource_updated` verdict can wait
+/// (up to 10s with no snapshot), so eligibility is read again once it returns.
+/// The predicate here answers eligible once and ineligible after: a reload
+/// landing during the lookup. The verdict is `-32012`, not the lookup's `Ok`.
+#[tokio::test]
+async fn a_reload_during_the_catalogue_lookup_refuses() {
+    use crate::events::EventSource as _;
+    use crate::events::backend_source::{BackendSource, Upstream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let asked = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&asked);
+    let ineligible: crate::events::backend_source::Ineligible = Arc::new(move || {
+        if count.fetch_add(1, Ordering::SeqCst) == 0 {
+            std::collections::BTreeSet::new()
+        } else {
+            std::iter::once("b".to_owned()).collect()
+        }
+    });
+    let listeners = UpstreamListeners::new(
+        Arc::new(BackendRegistry::new()),
+        Weak::new(),
+        Arc::clone(&ineligible),
+    );
+    listeners.add("b", &watched("file:///a")).expect("room");
+    listeners
+        .backends
+        .lock()
+        .get("b")
+        .expect("listener")
+        .snapshot
+        .lock()
+        .read(["file:///a".to_owned()].into(), true);
+    let source = BackendSource {
+        names: Arc::new(|| vec!["b".to_owned()]),
+        upstream: Some(Upstream {
+            listeners,
+            ineligible,
+        }),
+    };
+    asked.store(0, Ordering::SeqCst);
+    let err = source
+        .authorize(
+            "p",
+            "backend.b.resource_updated",
+            &serde_json::json!({"uri": "file:///a"}),
+        )
+        .await
+        .expect_err("refused after the lookup");
+    assert_eq!(err.code, -32012);
+    assert_eq!(asked.load(Ordering::SeqCst), 2, "asked before and after");
+}
