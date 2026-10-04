@@ -166,9 +166,9 @@ async fn a_reading_client_gets_every_answer_before_exit() {
         }
     };
     let write = async |stdin: &mut tokio::process::ChildStdin, text: String| {
-        stdin
-            .write_all(text.as_bytes())
+        tokio::time::timeout(WRITE_BOUND, stdin.write_all(text.as_bytes()))
             .await
+            .expect("the gateway keeps reading stdin")
             .expect("write requests");
     };
     write(stdin.as_mut().unwrap(), initialize() + "\n").await;
