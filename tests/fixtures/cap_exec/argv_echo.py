@@ -7,6 +7,7 @@ The FIRST argument is a mode the test fixes in the capability file; it is never
 a caller parameter. Everything after it is reported back exactly as received.
 
   echo                  print {"argv", "stdin", "env_keys", "home", "cwd"} as JSON
+  big                   print 3000 "a", every CAP_EXEC_TEST_* env value, 3000 "b" (plain text)
   fail <code>           print a gws-style {"error": {...}} echoing argv, and the
                         same argv plus CAP_EXEC_TEST_* env values on stderr, exit <code>
   unauthorized          print a gws-style 401 error, exit 2
@@ -28,6 +29,9 @@ if mode == "echo":
                "home": os.environ.get("HOME", ""), "cwd": os.getcwd(),
                "test_values": {k: v for k, v in os.environ.items() if k.startswith("CAP_EXEC_TEST_")}},
               sys.stdout)
+elif mode == "big":
+    owned = "".join(v for k, v in os.environ.items() if k.startswith("CAP_EXEC_TEST_"))
+    sys.stdout.write("a" * 3000 + owned + "b" * 3000)
 elif mode == "fail":
     code = int(rest[0])
     sys.stderr.write("argv=" + " ".join(rest) + "\n")

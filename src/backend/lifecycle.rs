@@ -96,6 +96,8 @@ impl Backend {
             starts_in_flight: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             destination: std::sync::OnceLock::new(),
+            #[cfg(test)]
+            mark_window_gate: parking_lot::Mutex::new(None),
         }
     }
 
@@ -261,6 +263,50 @@ impl Backend {
         Ok(())
     }
 
+    /// Mark the backend as having a start that may connect, and read the policy
+    /// it builds under, in one step under the lock a pairing holds from its
+    /// check to its stamp: either this start reads the stamp, or it marks the
+    /// backend so that pairing refuses it. For a transport that connects as it
+    /// is built.
+    fn mark_connecting(&self) -> crate::security::ssrf::DestinationPolicy {
+        let _pairing = self.replaced_transport_cleanups.lock();
+        if self.destination.get().is_none() {
+            self.connected_unpinned
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.destination()
+    }
+
+    /// Wait at a test's [`super::MarkWindowGate`], when one is set.
+    #[cfg(test)]
+    async fn hold_in_mark_window(&self) {
+        let gate = self.mark_window_gate.lock().clone();
+        if let Some(gate) = gate {
+            gate.reached.notify_one();
+            gate.release.notified().await;
+        }
+    }
+
+    /// The same marking for a transport built under `built_under` before it
+    /// connects. A pairing that stamped a policy in between would leave the
+    /// connection about to be made unpinned, so the start is refused instead.
+    fn begin_connecting(
+        &self,
+        built_under: crate::security::ssrf::DestinationPolicy,
+    ) -> Result<()> {
+        let _pairing = self.replaced_transport_cleanups.lock();
+        if self.destination.get().is_none() {
+            self.connected_unpinned
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Ok(());
+        }
+        if self.destination() == built_under {
+            return Ok(());
+        }
+        debug!(backend = %self.name, "Not connecting: the destination policy changed while it was starting");
+        Err(Error::BackendUnavailable(self.name.clone()))
+    }
+
     /// Build a fresh transport for the pooled `entry`, store it, and return a
     /// clone. Per-user slots build the same transport shape as the shared slot;
     /// end-user identity is carried per-request via headers, not baked into the
@@ -290,17 +336,12 @@ impl Backend {
         }
 
         info!(backend = %self.name, ?key, "Starting backend transport");
-        // Read once, before anything connects, under the lock a pairing holds
-        // from its check to its stamp: either this start reads the stamp, or
-        // it marks the backend so that pairing refuses it.
-        let built_under = {
-            let _pairing = self.replaced_transport_cleanups.lock();
-            if self.destination.get().is_none() {
-                self.connected_unpinned
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-            }
-            self.destination()
-        };
+        // The policy this start builds under. The backend is marked for a
+        // pairing to refuse only once the start can connect (`mark_connecting`,
+        // `begin_connecting`): a start refused before that built nothing that
+        // could be unpinned, so it must not block a later hardened pairing
+        // (MIK-7855).
+        let built_under: crate::security::ssrf::DestinationPolicy;
 
         // Whatever the reason for starting - a client request, a health-driven
         // force_restart, warm start - this slot is no longer stopped-for-idleness.
@@ -318,6 +359,8 @@ impl Backend {
                 cwd,
                 protocol_version,
             } => {
+                // A stdio child reaches no network destination of its own.
+                built_under = self.destination();
                 let transport = self
                     .start_stdio_transport(command, cwd.as_ref(), protocol_version.as_ref())
                     .await?;
@@ -329,9 +372,14 @@ impl Backend {
                 streamable_http,
                 protocol_version,
             } => {
-                // Create OAuth client if configured
-                let oauth_client = self.create_oauth_client(http_url)?;
-
+                http_target(http_url)?;
+                // One read, before anything is built: the OAuth client and the
+                // transport are both built under it, and `begin_connecting`
+                // refuses the start if a pairing stamped another policy since.
+                built_under = self.destination();
+                #[cfg(test)]
+                self.hold_in_mark_window().await;
+                let oauth_client = self.create_oauth_client(http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
                     self.config.headers.clone(),
@@ -339,7 +387,7 @@ impl Backend {
                     *streamable_http,
                     oauth_client,
                     protocol_version.clone(),
-                    self.destination(),
+                    built_under,
                 )?;
                 // MIK-6735 fix 2: a per-user pool slot's transport serves
                 // exactly one caller identity for its whole lifetime, which
@@ -356,6 +404,7 @@ impl Backend {
                 transport.attach_era(Arc::clone(&self.era));
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
+                self.begin_connecting(built_under)?;
                 transport.connect().await?;
                 // The probe, its deadline and the meaning of its answer stay in
                 // `Backend::resolve_era` and `EraCache`. This path chooses when
@@ -380,8 +429,15 @@ impl Backend {
                 ws_url,
                 protocol_version,
             } => {
+                // A target the upgrade request cannot be built for is refused
+                // before the mark: such a start never connects (MIK-7855).
+                crate::transport::websocket::WebSocketTransport::upgrade_request(
+                    ws_url,
+                    &self.config.headers,
+                )?;
+                built_under = self.mark_connecting();
                 let transport = self
-                    .start_websocket(ws_url, protocol_version.clone())
+                    .start_websocket(ws_url, protocol_version.clone(), built_under)
                     .await?;
                 listen = Some(super::listen::handle_of(&transport));
                 transport
@@ -429,4 +485,18 @@ impl Backend {
 
         Ok(transport)
     }
+}
+
+/// Refuse an HTTP backend URL no request can be sent to (a scheme other than
+/// `http`/`https`, or no host). Such a start fails without connecting, so it
+/// is refused before anything is built or marked (MIK-7855).
+fn http_target(http_url: &str) -> Result<()> {
+    if url::Url::parse(http_url)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+    {
+        return Ok(());
+    }
+    Err(Error::TransportPermanent(
+        "Invalid transport base URL: not an http:// or https:// URL with a host".into(),
+    ))
 }

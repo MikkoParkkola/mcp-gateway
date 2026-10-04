@@ -1,4 +1,4 @@
-sha256: c3d196b75005954f73db53e57e015b4735bd0d72b4ca3ad0caaa2f24fca6315b
+sha256: 89148392a315856be400f6c547cfd960bf61f41f8c1488139a529c3652073402
 fulcrum: "1.0"
 name: brave_news_search
 description: |
@@ -29,6 +29,7 @@ schema:
       - q
   output:
     type: object
+    additionalProperties: true
     properties:
       results: { type: array }
 

@@ -48,6 +48,15 @@ pub(super) async fn open(
         subscriptions,
         Arc::clone(meta_mcp.execution_admission()),
         managed,
+        // Task settlement is an event source from the first transition on,
+        // the rows recovery settles included (MIK-7840).
+        |service, executor| {
+            if config.events.sources.task_settled
+                && let Some(hub) = meta_mcp.events()
+            {
+                hub.install_task_source(Arc::clone(service), executor);
+            }
+        },
     )
     .await
 }

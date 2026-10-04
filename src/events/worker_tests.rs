@@ -129,6 +129,11 @@ async fn counting_callback() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
 
 /// One subscription to `port` and one pending record for it.
 fn queued(hub: &EventsHub, port: u16, event_id: &str) {
+    queued_as(hub, port, event_id, "webhook.c.r.received");
+}
+
+/// [`queued`] for the event type `name`.
+fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
     use crate::events::outbox::{Enqueued, OutboxCaps, OutboxState};
     use crate::events::records::Subscription;
     use crate::events::store::{Caps, TailPolicy};
@@ -144,7 +149,7 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
         legacy_api_key_name: None,
         read_key: None,
         url: format!("https://127.0.0.1:{port}/cb"),
-        name: "webhook.c.r.received".into(),
+        name: name.into(),
         arguments: serde_json::json!({}),
         secret: format!("whsec_{}=", "A".repeat(43)),
         previous_secret: None,
@@ -173,7 +178,7 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
         v: 1,
         event_id: event_id.into(),
         subscription_id: "sub_worker".into(),
-        name: "webhook.c.r.received".into(),
+        name: name.into(),
         backend: "b".into(),
         owner_scoped: false,
         callback_host: String::new(),
@@ -300,6 +305,127 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
         accepted.load(Ordering::SeqCst) >= 1,
         "the attempt connects once the record is written"
     );
+}
+
+/// MIK-7894: a pending record for a backend event type no source offers any
+/// more (a reload made the backend ineligible and its withdrawal failed) is
+/// refused, not sent. The control: the same record under a webhook type, which
+/// no source offers in this harness either, reaches the callback.
+#[tokio::test]
+async fn a_backend_type_no_source_offers_is_not_sent() {
+    use std::sync::atomic::Ordering;
+    for (name, sent) in [
+        ("webhook.c.r.received", true),
+        ("backend.b.resource_updated", false),
+    ] {
+        let dir = tempfile::tempdir().expect("dir");
+        let log = Arc::new(
+            crate::security::TransparencyLogger::open(Arc::new(
+                crate::security::TransparencyLogConfig {
+                    enabled: true,
+                    path: dir
+                        .path()
+                        .join("audit.jsonl")
+                        .to_string_lossy()
+                        .into_owned(),
+                    ..crate::security::TransparencyLogConfig::default()
+                },
+            ))
+            .expect("log"),
+        );
+        let config = crate::config::EventsConfig {
+            callback_allow_private: vec!["127.0.0.0/8".into()],
+            ..crate::config::EventsConfig::default()
+        };
+        let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        let services = Services {
+            live: Arc::new(crate::config_reload::LiveConfig::new(
+                crate::config::Config::default(),
+            )),
+            #[cfg(feature = "firewall")]
+            firewall: None,
+            audit: Some(log),
+            provenance: None,
+            #[cfg(feature = "cost-governance")]
+            budget: None,
+            credentials: crate::events::LiveCredentials::default(),
+        };
+        let (port, accepted) = counting_callback().await;
+        queued_as(&hub, port, "evt", name);
+        hub.attempt(&services, "evt").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(accepted.load(Ordering::SeqCst) >= 1, sent, "{name}");
+    }
+}
+
+/// MIK-7842 AUDIT.3: an ending the audit log refuses (here an overdue record)
+/// is not buried unrecorded; it goes back to retry and is recorded once the
+/// log recovers.
+#[tokio::test]
+async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::TransparencyLogConfig {
+                enabled: true,
+                path: dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..crate::security::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("log"),
+    );
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        retry_max_attempts: 0,
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = Services {
+        live: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: Some(Arc::clone(&log)),
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: crate::events::LiveCredentials::default(),
+    };
+    queued(&hub, 9, "evt_overdue");
+    log.set_append_failure_for_test(true);
+    hub.attempt(&services, "evt_overdue").await;
+    let later = Utc::now() + chrono::Duration::minutes(5);
+    let due = hub
+        .store
+        .due(later, &std::collections::HashSet::new())
+        .expect("io");
+    assert_eq!(due.ready.len(), 1, "still pending, not buried");
+    assert_eq!(
+        due.ready[0].last_status.as_deref(),
+        Some("audit_unavailable")
+    );
+
+    // AUDIT.1, AUDIT.2: with the log back, the ending is recorded with the
+    // documented values for a record fan-out never stamped and a send that
+    // never built a body.
+    log.set_append_failure_for_test(false);
+    queued_event(&hub, "evt_overdue_two");
+    hub.attempt(&services, "evt_overdue_two").await;
+    let written = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
+    let line = written
+        .lines()
+        .find(|l| l.contains("evt_overdue_two"))
+        .expect("the ending is recorded");
+    assert!(
+        line.contains("\"firewall_verdict\":\"unrecorded\""),
+        "{line}"
+    );
+    assert!(line.contains("\"body_sha256\":\"\""), "{line}");
 }
 
 fn logged_services(dir: &std::path::Path) -> Services {

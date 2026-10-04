@@ -1,4 +1,4 @@
-sha256: b9bf9aaba160be6e16f783f1304c4412be3ad8a9f83733c2b5f7898a77e43885
+sha256: cf121c6f11e42724e5f51bc4550259924baa725b8c571e10e99e9df434030640
 fulcrum: "1.0"
 name: tavily_search
 description: |
@@ -38,8 +38,9 @@ schema:
       - query
   output:
     type: object
+    additionalProperties: true
     properties:
-      answer: { type: string }
+      answer: { type: [string, "null"] }
       results: { type: array }
 
 providers:
