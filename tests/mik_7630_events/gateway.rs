@@ -104,6 +104,11 @@ pub struct Gateway {
 /// instrumented build writes its profile at exit; a SIGKILL would lose it.
 /// `kill_on_drop` stays the backstop. `stop` and `restart` keep their SIGKILL:
 /// rows use them to simulate a crash.
+// ponytail: this blocks the test's runtime for up to 10 s, so on a
+// current-thread runtime an in-process mock cannot answer the draining child;
+// that child is then SIGKILLed and its profile lost. Coverage-only, and the
+// measured startup row clears its floor anyway; move rows that hold mocks to a
+// multi-thread runtime if a profile proves to matter.
 #[cfg(unix)]
 impl Drop for Gateway {
     fn drop(&mut self) {
@@ -116,9 +121,13 @@ impl Drop for Gateway {
         let Some(pid) = child.id() else {
             return;
         };
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status();
+        let Some(pid) = i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+        else {
+            return;
+        };
+        let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while std::time::Instant::now() < deadline {
             if matches!(child.try_wait(), Ok(Some(_))) {
