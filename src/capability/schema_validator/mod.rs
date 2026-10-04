@@ -30,6 +30,10 @@ use serde_json::Value;
 use crate::config::InputSchemaEnforcement;
 use crate::trust::closed_keys;
 
+mod alternatives;
+pub(crate) use alternatives::advertised_input_schema;
+use alternatives::alternatives_violations;
+
 /// A single validation violation with a human-readable, LLM-actionable message.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidationViolation {
@@ -351,6 +355,14 @@ fn validate_object(
 
         violations.extend(type_violations);
         coerced_map.insert(name.clone(), coerced_value);
+    }
+
+    // `anyOf` / `oneOf`: which parameters must be given, judged on the values as
+    // they are forwarded (after coercion), not as they were typed.
+    if violations.is_empty() {
+        let mut forwarded = arg_map.clone();
+        forwarded.extend(coerced_map.clone());
+        alternatives_violations(input_schema, &forwarded, &mut violations);
     }
 
     // If there are type violations keep the original args (they'll be rejected).
@@ -716,5 +728,8 @@ fn collect_valid_params(schema: &Value) -> Vec<(String, String)> {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+#[path = "alternatives_tests.rs"]
+mod alternatives_tests;
 #[cfg(test)]
 mod tests;

@@ -141,6 +141,16 @@ fn sendable(sub: &Subscription, now: DateTime<Utc>) -> bool {
     sub.active && sub.live(now)
 }
 
+/// What a settlement or burial did, as one receipt taken under the store lock.
+#[derive(Debug, Default)]
+pub(crate) struct Settled {
+    /// Dead letters the retention and caps then evicted.
+    pub evicted: Vec<Evicted>,
+    /// This call wrote the dead letter of the occurrence it was given, whether
+    /// or not the caps evicted it a moment later.
+    pub buried: bool,
+}
+
 impl Store {
     /// Write `record` unless a cap or a missing subscription refuses it.
     /// Pending records are never dropped to make room (F11).
@@ -407,7 +417,7 @@ impl Store {
         outcome: Settle,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+    ) -> std::io::Result<Settled> {
         let mut state = self.state.lock();
         // Only the claimed occurrence: a later one under the same id, admitted
         // after the claim was cancelled, is not settled by the old answer.
@@ -417,19 +427,30 @@ impl Store {
             .filter(|r| r.created_at == created_at)
             .cloned()
         else {
-            return Ok(Vec::new());
+            return Ok(Settled::default());
         };
         let sub_id = record.subscription_id.clone();
-        let settled = self.settle_record(&mut state, record, outcome, now, policy);
+        let mut settled = self.settle_record(&mut state, record, outcome, now, policy);
         if settled.is_err() {
-            let created_at = state.outbox.get(event_id).map(|r| r.created_at);
+            // The claimed occurrence's own stamp: a dead letter left under the
+            // same id by an earlier occurrence is not this burial. Reached when
+            // the dead letter is in place but its directory sync failed.
             let buried = state
                 .dead
                 .get(event_id)
-                .is_some_and(|(dead, _)| Some(dead.record.created_at) == created_at);
+                .is_some_and(|(dead, _)| dead.record.created_at == created_at);
             if buried {
-                // The dead letter is in place, if unsynced: never resend.
+                // The dead letter is in place, if unsynced: never resend. The
+                // burial happened, so its receipt stands: only the cleanup after
+                // it failed, and that is logged, not allowed to hide the burial.
                 state.outbox.remove(event_id);
+                if let Err(error) = &settled {
+                    tracing::warn!(%error, "events store: cleanup after a burial failed");
+                }
+                settled = Ok(Settled {
+                    evicted: Vec::new(),
+                    buried: true,
+                });
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
                 left.next_attempt_at = now + SETTLE_RETRY;
@@ -471,14 +492,14 @@ impl Store {
         outcome: Settle,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+    ) -> std::io::Result<Settled> {
         let event_id = record.event_id.clone();
         let file = OutboxRecord::file(&event_id);
         match outcome {
             Settle::Delivered => {
                 remove_record(&self.outbox_dir, &file)?;
                 state.outbox.remove(&event_id);
-                Ok(Vec::new())
+                Ok(Settled::default())
             }
             Settle::Retry { next, status } => {
                 record.state = OutboxState::Pending;
@@ -486,7 +507,7 @@ impl Store {
                 record.last_status = Some(status.to_owned());
                 write_record(&self.outbox_dir, &file, &record)?.durable()?;
                 state.outbox.insert(event_id, record);
-                Ok(Vec::new())
+                Ok(Settled::default())
             }
             Settle::Dead { reason, status } => {
                 if let Some(status) = status {
@@ -497,8 +518,21 @@ impl Store {
                 // Eviction runs last, so it never removes that marker first.
                 self.entomb(state, record, reason, now)?;
                 state.outbox.remove(&event_id);
-                remove_record(&self.outbox_dir, &file)?;
-                self.evict_dead(state, now, policy)
+                // The dead letter is durable: a cleanup that fails after it is
+                // logged, and the burial and every eviction already made keep
+                // their receipts.
+                let mut evicted = Vec::new();
+                if let Err(error) = remove_record(&self.outbox_dir, &file)
+                    .and_then(|()| self.evict_dead(state, now, policy, &mut evicted))
+                {
+                    tracing::warn!(%error, "events store: cleanup after a burial failed");
+                }
+                Ok(Settled {
+                    evicted,
+                    // Taken before the caps run: the burial happened even if
+                    // they evict it at once.
+                    buried: true,
+                })
             }
         }
     }
@@ -511,7 +545,7 @@ impl Store {
         reason: DeadReason,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+    ) -> std::io::Result<Settled> {
         let mut state = self.state.lock();
         self.bury(&mut state, record, reason, now, policy)
     }
@@ -523,7 +557,17 @@ impl Store {
         policy: DeadPolicy,
     ) -> std::io::Result<Vec<Evicted>> {
         let mut state = self.state.lock();
-        self.evict_dead(&mut state, now, policy)
+        let mut evicted = Vec::new();
+        match self.evict_dead(&mut state, now, policy, &mut evicted) {
+            Ok(()) => Ok(evicted),
+            // What was evicted before the failure is gone: its receipts are
+            // returned, and the next sweep retries the rest.
+            Err(error) if !evicted.is_empty() => {
+                tracing::warn!(%error, "events store: eviction stopped early");
+                Ok(evicted)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Suspend subscription `id` after sustained failure; its records stay
@@ -612,9 +656,29 @@ impl Store {
         reason: DeadReason,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
-        self.entomb(state, record, reason, now)?;
-        self.evict_dead(state, now, policy)
+    ) -> std::io::Result<Settled> {
+        let (event_id, created_at) = (record.event_id.clone(), record.created_at);
+        if let Err(error) = self.entomb(state, record, reason, now) {
+            // In place but unsynced is still a burial: its receipt stands.
+            let in_place = state
+                .dead
+                .get(&event_id)
+                .is_some_and(|(dead, _)| dead.record.created_at == created_at);
+            if !in_place {
+                return Err(error);
+            }
+            tracing::warn!(%error, "events store: dead letter written but not synced");
+        }
+        // The dead letter is written: a failed eviction after it is logged and
+        // the burial's receipt still stands.
+        let mut evicted = Vec::new();
+        if let Err(error) = self.evict_dead(state, now, policy, &mut evicted) {
+            tracing::warn!(%error, "events store: eviction after a burial failed");
+        }
+        Ok(Settled {
+            evicted,
+            buried: true,
+        })
     }
 
     /// Write `record` into `dead/`.
@@ -634,19 +698,30 @@ impl Store {
         };
         let id = dead.record.event_id.clone();
         let placed = write_record(&self.dead_dir, &OutboxRecord::file(&id), &dead)?;
+        #[cfg(test)]
+        let placed = if self
+            .fail_next_dead_sync
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            crate::events::records::Placed::NotSynced(std::io::Error::other("injected"))
+        } else {
+            placed
+        };
         let size = dead_size(&dead);
         state.dead.insert(id, (dead, size));
         placed.durable()
     }
 
     /// Drop dead letters past retention, then the oldest beyond the count
-    /// and byte caps.
+    /// and byte caps, pushing each onto `evicted` as it goes: a failure part
+    /// way leaves the completed evictions in `evicted` for their receipts.
     fn evict_dead(
         &self,
         state: &mut State,
         now: DateTime<Utc>,
         policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
+        evicted: &mut Vec<Evicted>,
+    ) -> std::io::Result<()> {
         let retention =
             chrono::Duration::from_std(policy.retention).unwrap_or(chrono::Duration::MAX);
         let mut by_age: Vec<(DateTime<Utc>, String, u64)> = state
@@ -657,7 +732,6 @@ impl Store {
         by_age.sort();
         let mut count = by_age.len();
         let mut bytes: u64 = by_age.iter().map(|(_, _, s)| *s).sum();
-        let mut evicted = Vec::new();
         for (dead_at, id, size) in by_age {
             let expired = now - dead_at >= retention;
             if !expired && count <= policy.max_records && bytes <= policy.max_bytes {
@@ -680,7 +754,7 @@ impl Store {
             count -= 1;
             bytes = bytes.saturating_sub(size);
         }
-        Ok(evicted)
+        Ok(())
     }
 }
 

@@ -69,13 +69,19 @@ impl MetaMcp {
         }
         // MIK-7692: a poll that meets the same decision again is not written
         // again inside the window (`grant_audit` module docs).
-        let task_and_caller = format!(
-            "{}|{:?}|{:?}|{:?}",
+        // MIK-7826: explicit identity fields, JSON-encoded so no value can
+        // forge a separator. A subject's label is display only, so it is not
+        // part of the caller; a Debug rendering would carry it.
+        let task_and_caller = json!([
             stored.task.id(),
             caller.api_key_name,
-            caller.grant_subject,
-            caller.agent_id
-        );
+            caller
+                .grant_subject
+                .as_ref()
+                .map(|s| [s.authority.as_str(), s.subject.as_str()]),
+            caller.agent_id.map(|a| (a.as_str(), a.proof())),
+        ])
+        .to_string();
         super::grant_audit::in_repeat_scope(&self.grant_repeats, task_and_caller, || {
             // Names only: no current policy reads a target's arguments.
             for target in &stored.targets {

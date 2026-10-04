@@ -168,7 +168,7 @@ impl EventsHub {
                             callback_host: &host,
                             detail: "replayed",
                             event_id: Some(event_id),
-                            ok: true,
+                            failed_with: None,
                         },
                         super::governance::Attribution::Admin(actor),
                     )

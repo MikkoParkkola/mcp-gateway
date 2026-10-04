@@ -63,7 +63,7 @@ async fn the_empty_id_reaches_no_session() {
     )
     .await
     .expect("an empty id has nobody to ask, so the gate does not wait");
-    assert_eq!(outcome, ConfirmationOutcome::Unsupported);
+    assert_eq!(outcome, ConfirmationOutcome::Undelivered);
     assert!(rx.try_recv().is_err(), "nothing was delivered to \"\"");
 }
 

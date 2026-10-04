@@ -130,3 +130,55 @@ fn a_clone_of_a_result_shares_one_hold() {
     drop(copy);
     assert!(enforcer.check(TOOL, Some(KEY)).allowed);
 }
+
+/// MIK-7880: an add that lands after a rollover publishes the new day but
+/// before the counter is cleared is kept. The hook parks the resetting add in
+/// that window and lands a second add from another thread; with the reset and
+/// the adds serialized, that add waits out the window instead.
+#[test]
+fn an_add_inside_the_day_reset_window_is_kept() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let acc = Arc::new(DailyAccumulator::stale(current_day() - 1, 700));
+    assert_eq!(acc.current(), 0, "yesterday's spend is not today's");
+    let (done, landed) = mpsc::channel();
+    let inner = Arc::clone(&acc);
+    let slot = std::rc::Rc::new(std::cell::Cell::new(None));
+    let hold = std::rc::Rc::clone(&slot);
+    AFTER_DAY_PUBLISH.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move || {
+            hold.set(Some(std::thread::spawn(move || {
+                inner.add(5);
+                let _ = done.send(());
+            })));
+            // Unserialized, the add completes inside the window; serialized,
+            // it is blocked and this wait times out.
+            let _ = landed.recv_timeout(Duration::from_millis(500));
+        }));
+    });
+    acc.add(3);
+    slot.take()
+        .expect("the reset window was reached")
+        .join()
+        .unwrap();
+    assert_eq!(acc.current(), 8, "an add inside the reset window was lost");
+}
+
+/// A total at the top of the range saturates rather than wrapping to a small
+/// number that would read as budget left.
+#[test]
+fn a_daily_total_saturates_instead_of_wrapping() {
+    let acc = DailyAccumulator::stale(current_day(), u64::MAX - 1);
+    assert_eq!(acc.add(5), u64::MAX);
+}
+
+/// An add that sampled an earlier day than the stored one (it read the clock
+/// before midnight and took the lock after a later add rolled over) must not
+/// reset the day backward and erase the newer day's spend.
+#[test]
+fn an_add_on_an_earlier_day_never_resets_backward() {
+    let acc = DailyAccumulator::stale(current_day() + 1, 700);
+    assert_eq!(acc.add(5), 705, "the newer day's spend was erased");
+    assert_eq!(acc.current(), 705, "the newer day's spend is still counted");
+}

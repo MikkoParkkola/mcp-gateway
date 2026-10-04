@@ -9,7 +9,7 @@
 //! - `McpFrame`: JSON parsing for request / response / notification frames
 //! - `InputScanner`: injection pattern scanning on clean and malicious args     [firewall]
 //! - Redactor: credential detection and in-place redaction of response JSON   [firewall]
-//! - `BudgetEnforcer`: pre-invoke cost check (`DashMap` + atomics, target <0.1ms) [cost-governance]
+//! - `BudgetEnforcer`: pre-invoke cost check (`DashMap` + short locks, target <0.1ms) [cost-governance]
 //! - `SemanticIndex`: TF-IDF query over 500-tool corpus (target <2ms)           [semantic-search]
 //! - Continuation: minting and redeeming a sealed continuation envelope (NFR.PERF.1)
 
@@ -363,7 +363,7 @@ fn bench_redactor(_c: &mut Criterion) {}
 
 // ── Cost BudgetEnforcer benchmarks ────────────────────────────────────────────
 //
-// Target: <0.1 ms per check (one DashMap lookup + ≤3 atomic reads).
+// Target: <0.1 ms per check (one DashMap lookup + ≤3 short accumulator locks).
 
 #[cfg(feature = "cost-governance")]
 fn bench_budget_enforcer(c: &mut Criterion) {
@@ -416,7 +416,7 @@ fn bench_budget_enforcer(c: &mut Criterion) {
     }
 
     // Full check path: enabled, cost > 0, within limit — exercises all three
-    // atomic reads (tool daily, global daily, key daily).
+    // accumulator reads (tool daily, global daily, key daily).
     {
         let enforcer = make_enforcer(Some(100.0), 0.001);
         group.bench_function("check_paid_tool_within_limit", |b| {
@@ -424,7 +424,7 @@ fn bench_budget_enforcer(c: &mut Criterion) {
         });
     }
 
-    // DailyAccumulator::add — atomic fetch_add on the same-day hot path.
+    // DailyAccumulator::add — one short lock on the same-day hot path.
     {
         let acc = DailyAccumulator::new();
         group.bench_function("daily_accumulator_add", |b| {

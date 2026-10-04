@@ -15,7 +15,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::hwm_scan::{hwm_missing_in, newest_finding};
+use super::hwm_scan::{contradicted, hwm_missing_in, newest_finding};
 use super::segments::{self, HighWater, Segment};
 use super::{
     MAX_TAIL_SCAN_BYTES, TransparencyLogConfig, chain_line, read_last_nonempty_line,
@@ -307,7 +307,6 @@ fn reopen_tail(
     hw: Option<&HighWater>,
     now: u64,
 ) -> io::Result<(Recovered, bool)> {
-    let below = |tail: u64| hw.is_some_and(|h| tail < h.counter);
     match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
             let (counter, hash, event, v) = record_head(&line)?;
@@ -318,13 +317,14 @@ fn reopen_tail(
                 std::fs::rename(path, &sealed).map_err(segments::ctx("rename", &sealed))?;
                 segments::sync_dir(path)?;
                 let sealed = segments::list_segments(path)?;
-                let carry = lost_from(newest_finding(&sealed, config)?, below(counter), counter);
+                let behind = contradicted(path, &sealed, hw, counter, &hash, config)?;
+                let carry = lost_from(newest_finding(&sealed, config)?, behind, counter);
                 let state = open_after_seal(path, config, &sealed, hw, now, carry)?;
-                Ok((state, below(counter)))
+                Ok((state, behind))
             } else {
                 let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
                 let below_mark =
-                    hw.is_some_and(|h| h.segment_seq == resumed.seg.seq && counter < h.counter);
+                    contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
                 Ok((resumed, below_mark))
             }
         }
@@ -344,11 +344,11 @@ fn reopen_after_seal(
     hw: Option<&HighWater>,
     now: u64,
 ) -> io::Result<(Recovered, bool)> {
-    let tail = match sealed.last() {
-        Some(segment) => seal_of(segment)?.map_or(0, |(counter, _)| counter),
-        None => 0,
+    let (tail, tail_hash) = match sealed.last() {
+        Some(segment) => seal_of(segment)?.unwrap_or_default(),
+        None => (0, String::new()),
     };
-    let below_mark = hw.is_some_and(|h| tail < h.counter);
+    let below_mark = contradicted(path, sealed, hw, tail, &tail_hash, config)?;
     let carry = lost_from(newest_finding(sealed, config)?, below_mark, tail);
     let state = open_after_seal(path, config, sealed, hw, now, carry)?;
     Ok((state, below_mark))
@@ -393,9 +393,9 @@ fn resume_active(
     };
     // The log committed to how far it got: a truncated tail must not let new
     // records reuse the lost counters, so verify reports the gap (2.13).
-    let counter = hw
-        .filter(|h| h.segment_seq == seq)
-        .map_or(counter, |h| h.counter.max(counter));
+    // Counters are global across segments, so the mark bounds them whatever
+    // segment it names: a restored older file must not reuse them (MIK-7884).
+    let counter = hw.map_or(counter, |h| h.counter.max(counter));
     let file = OpenOptions::new()
         .append(true)
         .open(path)
@@ -596,7 +596,12 @@ fn repair_torn_tail(
             extra.push((TORN_COMMITTED, true.into()));
         }
         let fields = housekeeping(EV_TORN, &extra);
-        write_synced(&mut file, config, fields, pred_counter + 1, &pred_hash)?;
+        // Above the mark when it is further ahead than the one line dropped,
+        // so a restored older file's repair record reuses no committed counter.
+        let at = hw
+            .filter(|h| h.counter > pred_counter + 1)
+            .map_or(pred_counter + 1, |h| h.counter + 1);
+        write_synced(&mut file, config, fields, at, &pred_hash)?;
     }
     Ok(Some(pred_counter + 1))
 }
