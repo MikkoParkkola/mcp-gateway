@@ -428,6 +428,11 @@ fn a_null_result_survives_the_typed_round_trip() {
     let typed: JsonRpcResponse = serde_json::from_value(wire.clone()).unwrap();
     assert_eq!(typed.result, Some(serde_json::Value::Null));
     assert_eq!(serde_json::to_value(&typed).unwrap(), wire);
+    // The untagged message enum (the SSE and stdio parse) reaches the same impl.
+    let JsonRpcMessage::Response(message) = serde_json::from_str(&wire.to_string()).unwrap() else {
+        panic!("a response frame classifies as a response");
+    };
+    assert_eq!(message.result, Some(serde_json::Value::Null));
 }
 
 /// MIK-7924.NULLRES.2: an error response still carries no `result`, whether
