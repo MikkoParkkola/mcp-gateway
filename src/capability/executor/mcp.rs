@@ -48,9 +48,6 @@ struct Child {
     in_flight: Arc<AtomicUsize>,
     /// Set at acquire and again when a call ends, so a long call is not idle.
     last_used: Arc<Mutex<Instant>>,
-    /// The runtime it was started on, so a stop from a thread without one
-    /// (a replacement registered by an embedder) still reaches it (MIK-7814).
-    runtime: Option<tokio::runtime::Handle>,
     /// Dropped after the backend is stopped, removing the tree.
     _workdir: Workdir,
 }
@@ -146,7 +143,6 @@ impl McpChildren {
                     id: self.next_id.fetch_add(1, Ordering::Relaxed),
                     in_flight: Arc::new(AtomicUsize::new(0)),
                     last_used: Arc::new(Mutex::new(Instant::now())),
-                    runtime: tokio::runtime::Handle::try_current().ok(),
                     _workdir: workdir,
                 },
             );
@@ -305,10 +301,7 @@ fn stop_all(children: Vec<Child>) {
     if children.is_empty() {
         return;
     }
-    let Some(handle) = tokio::runtime::Handle::try_current()
-        .ok()
-        .or_else(|| children.iter().find_map(|child| child.runtime.clone()))
-    else {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
         return;
     };
     handle.spawn(async move {
