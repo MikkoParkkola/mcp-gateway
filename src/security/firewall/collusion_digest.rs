@@ -149,8 +149,9 @@ impl DeliveryDigest {
     /// Kept to what `delivered` carries (a plan step's receipt against the
     /// plan's final answer): a whole leaf delivered verbatim stays in its run;
     /// any other segment leaves its run behind a seam and keeps only those of
-    /// its fingerprints whose k-gram occurs in a delivered leaf, as do earlier
-    /// retained ones.
+    /// its fingerprints whose k-gram occurs in a delivered leaf. Every earlier
+    /// fingerprint (the original runs' and retained ones) stays when its
+    /// k-gram is in a delivered leaf or in a kept run.
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
         let verbatim = |s: &Segment| s.whole && delivered.leaves.contains(s.text.as_str());
         if self.retained.is_empty() && self.segments.iter().all(verbatim) {
