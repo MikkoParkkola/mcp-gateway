@@ -452,12 +452,23 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
         // A credential that is all digits can come back as a JSON number. A
         // short needle would hit every number, so only one a caller could not
         // guess by chance (the same floor as caller values) is looked for.
+        // An integer past u64 parses as a float and prints in exponent form,
+        // so an all-digit needle is also compared by value.
         Value::Number(n) => {
             let digits = n.to_string();
-            if needles
-                .iter()
-                .any(|needle| needle.len() >= MIN_REDACTED_CALLER_VALUE && digits.contains(needle))
-            {
+            let float = n.as_f64().filter(|_| n.is_f64());
+            let same_float = |needle: &str| {
+                float.is_some_and(|f| {
+                    needle.bytes().all(|b| b.is_ascii_digit())
+                        && needle
+                            .parse::<f64>()
+                            .is_ok_and(|p| p.to_bits() == f.to_bits())
+                })
+            };
+            if needles.iter().any(|needle| {
+                needle.len() >= MIN_REDACTED_CALLER_VALUE
+                    && (digits.contains(needle) || same_float(needle))
+            }) {
                 *value = Value::String("[redacted]".to_owned());
             }
         }

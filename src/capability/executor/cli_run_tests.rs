@@ -485,3 +485,13 @@ fn a_long_self_overlapping_needle_collapses_to_one_marker() {
     let out = super::super::cli::redact_untruncated(&format!("x{text}y"), &[needle], &[]);
     assert_eq!(out, "x[redacted]y");
 }
+
+/// An all-digit credential past u64 comes back as a float in exponent form;
+/// it is still matched, by value.
+#[test]
+fn a_digit_credential_past_u64_is_redacted_as_a_number() {
+    let secret = "18446744073709551616".to_owned();
+    let mut value: Value = serde_json::from_str(r#"{"n": 18446744073709551616}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &[secret]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+}
