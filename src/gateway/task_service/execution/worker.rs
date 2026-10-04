@@ -16,6 +16,7 @@ use super::{
     BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
     TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
 };
+use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
 use crate::gateway::task_service::Target;
 use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
@@ -366,9 +367,7 @@ async fn follow_upstream_job(
                     Ok(processed) => {
                         let processed = backend_output(processed);
                         let target = (job.server.as_str(), job.tool.as_str());
-                        state
-                            .meta_mcp()
-                            .stage_upstream_result(relay, target, &processed);
+                        stage_followed_result(state, relay, target, &processed);
                         TaskTransition::Complete(processed)
                     }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
@@ -546,6 +545,13 @@ pub(super) fn inspect_settled(
     state
         .meta_mcp()
         .restage_if_changed(snapshot, Some(&*result));
+    // A task stores the backend's native result, never a `gateway_invoke`
+    // wrapper, whatever tool started it.
+    rebuild_task_receipt(
+        state,
+        &super::settlement::backend_output(result.clone()),
+        AnswerShape::Literal,
+    );
     if refused {
         response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
             response.id,
@@ -697,4 +703,31 @@ fn is_terminal(status: TaskStatus) -> bool {
 pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
+}
+
+/// Stage a followed upstream result for `relay` under `target`, as stored: the
+/// backend's own value, never a `gateway_invoke` wrapper (MIK-7887.RECEIPT.4).
+fn stage_followed_result(
+    state: &crate::gateway::task_service::host::LiveHost,
+    relay: crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
+    target: (&str, &str),
+    stored: &serde_json::Value,
+) {
+    state
+        .meta_mcp()
+        .stage_upstream_result(relay, target, stored);
+    rebuild_task_receipt(state, stored, AnswerShape::Literal);
+}
+
+/// MIK-7887.RECEIPT.4: a task's receipt describes its result as stored and
+/// served: `stored` has settlement's marker strip applied, and the rebuild
+/// leaves out the scope the serializer clamps and the gateway's chain.
+fn rebuild_task_receipt(
+    state: &crate::gateway::task_service::host::LiveHost,
+    stored: &serde_json::Value,
+    shape: AnswerShape,
+) {
+    state
+        .meta_mcp()
+        .rebuild_receipt_from_final(Some(stored), GatewayStamps::Legacy, shape);
 }
