@@ -68,6 +68,37 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
     format!("backend.{backend}.{}", kind.suffix())
 }
 
+/// The live config no longer lets this backend offer upstream events (a
+/// reload, MIK-7894): stop its task and withdraw the subscriptions that only
+/// the listener served. `tools_changed` stays, since the gateway announces it
+/// itself.
+///
+/// The withdrawal runs under the lifecycle lock a subscribe commits under, and
+/// only if the backend is still ineligible there: a reload that restores it
+/// first keeps its subscriptions, and one admitted after the restore lands
+/// after the withdrawal, so it is never deleted by it.
+fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
+    shared.stop.cancel();
+    let Some(hub) = hub.upgrade() else { return };
+    let names: Vec<String> = [
+        Kind::ResourceUpdated,
+        Kind::ResourcesChanged,
+        Kind::PromptsChanged,
+    ]
+    .into_iter()
+    .map(|kind| format!("backend.{}.{}", shared.name, kind.suffix()))
+    .collect();
+    let (name, ineligible) = (shared.name.clone(), Arc::clone(&shared.ineligible));
+    tokio::spawn(async move {
+        let started = hub.lifecycle.lock().await;
+        if ineligible().contains(&name) {
+            hub.withdraw(&names);
+        }
+        drop(started);
+        hub.reconcile_stops_in_background();
+    });
+}
+
 /// The task: reconnect until stopped.
 pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub: Weak<EventsHub>) {
     let _gate = tokio::select! {
@@ -77,6 +108,10 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
     let mut failures = 0u32;
     loop {
         if shared.stop.is_cancelled() {
+            return;
+        }
+        if shared.is_ineligible() {
+            end_ineligible(&shared, &hub);
             return;
         }
         let Some(backend) = registry.get(&shared.name) else {
@@ -496,12 +531,20 @@ impl<'a> State<'a> {
 
     /// Emit the coalescing windows that closed (§8), through the hub only.
     fn flush(&mut self, hub: &Weak<EventsHub>) {
+        // Re-checked at every delivery: a reload can make the backend
+        // ineligible while its listener runs (MIK-7894). Nothing pending is
+        // sent, the task ends, and the upstream subscriptions are withdrawn.
+        let due = self.coalescer.due(Instant::now());
+        if (self.tools_pending || !due.is_empty()) && self.shared.is_ineligible() {
+            self.tools_pending = false;
+            end_ineligible(self.shared, hub);
+            return;
+        }
         if std::mem::take(&mut self.tools_pending)
             && let Some(hub) = hub.upgrade()
         {
             hub.backend_tools_changed(&self.shared.name);
         }
-        let due = self.coalescer.due(Instant::now());
         if due.is_empty() {
             return;
         }

@@ -227,7 +227,8 @@ impl EventsHub {
         registry: Arc<crate::backend::BackendRegistry>,
         ineligible: Ineligible,
     ) {
-        let listeners = UpstreamListeners::new(registry, Arc::downgrade(self));
+        let listeners =
+            UpstreamListeners::new(registry, Arc::downgrade(self), Arc::clone(&ineligible));
         self.register_source(Arc::new(BackendSource {
             names,
             upstream: Some(Upstream {
