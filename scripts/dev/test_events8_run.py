@@ -162,5 +162,36 @@ class ShimReplyTests(unittest.TestCase):
         self.assertIs(self.facts('event: message\ndata: {"result":{}}\n\n', stream=True)["reply_ok"], True)
 
 
+
+class UpCleanupTests(unittest.TestCase):
+    """MIK-7893.SHIM.3: `up` empties --dir only when its state.json names this
+    script as the owner. A missing gateway binary stops `up` right after the
+    cleanup decision, so nothing is started."""
+
+    def up(self, state):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        (d / "state.json").write_text(state)
+        (d / "keep.txt").write_text("not the script's")
+        done = subprocess.run(
+            [sys.executable, str(SCRIPT), "--dir", str(d), "up", "--gateway", str(d / "no-such-gateway")],
+            capture_output=True, text=True, timeout=60)
+        return d, done
+
+    def test_a_foreign_state_json_is_refused_and_nothing_is_removed(self):
+        for state in ("{}", json.dumps({"started": T0}), "not json", "[]"):
+            with self.subTest(state=state):
+                d, done = self.up(state)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("not an events8 run directory", done.stderr)
+                self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
+
+    def test_a_directory_the_script_owns_is_cleared(self):
+        d, done = self.up(json.dumps({"owner": "events8_run"}))
+        self.assertNotIn("not an events8 run directory", done.stderr)
+        self.assertFalse((d / "keep.txt").exists(), "the previous run's files were left")
+
+
 if __name__ == "__main__":
     unittest.main()

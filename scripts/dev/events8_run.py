@@ -41,8 +41,21 @@ webhooks:
 """
 
 
+OWNER = "events8_run"  # names this script in state.json: the only directory up empties
+
+
 def state_path(d):
     return d / "state.json"
+
+
+def owned(d):
+    """True only when d/state.json is this script's: a generic state.json
+    written by anything else is not a licence to empty the directory."""
+    try:
+        state = json.loads(state_path(d).read_text())
+    except (OSError, ValueError):
+        return False
+    return isinstance(state, dict) and state.get("owner") == OWNER
 
 
 def digest(key):
@@ -109,13 +122,13 @@ def cmd_up(a):
             if probe.connect_ex(("127.0.0.1", port)) == 0:
                 sys.exit(f"port {port} is already in use; stop the previous run first")
     if d.exists() and any(d.iterdir()):
-        if not state_path(d).exists():
+        if not owned(d):
             sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
         for old in d.iterdir():  # a previous run's files only: the run starts clean
             shutil.rmtree(old) if old.is_dir() else old.unlink()
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o700)
-    state_path(d).write_text("{}")  # marks the directory as ours
+    state_path(d).write_text(json.dumps({"owner": OWNER}))  # marks the directory as ours
     key = "events8-" + secrets.token_hex(24)
     secret = secrets.token_hex(24)
     cfg = write_config(d, key)
@@ -140,7 +153,7 @@ def cmd_up(a):
                                  "--public", public, "--log", str(d / "shim.jsonl")],
                                 env={**os.environ, "EVENTS8_API_KEY": key})
         children.append(shim)
-        state = {"public": public, "webhook_secret": secret, "started": time.time(),
+        state = {"owner": OWNER, "public": public, "webhook_secret": secret, "started": time.time(),
                  "pids": [c.pid for c in children]}
         state_path(d).write_text(json.dumps(state))
         state_path(d).chmod(0o600)
