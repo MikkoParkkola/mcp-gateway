@@ -40,25 +40,9 @@ fn custom(oid: &[u64], content: &[u8], critical: bool) -> CustomExtension {
 
 const SAN: &[u64] = &[2, 5, 29, 17];
 
-#[test]
-fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
-    let ca_key = KeyPair::generate().unwrap();
-    let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
-    ca_params
-        .distinguished_name
-        .push(DnType::CommonName, "differential CA");
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
-    let issuer = Issuer::new(ca_params, ca_key);
-
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(ca_cert.der().clone()).unwrap();
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
-        .build()
-        .unwrap();
-
-    let candidates: Vec<(&str, CertificateParams)> = vec![
+/// The bounded leaf list: each usual except in one way.
+fn candidates() -> Vec<(&'static str, CertificateParams)> {
+    vec![
         ("baseline", leaf(|_| {})),
         (
             "CN as BMPString (not UTF-8)",
@@ -106,14 +90,14 @@ fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
             "unknown critical extension",
             leaf(|p| {
                 p.custom_extensions =
-                    vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 1], &[0x05, 0x00], true)]
+                    vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 1], &[0x05, 0x00], true)];
             }),
         ),
         (
             "unknown non-critical extension",
             leaf(|p| {
                 p.custom_extensions =
-                    vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 2], &[0x05, 0x00], false)]
+                    vec![custom(&[1, 3, 6, 1, 4, 1, 99999, 2], &[0x05, 0x00], false)];
             }),
         ),
         (
@@ -128,7 +112,28 @@ fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
             "64-byte serial",
             leaf(|p| p.serial_number = Some(SerialNumber::from_slice(&[0x01; 64]))),
         ),
-    ];
+    ]
+}
+
+#[test]
+fn no_leaf_webpki_accepts_is_one_the_identity_parser_rejects() {
+    let ca_key = KeyPair::generate().unwrap();
+    let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
+    ca_params
+        .distinguished_name
+        .push(DnType::CommonName, "differential CA");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+    let issuer = Issuer::new(ca_params, ca_key);
+
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca_cert.der().clone()).unwrap();
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
+        .build()
+        .unwrap();
+
+    let candidates = candidates();
 
     let mut split = Vec::new();
     for (name, params) in candidates {
