@@ -183,17 +183,7 @@ class Shim(BaseHTTPRequestHandler):
                 doc = json.loads(data)
                 calls = doc if isinstance(doc, list) else [doc]
                 rpc = [d.get("method") for d in calls]
-                # Subscription identity only (never the delivery url or secret):
-                # the evidence check must see WHICH subscription a call named.
-                for d in calls:
-                    if d.get("method") in ("events/subscribe", "events/unsubscribe"):
-                        p = d.get("params") or {}
-                        args = p.get("arguments") if isinstance(p.get("arguments"), dict) else {}
-                        # Allowlisted filter keys only: arguments are caller-supplied.
-                        rpc_params.append({"method": d["method"], "name": p.get("name"),
-                                           "arguments": {k: v for k, v in args.items()
-                                                         if k in ("repo", "ref", "event_type")
-                                                         and isinstance(v, str)}})
+                rpc_params = subscription_params(doc)
             except (ValueError, AttributeError):
                 pass
         headers = {k: v for k, v in self.headers.items()
@@ -224,6 +214,34 @@ class Shim(BaseHTTPRequestHandler):
                 entry["rpc_params"] = rpc_params
             entry.update(reply_facts(out.decode(errors="replace"), stream))
         self.evidence(**entry)
+
+
+def subscription_params(doc):
+    """Subscription identity of each events/(un)subscribe call in one request.
+
+    Never the delivery url or secret: `key` is a digest of the inputs the
+    gateway derives a subscription id from (name, delivery url, full
+    arguments; the principal is the run's one token), so the evidence check
+    can tell WHICH subscription an unsubscribe named. Python's sorted JSON is
+    not JCS and the url is not normalised as the gateway does, so an
+    equivalent but differently spelled call gets another key: that fails the
+    check closed. No delivery url, no key.
+    """
+    out = []
+    for d in doc if isinstance(doc, list) else [doc]:
+        if d.get("method") not in ("events/subscribe", "events/unsubscribe"):
+            continue
+        p = d.get("params") or {}
+        args = p.get("arguments") if isinstance(p.get("arguments"), dict) else {}
+        url = (p.get("delivery") or {}).get("url") if isinstance(p.get("delivery"), dict) else None
+        key = hashlib.sha256(json.dumps([p.get("name"), url, args], sort_keys=True,
+                                        separators=(",", ":")).encode()).hexdigest() \
+            if isinstance(url, str) else None
+        # Allowlisted filter keys only: arguments are caller-supplied.
+        out.append({"method": d["method"], "name": p.get("name"), "key": key,
+                    "arguments": {k: v for k, v in args.items()
+                                  if k in ("repo", "ref", "event_type") and isinstance(v, str)}})
+    return out
 
 
 def reply_facts(text, stream):
