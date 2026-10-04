@@ -16,6 +16,7 @@ use super::{
     BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
     TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
 };
+use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
 use crate::gateway::task_service::Target;
 use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
@@ -369,6 +370,8 @@ async fn follow_upstream_job(
                         state
                             .meta_mcp()
                             .stage_upstream_result(relay, target, &processed);
+                        // The backend's own value, not a `gateway_invoke` wrapper.
+                        rebuild_task_receipt(state, &processed, AnswerShape::Literal);
                         TaskTransition::Complete(processed)
                     }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
@@ -546,21 +549,16 @@ pub(super) fn inspect_settled(
     state
         .meta_mcp()
         .restage_if_changed(snapshot, Some(&*result));
-    // MIK-7887.RECEIPT.4: the receipt describes the result as it is stored and
-    // served: without the backend's copy of the gateway's outcome marker,
-    // which settlement strips (`backend_output`), and with the scope clamped.
-    {
-        use crate::gateway::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
-        let stored = super::settlement::backend_output(result.clone());
-        let shape = if call.tool == "gateway_invoke" {
-            AnswerShape::InvokeWrapped
-        } else {
-            AnswerShape::Literal
-        };
-        state
-            .meta_mcp()
-            .rebuild_receipt_from_final(Some(&stored), GatewayStamps::Legacy, shape);
-    }
+    let shape = if call.tool == "gateway_invoke" {
+        AnswerShape::InvokeWrapped
+    } else {
+        AnswerShape::Literal
+    };
+    rebuild_task_receipt(
+        state,
+        &super::settlement::backend_output(result.clone()),
+        shape,
+    );
     if refused {
         response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
             response.id,
@@ -712,4 +710,17 @@ fn is_terminal(status: TaskStatus) -> bool {
 pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
+}
+
+/// MIK-7887.RECEIPT.4: a task's receipt describes its result as stored and
+/// served: `stored` has settlement's marker strip applied, and the rebuild
+/// leaves out the scope the serializer clamps and the gateway's chain.
+fn rebuild_task_receipt(
+    state: &crate::gateway::task_service::host::LiveHost,
+    stored: &serde_json::Value,
+    shape: AnswerShape,
+) {
+    state
+        .meta_mcp()
+        .rebuild_receipt_from_final(Some(stored), GatewayStamps::Legacy, shape);
 }
