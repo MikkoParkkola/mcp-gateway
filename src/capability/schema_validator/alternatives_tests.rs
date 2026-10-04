@@ -180,3 +180,20 @@ fn an_unenforced_root_combinator_stays_in_the_advertised_schema() {
     let bare = json!({ "type": "object", "anyOf": [{ "required": ["a"] }] });
     assert_eq!(advertised_input_schema(&bare), bare);
 }
+
+/// A type error is the whole answer: the alternatives are not judged on a
+/// value that failed coercion, so the caller sees one violation, not a second
+/// "no alternative" message caused by the first.
+#[test]
+fn a_type_error_is_reported_alone() {
+    let verdict = validate_arguments(
+        &json!({ "zone": "z", "everything": "not-a-bool" }),
+        &purge_schema(),
+    );
+    let params: Vec<&str> = verdict
+        .violations
+        .iter()
+        .map(|v| v.param.as_str())
+        .collect();
+    assert_eq!(params, ["everything"], "{:?}", verdict.violations);
+}
