@@ -101,58 +101,109 @@ impl super::super::MetaMcp {
         correlation: &ResponseCorrelation<'_>,
         read: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> bool {
-        use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditWho};
+        append_delivery_attempt(
+            self.transparency_logger.as_ref(),
+            value,
+            outcome,
+            stage,
+            correlation,
+            read,
+        )
+        .await
+    }
+}
 
-        use sha2::{Digest, Sha256};
+/// `MetaMcp::record_response_delivery_attempt` for an answer
+/// already rendered as a JSON value, into `logger` (the direct route,
+/// MIK-7669): same event, stage, hash, outcome and failure policy. `false`
+/// means the answer must be withheld.
+pub(crate) async fn record_answer_delivery(
+    logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+    answer: serde_json::Result<serde_json::Value>,
+    correlation: &ResponseCorrelation<'_>,
+    read: Option<serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    use crate::security::audit::AuditOutcome;
 
-        let Some(logger) = &self.transparency_logger else {
-            return true;
-        };
-        let fail_closed = logger.failure_policy() == AuditFailurePolicy::FailClosed;
-        let encoded = value.and_then(|value| serde_json::to_vec(&value));
-        let Ok(encoded) = encoded else {
-            tracing::warn!("Failed to encode response delivery attempt for transparency log");
-            return !fail_closed;
-        };
-        let hash = format!("sha256:{}", hex::encode(Sha256::digest(encoded)));
-        let mut fields = serde_json::Map::new();
-        fields.insert("event".into(), "response_delivery_attempt".into());
-        fields.insert("response_stage".into(), stage.into());
-        fields.insert("response_hash_encoding".into(), "sorted-json-v1".into());
-        fields.insert("response_hash".into(), hash.into());
-        fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
-        // A fingerprint: the id is its anonymous holder's credential (F9).
-        let session_id = crate::gateway::session_id::session_fp(correlation.session_id);
-        fields.insert("session_id".into(), session_id.into());
-        fields.insert("caller".into(), correlation.caller.into());
-        fields.insert("server".into(), correlation.external_server.into());
-        fields.insert("tool".into(), correlation.external_tool.into());
-        // The answer's read verdict rides this record instead of a second one
-        // (MIK-7799); its own `event` and `caller_key` stay the delivery's.
-        if let Some(read) = read {
-            for (name, value) in read {
-                if name != "event" {
-                    fields.entry(name).or_insert(value);
-                }
+    let code = answer
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer.pointer("/error/code"))
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+    let outcome = code.map_or(AuditOutcome::Ok, AuditOutcome::Error);
+    append_delivery_attempt(
+        logger,
+        answer,
+        outcome,
+        "transport_finalized",
+        correlation,
+        read,
+    )
+    .await
+}
+
+/// Append one delivery-attempt record to `logger`; `true` when there is no
+/// log. `false` only when the append failed under `FailClosed`.
+async fn append_delivery_attempt(
+    logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
+    value: serde_json::Result<serde_json::Value>,
+    outcome: crate::security::audit::AuditOutcome,
+    stage: &str,
+    correlation: &ResponseCorrelation<'_>,
+    read: Option<serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditWho};
+
+    use sha2::{Digest, Sha256};
+
+    let Some(logger) = logger else {
+        return true;
+    };
+    let fail_closed = logger.failure_policy() == AuditFailurePolicy::FailClosed;
+    let encoded = value.and_then(|value| serde_json::to_vec(&value));
+    let Ok(encoded) = encoded else {
+        tracing::warn!("Failed to encode response delivery attempt for transparency log");
+        return !fail_closed;
+    };
+    let hash = format!("sha256:{}", hex::encode(Sha256::digest(encoded)));
+    let mut fields = serde_json::Map::new();
+    fields.insert("event".into(), "response_delivery_attempt".into());
+    fields.insert("response_stage".into(), stage.into());
+    fields.insert("response_hash_encoding".into(), "sorted-json-v1".into());
+    fields.insert("response_hash".into(), hash.into());
+    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+    // A fingerprint: the id is its anonymous holder's credential (F9).
+    let session_id = crate::gateway::session_id::session_fp(correlation.session_id);
+    fields.insert("session_id".into(), session_id.into());
+    fields.insert("caller".into(), correlation.caller.into());
+    fields.insert("server".into(), correlation.external_server.into());
+    fields.insert("tool".into(), correlation.external_tool.into());
+    // The answer's read verdict rides this record instead of a second one
+    // (MIK-7799); its own `event` and `caller_key` stay the delivery's.
+    if let Some(read) = read {
+        for (name, value) in read {
+            if name != "event" {
+                fields.entry(name).or_insert(value);
             }
         }
-        let envelope = AuditEnvelope {
-            outcome,
-            ..AuditEnvelope::ok(AuditWho::from_actor_id(correlation.caller))
-        };
-        // F20: bounded on the blocking pool; a stalled disk withholds the
-        // response (FailClosed) instead of pinning a runtime worker.
-        let logger = std::sync::Arc::clone(logger);
-        if let Err(error) = logger
-            .append_bounded(move |l| l.append_event(fields, &envelope))
-            .await
-        {
-            tracing::warn!(
-                error_kind = ?error.kind(),
-                "Failed to append response delivery attempt to transparency log"
-            );
-            return !fail_closed;
-        }
-        true
     }
+    let envelope = AuditEnvelope {
+        outcome,
+        ..AuditEnvelope::ok(AuditWho::from_actor_id(correlation.caller))
+    };
+    // F20: bounded on the blocking pool; a stalled disk withholds the
+    // response (FailClosed) instead of pinning a runtime worker.
+    let logger = std::sync::Arc::clone(logger);
+    if let Err(error) = logger
+        .append_bounded(move |l| l.append_event(fields, &envelope))
+        .await
+    {
+        tracing::warn!(
+            error_kind = ?error.kind(),
+            "Failed to append response delivery attempt to transparency log"
+        );
+        return !fail_closed;
+    }
+    true
 }
