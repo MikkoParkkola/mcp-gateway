@@ -757,3 +757,28 @@ fn a_union_keeps_a_whole_float_beyond_i64_as_an_integer_member() {
     assert!(result.is_valid(), "{:?}", result.violations);
     assert_eq!(result.coerced["n"], json!(1e20));
 }
+
+/// MIK-7905: a whole number outside the i64 range under a plain integer type is
+/// kept as sent, never clamped to i64::MAX or i64::MIN. Inside the range a
+/// whole float still becomes an integer; -2^63 is i64::MIN exactly.
+#[test]
+fn a_whole_number_beyond_i64_is_kept_not_clamped() {
+    let schema = schema_with_props(json!({ "n": { "type": "integer" } }), &[]);
+    for sent in [
+        json!(1e20),
+        json!(-1e20),
+        json!(9_223_372_036_854_775_808.0),
+    ] {
+        let result = validate_arguments(&json!({ "n": sent }), &schema);
+        assert!(result.is_valid(), "{sent}: {:?}", result.violations);
+        assert_eq!(result.coerced["n"], sent);
+    }
+    for (sent, integer) in [
+        (json!(-9_223_372_036_854_775_808.0), json!(i64::MIN)),
+        (json!(3.0), json!(3)),
+    ] {
+        let result = validate_arguments(&json!({ "n": sent }), &schema);
+        assert!(result.is_valid(), "{sent}: {:?}", result.violations);
+        assert_eq!(result.coerced["n"], integer, "{sent}");
+    }
+}
