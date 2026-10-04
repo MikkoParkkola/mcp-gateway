@@ -545,15 +545,12 @@ pub(super) fn inspect_settled(
     state
         .meta_mcp()
         .restage_if_changed(snapshot, Some(&*result));
-    let shape = if call.tool == "gateway_invoke" {
-        AnswerShape::InvokeWrapped
-    } else {
-        AnswerShape::Literal
-    };
+    // A task stores the backend's native result, never a `gateway_invoke`
+    // wrapper, whatever tool started it.
     rebuild_task_receipt(
         state,
         &super::settlement::backend_output(result.clone()),
-        shape,
+        AnswerShape::Literal,
     );
     if refused {
         response = crate::protocol::JsonRpcResponse::delivery_refusal_error(

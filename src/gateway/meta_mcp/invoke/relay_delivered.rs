@@ -101,12 +101,16 @@ pub(crate) enum AnswerShape {
 }
 
 /// The backend text of a finally delivered `result`: the gateway's own
-/// members removed (its chain, the scope verdict it clamps, and on a modern
+/// members removed (its chain, the scope verdicts it clamps, top level and a
+/// task envelope's retained result, and on a modern
 /// answer its `serverInfo`), and a `gateway_invoke` wrapper read decoded.
 #[cfg(feature = "firewall")]
 fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Value {
     let mut copy = result.clone();
     crate::security::signature_chain::strip_chain(&mut copy);
+    // The scope a task envelope's retained result claims is clamped on the
+    // way out too: the backend's text there is not delivered.
+    crate::protocol::cacheable::clamp_delivered_scope(&mut copy);
     if let Some(members) = copy.as_object_mut() {
         members.remove("cacheScope");
         if stamps == GatewayStamps::Modern

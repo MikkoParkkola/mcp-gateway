@@ -297,3 +297,27 @@ async fn an_interim_invoke_answer_keeps_its_input_requests_in_the_receipt() {
         "a delivered input request lost its receipt"
     );
 }
+
+/// MIK-7887.RECEIPT.4: a task envelope's retained result has its scope
+/// clamped on the way out, so backend text stuffed in that nested
+/// `cacheScope` is not receipted.
+#[tokio::test]
+async fn a_nested_task_result_scope_is_not_receipted() {
+    let (meta, firewall) = relay_meta();
+    let stuffing = filler("nested");
+    let envelope = json!({
+        "taskId": "t-1",
+        "status": "completed",
+        "result": {"content": [{"type": "text", "text": PROSE}], "cacheScope": stuffing},
+    });
+    receipt_after_rebuild(&meta, &envelope, &envelope, GatewayStamps::Legacy).await;
+    assert!(
+        relayed_by_bob(&firewall, PROSE),
+        "delivered text lost its receipt"
+    );
+    let piece: String = stuffing.chars().take(400).collect();
+    assert!(
+        !relayed_by_bob(&firewall, &piece),
+        "undelivered nested scope text was receipted"
+    );
+}
