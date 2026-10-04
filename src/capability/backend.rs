@@ -659,6 +659,12 @@ impl CapabilityBackend {
     ///
     /// [`crate::Error::Config`] naming the unresolved reference, or the key the
     /// descriptor's provider requires.
+    ///
+    /// Replacing a definition of the same name stops its `mcp` children on
+    /// the runtime that started them: keep that runtime driven, or drop it.
+    /// An idle runtime stops them only when it next runs, and dropping it
+    /// kills each direct child but not a process that child started
+    /// (MIK-7923).
     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
         let name = capability.name.clone();

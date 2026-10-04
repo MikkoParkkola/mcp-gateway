@@ -3839,7 +3839,10 @@ a request that began before a replacement can still be answered from the earlier
 definition's cache entry (it is ordered before the replacement), and one that begins after it
 never is. `CapabilityBackend::register_capability` replacing a definition of the same
 name now also drops the answers cached for it and stops its running `mcp` children, so an
-unpinned replacement meets the process check instead of the pinned original's cached result.
+unpinned replacement meets the process check instead of the pinned original's cached result. Its children are stopped on the runtime that started them:
+keep that runtime driven, or drop it. A runtime that is kept but no longer driven (a current-thread
+runtime after `block_on` returns) stops them only when it next runs; dropping it kills each direct
+child, but a process that child started may survive (MIK-7923, to be fixed in 4.0.1).
 
 **Action:** an embedder that read `providers.process` or `providers.integrity` calls the getter of
 the same name. One that set `integrity`, or that edits a loaded definition before running it,
