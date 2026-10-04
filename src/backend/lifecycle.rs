@@ -277,6 +277,16 @@ impl Backend {
         self.destination()
     }
 
+    /// Wait at a test's [`super::MarkWindowGate`], when one is set.
+    #[cfg(test)]
+    async fn hold_in_mark_window(&self) {
+        let gate = self.mark_window_gate.lock().clone();
+        if let Some(gate) = gate {
+            gate.reached.notify_one();
+            gate.release.notified().await;
+        }
+    }
+
     /// The same marking for a transport built under `built_under` before it
     /// connects. A pairing that stamped a policy in between would leave the
     /// connection about to be made unpinned, so the start is refused instead.
@@ -362,17 +372,13 @@ impl Backend {
                 streamable_http,
                 protocol_version,
             } => {
+                http_target(http_url)?;
                 // One read, before anything is built: the OAuth client and the
                 // transport are both built under it, and `begin_connecting`
                 // refuses the start if a pairing stamped another policy since.
                 built_under = self.destination();
                 #[cfg(test)]
-                let gate = self.mark_window_gate.lock().clone();
-                #[cfg(test)]
-                if let Some(gate) = gate {
-                    gate.reached.notify_one();
-                    gate.release.notified().await;
-                }
+                self.hold_in_mark_window().await;
                 let oauth_client = self.create_oauth_client(http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
@@ -479,4 +485,18 @@ impl Backend {
 
         Ok(transport)
     }
+}
+
+/// Refuse an HTTP backend URL no request can be sent to (a scheme other than
+/// `http`/`https`, or no host). Such a start fails without connecting, so it
+/// is refused before anything is built or marked (MIK-7855).
+fn http_target(http_url: &str) -> Result<()> {
+    if url::Url::parse(http_url)
+        .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.has_host())
+    {
+        return Ok(());
+    }
+    Err(Error::TransportPermanent(
+        "Invalid transport base URL: not an http:// or https:// URL with a host".into(),
+    ))
 }

@@ -63,6 +63,13 @@ impl super::WebSocketTransport {
         let mut request = url
             .into_client_request()
             .map_err(|_| Error::Transport("WebSocket connect failed: invalid ws_url".into()))?;
+        if !matches!(request.uri().scheme_str(), Some("ws" | "wss"))
+            || request.uri().host().is_none()
+        {
+            return Err(Error::Transport(
+                "WebSocket connect failed: invalid ws_url".into(),
+            ));
+        }
         for (name, value) in headers {
             let (Ok(name), Ok(value)) = (
                 HeaderName::from_bytes(name.as_bytes()),

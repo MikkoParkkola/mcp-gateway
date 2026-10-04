@@ -574,14 +574,17 @@ fn refused_before_connecting() -> Arc<Backend> {
     ))
 }
 
-/// A WebSocket backend whose upgrade request cannot be built: a header name
-/// HTTP does not allow. The start is refused before anything can connect.
-fn websocket_refused_before_connecting() -> Arc<Backend> {
+/// A backend at `transport` with `headers`, built without config validation
+/// the way an embedder can build one.
+fn unvalidated(transport: TransportConfig, headers: &[(&str, &str)]) -> Arc<Backend> {
     Arc::new(Backend::new(
         "b",
         BackendConfig {
-            transport: transport("ws://127.0.0.1:{port}/", 9),
-            headers: [("bad header".to_string(), "v".to_string())].into(),
+            transport,
+            headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect(),
             ..BackendConfig::default()
         },
         &FailsafeConfig::default(),
@@ -593,9 +596,31 @@ fn websocket_refused_before_connecting() -> Arc<Backend> {
 // leaves the backend un-marked and a later hardened pairing is not refused.
 #[tokio::test]
 async fn a_start_refused_before_connecting_does_not_block_a_hardened_pairing() {
+    let ws = |url: &str| TransportConfig::WebSocket {
+        ws_url: url.to_string(),
+        protocol_version: None,
+    };
+    let http_at = |url: &str| TransportConfig::Http {
+        http_url: url.to_string(),
+        streamable_http: true,
+        protocol_version: None,
+    };
     for (kind, backend) in [
-        ("http", refused_before_connecting()),
-        ("websocket", websocket_refused_before_connecting()),
+        ("http oauth clash", refused_before_connecting()),
+        (
+            "http scheme",
+            unvalidated(http_at("ftp://localhost/mcp"), &[]),
+        ),
+        ("http url", unvalidated(http_at("not a url"), &[])),
+        (
+            "websocket header",
+            unvalidated(ws("ws://127.0.0.1:9/"), &[("bad header", "v")]),
+        ),
+        (
+            "websocket scheme",
+            unvalidated(ws("http://localhost/"), &[]),
+        ),
+        ("websocket url", unvalidated(ws("not a url"), &[])),
     ] {
         let registry = Arc::new(BackendRegistry::new());
         assert!(registry.register(Arc::clone(&backend)));
@@ -683,8 +708,8 @@ async fn a_pairing_inside_the_start_window_stops_the_start_connecting() {
             .await
             .expect("start task");
         assert!(
-            started.is_err(),
-            "{kind}: the start built under the old policy"
+            matches!(started, Err(crate::Error::BackendUnavailable(_))),
+            "{kind}: the start built under the old policy is refused, got {started:?}"
         );
         assert_eq!(
             accepted.load(Ordering::SeqCst),
