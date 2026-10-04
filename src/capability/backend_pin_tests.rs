@@ -431,3 +431,42 @@ async fn a_runtime_less_replacement_stops_a_child_with_a_call_in_flight() {
         "grandchild {pid} outlived a runtime-less replacement"
     );
 }
+
+/// MIK-7814: every pinned capability shipped in this repository loads with a
+/// fingerprint that a second load and a clone reproduce exactly, so the
+/// admission check never refuses a pinned file as loaded.
+#[tokio::test]
+async fn every_shipped_pinned_capability_keeps_its_fingerprint() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+    let mut pending = vec![root];
+    let mut checked = 0;
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "yaml") {
+                continue;
+            }
+            let Ok(first) = crate::capability::parse_capability_file(&path).await else {
+                continue;
+            };
+            if first.providers.integrity() != crate::capability::Integrity::Verified {
+                continue;
+            }
+            let second = crate::capability::parse_capability_file(&path)
+                .await
+                .unwrap();
+            assert_eq!(first.providers.pinned, second.providers.pinned, "{path:?}");
+            assert_eq!(
+                first.clone().fingerprint(),
+                first.providers.pinned,
+                "{path:?}"
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked > 100, "only {checked} pinned files found");
+}
