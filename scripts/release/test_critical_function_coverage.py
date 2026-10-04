@@ -482,6 +482,24 @@ class HeadLineCalls(unittest.TestCase):
                 self.assertEqual(result[9], [])
                 self.assertNotIn(2, result[4])
 
+    def test_a_constant_target_on_the_head_line_stays_covered(self):
+        shapes = [
+            '    debug!(target: HTTP_TARGET, url = %x, "seen");\n',
+            '    tracing::info!(target: crate::LOG_TARGET, n = 3, "seen")\n',
+            '    warn!(target: "gateway.http", %error, "seen");\n',
+            '    warn!(target: HTTP_TARGET,\n',
+        ]
+        for body in shapes:
+            with self.subTest(body=body.strip()):
+                result = self.grade(body, {2: 1})
+                self.assertEqual(result[9], [])
+                self.assertNotIn(2, result[4])
+
+    def test_a_call_in_the_target_is_unverifiable(self):
+        result = self.grade('    debug!(target: pick(x), "seen");\n', {2: 1})
+        self.assertEqual(result[4], [2])
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 1)"])
+
     def test_a_call_inside_the_message_literal_is_not_a_call(self):
         result = self.grade('    debug!("see clean(x) for {}", x);\n', {2: 1})
         self.assertEqual(result[0], "ok")

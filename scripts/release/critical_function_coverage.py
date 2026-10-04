@@ -92,8 +92,13 @@ _HEAD_PATH = r"[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*"
 _NUMBER = r"-?\d[\d_]*(?:\.\d[\d_]*)?(?:[iuf](?:8|16|32|64|128|size))?"
 _ITEM_VALUE = r"[%?]?(?:" + _HEAD_PATH + r"|" + _NUMBER + r")"
 _ITEM = r'(?:"[^"\\]*"|[A-Za-z_]\w*\s*=\s*' + _ITEM_VALUE + r"|" + _ITEM_VALUE + r")"
+# An optional leading `target: X,` names the event's target. X is a constant
+# path or a quote-free literal (`tracing` requires a constant there), so it
+# runs no code: a module pins its moved events to one target this way.
+_TARGET = r'(?:target\s*:\s*(?:' + _HEAD_PATH + r'|"[^"\\]*")\s*,\s*)?'
 PLAIN_HEAD = re.compile(
     r"^\s*(?:(?:::)?tracing::)?(?:trace|debug|info|warn|error|event)!\(\s*"
+    + _TARGET +
     r"(?:" + _ITEM + r"(?:\s*,\s*" + _ITEM + r")*\s*,?)?"
     r"\s*(?:\)\s*;?)?\s*$"
 )
