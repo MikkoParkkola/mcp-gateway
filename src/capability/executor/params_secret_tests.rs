@@ -287,11 +287,22 @@ fn a_filled_body_field_that_looks_like_a_placeholder_is_kept() {
 #[test]
 fn a_body_field_nothing_fills_is_still_left_out() {
     let (_dir, executor) = executor_holding("");
-    let template = json!({ "kept": "{q}", "missing": "{absent}" });
+    let template = json!({
+        "kept": "{q}",
+        "missing": "{absent}",
+        "defaulted": "{first|50}",
+        "indexed": "{filter[id]}",
+    });
     let body = executor
         .substitute_value(&template, &json!({ "q": "cats" }))
         .unwrap();
     assert_eq!(body, json!({ "kept": "cats" }));
+    // The query path omits them the same way.
+    for unfilled in ["{absent}", "{first|50}", "{filter[id]}"] {
+        let template = std::collections::HashMap::from([("k".to_owned(), unfilled.to_owned())]);
+        let pairs = executor.substitute_params(&template, &json!({})).unwrap();
+        assert!(pairs.is_empty(), "{unfilled}: {pairs:?}");
+    }
 }
 
 /// MIK-7888B.BODY.3: a query template whose named placeholders are all filled
@@ -299,18 +310,21 @@ fn a_body_field_nothing_fills_is_still_left_out() {
 #[test]
 fn a_filled_query_template_with_literal_braces_is_sent() {
     let (_dir, executor) = executor_holding("");
-    let template = std::collections::HashMap::from([(
-        "filter".to_owned(),
-        r#"{"filter":"{q}","options":{}}"#.to_owned(),
-    )]);
-    let pairs = executor
-        .substitute_params(&template, &json!({ "q": "cats" }))
-        .unwrap();
-    assert_eq!(
-        pairs,
-        vec![(
-            "filter".to_owned(),
-            r#"{"filter":"cats","options":{}}"#.to_owned()
-        )]
-    );
+    for (template, sent) in [
+        (
+            r#"{"filter":"{q}","options":{}}"#,
+            r#"{"filter":"cats","options":{}}"#,
+        ),
+        (
+            r#"{"filter":"{q}","page":{"size":10}}"#,
+            r#"{"filter":"cats","page":{"size":10}}"#,
+        ),
+    ] {
+        let template =
+            std::collections::HashMap::from([("filter".to_owned(), template.to_owned())]);
+        let pairs = executor
+            .substitute_params(&template, &json!({ "q": "cats" }))
+            .unwrap();
+        assert_eq!(pairs, vec![("filter".to_owned(), sent.to_owned())]);
+    }
 }

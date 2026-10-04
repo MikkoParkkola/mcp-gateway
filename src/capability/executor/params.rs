@@ -471,14 +471,11 @@ fn is_pure_placeholder(s: &str) -> bool {
         && !s.starts_with("{keychain.")
 }
 
-/// Whether `{name}` names a parameter: a non-empty identifier (letters,
-/// digits, `_`, `-`, `.`). `{}` and JSON fragments such as `{"a":1}` are
-/// literal braces, not placeholders.
+/// Whether `{name}` names a parameter. Only literal braces are not: `{}` (or
+/// blank) and a JSON fragment such as `{"a":1}`, whose quoted key a parameter
+/// name never has. Any other name (`{first|50}`, `{filter[id]}`) is one.
 fn is_parameter_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    !name.trim().is_empty() && !name.contains('"')
 }
 
 /// Returns `true` when a substituted string is still an unresolved placeholder.
