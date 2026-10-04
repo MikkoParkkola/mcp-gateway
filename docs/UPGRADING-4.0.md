@@ -164,7 +164,8 @@ backend" and "fails a capability file" first.**
 | 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
 | 138 | `mcp_gateway::key_server::oidc::OidcError` gained three variants (`InsecureIssuer`, `InsecureFetch`, `ClientUnavailable`) and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles | Add the three arms, or end the `match` with a wildcard arm |
 | 139 | A relay refusal of a catalogue read (`prompts/get`, `resources/read`) on the meta route now answers HTTP 403, as a `tools/call` relay refusal does; before it was HTTP 200 with the error in the body | A client that branches on the HTTP status of a refused catalogue read should treat 403 as a refusal; the JSON-RPC error (`-32002`) is unchanged |
-| 140 | A successful `cli` or `mcp` capability result no longer carries a credential the gateway injected into the child (an env value, or the resolved `token_env`): every string value and key is rewritten to `[redacted]` and the document is otherwise intact; with the `firewall` feature the credential scanner runs on it too. Values the caller sent are left in the result, since a tool legitimately returns them (with the `firewall` feature the scanner can still replace one that looks like a credential). Without the `firewall` feature only the literal removal of injected values applies: a credential the child invents or reads from elsewhere is not recognised, in results or in error text. The removal is literal: a credential the child encodes (base64, URL escapes) or splits across separate values is not matched. Numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, ... | A capability whose tool must return an injected value cannot: read it from the child's own source instead |
+| 140 | `RuntimeProvenanceReceipt::backend_ok` is now `Option<bool>`, and an event receipt carries none (the JSON has no `backend_ok` field). Before, an event receipt claimed `true`, which nothing had observed | An embedder that reads or builds the field uses `Some(..)`; a verifier reads `subject_kind` first and treats a missing `backend_ok` as not observed. Receipts already stored still read |
+| 141 | A successful `cli` or `mcp` capability result no longer carries a credential the gateway injected into the child (an env value, or the resolved `token_env`): every string value and key is rewritten to `[redacted]` and the document is otherwise intact; with the `firewall` feature the credential scanner runs on it too. Values the caller sent are left in the result, since a tool legitimately returns them (with the `firewall` feature the scanner can still replace one that looks like a credential). Without the `firewall` feature only the literal removal of injected values applies: a credential the child invents or reads from elsewhere is not recognised, in results or in error text. The removal is literal: a credential the child encodes (base64, URL escapes) or splits across separate values is not matched. Numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, ... | A capability whose tool must return an injected value cannot: read it from the child's own source instead |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3746,7 +3747,15 @@ With relay detection set to `block`, a `prompts/get` whose arguments, or a `reso
 
 **Action:** a client that reads the HTTP status of a meta-route catalogue read and treats 200 as "the call was answered" should handle 403 as a refusal and read the JSON-RPC error from the body, as it already does for a refused `tools/call`. A client that only reads the JSON-RPC body needs no change.
 
-## 140. A successful capability result loses the credentials the gateway injected
+## 140. `backend_ok` on a provenance receipt is optional
+
+**Startup:** no notice, a library API and receipt-format change rather than a change to running behaviour
+
+`mcp_gateway::trust::RuntimeProvenanceReceipt::backend_ok` was a `bool`. It is now `Option<bool>`: an event receipt (`subject_kind: event`) carries `None` and its JSON has no `backend_ok` field, because an event is a delivery, not a tool result, and nothing observed a success. Through the 4.0 betas an event receipt signed `backend_ok: true`. Runtime receipts are unchanged on the wire (`true` or `false`, same field position), so stored receipts and their signatures still verify and read. Replay scoring abstains on an event receipt, and on any receipt without the field.
+
+**Action:** an embedder that reads `receipt.backend_ok` as a `bool`, or sets it, uses `Option<bool>` (`Some(true)`, `Some(false)`). A verifier treats a missing `backend_ok` as not observed, never as success.
+
+## 141. A successful capability result loses the credentials the gateway injected
 
 **Startup:** no notice, the first successful `cli` or `mcp` capability call returns the redacted result
 
