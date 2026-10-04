@@ -661,7 +661,18 @@ impl CapabilityBackend {
     /// descriptor's provider requires.
     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
-        self.capabilities.write().upsert(capability);
+        let name = capability.name.clone();
+        let mut caps = self.capabilities.write();
+        let replaced = caps.contains(&name);
+        caps.upsert(capability);
+        if replaced {
+            // A replacement is a live-policy change (MIK-7814): answers cached
+            // or children started under the old definition must not serve the
+            // new one, which may be unpinned. Bumped with the lock held, as in
+            // unload. A first registration has nothing cached under its name.
+            self.executor.bump_policy_epoch();
+            self.executor.bump_mcp_generation(&name);
+        }
         Ok(())
     }
 
