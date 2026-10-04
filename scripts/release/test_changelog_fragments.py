@@ -243,6 +243,15 @@ class CheckAgainstGit(unittest.TestCase):
         self.git("commit", "-qam", "change")
         self.assertEqual(self.run_check("docs, no-changelog")[0], 0)
 
+    def test_a_committed_retype_passes_through_the_git_diff(self):
+        (self.root / "changelog.d/7.fixed.md").write_text("- b (#7)\n", encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "fragment")
+        self.git("branch", "-f", "base")
+        self.git("mv", "changelog.d/7.fixed.md", "changelog.d/7.security.md")
+        self.git("commit", "-qm", "retype")
+        self.assertEqual(self.run_check()[0], 0)
+
     def test_a_committed_fragment_passes(self):
         (self.root / "src/lib.rs").write_text("fn b() {}\n", encoding="utf-8")
         (self.root / "changelog.d/7.fixed.md").write_text("- b (#7)\n", encoding="utf-8")
