@@ -3060,7 +3060,7 @@ re-initialize with the new token and use the new `Mcp-Session-Id`. Other clients
 
 **Startup:** no notice
 
-In 3.x and the betas, `tasks/get` returned a finished task's stored result with no invocation
+In the 4.0.0 betas, `tasks/get` returned a finished task's stored result with no invocation
 policy, and a repeated task call with the same key answered from the stored task. A tool that was
 withheld, a backend that was killed, or a grant that was revoked after the task finished did not
 stop either. In 4.0 both paths run the policy for the calls that produced the result before
@@ -3080,7 +3080,7 @@ a beta (which reads versions 1 to 3) refuse to open the task store, so the gatew
 `tasks.store_dir` (default `~/.mcp-gateway/tasks`). Back it up before upgrading. Clearing it to
 start a beta is destructive: it abandons every task and every task idempotency key, it is not a
 migration, and a repeated call then runs again. Restoring an older backup can lose completion and
-idempotency knowledge and replay external effects that already completed. 3.5.x has no task store
+idempotency knowledge and replay external effects that already completed. 3.x has no task store
 and is not affected.
 
 Three client-visible changes follow from that check:
