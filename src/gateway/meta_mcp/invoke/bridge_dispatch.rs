@@ -9,7 +9,9 @@ use tracing::debug;
 
 use super::bridge_settle::{arm, refuse_if_killed};
 use super::classify_bridged_dispatch_error;
-use super::{dispatch_guards, relay};
+#[cfg(feature = "cost-governance")]
+use super::dispatch_guards;
+use super::relay;
 use crate::Error;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::idempotency::IdempotencyReservation;
