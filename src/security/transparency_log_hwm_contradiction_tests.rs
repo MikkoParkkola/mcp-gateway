@@ -280,6 +280,16 @@ fn lagging_mark_restart_finds(
     signed: bool,
     edit: impl FnOnce(&mut Vec<serde_json::Value>),
 ) -> bool {
+    mark_restart_finds(signed, 3, edit)
+}
+
+/// Restart a five-record log whose mark names record `at`, after `edit` has
+/// changed the active file, and report whether the restart recorded a finding.
+fn mark_restart_finds(
+    signed: bool,
+    at: usize,
+    edit: impl FnOnce(&mut Vec<serde_json::Value>),
+) -> bool {
     use super::rotation_tests::SECRET;
     use super::segments::{HighWater, encode_hwm, write_hwm};
     let dir = tempfile::tempdir().unwrap();
@@ -290,8 +300,8 @@ fn lagging_mark_restart_finds(
     drop(l);
     let mut records = lines(&path);
     let mark = HighWater {
-        counter: records[3]["counter"].as_u64().unwrap(),
-        entry_hash: records[3]["entry_hash"].as_str().unwrap().into(),
+        counter: records[at]["counter"].as_u64().unwrap(),
+        entry_hash: records[at]["entry_hash"].as_str().unwrap().into(),
         segment_seq: 0,
     };
     write_hwm(&path, &encode_hwm(&mark, secret, "test").unwrap(), true).unwrap();
@@ -336,4 +346,25 @@ fn an_oversized_line_beside_the_mark_is_a_finding() {
         records.insert(2, serde_json::Value::String(filler));
     });
     assert!(found, "oversized line read past without a finding");
+}
+
+/// The mark can name the newest record itself (a clean shutdown): that record
+/// is judged on its content too, or an edit under its stored hash, or a forged
+/// signature, would pass a restart and later expire with nothing recorded.
+#[test]
+fn a_tail_at_the_mark_is_judged_on_its_content() {
+    for signed in [false, true] {
+        assert!(
+            !mark_restart_finds(signed, 4, |_| {}),
+            "control, signed {signed}"
+        );
+        let found = mark_restart_finds(signed, 4, |records| {
+            records[4]["tampered"] = serde_json::Value::Bool(true);
+        });
+        assert!(found, "edited tail at the mark accepted, signed {signed}");
+    }
+    let found = mark_restart_finds(true, 4, |records| {
+        records[4]["sig"] = serde_json::Value::String("0".repeat(64));
+    });
+    assert!(found, "a forged signature on the tail at the mark accepted");
 }
