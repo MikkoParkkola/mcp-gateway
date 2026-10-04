@@ -3071,8 +3071,9 @@ on. A refused read returns the policy error and no result.
 The task record now lists those calls (server and tool names, never arguments). A
 `gateway_invoke` or surfaced-tool task records its call at creation; a playbook or `gateway_execute`
 task records the calls it actually dispatched when it settles. A row written by a beta has no
-list: a finished playbook or `gateway_execute` row is refused, and any other legacy row is
-checked at the backend level only. Only beta task stores contain such plan rows.
+list: its one call is recovered from its upstream descriptor when that is consistent and checked
+as above, and a row without recoverable provenance, every playbook or `gateway_execute` row
+included, is refused -32003 (item 120). Only beta task stores contain such rows.
 
 **Rollback:** a record that carries calls is written as version 5, and a version 4 or 5 row makes
 a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
@@ -3090,13 +3091,14 @@ Three client-visible changes follow from that check:
   one the read returns -32002 and no result. Under `observe` the read is delivered.
 - A task whose dispatch an identity grant refused now reads back as the current grant denial
   (-32004), not as the failure it stored, for as long as the grant stays denied.
-- Every read of a finished task writes one `identity_grant_decision` record to the audit log when
-  the target is a personal capability, beside the record the worker wrote at dispatch.
+- A read of a finished task writes an `identity_grant_decision` record to the audit log when the
+  target is a personal capability, beside the record the worker wrote at dispatch; an unchanged
+  decision is written at most once per 10 minutes (item 117).
 
 **Action:** none on upgrade. A client that attests calls must send a fresh recovery token in
 `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task, as it already
-does for a working one. Where a SIEM rule counts decision records per call, expect one more per
-read.
+does for a working one. Where a SIEM rule counts decision records per call, expect more records
+for polled tasks, bounded as item 117 describes.
 
 ## 106. Hardened requires a per-caller identity
 
