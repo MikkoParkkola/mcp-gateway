@@ -138,7 +138,7 @@ impl OutboundFrame {
     pub(crate) fn delivers_result(&self) -> bool {
         match &self.payload {
             Payload::Response(response) => response.result.is_some() && !response.delivery_refusal,
-            Payload::Answer(value) => value.get("result").is_some_and(|r| !r.is_null()),
+            Payload::Answer(value) => value.get("result").is_some(),
             _ => false,
         }
     }

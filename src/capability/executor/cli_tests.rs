@@ -149,12 +149,41 @@ async fn the_resolved_credential_reaches_token_env_and_not_an_error() {
     let token_env = "      token_env: CAP_EXEC_TEST_TOKEN\n";
     let props = "      x:\n        type: string";
 
+    // MIK-7882.REDACT.1: the child received the token (it echoes it), and the
+    // caller receives the answer without it.
     let ok = call(&probe("echo", props, &auth, token_env)).await.unwrap();
-    assert_eq!(ok["test_values"]["CAP_EXEC_TEST_TOKEN"], token);
+    assert_eq!(ok["test_values"]["CAP_EXEC_TEST_TOKEN"], "[redacted]");
+    assert!(!ok.to_string().contains(token), "success leaked it: {ok}");
     assert!(
         !ok["argv"].to_string().contains(token),
         "the token never travels in argv"
     );
+
+    // The same under `output: text`, which wraps the whole stdout.
+    let text = call(&probe(
+        "echo",
+        props,
+        &auth,
+        &format!("{token_env}      output: text\n"),
+    ))
+    .await
+    .unwrap();
+    let text = text["text"].as_str().unwrap();
+    assert!(!text.contains(token), "text output leaked it: {text}");
+    assert!(text.contains("[redacted]"), "{text}");
+
+    // And a long answer is returned whole, not cut to a 2 KiB excerpt.
+    let big = call(&probe(
+        "big",
+        props,
+        &auth,
+        &format!("{token_env}      output: text\n"),
+    ))
+    .await
+    .unwrap();
+    let big = big["text"].as_str().unwrap();
+    assert!(!big.contains(token), "{big}");
+    assert_eq!(big.len(), 6000 + "[redacted]".len(), "no truncation");
 
     let err = call(&probe("fail", props, &auth, token_env))
         .await

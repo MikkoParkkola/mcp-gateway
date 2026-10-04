@@ -643,6 +643,9 @@ pub(crate) async fn audit_identity_propagation(
 }
 
 #[cfg(test)]
+mod audience_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

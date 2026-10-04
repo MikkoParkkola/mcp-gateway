@@ -12,6 +12,40 @@ use dashmap::DashMap;
 
 use crate::{Error, Result};
 
+/// A `{name}` placeholder: `{keychain.X}`, `{env.X}`, or a caller parameter.
+#[allow(clippy::unwrap_used)] // a constant pattern
+static PLACEHOLDER: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r"\{([^{}]*)\}").unwrap());
+
+/// Replace every `{name}` in `value` for which `fill` returns `Some(text)`;
+/// `None` leaves the placeholder as written.
+///
+/// One scan of `value`: substituted text is never looked at again, so a value
+/// holding `{other}` arrives byte for byte (MIK-7888).
+///
+/// # Errors
+///
+/// The first error `fill` returns.
+pub(crate) fn fill_placeholders(
+    value: &str,
+    mut fill: impl FnMut(&str) -> Result<Option<String>>,
+) -> Result<String> {
+    let mut out = String::with_capacity(value.len());
+    let mut copied_to = 0;
+    for caps in PLACEHOLDER.captures_iter(value) {
+        let (Some(whole), Some(name)) = (caps.get(0), caps.get(1)) else {
+            continue;
+        };
+        if let Some(text) = fill(name.as_str())? {
+            out.push_str(&value[copied_to..whole.start()]);
+            out.push_str(&text);
+            copied_to = whole.end();
+        }
+    }
+    out.push_str(&value[copied_to..]);
+    Ok(out)
+}
+
 /// Secret resolver with caching
 pub struct SecretResolver {
     /// Cached resolved secrets for the session
@@ -48,6 +82,9 @@ impl SecretResolver {
     /// - `{keychain.SERVICE}` - macOS Keychain or Linux secret-tool
     /// - `{env.VAR}` - Environment variable
     ///
+    /// One pass over `value`: a resolved secret is data and is never scanned
+    /// for another reference.
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -59,65 +96,69 @@ impl SecretResolver {
     /// # Errors
     ///
     /// Returns an error if a keychain entry is not found or cannot be accessed.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the hardcoded regex patterns are invalid (compile-time constant).
     pub fn resolve(&self, value: &str) -> Result<String> {
-        let mut result = value.to_string();
+        self.resolve_with(value, &|_| None)
+    }
 
-        // Find all {keychain.X} patterns
-        #[allow(clippy::unwrap_used)]
-        let keychain_pattern = regex::Regex::new(r"\{keychain\.([^}]+)\}").unwrap();
-        for caps in keychain_pattern.captures_iter(value) {
-            let service = &caps[1];
-            let placeholder = &caps[0];
-
-            // Check cache first
-            let secret = if let Some(cached) = self.cache.get(service) {
-                cached.clone()
-            } else {
-                // Fetch from keychain
-                let secret = Self::fetch_from_keychain(service)?;
-                // Cache it
-                self.cache.insert(service.to_string(), secret.clone());
-                secret
-            };
-
-            result = result.replace(placeholder, &secret);
-        }
-
-        // Find all {env.X} patterns
-        #[allow(clippy::unwrap_used)]
-        let env_pattern = regex::Regex::new(r"\{env\.([^}]+)\}").unwrap();
+    /// [`Self::resolve`], also handing every other `{name}` to `other`: its
+    /// `Some(text)` replaces the placeholder, `None` leaves it in place.
+    ///
+    /// One scan of `value` does all of it, so no substituted text (a secret or
+    /// an `other` value) is looked at again; a secret that contains `{q}`
+    /// reaches the caller of this function byte for byte.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resolve`].
+    pub fn resolve_with(
+        &self,
+        value: &str,
+        other: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<String> {
         // One snapshot for the whole value: a reload between two placeholders
         // would otherwise splice a pre-reload half onto a post-reload half and
         // produce a credential that never existed in either generation.
         let env = self.env.get();
-        for caps in env_pattern.captures_iter(&result.clone()) {
-            let var_name = &caps[1];
-            let placeholder = &caps[0];
-
-            // `{env.X:-}` allows empty on purpose, as `${VAR:-}` does in config.
-            if let Some(name) = var_name.strip_suffix(":-") {
-                let value = env.resolve(name).unwrap_or_default();
-                result = result.replace(placeholder, &value);
-                continue;
+        fill_placeholders(value, |name| {
+            if let Some(service) = name.strip_prefix("keychain.")
+                && !service.is_empty()
+            {
+                self.keychain_secret(service).map(Some)
+            } else if let Some(var_name) = name.strip_prefix("env.")
+                && !var_name.is_empty()
+            {
+                Self::env_secret(&env, var_name).map(Some)
+            } else {
+                Ok(other(name))
             }
-            // Empty is refused like unset, as `SecretRef::resolve` does (C4).
-            let value = env
-                .resolve(var_name)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    Error::Config(format!(
-                        "{{env.{var_name}}} is not set or is empty{}",
-                        env.absent_files_hint()
-                    ))
-                })?;
-            result = result.replace(placeholder, &value);
-        }
+        })
+    }
 
-        Ok(result)
+    /// A keychain entry, from the session cache when it was read before.
+    fn keychain_secret(&self, service: &str) -> Result<String> {
+        if let Some(cached) = self.cache.get(service) {
+            return Ok(cached.clone());
+        }
+        let secret = Self::fetch_from_keychain(service)?;
+        self.cache.insert(service.to_string(), secret.clone());
+        Ok(secret)
+    }
+
+    /// An environment variable, read from the snapshot `env`.
+    fn env_secret(env: &crate::config::EnvOverlay, var_name: &str) -> Result<String> {
+        // `{env.X:-}` allows empty on purpose, as `${VAR:-}` does in config.
+        if let Some(name) = var_name.strip_suffix(":-") {
+            return Ok(env.resolve(name).unwrap_or_default());
+        }
+        // Empty is refused like unset, as `SecretRef::resolve` does (C4).
+        env.resolve(var_name)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Error::Config(format!(
+                    "{{env.{var_name}}} is not set or is empty{}",
+                    env.absent_files_hint()
+                ))
+            })
     }
 
     /// Fetch a secret from the system keychain

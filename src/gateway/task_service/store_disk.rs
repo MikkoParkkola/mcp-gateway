@@ -1,0 +1,241 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The task store's disk layer: directory and lease checks, record loading and
+//! the durable write path.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use super::platform::{
+    create_private_dir, has_mode, judge_store_dir, open_new_private, open_record, rename, sync_dir,
+    sync_file,
+};
+use super::{
+    CommitHook, CommitStage, Entry, LEASE, RECORD_MODE, STORE_MODE, StoreError, StoreLimits,
+    TEMP_ATTEMPTS, fits, is_record_name, record_name,
+};
+use crate::fs_lock::{DirPin, ExclusiveFileLock};
+use crate::gateway::task_service::record::{MAX_LOADABLE_VERSION, Record};
+use crate::protocol::tasks::Task;
+
+pub(super) fn open_blocking(
+    dir: &Path,
+    limits: StoreLimits,
+) -> Result<(ExclusiveFileLock, BTreeMap<String, Entry>), StoreError> {
+    let pin = prepare_dir(dir)?;
+    let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
+    Ok((lease, load(dir, limits)?))
+}
+
+fn prepare_dir(dir: &Path) -> Result<DirPin, StoreError> {
+    let shown_path = dir.display();
+    match fs::symlink_metadata(dir) {
+        Ok(meta) => {
+            if !meta.is_dir() || !has_mode(&meta, STORE_MODE) {
+                tracing::warn!(path = %shown_path, "task store directory is not a private directory");
+                return Err(StoreError::UnsafeStore);
+            }
+            judge_store_dir(dir)
+        }
+        // A fresh directory is judged exactly like an existing one.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_private_dir(dir).and_then(|()| judge_store_dir(dir))
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %shown_path, "task store directory unreadable");
+            Err(StoreError::Uninspectable)
+        }
+    }
+}
+
+pub(super) fn acquire_lease(lease: &Path) -> Result<ExclusiveFileLock, StoreError> {
+    let shown_path = lease.display();
+    match fs::symlink_metadata(lease) {
+        Ok(meta) => {
+            if !meta.is_file() || !has_mode(&meta, RECORD_MODE) {
+                tracing::warn!(path = %shown_path, "task store lease is not a private regular file");
+                return Err(StoreError::UnsafeStore);
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(%error, path = %shown_path, "task store lease unreadable");
+            return Err(StoreError::Uninspectable);
+        }
+    }
+    ExclusiveFileLock::try_acquire(lease).map_err(|error| {
+        if error.kind() == io::ErrorKind::WouldBlock {
+            return StoreError::AlreadyOwned;
+        }
+        // Windows judges the lease's DACL inside `try_acquire`, the check unix
+        // makes above with `has_mode`; a lease that is not private is unsafe.
+        #[cfg(windows)]
+        if error.kind() == io::ErrorKind::PermissionDenied {
+            tracing::warn!(%error, path = %shown_path, "task store lease is not private");
+            return StoreError::UnsafeStore;
+        }
+        // Includes the platforms with no tested exclusion primitive: they refuse
+        // custody outright rather than pretend to hold it.
+        tracing::warn!(%error, path = %shown_path, "task store lease not acquired");
+        StoreError::Unavailable
+    })
+}
+
+/// Read every record. Any unreadable, foreign-moded, non-regular, unsupported,
+/// duplicated or over-budget record refuses readiness with the directory left
+/// exactly as found. The disk is a trust boundary, so limits apply here too and
+/// the cap is enforced on the BYTES ACTUALLY READ rather than on a stat taken
+/// beforehand — a length observed before the read is a fact about a moment that
+/// has already passed.
+fn load(dir: &Path, limits: StoreLimits) -> Result<BTreeMap<String, Entry>, StoreError> {
+    let mut entries: BTreeMap<String, Entry> = BTreeMap::new();
+    let mut identities = BTreeSet::new();
+    let mut principals: BTreeMap<String, usize> = BTreeMap::new();
+    for entry in fs::read_dir(dir).map_err(|_| StoreError::Unavailable)? {
+        let entry = entry.map_err(|_| StoreError::Unavailable)?;
+        let name = entry.file_name();
+        // An orphaned temp file, the lease, and anything else is not a record and
+        // never becomes one.
+        let Some(name) = name.to_str().filter(|name| is_record_name(name)) else {
+            continue;
+        };
+        let path = entry.path();
+        let shown_path = path.display();
+        // Open first, then judge the OPEN HANDLE. Checking the path and then
+        // opening it are two different files if anything swaps the name in
+        // between, and a symlink is refused by the open itself rather than by a
+        // check that the open could disagree with.
+        let mut file = open_record(&path)?;
+        let meta = file.metadata().map_err(|_| StoreError::Unavailable)?;
+        if !meta.is_file() || !has_mode(&meta, RECORD_MODE) {
+            tracing::warn!(path = %shown_path, "task record is not a private regular file");
+            return Err(StoreError::UnsafeStore);
+        }
+        fits(limits, entries.len())?;
+        let bytes = read_bounded(&mut file, limits.record_bytes).inspect_err(|error| {
+            if *error == StoreError::Capacity {
+                tracing::warn!(path = %shown_path, "task record exceeds the record budget");
+            }
+        })?;
+        let record: Record = serde_json::from_slice(&bytes).map_err(|error| {
+            tracing::warn!(%error, path = %shown_path, "task record does not parse");
+            StoreError::CorruptRecord
+        })?;
+        if !(1..=MAX_LOADABLE_VERSION).contains(&record.version) {
+            let version = record.version;
+            tracing::warn!(path = %shown_path, version, "unsupported task record version");
+            return Err(StoreError::CorruptRecord);
+        }
+        let task = Task::from_snapshot(record.model.clone()).map_err(|error| {
+            tracing::warn!(%error, path = %shown_path, "task record does not restore");
+            StoreError::CorruptRecord
+        })?;
+        // A record living under another task's name would let a rename rebind it.
+        if record_name(task.id()) != name
+            || !identities.insert(record.admission.identity_digest.clone())
+        {
+            tracing::warn!(path = %shown_path, "task record identity or name is not its own");
+            return Err(StoreError::CorruptRecord);
+        }
+        let held = principals
+            .entry(record.admission.principal_digest.clone())
+            .or_default();
+        *held += 1;
+        if *held > limits.per_principal {
+            tracing::warn!(path = %shown_path, "stored tasks exceed the per-principal cap");
+            return Err(StoreError::Capacity);
+        }
+        entries.insert(task.id().to_owned(), Entry { task, record });
+    }
+    Ok(entries)
+}
+
+/// Read at most `cap` bytes, refusing as soon as one more than that arrives.
+/// Reading a byte past the cap is what makes "too large" observable without ever
+/// allocating the oversized content it is refusing.
+/// `pub(super)` only so the bound itself can be asserted directly rather than
+/// inferred from a store-level outcome. Still module-private.
+pub(in crate::gateway::task_service) fn read_bounded(
+    file: &mut fs::File,
+    cap: usize,
+) -> Result<Vec<u8>, StoreError> {
+    use std::io::Read as _;
+
+    let ceiling = u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1);
+    let mut bytes = Vec::new();
+    file.take(ceiling)
+        .read_to_end(&mut bytes)
+        .map_err(|_| StoreError::Unavailable)?;
+    if bytes.len() > cap {
+        return Err(StoreError::Capacity);
+    }
+    Ok(bytes)
+}
+
+pub(super) enum Fault {
+    BeforeRename(io::Error),
+    AfterRename(io::Error),
+}
+
+/// Write one record durably: private temp, payload, file sync, rename, directory
+/// sync. Failure before the rename is a clean refusal; failure at or after it
+/// leaves durability uncertain, which is the caller's cue to poison readiness.
+pub(super) fn write_record(
+    dir: &Path,
+    name: &str,
+    bytes: &[u8],
+    hook: Option<&CommitHook>,
+    counter: &AtomicU64,
+) -> Result<(), Fault> {
+    // Nothing is removed before this point: a colliding orphan belongs to some
+    // earlier attempt and is stepped over, never deleted.
+    let (file, temp) = create_temp(dir, name, counter).map_err(Fault::BeforeRename)?;
+    let staged = stage_temp(file, bytes, hook)
+        .and_then(|()| fire(hook, CommitStage::Rename))
+        .and_then(|()| rename(&temp, dir.join(name)));
+    if let Err(error) = staged {
+        let _ = fs::remove_file(&temp);
+        return Err(Fault::BeforeRename(error));
+    }
+    fire(hook, CommitStage::DirectorySync)
+        .and_then(|()| sync_dir(dir))
+        .map_err(Fault::AfterRename)
+}
+
+/// Claim a private temporary file, retrying past a name some earlier attempt
+/// left behind. Mirrors the reviewed `oauth::storage::create_secret_tmp`: the
+/// process id keeps two processes apart, the counter keeps two attempts apart,
+/// and a collision costs a nonce rather than another writer's evidence.
+fn create_temp(dir: &Path, name: &str, counter: &AtomicU64) -> io::Result<(fs::File, PathBuf)> {
+    for _ in 0..TEMP_ATTEMPTS {
+        let nonce = counter.fetch_add(1, Ordering::Relaxed);
+        let temp = dir.join(format!("{name}.tmp.{}.{nonce}", std::process::id()));
+        match open_new_private(&temp) {
+            Ok(file) => return Ok((file, temp)),
+            // A stale temp holds this name; take the next nonce and leave it be.
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "no unused task record temporary name",
+    ))
+}
+
+fn stage_temp(mut file: fs::File, bytes: &[u8], hook: Option<&CommitHook>) -> io::Result<()> {
+    use std::io::Write as _;
+
+    fire(hook, CommitStage::Write)?;
+    file.write_all(bytes)?;
+    fire(hook, CommitStage::Flush)?;
+    sync_file(&file)?;
+    fire(hook, CommitStage::FileSync)
+}
+
+pub(super) fn fire(hook: Option<&CommitHook>, stage: CommitStage) -> io::Result<()> {
+    hook.map_or(Ok(()), |hook| hook(stage))
+}

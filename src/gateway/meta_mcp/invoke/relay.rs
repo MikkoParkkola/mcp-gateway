@@ -554,13 +554,55 @@ impl MetaMcp {
     }
 
     /// A copy of `result` to compare after a final check, when receipts are
-    /// pending; see [`discard_if_changed`].
+    /// pending; see [`MetaMcp::restage_if_changed`].
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     pub(crate) fn relay_snapshot(&self, result: &Value) -> Option<Value> {
         let pending = RELAY_RECEIPTS
             .try_with(|receipts| !receipts.borrow().is_empty())
             .unwrap_or(false);
         (pending && self.relay_active()).then(|| result.clone())
+    }
+
+    /// A final check may have changed the delivered result (a redaction):
+    /// the staged receipts then describe text the caller never got.
+    ///
+    /// One staged receipt (a single-target call) is rebuilt from what is
+    /// delivered, so the text the caller still got keeps its receipt and the
+    /// removed text stops being tracked. Several (a plan) cannot be told apart
+    /// by the changed text and are dropped.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        allow(clippy::unused_self, clippy::needless_pass_by_value)
+    )]
+    pub(crate) fn restage_if_changed(&self, snapshot: Option<Value>, result: Option<&Value>) {
+        if !snapshot.is_some_and(|before| Some(&before) != result) {
+            return;
+        }
+        let _ = RELAY_RECEIPTS.try_with(|receipts| {
+            let mut receipts = receipts.borrow_mut();
+            let staged = std::mem::take(&mut *receipts);
+            #[cfg(feature = "firewall")]
+            if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
+                && let Some(digest) = fw.delivery_digest(
+                    &one.server,
+                    &one.tool,
+                    &super::audit::delivered_value(delivered),
+                )
+            {
+                // A redaction can drop the classification marker with the
+                // text; what the call was judged sensitive for stays so.
+                let digest = digest.keeping_sensitivity_of(&one.digest);
+                receipts.push(Receipt {
+                    key: one.key.clone(),
+                    keyed: one.keyed,
+                    server: one.server.clone(),
+                    tool: one.tool.clone(),
+                    digest,
+                });
+            }
+            #[cfg(not(feature = "firewall"))]
+            drop(staged);
+        });
     }
 
     /// A replayed single-target call (`gateway_invoke`, a surfaced tool) is
@@ -702,15 +744,6 @@ pub(crate) fn commit_with(fw: &crate::security::firewall::Firewall, delivered: b
 /// state-only round the gateway answered for itself).
 pub(crate) fn discard_staged() {
     let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().clear());
-}
-
-/// A final check that changed the delivered result (a redaction) leaves the
-/// staged receipts describing text the caller never got: drop them all.
-#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
-pub(crate) fn discard_if_changed(snapshot: Option<Value>, result: Option<&Value>) {
-    if snapshot.is_some_and(|before| Some(&before) != result) {
-        let _ = RELAY_RECEIPTS.try_with(|receipts| receipts.borrow_mut().clear());
-    }
 }
 
 /// A bridged prompt is content delivered to the caller (§13.3): recorded

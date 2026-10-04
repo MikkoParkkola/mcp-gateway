@@ -49,9 +49,11 @@ async fn attested_state(
     Arc<AttestationValidator>,
     BnautAttestationSigner,
 ) {
-    let signer = BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d");
+    let signer = BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d")
+        .with_audience("test-gateway");
     let validator = Arc::new(AttestationValidator::with_settings(
-        BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d"),
+        BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d")
+            .with_audience("test-gateway"),
         AUDIT_CAPACITY,
         TimeDelta::zero(),
     ));
@@ -280,7 +282,7 @@ async fn state_enforced_from_config(mock: &Arc<MockBackend>) -> (Arc<AppState>, 
 }
 
 fn config_signer() -> BnautAttestationSigner {
-    BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d")
+    BnautAttestationSigner::new(ATTESTATION_KEY.to_vec(), "joint-d").with_audience("test-gateway")
 }
 
 /// Signing on, Enforce from config: an unattested signed call is refused
