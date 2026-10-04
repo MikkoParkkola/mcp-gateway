@@ -767,3 +767,66 @@ async fn reloading_a_removed_capability_bumps_its_mcp_generation() {
     backend.reload().await.unwrap();
     assert_ne!(backend.executor.mcp_generation("mcp_probe"), before);
 }
+
+/// MIK-7814: `register_capability` replacing a pinned definition with an
+/// unpinned one under the same name must strand the original's cached
+/// answers, so the next call meets the process gate instead of the cache.
+#[cfg(unix)]
+#[tokio::test]
+async fn re_registering_a_capability_strands_its_cached_answers() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Bare, as the shipped `gws` entry is: the gate compares the name and the
+    // runner resolves it on PATH.
+    let python = "python3".to_owned();
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cap_exec/argv_echo.py")
+        .display()
+        .to_string();
+    let body = format!(
+        "name: pin_probe\ndescription: Pin probe.\ncache:\n  ttl: 60\n  strategy: memory\n\
+         providers:\n  primary:\n    service: cli\n    config:\n      command: '{python}'\n      \
+         args: ['{script}', echo, '1']\n"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pin_probe.yaml");
+    std::fs::write(
+        &path,
+        crate::capability::rewrite_with_pin(&body, &crate::capability::compute_capability_hash(&body)),
+    )
+    .unwrap();
+    let pinned = crate::capability::parse_capability_file(&path)
+        .await
+        .expect("pinned file loads");
+    let unpinned = crate::capability::parse_capability(&body).expect("unpinned parses");
+    assert_eq!(unpinned.providers.integrity(), crate::capability::Integrity::Unpinned);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut executor = CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch));
+    executor.process_policy.commands = vec![crate::config::ProcessCommand {
+        command: python,
+        args_prefix: Vec::new(),
+    }];
+    let backend = CapabilityBackend::new("test", Arc::new(executor));
+    // The gateway snapshots the epoch, revision and profile per request.
+    let request = || {
+        let mut context = CapabilityExecutionContext::default();
+        context.policy_epoch = Some(epoch.load(Ordering::SeqCst));
+        context.protocol_revision = Some(crate::protocol::PROTOCOL_VERSION.to_owned());
+        context.routing_profile = Some("default".to_owned());
+        context
+    };
+
+    backend.register_capability(pinned).unwrap();
+    backend
+        .call_tool_with_context("pin_probe", json!({}), request())
+        .await
+        .expect("the pinned definition runs and is cached");
+
+    backend.register_capability(unpinned).unwrap();
+    let err = backend
+        .call_tool_with_context("pin_probe", json!({}), request())
+        .await
+        .expect_err("an unpinned replacement must not be answered from cache");
+    assert!(err.to_string().contains("must be pinned"), "{err}");
+}
