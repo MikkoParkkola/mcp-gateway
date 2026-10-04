@@ -266,7 +266,11 @@ fn an_honest_restart_records_no_finding() {
 
 /// Write `records` back as the active file, one JSON line each, as found.
 fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
-    let text: String = records.iter().map(|r| format!("{r}\n")).collect();
+    let mut text = String::new();
+    for record in records {
+        text.push_str(&record.to_string());
+        text.push('\n');
+    }
     std::fs::write(path, text).unwrap();
 }
 
