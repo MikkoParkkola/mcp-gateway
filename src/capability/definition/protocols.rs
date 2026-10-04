@@ -279,7 +279,7 @@ pub struct JsonRpcConfig {
 /// This enum is the extension point for future protocol adapters.
 ///
 /// `ProtocolConfig` is NOT deserialized from YAML directly — it is produced
-/// by [`ProviderConfig::protocol_config()`] to preserve backward
+/// by [`ProviderConfig::protocol_config()`](super::ProviderConfig::protocol_config) to preserve backward
 /// compatibility with existing capability definitions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "protocol", rename_all = "snake_case")]
