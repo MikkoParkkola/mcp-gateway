@@ -130,3 +130,47 @@ async fn a_read_record_failure_leaves_no_direct_receipt() {
     fx.read(Some("a")).await;
     assert_refused(&fx, &fx.send(Some("b"), &format!("{text} ")).await, 1);
 }
+
+/// MIK-7669: a judged direct read is one record, as on `/mcp` (MIK-7799): its
+/// tenants ride the answer's `response_delivery_attempt`, and no standalone
+/// `tenant_read` event is written for it.
+#[tokio::test]
+async fn a_judged_direct_read_is_one_record() {
+    let mut fx = fixture(Setup {
+        tenants: true,
+        ..Setup::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.jsonl");
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "rv".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log"),
+    );
+    Arc::get_mut(&mut fx.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    fx.answer_read(Read::Text(named("t1", PROSE)));
+    fx.read(Some("a")).await;
+    let records: Vec<Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("log line is JSON"))
+        .collect();
+    assert!(
+        !records.iter().any(|r| r["event"] == "tenant_read"),
+        "a standalone tenant_read record: {records:#?}"
+    );
+    let t1 = crate::security::hash_argument(&json!("t1"));
+    let carrying = records
+        .iter()
+        .filter(|r| r["event"] == "response_delivery_attempt")
+        .filter(|r| r.to_string().contains(&t1))
+        .count();
+    assert_eq!(carrying, 1, "the delivery record names t1: {records:#?}");
+}
