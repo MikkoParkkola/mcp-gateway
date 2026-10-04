@@ -118,9 +118,9 @@ impl MetaMcp {
         })
     }
 
-    /// Add up to `limit` visible event entries to a search answer `out`
-    /// (after ranking and the tool limit), counting every match in `total`
-    /// and `total_available`.
+    /// Fill a search answer `out` with visible event entries after its tool
+    /// rows, up to `limit` rows in all (MIK-7819), counting every event match
+    /// in `total_available`.
     pub(super) fn add_events_to(
         &self,
         out: &mut serde_json::Value,
@@ -134,7 +134,8 @@ impl MetaMcp {
         let Some(matches) = out["matches"].as_array_mut().filter(|_| found > 0) else {
             return;
         };
-        matches.extend(events.into_iter().take(limit));
+        let room = limit.saturating_sub(matches.len());
+        matches.extend(events.into_iter().take(room));
         let shown = matches.len();
         out["total"] = shown.into();
         out["total_available"] = (out["total_available"].as_u64().unwrap_or(0) + found).into();

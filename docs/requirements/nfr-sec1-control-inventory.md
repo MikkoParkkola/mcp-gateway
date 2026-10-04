@@ -80,7 +80,7 @@ hit them and should not have to guess whether they were missed.
 
 | # | control | source symbol (file:line) | input whose absence must cause refusal | refusal test |
 |---|---|---|---|---|
-| 1 | Origin / DNS-rebinding gate | `origin_guard_middleware` — `src/gateway/router/mod.rs:304` | an `Origin` header that is on the allowlist | `src/gateway/router/tests.rs:2227`, `:2253` |
+| 1 | Origin / DNS-rebinding gate | `origin_guard_middleware` — `src/gateway/router/mod.rs:304` | an `Origin` header that is on the allowlist | `src/gateway/router/tests/origin_gate.rs:35`, `:61` |
 | 2 | Agent JWT validity | `agent_auth_middleware` — `src/gateway/router/mod.rs:255`, body at `src/gateway/oauth/mod.rs:113` | a bearer JWT that validates against the agent registry | **`tests/nfr_sec1_controls.rs`** — NEW (two arms: an unverifiable token and an absent one) |
 | 3 | Authentication | `auth_middleware` — `src/gateway/auth.rs:894`, `:945` | a bearer token or API key | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 4 | Per-client rate limit | `client_preflight` — `src/gateway/auth.rs:956` | remaining budget in the client's window | **`tests/nfr_sec1_controls.rs`** — NEW |
@@ -89,9 +89,9 @@ hit them and should not have to guess whether they were missed.
 | 7 | Request body ceiling (10 MiB) | `handlers.rs:513` | a body within the ceiling | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 8 | JSON well-formedness | `handlers.rs:526` | parseable JSON | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 9 | Meta-MCP surface enabled | `handlers.rs:541` | the surface being enabled | **`tests/nfr_sec1_controls.rs`** — NEW |
-| 10 | JSON-RPC envelope shape | `parse_request` — `handlers.rs:648` | `jsonrpc`, `method`, `id` | `src/gateway/router/tests.rs:746`, `:761`, `:768` — on `parse_request` directly, not through the modern route |
+| 10 | JSON-RPC envelope shape | `parse_request` — `handlers.rs:648` | `jsonrpc`, `method`, `id` | `src/gateway/router/tests/request_parsing.rs:317`, `:339`, `:347` — on `parse_request` directly, not through the modern route |
 | 11 | Input sanitization | `sanitize_json_value` — `handlers.rs:610` | a string free of null bytes | **`tests/nfr_sec1_controls.rs`** — NEW |
-| 12 | Admin gate on management meta-tools | `require_admin_tool_access` — `src/gateway/router/authorization.rs:84`, called at `handlers.rs:985` | an authenticated client with `admin: true` | `src/gateway/router/tests.rs:3207` (`ac_order_2_a_modern_caller_is_refused_gateway_set_profile`) — through the modern route |
+| 12 | Admin gate on management meta-tools | `require_admin_tool_access` — `src/gateway/router/authorization.rs:84`, called at `handlers.rs:985` | an authenticated client with `admin: true` | `src/gateway/router/tests/session_routing.rs:164` (`ac_order_2_a_modern_caller_is_refused_gateway_set_profile`) — through the modern route |
 | 13 | Tool-scope / tenancy / SSRF authorization | `authorize_tool_target` — `src/gateway/router/authorization.rs:98`, called at `handlers.rs:993` | an API key whose `allowed_tools` covers the target | **`tests/nfr_sec1_controls.rs`** — NEW (existing `tests.rs:1287`, `:1436`, `:1570` call the gate directly, not through the modern route). Its agent-scope branch (`authorization.rs:165`) is asserted at `tests.rs:1508`, also directly |
 | 14 | Destructive-action confirmation | `require_destructive_confirmation` — `handlers.rs:1112` | someone to ask | `tests/mik_7215_acs.rs:630` |
 

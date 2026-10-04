@@ -4,11 +4,11 @@
 "An end-to-end test drives a signed inbound webhook to a filtered subscription and a receiver that verifies every signature, and one ChatGPT run over a tunnel completes subscribe, verification, delivery and unsubscribe (MIK-7630 AC 7)."
 
 The automated half is the CI test `end_to_end_with_a_signature_checking_receiver`
-(`tests/mik_7630_events_delivery.rs`); its inbound POST is unsigned (the
-fixture sets `require_signature: false`). This run is also the signed inbound
-leg: the gateway here requires `X-Hub-Signature-256`, and `fire` records a
-receipt (`fire.json`). The runbook grades nothing; the grader reads the
-evidence it produces.
+(`tests/mik_7630_events_delivery.rs`). Its inbound POST is signed with
+`X-Hub-Signature-256`, and unsigned or wrongly keyed POSTs are refused. This
+run signs its inbound POST the same way, and `fire` records a receipt
+(`fire.json`). The runbook grades nothing; the grader reads the evidence it
+produces.
 
 ## What is automated, and what is not
 

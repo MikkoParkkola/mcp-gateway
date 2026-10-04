@@ -453,14 +453,14 @@ src/transport/command_split.rs	split_command_unix	1	standard	d	split_command_uni
 src/transport/command_split.rs	split_command_windows	1	standard	d	split_command_windows	CommandLineToArgvW split; refuses an unterminated quote and does not truncate argv
 src/transport/http/client.rs	build	1	standard	borderline	build	Installs the redirect policy and pinned DNS client; getting it wrong silently disables both.
 src/transport/http/extra_headers.rs	merge_extra_headers	1	critical	borderline	merge_extra_headers	Withholds the static credential when the caller's credential value is invalid (#2292).
-src/transport/http/mod.rs	build_mcp_headers	1	critical	c	HttpTransport::build_mcp_headers	Picks MCP-Session-Id from the caller's identity bucket only.
-src/transport/http/mod.rs	establish_sse_connection	1	critical	borderline	HttpTransport::establish_sse_connection	64 KiB handshake cap (defence-in-depth against a misbehaving backend).
+src/transport/http/requests.rs	build_mcp_headers	1	critical	c	HttpTransport::build_mcp_headers	Picks MCP-Session-Id from the caller's identity bucket only.
+src/transport/http/startup.rs	establish_sse_connection	1	critical	borderline	HttpTransport::establish_sse_connection	64 KiB handshake cap (defence-in-depth against a misbehaving backend).
 src/transport/http/redirect_policy.rs	evaluate_redirect_for	1	critical	b,d	evaluate_redirect_for	Redirect hop cap, SSRF refusal, cross-origin refusal and the private-backend same-origin exemption.
-src/transport/http/mod.rs	get_oauth_token	1	critical	d	HttpTransport::get_oauth_token	Checks the message URL is secure before releasing the OAuth token.
+src/transport/http/requests.rs	get_oauth_token	1	critical	d	HttpTransport::get_oauth_token	Checks the message URL is secure before releasing the OAuth token.
 src/transport/http/mod.rs	require_secure_oauth_target	1	critical	d	require_secure_oauth_target	Refuses to send an OAuth bearer over cleartext to a non-loopback host.
-src/transport/http/mod.rs	resolve_message_url	1	critical	b,d	HttpTransport::resolve_message_url	Refuses an SSE message endpoint that resolves cross-origin (credential-exfiltration guard).
+src/transport/http/startup.rs	resolve_message_url	1	critical	b,d	HttpTransport::resolve_message_url	Refuses an SSE message endpoint that resolves cross-origin (credential-exfiltration guard).
 src/transport/http/mod.rs	same_origin	1	critical	borderline	same_origin	Comparator for the redirect and message-endpoint guards.
-src/transport/http/mod.rs	send_request_with_headers	1	critical	c	HttpTransport::send_request_with_headers	Binds the upstream session id to the caller's identity bucket.
+src/transport/http/requests.rs	send_request_with_headers	1	critical	c	HttpTransport::send_request_with_headers	Binds the upstream session id to the caller's identity bucket.
 src/transport/http/mod.rs	with_destination	1	critical	d	HttpTransport::with_destination	Destination literal check and OAuth TLS check at construction.
 src/transport/http/sse_decoder.rs	oversized	1	critical	borderline	SseDecoder::oversized	Caps pending SSE bytes from a backend.
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest

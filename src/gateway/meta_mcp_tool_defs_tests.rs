@@ -303,7 +303,8 @@ fn search_tools_has_output_schema_with_matches_array() {
         .expect("output_schema must be Some");
     assert_eq!(schema["type"], "object");
     assert_eq!(schema["properties"]["matches"]["type"], "array");
-    let item_props = &schema["properties"]["matches"]["items"]["properties"];
+    // A row is a tool or an event (MIK-7819); the tool branch comes first.
+    let item_props = &schema["properties"]["matches"]["items"]["anyOf"][0]["properties"];
     for field in &["server", "tool", "description", "score"] {
         assert!(item_props.get(field).is_some(), "missing field: {field}");
     }

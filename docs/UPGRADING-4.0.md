@@ -167,6 +167,7 @@ backend" and "fails a capability file" first.**
 | 140 | `RuntimeProvenanceReceipt::backend_ok` is now `Option<bool>`, and an event receipt carries none (the JSON has no `backend_ok` field). Before, an event receipt claimed `true`, which nothing had observed | An embedder that reads or builds the field uses `Some(..)`; a verifier reads `subject_kind` first and treats a missing `backend_ok` as not observed. Receipts already stored still read |
 | 141 | A successful `cli` or `mcp` capability result no longer carries a credential the gateway injected into the child (an env value, or the resolved `token_env`): every string value and key is rewritten to `[redacted]` and the document is otherwise intact; with the `firewall` feature the credential scanner runs on it too. Values the caller sent are left in the result, since a tool legitimately returns them (with the `firewall` feature the scanner can still replace one that looks like a credential). Without the `firewall` feature only the literal removal of injected values applies: a credential the child invents or reads from elsewhere is not recognised, in results or in error text. The removal is literal: a credential the child encodes (base64, URL escapes) or splits across separate values is not matched. Numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, ... | A capability whose tool must return an injected value cannot: read it from the child's own source instead |
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
+| 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3781,6 +3782,21 @@ A `cli` or `mcp` capability is started with credentials the gateway injects (an 
 `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` is a public enum, and it is not `#[non_exhaustive]`. `require_destructive_confirmation` now answers `Undelivered` when the question never reached a client (no live session could carry it), and keeps `Unsupported` for a question that was delivered but not answered (it timed out, or its channel closed). The gateway refuses or proceeds on both the same way; under hardened signing it gives the call's nonce back only after `Undelivered`, since a delivered question may have been seen. A `match` that lists every variant and has no wildcard arm no longer compiles.
 
 **Action:** an embedder that matches on `ConfirmationOutcome` adds an `Undelivered` arm that does what its `Unsupported` arm does, or ends the `match` with `_ =>`.
+
+## 143. `gateway_search_tools` rows are tools or events, and `limit` caps both
+
+**Startup:** no notice, a changed output schema and a shorter answer when events match
+
+With MCP Events enabled, a search answer adds an event row for each matching event after the tool
+rows. The published output schema described tool rows only, with `server`, `tool`, `description`
+and `score` required, so a client validating against it rejected an answer holding an event row.
+Each row is now `anyOf` a tool row or an event row (`kind: event`, `name`, `description` required,
+`inputSchema` optional). Event rows were also added up to `limit` on top of `limit` tool rows; the
+answer now holds at most `limit` rows in all, tools first. `total_available` still counts every
+match.
+
+**Action:** a client that reads `items.properties` reads `items.anyOf[0].properties` for tool rows
+and `items.anyOf[1]` for event rows. Raise `limit` to see more event rows when tools fill it.
 
 ## Upgrading from 3.5.x: a walkthrough
 
