@@ -470,3 +470,76 @@ async fn every_shipped_pinned_capability_keeps_its_fingerprint() {
     }
     assert!(checked > 100, "only {checked} pinned files found");
 }
+
+/// The same, but the registering thread has entered a current-thread runtime
+/// that nothing drives: a stop queued there would never run, so the stop must
+/// go to the runtime the child started on.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_undriven_runtime_replacement_stops_a_child_with_a_call_in_flight() {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cap_exec/fake_mcp.py")
+        .display()
+        .to_string();
+    let body = |description: &str| {
+        format!(
+            "name: mcp_undriven_probe\ndescription: {description}\nschema:\n  input:\n    type: object\n    \
+             properties:\n      operation:\n        type: string\n\
+             providers:\n  primary:\n    service: mcp\n    timeout: 20\n    config:\n      \
+             command: 'python3'\n      args: ['{script}']\n      transport: stdio\n      \
+             tool_selector:\n        param: operation\n        tools:\n          \
+             spawn: {{ tool: grandchild }}\n"
+        )
+    };
+    let backend = Arc::new(CapabilityBackend::new(
+        "test",
+        Arc::new(python_policy_executor()),
+    ));
+    backend
+        .register_capability(pinned_from(&body("Busy one.")).await)
+        .unwrap();
+    let out = backend
+        .call_tool("mcp_undriven_probe", json!({"operation": "spawn"}))
+        .await
+        .expect("the pinned mcp definition starts a child");
+    let rendered = serde_json::to_value(&out).unwrap();
+    let pid = serde_json::from_str::<serde_json::Value>(
+        rendered["content"][0]["text"].as_str().unwrap_or_default(),
+    )
+    .ok()
+    .and_then(|v| v["pid"].as_i64())
+    .expect("grandchild pid")
+    .to_string();
+    // A call in flight: its lease keeps the backend alive past eviction.
+    let in_flight = backend.executor.mcp_children.lease_backends_for_test();
+    assert_eq!(in_flight.len(), 1);
+    let replacement = pinned_from(&body("Busy two.")).await;
+    let registering = Arc::clone(&backend);
+    std::thread::spawn(move || {
+        let idle = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let _entered = idle.enter();
+        registering.register_capability(replacement).unwrap();
+    })
+    .join()
+    .unwrap();
+    assert_eq!(backend.executor.mcp_children.len(), 0, "evicted at once");
+    let mut alive = true;
+    for _ in 0..50 {
+        let status = std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .status()
+            .unwrap();
+        if !status.success() {
+            alive = false;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    drop(in_flight);
+    assert!(
+        !alive,
+        "grandchild {pid} outlived a replacement under an undriven runtime"
+    );
+}
