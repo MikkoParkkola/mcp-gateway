@@ -93,7 +93,7 @@ hit them and should not have to guess whether they were missed.
 | 11 | Input sanitization | `sanitize_json_value` — `handlers.rs:610` | a string free of null bytes | **`tests/nfr_sec1_controls.rs`** — NEW |
 | 12 | Admin gate on management meta-tools | `require_admin_tool_access` — `src/gateway/router/authorization.rs:142`, called at `handlers.rs:1311` | an authenticated client with `admin: true` | `control_12_a_modern_non_admin_caller_of_an_admin_meta_tool_is_refused` (`tests/nfr_sec1_controls.rs`): a modern `tools/call` of `gateway_reload_config` by a non-admin key gets 403 / -32600 "requires admin access", and an admin key with the same frame clears the gate (MIK-7914). The row previously cited `ac_order_2_a_modern_caller_is_refused_gateway_set_profile`, which refuses a sessionless `gateway_set_profile` — not an admin tool, so this gate never runs. Existing coverage: `meta_mcp_management_tool_requires_admin_client` (`src/gateway/router/tests/authz_and_sse.rs:108`) — 403 through `POST /mcp`, but a legacy frame; `anonymous_denied_admin_meta_tools` (`src/gateway/router/tests/origin_gate.rs:83`) — calls the gate directly |
 | 13 | Tool-scope / tenancy / SSRF authorization | `authorize_tool_target` — `src/gateway/router/authorization.rs:226` (decision in `decide_tool_target`, `:241`), called at `handlers.rs:1352` | an API key whose `allowed_tools` covers the target | **`tests/nfr_sec1_controls.rs:158`** (`control_13_a_modern_caller_outside_its_tool_scope_is_refused`). Direct calls to the gate, not through the modern route: `src/gateway/router/tests/authz_and_sse.rs:208`, `:236`, `:263` (SSRF). Its agent-scope branch (`authorization.rs:297`) is asserted at `src/gateway/router/tests/authz_and_sse.rs:145`, also directly. Anchors corrected 2026-10-04: the earlier `tests.rs:1287`/`:1436`/`:1570`/`:1508` had drifted off these tests and fell past the end of the file after the router test split |
-| 14 | Destructive-action confirmation | `require_destructive_confirmation` — `handlers.rs:1112` | someone to ask | `tests/mik_7215_acs.rs:630` |
+| 14 | Destructive-action confirmation | `require_destructive_confirmation` — `handlers.rs:1112` | someone to ask | `tests/mik_7215_acs/confirm.rs:19` |
 
 Firewall / anomaly detection (`handlers.rs:1068`, `-32002` / `-32600`) is a
 15th gate in the sequence. **NO LONGER BLOCKED** (2026-09-08): the sentence
@@ -151,8 +151,8 @@ introduced cannot have become inoperative for a modern caller.
 
 | control | refusal test | code |
 |---|---|---|
-| unsupported protocol version | `tests/mik_7215_acs.rs:472` | `-32022` |
-| undeclared capability | `tests/mik_7215_acs.rs:598` | `-32021` |
+| unsupported protocol version | `tests/mik_7215_acs/stateless_rows.rs:129` | `-32022` |
+| undeclared capability | `tests/mik_7215_acs/stateless_rows.rs:278` | `-32021` |
 | missing / mismatched HTTP version header | `tests/mik_7214_acs.rs:787` | `-32020` |
 | method removed or added by the revision | `handlers.rs:800`, `:828` | `-32601` |
 
