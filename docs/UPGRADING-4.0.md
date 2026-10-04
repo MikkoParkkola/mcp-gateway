@@ -3287,7 +3287,9 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
   dispatch, is refused, so send a new one per request (after a task-augmented call's challenge
   the first nonce was never spent, so resending it there is accepted). `require_nonce` stays your choice. A
-  malformed nonce is refused `-32602` before anything else. Answers given before the nonce is
+  malformed nonce is refused `-32602` before anything else (under `standard`, where only
+  `gateway_invoke` is signed, its nonce is judged after the invocation policy instead: a denied
+  call gets the policy refusal and counts no nonce rejection). Answers given before the nonce is
   admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
   call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
   undeclared-key refusal. A result that cannot be signed is refused `-32603`.

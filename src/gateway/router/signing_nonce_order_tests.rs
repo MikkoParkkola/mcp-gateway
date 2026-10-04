@@ -117,7 +117,7 @@ fn a_denied_invoke_with_a_malformed_nonce_gets_the_policy_refusal() {
     let (body, events) = observed("beta");
     let error = &body["error"];
     assert!(error.is_object(), "the call is refused: {body}");
-    assert_ne!(error["code"], json!(-32602), "policy answers first: {body}");
+    assert_eq!(error["code"], json!(-32003), "policy answers first: {body}");
     assert_ne!(error["message"], json!(INVALID_REFUSAL), "{body}");
     assert_no_rejections(&events);
 }

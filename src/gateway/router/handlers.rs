@@ -741,7 +741,7 @@ async fn meta_mcp_dispatch(
     }
     if let Some(error) = signing_context
         .as_ref()
-        .and_then(|context| context.refuse_malformed_nonce().err())
+        .and_then(|context| context.refuse_malformed_nonce_early().err())
     {
         return build_error_response(
             raw_id,
