@@ -1,0 +1,13 @@
+diff --git a/src/secrets.rs b/src/secrets.rs
+index 82e400030..041f6b262 100644
+--- a/src/secrets.rs
++++ b/src/secrets.rs
+@@ -129,7 +129,7 @@ impl SecretResolver {
+             {
+                 Self::env_secret(&env, var_name).map(Some)
+             } else {
+-                Ok(other(name))
++                Ok(None)
+             }
+         })
+     }

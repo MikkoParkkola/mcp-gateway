@@ -1,0 +1,13 @@
+diff --git a/src/secrets.rs b/src/secrets.rs
+index 82e400030..a9a9ef47f 100644
+--- a/src/secrets.rs
++++ b/src/secrets.rs
+@@ -38,7 +38,7 @@ pub(crate) fn fill_placeholders(
+         };
+         if let Some(text) = fill(name.as_str())? {
+             out.push_str(&value[copied_to..whole.start()]);
+-            out.push_str(&text);
++            out.push_str(&fill_placeholders(&text, &mut fill as &mut dyn FnMut(&str) -> Result<Option<String>>)?);
+             copied_to = whole.end();
+         }
+     }

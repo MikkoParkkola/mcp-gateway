@@ -1,0 +1,14 @@
+diff --git a/src/capability/executor/mod.rs b/src/capability/executor/mod.rs
+index 24dce6176..92b0566bb 100644
+--- a/src/capability/executor/mod.rs
++++ b/src/capability/executor/mod.rs
+@@ -619,8 +619,7 @@ impl CapabilityExecutor {
+             // value is not consulted: a resolved secret may contain that text
+             // (MIK-7888).
+             if name.eq_ignore_ascii_case("authorization")
+-                && unfilled
+-                && value_template.contains("{access_token}")
++                && value.contains("{access_token}")
+             {
+                 continue;
+             }

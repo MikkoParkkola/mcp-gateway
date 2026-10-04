@@ -1,0 +1,35 @@
+diff --git a/src/capability/executor/graphql.rs b/src/capability/executor/graphql.rs
+index 0c286628d..8b21596f1 100644
+--- a/src/capability/executor/graphql.rs
++++ b/src/capability/executor/graphql.rs
+@@ -67,19 +67,19 @@ impl GraphqlExecutor<'_> {
+         // Substitute {param} placeholders in the query template
+         // One pass, caller parameters only: a value holding `{other}` is sent
+         // as written, and the query never resolves a secret (MIK-7888).
+-        let query = crate::secrets::fill_placeholders(&query, |key| {
++        let mut query = query;
++        for (key, value) in params_obj.into_iter().flatten() {
+             if key == "query" || key == "variables" {
+-                return Ok(None);
++                continue;
+             }
+-            Ok(params_obj
+-                .and_then(|obj| obj.get(key))
+-                .map(|value| match value {
+-                    Value::String(s) => s.clone(),
+-                    Value::Number(n) => n.to_string(),
+-                    Value::Bool(b) => b.to_string(),
+-                    _ => serde_json::to_string(value).unwrap_or_default(),
+-                }))
+-        })?;
++            let value_str = match value {
++                Value::String(s) => s.clone(),
++                Value::Number(n) => n.to_string(),
++                Value::Bool(b) => b.to_string(),
++                _ => serde_json::to_string(value).unwrap_or_default(),
++            };
++            query = query.replace(&format!("{{{key}}}"), &value_str);
++        }
+ 
+         // 2. Merge variables: config defaults + caller overrides
+         let mut variables = serde_json::Map::new();

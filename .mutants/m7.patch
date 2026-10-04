@@ -1,0 +1,32 @@
+diff --git a/src/capability/executor/mod.rs b/src/capability/executor/mod.rs
+index 24dce6176..e7d9b18c4 100644
+--- a/src/capability/executor/mod.rs
++++ b/src/capability/executor/mod.rs
+@@ -591,14 +591,19 @@ impl CapabilityExecutor {
+ 
+         // One pass, caller parameters only: a value holding `{other}` is sent
+         // as written, and the URL never resolves a secret (MIK-7888).
+-        crate::secrets::fill_placeholders(&url, |key| {
+-            Ok(params.get(key).map(|value| match value {
+-                Value::String(s) => s.clone(),
+-                Value::Number(n) => n.to_string(),
+-                Value::Bool(b) => b.to_string(),
+-                _ => serde_json::to_string(value).unwrap_or_default(),
+-            }))
+-        })
++        let mut url = url;
++        if let Value::Object(map) = params {
++            for (key, value) in map {
++                let value_str = match value {
++                    Value::String(s) => s.clone(),
++                    Value::Number(n) => n.to_string(),
++                    Value::Bool(b) => b.to_string(),
++                    _ => serde_json::to_string(value).unwrap_or_default(),
++                };
++                url = url.replace(&format!("{{{key}}}"), &value_str);
++            }
++        }
++        Ok(url)
+     }
+ 
+     /// Build headers with credential injection.

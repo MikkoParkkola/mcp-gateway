@@ -1,0 +1,16 @@
+diff --git a/src/secret_injection.rs b/src/secret_injection.rs
+index fe6e1062a..75fce4711 100644
+--- a/src/secret_injection.rs
++++ b/src/secret_injection.rs
+@@ -269,11 +269,6 @@ impl SecretInjector {
+         // a value the check never saw must not be forwarded (MIK-7888). Doing
+         // it before the loop also keeps a skipping rule from deleting what an
+         // earlier rule on the same key injected.
+-        if let Some(obj) = args.as_object_mut() {
+-            for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+-                drop_caller_value(rule, obj);
+-            }
+-        }
+ 
+         for rule in rules {
+             if !tool_matches_rule(tool, &rule.tools) {
