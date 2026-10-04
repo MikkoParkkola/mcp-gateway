@@ -300,3 +300,37 @@ fn ui_interval_refresh_is_marked_as_a_poll() {
         "the marker is set in one place, behind the flag"
     );
 }
+
+/// MIK-7816.FIX.1: the add form treats notes as a failure only when the server
+/// says the backend was added disabled; an enabled add with notes (an OAuth
+/// login note) closes the form and shows them in an info line outside it. A
+/// source check: the page's script does not run in these tests.
+#[test]
+fn the_add_form_keeps_open_only_for_a_disabled_add() {
+    let start = INDEX_HTML
+        .find("async function submitAddServer")
+        .expect("the add handler");
+    let end = start + INDEX_HTML[start..].find("\n}\n").expect("its end");
+    let handler = &INDEX_HTML[start..end];
+    assert!(
+        handler.contains("res.enabled === false"),
+        "keeping the form open must depend on the server's enabled flag"
+    );
+    assert!(
+        handler.contains("add-server-note"),
+        "an enabled add shows its notes outside the form"
+    );
+    // The info line sits after the form panel closes, so closing the form
+    // leaves it visible: two `</div>` (form actions, form panel) lie between.
+    let msg = INDEX_HTML
+        .find(r#"id="add-server-msg""#)
+        .expect("the form message");
+    let note = INDEX_HTML
+        .find(r#"id="add-server-note""#)
+        .expect("the info line");
+    assert!(note > msg, "the info line follows the form");
+    assert!(
+        INDEX_HTML[msg..note].matches("</div>").count() >= 2,
+        "the info line is outside the form panel"
+    );
+}

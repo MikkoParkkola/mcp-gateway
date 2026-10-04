@@ -129,6 +129,14 @@ pub fn add_backend(
         {
             notes.push(format!("Added disabled. {reason}"));
         }
+        // The registry path takes no arguments, and the command does not
+        // start without them (MIK-7816).
+        if let server_registry::Setup::NeedsArgs { hint } = entry.setup {
+            backend.enabled = false;
+            notes.push(format!(
+                "Added disabled. Append {hint} to its command, then set `enabled: true`."
+            ));
+        }
         if entry.auth == server_registry::Auth::OAuth {
             notes.push(
                 "Logs in through your browser on first use. On a multi-user gateway the \
@@ -351,6 +359,10 @@ fn registry_backend(
     mut env: HashMap<String, String>,
 ) -> BackendConfig {
     use server_registry::{Auth, HttpFlavor, Transport};
+
+    // An empty `-e VAR=` for a required variable is no value: the reference
+    // stays, so the unresolved check in `add_backend` sees it (MIK-7816).
+    env.retain(|key, value| !(value.is_empty() && entry.required_env.contains(&key.as_str())));
 
     let mut backend = BackendConfig {
         description: desc.unwrap_or(entry.description).to_string(),

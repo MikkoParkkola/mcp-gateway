@@ -18,6 +18,7 @@ mod meta_mcp;
 pub(crate) use meta_mcp::publish_identity_grants;
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_text;
+mod meta_mcp_search_schema;
 mod meta_mcp_tool_defs;
 mod meta_mcp_tool_total;
 mod middleware;

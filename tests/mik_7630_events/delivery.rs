@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use sha2::Digest as _;
 
-use super::gateway::{ALICE, EVENT, Gateway, config};
+use super::gateway::{ALICE, EVENT, GITHUB_CAPABILITY, Gateway, config};
 use super::receiver::{Received, Receiver};
 
 /// Longest any row polls for one observable.
@@ -32,10 +32,61 @@ pub fn delivery_config(root: &Path, events: &Value) -> Value {
 
 /// A gateway on `cfg` that trusts `receiver`, with the event catalogued.
 pub async fn start_cfg(root: &Path, receiver: &Receiver, cfg: Value) -> Gateway {
+    start_cfg_env(root, receiver, cfg, &[]).await
+}
+
+/// As [`start_cfg`], with `extra` added to the gateway's environment.
+pub async fn start_cfg_env(
+    root: &Path,
+    receiver: &Receiver,
+    cfg: Value,
+    extra: &[(&str, &str)],
+) -> Gateway {
     let (k, v) = receiver.trust_env();
-    let gw = Gateway::start_with_env(root, cfg, &[(k, &v)]).await;
+    let mut env = vec![(k, v.as_str())];
+    env.extend_from_slice(extra);
+    let gw = Gateway::start_with_env(root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some(EVENT)).await;
     gw
+}
+
+/// Environment variable the signed inbound route reads its HMAC key from.
+pub const INBOUND_SECRET_ENV: &str = "EVENTS_INBOUND_HMAC";
+
+/// The fixture config with the `push` route requiring a GitHub-style
+/// `X-Hub-Signature-256` HMAC keyed by `{env.EVENTS_INBOUND_HMAC}`.
+pub fn signed_inbound_config(root: &Path, events: &Value) -> Value {
+    let mut cfg = delivery_config(root, events);
+    let signed = GITHUB_CAPABILITY.replacen(
+        "    method: POST\n",
+        "    method: POST\n    secret: \"{env.EVENTS_INBOUND_HMAC}\"\n    signature_header: X-Hub-Signature-256\n",
+        1,
+    );
+    assert_ne!(signed, GITHUB_CAPABILITY, "the route gained a secret");
+    std::fs::write(root.join("caps").join("github.yaml"), signed).expect("capability file");
+    cfg["webhooks"]["require_signature"] = json!(true);
+    cfg
+}
+
+/// POST `body` under `delivery_id` with `X-Hub-Signature-256` computed over
+/// the exact body bytes under `key`; the HTTP status.
+pub async fn fire_signed(gw: &Gateway, delivery_id: &str, body: &Value, key: &str) -> u16 {
+    use hmac::{Hmac, KeyInit, Mac};
+    let body = body.to_string();
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).expect("any key length");
+    mac.update(body.as_bytes());
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    gw.client
+        .post(format!("{}/webhooks/github/push", gw.url))
+        .header("content-type", "application/json")
+        .header("X-GitHub-Delivery", delivery_id)
+        .header("X-Hub-Signature-256", signature)
+        .body(body)
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("signed POST: {e}; logs={}", gw.logs()))
+        .status()
+        .as_u16()
 }
 
 /// As [`start_cfg`] over the fixture config with `events` merged in.
@@ -101,7 +152,12 @@ pub fn bare(answer: &Value) -> Value {
 
 /// A GitHub-style push body for `repo`.
 pub fn push(repo: &str) -> Value {
-    json!({"action": "opened", "repository": {"full_name": repo}, "ref": "main"})
+    push_ref(repo, "main")
+}
+
+/// A GitHub-style push body for `repo` on `git_ref`.
+pub fn push_ref(repo: &str, git_ref: &str) -> Value {
+    json!({"action": "opened", "repository": {"full_name": repo}, "ref": git_ref})
 }
 
 /// POST one push for `repo` under `delivery_id`; the route must accept it.

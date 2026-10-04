@@ -747,3 +747,6 @@ mod response_cache_error_tests;
 
 #[cfg(test)]
 mod ask_expiry_budget_tests;
+
+#[cfg(test)]
+mod tracing_target_tests;

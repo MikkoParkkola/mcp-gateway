@@ -416,6 +416,56 @@ async fn gateway_search_finds_visible_events() {
     }
 }
 
+/// MIK-7819: a search answer mixing tool and event rows validates against the
+/// output schema `gateway_search_tools` publishes, a row that is neither does
+/// not, and `limit` caps tool and event rows together.
+#[tokio::test]
+async fn search_rows_fit_the_published_schema_and_the_limit() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(root.path(), &rx, json!({})).await;
+    gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
+    let listed = gw.rpc(Some(ALICE), "tools/list", json!({})).await;
+    let schema = listed["result"]["tools"]
+        .as_array()
+        .and_then(|t| t.iter().find(|t| t["name"] == "gateway_search_tools"))
+        .map_or_else(
+            || panic!("gateway_search_tools is listed: {listed}"),
+            |t| t["outputSchema"].clone(),
+        );
+    let validator = jsonschema::validator_for(&schema).expect("a valid schema");
+    let found = gw
+        .tool_call(ALICE, "gateway_search_tools", json!({"query": "github"}))
+        .await;
+    let rows = found["matches"].as_array().expect("matches");
+    assert!(rows.iter().any(|r| r["kind"] == "event"), "{found}");
+    assert!(rows.iter().any(|r| r["kind"] != "event"), "{found}");
+    let errors: Vec<String> = validator
+        .iter_errors(&found)
+        .map(|e| e.to_string())
+        .collect();
+    assert!(errors.is_empty(), "{errors:?} in {found}");
+    for neither in [
+        json!({"kind": "event", "description": "no name"}),
+        json!({"kind": "tool", "name": "x", "description": "not an event"}),
+    ] {
+        let mut forged = found.clone();
+        forged["matches"]
+            .as_array_mut()
+            .expect("matches")
+            .push(neither.clone());
+        assert!(!validator.is_valid(&forged), "{neither} passed");
+    }
+    let one = gw
+        .tool_call(
+            ALICE,
+            "gateway_search_tools",
+            json!({"query": "github", "limit": 1}),
+        )
+        .await;
+    assert_eq!(one["matches"].as_array().map(Vec::len), Some(1), "{one}");
+}
+
 /// T35, CLI clause: `mcp-gateway events dead-letters list` and `replay` go
 /// through the same routes, with the credential from the environment.
 #[tokio::test]
