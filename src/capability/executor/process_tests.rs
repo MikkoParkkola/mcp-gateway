@@ -165,3 +165,16 @@ fn schema_defaults_fill_only_missing_or_null() {
     assert_eq!(merged["format"], "csv");
     assert!(merged.get("n").is_none());
 }
+
+/// MIK-7814 T1: a verified definition changed after loading no longer runs.
+#[tokio::test]
+async fn a_verified_definition_changed_after_loading_is_refused() {
+    let loaded = pinned("gws", "[gmail]").await;
+    let mut changed = loaded.clone();
+    changed.description = "Changed after the pin was checked.".into();
+    assert_eq!(changed.providers.integrity, Integrity::Verified);
+    let err = admit(&ProcessPolicy::default(), &changed, process(&changed))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("changed after its pin"), "{err}");
+}
