@@ -574,6 +574,7 @@ pub(crate) fn chain_after_gates(
 }
 
 mod delivery_record;
+pub(crate) use delivery_record::record_answer_delivery;
 
 #[path = "chain_receipt.rs"]
 pub(crate) mod chain_receipt;

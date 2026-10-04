@@ -100,21 +100,46 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
 
 /// What the inner handler learns that the read verdict needs (MIK-7116.MIN.2):
 /// the caller, formed only when the verdict is on, and the request params.
+/// Also the caller's name and the tool the delivery record names (MIK-7669),
+/// empty when the request was refused before its body was read.
 #[derive(Default)]
 pub(super) struct DirectReads {
     key: Option<String>,
     params: Option<Value>,
+    caller: Option<String>,
+    tool: String,
 }
 
 impl DirectReads {
+    /// The resolved caller's name, kept as soon as it is known, so even an
+    /// answer refused before the body is read names its caller.
+    pub(super) fn name_caller(&mut self, client: Option<&AuthenticatedClient>) {
+        self.caller = client.map(|client| client.name.clone());
+    }
+
     /// Capture the caller (`key` forms it) and the request params, only when
-    /// the verdict is on, so the default config copies nothing.
+    /// the verdict is on, so the default config copies nothing. The tool is
+    /// always kept: every answer is recorded.
     pub(super) fn capture(
         &mut self,
         state: &AppState,
         request: &Value,
         key: impl FnOnce() -> String,
     ) {
+        // As on the meta route: the tool a `tools/call` names, else the method.
+        let method = request
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        self.tool = if method == "tools/call" {
+            request
+                .pointer("/params/name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            method.to_string()
+        };
         if crate::gateway::outbound::judges(super::super::helpers::read_guard(state).as_deref()) {
             self.key = Some(key()).filter(|key| !key.is_empty());
             self.params = request.get("params").cloned();
@@ -172,16 +197,50 @@ async fn audited_call_judged(
             (status, Json(body)),
         ));
     }
-    let frame = crate::gateway::outbound::answer_value(
+    let mut frame = crate::gateway::outbound::answer_value(
         guard.as_deref(),
         reads.key.as_deref(),
         body,
         reads.params.as_ref(),
         hidden.as_ref(),
     );
+    // MIK-7669: the delivery record the meta route writes (`judged_answer`),
+    // after the judge and with the answer's `tenant_read` fields in it. The
+    // direct route keeps no session, so the session fingerprint is empty.
+    let mut status = status;
+    let correlation = crate::security::response_policy::ResponseCorrelation {
+        session_id: "",
+        caller: reads.caller.as_deref().unwrap_or("anonymous"),
+        external_server: &name,
+        external_tool: &reads.tool,
+    };
+    // No log, nothing to record: the answer is not copied to be hashed.
+    let document = state
+        .transparency_log
+        .as_ref()
+        .and_then(|_| frame.answer_document());
+    let recorded = match document {
+        Some(document) => {
+            let read = frame.take_record_fields();
+            crate::gateway::meta_mcp::response_security::record_answer_delivery(
+                state.transparency_log.as_ref(),
+                document,
+                &correlation,
+                read,
+            )
+            .await
+        }
+        None => true,
+    };
+    if !recorded {
+        let refusal =
+            crate::gateway::meta_mcp::MetaMcp::audit_unavailable_refusal(frame.answer_id());
+        frame = frame.replaced_by(refusal);
+        status = StatusCode::SERVICE_UNAVAILABLE;
+    }
     // COLLUDE.1 x MIN.2: receipts record only an answer that was delivered, so
-    // they follow the judge, the audit write and the read record that
-    // `emit_http` writes last, as it can still replace the answer.
+    // they follow the judge, the audit write and the delivery record (which
+    // carries the read verdict), as each can still replace the answer.
     let delivers = frame.delivers_result();
     let response = crate::gateway::outbound::to_http(frame, status, "");
     let (reply, written) =
