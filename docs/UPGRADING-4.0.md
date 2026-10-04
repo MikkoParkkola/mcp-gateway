@@ -3093,12 +3093,13 @@ Three client-visible changes follow from that check:
   (-32004), not as the failure it stored, for as long as the grant stays denied.
 - A read of a finished task writes an `identity_grant_decision` record to the audit log when the
   target is a personal capability, beside the record the worker wrote at dispatch; an unchanged
-  decision is written at most once per 10 minutes (item 117).
+  decision is usually suppressed for 10 minutes (item 117; not across a restart, and not once
+  4,096 live task, caller and target keys are tracked).
 
 **Action:** none on upgrade. A client that attests calls must send a fresh recovery token in
 `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task, as it already
 does for a working one. Where a SIEM rule counts decision records per call, expect more records
-for polled tasks, bounded as item 117 describes.
+for polled tasks, reduced as item 117 describes.
 
 ## 106. Hardened requires a per-caller identity
 
@@ -3415,6 +3416,8 @@ client polling once a second wrote about 86,400 identical records a day for one 
 - Any change is written at once: a revoked grant, another reason, another grant id.
 - An unchanged decision is written again once 10 minutes have passed, so polling stays visible.
 - Decisions made while dispatching a call are never suppressed.
+- Suppression is held in memory: a restart writes the next decision again, and once 4,096 live
+  task, caller and target keys are tracked a new key is recorded on every read.
 
 **Action:** a SIEM rule that counted one decision record per poll should count decision changes.
 
