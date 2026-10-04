@@ -216,7 +216,7 @@ impl Drop for TreeGuard {
         // On Unix this signals the whole process group (killpg), not only the
         // leader; on Windows it terminates the Job. A group already gone is
         // fine.
-        let _ = child.start_kill();
+        // RED probe (MIK-7815, throwaway): the tree is not killed on drop.
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
                 let _ = child.wait().await;
