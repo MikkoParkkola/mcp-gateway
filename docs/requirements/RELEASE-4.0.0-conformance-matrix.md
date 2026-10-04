@@ -241,7 +241,7 @@ whatever `structuredContent` holds (`src/gateway/meta_mcp/invoke.rs:194`), and
 `gateway::meta_mcp::invoke::response_transform_tests::ac_schema_10b_scalar_structured_content_survives_enforce_output_schema`
 and `ac_schema_10b_bare_array_structured_content_survives_enforce_output_schema`
 (clause b), and
-`gateway::meta_mcp::tests::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire`
+`gateway::meta_mcp::tests::surfaced_tools::ac_schema_10c_declared_output_schema_is_byte_identical_on_the_wire`
 (clause c) — each confirmed by breaking the mechanism it depends on and
 watching the test fail before being restored.
 
