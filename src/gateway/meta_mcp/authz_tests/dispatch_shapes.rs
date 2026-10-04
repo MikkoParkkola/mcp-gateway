@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! AUTHZ.13a-13d: gateway_invoke and code-mode dispatch shapes.
+//! AUTHZ.13a-13d: `gateway_invoke` and code-mode dispatch shapes.
 
 use super::*;
 
