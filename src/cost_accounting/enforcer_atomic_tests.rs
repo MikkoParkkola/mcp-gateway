@@ -164,3 +164,11 @@ fn an_add_inside_the_day_reset_window_is_kept() {
         .unwrap();
     assert_eq!(acc.current(), 8, "an add inside the reset window was lost");
 }
+
+/// A total at the top of the range saturates rather than wrapping to a small
+/// number that would read as budget left.
+#[test]
+fn a_daily_total_saturates_instead_of_wrapping() {
+    let acc = DailyAccumulator::stale(current_day(), u64::MAX - 1);
+    assert_eq!(acc.add(5), u64::MAX);
+}
