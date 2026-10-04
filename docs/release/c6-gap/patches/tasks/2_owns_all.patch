@@ -1,0 +1,12 @@
+diff --git a/src/gateway/task_service/service.rs b/src/gateway/task_service/service.rs
+index 7ac5f6a9c..5263d4d4a 100644
+--- a/src/gateway/task_service/service.rs
++++ b/src/gateway/task_service/service.rs
+@@ -180,6 +180,7 @@ impl TaskService {
+             return false;
+         };
+         ids.into_iter()
++            .take(1)
+             .all(|id| self.store.get(owner.as_digest(), id).is_ok())
+     }
+ 

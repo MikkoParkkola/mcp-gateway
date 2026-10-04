@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/service.rs b/src/personal_accounts/service.rs
+index c60c10a99..f4da941c0 100644
+--- a/src/personal_accounts/service.rs
++++ b/src/personal_accounts/service.rs
+@@ -465,7 +465,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
+         let mut scopes = rotated.scopes.unwrap_or_else(|| current.scopes.clone());
+         scopes.sort();
+         scopes.dedup();
+-        if scopes.iter().any(|scope| !current.scopes.contains(scope)) {
++        if false && scopes.iter().any(|scope| !current.scopes.contains(scope)) {
+             // A refresh may narrow what the user granted. It may never widen
+             // it: that is a new consent, and the user has not given it.
+             return Err(AccountServiceError::ScopeBroadeningRefused);

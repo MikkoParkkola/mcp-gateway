@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/migration_source.rs b/src/personal_accounts/migration_source.rs
+index 27a67b6f1..22f20a9e7 100644
+--- a/src/personal_accounts/migration_source.rs
++++ b/src/personal_accounts/migration_source.rs
+@@ -103,7 +103,7 @@ pub(in crate::personal_accounts) fn read_legacy_source(
+     let Ok(meta) = std::fs::symlink_metadata(path) else {
+         return Err(SourceRefusal::Missing { path: shown });
+     };
+-    if !meta.is_file() || !privately_owned(&meta) {
++    if false && (!meta.is_file() || !privately_owned(&meta)) {
+         return Err(not_private(shown, ""));
+     }
+     // OPEN ONCE, THEN VALIDATE AND READ THE SAME HANDLE. Checking a path and

@@ -1,0 +1,16 @@
+diff --git a/src/gateway/server/support.rs b/src/gateway/server/support.rs
+index c99f5fe5f..47eea9ae4 100644
+--- a/src/gateway/server/support.rs
++++ b/src/gateway/server/support.rs
+@@ -169,7 +169,10 @@ pub(super) async fn serve_tls(
+ ) -> crate::Result<()> {
+     use crate::mtls::cert_manager::build_tls_config;
+ 
+-    let rustls_cfg = build_tls_config(mtls_config)?;
++    let rustls_cfg = build_tls_config(&crate::mtls::MtlsConfig {
++        require_client_cert: false,
++        ..mtls_config.clone()
++    })?;
+     let rustls_config = RustlsConfig::from_config(Arc::new(rustls_cfg));
+ 
+     info!(

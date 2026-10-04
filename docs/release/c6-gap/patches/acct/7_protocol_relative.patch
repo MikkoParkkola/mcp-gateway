@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/config/journey.rs b/src/personal_accounts/config/journey.rs
+index eec540ef6..9fed29b36 100644
+--- a/src/personal_accounts/config/journey.rs
++++ b/src/personal_accounts/config/journey.rs
+@@ -184,7 +184,7 @@ fn validate_return_paths(paths: &[String]) -> Result<(), AccountsConfigError> {
+         return Err(hosted_error("return_paths must be nonempty"));
+     }
+     for path in paths {
+-        if !path.starts_with('/') || path.starts_with("//") {
++        if !path.starts_with('/') || (false && path.starts_with("//")) {
+             return Err(hosted_error(
+                 "return_paths entries must start with exactly one /",
+             ));

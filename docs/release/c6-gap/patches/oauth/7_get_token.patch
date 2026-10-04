@@ -1,0 +1,12 @@
+diff --git a/src/oauth/client/mod.rs b/src/oauth/client/mod.rs
+index 6864c621e..cded428ea 100644
+--- a/src/oauth/client/mod.rs
++++ b/src/oauth/client/mod.rs
+@@ -450,7 +450,6 @@ impl OAuthClient {
+         {
+             let token = self.current_token.read();
+             if let Some(ref t) = *token
+-                && !t.is_expired()
+             {
+                 return Ok(t.access_token.clone());
+             }

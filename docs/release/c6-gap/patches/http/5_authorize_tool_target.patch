@@ -1,0 +1,15 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 5106c217b..223dea5bd 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -230,7 +230,9 @@ pub(super) fn authorize_tool_target(
+     cert_identity: Option<&CertIdentity>,
+     target: ToolTarget<'_>,
+ ) -> Result<(), AuthorizationError> {
+-    decide_tool_target(state, client, oauth_agent_identity, cert_identity, target).emit(Emit::Audit)
++    let _ = decide_tool_target(state, client, oauth_agent_identity, cert_identity, target)
++        .emit(Emit::Audit);
++    Ok(())
+ }
+ 
+ /// The HTTP invocation predicate, with its audit records deferred.

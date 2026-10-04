@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 064744c1b..a861cd446 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -506,7 +506,7 @@ impl StdioTransport {
+         // carry a token would let a backend stamp `progressToken` onto a
+         // `notifications/message` and reach a client that filtered that
+         // severity out.
+-        let token = (notification.method == "notifications/progress")
++        let token = (notification.method.starts_with("notifications/"))
+             .then(|| {
+                 notification
+                     .params

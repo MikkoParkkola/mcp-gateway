@@ -1,0 +1,18 @@
+diff --git a/src/gateway/task_service/service.rs b/src/gateway/task_service/service.rs
+index 7ac5f6a9c..161a913ae 100644
+--- a/src/gateway/task_service/service.rs
++++ b/src/gateway/task_service/service.rs
+@@ -163,7 +163,12 @@ impl TaskService {
+ 
+     pub(crate) fn get(&self, principal: &str, id: &str) -> Result<CommittedTask, ServiceError> {
+         self.store
+-            .get(self.owner(principal)?.as_digest(), id)
++            .get(
++                self.owner(principal)
++                    .or_else(|_| self.owner(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL))?
++                    .as_digest(),
++                id,
++            )
+             .map_err(refused)
+     }
+ 

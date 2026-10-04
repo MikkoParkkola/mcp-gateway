@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers/request_checks.rs b/src/gateway/router/handlers/request_checks.rs
+index 30bdf9120..96e454434 100644
+--- a/src/gateway/router/handlers/request_checks.rs
++++ b/src/gateway/router/handlers/request_checks.rs
+@@ -126,7 +126,7 @@ pub(in crate::gateway::router) fn request_check_refusal(
+             header_name,
+             body_name,
+         };
+-        if let Err(mismatch) = check.validate() {
++        if false && let Err(mismatch) = check.validate() {
+             return Some((
+                 JsonRpcResponse::error(id.cloned(), -32020, mismatch.to_string()),
+                 StatusCode::BAD_REQUEST,
