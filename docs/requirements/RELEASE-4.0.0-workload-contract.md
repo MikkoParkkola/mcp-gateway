@@ -277,13 +277,19 @@ cell sees the same machine window.
 
 Amended 2026-10-04. This section used to schedule 3 measured reps of A, B
 and C, then a trailing D/E block. That matched neither the runner, which
-interleaves all five cells per rep, nor the runs that grade this row. Every
-graded run so far took n = 18: the FAIL at 14933f9a, and the VOID re-run at
-fe2ed154 (`RELEASE-4.0.0-scope-status.json`, NFR.WORKLOAD.1). That count was
-escalated from the n = 18 choice in
+interleaves all five cells per rep, nor the runs that grade this row.
+Evaluations at n = 3, 6 and 12 came out INCONCLUSIVE. The row was escalated
+to n = 18, which produced the standing FAIL at 14933f9a and the VOID re-run at
+fe2ed154 (`RELEASE-4.0.0-scope-status.json`, NFR.WORKLOAD.1). The count
+follows the n = 18 choice in
 `docs/internal/analysis/2026-09-22-nfr-perf-1-ramp-measurement.md` §1.5. The
 amendment is made before the graded run at the freeze SHA, so the number of
 reps is fixed in advance, not chosen after the data is seen.
+
+Freeze-time check, before the verdict is read: `pins.json` must have `reps`
+equal to 1..18 and `cell_order_seed` equal to the ratified seed. The evaluator
+does not enforce either, so a run that silently took the runner's default of 6,
+or a generated seed, is caught here rather than graded.
 
 Interleaved because bench-host is shared and other sessions' jobs land on it. One
 gateway listening at a time. Before each rep, `GET /health` version must match
