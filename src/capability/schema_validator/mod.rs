@@ -533,7 +533,11 @@ fn coerce_to_any(value: &Value, types: &[Value]) -> Result<Value, String> {
 /// Whether `value` is of JSON Schema type `ty` without any coercion.
 fn is_exactly(value: &Value, ty: &str) -> bool {
     match ty {
-        "integer" => value.is_i64() || value.is_u64(),
+        // JSON Schema: an integer is any number with no fractional part, so a
+        // whole float such as `3.0` or `1e20` is one.
+        "integer" => value
+            .as_f64()
+            .is_some_and(|f| f.is_finite() && f.fract() == 0.0),
         _ => json_type_name(value) == ty,
     }
 }

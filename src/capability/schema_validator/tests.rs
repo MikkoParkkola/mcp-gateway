@@ -717,6 +717,7 @@ fn a_union_of_two_real_types_takes_either() {
         assert!(validate_arguments(&json!({ "n": ok }), &schema).is_valid());
     }
     assert!(!validate_arguments(&json!({ "n": [1] }), &schema).is_valid());
+    assert!(!validate_arguments(&json!({ "n": 2.5 }), &schema).is_valid());
 }
 
 #[test]
@@ -729,6 +730,7 @@ fn a_null_only_union_refuses_a_value() {
 fn a_union_keeps_a_value_that_already_matches_a_member() {
     let schema = schema_with_props(json!({ "n": { "type": ["string", "integer"] } }), &[]);
     let result = validate_arguments(&json!({ "n": 3 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
     assert_eq!(result.coerced["n"], json!(3));
 }
 
@@ -736,5 +738,22 @@ fn a_union_keeps_a_value_that_already_matches_a_member() {
 fn a_union_keeps_a_large_number_that_matches_number() {
     let schema = schema_with_props(json!({ "n": { "type": ["integer", "number"] } }), &[]);
     let result = validate_arguments(&json!({ "n": 1e20 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["n"], json!(1e20));
+}
+
+#[test]
+fn a_union_keeps_a_whole_float_as_an_integer_member() {
+    let schema = schema_with_props(json!({ "n": { "type": ["string", "integer"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 3.0 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
+    assert_eq!(result.coerced["n"], json!(3.0));
+}
+
+#[test]
+fn a_union_keeps_a_whole_float_beyond_i64_as_an_integer_member() {
+    let schema = schema_with_props(json!({ "n": { "type": ["integer", "null"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 1e20 }), &schema);
+    assert!(result.is_valid(), "{:?}", result.violations);
     assert_eq!(result.coerced["n"], json!(1e20));
 }
