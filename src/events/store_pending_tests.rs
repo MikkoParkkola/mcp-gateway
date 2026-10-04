@@ -708,6 +708,42 @@ fn a_burial_keeps_its_receipt_when_the_cleanup_after_it_fails() {
     assert!(store.dead_letter_by_id("a").is_some());
 }
 
+/// MIK-7805: a dead letter renamed into place whose directory sync then
+/// fails is still a burial. `Store::settle` reports it and drops the outbox
+/// record, so the occurrence is never resent.
+#[test]
+fn a_burial_whose_dead_letter_sync_fails_is_still_reported() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    store.enqueue(record("a", "s1", now), caps).expect("io");
+    assert!(matches!(
+        store.claim("a", now).expect("io"),
+        Claim::Ready(_)
+    ));
+    store
+        .fail_next_dead_sync
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let dead = Settle::Dead {
+        reason: DeadReason::Gone,
+        status: Some("http_4xx"),
+    };
+    let settled = store.settle("a", now, dead, now, ROOMY).expect("settled");
+    assert!(
+        settled.buried,
+        "the dead letter is in place, so it is reported"
+    );
+    assert!(store.dead_letter_by_id("a").is_some());
+    assert!(
+        matches!(store.claim("a", now).expect("io"), Claim::Skip),
+        "a buried occurrence is never resent"
+    );
+}
+
 /// MIK-7805 AC5: evictions that completed before a later one failed still
 /// reach the caller, so each keeps its governance record.
 #[test]

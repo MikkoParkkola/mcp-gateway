@@ -432,8 +432,9 @@ impl Store {
         let sub_id = record.subscription_id.clone();
         let mut settled = self.settle_record(&mut state, record, outcome, now, policy);
         if settled.is_err() {
-            // The claimed occurrence's own stamp: the outbox entry may already
-            // be gone when the cleanup after the burial is what failed.
+            // The claimed occurrence's own stamp: a dead letter left under the
+            // same id by an earlier occurrence is not this burial. Reached when
+            // the dead letter is in place but its directory sync failed.
             let buried = state
                 .dead
                 .get(event_id)
@@ -686,6 +687,15 @@ impl Store {
         };
         let id = dead.record.event_id.clone();
         let placed = write_record(&self.dead_dir, &OutboxRecord::file(&id), &dead)?;
+        #[cfg(test)]
+        let placed = if self
+            .fail_next_dead_sync
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            crate::events::records::Placed::NotSynced(std::io::Error::other("injected"))
+        } else {
+            placed
+        };
         let size = dead_size(&dead);
         state.dead.insert(id, (dead, size));
         placed.durable()

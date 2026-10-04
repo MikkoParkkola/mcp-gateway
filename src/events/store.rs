@@ -151,6 +151,11 @@ pub(crate) struct Store {
     outbox_dir: PathBuf,
     dead_dir: PathBuf,
     state: Mutex<State>,
+    /// Test-only: the next dead letter put in place reports its directory
+    /// sync as failed, the one way a burial errors after the dead letter is
+    /// in memory.
+    #[cfg(test)]
+    fail_next_dead_sync: std::sync::atomic::AtomicBool,
 }
 
 impl Store {
@@ -181,6 +186,8 @@ impl Store {
             outbox_dir,
             dead_dir,
             state: Mutex::new(state),
+            #[cfg(test)]
+            fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
         };
         {
             let mut state = store.state.lock();
