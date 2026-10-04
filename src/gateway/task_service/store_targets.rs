@@ -42,17 +42,9 @@ impl TaskStore {
         .map_err(|_| StoreError::Storage)?
     }
 
-    /// [`Self::transition`] committing a plan's `targets` with the outcome, in
-    /// ONE write, and never leaving the task working for want of room.
-    ///
-    /// The outcome and the targets are measured together against the record
-    /// budget. If they do not fit, the task settles `Failed` with a bounded
-    /// error and no output (keeping the targets if THAT fits), so a result is
-    /// never stored without the targets that produced it.
-    ///
-    /// # Errors
-    /// The `transition` errors; `Capacity` only if even the bounded failure
-    /// cannot be stored.
+    /// [`Self::settle_bounded_by`] with the gateway as the author: the tests'
+    /// shorthand.
+    #[cfg(test)]
     pub(crate) async fn settle_bounded(
         &self,
         owner: &str,
@@ -72,8 +64,20 @@ impl TaskStore {
         .await
     }
 
-    /// [`Self::settle_bounded`], recording who wrote a `Fail` event's error
-    /// (MIK-7887.RECEIPT.1). The bounded fallback is always the gateway's.
+    /// [`Self::transition`] committing a plan's `targets` with the outcome, in
+    /// ONE write, and never leaving the task working for want of room.
+    ///
+    /// The outcome and the targets are measured together against the record
+    /// budget. If they do not fit, the task settles `Failed` with a bounded
+    /// error and no output (keeping the targets if THAT fits), so a result is
+    /// never stored without the targets that produced it.
+    ///
+    /// # Errors
+    /// The `transition` errors; `Capacity` only if even the bounded failure
+    /// cannot be stored.
+    ///
+    /// `author` records who wrote a `Fail` event's error (MIK-7887.RECEIPT.1);
+    /// the bounded fallback is always the gateway's.
     pub(crate) async fn settle_bounded_by(
         &self,
         owner: &str,
