@@ -218,18 +218,25 @@ async fn add_backend(
         config_path,
         state.meta_mcp.reload_context().as_deref(),
         |config| {
-            add_backend_config(config, &req.name, resolved).map_err(|_| {
-                (
-                    StatusCode::CONFLICT,
-                    format!("Backend '{}' already exists", req.name),
-                )
-            })
+            add_backend_config(config, &req.name, resolved)
+                .map(|notes| {
+                    // Whether it went in enabled: notes alone do not say, an
+                    // OAuth login note comes with an enabled backend.
+                    let enabled = config.backends.get(&req.name).is_some_and(|b| b.enabled);
+                    (notes, enabled)
+                })
+                .map_err(|_| {
+                    (
+                        StatusCode::CONFLICT,
+                        format!("Backend '{}' already exists", req.name),
+                    )
+                })
         },
     )
     .await;
 
-    let (notes, reload) = match mutation {
-        Ok(ConfigMutation::Applied(notes, reload)) => (notes, reload),
+    let ((notes, enabled), reload) = match mutation {
+        Ok(ConfigMutation::Applied(added, reload)) => (added, reload),
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
@@ -247,7 +254,13 @@ async fn add_backend(
 
     (
         StatusCode::CREATED,
-        Json(json!({"status": "created", "name": req.name, "reload": reload, "notes": notes})),
+        Json(json!({
+            "status": "created",
+            "name": req.name,
+            "reload": reload,
+            "notes": notes,
+            "enabled": enabled,
+        })),
     )
         .into_response()
 }
