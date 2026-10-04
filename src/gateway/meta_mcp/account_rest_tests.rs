@@ -21,8 +21,8 @@
 //! very same capability, arguments and backend DO reach the wire.
 
 mod dispatch_and_refusals;
-mod warm_cache;
 mod multi_user;
+mod warm_cache;
 
 use std::sync::Arc;
 
