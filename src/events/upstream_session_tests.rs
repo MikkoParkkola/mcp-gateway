@@ -136,6 +136,9 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
     assert_eq!(hub.store.subscriptions().len(), 2, "control: both held");
     assert!(!shared.stop.is_cancelled());
 
+    // A reload restores eligibility before the withdrawal gets the lifecycle
+    // lock (a subscribe holds it): nothing is withdrawn.
+    let held = hub.lifecycle.lock().await;
     refused.store(true, std::sync::atomic::Ordering::SeqCst);
     state.note(changed(), false);
     tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
@@ -145,12 +148,34 @@ async fn a_backend_made_ineligible_after_start_emits_nothing_and_stops() {
         "an ineligible backend still delivered"
     );
     assert!(shared.stop.is_cancelled(), "its listener was not stopped");
-    let left: Vec<String> = hub
-        .store
-        .subscriptions()
-        .into_iter()
-        .map(|s| s.name)
-        .collect();
+    refused.store(false, std::sync::atomic::Ordering::SeqCst);
+    drop(held);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        2,
+        "a withdrawal outlived the restore and deleted subscriptions"
+    );
+
+    // Still ineligible when the lock is had: the listener-only one goes.
+    refused.store(true, std::sync::atomic::Ordering::SeqCst);
+    super::end_ineligible(&shared, &weak);
+    let left = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let left: Vec<String> = hub
+                .store
+                .subscriptions()
+                .into_iter()
+                .map(|s| s.name)
+                .collect();
+            if left.len() < 2 {
+                return left;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the withdrawal ran");
     assert_eq!(
         left,
         ["backend.b.tools_changed"],

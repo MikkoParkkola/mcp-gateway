@@ -72,6 +72,11 @@ fn event_name(backend: &str, kind: NoteKind) -> String {
 /// reload, MIK-7894): stop its task and withdraw the subscriptions that only
 /// the listener served. `tools_changed` stays, since the gateway announces it
 /// itself.
+///
+/// The withdrawal runs under the lifecycle lock a subscribe commits under, and
+/// only if the backend is still ineligible there: a reload that restores it
+/// first keeps its subscriptions, and one admitted after the restore lands
+/// after the withdrawal, so it is never deleted by it.
 fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
     shared.stop.cancel();
     let Some(hub) = hub.upgrade() else { return };
@@ -83,8 +88,15 @@ fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) {
     .into_iter()
     .map(|kind| format!("backend.{}.{}", shared.name, kind.suffix()))
     .collect();
-    hub.withdraw(&names);
-    hub.reconcile_stops_in_background();
+    let (name, ineligible) = (shared.name.clone(), Arc::clone(&shared.ineligible));
+    tokio::spawn(async move {
+        let started = hub.lifecycle.lock().await;
+        if ineligible().contains(&name) {
+            hub.withdraw(&names);
+        }
+        drop(started);
+        hub.reconcile_stops_in_background();
+    });
 }
 
 /// The task: reconnect until stopped.
