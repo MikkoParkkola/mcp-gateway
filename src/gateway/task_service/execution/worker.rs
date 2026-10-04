@@ -367,11 +367,7 @@ async fn follow_upstream_job(
                     Ok(processed) => {
                         let processed = backend_output(processed);
                         let target = (job.server.as_str(), job.tool.as_str());
-                        state
-                            .meta_mcp()
-                            .stage_upstream_result(relay, target, &processed);
-                        // The backend's own value, not a `gateway_invoke` wrapper.
-                        rebuild_task_receipt(state, &processed, AnswerShape::Literal);
+                        stage_followed_result(state, relay, target, &processed);
                         TaskTransition::Complete(processed)
                     }
                     Err(error) => TaskTransition::Fail(crate::protocol::JsonRpcError {
@@ -710,6 +706,20 @@ fn is_terminal(status: TaskStatus) -> bool {
 pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
+}
+
+/// Stage a followed upstream result for `relay` under `target`, as stored: the
+/// backend's own value, never a `gateway_invoke` wrapper (MIK-7887.RECEIPT.4).
+fn stage_followed_result(
+    state: &crate::gateway::task_service::host::LiveHost,
+    relay: crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
+    target: (&str, &str),
+    stored: &serde_json::Value,
+) {
+    state
+        .meta_mcp()
+        .stage_upstream_result(relay, target, stored);
+    rebuild_task_receipt(state, stored, AnswerShape::Literal);
 }
 
 /// MIK-7887.RECEIPT.4: a task's receipt describes its result as stored and
