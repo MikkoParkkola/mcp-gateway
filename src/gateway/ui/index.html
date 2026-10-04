@@ -406,6 +406,7 @@ tr:hover td { background: var(--bg3); }
           <span id="add-server-msg" class="form-msg"></span>
         </div>
       </div>
+      <p id="add-server-note" class="form-msg ok" style="display:none"></p>
 
       <div id="servers-table-wrap">
         <table>
@@ -973,6 +974,8 @@ function toggleAddServerForm() {
   const visible = form.style.display !== 'none';
   form.style.display = visible ? 'none' : 'block';
   if (!visible) {
+    // A new add starts without the last add's information line.
+    document.getElementById('add-server-note').style.display = 'none';
     resetAddServerForm();
     loadRegistry();
   }
@@ -1116,13 +1119,18 @@ async function submitAddServer() {
       body: JSON.stringify(body),
     });
     const notes = (res && res.notes) || [];
-    if (notes.length > 0) {
+    if (notes.length > 0 && res.enabled === false) {
       // Added disabled: keep the reason on screen until the user closes the form.
       msg.textContent = 'Server added. ' + notes.join(' ');
       msg.className = 'form-msg err';
       refreshDashboard();
       return;
     }
+    // Added enabled. Notes here are information (an OAuth login on first
+    // use): they stay on screen outside the form once it closes.
+    const info = document.getElementById('add-server-note');
+    info.textContent = notes.length > 0 ? 'Server added. ' + notes.join(' ') : '';
+    info.style.display = notes.length > 0 ? '' : 'none';
     msg.textContent = 'Server added successfully.';
     msg.className = 'form-msg ok';
     setTimeout(() => {
