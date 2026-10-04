@@ -3052,6 +3052,21 @@ impl Gateway {
                 chain_nonce: chain_nonce.as_deref(),
             },
         ).await;
+        // MIK-7887.RECEIPT.4: the receipt describes the delivered answer. The
+        // stdio route stamps no `serverInfo` over a backend's.
+        {
+            use super::meta_mcp::invoke::relay::{AnswerShape, GatewayStamps};
+            let shape = if external_tool == "gateway_invoke" {
+                AnswerShape::InvokeWrapped
+            } else {
+                AnswerShape::Literal
+            };
+            meta_mcp.rebuild_receipt_from_final(
+                response.result.as_ref(),
+                GatewayStamps::Legacy,
+                shape,
+            );
+        }
         // COLLUDE.1: the receipts staged here are recorded by the caller once
         // the answer has been judged (`judge_and_commit`).
         if let Some(execution) = execution {

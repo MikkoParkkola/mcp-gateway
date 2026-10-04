@@ -118,11 +118,15 @@ async fn authorize_refuses_an_ineligible_backend() {
             std::collections::BTreeSet::new()
         }
     });
-    let listeners = UpstreamListeners::new(
-        Arc::new(BackendRegistry::new()),
-        Weak::new(),
-        Arc::clone(&ineligible),
-    );
+    // `b` is registered: authorization refuses a backend that is not.
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(Arc::new(crate::backend::Backend::new(
+        "b",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ))));
+    let listeners = UpstreamListeners::new(registry, Weak::new(), Arc::clone(&ineligible));
     listeners.add("b", &watched("file:///a")).expect("room");
     listeners
         .backends
@@ -170,55 +174,105 @@ async fn authorize_refuses_an_ineligible_backend() {
     );
 }
 
-/// MIK-7894: the catalogue lookup behind a `resource_updated` verdict can wait
-/// (up to 10s with no snapshot), so eligibility is read again once it returns.
-/// The predicate here answers eligible once and ineligible after: a reload
-/// landing during the lookup. The verdict is `-32012`, not the lookup's `Ok`.
-#[tokio::test]
-async fn a_reload_during_the_catalogue_lookup_refuses() {
+/// What a reload does to backend `b` while its catalogue lookup waits.
+#[derive(Clone, Copy)]
+enum Reload {
+    /// Nothing changes: the control, admitted under the offline rule.
+    Nothing,
+    /// The backend stays but turns ineligible.
+    Ineligible,
+    /// The backend leaves the registry.
+    Removed,
+}
+
+/// MIK-7894: the catalogue lookup behind a `resource_updated` verdict waits
+/// on the backend when no snapshot exists, so eligibility and the backend's
+/// registration are read again once it returns. The backend here never
+/// answers; `reload` is applied when its connection arrives, while the lookup
+/// waits, so a check made only before the lookup admits.
+async fn verdict_after_a_reload_during_the_lookup(reload: Reload) -> Result<(), RpcError> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
     use crate::events::EventSource as _;
     use crate::events::backend_source::{BackendSource, Upstream};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    let asked = Arc::new(AtomicUsize::new(0));
-    let count = Arc::clone(&asked);
-    let ineligible: crate::events::backend_source::Ineligible = Arc::new(move || {
-        if count.fetch_add(1, Ordering::SeqCst) == 0 {
-            std::collections::BTreeSet::new()
-        } else {
-            std::iter::once("b".to_owned()).collect()
+    let reloaded = Arc::new(AtomicBool::new(false));
+    let registry = Arc::new(BackendRegistry::new());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (flips, held_registry) = (Arc::clone(&reloaded), Arc::clone(&registry));
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept().await {
+            if let Reload::Removed = reload {
+                held_registry.remove("b");
+            }
+            flips.store(true, Ordering::SeqCst);
+            held.push(stream);
         }
     });
-    let listeners = UpstreamListeners::new(
-        Arc::new(BackendRegistry::new()),
-        Weak::new(),
-        Arc::clone(&ineligible),
-    );
-    listeners.add("b", &watched("file:///a")).expect("room");
-    listeners
-        .backends
-        .lock()
-        .get("b")
-        .expect("listener")
-        .snapshot
-        .lock()
-        .read(["file:///a".to_owned()].into(), true);
+    let config = BackendConfig {
+        transport: TransportConfig::Http {
+            http_url: format!("http://127.0.0.1:{port}/mcp"),
+            streamable_http: true,
+            protocol_version: None,
+        },
+        timeout: std::time::Duration::from_secs(1),
+        ..BackendConfig::default()
+    };
+    assert!(registry.register(Arc::new(Backend::new(
+        "b",
+        config,
+        &FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ))));
+    let turned = Arc::clone(&reloaded);
+    let ineligible: crate::events::backend_source::Ineligible = Arc::new(move || {
+        if matches!(reload, Reload::Ineligible) && turned.load(Ordering::SeqCst) {
+            std::iter::once("b".to_owned()).collect()
+        } else {
+            std::collections::BTreeSet::new()
+        }
+    });
     let source = BackendSource {
         names: Arc::new(|| vec!["b".to_owned()]),
         upstream: Some(Upstream {
-            listeners,
+            listeners: UpstreamListeners::new(registry, Weak::new(), Arc::clone(&ineligible)),
             ineligible,
         }),
     };
-    asked.store(0, Ordering::SeqCst);
-    let err = source
+    let verdict = source
         .authorize(
             "p",
             "backend.b.resource_updated",
             &serde_json::json!({"uri": "file:///a"}),
         )
-        .await
-        .expect_err("refused after the lookup");
-    assert_eq!(err.code, -32012);
-    assert_eq!(asked.load(Ordering::SeqCst), 2, "asked before and after");
+        .await;
+    assert!(
+        reloaded.load(Ordering::SeqCst),
+        "the lookup reached the backend"
+    );
+    verdict
+}
+
+#[tokio::test]
+async fn a_backend_made_ineligible_during_the_lookup_is_refused() {
+    let verdict = verdict_after_a_reload_during_the_lookup(Reload::Ineligible).await;
+    assert_eq!(verdict.expect_err("refused").code, -32012);
+}
+
+#[tokio::test]
+async fn a_backend_removed_during_the_lookup_is_refused() {
+    let verdict = verdict_after_a_reload_during_the_lookup(Reload::Removed).await;
+    assert_eq!(verdict.expect_err("refused").code, -32012);
+}
+
+/// The control: with no reload, the unreadable catalogue admits (offline rule).
+#[tokio::test]
+async fn a_backend_left_alone_during_the_lookup_is_admitted() {
+    let verdict = verdict_after_a_reload_during_the_lookup(Reload::Nothing).await;
+    assert!(verdict.is_ok(), "{verdict:?}");
 }

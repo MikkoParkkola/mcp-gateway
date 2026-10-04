@@ -3287,7 +3287,12 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
   dispatch, is refused, so send a new one per request (after a task-augmented call's challenge
   the first nonce was never spent, so resending it there is accepted). `require_nonce` stays your choice. A
-  malformed nonce is refused `-32602` before anything else. Answers given before the nonce is
+  malformed nonce is refused `-32602` early, but not first: authentication runs before it on
+  both HTTP routes, session admission on `/mcp`, and backend routing and the task-method and
+  retry-field checks on `/mcp/{backend}`. It runs before tool policy and dispatch, so a call
+  the policy would refuse gets `-32602` for a malformed nonce instead of the policy refusal, and
+  is counted as an invalid-nonce rejection. Under `standard` with `message_signing` enabled, the
+  same check applies to a `gateway_invoke` on `/mcp`. Answers given before the nonce is
   admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
   call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
   undeclared-key refusal. A result that cannot be signed is refused `-32603`.
@@ -3366,7 +3371,10 @@ creation. A session that only POSTs holds no stream, so a busy one was reaped at
 since 4.0 never adopts a presented id, its next request got a new session on the default routing
 profile, losing a profile narrowed by `gateway_set_profile`. The TTL is now idle time: every
 request that resumes or acts under the session, on `/mcp` and on the direct `/mcp/{name}` route,
-renews it. A session with no request and no open stream for the TTL is still reaped.
+renews it. The reaper sweeps every `streaming.session_reaper_interval` (default 60 seconds) and
+reaps a session that has had no request for the TTL and has no open stream at the sweep. An open
+stream holds the session but does not renew the TTL, so a session whose stream closes after the
+TTL has passed with no request is reaped at the next sweep, not a full TTL later.
 
 When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
 is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter

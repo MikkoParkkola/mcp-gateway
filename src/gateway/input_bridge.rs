@@ -14,7 +14,10 @@
 //! request the gateway cannot classify is one the client was never given the
 //! chance to withhold consent for.
 
+mod channel;
 mod debug;
+
+pub use channel::{DeliveryCommit, NoClientChannel};
 
 use serde_json::Value;
 
@@ -382,36 +385,29 @@ pub trait ClientChannel: Send + Sync {
         method: &str,
         params: Option<Value>,
     ) -> Result<Value, DeliveryError>;
-}
 
-/// A [`ClientChannel`] for a transport that cannot reach a client at all.
-///
-/// A null object rather than an `Option<&dyn ClientChannel>` on the caller
-/// context: an `Option` puts the "is there anywhere to send this" decision at
-/// every read site, where one site forgetting it fails open. Here the answer
-/// is the channel itself, and the only thing it can do is refuse.
-///
-/// Stdio's serve loop no longer carries this: since MIK-7387 it passes its own
-/// channel, and a legacy stdio client is asked in-band
-/// (`tests/mik_7212_mrtr7_stdio_acs.rs`). The stdio dispatchers outside the
-/// serve loop — a batch and `dispatch_single` — still carry it, because no
-/// reader exists there to deliver a reply, and so does every transport with no
-/// session. [`DeliveryError::NoSession`] is then the literal truth, not a
-/// stand-in for one. The refusal is pinned over the whole admitted method set
-/// in `tests/mik_7212_mrtr7_bridge_acs.rs`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoClientChannel;
-
-#[async_trait::async_trait]
-impl ClientChannel for NoClientChannel {
-    async fn send_request(
+    /// [`Self::send_request`], committing `commit` once the request reached
+    /// the client (MIK-7887.RECEIPT.3). A channel with a commit point (the
+    /// frame entered the session stream, stdout took the bytes) overrides this
+    /// and commits there, before the reply, so a send cancelled after delivery
+    /// keeps its commit. This default commits after the call returns, unless
+    /// no session existed: a cancelled send commits nothing, which errs
+    /// towards no record rather than one for a prompt nobody saw.
+    async fn send_request_committing(
         &self,
-        _session_id: &str,
-        _id: &str,
-        _method: &str,
-        _params: Option<Value>,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+        commit: Option<DeliveryCommit>,
     ) -> Result<Value, DeliveryError> {
-        Err(DeliveryError::NoSession)
+        let answer = self.send_request(session_id, id, method, params).await;
+        if !matches!(answer, Err(DeliveryError::NoSession))
+            && let Some(commit) = commit
+        {
+            commit.commit();
+        }
+        answer
     }
 }
 

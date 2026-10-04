@@ -41,6 +41,7 @@ fn reads_firewall(
     mode: CrossTenantReads,
     window_secs: u64,
     reads: &Arc<ReadHistory>,
+    arg_keys: &[&str],
 ) -> Arc<Firewall> {
     Arc::new(
         Firewall::from_config(
@@ -48,7 +49,7 @@ fn reads_firewall(
                 tenant_guard: TenantGuardConfig {
                     enabled: false,
                     window_secs,
-                    arg_keys: vec!["customer_id".to_string()],
+                    arg_keys: arg_keys.iter().map(|k| (*k).to_string()).collect(),
                     cross_tenant_reads: mode,
                     ..TenantGuardConfig::default()
                 },
@@ -72,10 +73,19 @@ async fn windowed_router(mode: CrossTenantReads, window: u64) -> (axum::Router, 
 }
 
 async fn split_state(mode: CrossTenantReads, window: u64) -> (Arc<AppState>, tempfile::TempDir) {
+    keyed_state(mode, window, &["customer_id"]).await
+}
+
+/// [`split_state`] attributing on `arg_keys`.
+async fn keyed_state(
+    mode: CrossTenantReads,
+    window: u64,
+    arg_keys: &[&str],
+) -> (Arc<AppState>, tempfile::TempDir) {
     let reads = ReadHistory::shared();
     let (handler, meta) = (
-        reads_firewall(mode, window, &reads),
-        reads_firewall(mode, window, &reads),
+        reads_firewall(mode, window, &reads, arg_keys),
+        reads_firewall(mode, window, &reads, arg_keys),
     );
     let (state, store) =
         super::super::state_with_firewalls_and_auth(handler, meta, &one_key()).await;
