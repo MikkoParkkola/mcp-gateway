@@ -152,3 +152,36 @@ async fn with_signing_on_a_restorable_envelope_keeps_its_id() {
         "{response}"
     );
 }
+
+/// C6 gap table rank 3 (startup, `Gateway::prepare_signing`): a request other
+/// than `tools/call` is refused for a malformed chain nonce by this step
+/// alone. `tools/call` re-checks the nonce at dispatch, which would hide this
+/// step failing open; `tools/list` has no second check.
+#[tokio::test]
+async fn a_malformed_chain_nonce_on_another_method_is_refused() {
+    let meta = Arc::new(MetaMcp::new(Arc::new(BackendRegistry::new())));
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": "cov3-list",
+        "method": "tools/list",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                (CHAIN_NONCE_META): ""
+            }
+        }
+    });
+    let response = dispatch_on(&meta, request).await;
+    assert_eq!(
+        response.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32602),
+        "a malformed nonce must be refused as invalid params: {response}"
+    );
+    assert_eq!(response["id"], json!("cov3-list"), "{response}");
+    let message = response
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(message.contains(CHAIN_NONCE_META), "{message}");
+}

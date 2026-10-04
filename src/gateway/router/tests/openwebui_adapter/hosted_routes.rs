@@ -550,3 +550,26 @@ async fn trace_accounts_requests_record_no_query_or_cookie() {
         assert!(!output.contains(secret), "{secret} leaked: {output}");
     }
 }
+
+/// C6 gap table rank 16 (HTTP, `journeys::status`): a caller holding the API
+/// key but no `x-openwebui-assertion` reaches the handler with no verified
+/// identity, and is refused as unauthenticated rather than read as somebody.
+#[tokio::test]
+async fn status_with_a_key_but_no_assertion_is_unauthenticated() {
+    // GIVEN
+    let gw = gateway(Shape::Bridged).await;
+    let (_, created) = create(&gw, "alice", &connect_body()).await;
+    let id = created["journey_id"].as_str().unwrap();
+    let uri = format!("/accounts/v1/journeys/{id}");
+    // WHEN
+    let keyed = Request::builder()
+        .method("GET")
+        .uri(&uri)
+        .header("authorization", format!("Bearer {API_KEY}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = json_of(send(&gw, keyed).await).await;
+    // THEN
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(body["error"]["code"], "unauthenticated", "{body}");
+}
