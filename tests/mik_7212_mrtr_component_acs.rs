@@ -1103,8 +1103,8 @@ async fn ac_mrtr_5d_a_handle_minted_by_another_process_is_refused() {
 /// An exchange the gateway opened must occupy a slot in the bounded table.
 ///
 /// Both bounds MRTR.8 names are already held at `unit` against the type, and
-/// held well: `tests/mik_7212_acs.rs:439` refuses at capacity rather than
-/// growing, and `:457` reclaims an abandoned exchange *and* asserts its slot
+/// held well: `tests/mik_7212_acs/inflight.rs:60` refuses at capacity rather
+/// than growing, and `:78` reclaims an abandoned exchange *and* asserts its slot
 /// comes back, which is the non-vacuous form the test plan asks for. Neither
 /// says anything about the gateway: they drive the table directly, and the
 /// criterion is about the *request path* putting an entry in it. That half is
