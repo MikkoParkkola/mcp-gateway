@@ -285,6 +285,23 @@ fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
     );
 }
 
+/// Empty leaves past the cap add no segments: each walk stops once its half
+/// is spent, so a digest stays bounded whatever the leaf count.
+#[test]
+fn empty_leaves_past_the_cap_add_no_segments() {
+    // Each edge leaf spends its walk's half to zero; empties follow.
+    let edge = "x".repeat(RECORD_CAP / 2 - 1);
+    let big = "y".repeat(RECORD_CAP);
+    let mut leaves = vec![edge.as_str()];
+    leaves.extend(std::iter::repeat_n("", 32_768));
+    leaves.push(big.as_str());
+    leaves.extend(std::iter::repeat_n("", 32_768));
+    leaves.push(edge.as_str());
+    let (digest, cut) = DeliveryDigest::of_leaves(&leaves, false);
+    assert!(cut);
+    assert_eq!(digest.segment_texts().len(), 2, "the two edge leaves only");
+}
+
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut collusion = CollusionConfig {

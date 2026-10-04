@@ -357,3 +357,63 @@ async fn a_changed_plan_receipt_never_commits_unkept_from_a_dispatch() {
         "never kept, never committed"
     );
 }
+
+/// A leaf removed from the middle of a step splits its run: the neighbours'
+/// own text keeps every fingerprint the source's run had over it, so the
+/// same-source reader relaying a neighbour is never refused, whichever window
+/// minima the split moves. Several texts, since minima depend on the key.
+#[tokio::test]
+async fn removing_a_middle_leaf_keeps_its_neighbours_whole() {
+    for round in 0..8 {
+        let (meta, firewall) = relay_meta();
+        let (left, gone, right) = (
+            filler(&format!("l{round}x"), 40),
+            filler(&format!("g{round}x"), 40),
+            filler(&format!("r{round}x"), 40),
+        );
+        let step = |middle: &str| json!({"rows": [left.as_str(), middle, right.as_str()]});
+        let (answer, redacted) = (
+            plan_answer(&json!({"a": step(&gone), "b": text_result(OTHER_PROSE)})),
+            plan_answer(&json!({"a": step("[removed]"), "b": text_result(OTHER_PROSE)})),
+        );
+        let ((), staged) = meta
+            .collecting_staged(async {
+                for (tool, value) in [("a", step(&gone)), ("b", text_result(OTHER_PROSE))] {
+                    plan_step(async {
+                        meta.stage_relay_receipt(
+                            RelayKey::new("alice", true),
+                            ("alpha", tool),
+                            &value,
+                        );
+                    })
+                    .await;
+                }
+                meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&redacted));
+                meta.rebuild_receipt_from_final(
+                    Some(&redacted),
+                    GatewayStamps::Legacy,
+                    AnswerShape::Literal,
+                );
+            })
+            .await;
+        staged.commit(true);
+        firewall.record_delivery(RelayCaller::Keyed("carol"), "alpha", "a", &step(&gone));
+
+        assert!(
+            refused(&firewall, "bob", &left),
+            "control: bob holds no copy"
+        );
+        assert!(
+            !refused(&firewall, "alice", &left),
+            "round {round}: left was delivered"
+        );
+        assert!(
+            !refused(&firewall, "alice", &right),
+            "round {round}: right was delivered"
+        );
+        assert!(
+            refused(&firewall, "alice", &gone),
+            "round {round}: the middle was removed"
+        );
+    }
+}

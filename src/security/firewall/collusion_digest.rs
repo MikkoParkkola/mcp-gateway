@@ -62,6 +62,9 @@ impl DeliveryDigest {
             let mut head = Vec::new();
             let mut room = half;
             for leaf in leaves {
+                if room == 0 {
+                    break;
+                }
                 if leaf.len() <= room {
                     head.push(whole(leaf, false));
                     room -= (leaf.len() + 1).min(room);
@@ -80,6 +83,9 @@ impl DeliveryDigest {
             let mut tail = Vec::new();
             let mut room = half;
             for leaf in leaves.iter().rev() {
+                if room == 0 {
+                    break;
+                }
                 if leaf.len() <= room {
                     tail.push(whole(leaf, false));
                     room -= (leaf.len() + 1).min(room);
@@ -152,18 +158,29 @@ impl DeliveryDigest {
     /// its fingerprints whose k-gram occurs in a delivered leaf, as do earlier
     /// retained ones.
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
+        let verbatim = |s: &Segment| s.whole && delivered.leaves.contains(s.text.as_str());
+        if self.retained.is_empty() && self.segments.iter().all(verbatim) {
+            return self;
+        }
+        // A removed leaf splits its run, and re-winnowing the pieces can drop
+        // minima whose k-grams were delivered: the original runs' fingerprints
+        // stay too, wherever their k-gram was delivered.
+        let found = delivered.kgrams(detector);
+        let mut retained: Vec<u64> = self
+            .fingerprints(detector)
+            .into_iter()
+            .filter(|fp| found.contains(fp))
+            .collect();
         let mut segments = Vec::with_capacity(self.segments.len());
-        let mut retained = Vec::new();
         let mut gap = false;
         for segment in self.segments {
-            if segment.whole && delivered.leaves.contains(segment.text.as_str()) {
+            if verbatim(&segment) {
                 segments.push(Segment {
                     gap_before: gap || segment.gap_before,
                     ..segment
                 });
                 gap = false;
             } else {
-                let found = delivered.kgrams(detector);
                 retained.extend(
                     detector
                         .fingerprints(&segment.text)
@@ -172,10 +189,6 @@ impl DeliveryDigest {
                 );
                 gap = true;
             }
-        }
-        if !self.retained.is_empty() {
-            let found = delivered.kgrams(detector);
-            retained.extend(self.retained.into_iter().filter(|fp| found.contains(fp)));
         }
         Self {
             segments,
