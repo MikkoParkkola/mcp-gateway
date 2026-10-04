@@ -51,6 +51,39 @@ impl super::WebSocketTransport {
         Box::pin(transport.connect()).await?;
         Ok(transport)
     }
+
+    /// The upgrade request for `url` carrying `headers`, built without touching
+    /// the network: an error here means the target can never be connected to.
+    /// No error carries more of the URL than that it is invalid, or a header
+    /// value, which may be a credential.
+    pub(crate) fn upgrade_request(url: &str, headers: &HashMap<String, String>) -> Result<Request> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+
+        let mut request = url
+            .into_client_request()
+            .map_err(|_| Error::Transport("WebSocket connect failed: invalid ws_url".into()))?;
+        if !matches!(request.uri().scheme_str(), Some("ws" | "wss"))
+            || request.uri().host().is_none()
+        {
+            return Err(Error::Transport(
+                "WebSocket connect failed: invalid ws_url".into(),
+            ));
+        }
+        for (name, value) in headers {
+            let (Ok(name), Ok(value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(value),
+            ) else {
+                // The value is a credential; name the header only.
+                return Err(Error::Transport(format!(
+                    "WebSocket connect failed: header `{name}` is not a valid HTTP header"
+                )));
+            };
+            request.headers_mut().insert(name, value);
+        }
+        Ok(request)
+    }
 }
 
 /// An upgraded connection, as `connect_async` returns it.
