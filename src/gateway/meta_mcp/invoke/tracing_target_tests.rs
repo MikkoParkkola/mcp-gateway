@@ -15,7 +15,10 @@ const EVENTS: [&str; 5] = ["trace!(", "debug!(", "info!(", "warn!(", "error!("];
 
 #[test]
 fn the_pinned_target_is_the_invoke_module() {
-    assert_eq!(super::INVOKE_TARGET, "mcp_gateway::gateway::meta_mcp::invoke");
+    assert_eq!(
+        super::INVOKE_TARGET,
+        "mcp_gateway::gateway::meta_mcp::invoke"
+    );
 }
 
 #[test]
