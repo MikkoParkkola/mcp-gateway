@@ -229,3 +229,52 @@ fn an_optional_variable_the_gateway_holds_is_forwarded_and_an_unset_one_is_left_
         "an empty optional variable is not forwarded"
     );
 }
+
+/// MIK-7816.FIX.3: an empty `-e VAR=` for a required variable is not a value.
+/// The reference stays, the unresolved check sees it, and the backend is added
+/// disabled with the variable named, on the stdio and the header path alike.
+#[test]
+fn an_empty_value_for_a_required_variable_is_unresolved() {
+    for (name, var) in [
+        ("tavily", "TAVILY_API_KEY"),
+        ("stripe", "STRIPE_SECRET_KEY"),
+    ] {
+        let (_dir, mut config) = config_with_env_file(&format!("{var}=\n"));
+        let notes = add_backend(&mut config, name, registry(name, &[(var, "")])).unwrap();
+        assert!(!config.backends[name].enabled, "{name}: {notes:?}");
+        assert!(
+            notes.iter().any(|n| n.contains(var)),
+            "{name}: the note names the variable: {notes:?}"
+        );
+    }
+}
+
+/// MIK-7816.FIX.2: an entry that needs arguments appended to its command is
+/// added disabled, with what to append, since the registry path takes none.
+#[test]
+fn an_entry_that_needs_arguments_is_added_disabled() {
+    let mut config = Config::default();
+    let notes = add_backend(&mut config, "filesystem", registry("filesystem", &[])).unwrap();
+    assert!(!config.backends["filesystem"].enabled, "{notes:?}");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("the directories it may access")),
+        "the note says what to append: {notes:?}"
+    );
+}
+
+/// MIK-7816.FIX.1 (server side): an OAuth entry is added enabled and still
+/// carries its login note; the UI tells the two apart by `enabled`.
+#[test]
+fn an_oauth_entry_is_added_enabled_with_its_login_note() {
+    let mut config = Config::default();
+    let notes = add_backend(&mut config, "linear", registry("linear", &[])).unwrap();
+    assert!(config.backends["linear"].enabled, "{notes:?}");
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("Logs in through your browser")),
+        "{notes:?}"
+    );
+}
