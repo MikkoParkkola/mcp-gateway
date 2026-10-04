@@ -43,6 +43,40 @@ pub enum Integrity {
 }
 
 impl ProvidersConfig {
+    /// Pin state of the file these providers were loaded from. Only the loader
+    /// sets [`Integrity::Verified`]; a program built on this crate can read it
+    /// but cannot set it (MIK-7814), so it cannot let an unpinned process
+    /// provider run:
+    ///
+    /// ```compile_fail,E0616
+    /// use mcp_gateway::capability::{Integrity, ProvidersConfig};
+    /// let mut providers = ProvidersConfig::default();
+    /// providers.integrity = Integrity::Verified;
+    /// ```
+    ///
+    /// ```
+    /// use mcp_gateway::capability::{Integrity, ProvidersConfig};
+    /// assert_eq!(ProvidersConfig::default().integrity(), Integrity::Unpinned);
+    /// ```
+    #[must_use]
+    pub fn integrity(&self) -> Integrity {
+        self.integrity
+    }
+
+    /// Typed `config` of each process provider (`cli`, `mcp`), keyed like
+    /// `named` (`fallback[i]` for a fallback entry). Read-only outside the
+    /// crate, like [`Self::integrity`]:
+    ///
+    /// ```compile_fail,E0616
+    /// use mcp_gateway::capability::ProvidersConfig;
+    /// let mut providers = ProvidersConfig::default();
+    /// providers.process.clear();
+    /// ```
+    #[must_use]
+    pub fn process(&self) -> &HashMap<String, ProcessConfig> {
+        &self.process
+    }
+
     /// Check if empty
     #[must_use]
     pub fn is_empty(&self) -> bool {
