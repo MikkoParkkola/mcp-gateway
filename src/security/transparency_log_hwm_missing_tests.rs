@@ -586,6 +586,42 @@ fn verify_compares_the_hash_at_the_mark() {
     );
 }
 
+/// MIK-7838: a hash mismatch at the mark is reported at the mark's counter,
+/// not after the tail. The mark is left behind the tail (a crash between an
+/// append and its `.hwm` write) so the mark, the tail, and the counter after
+/// it are three distinct values.
+#[test]
+fn a_mark_hash_mismatch_is_reported_at_the_mark_counter() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(never_rotates(&path)).unwrap();
+    (0..3).for_each(|i| append(&l, i));
+    let stale = std::fs::read(sibling(&path, "hwm")).unwrap();
+    (3..5).for_each(|i| append(&l, i));
+    drop(l);
+    std::fs::write(sibling(&path, "hwm"), stale).unwrap();
+    assert!(verify(&path, false).ok, "positive control: a lagging mark");
+    let mut all = lines(&path);
+    let at = all.len() - 3;
+    let mark = all[at]["counter"].as_u64().unwrap();
+    // Replace the record at the mark and re-chain everything after it.
+    all[at]["tool"] = "replaced".into();
+    for i in at..all.len() {
+        if i > at {
+            all[i]["prev_entry_hash"] = all[i - 1]["entry_hash"].clone();
+        }
+        all[i]["entry_hash"] = recompute_entry_hash(&all[i]).unwrap().into();
+    }
+    let body = all
+        .iter()
+        .fold(String::new(), |a, v| a + &v.to_string() + "\n");
+    std::fs::write(&path, body).unwrap();
+    let r = verify(&path, false);
+    assert!(!r.ok, "a replaced record at a lagging mark passed");
+    assert!(r.error_message.unwrap().contains("hash mismatch"));
+    assert_eq!(r.error_at_counter, Some(mark));
+}
+
 /// MIK-7712 AC1, review: the active segment holding the committed marker is
 /// emptied (or deleted) with `.hwm` kept. The newest surviving record is then
 /// the seal, below the mark, so the restart records the loss there too.
