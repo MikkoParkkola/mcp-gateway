@@ -294,11 +294,15 @@ def cmd_evidence(a):
     def named(method, r):
         return [p for p in r.get("rpc_params") or [] if p.get("method") == method]
 
+    def wanted(r):
+        # The param the criterion is about: this event, filtered to the repo fired at.
+        return next((p for p in named("events/subscribe", r) if p.get("name") == EVENT and fire.get("repo")
+                     and (p.get("arguments") or {}).get("repo") == fire["repo"]), None)
+
     def subscribed(r):
-        # The subscription the criterion is about: this event, filtered to the repo fired at.
-        return (rpc("events/subscribe")(r) and bool(r.get("result_id")) and any(
-            p.get("name") == EVENT and fire.get("repo") and (p.get("arguments") or {}).get("repo") == fire["repo"]
-            for p in named("events/subscribe", r)))
+        # A single call: a batch reply's id may be another call's (MIK-7892).
+        return (rpc("events/subscribe")(r) and r.get("rpc") == ["events/subscribe"]
+                and bool(r.get("result_id")) and wanted(r) is not None)
 
     # Several subscribes may be filtered to the repo (ChatGPT retries): take the
     # one whose delivery the gateway audited, else the first, so a later complete
@@ -312,7 +316,8 @@ def cmd_evidence(a):
     # Delivery and removal are bound to THIS subscription's id. The verification
     # handshake is not: the gateway reuses an earlier verified callback.
     sub_id = (sub or {}).get("result_id")
-    sub_args = next((p["arguments"] for p in named("events/subscribe", sub or {})), {})
+    sub_param = wanted(sub or {}) or {}
+    sub_args, sub_key = sub_param.get("arguments") or {}, sub_param.get("key")
     def first_seen(r):
         # When the gateway first audited this event: a retried older event was seen before the fire.
         ev = find(r, "event_id")
@@ -326,10 +331,13 @@ def cmd_evidence(a):
          and bool(sub_id) and has(r, "subscription_id", sub_id)
          and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1
          and first_seen(r) >= fire.get("ts", 1e18) - 1)
-    step("events/unsubscribe sent for the same event and arguments", shim,
-                 lambda r: rpc("events/unsubscribe")(r) and any(
-                     p.get("name") == EVENT and p.get("arguments") == sub_args and bool(sub_args)
-                     for p in named("events/unsubscribe", r)))
+    # The gateway reads no id on unsubscribe; it derives one from name, delivery
+    # url and arguments, so the call must carry this subscription's key (MIK-7892).
+    step("events/unsubscribe sent for the same subscription", shim,
+         lambda r: rpc("events/unsubscribe")(r) and r.get("rpc") == ["events/unsubscribe"] and any(
+             p.get("name") == EVENT and p.get("arguments") == sub_args and bool(sub_args)
+             and bool(sub_key) and p.get("key") == sub_key
+             for p in named("events/unsubscribe", r)))
     step("gateway removed that subscription (gateway audit)", audit,
          lambda r: has(r, "action", "events.unsubscribe") and has(r, "detail", "removed")
          and bool(sub_id) and has(r, "subscription_id", sub_id)
