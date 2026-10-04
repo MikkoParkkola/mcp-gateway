@@ -24,10 +24,13 @@
 //! maintainer's machine, never in the repository and never deleted, beside a
 //! `.meta` file in `.git/lead-decisions/` recording the sha256 and byte size
 //! of every input (baseline scrape, final scrape, window.json copy, PID watch
-//! log), the scrape second, the gateway PID and start time, and this
-//! harness's commit, checked out to run it. The public record cites shares,
-//! the decision, the input sha256 values and the harness commit; it carries
-//! no raw request counts.
+//! log), the scrape unix time, the gateway PID and start time, and the
+//! harness commit. Run the harness from #2972's merge commit, checked out,
+//! and cite that commit. The final grade record carries the decision, the
+//! shares, the per-transport `attributed / total` integers this prints, the
+//! scrape's sha256, the harness commit and the scrape unix time. (The
+//! interim note on 2026-10-05 carried no raw counts; that ruling was for the
+//! interim note only.)
 //!
 //! The grade refuses inputs that cannot support it: a scrape missing any
 //! zero-registered series, a counter that went down, a stdio window written
@@ -170,8 +173,8 @@ fn stamp(line: &str) -> Option<i64> {
 }
 
 /// The PID watch log, from `restart done pid=<pid>` on, names only `pid` and
-/// one start time, with a timestamped check within 15 minutes of each end of
-/// the window.
+/// one start time, with a check within 15 minutes after the baseline and one
+/// within 15 minutes after the final scrape.
 fn assert_one_process(log: &str, pid: u32, from: u64, to: u64) {
     const MAX_GAP: i64 = 900;
     let marker = format!("restart done pid={pid}");
@@ -208,26 +211,25 @@ fn assert_one_process(log: &str, pid: u32, from: u64, to: u64) {
     }
     assert_eq!(lstarts.len(), 1, "start times in the window: {lstarts:?}");
     let (from, to) = (i64::try_from(from).unwrap(), i64::try_from(to).unwrap());
-    let inside: Vec<i64> = stamps
-        .into_iter()
-        .filter(|t| (from..=to).contains(t))
-        .collect();
     // A restart anywhere in the window shows a new PID or start time at the
-    // next check, so interior gaps (a sleeping host) cannot hide one. Only the
-    // edges need a check close by: the first after the baseline, and the last
-    // before the final scrape.
-    let (Some(first), Some(last)) = (inside.first(), inside.last()) else {
-        panic!("no PID check inside the window");
-    };
+    // next check, so interior gaps (a sleeping host) cannot hide one. Two
+    // checks close the edges: one soon after the baseline, and one at or
+    // after the final scrape, which proves no restart came between the last
+    // routine check and the scrape (a late restart would leave small counters
+    // that still clear the baseline).
+    let first = stamps
+        .iter()
+        .copied()
+        .find(|t| *t >= from)
+        .unwrap_or_else(|| panic!("no PID check after the baseline"));
     assert!(
         first - from <= MAX_GAP,
         "first PID check {} s after the baseline",
         first - from
     );
     assert!(
-        to - last <= MAX_GAP,
-        "last PID check {} s before the final scrape",
-        to - last
+        stamps.iter().any(|t| (to..=to + MAX_GAP).contains(t)),
+        "no PID check within {MAX_GAP} s after the final scrape; take one right after it"
     );
 }
 
@@ -246,6 +248,23 @@ fn joint(
         (Ok(_), Err(blocked)) => Err(format!("{blocked:?}")),
         (Ok(stdio), Ok(http)) => Ok(stdio.into_iter().filter(|r| http.contains(r)).collect()),
     }
+}
+
+/// `(attributed, total)` per transport between the two scrapes, for the
+/// grade record.
+fn per_transport(baseline: &Series, last: &Series) -> BTreeMap<String, (u64, u64)> {
+    let mut out: BTreeMap<String, (u64, u64)> = BTreeMap::new();
+    for (key, now) in last {
+        let n = now - baseline.get(key).copied().unwrap_or(0);
+        let entry = out
+            .entry(label(&key.1, "transport").to_string())
+            .or_default();
+        entry.1 += n;
+        if key.0 == OBSERVED {
+            entry.0 += n;
+        }
+    }
+    out
 }
 
 fn env(name: &str) -> String {
@@ -295,6 +314,9 @@ fn u1_v1_window_grade() {
         elapsed.as_secs()
     );
     println!("aligned (durable start == baseline scrape): {aligned}");
+    for (transport, (attributed, total)) in per_transport(&baseline, &last) {
+        println!("{transport}: {attributed} / {total}");
+    }
     println!("\nHTTP process, by transport: {:?}", http.by_transport);
     println!("HTTP process, by client: {:?}", http.by_client);
     println!("{}", distribution_table(&http));
@@ -379,6 +401,10 @@ fn the_pid_watch_must_show_one_unbroken_process() {
     let restarted = format!("{log}2026-10-02T19:00:00+0200 pid=7 lstart=u\n");
     assert!(std::panic::catch_unwind(|| assert_one_process(&restarted, 7, from, to)).is_err());
     assert!(std::panic::catch_unwind(|| assert_one_process(&log, 7, from, to + 3600)).is_err());
+    // A scrape at 18:58 with no check after it could hide a late restart.
+    assert!(std::panic::catch_unwind(|| assert_one_process(&log, 7, from, to - 120)).is_ok());
+    let early = log.replace("2026-10-02T19:00:00+0200 pid=7 lstart=t\n", "");
+    assert!(std::panic::catch_unwind(|| assert_one_process(&early, 7, from, to - 120)).is_err());
 }
 
 /// A scrape short of the registered series set is refused even when both
