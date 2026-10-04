@@ -560,7 +560,7 @@ impl CapabilityExecutor {
     /// Build URL with path parameter substitution.
     #[allow(clippy::unused_self)]
     fn build_url(&self, config: &RestConfig, params: &Value) -> Result<String> {
-        let mut url = if config.uses_endpoint() {
+        let url = if config.uses_endpoint() {
             config.endpoint.clone()
         } else {
             let path = if let Some(selector) = &config.path_selector {
@@ -589,22 +589,16 @@ impl CapabilityExecutor {
             format!("{}{path}", config.base_url)
         };
 
-        if let Value::Object(map) = params {
-            for (key, value) in map {
-                let placeholder = format!("{{{key}}}");
-                if url.contains(&placeholder) {
-                    let value_str = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        _ => serde_json::to_string(value).unwrap_or_default(),
-                    };
-                    url = url.replace(&placeholder, &value_str);
-                }
-            }
-        }
-
-        Ok(url)
+        // One pass, caller parameters only: a value holding `{other}` is sent
+        // as written, and the URL never resolves a secret (MIK-7888).
+        crate::secrets::fill_placeholders(&url, |key| {
+            Ok(params.get(key).map(|value| match value {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                _ => serde_json::to_string(value).unwrap_or_default(),
+            }))
+        })
     }
 
     /// Build headers with credential injection.
@@ -618,11 +612,16 @@ impl CapabilityExecutor {
         let mut headers = HeaderMap::new();
 
         for (name, value_template) in &config.headers {
-            let value = self.substitute_string(value_template, params)?;
+            let (value, unfilled) = self.substitute_string_tracked(value_template, params)?;
 
-            // Skip Authorization headers with unresolved {access_token} —
-            // inject_auth will handle auth from the credential key.
-            if name.eq_ignore_ascii_case("authorization") && value.contains("{access_token}") {
+            // Skip an Authorization header whose TEMPLATE left {access_token}
+            // unfilled; inject_auth handles auth from the credential key. The
+            // value is not consulted: a resolved secret may contain that text
+            // (MIK-7888).
+            if name.eq_ignore_ascii_case("authorization")
+                && unfilled
+                && value_template.contains("{access_token}")
+            {
                 continue;
             }
 

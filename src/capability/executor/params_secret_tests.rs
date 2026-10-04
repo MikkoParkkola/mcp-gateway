@@ -157,3 +157,83 @@ fn a_placeholder_nothing_fills_is_still_left_out_of_the_query() {
     assert!(query_pairs(&executor, "{absent}", &json!({ "q": "x" })).is_empty());
     assert!(query_pairs(&executor, "{q}", &json!({})).is_empty());
 }
+
+/// MIK-7888: a resolved secret is data. One that happens to contain the text
+/// `{access_token}` must not make the gateway drop its Authorization header.
+#[tokio::test]
+async fn a_secret_holding_the_access_token_text_keeps_its_header() {
+    let (_dir, executor) = executor_holding("MIK7888_TOKEN=abc{access_token}def\n");
+    let config = crate::capability::RestConfig {
+        headers: std::collections::HashMap::from([(
+            "Authorization".to_string(),
+            "Bearer {env.MIK7888_TOKEN}".to_string(),
+        )]),
+        ..Default::default()
+    };
+    let headers = executor
+        .build_headers(
+            &config,
+            &crate::capability::AuthConfig::default(),
+            &json!({}),
+            &crate::capability::CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+        Some("Bearer abc{access_token}def")
+    );
+}
+
+/// An unfilled `{access_token}` in the template still leaves the header to
+/// the credential injector.
+#[tokio::test]
+async fn an_unfilled_access_token_template_is_still_skipped() {
+    let executor = CapabilityExecutor::new();
+    let config = crate::capability::RestConfig {
+        headers: std::collections::HashMap::from([(
+            "Authorization".to_string(),
+            "Bearer {access_token}".to_string(),
+        )]),
+        ..Default::default()
+    };
+    let headers = executor
+        .build_headers(
+            &config,
+            &crate::capability::AuthConfig::default(),
+            &json!({}),
+            &crate::capability::CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    assert!(headers.get("authorization").is_none());
+}
+
+/// MIK-7888: a caller value is substituted once; `{b}` inside it is text.
+#[test]
+fn the_url_builder_substitutes_each_caller_value_once() {
+    let executor = CapabilityExecutor::new();
+    let config = crate::capability::RestConfig {
+        base_url: "https://api.github.com".to_string(),
+        path: "/{a}|{b}".to_string(),
+        ..Default::default()
+    };
+    let url = executor
+        .build_url(&config, &json!({ "a": "{b}", "b": "B" }))
+        .unwrap();
+    assert_eq!(url, "https://api.github.com/{b}|B");
+}
+
+#[test]
+fn the_graphql_builder_substitutes_each_caller_value_once() {
+    let config = crate::capability::GraphqlConfig {
+        query: Some("{a}|{b}".to_string()),
+        ..Default::default()
+    };
+    let body = super::super::graphql::GraphqlExecutor::build_body(
+        &config,
+        &json!({ "a": "{b}", "b": "B" }),
+    )
+    .unwrap();
+    assert_eq!(body["query"], "{b}|B");
+}

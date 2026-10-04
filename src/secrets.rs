@@ -17,6 +17,35 @@ use crate::{Error, Result};
 static PLACEHOLDER: std::sync::LazyLock<regex::Regex> =
     std::sync::LazyLock::new(|| regex::Regex::new(r"\{([^{}]*)\}").unwrap());
 
+/// Replace every `{name}` in `value` for which `fill` returns `Some(text)`;
+/// `None` leaves the placeholder as written.
+///
+/// One scan of `value`: substituted text is never looked at again, so a value
+/// holding `{other}` arrives byte for byte (MIK-7888).
+///
+/// # Errors
+///
+/// The first error `fill` returns.
+pub(crate) fn fill_placeholders(
+    value: &str,
+    mut fill: impl FnMut(&str) -> Result<Option<String>>,
+) -> Result<String> {
+    let mut out = String::with_capacity(value.len());
+    let mut copied_to = 0;
+    for caps in PLACEHOLDER.captures_iter(value) {
+        let (Some(whole), Some(name)) = (caps.get(0), caps.get(1)) else {
+            continue;
+        };
+        if let Some(text) = fill(name.as_str())? {
+            out.push_str(&value[copied_to..whole.start()]);
+            out.push_str(&text);
+            copied_to = whole.end();
+        }
+    }
+    out.push_str(&value[copied_to..]);
+    Ok(out)
+}
+
 /// Secret resolver with caching
 pub struct SecretResolver {
     /// Cached resolved secrets for the session
@@ -90,32 +119,19 @@ impl SecretResolver {
         // would otherwise splice a pre-reload half onto a post-reload half and
         // produce a credential that never existed in either generation.
         let env = self.env.get();
-        let mut out = String::with_capacity(value.len());
-        let mut copied_to = 0;
-        for caps in PLACEHOLDER.captures_iter(value) {
-            let (Some(whole), Some(name)) = (caps.get(0), caps.get(1)) else {
-                continue;
-            };
-            let name = name.as_str();
-            let replacement = if let Some(service) = name.strip_prefix("keychain.")
+        fill_placeholders(value, |name| {
+            if let Some(service) = name.strip_prefix("keychain.")
                 && !service.is_empty()
             {
-                Some(self.keychain_secret(service)?)
+                self.keychain_secret(service).map(Some)
             } else if let Some(var_name) = name.strip_prefix("env.")
                 && !var_name.is_empty()
             {
-                Some(Self::env_secret(&env, var_name)?)
+                Self::env_secret(&env, var_name).map(Some)
             } else {
-                other(name)
-            };
-            if let Some(text) = replacement {
-                out.push_str(&value[copied_to..whole.start()]);
-                out.push_str(&text);
-                copied_to = whole.end();
+                Ok(other(name))
             }
-        }
-        out.push_str(&value[copied_to..]);
-        Ok(out)
+        })
     }
 
     /// A keychain entry, from the session cache when it was read before.
