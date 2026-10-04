@@ -91,16 +91,20 @@ delivery and unsubscribe. The grader reads, in order:
 | Check | Source |
 |---|---|
 | OAuth token issued; `server/discover`; `events/list` | `shim.jsonl` (method names and statuses only) |
-| `events/subscribe` answered with an `id`, for this event and filtered to the repo fired at | `shim.jsonl` (event name, `repo`/`ref`/`event_type` filters, result id) |
+| `events/subscribe`, sent alone, answered with an `id`, for this event and filtered to the repo fired at | `shim.jsonl` (event name, `repo`/`ref`/`event_type` filters, subscription key, result id) |
 | Verification handshake passed (`events.verification`, `detail: verified`) | `audit.jsonl` |
 | Signed inbound webhook accepted (status 200, body hash, delivery id, ref) | `fire.json` |
 | Signed delivery accepted 2xx for that subscription id (`events.delivery_outcome`, `delivered: true`) | `audit.jsonl` |
-| `events/unsubscribe` sent with the same event and filters | `shim.jsonl` |
+| `events/unsubscribe`, sent alone, for the same subscription (same event, filters and subscription key) | `shim.jsonl` |
 | The gateway removed that subscription id (`events.unsubscribe`, `detail: removed`) | `audit.jsonl` |
 | ChatGPT told you the ref in `fire.json` | your pasted reply |
 
 The files hold no tokens, signing secrets, callback paths or bodies (the audit
-log carries hashes and a callback host). A failed check names what to rerun:
+log carries hashes and a callback host). The subscription key is the shim's own
+SHA-256 of the event name, callback URL and arguments, the inputs the gateway
+derives the subscription id from; it is not that id and never equals it. A
+callback URL spelled differently on unsubscribe (case, trailing slash) gets
+another key and fails the check: rerun with the same URL. A failed check names what to rerun:
 no `events/list` means ChatGPT never saw events (rescan the plugin); a missing
 `events.verification` means the subscribe was refused before the handshake
 (see the `events/subscribe` row of `shim.jsonl`, `error_code`).
