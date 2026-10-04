@@ -245,6 +245,46 @@ fn a_capped_digest_has_no_fingerprint_across_its_cut() {
     );
 }
 
+/// MIK-7887.RECEIPT.2: retention keeps exactly the source fingerprints whose
+/// k-gram a delivered leaf holds, including one the delivered leaf's own
+/// winnowing did not select, and drops every other.
+#[test]
+fn retaining_keeps_a_delivered_kgram_whichever_window_selected_it() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    use super::Delivered;
+    let detector = CollusionDetector::new(RelayParams::default());
+    let words = |tag: &str| {
+        (0..60)
+            .map(|i| format!("{tag}{i:04}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut premise = false;
+    for round in 0..20 {
+        let (kept_part, gone) = (words(&format!("k{round}x")), words(&format!("g{round}x")));
+        let source = format!("{kept_part} {gone}");
+        let (digest, _) = DeliveryDigest::of_leaves(&[&source], false);
+        let delivered = Delivered::of_leaves(vec![kept_part.as_str()]).expect("under the bound");
+        let kept: HashSet<u64> = digest
+            .retaining(&detector, &delivered)
+            .fingerprints(&detector)
+            .into_iter()
+            .collect();
+        let kgrams: HashSet<u64> = detector.kgram_hashes(&kept_part).into_iter().collect();
+        let minima: HashSet<u64> = detector.fingerprints(&kept_part).into_iter().collect();
+        for fp in detector.fingerprints(&source) {
+            assert_eq!(kept.contains(&fp), kgrams.contains(&fp), "round {round}");
+            premise |= kgrams.contains(&fp) && !minima.contains(&fp);
+        }
+    }
+    assert!(
+        premise,
+        "premise: some kept fingerprint was not a delivered window minimum"
+    );
+}
+
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut collusion = CollusionConfig {

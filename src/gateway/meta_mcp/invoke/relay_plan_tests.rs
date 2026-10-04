@@ -118,17 +118,13 @@ async fn a_redaction_in_one_step_keeps_the_other_steps_receipt() {
 #[tokio::test]
 async fn a_step_receipt_never_holds_another_steps_text() {
     let (meta, firewall) = relay_meta();
-    let answer = plan_answer(&json!({"a": text_result(PROSE), "b": text_result(OTHER_PROSE)}));
-    let changed =
-        plan_answer(&json!({"a": text_result(PROSE), "b": text_result(OTHER_PROSE), "n": 1}));
-    deliver_plan(
-        &meta,
-        &[("a", PROSE), ("b", OTHER_PROSE)],
-        &answer,
-        &changed,
-    )
-    .await;
-    carol_holds(&firewall, "a", PROSE);
+    // A is redacted, so its receipt goes through the k-gram path, not only
+    // the whole-leaf one.
+    let a = format!("{PROSE} {SECRET}");
+    let answer = plan_answer(&json!({"a": text_result(&a), "b": text_result(OTHER_PROSE)}));
+    let changed = plan_answer(&json!({"a": text_result(PROSE), "b": text_result(OTHER_PROSE)}));
+    deliver_plan(&meta, &[("a", &a), ("b", OTHER_PROSE)], &answer, &changed).await;
+    carol_holds(&firewall, "a", &a);
     carol_holds(&firewall, "a", OTHER_PROSE);
 
     assert!(
