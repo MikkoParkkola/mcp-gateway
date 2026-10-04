@@ -3696,12 +3696,12 @@ frames name more than one tenant inside `window_secs`, the new key
 `tenant_guard.cross_tenant_reads` decides: `observe` (the default) writes a `tenant_read`
 audit record with `cross_tenant_read: flagged` (for an answer on `POST /mcp`, `/mcp/{name}` or stdio, the same fields ride the answer's own `response_delivery_attempt` record, written over the frame the judge left, so it costs no second record), `block` withholds the frame with a JSON-RPC
 error, and `off` checks nothing. A caller with no identity is recorded as `unattributable`.
-On those three routes an answer that names a tenant writes no `event: tenant_read` record: its read
-fields (`caller_key`, `tenants`, `attribution`, `cross_tenant_read`) ride its
-`response_delivery_attempt` record, so an audit rule that counts reads selects delivery records
-carrying `tenants` or `attribution`, and one that flags anomalies matches `cross_tenant_read` on
-either event. Notifications, server requests and stream events still write a standalone
-`tenant_read` record.
+On those three routes a dispatched answer that names a tenant writes no `event: tenant_read`
+record: its read fields (`caller_key`, `tenants`, `attribution`, `cross_tenant_read`) ride its
+`response_delivery_attempt` record. Notifications, server requests, stream events and the few
+errors stdio builds before dispatch (a bad signing envelope) still write a standalone `tenant_read`
+record. So an audit rule that counts reads selects either event carrying `tenants` or
+`attribution`, and one that flags anomalies matches `cross_tenant_read` on either event.
 Tenant ids are compared across backends, so two backends that reuse one id count as one tenant.
 Name tenant fields that appear inside backend content in `arg_keys`. The judge scans the document that is emitted, so a configured name equal to a wrapper member (`message`, `method`, `source`, `event_id`) also attributes, for responses, notifications and non-message stream events (#2846). A webhook subscription made while the check was off has no caller key until it renews, so its deliveries that name a tenant count as unattributable.
 
