@@ -152,6 +152,23 @@ pub struct SecretInjector {
     rules: HashMap<String, Vec<CredentialRule>>,
 }
 
+/// Remove the key `rule` owns from the caller's arguments: whatever the caller
+/// put there is never forwarded in place of the gateway's credential.
+fn drop_caller_value(
+    rule: &CredentialRule,
+    arguments: &mut serde_json::Map<String, serde_json::Value>,
+) {
+    match rule.inject_as {
+        InjectTarget::Argument => {
+            arguments.remove(&rule.inject_key);
+        }
+        InjectTarget::Query => {
+            arguments.remove(&format!("__query_{}", rule.inject_key));
+        }
+        InjectTarget::Header => {}
+    }
+}
+
 impl SecretInjector {
     /// Create a new secret injector with the given per-backend rules.
     #[must_use]
@@ -213,15 +230,7 @@ impl SecretInjector {
             {
                 continue;
             }
-            match rule.inject_as {
-                InjectTarget::Argument => {
-                    obj.remove(&rule.inject_key);
-                }
-                InjectTarget::Query => {
-                    obj.remove(&format!("__query_{}", rule.inject_key));
-                }
-                InjectTarget::Header => {}
-            }
+            drop_caller_value(rule, obj);
         }
     }
 
@@ -252,6 +261,19 @@ impl SecretInjector {
         let mut args = arguments;
         let mut headers: HashMap<String, String> = HashMap::new();
         let mut injected_names: Vec<String> = Vec::new();
+
+        // Every key a matching rule owns loses the caller's value up front,
+        // whatever its credential resolves to now. The firewall check strips
+        // the same keys from its own copy on the strength of an earlier
+        // resolution; if the credential changed in between and a rule skips,
+        // a value the check never saw must not be forwarded (MIK-7888). Doing
+        // it before the loop also keeps a skipping rule from deleting what an
+        // earlier rule on the same key injected.
+        if let Some(obj) = args.as_object_mut() {
+            for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+                drop_caller_value(rule, obj);
+            }
+        }
 
         for rule in rules {
             if !tool_matches_rule(tool, &rule.tools) {
@@ -489,3 +511,7 @@ impl SecretInjector {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "secret_injection_flip_tests.rs"]
+mod flip_tests;

@@ -181,31 +181,46 @@ impl CapabilityExecutor {
     /// such as `{env.NAME}` reaches the provider as that text, never as the
     /// gateway's own secret.
     pub(super) fn substitute_string(&self, template: &str, params: &Value) -> Result<String> {
-        let mut result = self.secret_resolver.resolve(template)?;
+        self.substitute_string_tracked(template, params)
+            .map(|(value, _unfilled)| value)
+    }
 
-        if let Value::Object(map) = params {
-            for (key, value) in map {
-                let placeholder = format!("{{{key}}}");
-                if result.contains(&placeholder) {
-                    let value_str = match value {
-                        Value::String(s) => s.clone(),
-                        Value::Number(n) => n.to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => String::new(),
-                        _ => serde_json::to_string(value).unwrap_or_default(),
-                    };
-                    result = result.replace(&placeholder, &value_str);
-                }
+    /// [`Self::substitute_string`], also saying whether the TEMPLATE named a
+    /// `{placeholder}` that no parameter or secret filled. That is known from
+    /// the single scan, not guessed from how the result looks.
+    fn substitute_string_tracked(&self, template: &str, params: &Value) -> Result<(String, bool)> {
+        // One scan of the template resolves secrets and caller parameters
+        // together: a substituted value is data and is never scanned again, so
+        // a secret holding `{q}` or a caller value holding `{other}` arrives
+        // as written (MIK-7888).
+        let unfilled = std::cell::Cell::new(false);
+        let caller = |key: &str| {
+            let found = params
+                .as_object()
+                .and_then(|map| map.get(key))
+                .map(|value| match value {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => String::new(),
+                    _ => serde_json::to_string(value).unwrap_or_default(),
+                });
+            if found.is_none() {
+                unfilled.set(true);
             }
-        }
-
-        Ok(result)
+            found
+        };
+        let value = self.secret_resolver.resolve_with(template, &caller)?;
+        Ok((value, unfilled.get()))
     }
 
     /// Resolve a map of string templates to `(key, value)` query-param pairs.
     ///
-    /// Empty, `"null"`, and still-unresolved `{placeholder}` values are
-    /// filtered out to avoid sending empty parameters to APIs.
+    /// Empty and `"null"` values are filtered out, and so is a value that
+    /// starts with a `{placeholder}` the template named and nothing filled, to
+    /// avoid sending empty parameters to APIs. A value is never filtered for
+    /// what it looks like: a caller's JSON text or `{env.NAME}`, or a secret
+    /// that begins with a brace, is sent as written (MIK-7857).
     pub(super) fn substitute_params(
         &self,
         template: &std::collections::HashMap<String, String>,
@@ -214,9 +229,8 @@ impl CapabilityExecutor {
         let mut result = Vec::new();
 
         for (key, value_template) in template {
-            let value = self.substitute_string(value_template, params)?;
-            // Skip empty values and unresolved {placeholder} templates
-            if !value.is_empty() && value != "null" && !value.starts_with('{') {
+            let (value, unfilled) = self.substitute_string_tracked(value_template, params)?;
+            if !value.is_empty() && value != "null" && !(unfilled && value.starts_with('{')) {
                 result.push((key.clone(), value));
             }
         }
