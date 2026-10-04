@@ -444,5 +444,9 @@ async fn a_sub_path_under_the_direct_route_is_not_a_route() {
     }
     let (status, body) = answer(&state, "POST", "/mcp/b").await;
     assert_eq!(status, StatusCode::NOT_FOUND, "the direct route");
-    assert!(!body.is_empty(), "the direct route reached its handler");
+    let json: Value = serde_json::from_slice(&body).expect("a JSON-RPC body");
+    assert!(
+        json.pointer("/error/code").is_some(),
+        "the direct route reached its handler: {json}"
+    );
 }
