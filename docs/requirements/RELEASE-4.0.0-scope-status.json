@@ -1726,9 +1726,11 @@
       "id": "MIK-7630.EVENTS.8",
       "status": "pending",
       "stage": "ungraded",
-      "blocked_on": "none",
-      "evidence": [],
-      "note": "Added 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
+      "blocked_on": "operator",
+      "evidence": [
+        "tests/mik_7630_events_delivery.rs:448"
+      ],
+      "note": "2026-10-05: T43 seen red, then green, on CI. RED: tests-only head b1413236c (PR #2651), CI run 37005789852, Tests job 110833614874: end_to_end_with_a_signature_checking_receiver panicked at tests/mik_7630_events/delivery.rs:135 'expected 1 event deliveries, got 0'. GREEN: at merge, on #2651's head b2e86421b, CI run 37041949507 Tests job 110953947747 'end_to_end_with_a_signature_checking_receiver ... ok' (that run failed only on Public repo hygiene); merged as 7317d4c94 (an ancestor of the release line); the red and the merge-time green drove the inbound webhook unsigned; T43 now drives a signed inbound webhook (342a28d4f, #2867, on the release line), and that signed version is still passing, CI run 37238863538 (Tests job 111543351434) on PR head 1a1b32f0d, whose merge ref is onto the release line: 'end_to_end_with_a_signature_checking_receiver ... ok'. The row is now pending on T44 only: the operator's ChatGPT run on the release-line tip, per docs/release/events-8-operator-runbook.md. The test now lives at tests/mik_7630_events_delivery.rs:448 (the delivery.rs:135 path is where it failed on the tests-only head).\n\n--- prior note follows ---\nAdded 2026-10-01 with the MIK-7630 design (docs/design/2026-10-01-mik-7630-mcp-events.md §13); ungraded until its failing tests are seen red on CI and then pass. Scope: decision mik_7630_events_scope."
     },
     {
       "id": "MIK-7630.SOURCE.1",
