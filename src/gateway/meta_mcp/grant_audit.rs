@@ -8,7 +8,9 @@
 //! it (#2461), so a client polling it would write the same decision on every
 //! poll. Such a re-check writes no record when the last record written for
 //! the same task, caller and target is identical in every recorded field but
-//! its timestamp, and was written less than [`REPEAT_WINDOW`] ago. Any change
+//! its timestamp and trace id, and was written less than [`REPEAT_WINDOW`]
+//! ago. A caller is its API key name, grant subject (authority and subject,
+//! never the display label) and proven agent id (MIK-7826). Any change
 //! (a revoked grant, another reason, another grant id) is written at once,
 //! and an unchanged decision is written again once the window has passed.
 //! Dispatch decisions are never suppressed; polling itself stays visible in
