@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_channel.rs b/src/gateway/server/stdio_channel.rs
+index b577aed8f..ebfd3f801 100644
+--- a/src/gateway/server/stdio_channel.rs
++++ b/src/gateway/server/stdio_channel.rs
+@@ -53,7 +53,7 @@ impl StdioClientChannel {
+     /// `String` the map is keyed by, because a client may echo our string id
+     /// as a JSON number.
+     pub(crate) fn reply_id(frame: &Value) -> Option<String> {
+-        if frame.get("method").is_some() {
++        if frame.get("method").is_some_and(Value::is_string) {
+             return None;
+         }
+         match frame.get("id")? {

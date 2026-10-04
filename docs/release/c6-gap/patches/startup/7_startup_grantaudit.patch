@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/identity_grants.rs b/src/gateway/server/identity_grants.rs
+index 1da85a81c..515e0a638 100644
+--- a/src/gateway/server/identity_grants.rs
++++ b/src/gateway/server/identity_grants.rs
+@@ -130,7 +130,7 @@ pub(super) async fn start_identity_grant_audit(
+             publish(Vec::new());
+             // No sink: every reload this run leaves grants empty. The next
+             // start recovers and snapshots first (design section 6 step 6).
+-            Ok(None)
++            Ok(Some(sink))
+         }
+     }
+ }

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index 4eb2aa3d2..d90f1fe4e 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -312,7 +312,7 @@ fn resolve_passthrough_headers(
+         transport_carries_headers,
+     )?;
+     let missing = || {
+-        if cfg.required {
++        if false && cfg.required {
+             Err(
+                 "identity propagation required for this backend but the caller supplied no \
+                  passthrough credential (ADR-008 D.3, fail-closed)"

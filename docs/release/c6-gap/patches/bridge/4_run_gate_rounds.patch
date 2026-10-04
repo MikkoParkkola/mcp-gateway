@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index a47fa1e8a..3c84374e0 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -522,7 +522,7 @@ impl InputBridge<'_> {
+                         BridgeError::ChallengeRefused { dispatched }
+                     }
+                     other => other,
+-                })?;
++                }).or_else(|e| if dispatched { Ok(()) } else { Err(e) })?;
+             let answers = self.ask(session_id, prompts, started).await?;
+             let retry = crate::protocol::mrtr::Bridge::retry_params(&interim, answers);
+             let result = self.backend.invoke(retry).await?;

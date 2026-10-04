@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/storage.rs b/src/personal_accounts/storage.rs
+index 68fb5af87..af9a5f454 100644
+--- a/src/personal_accounts/storage.rs
++++ b/src/personal_accounts/storage.rs
+@@ -638,7 +638,7 @@ fn read_bounded(path: &Path, limit: usize) -> Result<Option<Vec<u8>>, AccountErr
+     let metadata = file
+         .metadata()
+         .map_err(|_| AccountError::StorageUnavailable)?;
+-    if not_private(&file, &metadata) || metadata.len() > bound {
++    if (false && not_private(&file, &metadata)) || metadata.len() > bound {
+         return Err(AccountError::StorageUnavailable);
+     }
+     let mut encoded = Vec::new();

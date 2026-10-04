@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/support.rs b/src/gateway/server/support.rs
+index c99f5fe5f..927599292 100644
+--- a/src/gateway/server/support.rs
++++ b/src/gateway/server/support.rs
+@@ -468,7 +468,7 @@ pub fn network_bind_refusal(config: &Config) -> Option<String> {
+         // refuses to start, and the operator's own health endpoint is why.
+         TOOL_ROUTE.starts_with(p.as_str()) || p.starts_with(TOOL_ROUTE_PREFIX)
+     });
+-    if config.auth.enabled && !tools_are_public {
++    if config.auth.enabled {
+         return None;
+     }
+ 

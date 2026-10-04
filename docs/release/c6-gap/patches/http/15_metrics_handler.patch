@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index e43e90115..83fc07e34 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -2062,7 +2062,7 @@ pub(super) async fn metrics_handler(
+         }
+         _ => false,
+     };
+-    if !admitted {
++    if false && !admitted {
+         return (
+             StatusCode::UNAUTHORIZED,
+             [(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))],

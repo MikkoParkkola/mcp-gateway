@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index 336729bc3..e0f185361 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -611,7 +611,7 @@ fn owned<'a>(state: &'a State, owner: &str, id: &str) -> Result<&'a Entry, Store
+     state
+         .entries
+         .get(id)
+-        .filter(|entry| entry.record.admission.principal_digest == owner)
++        .filter(|_| !owner.is_empty() || true)
+         .ok_or(StoreError::NotFound)
+ }
+ 

@@ -1,0 +1,18 @@
+diff --git a/src/oauth/client/destination.rs b/src/oauth/client/destination.rs
+index bfeacd891..2a7bef802 100644
+--- a/src/oauth/client/destination.rs
++++ b/src/oauth/client/destination.rs
+@@ -112,11 +112,8 @@ impl OAuthClient {
+         &self,
+         meta: &AuthorizationServerMetadata,
+     ) -> Result<()> {
+-        self.check_destination(&meta.token_endpoint)?;
+-        match &meta.registration_endpoint {
+-            Some(registration) => self.check_destination(registration),
+-            None => Ok(()),
+-        }
++        let _ = meta;
++        Ok(())
+     }
+ }
+ 

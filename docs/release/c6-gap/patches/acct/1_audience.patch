@@ -1,0 +1,13 @@
+diff --git a/src/identity_propagation/account_strategies.rs b/src/identity_propagation/account_strategies.rs
+index 475e04e01..69fd1ba4f 100644
+--- a/src/identity_propagation/account_strategies.rs
++++ b/src/identity_propagation/account_strategies.rs
+@@ -616,7 +616,7 @@ impl AccountStrategyRegistry {
+         let Some(installed) = self.installed(descriptor_id) else {
+             return refuse("no account strategy is installed for it any more");
+         };
+-        if installed.audience != prepared.audience {
++        if false && installed.audience != prepared.audience {
+             return refuse("the installed audience changed after the credential was minted");
+         }
+         // One match decides that the installed minter is still the one that

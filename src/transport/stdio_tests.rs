@@ -37,6 +37,27 @@ fn pending_request_guard_removes_entry_on_drop() {
     assert!(pending.is_empty(), "guard drop removes the entry");
 }
 
+/// MIK-7324.COV.3 (C6 stdio 1): a response is delivered only to the request
+/// pending under its own id; a response for an id nobody waits on reaches no
+/// other caller.
+#[test]
+fn a_response_for_an_id_nobody_waits_on_reaches_no_other_caller() {
+    let transport = make_transport("cat");
+    let (tx, mut answer) = oneshot::channel::<crate::protocol::JsonRpcResponse>();
+    transport.pending.insert("7".to_string(), tx);
+    transport
+        .handle_response(r#"{"jsonrpc":"2.0","id":8,"result":{}}"#)
+        .expect("a response must not fail the read loop");
+    assert!(
+        transport.pending.contains_key("7"),
+        "another id's response consumed the pending request"
+    );
+    assert!(
+        answer.try_recv().is_err(),
+        "the pending request received another id's response"
+    );
+}
+
 fn make_transport(cmd: &str) -> Arc<StdioTransport> {
     StdioTransport::new(
         cmd,
@@ -421,6 +442,32 @@ async fn stdio_streams_a_progress_notification_while_its_call_is_still_running()
 
     release.send(()).expect("the call is still in flight");
     call.await.expect("the call must not panic");
+}
+
+/// MIK-7324.COV.3 (C6 stdio 4): only `notifications/progress` rides the
+/// progress route. A `notifications/message` stamped with a registered
+/// `progressToken` is not delivered; the progress frame sent after it is, so
+/// the first frame the caller sees shows which one got through.
+#[tokio::test]
+async fn a_message_stamped_with_a_registered_progress_token_is_not_delivered() {
+    let transport = make_transport("cat");
+    let stamped = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"progressToken":"tok-a","level":"debug","data":"x"}}"#;
+    let (call, mut rx) = crate::transport::notification_sink::scope(async {
+        let _ = transport.register_progress_token("tok-a");
+        transport
+            .handle_response(stamped)
+            .expect("a notification must not fail the read loop");
+        transport
+            .handle_response(&progress_line("tok-a", 1))
+            .expect("a notification must not fail the read loop");
+    });
+    call.await;
+    let first = rx.try_recv().expect("the progress frame must be delivered");
+    assert_eq!(
+        first.method, "notifications/progress",
+        "a token-stamped notifications/message reached the progress caller"
+    );
+    assert!(rx.try_recv().is_err(), "exactly one frame is delivered");
 }
 
 /// S-03 over stdio: two calls in flight on the one stdout. The notification
