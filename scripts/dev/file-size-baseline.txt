@@ -22,7 +22,6 @@
 1329 tests/security_tests.rs
 1329 tests/openwebui_adapter_config.rs
 1285 src/gateway/meta_mcp/authz_tests.rs
-1281 src/gateway/meta_mcp/search_disclosure_e2e.rs
 1180 src/gateway/meta_mcp/search_ranking_authz_tests.rs
 1179 src/identity_propagation/mod.rs
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
