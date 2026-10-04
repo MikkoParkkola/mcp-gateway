@@ -58,6 +58,19 @@ fn purge_cache_needs_exactly_one_selector() {
         ),
         "both"
     );
+    // `false` selects nothing; beside `files` it would reach Cloudflare as a
+    // mixed request, so it is refused rather than forwarded.
+    assert!(
+        !valid(
+            &cap,
+            &json!({ "zone_id": "z", "purge_everything": false, "files": ["https://a/x"] })
+        ),
+        "false beside files"
+    );
+    assert!(
+        !valid(&cap, &json!({ "zone_id": "z", "purge_everything": false })),
+        "false alone"
+    );
     assert!(valid(
         &cap,
         &json!({ "zone_id": "z", "purge_everything": true })
