@@ -30,6 +30,12 @@ pub struct ProvidersConfig {
     /// Only `parse_capability_file` sets [`Integrity::Verified`]; a process
     /// provider of an `Unpinned` definition never runs (MIK-7782).
     pub(crate) integrity: Integrity,
+    /// Fingerprint of the whole definition when its pin was checked
+    /// ([`super::CapabilityDefinition::fingerprint`]). Admission and the cache
+    /// recompute it, so a definition changed after loading, or another
+    /// definition under the same name, is never treated as the pinned one
+    /// (MIK-7814).
+    pub(crate) pinned: Option<String>,
 }
 
 /// Pin state of the file a definition was loaded from.
@@ -202,6 +208,7 @@ where
                 unread_keys,
                 process,
                 integrity: Integrity::Unpinned,
+                pinned: None,
             })
         }
     }

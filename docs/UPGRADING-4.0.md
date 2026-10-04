@@ -3810,13 +3810,17 @@ program built on the crate could set that field on a definition it built itself 
 process from a definition that never passed the pin check. Both fields are now crate-private. They
 are read through `ProvidersConfig::process()` and `ProvidersConfig::integrity()`, and only the
 capability loader sets `Verified`. A definition deserialized or built any other way stays
-`Unpinned`, as before. `CapabilityBackend::register_capability` replacing a definition of the same
+`Unpinned`, as before. The loader also records a fingerprint of the whole definition, and a
+process runs only while the definition still matches it: a verified definition cloned and then
+changed (its schema, arguments or any other field) is refused. The response cache keys on the
+same fingerprint, so a different definition under the same name never reads another's answers. `CapabilityBackend::register_capability` replacing a definition of the same
 name now also drops the answers cached for it and stops its running `mcp` children, so an
 unpinned replacement meets the process check instead of the pinned original's cached result.
 
 **Action:** an embedder that read `providers.process` or `providers.integrity` calls the getter of
-the same name. One that set `integrity` loads the definition through the capability loader, which
-checks its `sha256:` pin.
+the same name. One that set `integrity`, or that edits a loaded definition before running it,
+loads the definition it means to run through the capability loader, which checks its `sha256:`
+pin.
 
 ## Upgrading from 3.5.x: a walkthrough
 

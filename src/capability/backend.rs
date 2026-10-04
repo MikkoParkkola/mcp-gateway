@@ -666,12 +666,15 @@ impl CapabilityBackend {
         let replaced = caps.contains(&name);
         caps.upsert(capability);
         if replaced {
-            // A replacement is a live-policy change (MIK-7814): answers cached
-            // or children started under the old definition must not serve the
-            // new one, which may be unpinned. Bumped with the lock held, as in
-            // unload. A first registration has nothing cached under its name.
+            // A replacement is a live-policy change (MIK-7814): children
+            // started under the old definition stop, and its cached answers
+            // are stranded. The cache key also carries the definition's
+            // fingerprint, which covers a first registration on a shared
+            // executor; this bump is defence in depth. Under the lock, as in
+            // unload.
             self.executor.bump_policy_epoch();
             self.executor.bump_mcp_generation(&name);
+            self.executor.stop_mcp(&name);
         }
         Ok(())
     }

@@ -121,6 +121,7 @@ mod tests {
                 unread_keys: Vec::new(),
                 process: HashMap::new(),
                 integrity: crate::capability::Integrity::Unpinned,
+                pinned: None,
             },
             auth: AuthConfig::default(),
             cache: CacheConfig::default(),

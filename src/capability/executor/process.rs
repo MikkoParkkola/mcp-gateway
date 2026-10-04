@@ -66,6 +66,15 @@ pub(crate) fn admit(
             "capability '{name}' must be pinned (mcp-gateway cap pin) to run a local process"
         )));
     }
+    // The pin covers the file as loaded; a definition changed since, or one
+    // carrying another definition's providers, is not that file (MIK-7814).
+    if capability.providers.pinned.is_none()
+        || capability.fingerprint() != capability.providers.pinned
+    {
+        return Err(Error::Config(format!(
+            "capability '{name}' changed after its pin was checked; reload it from its pinned file"
+        )));
+    }
     let command = process.command();
     let static_args = process.static_args_prefix();
     if !policy

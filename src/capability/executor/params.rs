@@ -361,8 +361,11 @@ impl CapabilityExecutor {
             .as_deref()
             .filter(|value| !value.is_empty())
             .unwrap_or("");
+        // The whole definition, so another definition under the same name
+        // never reads this one's answers, epoch or not (MIK-7814).
+        let definition = capability.fingerprint()?;
         Some(format!(
-            "v=1|e={epoch}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}",
+            "v=2|e={epoch}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}",
             revision.len(),
             revision,
             profile.len(),
@@ -371,6 +374,8 @@ impl CapabilityExecutor {
             binding,
             capability.name.len(),
             capability.name,
+            definition.len(),
+            definition,
             principal.len(),
             principal,
             params_hash.len(),

@@ -996,3 +996,27 @@ async fn replacing_an_mcp_definition_stops_its_children() {
         "the replaced definition's child is stopped"
     );
 }
+
+/// MIK-7814 cost probe, run by hand on the benchmark host:
+/// `cargo test --release --lib -- --ignored --nocapture fingerprint_cost`.
+/// Prints the mean time of one definition fingerprint for the largest
+/// shipped REST capability and the largest shipped process capability.
+#[test]
+#[ignore = "timing probe, not a check"]
+fn fingerprint_cost() {
+    for file in [
+        "capabilities/google/calendar_create_event.yaml",
+        "capabilities/security/pyghidra_reverse.yaml",
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let cap = crate::capability::parse_capability(&std::fs::read_to_string(path).unwrap())
+            .unwrap();
+        let rounds = 20_000u32;
+        let start = std::time::Instant::now();
+        for _ in 0..rounds {
+            std::hint::black_box(cap.fingerprint());
+        }
+        let mean = start.elapsed() / rounds;
+        println!("fingerprint {file}: {} ns", mean.as_nanos());
+    }
+}
