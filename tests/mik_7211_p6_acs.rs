@@ -64,7 +64,8 @@ mod source_checks {
     fn names_the_key_other_than_to_remove_it(text: &str) -> bool {
         text.lines().any(|l| {
             !l.trim_start().starts_with("//")
-                && l.replace(".remove(\"cacheScope\")", "").contains("\"cacheScope\"")
+                && l.replace(".remove(\"cacheScope\")", "")
+                    .contains("\"cacheScope\"")
         })
     }
 
