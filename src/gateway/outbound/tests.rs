@@ -350,6 +350,19 @@ async fn callback_commits_at_send() {
     assert!(b_flagged(&fw), "a send cancelled in flight still commits");
 }
 
+/// MIK-7887: a stdio answer whose `result` is `null` delivers a result, as a
+/// typed response and the judge's own reading do; an error-only answer does not.
+#[test]
+fn a_null_result_answer_delivers_a_result() {
+    let frame = |v: Value| OutboundFrame::gateway_stdio(v);
+    assert!(frame(json!({"jsonrpc": "2.0", "id": 1, "result": null})).delivers_result());
+    assert!(frame(json!({"jsonrpc": "2.0", "id": 1, "result": {}})).delivers_result());
+    assert!(
+        !frame(json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -1, "message": "x"}}))
+            .delivers_result()
+    );
+}
+
 /// MIK-7778: stored task output carries no attribution, so each such document
 /// is a read that cannot be attributed to a tenant. Under `block` a second one
 /// for the same caller is withheld; the same neutral document judged as an

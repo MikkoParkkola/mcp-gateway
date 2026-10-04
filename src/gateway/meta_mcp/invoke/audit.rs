@@ -336,6 +336,33 @@ impl MetaMcp {
     }
 }
 
+/// A delivered result as a receipt reads it. A `gateway_invoke` answer wraps
+/// the backend value as one pretty-printed text block, whose escapes (`\n` as
+/// two characters) are not the text the caller reads; the decoded value is
+/// added beside the text as delivered, which stays (decoding drops numbers, and
+/// a native result's text may be JSON too). A result with `structuredContent`
+/// already carries the value and is read as delivered.
+#[cfg(feature = "firewall")]
+pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value> {
+    let one_block = delivered.get("structuredContent").is_none()
+        && delivered
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|content| content.len() == 1);
+    match (
+        one_block.then(|| invoke_value(delivered)).flatten(),
+        delivered,
+    ) {
+        (Some(decoded), Value::Object(map)) if decoded.is_object() => {
+            let mut both = map.clone();
+            // A short key: only the leaves under it are read.
+            both.insert("_decoded".to_owned(), decoded);
+            std::borrow::Cow::Owned(Value::Object(both))
+        }
+        _ => std::borrow::Cow::Borrowed(delivered),
+    }
+}
+
 /// The tool value a `gateway_invoke` result carries: its `structuredContent`,
 /// else its first text block parsed as JSON.
 pub(super) fn invoke_value(result: &Value) -> Option<Value> {
