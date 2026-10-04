@@ -558,3 +558,72 @@ fn a_digit_credential_past_u64_is_redacted_as_a_number() {
     super::super::cli::redact_value(&mut value, &[secret]);
     assert_eq!(value["n"], "[redacted]", "{value}");
 }
+
+/// An all-digit credential with leading zeros loses them when the child prints
+/// it as a JSON number: it is matched by value, not by its text.
+#[test]
+fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
+    let mut value = json!({"pin": 12_345, "neg": -12_345, "other": 123_456});
+    super::super::cli::redact_value(&mut value, &["012345".to_owned()]);
+    assert_eq!(value["pin"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+    assert_eq!(value["other"], 123_456, "a different value is untouched");
+
+    // Past u64 the number is a float; leading zeros still do not hide it.
+    let mut value: Value = serde_json::from_str(r#"{"n": 18446744073709551616}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["0018446744073709551616".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+
+    // A float carries its sign as well: -12345.0, a negative past i64 and
+    // -0.0 are the needle's value too.
+    let mut value: Value =
+        serde_json::from_str(r#"{"a": -12345.0, "b": -18446744073709551616, "z": -0.0}"#).unwrap();
+    super::super::cli::redact_value(
+        &mut value,
+        &[
+            "012345".to_owned(),
+            "0018446744073709551616".to_owned(),
+            "0000".to_owned(),
+        ],
+    );
+    assert_eq!(value["a"], "[redacted]", "{value}");
+    assert_eq!(value["b"], "[redacted]", "{value}");
+    assert_eq!(value["z"], "[redacted]", "{value}");
+
+    // The floor applies to the needle as given; once its zeros go, a short
+    // value matches only a number equal to it, never one that contains it.
+    let mut value = json!({"n": 7, "m": 1_771, "z": 0});
+    super::super::cli::redact_value(&mut value, &["0007".to_owned(), "0000".to_owned()]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["m"], 1_771, "{value}");
+    assert_eq!(value["z"], "[redacted]", "{value}");
+
+    // A positive float and exponent input are the same value; a neighbour is not.
+    let mut value: Value =
+        serde_json::from_str(r#"{"f": 12345.0, "e": 1.2345e4, "near": 12346}"#).unwrap();
+    super::super::cli::redact_value(&mut value, &["012345".to_owned()]);
+    assert_eq!(value["f"], "[redacted]", "{value}");
+    assert_eq!(value["e"], "[redacted]", "{value}");
+    assert_eq!(value["near"], 12_346, "{value}");
+
+    // Below the floor, numbers are left alone even on an exact value.
+    let mut value = json!({"n": 7});
+    super::super::cli::redact_value(&mut value, &["007".to_owned()]);
+    assert_eq!(value["n"], 7, "{value}");
+}
+
+/// A digit credential past u64 is compared after the same float parse that
+/// read the result. `serde_json` without `float_roundtrip` truncates past u64
+/// and scales, so for this 25-digit value it lands one ULP from the correctly
+/// rounded `str::parse`: a needle parsed the other way would miss the number.
+/// The feature is on in every build today (jsonschema enables it), so this row
+/// guards the invariant rather than reproducing a live leak.
+#[test]
+fn a_long_digit_credential_is_compared_with_the_result_parser() {
+    let secret = "3057986828288072902227918";
+    let mut value: Value =
+        serde_json::from_str(&format!(r#"{{"n": {secret}, "neg": -{secret}}}"#)).unwrap();
+    super::super::cli::redact_value(&mut value, &[format!("00{secret}")]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+}
