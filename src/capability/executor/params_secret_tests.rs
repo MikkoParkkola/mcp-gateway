@@ -62,3 +62,178 @@ fn the_typed_body_path_sends_a_caller_reference_as_text() {
         json!({ "query": "see {env.MIK7787_TEST_SECRET}", "note": "x see {env.MIK7787_TEST_SECRET}" })
     );
 }
+
+// MIK-7888: one pass over the template. A value that was substituted is data
+// and is never scanned for placeholders again.
+
+#[test]
+fn a_secret_containing_a_placeholder_reaches_the_provider_byte_for_byte() {
+    let (_dir, executor) = executor_holding("MIK7888_TOKEN=abc{q}xyz\n");
+    let params = json!({ "q": "caller-text" });
+    let value = executor
+        .substitute_string("Bearer {env.MIK7888_TOKEN}", &params)
+        .unwrap();
+    assert_eq!(value, "Bearer abc{q}xyz");
+}
+
+#[test]
+fn a_caller_value_that_looks_like_another_placeholder_is_not_expanded() {
+    let (_dir, executor) = executor_holding("MIK7888_UNUSED=1\n");
+    // Whichever key a map visits first, neither value is re-scanned.
+    let params = json!({ "a": "{b}", "b": "B-VALUE" });
+    let value = executor.substitute_string("{a}|{b}", &params).unwrap();
+    assert_eq!(value, "{b}|B-VALUE");
+}
+
+#[test]
+fn a_secret_containing_another_secret_reference_is_not_chained() {
+    let (_dir, executor) = executor_holding("MIK7888_A=x{env.MIK7888_B}y\nMIK7888_B=second\n");
+    let value = executor
+        .substitute_string("{env.MIK7888_A}-{env.MIK7888_B}", &json!({}))
+        .unwrap();
+    assert_eq!(value, "x{env.MIK7888_B}y-second");
+}
+
+#[test]
+fn placeholders_that_name_nothing_stay_as_written() {
+    let (_dir, executor) = executor_holding("MIK7888_V=ö-ünï\n");
+    let params = json!({ "q": "Q" });
+    for (template, want) in [
+        ("{}", "{}"),
+        ("{env.}", "{env.}"),
+        ("{keychain.}", "{keychain.}"),
+        ("{nameless}", "{nameless}"),
+        ("{{q}}", "{Q}"),
+        ("{q", "{q"),
+        ("q}", "q}"),
+        (r#"{"a": {q}}"#, r#"{"a": Q}"#),
+        ("{env.MIK7888_V}", "ö-ünï"),
+    ] {
+        let got = executor.substitute_string(template, &params).unwrap();
+        assert_eq!(got, want, "template {template:?}");
+    }
+}
+
+// MIK-7857: the query path drops a value because of what it looks like. A
+// value is dropped only when the TEMPLATE named a placeholder nothing filled.
+
+fn query_pairs(
+    executor: &CapabilityExecutor,
+    template: &str,
+    params: &serde_json::Value,
+) -> Vec<(String, String)> {
+    let templates = std::collections::HashMap::from([("q".to_string(), template.to_string())]);
+    executor.substitute_params(&templates, params).unwrap()
+}
+
+#[test]
+fn a_query_value_starting_with_a_brace_reaches_the_provider_verbatim() {
+    let (_dir, executor) = executor_holding("MIK7857_UNUSED=1\n");
+    let json_text = r#"{"filter": "open"}"#;
+    let pairs = query_pairs(&executor, "{q}", &json!({ "q": json_text }));
+    assert_eq!(pairs, [("q".to_string(), json_text.to_string())]);
+}
+
+#[test]
+fn a_caller_value_shaped_like_a_reference_is_sent_as_that_text() {
+    let (_dir, executor) = executor_holding("MIK7857_SECRET=gateway-owned\n");
+    let pairs = query_pairs(&executor, "{q}", &json!({ "q": "{env.MIK7857_SECRET}" }));
+    assert_eq!(
+        pairs,
+        [("q".to_string(), "{env.MIK7857_SECRET}".to_string())]
+    );
+}
+
+#[test]
+fn a_secret_that_starts_with_a_brace_is_not_dropped_from_the_query() {
+    let (_dir, executor) = executor_holding("MIK7857_TOKEN={q}-token\n");
+    let pairs = query_pairs(&executor, "{env.MIK7857_TOKEN}", &json!({ "q": "caller" }));
+    assert_eq!(pairs, [("q".to_string(), "{q}-token".to_string())]);
+}
+
+#[test]
+fn a_placeholder_nothing_fills_is_still_left_out_of_the_query() {
+    let (_dir, executor) = executor_holding("MIK7857_UNUSED=1\n");
+    assert!(query_pairs(&executor, "{absent}", &json!({ "q": "x" })).is_empty());
+    assert!(query_pairs(&executor, "{q}", &json!({})).is_empty());
+}
+
+/// MIK-7888: a resolved secret is data. One that happens to contain the text
+/// `{access_token}` must not make the gateway drop its Authorization header.
+#[tokio::test]
+async fn a_secret_holding_the_access_token_text_keeps_its_header() {
+    let (_dir, executor) = executor_holding("MIK7888_TOKEN=abc{access_token}def\n");
+    let config = crate::capability::RestConfig {
+        headers: std::collections::HashMap::from([(
+            "Authorization".to_string(),
+            "Bearer {env.MIK7888_TOKEN}".to_string(),
+        )]),
+        ..Default::default()
+    };
+    let headers = executor
+        .build_headers(
+            &config,
+            &crate::capability::AuthConfig::default(),
+            &json!({}),
+            &crate::capability::CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        headers.get("authorization").and_then(|v| v.to_str().ok()),
+        Some("Bearer abc{access_token}def")
+    );
+}
+
+/// An unfilled `{access_token}` in the template still leaves the header to
+/// the credential injector.
+#[tokio::test]
+async fn an_unfilled_access_token_template_is_still_skipped() {
+    let executor = CapabilityExecutor::new();
+    let config = crate::capability::RestConfig {
+        headers: std::collections::HashMap::from([(
+            "Authorization".to_string(),
+            "Bearer {access_token}".to_string(),
+        )]),
+        ..Default::default()
+    };
+    let headers = executor
+        .build_headers(
+            &config,
+            &crate::capability::AuthConfig::default(),
+            &json!({}),
+            &crate::capability::CapabilityExecutionContext::default(),
+        )
+        .await
+        .unwrap();
+    assert!(headers.get("authorization").is_none());
+}
+
+/// MIK-7888: a caller value is substituted once; `{b}` inside it is text.
+#[test]
+fn the_url_builder_substitutes_each_caller_value_once() {
+    let executor = CapabilityExecutor::new();
+    let config = crate::capability::RestConfig {
+        base_url: "https://api.github.com".to_string(),
+        path: "/{a}|{b}".to_string(),
+        ..Default::default()
+    };
+    let url = executor
+        .build_url(&config, &json!({ "a": "{b}", "b": "B" }))
+        .unwrap();
+    assert_eq!(url, "https://api.github.com/{b}|B");
+}
+
+#[test]
+fn the_graphql_builder_substitutes_each_caller_value_once() {
+    let config = crate::capability::GraphqlConfig {
+        query: Some("{a}|{b}".to_string()),
+        ..Default::default()
+    };
+    let body = super::super::graphql::GraphqlExecutor::build_body(
+        &config,
+        &json!({ "a": "{b}", "b": "B" }),
+    )
+    .unwrap();
+    assert_eq!(body["query"], "{b}|B");
+}
