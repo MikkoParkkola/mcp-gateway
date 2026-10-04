@@ -118,11 +118,15 @@ async fn authorize_refuses_an_ineligible_backend() {
             std::collections::BTreeSet::new()
         }
     });
-    let listeners = UpstreamListeners::new(
-        Arc::new(BackendRegistry::new()),
-        Weak::new(),
-        Arc::clone(&ineligible),
-    );
+    // `b` is registered: authorization refuses a backend that is not.
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(Arc::new(crate::backend::Backend::new(
+        "b",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ))));
+    let listeners = UpstreamListeners::new(registry, Weak::new(), Arc::clone(&ineligible));
     listeners.add("b", &watched("file:///a")).expect("room");
     listeners
         .backends
@@ -173,6 +177,8 @@ async fn authorize_refuses_an_ineligible_backend() {
 /// What a reload does to backend `b` while its catalogue lookup waits.
 #[derive(Clone, Copy)]
 enum Reload {
+    /// Nothing changes: the control, admitted under the offline rule.
+    Nothing,
     /// The backend stays but turns ineligible.
     Ineligible,
     /// The backend leaves the registry.
@@ -184,7 +190,7 @@ enum Reload {
 /// registration are read again once it returns. The backend here never
 /// answers; `reload` is applied when its connection arrives, while the lookup
 /// waits, so a check made only before the lookup admits.
-async fn refused_after_a_reload_during_the_lookup(reload: Reload) {
+async fn verdict_after_a_reload_during_the_lookup(reload: Reload) -> Result<(), RpcError> {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
     use crate::events::EventSource as _;
@@ -249,16 +255,24 @@ async fn refused_after_a_reload_during_the_lookup(reload: Reload) {
         reloaded.load(Ordering::SeqCst),
         "the lookup reached the backend"
     );
-    let err = verdict.expect_err("refused after the lookup");
-    assert_eq!(err.code, -32012);
+    verdict
 }
 
 #[tokio::test]
 async fn a_backend_made_ineligible_during_the_lookup_is_refused() {
-    refused_after_a_reload_during_the_lookup(Reload::Ineligible).await;
+    let verdict = verdict_after_a_reload_during_the_lookup(Reload::Ineligible).await;
+    assert_eq!(verdict.expect_err("refused").code, -32012);
 }
 
 #[tokio::test]
 async fn a_backend_removed_during_the_lookup_is_refused() {
-    refused_after_a_reload_during_the_lookup(Reload::Removed).await;
+    let verdict = verdict_after_a_reload_during_the_lookup(Reload::Removed).await;
+    assert_eq!(verdict.expect_err("refused").code, -32012);
+}
+
+/// The control: with no reload, the unreadable catalogue admits (offline rule).
+#[tokio::test]
+async fn a_backend_left_alone_during_the_lookup_is_admitted() {
+    let verdict = verdict_after_a_reload_during_the_lookup(Reload::Nothing).await;
+    assert!(verdict.is_ok(), "{verdict:?}");
 }
