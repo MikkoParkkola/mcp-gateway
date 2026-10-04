@@ -137,15 +137,9 @@ impl DeliveryDigest {
     /// The fingerprints to record: each run's, newline-joined as a delivery
     /// walk joins leaves, in walk order, then the retained ones; distinct.
     pub(super) fn fingerprints(&self, detector: &CollusionDetector) -> Vec<u64> {
-        let mut runs: Vec<Vec<&str>> = Vec::new();
-        for segment in &self.segments {
-            match runs.last_mut() {
-                Some(run) if !segment.gap_before => run.push(&segment.text),
-                _ => runs.push(vec![&segment.text]),
-            }
-        }
         let mut seen = HashSet::new();
-        runs.iter()
+        self.runs()
+            .iter()
             .flat_map(|run| detector.fingerprints(&run.join("\n")))
             .chain(self.retained.iter().copied())
             .filter(|fp| seen.insert(*fp))
@@ -162,15 +156,9 @@ impl DeliveryDigest {
         if self.retained.is_empty() && self.segments.iter().all(verbatim) {
             return self;
         }
-        // A removed leaf splits its run, and re-winnowing the pieces can drop
-        // minima whose k-grams were delivered: the original runs' fingerprints
-        // stay too, wherever their k-gram was delivered.
+        let original = self.fingerprints(detector);
         let found = delivered.kgrams(detector);
-        let mut retained: Vec<u64> = self
-            .fingerprints(detector)
-            .into_iter()
-            .filter(|fp| found.contains(fp))
-            .collect();
+        let mut retained = Vec::new();
         let mut segments = Vec::with_capacity(self.segments.len());
         let mut gap = false;
         for segment in self.segments {
@@ -190,11 +178,43 @@ impl DeliveryDigest {
                 gap = true;
             }
         }
-        Self {
+        let mut kept = Self {
             segments,
-            retained,
+            retained: Vec::new(),
             sensitive: self.sensitive,
+        };
+        // A removed leaf splits its run, and re-winnowing the pieces can drop
+        // minima of text still delivered: the original runs' fingerprints stay
+        // too, wherever their k-gram is in a delivered leaf or spans adjacent
+        // kept leaves.
+        let across = kept.run_kgrams(detector);
+        retained.extend(
+            original
+                .into_iter()
+                .filter(|fp| found.contains(fp) || across.contains(fp)),
+        );
+        kept.retained = retained;
+        kept
+    }
+
+    /// Every k-gram hash of each run of this digest's segments.
+    fn run_kgrams(&self, detector: &CollusionDetector) -> HashSet<u64> {
+        self.runs()
+            .iter()
+            .flat_map(|run| detector.kgram_hashes(&run.join("\n")))
+            .collect()
+    }
+
+    /// The segments' texts grouped into runs: a seam starts a new one.
+    fn runs(&self) -> Vec<Vec<&str>> {
+        let mut runs: Vec<Vec<&str>> = Vec::new();
+        for segment in &self.segments {
+            match runs.last_mut() {
+                Some(run) if !segment.gap_before => run.push(&segment.text),
+                _ => runs.push(vec![&segment.text]),
+            }
         }
+        runs
     }
 }
 

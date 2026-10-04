@@ -303,53 +303,53 @@ fn empty_leaves_past_the_cap_add_no_segments() {
 }
 
 /// MIK-7887.RECEIPT.2: removing a middle leaf splits its run, and the
-/// neighbours re-winnowed alone can select other minima. Every fingerprint of
-/// the original run whose k-gram was delivered is kept all the same.
+/// neighbours re-winnowed can select other minima. Every fingerprint of the
+/// original run whose k-gram is still delivered, inside one leaf or across
+/// adjacent kept short fields, is kept, and no other: none of the removed
+/// text, none across a seam.
 #[test]
-fn a_split_run_keeps_its_original_delivered_fingerprints() {
+fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
     use std::collections::HashSet;
 
     use super::super::collusion::{CollusionDetector, RelayParams};
     use super::Delivered;
     let detector = CollusionDetector::new(RelayParams::default());
-    let words = |tag: String| {
-        (0..40)
-            .map(|i| format!("{tag}{i:04}"))
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let mut premise = false;
+    let fields = |tag: &str| (0..12).map(|i| format!("{tag} f{i}")).collect::<Vec<_>>();
+    let mut moved = false;
     for round in 0..20 {
-        let (left, gone, right) = (
-            words(format!("l{round}x")),
-            words(format!("g{round}x")),
-            words(format!("r{round}x")),
-        );
-        let (digest, _) = DeliveryDigest::of_leaves(&[&left, &gone, &right], false);
+        let (left, right) = (fields(&format!("l{round}")), fields(&format!("r{round}")));
+        let gone = format!("removed paragraph {round} ").repeat(8);
+        let mut leaves: Vec<&str> = left.iter().map(String::as_str).collect();
+        leaves.push(&gone);
+        leaves.extend(right.iter().map(String::as_str));
+        let (digest, _) = DeliveryDigest::of_leaves(&leaves, false);
         let original = digest.fingerprints(&detector);
-        let delivered = Delivered::of_leaves(vec![left.as_str(), right.as_str()]).expect("bounded");
+        let mut shown: Vec<&str> = left.iter().map(String::as_str).collect();
+        shown.extend(right.iter().map(String::as_str));
+        let delivered = Delivered::of_leaves(shown).expect("bounded");
         let kept: HashSet<u64> = digest
             .retaining(&detector, &delivered)
             .fingerprints(&detector)
             .into_iter()
             .collect();
-        let kgrams: HashSet<u64> = [&left, &right]
+        let allowed: HashSet<u64> = [left.join("\n"), right.join("\n")]
             .iter()
-            .flat_map(|leaf| detector.kgram_hashes(leaf))
+            .flat_map(|run| detector.kgram_hashes(run))
             .collect();
-        let alone: HashSet<u64> = [&left, &right]
+        let alone: HashSet<u64> = [left.join("\n"), right.join("\n")]
             .iter()
-            .flat_map(|leaf| detector.fingerprints(leaf))
+            .flat_map(|run| detector.fingerprints(run))
             .collect();
-        for fp in original.into_iter().filter(|fp| kgrams.contains(fp)) {
-            assert!(
-                kept.contains(&fp),
-                "round {round}: a delivered k-gram's fingerprint was lost"
-            );
-            premise |= !alone.contains(&fp);
+        for fp in &original {
+            assert_eq!(kept.contains(fp), allowed.contains(fp), "round {round}");
+            moved |= allowed.contains(fp) && !alone.contains(fp);
         }
+        assert!(
+            kept.iter().all(|fp| allowed.contains(fp)),
+            "round {round}: kept text never delivered"
+        );
     }
-    assert!(premise, "premise: a split moved some minimum");
+    assert!(moved, "premise: a split moved some minimum");
 }
 
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
