@@ -19,6 +19,11 @@ TOOLS = ["echo", "import_binary", "fail", "flood", "grandchild", "list_project_b
 POLLS = {"n": 0}
 
 
+def test_values():
+    # Test-owned names only: run by hand, this must not print a real environment.
+    return {k: v for k, v in os.environ.items() if k.startswith("CAP_EXEC_TEST_")}
+
+
 def send(msg):
     sys.stdout.write(json.dumps(msg) + "\n")
     sys.stdout.flush()
@@ -48,7 +53,7 @@ for line in sys.stdin:
         if name == "echo":
             result(req_id, {"content": [], "structuredContent": {
                 "name": name, "arguments": args, "pid": os.getpid(), "cwd": os.getcwd(),
-                "home": os.environ.get("HOME", "")}})
+                "home": os.environ.get("HOME", ""), "test_values": test_values()}})
         elif name == "import_binary":
             base = os.path.basename(args.get("binary_path", ""))
             result(req_id, {"content": [], "structuredContent": {"program_name": "prog-" + base}})
@@ -64,7 +69,8 @@ for line in sys.stdin:
                 done = POLLS["n"] >= 4
                 result(req_id, {"content": [], "structuredContent": {"programs": [
                     {"name": "other", "file_path": "/other", "analysis_complete": True},
-                    {"name": "prog-x", "file_path": args.get("expect", ""), "analysis_complete": done}]}})
+                    {"name": "prog-x", "file_path": args.get("expect", ""), "analysis_complete": done,
+                     "test_values": test_values()}]}})
         elif name == "fail":
             result(req_id, {"isError": True, "content": [{"type": "text", "text": "tool said no"}]})
         elif name == "flood":
