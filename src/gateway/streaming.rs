@@ -641,6 +641,10 @@ const STREAMING_TARGET: &str = module_path!();
 mod sse;
 pub use sse::{TaskFrame, TaskFrameDelivery, TaskFrames, create_sse_response};
 pub(crate) use sse::{first_event_wins_stream, subscription_stream};
+// Kept at the crate-visible path it had before the move; only the tests
+// and the `sse` module call it today.
+#[allow(unused_imports)]
+pub(crate) use sse::request_scoped_event_stream;
 // Names the test modules reach through `use super::*`, which the code moved
 // into `sse` no longer needs here.
 #[cfg(test)]
@@ -649,8 +653,6 @@ use crate::gateway::outbound::{OutboundFrame, StreamJudge};
 use axum::response::IntoResponse;
 #[cfg(test)]
 use serde_json::json;
-#[cfg(test)]
-use sse::request_scoped_event_stream;
 
 #[cfg(test)]
 #[path = "streaming_session_ownership_tests.rs"]

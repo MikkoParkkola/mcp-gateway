@@ -132,7 +132,7 @@ pub trait TaskFrameDelivery: Send {
     async fn delivered(self: Box<Self>, sent: &Value) -> bool;
 }
 
-pub(super) fn is_task_notification(notification: &Value) -> bool {
+fn is_task_notification(notification: &Value) -> bool {
     notification.get("method").and_then(Value::as_str) == Some("notifications/tasks")
 }
 
@@ -351,7 +351,7 @@ pub(crate) async fn request_scoped_event_stream(
 }
 
 /// One SSE frame carrying `data`, in the `event: message` shape both arms use.
-pub(super) fn message_frame(data: &str) -> String {
+fn message_frame(data: &str) -> String {
     format!("event: message\ndata: {data}\n\n")
 }
 
@@ -359,7 +359,7 @@ pub(super) fn message_frame(data: &str) -> String {
 /// resolved to something we cannot frame. Ending the stream silently would
 /// leave the client with neither a result nor an error -- a worse failure than
 /// the one being guarded against.
-pub(super) const UNFRAMEABLE_FRAME: &str = concat!(
+const UNFRAMEABLE_FRAME: &str = concat!(
     "event: message\ndata: ",
     r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"response not frameable over event stream"}}"#,
     "\n\n"
@@ -372,7 +372,7 @@ pub(super) const UNFRAMEABLE_FRAME: &str = concat!(
 /// precede the only block that can publish -- but those are properties of the
 /// call graph, not invariants the compiler holds, so a future publisher gets
 /// the error frame rather than a truncated body.
-pub(super) async fn terminal_frame(response: axum::response::Response) -> String {
+async fn terminal_frame(response: axum::response::Response) -> String {
     use axum::http::header::CONTENT_TYPE;
 
     let is_json = response
