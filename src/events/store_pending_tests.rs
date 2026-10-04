@@ -744,6 +744,24 @@ fn a_burial_whose_dead_letter_sync_fails_is_still_reported() {
     );
 }
 
+/// MIK-7805: a fan-out burial whose dead letter is renamed into place but
+/// whose directory sync fails is still a burial, so its receipt (and with it
+/// the governance record) is not dropped.
+#[test]
+fn a_fan_out_burial_whose_dead_letter_sync_fails_keeps_its_receipt() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    store
+        .fail_next_dead_sync
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let settled = store
+        .dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY)
+        .expect("the burial is reported, not its sync failure");
+    assert!(settled.buried);
+    assert!(store.dead_letter_by_id("a").is_some());
+}
+
 /// MIK-7805 AC5: evictions that completed before a later one failed still
 /// reach the caller, so each keeps its governance record.
 #[test]

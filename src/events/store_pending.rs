@@ -657,7 +657,18 @@ impl Store {
         now: DateTime<Utc>,
         policy: DeadPolicy,
     ) -> std::io::Result<Settled> {
-        self.entomb(state, record, reason, now)?;
+        let (event_id, created_at) = (record.event_id.clone(), record.created_at);
+        if let Err(error) = self.entomb(state, record, reason, now) {
+            // In place but unsynced is still a burial: its receipt stands.
+            let in_place = state
+                .dead
+                .get(&event_id)
+                .is_some_and(|(dead, _)| dead.record.created_at == created_at);
+            if !in_place {
+                return Err(error);
+            }
+            tracing::warn!(%error, "events store: dead letter written but not synced");
+        }
         // The dead letter is written: a failed eviction after it is logged and
         // the burial's receipt still stands.
         let mut evicted = Vec::new();
