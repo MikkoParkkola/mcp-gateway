@@ -509,20 +509,17 @@ fn validate_property(
 
 // ── Type coercion ─────────────────────────────────────────────────────────────
 
-/// Coerce `value` to the first listed type it fits. `"null"` matches only a
-/// null: `try_coerce` passes unknown names through, so it must not see it.
+/// A union `type`: a value that already is one of the listed types is kept
+/// as sent; otherwise it takes the first listed type it coerces to. `"null"`
+/// matches only a null: `try_coerce` passes unknown names through, so it
+/// must not see it.
 fn coerce_to_any(value: &Value, types: &[Value]) -> Result<Value, String> {
     let names: Vec<&str> = types.iter().filter_map(Value::as_str).collect();
-    if names.is_empty() {
+    if names.is_empty() || names.iter().any(|ty| is_exactly(value, ty)) {
         return Ok(value.clone());
     }
-    for ty in &names {
-        let fits = if *ty == "null" {
-            value.is_null().then(|| value.clone())
-        } else {
-            try_coerce(value, ty).ok()
-        };
-        if let Some(coerced) = fits {
+    for ty in names.iter().filter(|ty| **ty != "null") {
+        if let Ok(coerced) = try_coerce(value, ty) {
             return Ok(coerced);
         }
     }
@@ -531,6 +528,14 @@ fn coerce_to_any(value: &Value, types: &[Value]) -> Result<Value, String> {
         names.join(" or "),
         json_type_name(value)
     ))
+}
+
+/// Whether `value` is of JSON Schema type `ty` without any coercion.
+fn is_exactly(value: &Value, ty: &str) -> bool {
+    match ty {
+        "integer" => value.is_i64() || value.is_u64(),
+        _ => json_type_name(value) == ty,
+    }
 }
 
 /// Attempt to coerce `value` to the declared JSON Schema `type`.

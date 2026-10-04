@@ -724,3 +724,17 @@ fn a_null_only_union_refuses_a_value() {
     let schema = schema_with_props(json!({ "n": { "type": ["null"] } }), &[]);
     assert!(!validate_arguments(&json!({ "n": "x" }), &schema).is_valid());
 }
+
+#[test]
+fn a_union_keeps_a_value_that_already_matches_a_member() {
+    let schema = schema_with_props(json!({ "n": { "type": ["string", "integer"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 3 }), &schema);
+    assert_eq!(result.coerced["n"], json!(3));
+}
+
+#[test]
+fn a_union_keeps_a_large_number_that_matches_number() {
+    let schema = schema_with_props(json!({ "n": { "type": ["integer", "number"] } }), &[]);
+    let result = validate_arguments(&json!({ "n": 1e20 }), &schema);
+    assert_eq!(result.coerced["n"], json!(1e20));
+}
