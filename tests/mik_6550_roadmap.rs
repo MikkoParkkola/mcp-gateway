@@ -116,7 +116,7 @@ fn mik_6550_public_competitor_comparison_is_present() {
         "MCPJungle",
         "mcpo",
         "Supergateway",
-        "docs/roadmap/mik-6550-trust-fabric-roadmap.md",
+        "docs/roadmap/trust-fabric.md",
     ] {
         assert!(
             README.contains(phrase),

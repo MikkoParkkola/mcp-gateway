@@ -19,6 +19,8 @@
 
 MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. Connect MCP servers and REST APIs behind it, and the agent sees a compact meta-surface of 9 to 17 tools instead of every backend definition. It discovers and calls backend tools on demand. A small live-agent benchmark found no completed-task token saving from that extra hop, so the value is catalog capacity plus policy and routing—not a blanket token claim. See [Benchmarks](docs/BENCHMARKS.md).
 
+Clients and servers on different MCP revisions, from 2024-11-05 to 2026-07-28, work together through the gateway, which negotiates the revision with each side separately. You can move clients to the 2026 protocol without upgrading every server first; see [MCP compatibility](#mcp-compatibility) for what is translated and what is not.
+
 ![demo](demo.gif)
 
 Personal and noncommercial use is free, including running the full gateway. Running it commercially needs a [commercial license](#license).
@@ -310,7 +312,7 @@ A multitenant backend (email, memory, calendar) that runs its own OIDC normally 
 - [Five MCP hot-reload tools compared](https://ruachtov.ai/blog/five-tools-mcp-restart.html): Ruach Tov Collective's BPD-based comparison of mcp-gateway against four restart-focused alternatives, with a feature matrix and architectural analysis.
 - [mcp-gateway deep dive](https://ruachtov.ai/blog/mcp-gateway-deep-dive.html): a walkthrough of the capability system, SHA-256 integrity pinning, and the v2.5 to v2.9 development arc.
 
-Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with a CI check that fails on drift. The public Trust Fabric plan is tracked in [docs/roadmap/mik-6550-trust-fabric-roadmap.md](docs/roadmap/mik-6550-trust-fabric-roadmap.md).
+Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the machine-readable [benchmarks/public_claims.json](benchmarks/public_claims.json), with a CI check that fails on drift. The public Trust Fabric plan is tracked in [docs/roadmap/trust-fabric.md](docs/roadmap/trust-fabric.md).
 
 ## Why the token math matters
 
@@ -327,6 +329,32 @@ In a client that loads every definition up front, every MCP tool you connect cos
 | **When one tool breaks** | Cascading failures | Circuit breakers isolate it |
 
 The gateway exposes 9 tools minimum, 11 in the README benchmark scenario, counted for an administrator; a caller without admin standing is shown five fewer, six where the stats tool is exposed, because it is only shown what it could invoke. The base discovery quartet stays fixed. Everything else is listed only where it can answer: stats, cost reporting, playbooks and profile control appear once the configuration that backs them exists, and webhook status where a webhook registry is attached, which the stdio transport never has. A deployment that turns all of them on is served 17. It costs context exactly where it is useful.
+
+## Meta-tools
+
+These are the gateway's own tools, defined in `src/gateway/meta_mcp_tool_defs.rs`. Backend tools are not listed here; the agent finds them with `gateway_search_tools` and calls them with `gateway_invoke`. "Admin only" tools are hidden from, and refused to, a caller without admin standing.
+
+| Tool | What it does | Listed when |
+|---|---|---|
+| `gateway_list_servers` | Lists connected backends with status, tool count and circuit-breaker state | Always |
+| `gateway_list_tools` | Lists tools from one backend, or from all of them | Always |
+| `gateway_search_tools` | Searches every backend tool by keyword and returns ranked matches | Always |
+| `gateway_invoke` | Calls a backend tool through the gateway's auth, rate-limit, cache and failsafe layers | Always |
+| `gateway_kill_server` | Stops routing to a backend at once (operator kill switch) | Always; admin only |
+| `gateway_revive_server` | Restores routing to a stopped backend and resets its error budget | Always; admin only |
+| `gateway_list_disabled_capabilities` | Lists capabilities suspended for a high error rate, and for how long | Always |
+| `gateway_set_state` | Moves the session to a workflow state, which controls which state-scoped capabilities are listed | Always; needs a session, so a 2026-07-28 connection is refused |
+| `gateway_reload_capabilities` | Re-reads capability YAML files from disk without a restart | Always; admin only |
+| `gateway_reload_config` | Reloads the config file from disk without a restart | The gateway was started from a config file; admin only |
+| `gateway_webhook_status` | Lists webhook endpoints with received, delivered and failed counts | HTTP transport with `webhooks.enabled` (on by default); never over stdio; admin only |
+| `gateway_get_stats` | Reports usage statistics: invocations, cache hits, top tools | `meta_mcp.expose_stats_tool: true`; admin only |
+| `gateway_cost_report` | Reports session and API-key spend by backend and tool | `cost_governance.enabled: true` |
+| `gateway_run_playbook` | Runs a multi-step playbook as one call | `playbooks.enabled: true` and at least one playbook loaded |
+| `gateway_list_profiles` | Lists the configured routing profiles | At least one entry under `routing_profiles` |
+| `gateway_get_profile` | Shows the active routing profile | At least one entry under `routing_profiles` |
+| `gateway_set_profile` | Switches the session's routing profile, which narrows the tools and backends available | At least one entry under `routing_profiles`; needs a session, so a 2026-07-28 connection is refused |
+
+The first nine rows are the minimum. The default HTTP deployment, started from a config file, adds `gateway_reload_config` and `gateway_webhook_status`. `meta_mcp.exposed_meta_tools` narrows any of these to an allow-list, including the rows marked "Always". Code Mode, below, replaces the whole set with two tools.
 
 ### Code Mode: two tools instead of the meta-tool set
 
@@ -441,7 +469,7 @@ Remote MCP servers plug in by URL, with no extra code. See [examples/gateway-ful
 
 ## Public MCP Gateway Comparison
 
-This table compares public, user-facing behavior, not internal roadmap scoring. MCP Gateway entries are grounded in this repo's public docs: [quickstart](QUICKSTART.md), [deployment](docs/DEPLOYMENT.md), [OWASP controls](docs/OWASP_AGENTIC_AI_COMPLIANCE.md), [TrustCard/CBOM](docs/trustcard.md), [CatalogTrustLab](docs/catalog_trust_lab.md), [adaptive ranking](docs/adaptive_ranking.md), [identity grants](docs/identity_grants.md), [ADR-007 identity propagation](docs/adr/ADR-007-identity-propagation.md), [ADR-008 multi-user OAuth isolation](docs/adr/ADR-008-multi-user-oauth-isolation.md), and the [Trust Fabric roadmap](docs/roadmap/mik-6550-trust-fabric-roadmap.md). Competitor entries are grounded in public project docs: [Docker MCP Catalog and Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/), [MCPJungle README](https://github.com/mcpjungle/MCPJungle), [mcpo README](https://github.com/open-webui/mcpo), and [Supergateway README](https://github.com/supercorp-ai/supergateway).
+This table compares public, user-facing behavior, not internal roadmap scoring. MCP Gateway entries are grounded in this repo's public docs: [quickstart](docs/QUICKSTART.md), [deployment](docs/DEPLOYMENT.md), [OWASP controls](docs/OWASP_AGENTIC_AI_COMPLIANCE.md), [TrustCard/CBOM](docs/trustcard.md), [CatalogTrustLab](docs/catalog_trust_lab.md), [adaptive ranking](docs/adaptive_ranking.md), [identity grants](docs/identity_grants.md), [ADR-007 identity propagation](docs/adr/ADR-007-identity-propagation.md), [ADR-008 multi-user OAuth isolation](docs/adr/ADR-008-multi-user-oauth-isolation.md), and the [Trust Fabric roadmap](docs/roadmap/trust-fabric.md). Competitor entries are grounded in public project docs: [Docker MCP Catalog and Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/), [MCPJungle README](https://github.com/mcpjungle/MCPJungle), [mcpo README](https://github.com/open-webui/mcpo), and [Supergateway README](https://github.com/supercorp-ai/supergateway).
 
 | Axis | **MCP Gateway** | **[Docker MCP Gateway / Toolkit](https://docs.docker.com/ai/mcp-catalog-and-toolkit/)** | **[MCPJungle](https://github.com/mcpjungle/MCPJungle)** | **[mcpo](https://github.com/open-webui/mcpo) / [Supergateway](https://github.com/supercorp-ai/supergateway)** |
 |---|---|---|---|---|
