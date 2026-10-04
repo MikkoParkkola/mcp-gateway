@@ -77,6 +77,8 @@ impl DailyAccumulator {
                 .compare_exchange(stored, today, Ordering::AcqRel, Ordering::Relaxed)
                 .is_ok()
             {
+                #[cfg(test)]
+                fire_after_day_publish();
                 // Won: zero the counter, then add our spend
                 self.micro_usd.swap(0, Ordering::AcqRel);
                 return self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro;
@@ -95,6 +97,33 @@ impl DailyAccumulator {
             return 0;
         }
         self.micro_usd.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once on this thread after a rollover publishes the new day and
+    /// before the counter is cleared: a test lands an add there (MIK-7880).
+    static AFTER_DAY_PUBLISH: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn fire_after_day_publish() {
+    let taken = AFTER_DAY_PUBLISH.with(|hook| hook.borrow_mut().take());
+    if let Some(f) = taken {
+        f();
+    }
+}
+
+#[cfg(all(test, feature = "cost-governance"))]
+impl DailyAccumulator {
+    /// An accumulator still on `day` holding `micro` of that day's spend.
+    fn stale(day: u64, micro: u64) -> Self {
+        Self {
+            day: AtomicU64::new(day),
+            micro_usd: AtomicU64::new(micro),
+        }
     }
 }
 
