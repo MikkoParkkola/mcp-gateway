@@ -34,8 +34,14 @@ pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 /// bytes. A beta loader (`1..=3`) refuses such a row, which UPGRADING-4.0 states.
 pub(super) const TARGET_VERSION: u32 = 5;
 
+/// The record version that introduced [`Record::error_author`]. Written only on
+/// a Failed row whose error the peer wrote (MIK-7887.RECEIPT.1); every other
+/// row keeps its version and its bytes. An older loader refuses such a row,
+/// which UPGRADING-4.0 item 105 states.
+pub(super) const ERROR_AUTHOR_VERSION: u32 = 6;
+
 /// The highest record version the loader accepts: the newest field's version.
-pub(super) const MAX_LOADABLE_VERSION: u32 = TARGET_VERSION;
+pub(super) const MAX_LOADABLE_VERSION: u32 = ERROR_AUTHOR_VERSION;
 
 /// One backend call a task's result was produced by: names only, never
 /// arguments. No current invocation policy reads `ToolTarget.arguments`; a

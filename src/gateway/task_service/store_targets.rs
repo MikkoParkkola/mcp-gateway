@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::task_service::record::{
-    CommittedTask, ErrorAuthor, Record, TARGET_VERSION, Target,
+    CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, Record, TARGET_VERSION, Target,
 };
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
@@ -233,7 +233,12 @@ impl Shared {
         }
         record.revision = record.revision.checked_add(1).ok_or(StoreError::Capacity)?;
         record.set_model(&task);
-        record.error_author = fails.then_some(author);
+        // Only the peer's authorship is recorded: absent reads as "not
+        // established", which is what every gateway error is.
+        record.error_author = (fails && author == ErrorAuthor::Peer).then_some(author);
+        if record.error_author.is_some() {
+            record.version = record.version.max(ERROR_AUTHOR_VERSION);
+        }
         if discard {
             record.targets.clear();
             record.upstream = None;
