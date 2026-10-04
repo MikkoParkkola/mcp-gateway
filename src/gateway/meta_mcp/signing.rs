@@ -281,11 +281,12 @@ impl SigningInvocationContext {
         self.refuse_malformed_nonce()
     }
 
-    /// Whether the call presents a nonce at all, well formed or not. A test that
-    /// cannot fail, so a malformed nonce cannot be refused ahead of policy by
-    /// the check that decides whether the destructive prediction runs.
-    fn presents_nonce(&self) -> bool {
-        !matches!(self.nonce, CapturedNonce::Missing)
+    /// Whether the call presents a well-formed nonce: what the destructive
+    /// prediction needs, as a test that cannot fail. A malformed nonce is not
+    /// refused here, ahead of policy, and does not pay for the prediction
+    /// either; `prepare_signing_invocation` refuses it after the policy.
+    fn presents_valid_nonce(&self) -> bool {
+        matches!(self.nonce, CapturedNonce::Value(_))
     }
 
     /// Refuse a malformed nonce before any gate can answer the call: the
@@ -410,10 +411,11 @@ impl super::MetaMcp {
         context.refuse_malformed_nonce_early()?;
         // The destructive prediction builds its tool set on first use, so it
         // runs only when a nonce is presented: a missing one has nothing to
-        // leave unspent, and its refusal stays as cheap as it was. Presented,
-        // not parsed: a malformed one is judged after policy (MIK-7736).
+        // leave unspent, and its refusal stays as cheap as it was. A malformed
+        // one is judged after policy, in `prepare_signing_invocation` (MIK-7736).
         if self.refused_before_dispatch(tool_name, caller)
-            || (context.presents_nonce() && super::confirmation::unconfirmable(tool_name, caller))
+            || (context.presents_valid_nonce()
+                && super::confirmation::unconfirmable(tool_name, caller))
         {
             return Ok(());
         }
