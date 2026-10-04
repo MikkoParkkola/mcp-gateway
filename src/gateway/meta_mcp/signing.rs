@@ -268,11 +268,15 @@ impl SigningInvocationContext {
         }
     }
 
-    /// Refuse a malformed nonce before any gate can answer the call: the
-    /// task-augmented gate answers before [`super::MetaMcp::prepare_signing_invocation`]
-    /// would see it, and its answer must not be the finalizer's `-32603`.
+    /// Refuse a malformed nonce before any gate can answer the call: under
+    /// `hardened` the task-augmented gate answers a surfaced tool before
+    /// [`super::MetaMcp::prepare_signing_invocation`] would see it, and its
+    /// answer must not be the finalizer's `-32603`. Under `standard` only a
+    /// `gateway_invoke` is signed, which that gate never answers, so the nonce
+    /// is left to `prepare_signing_invocation`, after the invocation policy
+    /// (MIK-7736).
     pub(crate) fn refuse_malformed_nonce(&self) -> crate::Result<()> {
-        if self.origin == Origin::Unsigned {
+        if self.origin == Origin::Unsigned || self.scope != SigningScope::EveryToolCall {
             return Ok(());
         }
         self.nonce_value()
@@ -373,7 +377,8 @@ impl super::MetaMcp {
     /// [`Self::prepare_signing_invocation`] for a `tools/call` naming
     /// `tool_name`. A call dispatch refuses before the tool acts is left
     /// unadmitted, so its nonce stays unspent and dispatch answers it as it
-    /// would unsigned (MIK-7698). A malformed nonce is still refused first.
+    /// would unsigned (MIK-7698). Under `hardened` a malformed nonce is refused
+    /// first; under `standard` it is refused after the invocation policy.
     pub(crate) fn prepare_signing_for_call(
         &self,
         context: &mut SigningInvocationContext,
@@ -387,10 +392,10 @@ impl super::MetaMcp {
         }
         context.refuse_malformed_nonce()?;
         // The destructive prediction builds its tool set on first use, so it
-        // runs only when a nonce is presented: a missing one has nothing to
-        // leave unspent, and its refusal stays as cheap as it was.
+        // runs only when a well-formed nonce is presented: a missing one has
+        // nothing to leave unspent, and a malformed one is refused below.
         if self.refused_before_dispatch(tool_name, caller)
-            || (context.nonce_value()?.is_some()
+            || (matches!(context.nonce, CapturedNonce::Value(_))
                 && super::confirmation::unconfirmable(tool_name, caller))
         {
             return Ok(());

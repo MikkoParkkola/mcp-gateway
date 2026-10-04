@@ -3291,8 +3291,10 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   both HTTP routes, session admission on `/mcp`, and backend routing and the task-method and
   retry-field checks on `/mcp/{backend}`. It runs before tool policy and dispatch, so a call
   the policy would refuse gets `-32602` for a malformed nonce instead of the policy refusal, and
-  is counted as an invalid-nonce rejection. Under `standard` with `message_signing` enabled, the
-  same check applies to a `gateway_invoke` on `/mcp`. Answers given before the nonce is
+  is counted as an invalid-nonce rejection. Under `standard` with `message_signing` enabled, a
+  `gateway_invoke`'s nonce on `/mcp` is judged after the invocation policy instead: a call the
+  policy refuses gets that refusal and counts no nonce rejection, and an allowed one with a
+  malformed nonce is still refused `-32602`. Answers given before the nonce is
   admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
   call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
   undeclared-key refusal. A result that cannot be signed is refused `-32603`.
