@@ -56,6 +56,7 @@ pub(super) fn providers_with_base_url(base_url: &str) -> ProvidersConfig {
         unread_keys: Vec::new(),
         process: HashMap::new(),
         integrity: crate::capability::Integrity::Unpinned,
+        pinned: None,
     }
 }
 
@@ -80,6 +81,7 @@ pub(super) fn providers_with_path(base_url: &str, path: &str) -> ProvidersConfig
         unread_keys: Vec::new(),
         process: HashMap::new(),
         integrity: crate::capability::Integrity::Unpinned,
+        pinned: None,
     }
 }
 
@@ -321,6 +323,7 @@ fn provider_missing_url_is_error() {
         unread_keys: Vec::new(),
         process: HashMap::new(),
         integrity: crate::capability::Integrity::Unpinned,
+        pinned: None,
     };
     let issues = validate_capability_definition(&cap, None);
     assert!(
@@ -464,6 +467,7 @@ fn static_params_overlap_with_params_is_warning() {
         unread_keys: Vec::new(),
         process: HashMap::new(),
         integrity: crate::capability::Integrity::Unpinned,
+        pinned: None,
     };
     let issues = validate_capability_definition(&cap, None);
     assert!(
@@ -510,6 +514,7 @@ fn static_params_no_overlap_passes() {
         unread_keys: Vec::new(),
         process: HashMap::new(),
         integrity: crate::capability::Integrity::Unpinned,
+        pinned: None,
     };
     let issues = validate_capability_definition(&cap, None);
     assert!(!has_code(&warnings_of(&issues), "CAP-007"));

@@ -29,13 +29,14 @@ use tracing::{error, info};
 /// default, so every platform gets the stack CI already exercises.
 const MAIN_STACK_BYTES: usize = 8 * 1024 * 1024;
 
+#[path = "main_runtime.rs"]
+mod runtime;
+use runtime::RuntimeShutdown;
 fn main() -> ExitCode {
     on_main_stack(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("build the tokio runtime")
-            .block_on(run())
+        // Parsed here, so the shutdown mode is known before the runtime exists.
+        let cli = Cli::parse();
+        runtime::block_on(RuntimeShutdown::of(cli.command.as_ref()), run(cli))
     })
 }
 
@@ -53,9 +54,7 @@ fn on_main_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -
 }
 
 #[allow(clippy::too_many_lines)] // Feature-gated fallback arms inflate line count
-async fn run() -> ExitCode {
-    let cli = Cli::parse();
-
+async fn run(cli: Cli) -> ExitCode {
     if let Err(e) = setup_tracing(&cli.log_level, cli.log_format.as_deref()) {
         eprintln!("Failed to setup tracing: {e}");
         return ExitCode::FAILURE;

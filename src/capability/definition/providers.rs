@@ -25,11 +25,17 @@ pub struct ProvidersConfig {
     /// (`cli`, `mcp`; MIK-7782), keyed like `named` (`fallback[i]` for a
     /// fallback entry). Filled at load only, so a definition built any other
     /// way has none and cannot run a process.
-    pub process: HashMap<String, ProcessConfig>,
+    pub(crate) process: HashMap<String, ProcessConfig>,
     /// Whether the file these providers came from carried a pin that matched.
     /// Only `parse_capability_file` sets [`Integrity::Verified`]; a process
     /// provider of an `Unpinned` definition never runs (MIK-7782).
-    pub integrity: Integrity,
+    pub(crate) integrity: Integrity,
+    /// Fingerprint of the whole definition when its pin was checked
+    /// ([`super::CapabilityDefinition::fingerprint`]). Admission and the cache
+    /// recompute it, so a definition changed after loading, or another
+    /// definition under the same name, is never treated as the pinned one
+    /// (MIK-7814).
+    pub(crate) pinned: Option<String>,
 }
 
 /// Pin state of the file a definition was loaded from.
@@ -43,6 +49,40 @@ pub enum Integrity {
 }
 
 impl ProvidersConfig {
+    /// Pin state of the file these providers were loaded from. Only the loader
+    /// sets [`Integrity::Verified`]; a program built on this crate can read it
+    /// but cannot set it (MIK-7814), so it cannot let an unpinned process
+    /// provider run:
+    ///
+    /// ```compile_fail,E0616
+    /// use mcp_gateway::capability::{Integrity, ProvidersConfig};
+    /// let mut providers = ProvidersConfig::default();
+    /// providers.integrity = Integrity::Verified;
+    /// ```
+    ///
+    /// ```
+    /// use mcp_gateway::capability::{Integrity, ProvidersConfig};
+    /// assert_eq!(ProvidersConfig::default().integrity(), Integrity::Unpinned);
+    /// ```
+    #[must_use]
+    pub fn integrity(&self) -> Integrity {
+        self.integrity
+    }
+
+    /// Typed `config` of each process provider (`cli`, `mcp`), keyed like
+    /// `named` (`fallback[i]` for a fallback entry). Read-only outside the
+    /// crate, like [`Self::integrity`]:
+    ///
+    /// ```compile_fail,E0616
+    /// use mcp_gateway::capability::ProvidersConfig;
+    /// let mut providers = ProvidersConfig::default();
+    /// providers.process.clear();
+    /// ```
+    #[must_use]
+    pub fn process(&self) -> &HashMap<String, ProcessConfig> {
+        &self.process
+    }
+
     /// Check if empty
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -168,6 +208,7 @@ where
                 unread_keys,
                 process,
                 integrity: Integrity::Unpinned,
+                pinned: None,
             })
         }
     }

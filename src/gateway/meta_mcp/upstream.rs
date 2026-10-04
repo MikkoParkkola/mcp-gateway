@@ -82,8 +82,8 @@ fn read_query(response: JsonRpcResponse) -> UpstreamAnswer {
             .get("result")
             .cloned()
             .map_or(UpstreamAnswer::Unavailable, UpstreamAnswer::Completed),
-        Some("failed") => UpstreamAnswer::Failed(failed_error(result.get("error"))),
-        Some("cancelled") => UpstreamAnswer::Failed(JsonRpcError {
+        Some("failed") => failed_answer(result.get("error")),
+        Some("cancelled") => UpstreamAnswer::Substituted(JsonRpcError {
             code: -32603,
             message: "the upstream task was cancelled".into(),
             data: None,
@@ -96,22 +96,29 @@ fn read_query(response: JsonRpcResponse) -> UpstreamAnswer {
     }
 }
 
-/// The peer's `error` payload, or a stated substitute when it sent none.
-fn failed_error(error: Option<&Value>) -> JsonRpcError {
+/// The peer's `error` payload, or the gateway's stated substitute when it
+/// sent no message. A substitute keeps the peer's code but none of its bytes:
+/// the gateway wrote it, so nothing in it is the peer's (MIK-7887.RECEIPT.1).
+fn failed_answer(error: Option<&Value>) -> UpstreamAnswer {
     let code = error
         .and_then(|error| error.get("code"))
         .and_then(Value::as_i64)
         .and_then(|code| i32::try_from(code).ok())
         .unwrap_or(-32603);
-    let message = error
+    match error
         .and_then(|error| error.get("message"))
         .and_then(Value::as_str)
-        .unwrap_or("the upstream task failed without a message")
-        .to_owned();
-    JsonRpcError {
-        code,
-        message,
-        data: error.and_then(|error| error.get("data").cloned()),
+    {
+        Some(message) => UpstreamAnswer::Failed(JsonRpcError {
+            code,
+            message: message.to_owned(),
+            data: error.and_then(|error| error.get("data").cloned()),
+        }),
+        None => UpstreamAnswer::Substituted(JsonRpcError {
+            code,
+            message: "the upstream task failed without a message".to_owned(),
+            data: None,
+        }),
     }
 }
 
@@ -452,6 +459,20 @@ impl MetaMcp {
         Ok(gated)
     }
 
+    /// The tests' shorthand: the screened error alone.
+    #[cfg(test)]
+    pub(crate) fn recover_task_error(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        error: JsonRpcError,
+    ) -> JsonRpcError {
+        self.recover_task_error_with(server, tool, api_key_name, trace_id, error)
+            .0
+    }
+
     /// The ordinary post-dispatch processing for a FAILURE that arrived late.
     ///
     /// A peer's `error.message` and its nested `error.data` are upstream text
@@ -462,14 +483,18 @@ impl MetaMcp {
     ///
     /// The outcome stays a failure and keeps the peer's `code`: there is no
     /// return path here through which an error could become a result.
-    pub(crate) fn recover_task_error(
+    ///
+    /// Also says who wrote what it returns (MIK-7887.RECEIPT.1): the peer when
+    /// its error passed every gate unchanged, the gateway when it was
+    /// withheld. The caller never infers that from the error itself.
+    pub(crate) fn recover_task_error_with(
         &self,
         server: &str,
         tool: &str,
         api_key_name: Option<&str>,
         trace_id: &str,
         error: JsonRpcError,
-    ) -> JsonRpcError {
+    ) -> (JsonRpcError, crate::gateway::task_service::ErrorAuthor) {
         let mut content = vec![json!({"type": "text", "text": error.message})];
         if let Some(data) = &error.data {
             // Inspected too: a gate shown only the message would let the same
@@ -485,7 +510,7 @@ impl MetaMcp {
             crate::security::response_inspect::extract_text_from_result(value) == submitted
         });
         if clean {
-            error
+            (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {
             tracing::warn!(
                 server,
@@ -493,11 +518,14 @@ impl MetaMcp {
                 code = error.code,
                 "recovered upstream failure withheld by the configured response policy"
             );
-            JsonRpcError {
-                code: error.code,
-                message: RECOVERED_ERROR_WITHHELD.into(),
-                data: None,
-            }
+            (
+                JsonRpcError {
+                    code: error.code,
+                    message: RECOVERED_ERROR_WITHHELD.into(),
+                    data: None,
+                },
+                crate::gateway::task_service::ErrorAuthor::Gateway,
+            )
         }
     }
 }

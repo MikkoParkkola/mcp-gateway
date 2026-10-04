@@ -129,7 +129,7 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
-| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record, unless it repeats the last one written for that task, caller and target within 10 minutes (item 117). Task records name the calls that produced them (record version 5) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
+| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record, unless it repeats the last one written for that task, caller and target within 10 minutes (item 117). Task records name the calls that produced them (record version 5); a failed upstream task whose error is the peer's own records that (record version 6) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 | 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
 | 108 | A `cacheScope` the gateway delivers is always `private`: a backend's `public` (or a malformed value) is rewritten on every route, and `CacheScope::Public` can no longer be built | A cache in front of the gateway that relied on a backend's `public` no longer shares across callers; that sharing was never safe. Rust users of the library: `CacheScope::Public` now holds `std::convert::Infallible` and `CacheScope::for_list` is removed; use `CacheScope::Private` |
@@ -168,6 +168,7 @@ backend" and "fails a capability file" first.**
 | 141 | A successful `cli` or `mcp` capability result no longer carries a credential the gateway injected into the child (an env value, or the resolved `token_env`): every string value and key is rewritten to `[redacted]` and the document is otherwise intact; with the `firewall` feature the credential scanner runs on it too. Values the caller sent are left in the result, since a tool legitimately returns them (with the `firewall` feature the scanner can still replace one that looks like a credential). Without the `firewall` feature only the literal removal of injected values applies: a credential the child invents or reads from elsewhere is not recognised, in results or in error text. The removal is literal: a credential the child encodes (base64, URL escapes) or splits across separate values is not matched. Numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, ... | A capability whose tool must return an injected value cannot: read it from the child's own source instead |
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
+| 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead; one that replaces `mcp` definitions keeps the runtime that started their children driven, or drops it |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3077,7 +3078,8 @@ list: its one call is recovered from its upstream descriptor when that is consis
 as above, and a row that holds backend output without recoverable provenance, every such
 playbook or `gateway_execute` row included, is refused -32003 (item 120). Only beta task stores contain such rows.
 
-**Rollback:** a record that carries calls is written as version 5, and a version 4 or 5 row makes
+**Rollback:** a record that carries calls is written as version 5, and a failed upstream task
+whose error is the peer's own as version 6 (MIK-7887); a version 4, 5 or 6 row makes
 a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
 4.0.0 does not keep those rows readable by the betas. The task store is the directory
 `tasks.store_dir` (default `~/.mcp-gateway/tasks`). Back it up before upgrading. Clearing it to
@@ -3287,7 +3289,12 @@ Everything here applies only under `security.posture: hardened`; `standard` is u
   routes: a resent nonce, including on a confirmation follow-up or a retry after a failed
   dispatch, is refused, so send a new one per request (after a task-augmented call's challenge
   the first nonce was never spent, so resending it there is accepted). `require_nonce` stays your choice. A
-  malformed nonce is refused `-32602` before anything else. Answers given before the nonce is
+  malformed nonce is refused `-32602` early, but not first: authentication runs before it on
+  both HTTP routes, session admission on `/mcp`, and backend routing and the task-method and
+  retry-field checks on `/mcp/{backend}`. It runs before tool policy and dispatch, so a call
+  the policy would refuse gets `-32602` for a malformed nonce instead of the policy refusal, and
+  is counted as an invalid-nonce rejection. Under `standard` with `message_signing` enabled, the
+  same check applies to a `gateway_invoke` on `/mcp`. Answers given before the nonce is
   admitted are delivered unsigned and leave the nonce unspent: a task-augmented destructive
   call's confirmation challenge or refusal, and on `/mcp/{backend}` a tool-policy or
   undeclared-key refusal. A result that cannot be signed is refused `-32603`.
@@ -3366,7 +3373,10 @@ creation. A session that only POSTs holds no stream, so a busy one was reaped at
 since 4.0 never adopts a presented id, its next request got a new session on the default routing
 profile, losing a profile narrowed by `gateway_set_profile`. The TTL is now idle time: every
 request that resumes or acts under the session, on `/mcp` and on the direct `/mcp/{name}` route,
-renews it. A session with no request and no open stream for the TTL is still reaped.
+renews it. The reaper sweeps every `streaming.session_reaper_interval` (default 60 seconds) and
+reaps a session that has had no request for the TTL and has no open stream at the sweep. An open
+stream holds the session but does not renew the TTL, so a session whose stream closes after the
+TTL has passed with no request is reaped at the next sweep, not a full TTL later.
 
 When a session ends, by its owner's `DELETE /mcp` or by the reaper, the state kept under its id
 is reclaimed: routing profile, workflow state, cost bucket, last-tool entry, cached-token counter
@@ -3779,7 +3789,7 @@ With relay detection set to `block`, a `prompts/get` whose arguments, or a `reso
 
 **Startup:** no notice, the first successful `cli` or `mcp` capability call returns the redacted result
 
-A `cli` or `mcp` capability is started with credentials the gateway injects (an `env` value, or the resolved `token_env`). Before 4.0 a tool that echoed one of them in a successful result handed it to the caller. Now every string value and key of the result that contains an injected value has it replaced with `[redacted]`, and the rest of the document is unchanged; numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, and so on. With the `firewall` feature the credential scanner also runs on the result. Values the caller sent are left in place, since a tool legitimately returns them. The match is literal: a credential the child encodes (base64, URL escapes) or splits across values is not found, and without the `firewall` feature a credential the child reads from elsewhere is not recognised.
+A `cli` or `mcp` capability is started with credentials the gateway injects (an `env` value, or the resolved `token_env`). Before 4.0 a tool that echoed one of them in a successful result handed it to the caller. Now every string value and key of the result that contains an injected value has it replaced with `[redacted]`, and the rest of the document is unchanged; numbers are redacted only for an injected value of 4 or more digits, and a redacted key that collides with another is renamed `[redacted]#2`, `#3`, and so on. With the `firewall` feature the credential scanner also runs on the result. Values the caller sent are left in place, since a tool legitimately returns them. The match is literal: a credential the child encodes (base64, URL escapes) or splits across values is not found, nor is an all-digit credential with leading zeros (for example `012345`) that the child prints back as a JSON number (`12345`), and without the `firewall` feature a credential the child reads from elsewhere is not recognised.
 
 **Action:** a capability whose tool must return an injected value can no longer do so through the result; read the value from its own source instead. A client that compares results byte for byte should expect `[redacted]` where an injected value used to appear.
 
@@ -3805,6 +3815,42 @@ match.
 
 **Action:** a client that reads `items.properties` reads `items.anyOf[0].properties` for tool rows
 and `items.anyOf[1]` for event rows. Raise `limit` to see more event rows when tools fill it.
+
+## 144. A capability's pin state and process configs are read-only outside the crate
+
+**Startup:** no notice, a library API change rather than a change to running behaviour
+
+`mcp_gateway::capability::ProvidersConfig` carried two public fields: `process`, the typed
+configuration of each `cli` or `mcp` provider, and `integrity`, the pin state of the file the
+definition came from. A process provider runs only when `integrity` is `Integrity::Verified`, so a
+program built on the crate could set that field on a definition it built itself and run a local
+process from a definition that never passed the pin check. Both fields are now crate-private. They
+are read through `ProvidersConfig::process()` and `ProvidersConfig::integrity()`, and only the
+capability loader sets `Verified`. A definition deserialized or built any other way stays
+`Unpinned`, as before. The loader also records a fingerprint of the whole definition, and a
+process runs only while the definition still matches it: a verified definition cloned and then
+changed (its schema, arguments or any other field) is refused. For a process provider the response
+cache keys on the same fingerprint, so a different definition under the same name never reads
+another's answers. Other providers keep the epoch key: on an executor with no shared policy epoch,
+or for a request that snapshotted the epoch before a replacement, a REST call can still return the
+answer the earlier definition cached, within its TTL. That answer is stale, but no process starts
+and no request goes out.
+The gateway's own response cache keys on the policy epoch a request snapshots when it starts:
+a request that began before a replacement can still be answered from the earlier, pinned
+definition's cache entry (it is ordered before the replacement), and one that begins after it
+never is. `CapabilityBackend::register_capability` replacing a definition of the same
+name now also drops the answers cached for it and stops its running `mcp` children, so an
+unpinned replacement meets the process check instead of the pinned original's cached result. Its children are stopped on the runtime that started them:
+keep that runtime driven, or drop it. A runtime that is kept but no longer driven (a current-thread
+runtime after `block_on` returns) stops them only when it next runs. Dropping it drops the queued
+stop, and a child's whole process tree ends when the last holder of that child lets go; a call
+still in flight elsewhere keeps the child running until that call is released (MIK-7923, to be
+fixed in 4.0.1).
+
+**Action:** an embedder that read `providers.process` or `providers.integrity` calls the getter of
+the same name. One that set `integrity`, or that edits a loaded definition before running it,
+loads the definition it means to run through the capability loader, which checks its `sha256:`
+pin.
 
 ## Upgrading from 3.5.x: a walkthrough
 

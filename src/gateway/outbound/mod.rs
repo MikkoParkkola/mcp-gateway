@@ -105,6 +105,10 @@ pub(crate) struct OutboundFrame {
     /// The `caller_key` the frame was judged for; a sink bound to another key
     /// drops it. `None` on the fast path, where nothing was judged.
     key: Option<Arc<str>>,
+    /// Work committed once a sink writes this frame (MIK-7887.RECEIPT.3: a
+    /// bridged prompt's relay receipt). Shared by fan-out clones and taken
+    /// once; a replaced or withheld frame drops it uncommitted.
+    delivery: Option<Arc<parking_lot::Mutex<Option<crate::gateway::input_bridge::DeliveryCommit>>>>,
 }
 
 impl OutboundFrame {
@@ -117,6 +121,7 @@ impl OutboundFrame {
             ticket: None,
             record_taken: false,
             key: None,
+            delivery: None,
         }
     }
 
@@ -179,6 +184,7 @@ impl OutboundFrame {
             ticket: None,
             record_taken: self.record_taken,
             key: self.key,
+            delivery: None,
         }
     }
 
@@ -191,6 +197,7 @@ impl OutboundFrame {
             ticket: None,
             record_taken: self.record_taken,
             key: self.key,
+            delivery: None,
         }
     }
 

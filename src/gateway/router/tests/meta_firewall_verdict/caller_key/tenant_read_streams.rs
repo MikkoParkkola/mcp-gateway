@@ -229,6 +229,123 @@ async fn webhook_and_event_scan_root() {
     }
 }
 
+/// A `message` webhook route on the `demo` backend: the event's document is
+/// the body, or its `data` mapping (`transform` lines), written with its
+/// top-level `id` and no wrapper to scan (MIK-7822).
+fn message_routes(state: &AppState, transform: &str) -> axum::Router {
+    let capability = crate::capability::parse_capability(&format!(
+        r#"
+name: hooks
+description: Rows changed upstream
+webhooks:
+  rows:
+    path: /rows
+    method: POST
+    notify: true
+    transform:
+      event_type: "message"
+{transform}
+providers:
+  primary:
+    service: rest
+    config:
+      base_url: http://localhost:9
+      path: /unused
+      method: GET
+"#
+    ))
+    .unwrap();
+    let mut registry =
+        crate::gateway::webhooks::WebhookRegistry::new(crate::config::WebhookConfig {
+            enabled: true,
+            base_path: "/webhooks".to_string(),
+            require_signature: false,
+            ..crate::config::WebhookConfig::default()
+        })
+        .with_backend("demo");
+    registry.register_capability(&capability);
+    registry.create_routes(Arc::clone(&state.multiplexer))
+}
+
+/// After a read of A on `arg_keys`, POST `body` to a `message` route with
+/// `transform`: the events the A reader's stream receives.
+async fn message_events(
+    mode: CrossTenantReads,
+    arg_keys: &[&str],
+    transform: &str,
+    body: &Value,
+) -> Vec<String> {
+    let (state, _store) = keyed_state(mode, 3600, arg_keys).await;
+    let router = create_router(Arc::clone(&state));
+    let hooks = message_routes(&state, transform);
+    let mut stream = Stream::open(&router).await;
+    let _ = stream.drain(QUIET).await;
+    let (a, _, answer) = send(&router, call_with(&caller(), true, None, 0, &reading(A))).await;
+    assert_eq!(a, Delivered, "{answer}");
+    post_webhook(&hooks, body).await;
+    stream.drain(QUIET).await
+}
+
+async fn message_delivered(
+    mode: CrossTenantReads,
+    arg_keys: &[&str],
+    transform: &str,
+    body: &Value,
+) -> bool {
+    mentions(
+        &message_events(mode, arg_keys, transform, body).await,
+        "row-78",
+    )
+}
+
+/// MIK-7822: a `message` webhook whose only mention of B is its top-level
+/// `id` (an object, then a JSON string) is withheld from an A reader under
+/// Block; the same body naming A is delivered.
+#[tokio::test]
+async fn message_webhook_top_level_id_is_judged() {
+    let keys = ["customer_id"];
+    for tenant in [A, B] {
+        let named = json!({ "customer_id": tenant });
+        for id in [named.clone(), json!(named.to_string())] {
+            let body = json!({ "id": id, "kind": "row-78" });
+            assert!(
+                message_delivered(CrossTenantReads::Off, &keys, "", &body).await,
+                "control: off delivers {body}"
+            );
+            let got = message_delivered(CrossTenantReads::Block, &keys, "", &body).await;
+            assert_eq!(
+                got,
+                tenant == A,
+                "block, top-level id naming {tenant}: {body}"
+            );
+        }
+    }
+}
+
+/// MIK-7822, mapped: with `id` itself a tenant key, a mapping that writes a
+/// body field (raw key not a tenant key) into the top-level `id` names B only
+/// in the written document.
+#[tokio::test]
+async fn message_webhook_mapped_top_level_id_is_judged() {
+    let keys = ["customer_id", "id"];
+    let transform = "      data:\n        id: \"{ref}\"\n        kind: \"{kind}\"";
+    for tenant in [A, B] {
+        let body = json!({ "ref": tenant, "kind": "row-78" });
+        let off = message_events(CrossTenantReads::Off, &keys, transform, &body).await;
+        assert!(
+            mentions(&off, &format!(r#""id":"{tenant}""#)),
+            "control: off delivers the mapped id: {off:?}"
+        );
+        let got = message_delivered(CrossTenantReads::Block, &keys, transform, &body).await;
+        assert_eq!(got, tenant == A, "block, mapped id naming {tenant}: {body}");
+    }
+    // A mapped `id` does not replace the raw scan: B named only in a field the
+    // mapping drops is still judged.
+    let body = json!({ "ref": "evt-1", "kind": "row-78", "customer_id": B });
+    let got = message_delivered(CrossTenantReads::Block, &["customer_id"], transform, &body).await;
+    assert!(!got, "block, B only in the dropped raw field: {body}");
+}
+
 /// A modern `subscriptions/listen` stream under the fixture key, past its
 /// acknowledgement.
 async fn open_listen(router: &axum::Router) -> Stream {

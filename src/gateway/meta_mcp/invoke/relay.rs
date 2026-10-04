@@ -638,23 +638,6 @@ impl MetaMcp {
             self.stage_relay_receipt(caller.relay_caller(session_id), target, value);
         }
     }
-
-    /// Record `value` as delivered to `who` from `server:tool`, now.
-    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
-    pub(super) fn record_relay_delivery(
-        &self,
-        who: RelayKey<'_>,
-        (server, tool): (&str, &str),
-        value: &Value,
-    ) {
-        #[cfg(feature = "firewall")]
-        if let Some(fw) = self.firewall.as_ref() {
-            let caller = crate::security::firewall::RelayCaller::new(who.key, who.keyed);
-            fw.record_delivery(caller, server, tool, value);
-        }
-        #[cfg(not(feature = "firewall"))]
-        let _ = (who, server, tool, value);
-    }
 }
 
 impl MetaMcp {
@@ -689,7 +672,7 @@ impl MetaMcp {
     }
 }
 
-/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
+/// `value` as a receipt for `who` under `fw`; `None` with relay detection off/// `value` as a receipt for `who` under `fw`; `None` with relay detection off
 /// or outside a collector.
 #[cfg(feature = "firewall")]
 fn receipt_with(
@@ -745,7 +728,8 @@ pub(crate) fn discard_staged() {
 }
 
 /// A bridged prompt is content delivered to the caller (§13.3): recorded
-/// when it is handed to the client, before the reply is awaited. The text
+/// once the channel confirms delivery (MIK-7887.RECEIPT.3), which is before
+/// the reply is awaited, so no second caller can relay it during the wait. The text
 /// recorded is the text sent; only the classification verdict comes from a
 /// copy, as a tool result's does.
 pub(super) struct RecordingChannel<'a> {
@@ -778,18 +762,29 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
             delivered_form(&mut prompt);
             prompt
         });
-        if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_active()) {
-            let recorded =
-                self.meta
-                    .recorded_prompt(self.target, self.api_key_name, self.trace_id, prompt);
-            self.meta
-                .record_relay_delivery(self.who, self.target, &recorded);
-        }
+        // MIK-7887.RECEIPT.3: the receipt commits where the channel confirms
+        // delivery, not here; no session or a send cancelled first leaves none.
+        let commit = params
+            .as_ref()
+            .filter(|_| self.meta.relay_active())
+            .and_then(|prompt| {
+                let recorded = self.meta.recorded_prompt(
+                    self.target,
+                    self.api_key_name,
+                    self.trace_id,
+                    prompt,
+                );
+                self.meta.delivery_commit(self.who, self.target, &recorded)
+            });
         self.inner
-            .send_request(session_id, id, method, params)
+            .send_request_committing(session_id, id, method, params, commit)
             .await
     }
 }
+
+#[path = "relay_delivered.rs"]
+mod delivered;
+pub(crate) use delivered::{AnswerShape, GatewayStamps};
 
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_tests.rs"]

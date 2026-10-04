@@ -511,6 +511,20 @@ impl MetaMcp {
         }
     }
 
+    /// The tests' shorthand: the transition to commit alone.
+    #[cfg(test)]
+    pub(crate) async fn audit_settlement(
+        &self,
+        task: SettledTask<'_>,
+        proposed: TaskTransition,
+        notes: &DispatchNotes,
+        principal: &str,
+    ) -> TaskTransition {
+        self.audit_settlement_kept(task, proposed, notes, principal)
+            .await
+            .0
+    }
+
     /// MIN.1 gap 1: write the settlement record of a recovered upstream task,
     /// before `proposed` is committed, and return the transition to commit.
     ///
@@ -520,25 +534,29 @@ impl MetaMcp {
     /// was admitted under and nothing more. A failed write under
     /// [`AuditFailurePolicy::FailClosed`] commits `-32005` instead, with no
     /// backend content, as a live call withholds its result (D1-f).
-    pub(crate) async fn audit_settlement(
+    ///
+    /// Also says whether the transition it returns is the one proposed
+    /// (`true`) or that fail-closed replacement (`false`), so a caller never
+    /// infers it from the outcome (MIK-7887.RECEIPT.1).
+    pub(crate) async fn audit_settlement_kept(
         &self,
         task: SettledTask<'_>,
         proposed: TaskTransition,
         notes: &DispatchNotes,
         principal: &str,
-    ) -> TaskTransition {
+    ) -> (TaskTransition, bool) {
         let Some(log) = self.transparency_logger.as_ref() else {
-            return proposed;
+            return (proposed, true);
         };
         let result = match &proposed {
             TaskTransition::Complete(value) => Ok(value.clone()),
             TaskTransition::Fail(error) => Err(Error::json_rpc(error.code, error.message.clone())),
-            _ => return proposed,
+            _ => return (proposed, true),
         };
         // Total here: only `Error::AuditUnavailable` maps to `None`, and the
         // mapping above builds `Ok` or `Error::JsonRpc` alone.
         let Some(outcome) = AuditOutcome::from_result(&result) else {
-            return proposed;
+            return (proposed, true);
         };
         let attribution = notes.attribution(self, BTreeSet::new(), result.as_ref().ok());
         let envelope = AuditEnvelope {
@@ -569,21 +587,22 @@ impl MetaMcp {
             .await;
         let (server, tool, task_id) = (task.server, task.tool, task.id);
         match written {
-            Ok(()) => proposed,
+            Ok(()) => (proposed, true),
             Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
                 tracing::error!(server, tool, task_id, %error, "settlement audit write failed; result withheld");
                 let withheld = Error::AuditUnavailable;
-                TaskTransition::Fail(crate::protocol::JsonRpcError {
+                let replaced = TaskTransition::Fail(crate::protocol::JsonRpcError {
                     code: withheld.to_rpc_code(),
                     message: withheld.to_string(),
                     data: None,
-                })
+                });
+                (replaced, false)
             }
             Err(error) => {
                 tracing::warn!(server, tool, task_id, %error, "settlement audit write failed (non-fatal)");
                 telemetry_metrics::counter!("mcp_audit_settlement_write_failures_total")
                     .increment(1);
-                proposed
+                (proposed, true)
             }
         }
     }

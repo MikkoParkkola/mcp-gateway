@@ -17,6 +17,20 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "events8_run.py"
+
+
+def free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def setUpModule():
+    # The script's fixed ports may be held on a shared runner; every run here
+    # gets ports nothing else holds, so a refusal is never a port collision.
+    os.environ["EVENTS8_GW_PORT"] = str(free_port())
+    os.environ["EVENTS8_SHIM_PORT"] = str(free_port())
 EVENT = "webhook.github.push.received"
 SUB = "sub-123"
 T0 = 1_000_000.0
@@ -276,6 +290,18 @@ class UpCleanupTests(unittest.TestCase):
                 self.assertNotEqual(done.returncode, 0)
                 self.assertIn("not an events8 run directory", done.stderr)
                 self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
+
+    def test_a_foreign_directory_is_refused_while_a_port_is_busy(self):
+        """Ownership is judged before the ports, so a busy port on a shared
+        host cannot mask the refusal of a directory the script does not own."""
+        import socket
+        busy = socket.socket()
+        self.addCleanup(busy.close)
+        busy.bind(("127.0.0.1", int(os.environ["EVENTS8_SHIM_PORT"])))
+        busy.listen()
+        d, done = self.up("{}")
+        self.assertIn("not an events8 run directory", done.stderr)
+        self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
 
     def test_a_symlinked_state_json_does_not_lend_ownership(self):
         owner = tempfile.TemporaryDirectory()
