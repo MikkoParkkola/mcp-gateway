@@ -193,3 +193,19 @@ fn the_cloudflare_alternatives_still_refuse_an_undeclared_key() {
         "dns update admitted an undeclared key"
     );
 }
+
+/// MIK-7909 on the shipped DNS update: a comment that looks like a placeholder
+/// is the caller's value, so it reaches the PATCH body and the anyOf guard's
+/// "one field to change" is a real change, not an empty request.
+#[test]
+fn update_dns_record_sends_a_brace_wrapped_comment() {
+    let cap = shipped("cloudflare_update_dns_record");
+    let args = json!({ "zone_id": "z", "dns_record_id": "r", "comment": "{literal}" });
+    assert!(valid(&cap, &args), "{args}");
+    let provider = cap.primary_provider().expect("a primary provider");
+    let template = provider.config.body.as_ref().expect("a body template");
+    let body = CapabilityExecutor::new()
+        .substitute_value(template, &args)
+        .unwrap();
+    assert_eq!(body, json!({ "comment": "{literal}" }), "{body}");
+}
