@@ -109,14 +109,11 @@ impl EventSource for BackendSource {
         else {
             return Err(RpcError::invalid("arguments.uri"));
         };
-        up.listeners.authorize_uri(backend, uri).await?;
-        // The lookup can wait on a catalogue read (up to 10s): a reload during
-        // it counts, so eligibility, and the backend still being there, are
-        // read again once it returns.
+        // Mutant for the red run: the second check moved before the lookup.
         if (up.ineligible)().contains(backend) || !(self.names)().iter().any(|n| n == backend) {
             return Err(RpcError::forbidden());
         }
-        Ok(())
+        up.listeners.authorize_uri(backend, uri).await
     }
 
     fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
