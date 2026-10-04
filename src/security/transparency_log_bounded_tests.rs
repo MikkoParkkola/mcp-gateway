@@ -85,18 +85,17 @@ async fn stall_pins_no_runtime_worker() {
 
 /// T2: callers that arrive while a write is stuck wait for the one permit
 /// and time out; none starts a second blocking closure. All twenty-one are
-/// released together by one barrier before any of them appends (MIK-7896), so
-/// none can start late, after the held write already timed out: the
-/// contention is set up by the barrier, not by how fast the runner spawns.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+/// released together by one barrier before any of them appends (MIK-7896).
+/// Tokio's clock is paused and moved by hand, so every caller reaches the
+/// permit before any deadline can pass, however slow the runner: the
+/// contention does not depend on scheduling.
+#[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn stall_parks_one_blocking_thread() {
     use std::sync::atomic::Ordering;
     const CALLERS: usize = 21;
     let dir = tempfile::tempdir().unwrap();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
-    // A bound the queued callers cannot outrun: the held write must still be
-    // inside it when they reach the permit, or they would be refused at once.
-    let release = l.stall_next_write_for_test(Duration::from_secs(2));
+    let release = stall(&l);
     let start = Arc::new(tokio::sync::Barrier::new(CALLERS));
     let calls: Vec<_> = (0..CALLERS)
         .map(|_| {
@@ -108,15 +107,26 @@ async fn stall_parks_one_blocking_thread() {
             })
         })
         .collect();
-    // Whichever caller takes the permit first holds the stalled write. The
-    // gate's own 60 s hang guard bounds this wait however starved the runner.
-    let held = Arc::clone(&release.0);
+    // Whichever caller took the permit holds the stalled write. Real time
+    // here is only a hang guard; the paused clock has not moved.
+    let guard = std::time::Instant::now();
+    while !release.is_entered() {
+        assert!(
+            guard.elapsed() < Duration::from_secs(60),
+            "no write reached the blocking pool"
+        );
+        tokio::task::yield_now().await;
+    }
+    // One more round for every caller to reach the permit wait: the runtime
+    // has one thread and every caller is ready, so each is polled again.
+    for _ in 0..CALLERS {
+        tokio::task::yield_now().await;
+    }
     assert!(
-        tokio::task::spawn_blocking(move || held.wait_entered())
-            .await
-            .unwrap(),
-        "no write reached the blocking pool"
+        calls.iter().all(|c| !c.is_finished()),
+        "a caller returned before any deadline passed"
     );
+    tokio::time::advance(BOUND).await;
     for call in calls {
         assert!(call.await.unwrap().is_err());
     }
