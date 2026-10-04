@@ -511,6 +511,22 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
     super::super::cli::redact_value(&mut value, &["0018446744073709551616".to_owned()]);
     assert_eq!(value["n"], "[redacted]", "{value}");
 
+    // A float carries its sign as well: -12345.0, a negative past i64 and
+    // -0.0 are the needle's value too.
+    let mut value: Value =
+        serde_json::from_str(r#"{"a": -12345.0, "b": -18446744073709551616, "z": -0.0}"#).unwrap();
+    super::super::cli::redact_value(
+        &mut value,
+        &[
+            "012345".to_owned(),
+            "0018446744073709551616".to_owned(),
+            "0000".to_owned(),
+        ],
+    );
+    assert_eq!(value["a"], "[redacted]", "{value}");
+    assert_eq!(value["b"], "[redacted]", "{value}");
+    assert_eq!(value["z"], "[redacted]", "{value}");
+
     // The floor applies to the needle as given; once its zeros go, a short
     // value matches only a number equal to it, never one that contains it.
     let mut value = json!({"n": 7, "m": 1_771, "z": 0});
