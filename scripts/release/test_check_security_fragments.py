@@ -79,6 +79,11 @@ class CheckSecurityFragments(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertIn("no closing period", out[0])
 
+    def test_trailing_text_after_a_period_fails(self):
+        out = run({"1.security.md": "- X. Affects: 3.x. Operator action: Upgrade. Restart the service\n"})
+        self.assertEqual(len(out), 1)
+        self.assertIn("no closing period", out[0])
+
     def test_a_value_may_start_with_a_dot(self):
         text = "- X. Affects: .NET clients on 3.x. Operator action: .env files need `a`.\n"
         self.assertEqual(run({"1.security.md": text}), [])

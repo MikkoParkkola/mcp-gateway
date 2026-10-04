@@ -16,7 +16,6 @@ import re
 import sys
 
 LABEL = re.compile(r"\b(Affects|Operator action):")
-SENTENCE = re.compile(r"(.+?)\.(\s|$)")
 # Letters and digits only bound the marker, so `_UNVERIFIED_` emphasis still matches.
 UNVERIFIED = re.compile(r"(?<![A-Za-z0-9])UNVERIFIED(?![A-Za-z0-9])", re.IGNORECASE)
 
@@ -29,11 +28,10 @@ def clauses(item):
 
 
 def value_problem(value):
-    """None when the value is one non-empty sentence ending in a period."""
+    """None when the value is non-empty and ends in a period."""
     if not value.strip(" .*_`"):
         return "an empty '{}' value"
-    sentence = SENTENCE.match(value)
-    if not sentence or not sentence.group(1).strip(" .*_`"):
+    if not value.endswith("."):
         return "a '{}' value with no closing period"
     return None
 
