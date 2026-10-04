@@ -100,24 +100,21 @@ pub(crate) enum AnswerShape {
     Literal,
 }
 
-/// The backend text of a finally delivered `result`: the gateway's own
-/// members removed (its chain, the scope verdicts it clamps, top level and a
-/// task envelope's retained result, and on a modern
-/// answer its `serverInfo`), and a `gateway_invoke` wrapper read decoded.
+/// The backend text of a finally delivered `result`: the gateway's chain
+/// removed, every scope clamped as the wire clamps it (top level and a task
+/// envelope's retained result), a modern answer's `serverInfo` stamp removed,
+/// and a `gateway_invoke` wrapper read decoded.
 #[cfg(feature = "firewall")]
 fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Value {
     let mut copy = result.clone();
     crate::security::signature_chain::strip_chain(&mut copy);
-    // The scope a task envelope's retained result claims is clamped on the
-    // way out too: the backend's text there is not delivered.
+    // Clamped as the wire clamps it, so a backend's text in a scope, top
+    // level or in a task envelope's retained result, is never digested.
     crate::protocol::cacheable::clamp_delivered_scope(&mut copy);
-    if let Some(members) = copy.as_object_mut() {
-        members.remove("cacheScope");
-        if stamps == GatewayStamps::Modern
-            && let Some(meta) = members.get_mut("_meta").and_then(Value::as_object_mut)
-        {
-            meta.remove(crate::protocol::meta::KEY_SERVER_INFO);
-        }
+    if stamps == GatewayStamps::Modern
+        && let Some(meta) = copy.get_mut("_meta").and_then(Value::as_object_mut)
+    {
+        meta.remove(crate::protocol::meta::KEY_SERVER_INFO);
     }
     // An interim answer (`inputRequests`, `requestState`) is a promoted
     // native result, not a wrapper: its members are delivered as they stand.
@@ -127,5 +124,35 @@ fn receipt_copy(result: &Value, stamps: GatewayStamps, shape: AnswerShape) -> Va
             super::super::audit::delivered_value(&copy).into_owned()
         }
         AnswerShape::InvokeWrapped | AnswerShape::Literal => copy,
+    }
+}
+
+#[cfg(all(test, feature = "firewall"))]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::protocol::meta::KEY_SERVER_INFO;
+
+    /// A delivered answer with a `serverInfo` in its `_meta`.
+    fn answered() -> Value {
+        json!({"content": [], "_meta": {KEY_SERVER_INFO: {"name": "named"}, "keep": 1}})
+    }
+
+    /// MIK-7887.RECEIPT.4: a modern answer's `serverInfo` is the gateway's
+    /// stamp and leaves the receipt copy; the rest of `_meta` stays.
+    #[test]
+    fn a_modern_copy_drops_the_server_info_stamp() {
+        let copy = receipt_copy(&answered(), GatewayStamps::Modern, AnswerShape::Literal);
+        assert!(copy["_meta"].get(KEY_SERVER_INFO).is_none(), "{copy}");
+        assert_eq!(copy["_meta"]["keep"], 1, "{copy}");
+    }
+
+    /// MIK-7887.RECEIPT.4: a legacy answer's `serverInfo` is the backend's,
+    /// delivered as sent, so it stays in the receipt copy.
+    #[test]
+    fn a_legacy_copy_keeps_the_backends_server_info() {
+        let copy = receipt_copy(&answered(), GatewayStamps::Legacy, AnswerShape::Literal);
+        assert_eq!(copy["_meta"][KEY_SERVER_INFO]["name"], "named", "{copy}");
     }
 }

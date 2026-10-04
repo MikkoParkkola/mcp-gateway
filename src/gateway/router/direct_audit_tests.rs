@@ -23,6 +23,7 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+mod delivery;
 mod meta_refusal;
 mod meta_replay;
 #[cfg(feature = "firewall")]

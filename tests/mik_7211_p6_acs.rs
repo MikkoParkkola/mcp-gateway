@@ -59,29 +59,6 @@ mod source_checks {
             .any(|l| !l.trim_start().starts_with("//") && l.contains("\"cacheScope\""))
     }
 
-    /// [`writes_the_key`], except that a `.remove("cacheScope")` call is not a
-    /// write: it is the only use the remove-only files may make of the key.
-    fn names_the_key_other_than_to_remove_it(text: &str) -> bool {
-        text.lines().any(|l| {
-            !l.trim_start().starts_with("//")
-                && l.replace(".remove(\"cacheScope\")", "")
-                    .contains("\"cacheScope\"")
-        })
-    }
-
-    #[test]
-    fn a_remove_only_file_may_remove_the_key_and_nothing_else() {
-        assert!(!names_the_key_other_than_to_remove_it(
-            "members.remove(\"cacheScope\");\n"
-        ));
-        assert!(names_the_key_other_than_to_remove_it(
-            "members.insert(\"cacheScope\".into(), v);\n"
-        ));
-        assert!(names_the_key_other_than_to_remove_it(
-            "members.remove(\"cacheScope\"); m.insert(\"cacheScope\".into(), v);\n"
-        ));
-    }
-
     /// Cutting a file at its first `#[cfg(test)]` hid every production writer
     /// after a test-gated item. The check reads whole files now.
     #[test]
@@ -117,7 +94,7 @@ mod source_checks {
             // scope clamped; it writes the key only into a test prompt.
             "src/gateway/meta_mcp/invoke/relay_tests.rs",
             // MIK-7887.RECEIPT.4 rows: they write the key only into backend
-            // fixtures. The receipt copy itself is checked below, narrower.
+            // fixtures.
             "src/gateway/meta_mcp/invoke/relay_delivery_tests.rs",
             "src/gateway/router/tests/task_execution_adapter/relay_upstream.rs",
             "src/gateway/server/tests/collusion_stdio_delivered.rs",
@@ -131,10 +108,6 @@ mod source_checks {
             "src/protocol/cacheable/clamp_tests.rs",
             "src/protocol/tasks/scope_clamp_tests.rs",
         ];
-        // May name the key only to remove it: MIK-7887.RECEIPT.4's receipt
-        // copy drops the clamped scope from a private copy, never a delivered
-        // value. Any other line naming the key there still fails.
-        let remove_only = ["src/gateway/meta_mcp/invoke/relay_delivered.rs"];
         let mut offenders = Vec::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         for path in files {
@@ -144,12 +117,7 @@ mod source_checks {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source reads");
-            let offends = if remove_only.contains(&shown.as_str()) {
-                names_the_key_other_than_to_remove_it(&text)
-            } else {
-                writes_the_key(&text)
-            };
-            if offends {
+            if writes_the_key(&text) {
                 offenders.push(shown);
             }
         }
