@@ -103,7 +103,7 @@ include = [
     "docs/requirements/RELEASE-4.0.0-test-plan.md",
     "docs/requirements/RELEASE-4.0.0-workload-contract.md",
     "docs/requirements/workload-pins-observed.md",
-    "docs/roadmap/mik-6550-trust-fabric-roadmap.md",
+    "docs/roadmap/trust-fabric.md",
     "docs/runbooks/backup-restore-and-keys.md",
     "docs/runtime/descriptor_spec.md",
     "docs/runtime/divergence_registry.md",
