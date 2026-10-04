@@ -540,3 +540,19 @@ fn a_digit_credential_with_leading_zeros_is_redacted_as_a_number() {
     super::super::cli::redact_value(&mut value, &["007".to_owned()]);
     assert_eq!(value["n"], 7, "{value}");
 }
+
+/// A digit credential past u64 is compared after the same float parse that
+/// read the result. serde_json without `float_roundtrip` truncates past u64
+/// and scales, so for this 25-digit value it lands one ULP from the correctly
+/// rounded `str::parse`: a needle parsed the other way would miss the number.
+/// The feature is on in every build today (jsonschema enables it), so this row
+/// guards the invariant rather than reproducing a live leak.
+#[test]
+fn a_long_digit_credential_is_compared_with_the_result_parser() {
+    let secret = "3057986828288072902227918";
+    let mut value: Value =
+        serde_json::from_str(&format!(r#"{{"n": {secret}, "neg": -{secret}}}"#)).unwrap();
+    super::super::cli::redact_value(&mut value, &[format!("00{secret}")]);
+    assert_eq!(value["n"], "[redacted]", "{value}");
+    assert_eq!(value["neg"], "[redacted]", "{value}");
+}

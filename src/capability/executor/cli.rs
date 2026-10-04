@@ -465,13 +465,14 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
                 if !needle.bytes().all(|b| b.is_ascii_digit()) {
                     return false;
                 }
-                if let Some(f) = float {
-                    return needle
-                        .parse::<f64>()
-                        .is_ok_and(|p| p.to_bits() == f.to_bits());
-                }
                 let value = needle.trim_start_matches('0');
                 let value = if value.is_empty() { "0" } else { value };
+                // Parsed by serde_json, the parser that read the result, so
+                // both sides round the same way whatever its float features.
+                if let Some(f) = float {
+                    return serde_json::from_str::<f64>(value)
+                        .is_ok_and(|p| p.to_bits() == f.to_bits());
+                }
                 digits.trim_start_matches('-') == value
             };
             if needles.iter().any(|needle| {
