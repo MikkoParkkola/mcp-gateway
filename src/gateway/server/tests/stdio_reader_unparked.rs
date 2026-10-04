@@ -119,7 +119,8 @@ async fn batches_on_a_full_stdout_do_not_park_the_reader() {
 }
 
 /// T3. Positive control: a client that reads loses nothing. Every batch item,
-/// every single request and every parse error is answered exactly once.
+/// every single request and every parse error is answered exactly once, read
+/// through to EOF so a duplicate would be counted too.
 #[tokio::test]
 async fn a_reading_client_gets_every_answer() {
     let mut served = serve(1 << 20).await;
@@ -130,15 +131,15 @@ async fn a_reading_client_gets_every_answer() {
         lines.push(json!({"jsonrpc": "2.0", "id": 100 + k, "method": "ping"}).to_string());
     }
     send(&mut served.stdin, &lines.join("\n")).await;
+    drop(served.stdin);
     let mut batch_ids = Vec::new();
     let mut single_ids = Vec::new();
     let mut parse_errors = 0;
-    while batch_ids.len() + single_ids.len() + parse_errors < 30 {
-        let line = timeout(ARRIVAL, served.stdout.next_line())
-            .await
-            .expect("every answer arrives")
-            .expect("stdout reads")
-            .expect("stdout is open");
+    while let Some(line) = timeout(ARRIVAL, served.stdout.next_line())
+        .await
+        .expect("stdout ends within the bound")
+        .expect("stdout reads")
+    {
         let frame: Value = serde_json::from_str(&line).expect("one JSON frame");
         match &frame {
             Value::Array(items) => {
@@ -154,10 +155,35 @@ async fn a_reading_client_gets_every_answer() {
     assert_eq!(batch_ids, (0..10).map(|k| json!(k)).collect::<Vec<_>>());
     assert_eq!(single_ids, (100..110).map(|k| json!(k)).collect::<Vec<_>>());
     assert_eq!(parse_errors, 10);
-    drop(served.stdin);
     timeout(ARRIVAL, &mut served.task)
         .await
         .expect("EOF returns promptly when stdout is read")
         .expect("no panic")
         .expect("Ok");
+}
+
+/// T4. An `initialize` that cannot be queued ends the session instead of
+/// parking the reader: with stdin still open and stdout unread, the serve
+/// loop returns within the initialize bound, the drain and the teardown.
+#[tokio::test]
+async fn an_initialize_on_a_full_stdout_ends_the_session() {
+    let mut served = serve(64).await;
+    let flood = vec!["{not json"; FLOOD].join("\n");
+    send(&mut served.stdin, &flood).await;
+    let initialize = json!({
+        "jsonrpc": "2.0", "id": "init-2", "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "mik7684", "version": "0"},
+        },
+    });
+    send(&mut served.stdin, &initialize.to_string()).await;
+    let bound = super::super::STDIO_DRAIN_TIMEOUT * 2 + Duration::from_secs(25);
+    timeout(bound, &mut served.task)
+        .await
+        .unwrap_or_else(|_| panic!("run_stdio_on must return within {bound:?}, stdin open"))
+        .expect("the serve task does not panic")
+        .expect("run_stdio_on returns Ok");
+    drop((served.stdin, served.stdout));
 }
