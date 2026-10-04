@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // S1 — admission-owned task binding, restart import, expiry transaction.
-// Sync-mode paths above are unchanged apart from one refusing match arm.
+// The sync-mode paths, in admission.rs, are unchanged apart from one
+// refusing match arm.
 // ---------------------------------------------------------------------------
 
 /// Domain tag for the persisted principal digest. Separate from the identity
