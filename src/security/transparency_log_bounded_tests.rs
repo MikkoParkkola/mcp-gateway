@@ -84,40 +84,42 @@ async fn stall_pins_no_runtime_worker() {
 }
 
 /// T2: callers that arrive while a write is stuck wait for the one permit
-/// and time out; none starts a second blocking closure.
+/// and time out; none starts a second blocking closure. All twenty-one are
+/// released together by one barrier before any of them appends (MIK-7896), so
+/// none can start late, after the held write already timed out: the
+/// contention is set up by the barrier, not by how fast the runner spawns.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stall_parks_one_blocking_thread() {
     use std::sync::atomic::Ordering;
+    const CALLERS: usize = 21;
     let dir = tempfile::tempdir().unwrap();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
-    // A bound the contenders cannot outrun: the held write must still be
-    // inside it when they queue, or they would be refused, not queued.
+    // A bound the queued callers cannot outrun: the held write must still be
+    // inside it when they reach the permit, or they would be refused at once.
     let release = l.stall_next_write_for_test(Duration::from_secs(2));
-    let first = tokio::spawn({
-        let l = Arc::clone(&l);
-        async move { invocation(&l).await }
-    });
-    // Wait on the gate, not on a poll budget: `entered` means the blocking
-    // closure ran (and counted itself), however starved the runner is. The
-    // gate's own 60 s hang guard bounds the wait.
+    let start = Arc::new(tokio::sync::Barrier::new(CALLERS));
+    let calls: Vec<_> = (0..CALLERS)
+        .map(|_| {
+            let l = Arc::clone(&l);
+            let start = Arc::clone(&start);
+            tokio::spawn(async move {
+                start.wait().await;
+                invocation(&l).await
+            })
+        })
+        .collect();
+    // Whichever caller takes the permit first holds the stalled write. The
+    // gate's own 60 s hang guard bounds this wait however starved the runner.
     let held = Arc::clone(&release.0);
     assert!(
         tokio::task::spawn_blocking(move || held.wait_entered())
             .await
             .unwrap(),
-        "the first write never reached the blocking pool"
+        "no write reached the blocking pool"
     );
-    // Twenty callers queue while the first write is still in the kernel.
-    let waiting: Vec<_> = (0..20)
-        .map(|_| {
-            let l = Arc::clone(&l);
-            tokio::spawn(async move { invocation(&l).await })
-        })
-        .collect();
-    for w in waiting {
-        assert!(w.await.unwrap().is_err());
+    for call in calls {
+        assert!(call.await.unwrap().is_err());
     }
-    assert!(first.await.unwrap().is_err());
     assert_eq!(
         l.bound.closures_entered.load(Ordering::Acquire),
         1,
@@ -126,7 +128,7 @@ async fn stall_parks_one_blocking_thread() {
     assert_eq!(
         l.refused_under_stall_for_test(),
         0,
-        "contenders were refused, not queued"
+        "callers were refused, not queued on the permit"
     );
     release.release();
 }
