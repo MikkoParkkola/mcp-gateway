@@ -671,11 +671,9 @@ impl MetaMcp {
     ) -> Value {
         let (classified, _) =
             self.apply_context_integrity(server, tool, api_key_name, trace_id, prompt.clone());
-        // The form the caller is handed: the reserved chain and scope metadata
-        // are stripped at delivery, so the receipt must not describe them.
+        // Recorded in the form the caller is handed.
         let mut recorded = prompt.clone();
-        crate::security::signature_chain::strip_chain(&mut recorded);
-        crate::protocol::cacheable::clamp_delivered_scope(&mut recorded);
+        delivered_form(&mut recorded);
         let Some(verdict) = classified.get("_context_integrity") else {
             return recorded;
         };
@@ -759,6 +757,14 @@ pub(super) struct RecordingChannel<'a> {
     pub(super) trace_id: &'a str,
 }
 
+/// The form a caller is handed: a backend's copy of the reserved chain member
+/// is dropped and the cache scope clamped (MIK-7910). A delivery and its record
+/// both pass through here, so the receipt describes the bytes that were sent.
+pub(crate) fn delivered_form(value: &mut Value) {
+    crate::security::signature_chain::strip_chain(value);
+    crate::protocol::cacheable::clamp_delivered_scope(value);
+}
+
 #[async_trait::async_trait]
 impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
     async fn send_request(
@@ -768,6 +774,10 @@ impl crate::gateway::input_bridge::ClientChannel for RecordingChannel<'_> {
         method: &str,
         params: Option<Value>,
     ) -> Result<Value, crate::gateway::input_bridge::DeliveryError> {
+        let params = params.map(|mut prompt| {
+            delivered_form(&mut prompt);
+            prompt
+        });
         if let Some(prompt) = params.as_ref().filter(|_| self.meta.relay_active()) {
             let recorded =
                 self.meta
