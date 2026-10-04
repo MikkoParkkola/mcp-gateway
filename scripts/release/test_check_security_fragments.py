@@ -50,6 +50,20 @@ class CheckSecurityFragments(unittest.TestCase):
     def test_other_fragment_types_are_ignored(self):
         self.assertEqual(run({"1.fixed.md": "- **A fix.** No clauses.\n"}), [])
 
+    def test_a_security_bullet_outside_a_security_fragment_fails(self):
+        # MIK-7865: the filename picks the release-notes subsection, so a
+        # Security bullet in a .fixed fragment would be filed under Fixed.
+        for bullet in ("- Security: X.\n", "- **Security:** X.\n", "- **Security**: X.\n"):
+            out = run({"1.fixed.md": bullet, "2.added.md": "- A.\n" + bullet})
+            self.assertEqual(len(out), 2, bullet)
+            self.assertIn("1.fixed.md bullet 1", out[0])
+            self.assertIn("2.added.md bullet 2", out[1])
+            self.assertIn(".security.md", out[0])
+
+    def test_a_bullet_that_only_mentions_security_passes(self):
+        text = "- Security counters: X.\n- **Fixes a security gap.** Y.\n"
+        self.assertEqual(run({"1.added.md": text}), [])
+
     def test_a_clause_split_across_continuation_lines_counts(self):
         text = "- **A guard.** Text.\n  Affects: 3.x up to\n  3.5.1. Operator action: set `a.b`.\n"
         self.assertEqual(run({"1.security.md": text}), [])
