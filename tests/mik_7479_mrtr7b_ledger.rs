@@ -305,7 +305,8 @@ fn cause_phrases_are_the_gateways_own_text() {
         "../src/gateway/meta_mcp/invoke/dispatch_guards.rs"
     ));
     let error = joined(include_str!("../src/error.rs"));
-    let server = joined(include_str!("../src/gateway/server/mod.rs"));
+    // The stdio busy refusal moved out of server/mod.rs with MIK-7684.
+    let server = joined(include_str!("../src/gateway/server/stdio_refusal.rs"));
     for (phrase, source, file) in [
         (
             CAPABILITY_DISABLED,
@@ -314,7 +315,7 @@ fn cause_phrases_are_the_gateways_own_text() {
         ),
         (ASK_EXPIRED, &invoke, "meta_mcp/invoke/legacy_bridge.rs"),
         (BREAKER_OPEN, &error, "error.rs"),
-        (SERVER_BUSY, &server, "gateway/server/mod.rs"),
+        (SERVER_BUSY, &server, "gateway/server/stdio_refusal.rs"),
     ] {
         assert!(
             source.contains(phrase),

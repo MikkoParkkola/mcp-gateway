@@ -659,9 +659,29 @@ impl CapabilityBackend {
     ///
     /// [`crate::Error::Config`] naming the unresolved reference, or the key the
     /// descriptor's provider requires.
+    ///
+    /// Replacing a definition of the same name stops its `mcp` children on
+    /// the runtime that started them: keep that runtime driven, or drop it.
+    /// An idle runtime stops them only when it next runs. Dropping it ends
+    /// each child's process tree once no call still holds that child; a call
+    /// in flight elsewhere keeps it running until released (MIK-7923).
     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
-        self.capabilities.write().upsert(capability);
+        let name = capability.name.clone();
+        let mut caps = self.capabilities.write();
+        let replaced = caps.contains(&name);
+        caps.upsert(capability);
+        if replaced {
+            // A replacement is a live-policy change (MIK-7814): children
+            // started under the old definition stop, and its cached answers
+            // are stranded. The cache key also carries the definition's
+            // fingerprint, which covers a first registration on a shared
+            // executor; this bump is defence in depth. Under the lock, as in
+            // unload.
+            self.executor.bump_policy_epoch();
+            self.executor.bump_mcp_generation(&name);
+            self.executor.stop_mcp(&name);
+        }
         Ok(())
     }
 
@@ -766,3 +786,7 @@ pub struct CapabilityBackendStatus {
 #[cfg(test)]
 #[path = "backend_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "backend_pin_tests.rs"]
+mod pin_tests;

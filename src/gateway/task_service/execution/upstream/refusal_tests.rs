@@ -230,8 +230,10 @@ async fn recover(
             &f.id,
             authorized,
             |_: Value| -> Result<Value, JsonRpcError> { panic!("no result may be processed") },
-            |_: JsonRpcError| -> JsonRpcError { panic!("no error may be processed") },
-            |event, _notes| std::future::ready(event),
+            |_: JsonRpcError| -> (JsonRpcError, crate::gateway::task_service::ErrorAuthor) {
+                panic!("no error may be processed")
+            },
+            |event, _notes| std::future::ready((event, true)),
             Duration::from_secs(5),
         )
         .await

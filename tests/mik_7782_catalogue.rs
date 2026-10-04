@@ -26,13 +26,13 @@ async fn every_shipped_process_capability_is_pinned_typed_and_allowed_or_held() 
     let allowed = ProcessCommand::shipped();
     let mut process_caps = 0;
     for def in &defs {
-        let Some(process) = def.providers.process.get("primary") else {
+        let Some(process) = def.providers.process().get("primary") else {
             continue;
         };
         process_caps += 1;
         let name = &def.name;
         assert_eq!(
-            def.providers.integrity,
+            def.providers.integrity(),
             Integrity::Verified,
             "{name} must load through a matching pin"
         );
@@ -74,7 +74,7 @@ async fn every_mapped_pyghidra_tool_is_in_the_server_snapshot() {
     let dir = format!("{}/capabilities", env!("CARGO_MANIFEST_DIR"));
     let defs = CapabilityLoader::load_directory(&dir).await.unwrap();
     let def = defs.iter().find(|d| d.name == "pyghidra_reverse").unwrap();
-    let Some(ProcessConfig::Mcp(config)) = def.providers.process.get("primary") else {
+    let Some(ProcessConfig::Mcp(config)) = def.providers.process().get("primary") else {
         panic!("pyghidra_reverse must be an mcp capability");
     };
     let selector = config.tool_selector.as_ref().expect("mapped");

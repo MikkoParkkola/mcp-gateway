@@ -20,6 +20,9 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
         struct Shadow {
             jsonrpc: String,
             id: Option<RequestId>,
+            /// `Some(Value::Null)` when the peer sent `"result": null`: that is
+            /// a result (JSON-RPC 2.0 section 5), unlike an absent member.
+            #[serde(default, deserialize_with = "present")]
             result: Option<Value>,
             error: Option<JsonRpcError>,
             method: Option<serde::de::IgnoredAny>,
@@ -31,9 +34,24 @@ impl<'de> Deserialize<'de> for JsonRpcResponse {
                 "frame carries `method`: a request or notification, not a response",
             ));
         }
+        // A `null` beside an error is the peer spelling "no result": an error
+        // response carries no `result`, so it stays absent.
+        let result = match (shadow.result, &shadow.error) {
+            (Some(Value::Null), Some(_)) => None,
+            (result, _) => result,
+        };
         Ok(Self {
             jsonrpc: shadow.jsonrpc,
-            ..Self::envelope(shadow.id, shadow.result, shadow.error)
+            ..Self::envelope(shadow.id, result, shadow.error)
         })
     }
+}
+
+/// A member that is present, `null` included; `#[serde(default)]` supplies
+/// `None` only when it is absent.
+fn present<'de, D>(deserializer: D) -> std::result::Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }

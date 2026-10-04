@@ -100,9 +100,9 @@ impl MetaMcp {
 
 impl MetaMcp {
     /// Stage the receipt a read of `stored` renews: its result, its pending
-    /// input requests, or (MIK-7887) the backend's own error of a failed
-    /// task. A multi-target task, one the gateway alone failed, and a working
-    /// or cancelled one stage nothing.
+    /// input requests, or (MIK-7887) the peer's own error of a failed task. A
+    /// multi-target task, an error the gateway wrote or whose author is not
+    /// established, and a working or cancelled task stage nothing.
     pub(crate) fn stage_stored_receipt(
         &self,
         who: super::invoke::relay::RelayKey<'_>,
@@ -130,8 +130,9 @@ impl MetaMcp {
                 }
             }
             TaskStatus::Failed => {
-                // The backend's own error is what the reader is handed.
-                if let Some(error) = stored.task.error()
+                // Only an error the gateway established as the peer's is the
+                // backend's text; its own errors receipt nothing (MIK-7887.RECEIPT.1).
+                if let Some(error) = stored.backend_error()
                     && let Ok(error) = serde_json::to_value(error)
                 {
                     // Classified like a pending prompt, so a sensitive error
@@ -141,6 +142,32 @@ impl MetaMcp {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+impl MetaMcp {
+    /// MIK-7887.RECEIPT.1: a followed task's failure at settlement. A peer's
+    /// own error replaces the working stub with its receipt, classified like a
+    /// pending prompt as a read classifies it; any other error is the
+    /// gateway's and drops the stub, so nothing it wrote is receipted.
+    pub(crate) fn stage_followed_error(
+        &self,
+        who: super::invoke::relay::RelayKey<'_>,
+        target: (&str, &str),
+        error: &crate::protocol::JsonRpcError,
+        author: crate::gateway::task_service::ErrorAuthor,
+    ) {
+        if !self.relay_active() {
+            return;
+        }
+        if author == crate::gateway::task_service::ErrorAuthor::Peer
+            && let Ok(error) = serde_json::to_value(error)
+        {
+            let recorded = self.recorded_prompt(target, None, "tasks/settle", &error);
+            self.stage_upstream_result(who, target, &recorded);
+        } else {
+            super::invoke::relay::discard_staged();
         }
     }
 }

@@ -112,3 +112,45 @@ fn monitor_only_context_metadata_does_not_withhold_an_error() {
     assert_eq!(screened.message, error.message);
     assert_eq!(screened.data, error.data);
 }
+
+/// MIK-7887.RECEIPT.1: the screen says who wrote what it returns. A withheld
+/// error is the gateway's words; one every gate passed unchanged is the peer's.
+#[test]
+fn the_screen_names_the_author_of_what_it_returns() {
+    use crate::gateway::task_service::ErrorAuthor;
+    let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    meta.enable_response_inspection_action_mode();
+    let secret = JsonRpcError {
+        code: -32001,
+        message: format!("upstream failed: {MARKER}"),
+        data: None,
+    };
+    let (_, author) = meta.recover_task_error_with("peer", "slow_echo", None, "trace", secret);
+    assert_eq!(author, ErrorAuthor::Gateway);
+    let benign = JsonRpcError {
+        code: -32042,
+        message: "the tool could not read row 7".into(),
+        data: None,
+    };
+    let (_, author) = meta.recover_task_error_with("peer", "slow_echo", None, "trace", benign);
+    assert_eq!(author, ErrorAuthor::Peer);
+}
+
+/// MIK-7887.RECEIPT.1: a failed upstream task with no message is answered in
+/// the gateway's words, so it is a substitute, never the peer's error.
+#[test]
+fn a_failure_without_a_message_is_a_substitute() {
+    use super::{UpstreamAnswer, failed_answer};
+    assert!(matches!(
+        failed_answer(Some(&json!({"code": -32001}))),
+        UpstreamAnswer::Substituted(JsonRpcError { code: -32001, .. })
+    ));
+    assert!(matches!(
+        failed_answer(None),
+        UpstreamAnswer::Substituted(_)
+    ));
+    assert!(matches!(
+        failed_answer(Some(&json!({"code": -32001, "message": "row 7"}))),
+        UpstreamAnswer::Failed(_)
+    ));
+}
