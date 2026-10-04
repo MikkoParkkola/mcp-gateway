@@ -34,8 +34,14 @@ pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 /// bytes. A beta loader (`1..=3`) refuses such a row, which UPGRADING-4.0 states.
 pub(super) const TARGET_VERSION: u32 = 5;
 
+/// The record version that introduced [`Record::error_author`]. Written only on
+/// a Failed row whose error the peer wrote (MIK-7887.RECEIPT.1); every other
+/// row keeps its version and its bytes. An older loader refuses such a row,
+/// which UPGRADING-4.0 item 105 states.
+pub(super) const ERROR_AUTHOR_VERSION: u32 = 6;
+
 /// The highest record version the loader accepts: the newest field's version.
-pub(super) const MAX_LOADABLE_VERSION: u32 = TARGET_VERSION;
+pub(super) const MAX_LOADABLE_VERSION: u32 = ERROR_AUTHOR_VERSION;
 
 /// One backend call a task's result was produced by: names only, never
 /// arguments. No current invocation policy reads `ToolTarget.arguments`; a
@@ -188,6 +194,12 @@ pub(super) struct Record {
     /// output, so delivering it needs no target check.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) output_free: bool,
+    /// Who wrote a Failed row's stored error, decided where it is known
+    /// (MIK-7887.RECEIPT.1). Private: never on the wire or in a `tasks/get`
+    /// body. Absent on older rows and on every non-Failed row; absent is read
+    /// as "not established", which receipts nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) error_author: Option<ErrorAuthor>,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
@@ -242,6 +254,7 @@ impl PreparedTask {
                 input_round: None,
                 targets,
                 output_free: false,
+                error_author: None,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -279,6 +292,7 @@ impl PreparedTask {
                 input_round: None,
                 targets: Vec::new(),
                 output_free: false,
+                error_author: None,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),
@@ -331,6 +345,8 @@ pub(crate) struct CommittedTask {
     pub(crate) targets_recorded: bool,
     /// The row holds only the gateway's own bounded failure, no backend output.
     pub(crate) output_free: bool,
+    /// Who wrote a Failed row's stored error; see `Record::error_author`.
+    pub(crate) error_author: Option<ErrorAuthor>,
     /// The owner's digest as the record persisted it, read in the same piece
     /// as the rest of the snapshot (the events source carries it).
     pub(crate) owner_digest: String,
@@ -363,8 +379,18 @@ impl CommittedTask {
             revision: record.revision,
             targets_recorded: record.version >= TARGET_VERSION,
             output_free: record.output_free,
+            error_author: record.error_author,
             owner_digest: record.admission.principal_digest.clone(),
         }
+    }
+
+    /// The stored error when the peer wrote it (MIK-7887.RECEIPT.1): only a
+    /// Failed row whose error the gateway established as the peer's. A gateway
+    /// error, a substitute, or an older row whose author is unknown has none.
+    pub(crate) fn backend_error(&self) -> Option<&crate::protocol::JsonRpcError> {
+        (!self.output_free && self.error_author == Some(ErrorAuthor::Peer))
+            .then(|| self.task.error())
+            .flatten()
     }
 
     /// The stored result when it is backend output. A row holding only the
@@ -377,6 +403,17 @@ impl CommittedTask {
             .is_some_and(|meta| meta.get(EXECUTION_OUTCOME_KEY).is_some());
         (!self.output_free && !gateway_authored).then_some(result)
     }
+}
+
+/// Who wrote a failed task's stored error (MIK-7887.RECEIPT.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ErrorAuthor {
+    /// The peer's own error, passed unchanged by every screen and record.
+    Peer,
+    /// Anything else: a gateway refusal, a substitute, a withheld or replaced
+    /// error.
+    Gateway,
 }
 
 /// The `_meta` key only the gateway's own interrupted results carry.
