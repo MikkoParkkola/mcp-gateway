@@ -153,3 +153,26 @@ fn the_advertised_schema_has_no_root_combinators_and_the_enforced_one_keeps_them
     );
     assert!(nested["properties"]["p"].get("oneOf").is_some());
 }
+
+/// A root combinator the gateway does not enforce stays listed: hiding it
+/// would leave the constraint checked by neither the client nor the gateway.
+#[test]
+fn an_unenforced_root_combinator_stays_in_the_advertised_schema() {
+    let schema = json!({
+        "type": "object",
+        "properties": { "a": { "type": "string" }, "b": { "type": "string" } },
+        "anyOf": [{ "required": ["a"] }, { "type": "object" }],
+        "oneOf": [{ "required": ["a"] }, { "required": ["b"] }],
+        "allOf": [{ "required": ["a"] }]
+    });
+    let shown = advertised_input_schema(&schema);
+    assert_eq!(shown["anyOf"], schema["anyOf"], "unread branch: {shown}");
+    assert_eq!(
+        shown["allOf"], schema["allOf"],
+        "allOf is never enforced: {shown}"
+    );
+    assert!(
+        shown.get("oneOf").is_none(),
+        "enforced list advertised: {shown}"
+    );
+}

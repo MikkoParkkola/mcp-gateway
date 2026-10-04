@@ -440,16 +440,24 @@ fn alternative_is_supported(alternative: &Value) -> bool {
     })
 }
 
-/// The input schema a client is shown: without `anyOf`, `oneOf` or `allOf` at
-/// its root. Some clients refuse a whole request when a tool's schema has one
-/// there; the gateway still enforces them on every call, and the capability's
-/// description says what is required.
+/// The input schema a client is shown: without a root `anyOf` or `oneOf` that
+/// `alternatives_violations` enforces. Some clients refuse a whole request when
+/// a tool's schema has one there; the gateway still enforces these on every
+/// call, and the capability's description says what is required. A combinator
+/// the gateway does not enforce (`allOf`, or a list with a branch it does not
+/// read) stays listed, so hiding it never drops a constraint from both sides.
 #[must_use]
 pub(crate) fn advertised_input_schema(schema: &Value) -> Value {
     let mut shown = schema.clone();
     if let Some(object) = shown.as_object_mut() {
-        for keyword in ["anyOf", "oneOf", "allOf"] {
-            object.remove(keyword);
+        for keyword in ["anyOf", "oneOf"] {
+            let enforced = object
+                .get(keyword)
+                .and_then(Value::as_array)
+                .is_some_and(|alternatives| alternatives.iter().all(alternative_is_supported));
+            if enforced {
+                object.remove(keyword);
+            }
         }
     }
     shown
