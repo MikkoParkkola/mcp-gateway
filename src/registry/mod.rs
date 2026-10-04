@@ -5,7 +5,6 @@
 //! Provides discovery and installation of pre-built capability definitions
 //! from both local capabilities directory and remote GitHub sources.
 
-pub mod marketplace;
 pub mod server_registry;
 
 use std::collections::HashMap;

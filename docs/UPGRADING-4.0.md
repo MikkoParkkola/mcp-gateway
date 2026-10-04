@@ -169,6 +169,7 @@ backend" and "fails a capability file" first.**
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
 | 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead; one that replaces `mcp` definitions keeps the runtime that started their children driven, or drops it |
+| 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3859,6 +3860,26 @@ fixed in 4.0.1).
 the same name. One that set `integrity`, or that edits a loaded definition before running it,
 loads the definition it means to run through the capability loader, which checks its `sha256:`
 pin.
+
+## 145. The `plugin` command and the `marketplace` config block are removed
+
+**Startup:** no notice, a removed CLI surface (a leftover `marketplace` block logs one warning, not the upgrade notice)
+
+`mcp-gateway plugin search`, `install`, `uninstall` and `list` are gone. `install` downloaded a
+manifest and wrote it under `marketplace.plugin_dir`, but no gateway path ever loaded what it
+wrote: an installed plugin added no backend, tool or capability. The default marketplace,
+`https://plugins.mcpgateway.io`, does not resolve. The flags and variables that went with the
+command (`--marketplace-url`, `--plugin-dir`, `MCP_GATEWAY_MARKETPLACE_URL`,
+`MCP_GATEWAY_PLUGIN_DIR`) are gone with it.
+
+- **`marketplace` in the config file is a retired key: it loads, does nothing, and warns once**,
+  on start and on reload, with `` `marketplace` is ignored since 4.0: the `plugin` command was removed in 4.0, and nothing else read this block: no gateway path loaded the plugins it installed. Remove the marketplace block. ``
+- **Library break:** the `mcp_gateway::registry::marketplace` module and
+  `mcp_gateway::config::MarketplaceConfig` are removed, and `Config` has no `marketplace` field.
+
+**Action:** delete the `marketplace:` block and the `~/.mcp-gateway/plugins` directory (or your
+`plugin_dir`). Add tools as `backends:` entries or as capability files (`mcp-gateway cap`), which
+the gateway does load. Drop `plugin` calls from scripts.
 
 ## Upgrading from 3.5.x: a walkthrough
 

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Secondary subcommand enums for `mcp-gateway`.
 //!
-//! This module contains [`CapCommand`], [`PluginCommand`], [`TlsCommand`], and
-//! [`TrustCommand`] — all extracted from `cli/mod.rs` to keep each file under
+//! This module contains [`CapCommand`], [`TlsCommand`], and [`TrustCommand`]
+//! — all extracted from `cli/mod.rs` to keep each file under
 //! 800 lines.
 
 use std::path::PathBuf;
@@ -610,88 +610,6 @@ pub enum RuntimeProviderArg {
     Launchd,
     /// Kubernetes workload runtime.
     Kubernetes,
-}
-
-/// Plugin marketplace subcommands
-///
-/// Manages gateway plugins sourced from the remote marketplace at
-/// `https://plugins.mcpgateway.io` (configurable via `marketplace.marketplace_url`).
-///
-/// # Examples
-///
-/// ```bash
-/// # Search for Stripe-related plugins
-/// mcp-gateway plugin search stripe
-///
-/// # Install a plugin
-/// mcp-gateway plugin install stripe-payments
-///
-/// # List installed plugins
-/// mcp-gateway plugin list
-///
-/// # Remove a plugin
-/// mcp-gateway plugin uninstall stripe-payments
-/// ```
-#[derive(Subcommand, Debug)]
-pub enum PluginCommand {
-    /// Search the marketplace for plugins matching a query
-    ///
-    /// Queries the remote marketplace and prints matching plugin names,
-    /// versions, and descriptions.
-    #[command(about = "Search the plugin marketplace")]
-    Search {
-        /// Text to search for (matched against name, description, and tags)
-        #[arg(required = true)]
-        query: String,
-
-        /// Marketplace base URL (overrides config `marketplace.marketplace_url`)
-        #[arg(long, env = "MCP_GATEWAY_MARKETPLACE_URL")]
-        marketplace_url: Option<String>,
-    },
-
-    /// Download and install a plugin from the marketplace
-    ///
-    /// Downloads the plugin manifest, verifies its SHA-256 checksum, and
-    /// installs it into the local plugin directory.
-    #[command(about = "Install a plugin from the marketplace")]
-    Install {
-        /// Plugin name to install (as listed by `plugin search`)
-        #[arg(required = true)]
-        name: String,
-
-        /// Marketplace base URL (overrides config `marketplace.marketplace_url`)
-        #[arg(long, env = "MCP_GATEWAY_MARKETPLACE_URL")]
-        marketplace_url: Option<String>,
-
-        /// Local directory to install plugins into (overrides config `marketplace.plugin_dir`)
-        #[arg(long, env = "MCP_GATEWAY_PLUGIN_DIR")]
-        plugin_dir: Option<std::path::PathBuf>,
-    },
-
-    /// Remove an installed plugin
-    ///
-    /// Deletes the plugin directory and removes it from the local registry.
-    #[command(about = "Uninstall a plugin")]
-    Uninstall {
-        /// Plugin name to remove
-        #[arg(required = true)]
-        name: String,
-
-        /// Local plugin directory (overrides config `marketplace.plugin_dir`)
-        #[arg(long, env = "MCP_GATEWAY_PLUGIN_DIR")]
-        plugin_dir: Option<std::path::PathBuf>,
-    },
-
-    /// List all locally installed plugins
-    ///
-    /// Scans the plugin directory and prints every installed plugin with its
-    /// version and install path.
-    #[command(about = "List installed plugins")]
-    List {
-        /// Local plugin directory (overrides config `marketplace.plugin_dir`)
-        #[arg(long, env = "MCP_GATEWAY_PLUGIN_DIR")]
-        plugin_dir: Option<std::path::PathBuf>,
-    },
 }
 
 /// TLS certificate lifecycle subcommands (RFC-0051)

@@ -218,7 +218,6 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
         "playbooks" => playbooks,
         "routing_profiles" => routing_profiles,
         "code_mode" => code_mode,
-        "marketplace" => marketplace,
         "streaming" => streaming,
         "failsafe" => failsafe,
         "error_budget" => error_budget,
@@ -323,7 +322,6 @@ pub(super) struct MetaFields {
     key_server: String,
     agent_auth: String,
     runtime: String,
-    marketplace: String,
     /// Control-plane section (RBAC role mapping). Tracked so a role-mapping-only
     /// edit is detected and triggers a reload — without this, removing an admin
     /// rule would not take effect until restart (MIK-6702 CP.RELOAD.2).
@@ -365,7 +363,6 @@ impl MetaFields {
             key_server: canonical_json(&c.key_server),
             agent_auth: canonical_json(&c.agent_auth),
             runtime: canonical_json(&c.runtime),
-            marketplace: canonical_json(&c.marketplace),
             control_plane: canonical_json(&c.control_plane),
             server_public_url: c.server.public_url.clone().unwrap_or_default(),
             #[cfg(feature = "cost-governance")]

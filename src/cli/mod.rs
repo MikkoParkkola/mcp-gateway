@@ -46,9 +46,8 @@ use crate::cli::output::OutputFormat;
 pub use identity::{IdentityCommand, IdentityGrantScopeArg, IdentityGrantsCommand};
 pub use skills::SkillsCommand;
 pub use subcommands::{
-    AuditCommand, CapCommand, KubernetesCommand, PluginCommand, ProtocolImportCommand,
-    ProtocolImportKind, RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand,
-    TrustLabCommand,
+    AuditCommand, CapCommand, KubernetesCommand, ProtocolImportCommand, ProtocolImportKind,
+    RankingCommand, RuntimeProviderArg, TlsCommand, TrustCommand, TrustLabCommand,
 };
 
 // ── Config-export CLI types ───────────────────────────────────────────────────
@@ -360,13 +359,6 @@ pub enum Command {
     /// that AI agents can discover and load via the `loadSkill` convention.
     #[command(subcommand, about = "Generate agent skill bundles")]
     Skills(SkillsCommand),
-
-    /// Manage gateway plugins from the marketplace
-    ///
-    /// Search, install, uninstall, and list gateway plugins sourced from the
-    /// remote plugin marketplace.
-    #[command(subcommand, about = "Plugin marketplace management")]
-    Plugin(PluginCommand),
 
     /// Setup wizard and config export — import MCP servers or export gateway config
     ///
