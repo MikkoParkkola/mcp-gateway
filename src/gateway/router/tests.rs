@@ -11,6 +11,7 @@ use crate::backend::{Backend, BackendRegistry};
 use crate::config::{
     ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig, StreamingConfig, SurfacedToolConfig,
 };
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::test_helpers::MetaMcp;
 use crate::gateway::{
     AgentAuthState, AgentIdentity as OAuthAgentIdentity, AgentRegistry, GatewayKeyPair,
@@ -25,6 +26,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -616,6 +618,81 @@ fn deployment_guide_matches_the_admin_tool_set() {
              which it no longer does"
         );
     }
+}
+
+/// A client restricted to one backend, with optional tool scoping.
+fn scoped_client(
+    name: &str,
+    backends: Vec<String>,
+    allowed_tools: Option<Vec<String>>,
+) -> AuthenticatedClient {
+    AuthenticatedClient {
+        quota_principal: None,
+        name: name.to_string(),
+        rate_limit: 0,
+        backends,
+        allowed_tools,
+        denied_tools: None,
+        admin: false,
+        principal: format!("principal-{name}"),
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    }
+}
+
+/// A refusal must be attributed to whichever identity authenticated the caller.
+///
+/// The audit line exists so an incident responder can say who was refused.
+/// Reporting only the API-key name labels an agent-authenticated or
+/// certificate-authenticated caller as unauthenticated — precisely the
+/// refusals most worth attributing. Unwired from any assertion until now.
+#[test]
+fn authz_refusal_principal_names_the_authenticated_identity() {
+    use crate::gateway::oauth::AgentIdentity;
+    use crate::mtls::CertIdentity;
+
+    let api_key = scoped_client("keyed", vec!["*".into()], None);
+    assert_eq!(
+        super::authorization::refusal_principal(Some(&api_key), None, None).as_deref(),
+        Some("keyed"),
+        "an API-key caller is named by its client name"
+    );
+
+    let agent = AgentIdentity {
+        quota_principal: None,
+        client_id: "cid".to_string(),
+        agent_name: "runner".to_string(),
+        scopes: Vec::new(),
+        raw_scopes: Vec::new(),
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(None, Some(&agent), None).as_deref(),
+        Some("agent:runner"),
+        "an agent caller must not be reported as unauthenticated"
+    );
+
+    let cert = CertIdentity {
+        display_name: "machine-7".to_string(),
+        ..CertIdentity::default()
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(None, None, Some(&cert)).as_deref(),
+        Some("cert:machine-7"),
+        "a certificate caller must not be reported as unauthenticated"
+    );
+
+    let anonymous = AuthenticatedClient {
+        quota_principal: None,
+        authenticated: false,
+        credential_kind: crate::security::audit::CredentialKind::None,
+        ..scoped_client("public", vec!["*".into()], None)
+    };
+    assert_eq!(
+        super::authorization::refusal_principal(Some(&anonymous), None, None),
+        None,
+        "an identity that presented no credential is genuinely unattributed, \
+         and must not borrow the name of a configured client"
+    );
 }
 
 /// The fixture with the 2026 era switched on.
