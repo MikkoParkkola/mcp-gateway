@@ -339,6 +339,11 @@ async fn message_webhook_mapped_top_level_id_is_judged() {
         let got = message_delivered(CrossTenantReads::Block, &keys, transform, &body).await;
         assert_eq!(got, tenant == A, "block, mapped id naming {tenant}: {body}");
     }
+    // A mapped `id` does not replace the raw scan: B named only in a field the
+    // mapping drops is still judged.
+    let body = json!({ "ref": "evt-1", "kind": "row-78", "customer_id": B });
+    let got = message_delivered(CrossTenantReads::Block, &["customer_id"], transform, &body).await;
+    assert!(!got, "block, B only in the dropped raw field: {body}");
 }
 
 /// A modern `subscriptions/listen` stream under the fixture key, past its
