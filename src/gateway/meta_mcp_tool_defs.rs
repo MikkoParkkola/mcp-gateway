@@ -6,6 +6,7 @@
 //! interface. Kept separate from the helper utilities so the schema definitions
 //! can be updated without touching the routing/search logic.
 
+use super::meta_mcp_search_schema::search_tools_output_schema;
 pub(crate) use super::meta_mcp_tool_total::ToolTotal;
 use crate::protocol::{Tool, ToolAnnotations};
 use serde_json::{Value, json};
@@ -72,30 +73,6 @@ fn build_list_tools_tool(tool_count: ToolTotal, server_count: usize) -> Tool {
         role: Some(crate::projection::Role::Selector),
         projection: None,
     }
-}
-
-/// JSON output schema describing the `gateway_search_tools` response structure.
-fn search_tools_output_schema() -> serde_json::Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "matches": {
-                "type": "array",
-                "description": "Ranked list of matching tools",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "server":      { "type": "string", "description": "Backend server name" },
-                        "tool":        { "type": "string", "description": "Tool name" },
-                        "description": { "type": "string", "description": "Tool description" },
-                        "score":       { "type": "number", "description": "Relevance score (higher is more relevant)" }
-                    },
-                    "required": ["server", "tool", "description", "score"]
-                }
-            }
-        },
-        "required": ["matches"]
-    })
 }
 
 /// Build the `gateway_search_tools` meta-tool definition.
