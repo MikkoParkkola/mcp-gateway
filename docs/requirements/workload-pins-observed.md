@@ -41,8 +41,8 @@ filled by an actual run; they are absent here by construction.
 
 The contract digest above dates from 2026-09-13. The contract changed after that
 (`9ebc0e4c…e459` before the §7 amendment). The 2026-10-04 amendment, which sets §7 to the
-n = 18 rep schedule the runner executes and adds the reps and seed rows to §11, gives
-`bc5621428cade0673d9a0dce9b819ecb8ff69d45cda85ebf6327f3e644705ba2`. Re-read the digest at
+n = 18 rep schedule the runner executes and adds the reps and seed rows to §11 (seed `20261007`), gives
+`a09b26e0758508c483f81fb84536cdb88aae20bc0b19e2b83dd648ff8ddcf2ef`. Re-read the digest at
 freeze. A later edit changes it again.
 
 ## Rep schedule
@@ -50,7 +50,7 @@ freeze. A later edit changes it again.
 | Pin | Value |
 |---|---|
 | measured reps per cell | 18 (`WORKLOAD_REPS=18`; `pins.json` `reps` = 1..18) |
-| cell order | seeded permutation of A–E per rep (`cell_order_seed` in `pins.json`) |
+| cell order | seeded permutation of A–E per rep; seed `20261007` (`cell_order_seed` in `pins.json`) |
 
 ## Checkout SHAs
 

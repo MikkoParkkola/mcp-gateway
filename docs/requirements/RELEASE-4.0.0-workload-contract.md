@@ -271,7 +271,9 @@ measured:              rep n = 1..18, each a seeded permutation of A B C D E
 The graded run takes **n = 18 measured reps per cell** (`WORKLOAD_REPS=18`,
 with the runner's floor of 6). In each rep all five cells run once, in an order
 drawn from `WORKLOAD_SEED` and the rep number (`cell_order` in
-`run_workload.sh`). The seed is recorded in `pins.json` and the drawn order in
+`run_workload.sh`). The graded run uses **`WORKLOAD_SEED=20261007`**, a fixed
+number ratified here, not derived from the freeze SHA or chosen on the day.
+The seed is recorded in `pins.json` and the drawn order in
 `cell_order.jsonl`. D and E sit in the same loop as the gated cells, so every
 cell sees the same machine window.
 
@@ -287,7 +289,7 @@ amendment is made before the graded run at the freeze SHA, so the number of
 reps is fixed in advance, not chosen after the data is seen.
 
 Freeze-time check, before the verdict is read: `pins.json` must have `reps`
-equal to 1..18 and `cell_order_seed` equal to the ratified seed. The evaluator
+equal to 1..18 and `cell_order_seed` equal to `20261007`. The evaluator
 does not enforce either, so a run that silently took the runner's default of 6,
 or a generated seed, is caught here rather than graded.
 
@@ -363,7 +365,7 @@ Filled before the first measured rep; empty pins void the run.
 | cell B checkout SHA | (pinned at freeze) |
 | cell C/D/E checkout SHA | (pinned at freeze) |
 | measured reps per cell (`pins.json` `reps`) | 18 (`WORKLOAD_REPS=18`; `reps` must list 1..18) |
-| cell-order seed (`pins.json` `cell_order_seed`) | (pinned at freeze) |
+| cell-order seed (`pins.json` `cell_order_seed`) | `20261007` (`WORKLOAD_SEED=20261007`) |
 
 The runner writes the per-cell checkout SHAs, health versions and k6 digest
 into `pins.json` in the run directory, and the evaluator voids the run if any
