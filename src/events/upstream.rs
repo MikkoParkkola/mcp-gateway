@@ -89,6 +89,19 @@ pub(crate) fn multi_user(running: &Config) -> bool {
         .implies_multi_user(!running.key_server.oidc.is_empty())
 }
 
+/// The backends the live config makes ineligible, re-read at every call: the
+/// one predicate the events source and its listeners share, so a reload is
+/// seen at the next use (MIK-7894).
+pub(crate) fn live_ineligible(
+    live: std::sync::Arc<crate::config_reload::LiveConfig>,
+) -> super::backend_source::Ineligible {
+    std::sync::Arc::new(move || {
+        ineligible_backends(&live.get(), multi_user(live.running()))
+            .into_keys()
+            .collect()
+    })
+}
+
 /// Every configured backend that cannot offer the events, with the reason.
 /// Read from config alone, so asking never starts a backend.
 pub(crate) fn ineligible_backends(

@@ -25,7 +25,7 @@ Personal and noncommercial use is free, including running the full gateway. Runn
 
 ## The problem this removes
 
-Every MCP tool an AI client connects costs roughly 150 tokens of context overhead, loaded into every request whether the tool gets used or not. Connect 20 servers with 100 tools between them and you spend about 15,000 tokens before the conversation starts. Context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
+A client that loads every connected tool's full definition up front (an eager client) pays for each one in every request, whether the tool gets used or not. At the roughly 150 tokens per tool this README's model assumes (`benchmarks/public_claims.json`; an assumed figure, not a measurement), 20 servers with 100 tools between them cost about 15,000 tokens before the conversation starts. Some clients defer instead: they load only tool names and fetch a definition when the model asks for it, so their per-tool cost is much lower and this figure does not apply to them. For those clients, aggregation, routing and policy are the main reasons to use the gateway, not context savings. For eager clients, context limits then force a second cost: you have to decide up front which tools to connect and leave the rest out, so the agent makes worse decisions because it cannot reach data you chose not to load.
 
 MCP Gateway moves the full catalog out of the exposed tool list. The agent loads a small fixed set of meta-tools, searches with `gateway_search_tools`, and invokes a backend tool with `gateway_invoke`. This creates room for larger catalogs, but the extra search hop can cost more tokens and time on a completed task.
 
@@ -297,7 +297,7 @@ MCP Gateway is a tool and capability **router**. It routes MCP tool, resource, a
 
 It is not a chat-completions or embeddings proxy. When a backend asks for `sampling/createMessage`, the connected client performs the model call, not the gateway. The OpenAI-compatible prompt-cache helpers exist for one narrow reason: so `gateway_invoke` can preserve `prompt_cache_key` behavior for backends that call LLM APIs internally. That boundary is deliberate. The value here is routing hundreds of tools through a small surface, not sitting in the model path.
 
-Compared with the default approach of loading every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. Compared with generic transport bridges that expose one server at a time, it aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
+Compared with a client that loads every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. Compared with generic transport bridges that expose one server at a time, it aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
 
 <a id="end-user-identity-v31"></a>
 
@@ -314,11 +314,11 @@ Quantitative claims in this README are sourced from [docs/BENCHMARKS.md](docs/BE
 
 ## Why the token math matters
 
-Every MCP tool you connect costs about 150 tokens of context overhead. Connect 20 servers with 100 tools and you have burned roughly 15,000 tokens before the first message, on definitions the AI probably will not use this turn. Worse, context limits force you to choose which tools to connect at all, so the agent makes weaker decisions because the right data is out of reach.
+In a client that loads every definition up front, every MCP tool you connect costs context in every request; this README models it at about 150 tokens per tool, an assumed figure rather than a measurement. Connect 20 servers with 100 tools and you have burned roughly 15,000 tokens before the first message, on definitions the AI probably will not use this turn. A client that loads only tool names until one is needed pays far less, so the comparison below is for eager clients. Worse, in an eager client context limits force you to choose which tools to connect at all, so the agent makes weaker decisions because the right data is out of reach.
 
 | | Without gateway | With gateway |
 |---|----------------|--------------|
-| **Tools in context** | Every definition, every request | 11 meta-tools in the README benchmark (~1,100 tokens) |
+| **Tools in context** | Every definition, every request (eager client) | 11 meta-tools in the README benchmark (~1,100 tokens) |
 | **Schema footprint** | ~15,000 modeled tokens (100 tools) | ~1,100 modeled tokens before discovery; not completed-task cost |
 | **Measured task cost** | Direct path was lower at every tested size | Meta path used 1.2–16.1% more input tokens and one extra turn |
 | **Practical tool limit** | 20 to 50 tools under context pressure | Unlimited, discovered on demand |
