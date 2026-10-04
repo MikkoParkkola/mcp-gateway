@@ -18,7 +18,6 @@
 1464 src/capability/definition/tests.rs
 1460 src/idempotency.rs
 1412 src/gateway/meta_mcp/account_rest_tests.rs
-1405 src/capability/definition/mod.rs
 1398 tests/mik_7212_mrtr_component_acs.rs
 1329 tests/security_tests.rs
 1329 tests/openwebui_adapter_config.rs
