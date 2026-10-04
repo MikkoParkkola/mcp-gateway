@@ -3,6 +3,7 @@
 //! #2450: the record's `targets` field, its version, and the loader range.
 use super::super::record::Target;
 use super::*;
+use chrono::Utc;
 
 fn target() -> Target {
     Target {
