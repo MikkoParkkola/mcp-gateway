@@ -259,7 +259,7 @@ impl McpChildren {
 
     /// Clone every child's backend, as a call's lease does, so a test can
     /// keep a "call in flight" past the child's eviction.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn lease_backends_for_test(&self) -> Vec<Arc<Backend>> {
         self.map
             .lock()

@@ -178,3 +178,32 @@ async fn a_verified_definition_changed_after_loading_is_refused() {
         .to_string();
     assert!(err.contains("changed after its pin"), "{err}");
 }
+
+/// MIK-7814: the fingerprint is lossless. Two integers a double cannot tell
+/// apart (2^53 and 2^53 + 1) must still give different fingerprints, so an
+/// edit between them is refused.
+#[tokio::test]
+async fn an_edit_between_adjacent_large_integers_is_refused() {
+    let body = "name: gate_probe\ndescription: Gate probe.\nschema:\n  input:\n    type: object\n    \
+                properties:\n      n:\n        type: integer\n        default: 9007199254740992\n\
+                providers:\n  primary:\n    service: cli\n    config:\n      command: gws\n      \
+                args: [gmail]\n";
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("gate_probe.yaml");
+    std::fs::write(
+        &path,
+        rewrite_with_pin(body, &compute_capability_hash(body)),
+    )
+    .unwrap();
+    let loaded = parse_capability_file(&path)
+        .await
+        .expect("pinned file loads");
+    admit(&ProcessPolicy::default(), &loaded, process(&loaded)).expect("as loaded, admitted");
+    let mut changed = loaded.clone();
+    changed.schema.input["properties"]["n"]["default"] =
+        serde_json::json!(9_007_199_254_740_993_u64);
+    let err = admit(&ProcessPolicy::default(), &changed, process(&changed))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("changed after its pin"), "{err}");
+}
