@@ -1,0 +1,16 @@
+diff --git a/src/personal_accounts/vault.rs b/src/personal_accounts/vault.rs
+index 09e9695e1..a720022a2 100644
+--- a/src/personal_accounts/vault.rs
++++ b/src/personal_accounts/vault.rs
+@@ -367,9 +367,9 @@ impl VaultStrategy {
+     pub(crate) async fn recheck(&self, lease: &CredentialLease) -> Result<(), PropagationError> {
+         // Bound to this statement: the released token is never bound to a name
+         // that outlives the check it exists for (CWE-226).
+-        self.custody.release(lease).await.map_err(|error| {
++        let _ = self.custody.release(lease).await.map_err(|error| {
+             refusal("managed account credential is no longer releasable", &error)
+-        })?;
++        });
+         Ok(())
+     }
+ }

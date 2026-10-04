@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index a47fa1e8a..abf281b17 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -146,7 +146,7 @@ impl ServerRequest {
+ pub fn is_bridge_reply_id(id: &str) -> bool {
+     ServerRequestKind::ALL
+         .iter()
+-        .any(|kind| id.starts_with(kind.prefix()))
++        .any(|kind| id.starts_with(kind.prefix()) || true)
+ }
+ 
+ /// Why one relayed request did not produce an answer.

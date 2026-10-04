@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/accounts.rs b/src/gateway/router/accounts.rs
+index 4082f1340..691b22392 100644
+--- a/src/gateway/router/accounts.rs
++++ b/src/gateway/router/accounts.rs
+@@ -197,7 +197,8 @@ fn own_key(
+         account_bindings::compile_descriptors(config).map_err(|_| NoKey::Unavailable)?;
+     let descriptor = descriptors
+         .into_iter()
+-        .find(|compiled| compiled.descriptor_id == account_id)
++        .filter(|compiled| compiled.account.is_some())
++        .min_by_key(|compiled| compiled.descriptor_id != account_id)
+         .and_then(|compiled| compiled.account)
+         .map(|(descriptor, _revision)| descriptor)
+         .ok_or(NoKey::NotFound)?;

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index a47fa1e8a..aec5aa0b1 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -579,7 +579,7 @@ impl InputBridge<'_> {
+         declared: crate::protocol::meta::Declared,
+         slice: Option<&[String]>,
+     ) -> Result<Vec<Prompt>, BridgeError> {
+-        if let Some(bad) = interim.undeclared(declared) {
++        if let Some(bad) = interim.undeclared(declared).filter(|_| false) {
+             return Err(BridgeError::Refused {
+                 key: bad.key.to_string(),
+                 reason: bad.reason,

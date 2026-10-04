@@ -1,0 +1,21 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 064744c1b..2278007be 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -455,13 +455,9 @@ impl StdioTransport {
+                 slot.insert(DeliveryHandle::capture(token));
+                 true
+             }
+-            dashmap::mapref::entry::Entry::Occupied(_) => {
+-                // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
+-                warn!(
+-                    token = %token,
+-                    "progress token is already registered to a live call; refusing to reroute it"
+-                );
+-                false
++            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
++                slot.insert(DeliveryHandle::capture(token));
++                true
+             }
+         }
+     }

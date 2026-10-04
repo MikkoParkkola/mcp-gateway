@@ -1,0 +1,15 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 064744c1b..244886c13 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -654,9 +654,7 @@ impl<'a> ProgressRegistrationGuard<'a> {
+ 
+ impl Drop for ProgressRegistrationGuard<'_> {
+     fn drop(&mut self) {
+-        if self.owns_registration {
+-            self.transport.deregister_progress_token(&self.token);
+-        }
++        self.transport.deregister_progress_token(&self.token);
+     }
+ }
+ 

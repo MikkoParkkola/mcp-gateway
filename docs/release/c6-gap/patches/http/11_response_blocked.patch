@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/direct_guards.rs b/src/gateway/router/direct_guards.rs
+index a295312fc..656067690 100644
+--- a/src/gateway/router/direct_guards.rs
++++ b/src/gateway/router/direct_guards.rs
+@@ -172,7 +172,8 @@ fn response_blocked(
+             "Firewall: direct backend response warning"
+         );
+     }
+-    !verdict.allowed
++    let _ = !verdict.allowed;
++    false
+ }
+ 
+ #[cfg(not(feature = "firewall"))]

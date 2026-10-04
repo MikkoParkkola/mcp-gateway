@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/journey/callback.rs b/src/personal_accounts/journey/callback.rs
+index fe8992827..2fed15f15 100644
+--- a/src/personal_accounts/journey/callback.rs
++++ b/src/personal_accounts/journey/callback.rs
+@@ -61,7 +61,7 @@ fn locate(config: &StoreConfig, table: &JourneyTable, state: &str) -> Option<Jou
+ 
+ /// Step 2 (R2-3, R3-2): a replay is decided on the PRE-sweep record.
+ fn is_replay(before: &JourneyRecord) -> bool {
+-    before.consumed
++    false
+         || matches!(
+             before.status,
+             JourneyStatus::Connected

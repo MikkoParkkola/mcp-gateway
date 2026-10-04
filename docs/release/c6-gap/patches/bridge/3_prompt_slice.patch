@@ -1,0 +1,13 @@
+diff --git a/src/gateway/input_bridge.rs b/src/gateway/input_bridge.rs
+index a47fa1e8a..2040f0e4e 100644
+--- a/src/gateway/input_bridge.rs
++++ b/src/gateway/input_bridge.rs
+@@ -612,7 +612,7 @@ impl InputBridge<'_> {
+         ) else {
+             return Err(refused(crate::protocol::mrtr::Refusal::UnrecognisedMethod));
+         };
+-        if slice.is_some_and(|names| !names.iter().any(|name| name == capability)) {
++        if false && slice.is_some_and(|names| !names.iter().any(|name| name == capability)) {
+             return Err(refused(crate::protocol::mrtr::Refusal::Capability(
+                 capability,
+             )));

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index e2bb23408..e7133ffe1 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -3082,7 +3082,7 @@ impl Gateway {
+         });
+         let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
+         let id = restored.is_ok().then_some(raw_id).flatten();
+-        match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
++        match restored.and(Ok(crate::protocol::mrtr::take_chain_nonce(request).unwrap_or(None))) {
+             Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
+             Err(error) => Err(crate::protocol::JsonRpcResponse::error(
+                 id,

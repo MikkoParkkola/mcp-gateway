@@ -1,0 +1,13 @@
+diff --git a/src/oauth/storage.rs b/src/oauth/storage.rs
+index 5b95e519f..446b52a0a 100644
+--- a/src/oauth/storage.rs
++++ b/src/oauth/storage.rs
+@@ -114,7 +114,7 @@ impl TokenInfo {
+                 .as_secs();
+ 
+             // Consider expired 60 seconds before actual expiry
+-            now + 60 >= expires_at
++            now >= expires_at
+         } else {
+             // No expiry = doesn't expire
+             false

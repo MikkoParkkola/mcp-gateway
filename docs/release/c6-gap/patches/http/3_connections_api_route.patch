@@ -1,0 +1,21 @@
+diff --git a/src/gateway/router/accounts/connections.rs b/src/gateway/router/accounts/connections.rs
+index 92b958c5a..2b0c88469 100644
+--- a/src/gateway/router/accounts/connections.rs
++++ b/src/gateway/router/accounts/connections.rs
+@@ -32,7 +32,15 @@ pub(super) fn api_route(revocation: Arc<dyn AccountRevocation>) -> Router<Arc<Ap
+     let handler = move |State(state): State<Arc<AppState>>, request: Request| async move {
+         let extensions = request.extensions();
+         let (Some(identity), Some(Forwarded(account_id))) = (
+-            extensions.get::<VerifiedIdentity>().cloned(),
++            extensions.get::<VerifiedIdentity>().cloned().or_else(|| {
++                Some(VerifiedIdentity {
++                    subject: String::new(),
++                    email: String::new(),
++                    name: None,
++                    groups: Vec::new(),
++                    issuer: String::new(),
++                })
++            }),
+             extensions.get::<Forwarded>().cloned(),
+         ) else {
+             return refusal(StatusCode::UNAUTHORIZED, "unauthenticated", None);
