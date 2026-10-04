@@ -252,3 +252,35 @@ async fn add_targets_refuses_a_foreign_owner_a_moved_row_a_settled_row_and_a_clo
         StoreError::Unavailable
     );
 }
+
+/// C6 gap table rank 6 (tasks, `Shared::settle_bounded_blocking`): settling
+/// another owner's live task is refused as not found and writes nothing. The
+/// request path checks ownership first, which would hide this refusal failing
+/// open; recovery passes the row's own owner.
+#[tokio::test]
+async fn settle_bounded_refuses_a_foreign_owner_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let live = task();
+    store
+        .create(PreparedTask::for_test(&live, OWNER, 1))
+        .await
+        .unwrap();
+    let before = files(&path);
+
+    let refused = store
+        .settle_bounded(OTHER, live.id(), 1, (TaskTransition::Cancel, None), at(1))
+        .await
+        .unwrap_err();
+
+    assert_eq!(refused, StoreError::NotFound);
+    assert_eq!(files(&path), before, "a refusal writes nothing");
+    // Positive control: the owner settles the same row at the same revision.
+    let settled = store
+        .settle_bounded(OWNER, live.id(), 1, (TaskTransition::Cancel, None), at(1))
+        .await
+        .unwrap();
+    assert_eq!(settled.task.status(), TaskStatus::Cancelled);
+    store.close().await.unwrap();
+}
