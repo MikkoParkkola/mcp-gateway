@@ -173,10 +173,11 @@ fn newline_less_record_failing_its_hash_or_signature_is_dropped() {
         let p = path.clone();
         within_10s(move || drop(TransparencyLogger::open(cfg(&p, 12, signed)).unwrap()));
         let after = lines(&path);
-        assert_eq!(
-            event(after.last().unwrap()),
-            Some(EV_TORN),
-            "signed {signed}: {after:?}"
+        // The repair record is chained, and the missing-mark marker may follow
+        // it when `.hwm` already counted the dropped line.
+        assert!(
+            after.iter().any(|r| event(r) == Some(EV_TORN)),
+            "signed {signed}: no torn-tail record: {after:?}"
         );
         assert!(
             !after.contains(&all[last]),
