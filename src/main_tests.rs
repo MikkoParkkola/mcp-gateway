@@ -326,7 +326,12 @@ fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
 /// resolved, and nothing read what `plugin install` wrote.
 #[test]
 fn cli_plugin_command_is_gone() {
-    for args in [&["plugin", "list"][..], &["plugin", "search", "stripe"][..]] {
+    for args in [
+        &["plugin", "search", "stripe"][..],
+        &["plugin", "install", "stripe-payments"][..],
+        &["plugin", "uninstall", "stripe-payments"][..],
+        &["plugin", "list"][..],
+    ] {
         assert!(parse_args(args).is_err(), "{args:?} still parses");
     }
 }

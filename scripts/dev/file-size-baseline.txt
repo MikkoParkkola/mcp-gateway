@@ -1,7 +1,7 @@
 # Rust files over the 800-line ceiling, with the count when recorded.
 # The gate ratchets: a listed file may shrink, never grow, and nothing new
 # may cross. Delete a row once the file drops under the ceiling.
-# 37 files, 16307 lines of excess.
+# 36 files, 16303 lines of excess.
 5364 src/gateway/server/mod.rs
 2668 src/gateway/meta_mcp/mod.rs
 2176 src/gateway/router/handlers.rs
@@ -38,4 +38,3 @@
 840 src/personal_accounts/worker_tests.rs
 838 src/tool_registry.rs
 836 src/gateway/meta_mcp_helpers_chain_tests.rs
-804 src/cli/subcommands.rs
