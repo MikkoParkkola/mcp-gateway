@@ -265,10 +265,10 @@ async fn text_removed_from_one_step_but_delivered_by_another_stays_receipted() {
 /// alice's copy of it is still caught, though the answer lost the marker.
 #[tokio::test]
 async fn a_kept_plan_receipt_stays_sensitive() {
-    let (meta, firewall) = relay_meta();
+    let (meta, firewall) = super::classified_only_meta();
     let marked = |text: &str| {
         let mut v = text_result(text);
-        v["_context_integrity"] = json!({"classification": {"data_classes": ["credentials"]}});
+        v["_context_integrity"] = json!({"classification": {"data_classes": ["personal_data"]}});
         v
     };
     let ((), staged) = meta
