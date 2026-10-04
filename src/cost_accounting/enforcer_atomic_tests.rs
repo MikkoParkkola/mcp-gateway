@@ -158,6 +158,9 @@ fn an_add_inside_the_day_reset_window_is_kept() {
         }));
     });
     acc.add(3);
-    slot.take().expect("the reset window was reached").join().unwrap();
+    slot.take()
+        .expect("the reset window was reached")
+        .join()
+        .unwrap();
     assert_eq!(acc.current(), 8, "an add inside the reset window was lost");
 }

@@ -4,21 +4,18 @@
 //! Pre-invoke budget enforcement.
 //!
 //! `BudgetEnforcer::check()` is called BEFORE every tool dispatch.
-//! It must complete in <0.1 ms: one `DashMap` lookup + ≤3 atomic comparisons,
-//! no allocations on the hot path when the tool is free. A paid tool also takes
-//! the reservation lock and allocates its hold (MIK-7763).
+//! It must complete in <0.1 ms: one `DashMap` lookup + ≤3 short uncontended
+//! locks, no allocations on the hot path when the tool is free. A paid tool also
+//! takes the reservation lock and allocates its hold (MIK-7763).
 //!
 //! # Day-boundary reset
 //!
-//! `DailyAccumulator` stores (`day_number`, `micro_usd`) as separate atomics.
-//! On each `add()` call the current day is compared to the stored day:
-//! - If equal: `fetch_add` on the counter.
-//! - If different: `compare_exchange` to win the reset race, then `swap(0)`
-//!   + `fetch_add`.  Losers of the CAS fall through to `fetch_add` on the
-//!     already-reset counter — no spend is lost.
+//! `DailyAccumulator` keeps (`day_number`, `micro_usd`) under one lock. Each
+//! `add()` compares the current day to the stored day and, on a rollover,
+//! publishes the new day and clears the total in the same critical section,
+//! so no add can land between the two and be erased (MIK-7880).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -30,15 +27,14 @@ use super::registry::CostRegistry;
 
 // ── DailyAccumulator ─────────────────────────────────────────────────────────
 
-/// Atomic daily spend accumulator with automatic day-boundary reset.
+/// Daily spend accumulator with automatic day-boundary reset.
 ///
-/// Uses two independent `AtomicU64` fields:
-/// - `day`: days since UNIX epoch (UTC).  Detects day rollovers.
-/// - `micro_usd`: accumulated spend in micro-USD (1 USD = `1_000_000`).
+/// One lock holds both halves, so a reset and an add never interleave:
+/// - `.0`: days since UNIX epoch (UTC).  Detects day rollovers.
+/// - `.1`: accumulated spend in micro-USD (1 USD = `1_000_000`).
 #[cfg(feature = "cost-governance")]
 pub struct DailyAccumulator {
-    day: AtomicU64,
-    micro_usd: AtomicU64,
+    state: Mutex<(u64, u64)>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -53,50 +49,40 @@ impl DailyAccumulator {
     /// Create a new accumulator initialised to today / zero spend.
     pub fn new() -> Self {
         Self {
-            day: AtomicU64::new(current_day()),
-            micro_usd: AtomicU64::new(0),
+            state: Mutex::new((current_day(), 0)),
         }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, (u64, u64)> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Add `micro` micro-USD of spend.  Auto-resets on day boundary.
     ///
     /// Returns the new running total **after** the add.
     ///
-    /// Race-safety: `compare_exchange` ensures only one winner resets the
-    /// counter.  The winner uses `swap(0)` then `fetch_add(micro)` so any
-    /// concurrent `fetch_add` calls that arrive between the swap and our add
-    /// are preserved.  Losers of the CAS simply `fetch_add` on the
-    /// already-reset accumulator.
+    /// Race-safety: the rollover check, the clear and the add share one
+    /// critical section, so an add on the new day cannot be erased by the
+    /// reset (MIK-7880).
     pub fn add(&self, micro: u64) -> u64 {
         let today = current_day();
-        let stored = self.day.load(Ordering::Acquire);
-        if stored != today {
-            // Attempt to win the reset race
-            if self
-                .day
-                .compare_exchange(stored, today, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-            {
-                #[cfg(test)]
-                fire_after_day_publish();
-                // Won: zero the counter, then add our spend
-                self.micro_usd.swap(0, Ordering::AcqRel);
-                return self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro;
-            }
-            // Lost: another thread already reset — fall through to fetch_add
+        let mut state = self.lock();
+        if state.0 != today {
+            state.0 = today;
+            #[cfg(test)]
+            fire_after_day_publish();
+            state.1 = 0;
         }
-        self.micro_usd.fetch_add(micro, Ordering::AcqRel) + micro
+        state.1 = state.1.saturating_add(micro);
+        state.1
     }
 
     /// Current daily spend in micro-USD.
     ///
     /// Returns 0 if the stored day is not today (stale — caller treats as fresh day).
     pub fn current(&self) -> u64 {
-        let today = current_day();
-        if self.day.load(Ordering::Relaxed) != today {
-            return 0;
-        }
-        self.micro_usd.load(Ordering::Relaxed)
+        let state = self.lock();
+        if state.0 == current_day() { state.1 } else { 0 }
     }
 }
 
@@ -121,8 +107,7 @@ impl DailyAccumulator {
     /// An accumulator still on `day` holding `micro` of that day's spend.
     fn stale(day: u64, micro: u64) -> Self {
         Self {
-            day: AtomicU64::new(day),
-            micro_usd: AtomicU64::new(micro),
+            state: Mutex::new((day, micro)),
         }
     }
 }
