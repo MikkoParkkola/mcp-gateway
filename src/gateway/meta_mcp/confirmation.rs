@@ -244,11 +244,17 @@ pub(super) async fn destructive_confirmation_gate(
             // Nobody could be asked. What that means depends on the era,
             // and the policy was decided at the edge that knows which era
             // this request belongs to.
-            if outcome == ConfirmationOutcome::Unsupported
+            let undelivered = outcome == ConfirmationOutcome::Undelivered;
+            if (undelivered || outcome == ConfirmationOutcome::Unsupported)
                 && policy.on_unconfirmable() == ConfirmationPolicy::REFUSE
             {
+                // Only a question that never reached anyone is "unasked": a
+                // delivered one may have been seen, so its refusal keeps the
+                // nonce spent (MIK-7869).
                 return match GateOutcome::refuse(refused(&action_desc)) {
-                    GateOutcome::Refuse(response) => GateOutcome::RefuseUnasked(response),
+                    GateOutcome::Refuse(response) if undelivered => {
+                        GateOutcome::RefuseUnasked(response)
+                    }
                     other => other,
                 };
             }

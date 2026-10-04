@@ -43,9 +43,11 @@
 //! match require_destructive_confirmation(&proxy, session_id, "kill server 'payments'").await {
 //!     ConfirmationOutcome::Confirmed => { /* execute */ }
 //!     ConfirmationOutcome::Declined  => return /* abort, surface denial */ ,
-//!     // Nobody could be asked. Refuse or proceed is the CALLER's decision,
+//!     // No answer could be had. Refuse or proceed is the CALLER's decision,
 //!     // taken from the era's ConfirmationPolicy; the WARN is logged either way.
-//!     ConfirmationOutcome::Unsupported => { /* consult ConfirmationPolicy */ }
+//!     ConfirmationOutcome::Unsupported | ConfirmationOutcome::Undelivered => {
+//!         /* consult ConfirmationPolicy */
+//!     }
 //! }
 //! ```
 
@@ -71,11 +73,16 @@ pub enum ConfirmationOutcome {
     Confirmed,
     /// The operator declined or cancelled; abort execution.
     Declined,
-    /// Elicitation could not be delivered (no session, timeout, transport
-    /// failure).  The warning is already emitted; whether the call then
-    /// proceeds is the caller's decision, taken from [`ConfirmationPolicy`] —
-    /// a legacy request proceeds, a modern one is refused.
+    /// The question was delivered but no answer came back (it timed out, or
+    /// its channel closed). The operator may have seen it. The warning is
+    /// already emitted; whether the call then proceeds is the caller's
+    /// decision, taken from [`ConfirmationPolicy`] — a legacy request proceeds,
+    /// a modern one is refused.
     Unsupported,
+    /// The question was never delivered: no live session could carry it, so
+    /// nobody was asked. Handled like [`Self::Unsupported`] by the policy; it
+    /// differs only in that a refusal here provably asked no one.
+    Undelivered,
 }
 
 /// What the gateway does when it cannot ask.
@@ -290,7 +297,7 @@ pub async fn require_destructive_confirmation(
                 "Destructive meta-tool invoked without active SSE session; \
                  no operator could be asked"
             );
-            ConfirmationOutcome::Unsupported
+            ConfirmationOutcome::Undelivered
         }
         Err(SamplingError::Timeout(d)) => {
             warn!(
