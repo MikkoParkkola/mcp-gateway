@@ -209,6 +209,39 @@ fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
     assert!(text.ends_with(tail));
 }
 
+/// MIK-7887.RECEIPT.2: a capped digest's fingerprints come from its head and
+/// its tail apart, so none spans the cut, where joined text would have one.
+#[test]
+fn a_capped_digest_has_no_fingerprint_across_its_cut() {
+    use std::collections::HashSet;
+
+    use super::super::collusion::{CollusionDetector, RelayParams};
+    let detector = CollusionDetector::new(RelayParams::default());
+    let text: String = (0..2000).map(|i| format!("w{i:05} ")).collect();
+    let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
+    assert!(cut);
+    let segments = digest.segment_texts();
+    let [(head, false), (tail, true)] = segments.as_slice() else {
+        panic!("head, seam, tail: {}", segments.len());
+    };
+    let apart: HashSet<u64> = detector
+        .fingerprints(head)
+        .into_iter()
+        .chain(detector.fingerprints(tail))
+        .collect();
+    let joined = detector.fingerprints(&format!("{head}\n{tail}"));
+    assert!(
+        joined.iter().any(|fp| !apart.contains(fp)),
+        "premise: joined, the cut carries fingerprints of its own"
+    );
+    assert!(
+        digest
+            .fingerprints(&detector)
+            .iter()
+            .all(|fp| apart.contains(fp))
+    );
+}
+
 fn observing(extra: impl FnOnce(&mut CollusionConfig)) -> (Firewall, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut collusion = CollusionConfig {

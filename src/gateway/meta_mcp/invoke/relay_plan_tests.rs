@@ -198,47 +198,6 @@ async fn a_large_plan_keeps_a_middle_steps_receipt() {
     );
 }
 
-/// A capped receipt has a seam between its head and its tail: text spanning
-/// the cut was never produced contiguously by the source and grants no
-/// excuse. A single-target receipt, committed as staged.
-#[tokio::test]
-async fn a_capped_receipt_records_nothing_across_its_cut() {
-    let (meta, firewall) = relay_meta();
-    let (head, middle, tail) = (
-        filler("left", 600),
-        filler("mid", 600),
-        filler("right", 600),
-    );
-    let text = format!("{head} {middle} {tail}");
-    let ((), staged) = meta
-        .collecting_staged(async {
-            meta.stage_relay_receipt(
-                RelayKey::new("alice", true),
-                ("alpha", "a"),
-                &text_result(&text),
-            );
-        })
-        .await;
-    staged.commit(true);
-    let cut = 3 * 1024;
-    let across = format!(
-        "{} {}",
-        &text[cut - 150..cut],
-        &text[text.len() - cut..][..150]
-    );
-    carol_holds(&firewall, "a", &across);
-    carol_holds(&firewall, "a", &text[..cut]);
-
-    assert!(
-        !refused(&firewall, "alice", &text[200..cut]),
-        "control: the head is excused"
-    );
-    assert!(
-        refused(&firewall, "alice", &across),
-        "nothing spans the cut"
-    );
-}
-
 /// The stated residual: a k-gram in two steps, removed from A only, stays on
 /// A's receipt, since the caller got it through B and A did produce it.
 #[tokio::test]
@@ -261,8 +220,9 @@ async fn text_removed_from_one_step_but_delivered_by_another_stays_receipted() {
     );
 }
 
-/// A sensitive step stays sensitive after its plan is changed: carol relaying
-/// alice's copy of it is still caught, though the answer lost the marker.
+/// A sensitive step of a two-step plan stays sensitive after the plan's answer
+/// is changed: carol relaying alice's copy of it is still caught, though the
+/// answer lost the marker.
 #[tokio::test]
 async fn a_kept_plan_receipt_stays_sensitive() {
     let (meta, firewall) = super::classified_only_meta();
@@ -273,16 +233,15 @@ async fn a_kept_plan_receipt_stays_sensitive() {
     };
     let ((), staged) = meta
         .collecting_staged(async {
-            plan_step(async {
-                meta.stage_relay_receipt(
-                    RelayKey::new("alice", true),
-                    ("beta", "x"),
-                    &marked(PROSE),
-                );
-            })
-            .await;
-            let answer = plan_answer(&json!({"x": marked(PROSE), "n": 1}));
-            let delivered = plan_answer(&json!({"x": text_result(PROSE)}));
+            for (tool, value) in [("x", marked(PROSE)), ("y", text_result(OTHER_PROSE))] {
+                plan_step(async {
+                    meta.stage_relay_receipt(RelayKey::new("alice", true), ("beta", tool), &value);
+                })
+                .await;
+            }
+            let answer = plan_answer(&json!({"x": marked(PROSE), "y": text_result(OTHER_PROSE)}));
+            let delivered =
+                plan_answer(&json!({"x": text_result(PROSE), "y": text_result(OTHER_PROSE)}));
             meta.restage_if_changed(meta.relay_snapshot(&answer), Some(&delivered));
             meta.rebuild_receipt_from_final(
                 Some(&delivered),
