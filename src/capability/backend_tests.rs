@@ -857,7 +857,10 @@ async fn pinned_from(body: &str) -> CapabilityDefinition {
     let path = dir.path().join("probe.yaml");
     std::fs::write(
         &path,
-        crate::capability::rewrite_with_pin(body, &crate::capability::compute_capability_hash(body)),
+        crate::capability::rewrite_with_pin(
+            body,
+            &crate::capability::compute_capability_hash(body),
+        ),
     )
     .unwrap();
     crate::capability::parse_capability_file(&path)
@@ -918,7 +921,9 @@ async fn a_stale_snapshot_does_not_reach_a_replaced_definitions_cache() {
         "test",
         Arc::new(python_policy_executor().with_policy_epoch(Arc::clone(&epoch))),
     );
-    backend.register_capability(pinned_from(&body).await).unwrap();
+    backend
+        .register_capability(pinned_from(&body).await)
+        .unwrap();
     let stale = snapshot(&epoch);
     backend
         .call_tool_with_context("pin_probe", json!({}), stale.clone())
@@ -1064,8 +1069,8 @@ fn fingerprint_cost() {
         "capabilities/security/pyghidra_reverse.yaml",
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
-        let cap = crate::capability::parse_capability(&std::fs::read_to_string(path).unwrap())
-            .unwrap();
+        let cap =
+            crate::capability::parse_capability(&std::fs::read_to_string(path).unwrap()).unwrap();
         let rounds = 20_000u32;
         let start = std::time::Instant::now();
         for _ in 0..rounds {
@@ -1074,4 +1079,50 @@ fn fingerprint_cost() {
         let mean = start.elapsed() / rounds;
         println!("fingerprint {file}: {} ns", mean.as_nanos());
     }
+}
+
+/// MIK-7814: the gateway's outer response cache keys on the request's epoch
+/// snapshot. A snapshot taken after a replacement must key differently from
+/// one taken before it, so it can never read the old definition's answer. (A
+/// snapshot taken before is ordered before the replacement and may still read
+/// it: staleness from the trusted definition, not an escalation.)
+#[test]
+fn a_snapshot_after_a_replacement_never_keys_the_old_outer_answer() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let body = "name: outer_probe\ndescription: Outer probe.\nproviders:\n  primary:\n    \
+                service: rest\n    config:\n      base_url: https://outer-probe.internal\n      \
+                path: /x\n";
+    let epoch = Arc::new(AtomicU64::new(0));
+    let backend = CapabilityBackend::new(
+        "test",
+        Arc::new(CapabilityExecutor::new().with_policy_epoch(Arc::clone(&epoch))),
+    );
+    backend
+        .register_capability(crate::capability::parse_capability(body).unwrap())
+        .unwrap();
+    let key = |snapshot: u64| {
+        crate::cache::ResponseCache::response_key(
+            "test",
+            "outer_probe",
+            &json!({}),
+            "",
+            None,
+            crate::cache::KeyContext {
+                routing_profile: "default",
+                protocol_revision: Some(crate::protocol::PROTOCOL_VERSION),
+                policy_epoch: snapshot,
+            },
+        )
+    };
+    let before = epoch.load(Ordering::SeqCst);
+    backend
+        .register_capability(crate::capability::parse_capability(body).unwrap())
+        .unwrap();
+    let after = epoch.load(Ordering::SeqCst);
+    assert!(after > before, "a replacement must advance the epoch");
+    assert_ne!(
+        key(after),
+        key(before),
+        "an after-snapshot reads a fresh key"
+    );
 }

@@ -350,6 +350,12 @@ impl CapabilityExecutor {
         // neither be served from cache nor reach the wire.
         let context = self.prepare_account_context(capability, context).await?;
 
+        // A process provider meets its gate before the cache too, so pin
+        // policy never depends on the cache key's shape (MIK-7814).
+        if let Some(process) = capability.providers.process.get("primary") {
+            process::admit(&self.process_policy, capability, process)?;
+        }
+
         // Check cache first. Loopback-relaxed fetches never enter the store.
         // The key uses the invoke-path snapshot on `context` (revision, profile,
         // epoch, already-resolved cache_binding), never a reload of the Arcs.

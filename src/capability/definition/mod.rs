@@ -557,14 +557,14 @@ fn collect_schema_tokens(schema: &serde_json::Value, push: &mut impl FnMut(&str)
 }
 
 impl CapabilityDefinition {
-    /// Canonical SHA-256 of the whole serialized definition, providers with
-    /// their typed process configs included and the pin state itself
-    /// excluded. `None` only if the definition cannot be serialized, which
-    /// never matches a stored fingerprint (MIK-7814).
+    /// SHA-256 of the whole definition in RFC 8785 canonical JSON, providers
+    /// with their typed process configs included and the pin state itself
+    /// excluded. JCS sorts every object's keys, so map order never changes
+    /// it. `None` only if the definition cannot be serialized, which never
+    /// matches a stored fingerprint (MIK-7814).
     pub(crate) fn fingerprint(&self) -> Option<String> {
-        serde_json::to_value(self)
-            .ok()
-            .map(|value| crate::hashing::canonical_json_sha256(&value))
+        let canonical = serde_json_canonicalizer::to_vec(self).ok()?;
+        Some(crate::hashing::sha256_hex(&canonical))
     }
 
     /// Build the MCP tool description, appending keyword tags and schema field

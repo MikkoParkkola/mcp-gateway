@@ -3813,7 +3813,11 @@ capability loader sets `Verified`. A definition deserialized or built any other 
 `Unpinned`, as before. The loader also records a fingerprint of the whole definition, and a
 process runs only while the definition still matches it: a verified definition cloned and then
 changed (its schema, arguments or any other field) is refused. The response cache keys on the
-same fingerprint, so a different definition under the same name never reads another's answers. `CapabilityBackend::register_capability` replacing a definition of the same
+same fingerprint, so a different definition under the same name never reads another's answers.
+The gateway's own response cache keys on the policy epoch a request snapshots when it starts:
+a request that began before a replacement can still be answered from the earlier, pinned
+definition's cache entry (it is ordered before the replacement), and one that begins after it
+never is. `CapabilityBackend::register_capability` replacing a definition of the same
 name now also drops the answers cached for it and stops its running `mcp` children, so an
 unpinned replacement meets the process check instead of the pinned original's cached result.
 

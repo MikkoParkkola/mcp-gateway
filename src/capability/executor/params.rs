@@ -363,7 +363,14 @@ impl CapabilityExecutor {
             .unwrap_or("");
         // The whole definition, so another definition under the same name
         // never reads this one's answers, epoch or not (MIK-7814).
-        let definition = capability.fingerprint()?;
+        let definition = format!(
+            "{}{}",
+            match capability.providers.integrity {
+                crate::capability::Integrity::Verified => "p:",
+                crate::capability::Integrity::Unpinned => "u:",
+            },
+            capability.fingerprint()?
+        );
         Some(format!(
             "v=2|e={epoch}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}|{}:{}",
             revision.len(),
