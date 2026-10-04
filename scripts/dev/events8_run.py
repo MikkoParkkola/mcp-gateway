@@ -16,7 +16,9 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-GW_PORT, SHIM_PORT = 39561, 39560
+# Overridable so tests on a shared host can use ports nothing else holds.
+GW_PORT = int(os.environ.get("EVENTS8_GW_PORT", "39561"))
+SHIM_PORT = int(os.environ.get("EVENTS8_SHIM_PORT", "39560"))
 EVENT = "webhook.github.push.received"
 SCRIPTS = Path(__file__).resolve().parent
 CAPABILITY = """name: github
@@ -129,6 +131,8 @@ def cmd_up(a):
             if probe.connect_ex(("127.0.0.1", port)) == 0:
                 sys.exit(f"port {port} is already in use; stop the previous run first")
     if d.exists() and any(d.iterdir()):
+        if not owned(d):  # judged again here: the directory may have changed during the probes
+            sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
         for old in d.iterdir():  # a previous run's files only: the run starts clean
             shutil.rmtree(old) if old.is_dir() else old.unlink()
     d.mkdir(parents=True, exist_ok=True)

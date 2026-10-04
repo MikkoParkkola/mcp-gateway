@@ -17,6 +17,20 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "events8_run.py"
+
+
+def free_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def setUpModule():
+    # The script's fixed ports may be held on a shared runner; every run here
+    # gets ports nothing else holds, so a refusal is never a port collision.
+    os.environ["EVENTS8_GW_PORT"] = str(free_port())
+    os.environ["EVENTS8_SHIM_PORT"] = str(free_port())
 EVENT = "webhook.github.push.received"
 SUB = "sub-123"
 T0 = 1_000_000.0
@@ -283,12 +297,8 @@ class UpCleanupTests(unittest.TestCase):
         import socket
         busy = socket.socket()
         self.addCleanup(busy.close)
-        busy.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            busy.bind(("127.0.0.1", 39560))
-            busy.listen()
-        except OSError:
-            pass  # already held by something else: busy either way
+        busy.bind(("127.0.0.1", int(os.environ["EVENTS8_SHIM_PORT"])))
+        busy.listen()
         d, done = self.up("{}")
         self.assertIn("not an events8 run directory", done.stderr)
         self.assertTrue((d / "keep.txt").exists(), "a directory the script does not own was emptied")
