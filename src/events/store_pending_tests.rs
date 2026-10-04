@@ -798,3 +798,5 @@ fn an_eviction_that_fails_part_way_still_reports_the_ones_it_made() {
         "x went before y failed"
     );
 }
+#[path = "store_pending_crash_tests.rs"]
+mod crash;
