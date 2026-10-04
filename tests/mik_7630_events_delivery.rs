@@ -24,8 +24,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use delivery::{
     DEADLINE, INBOUND_SECRET_ENV, audit_mentioning, dead_with_reason, delivery_config,
-    events_at_least, fast_retry, fire, fire_signed, sha256_hex, signed_inbound_config, start,
-    start_cfg, start_cfg_env, subscribe, unsubscribe, wait_until,
+    events_at_least, fast_retry, fire, fire_signed, push_ref, sha256_hex, signed_inbound_config,
+    start, start_cfg, start_cfg_env, subscribe, unsubscribe, wait_until,
 };
 use gateway::{ALICE, EVENT, Gateway};
 use receiver::{ConnCounter, EventReply, Received, Receiver, whsec};
@@ -442,17 +442,26 @@ async fn end_to_end_with_a_signature_checking_receiver() {
     let gw = start_cfg_env(root.path(), &rx, cfg, &[(INBOUND_SECRET_ENV, INBOUND_KEY)]).await;
     let secret = whsec(32);
     let id = subscribe(&gw, ALICE, &rx.url, &secret, json!({"repo": "o/r"})).await;
+    // The refused POSTs carry their own refs, so a leaked one cannot stand in
+    // for the accepted delivery.
     assert_eq!(
-        gw.webhook("d-43u", &delivery::push("o/r")).await,
+        gw.webhook("d-43u", &push_ref("o/r", "refused-unsigned"))
+            .await,
         401,
         "an unsigned inbound POST is refused"
     );
     assert_eq!(
-        fire_signed(&gw, "d-43w", "o/r", "not-the-route-key").await,
+        fire_signed(
+            &gw,
+            "d-43w",
+            &push_ref("o/r", "refused-wrong-key"),
+            "not-the-route-key"
+        )
+        .await,
         401,
         "a wrongly keyed inbound POST is refused"
     );
-    let accepted = fire_signed(&gw, "d-43a", "o/r", INBOUND_KEY).await;
+    let accepted = fire_signed(&gw, "d-43a", &push_ref("o/r", "accepted"), INBOUND_KEY).await;
     assert!(
         (200..300).contains(&accepted),
         "signed inbound answered {accepted}"
@@ -467,8 +476,18 @@ async fn end_to_end_with_a_signature_checking_receiver() {
         .expect("timestamp");
     assert!((ts - arrived_unix(post)).abs() <= 300, "fresh timestamp");
     assert_eq!(post.json()["data"]["fields"]["repo"], "o/r");
+    assert_eq!(
+        post.json()["data"]["fields"]["ref"],
+        "accepted",
+        "the delivery is the accepted POST's"
+    );
+    assert!(!rx.challenges().is_empty(), "the subscribe was verified");
+    assert!(
+        rx.received().iter().all(|r| r.signed_by(&secret)),
+        "every POST the receiver got, verification included, is signed"
+    );
     let settle = Duration::from_millis(1500);
-    let other = fire_signed(&gw, "d-43b", "other/x", INBOUND_KEY).await;
+    let other = fire_signed(&gw, "d-43b", &push_ref("other/x", "main"), INBOUND_KEY).await;
     assert!(
         (200..300).contains(&other),
         "signed inbound answered {other}"
@@ -483,7 +502,7 @@ async fn end_to_end_with_a_signature_checking_receiver() {
         unsubscribe(&gw, ALICE, &rx.url, json!({"repo": "o/r"})).await,
         json!({})
     );
-    let after = fire_signed(&gw, "d-43c", "o/r", INBOUND_KEY).await;
+    let after = fire_signed(&gw, "d-43c", &push_ref("o/r", "main"), INBOUND_KEY).await;
     assert!(
         (200..300).contains(&after),
         "signed inbound answered {after}"

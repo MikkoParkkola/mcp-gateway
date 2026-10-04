@@ -68,11 +68,11 @@ pub fn signed_inbound_config(root: &Path, events: &Value) -> Value {
     cfg
 }
 
-/// POST one push for `repo` under `delivery_id` with `X-Hub-Signature-256`
-/// computed over the exact body bytes under `key`; the HTTP status.
-pub async fn fire_signed(gw: &Gateway, delivery_id: &str, repo: &str, key: &str) -> u16 {
+/// POST `body` under `delivery_id` with `X-Hub-Signature-256` computed over
+/// the exact body bytes under `key`; the HTTP status.
+pub async fn fire_signed(gw: &Gateway, delivery_id: &str, body: &Value, key: &str) -> u16 {
     use hmac::{Hmac, KeyInit, Mac};
-    let body = push(repo).to_string();
+    let body = body.to_string();
     let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).expect("any key length");
     mac.update(body.as_bytes());
     let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
@@ -152,7 +152,12 @@ pub fn bare(answer: &Value) -> Value {
 
 /// A GitHub-style push body for `repo`.
 pub fn push(repo: &str) -> Value {
-    json!({"action": "opened", "repository": {"full_name": repo}, "ref": "main"})
+    push_ref(repo, "main")
+}
+
+/// A GitHub-style push body for `repo` on `git_ref`.
+pub fn push_ref(repo: &str, git_ref: &str) -> Value {
+    json!({"action": "opened", "repository": {"full_name": repo}, "ref": git_ref})
 }
 
 /// POST one push for `repo` under `delivery_id`; the route must accept it.
