@@ -111,8 +111,9 @@ impl EventSource for BackendSource {
         };
         up.listeners.authorize_uri(backend, uri).await?;
         // The lookup can wait on a catalogue read (up to 10s): a reload during
-        // it counts, so eligibility is read again once it returns.
-        if (up.ineligible)().contains(backend) {
+        // it counts, so eligibility, and the backend still being registered,
+        // are read again once it returns.
+        if (up.ineligible)().contains(backend) || !up.listeners.knows(backend) {
             return Err(RpcError::forbidden());
         }
         Ok(())
