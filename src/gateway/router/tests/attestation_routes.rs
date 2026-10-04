@@ -85,6 +85,7 @@ fn token_for(tool: &str) -> String {
 
 fn token_with(capabilities: &[&str]) -> String {
     BnautAttestationSigner::new(KEY.to_vec(), "route")
+        .with_audience("test-gateway")
         .issue(
             &TokenRequest {
                 agent_identity: "agent".to_string(),
@@ -142,10 +143,9 @@ fn router_on(
             meta = meta.with_attestation(validator, mode);
         }
         Some(mode) => {
-            let validator = Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
-                KEY.to_vec(),
-                "route",
-            )));
+            let validator = Arc::new(AttestationValidator::new(
+                BnautAttestationSigner::new(KEY.to_vec(), "route").with_audience("test-gateway"),
+            ));
             meta = meta.with_attestation(validator, mode);
         }
         None => {}
@@ -286,6 +286,33 @@ async fn surfaced_tool_enforce_carries_meta_token() {
     assert!(json.get("error").is_none(), "{json}");
     assert_eq!(transport.seen.lock().unwrap().len(), 1, "one dispatch");
     assert_token_never_forwarded(&transport);
+}
+
+/// MIK-7795: a token minted with the same key for another destination is
+/// refused on the direct route and on `gateway_invoke`, never dispatched.
+/// Mutant: the audience check is dropped from the validator both routes call.
+#[tokio::test]
+async fn a_token_minted_for_another_audience_is_refused_on_both_routes() {
+    let foreign = BnautAttestationSigner::new(KEY.to_vec(), "route")
+        .with_audience("another-gateway")
+        .issue(
+            &TokenRequest {
+                agent_identity: "agent".to_string(),
+                task_uuid: uuid::Uuid::new_v4(),
+                capabilities: vec![TOOL.to_string()],
+            },
+            chrono::Utc::now(),
+            chrono::TimeDelta::minutes(5),
+        )
+        .encoded()
+        .to_string();
+    let (router, transport, _store) = router_with(Some(AttestationMode::Enforce), false).await;
+
+    let (_, json) = call(&router, "/mcp/demo", Some(&foreign)).await;
+    assert_refused(&json, "direct_route");
+    let (_, json) = call(&router, "/mcp", Some(&foreign)).await;
+    assert_refused(&json, "gateway_invoke");
+    assert!(transport.seen.lock().unwrap().is_empty(), "no dispatch");
 }
 
 /// Observe never blocks, on either route.

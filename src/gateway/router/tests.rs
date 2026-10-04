@@ -1630,6 +1630,7 @@ async fn backend_handler_direct_route_stamps_bypass_provenance() {
     let (state, _store) = test_router_app_state_with_meta(backend, |meta| {
         meta.enable_provenance_stamping(
             crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                .with_audience("test-gateway")
                 .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
         );
     })
@@ -1670,7 +1671,8 @@ async fn backend_handler_direct_route_stamps_bypass_provenance() {
     assert_eq!(signed.receipt.tool, "search");
 
     let validator = crate::attestation::AttestationValidator::new(
-        crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"),
+        crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway"),
     );
     assert!(
         validator.verify_result_provenance(&signed),

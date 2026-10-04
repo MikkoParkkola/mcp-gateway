@@ -68,6 +68,7 @@ async fn post_direct(
         if provenance {
             meta.enable_provenance_stamping(
                 crate::attestation::BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+                    .with_audience("test-gateway")
                     .derive_domain(crate::attestation::RESULT_PROVENANCE_DOMAIN_INFO),
             );
         }

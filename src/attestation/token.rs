@@ -32,6 +32,10 @@ pub struct TokenClaims {
     pub algorithm: String,
     /// Identifier of the signing key, namespaced under `bnaut/`.
     pub key_id: String,
+    /// The destination this token is for: the audience of the gateway that
+    /// validates it. Required, so a token minted for one destination is
+    /// refused by another (MIK-7795).
+    pub audience: String,
     /// Identity of the agent the sandbox runs on behalf of.
     pub agent_identity: String,
     /// UUID of the task the sandbox executes.
@@ -122,6 +126,7 @@ mod tests {
             issuer: BNAUT_ISSUER.to_string(),
             algorithm: SIGNING_ALGORITHM.to_string(),
             key_id: "bnaut/test".to_string(),
+            audience: "gateway-a".to_string(),
             agent_identity: "agent".to_string(),
             task_uuid: "task".to_string(),
             capabilities: vec!["read".to_string()],

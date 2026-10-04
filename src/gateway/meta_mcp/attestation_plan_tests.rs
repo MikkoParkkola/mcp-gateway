@@ -34,10 +34,9 @@ steps:
 
 fn meta_in(mode: AttestationMode) -> (MetaMcp, Arc<std::sync::atomic::AtomicUsize>) {
     let (registry, calls) = counted_backend("alpha");
-    let validator = Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
-        b"plan-key".to_vec(),
-        "plan",
-    )));
+    let validator = Arc::new(AttestationValidator::new(
+        BnautAttestationSigner::new(b"plan-key".to_vec(), "plan").with_audience("test-gateway"),
+    ));
     let meta = MetaMcp::new(registry)
         .with_code_mode(true)
         .with_attestation(validator, mode);

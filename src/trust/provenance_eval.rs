@@ -244,7 +244,7 @@ mod tests {
     const KEY: &[u8] = b"provenance-eval-test-key";
 
     fn signer() -> BnautAttestationSigner {
-        BnautAttestationSigner::new(KEY.to_vec(), "unit")
+        BnautAttestationSigner::new(KEY.to_vec(), "unit").with_audience("test-gateway")
     }
 
     /// The receipt-domain subkey used to sign fixture receipts directly.
@@ -449,7 +449,8 @@ mod tests {
     /// A receipt signed with a different key is not trusted ground truth.
     #[test]
     fn replay_rejects_foreign_key_signatures() {
-        let foreign = BnautAttestationSigner::new(b"someone-elses-key".to_vec(), "unit");
+        let foreign = BnautAttestationSigner::new(b"someone-elses-key".to_vec(), "unit")
+            .with_audience("test-gateway");
         let mut receipt = RuntimeProvenanceReceipt::observed(
             "demo",
             "search",
