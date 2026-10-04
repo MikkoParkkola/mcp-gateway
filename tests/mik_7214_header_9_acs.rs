@@ -1136,3 +1136,5 @@ async fn a_reconnect_to_a_modern_peer_sends_the_modern_sse_get() {
         gets[1].headers
     );
 }
+#[path = "mik_7214_header_9_acs/non_ascii_name.rs"]
+mod non_ascii_name;
