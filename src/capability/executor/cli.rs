@@ -456,10 +456,11 @@ fn scrub_value(value: &mut Value, needles: &[&str]) {
         // it loses its leading zeros ("012345" comes back as 12345), and past
         // u64 it parses as a float and prints in exponent form. The floor is
         // on the needle as injected, so "0007" redacts the number 7 but never
-        // the 7 inside 1771.
+        // the 7 inside 1771. The sign is ignored on both paths: a needle has
+        // none, so -12345, -12345.0 and -0.0 are the same value as one.
         Value::Number(n) => {
             let digits = n.to_string();
-            let float = n.as_f64().filter(|_| n.is_f64());
+            let float = n.as_f64().filter(|_| n.is_f64()).map(f64::abs);
             let same_value = |needle: &str| {
                 if !needle.bytes().all(|b| b.is_ascii_digit()) {
                     return false;
