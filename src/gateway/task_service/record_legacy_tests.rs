@@ -209,3 +209,27 @@ fn a_committed_snapshot_carries_its_owner_digest() {
     let record = row(&task, 3, None);
     assert_eq!(CommittedTask::of(task, &record).owner_digest, "principal");
 }
+
+/// MIK-7887.RECEIPT.1: the error's author is private record state. It survives
+/// a round-trip, is omitted when unset, reads as unset on an older row, and is
+/// never part of the task snapshot a `tasks/get` body is built from.
+#[test]
+fn the_error_author_is_private_record_state() {
+    use super::ErrorAuthor;
+    let task = Task::create("gateway_invoke");
+    let mut record = row(&task, TARGET_VERSION, None);
+
+    let unset = serde_json::to_value(&record).expect("serializes");
+    assert!(unset.get("errorAuthor").is_none(), "{unset}");
+    let older: Record = serde_json::from_value(unset).expect("an older row loads");
+    assert_eq!(older.error_author, None);
+
+    record.error_author = Some(ErrorAuthor::Peer);
+    let set = serde_json::to_value(&record).expect("serializes");
+    let back: Record = serde_json::from_value(set.clone()).expect("round-trips");
+    assert_eq!(back.error_author, Some(ErrorAuthor::Peer));
+    assert!(
+        set["model"].get("errorAuthor").is_none(),
+        "the snapshot carries no author: {set}"
+    );
+}
