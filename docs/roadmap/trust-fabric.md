@@ -25,8 +25,8 @@ list are not scheduled. They are listed so you can plan around them.
 - **Grant and policy changes from the control plane.** Its write endpoints
   refuse with 409 and name where to make the change instead: the identity
   grants file for grants, gateway config for policy. The web UI is read-only.
-- **Fleet-wide discovery.** Shadow discovery is local only. There are no
-  network range scans and no scheduled inventory.
+- **Fleet-wide discovery.** Shadow discovery is local only and does not scan
+  network ranges.
 - **Container lifecycle for HTTP backends.** Runtime isolation launches only
   stdio backends in a container. HTTP container endpoints and port mapping are
   not supported.
