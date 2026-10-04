@@ -595,4 +595,38 @@ mod tests {
             .to_string();
         assert!(err.contains("max_segment_byte"), "{err}");
     }
+
+    /// The `plugin` command is retired in 4.0: a config that still carries its
+    /// `marketplace` block loads, and says once that the block does nothing.
+    #[test]
+    fn retired_marketplace_block_loads_and_warns_once() {
+        use crate::test_log_capture::{count, records};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        crate::gateway::test_helpers::write_owner_only(
+            &path,
+            "marketplace:\n  marketplace_url: https://plugins.example\n  plugin_dir: /tmp/p\n",
+        )
+        .expect("write config");
+        let logs = records(|| {
+            crate::config::Config::load(Some(&path)).expect("loads");
+            crate::config::Config::load(Some(&path)).expect("reloads");
+        });
+        let retired = "`marketplace` is ignored since 4.0";
+        assert_eq!(count(&logs, "WARN", retired), 1, "{logs:?}");
+    }
+
+    /// UPGRADING quotes the `marketplace` warning verbatim.
+    #[test]
+    fn upgrading_quotes_the_marketplace_warning() {
+        let (_, why) = RETIRED_KEYS
+            .iter()
+            .find(|(path, _)| *path == ["marketplace"])
+            .expect("marketplace is retired");
+        let quote = retired_warning("marketplace", why);
+        assert!(
+            include_str!("../../docs/UPGRADING-4.0.md").contains(&quote),
+            "UPGRADING must quote: {quote}"
+        );
+    }
 }

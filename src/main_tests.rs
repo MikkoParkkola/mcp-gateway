@@ -322,6 +322,15 @@ fn parse_args(args: &[&str]) -> Result<Cli, clap::Error> {
     Cli::try_parse_from(full)
 }
 
+/// The `plugin` command is retired in 4.0: its marketplace host never
+/// resolved, and nothing read what `plugin install` wrote.
+#[test]
+fn cli_plugin_command_is_gone() {
+    for args in [&["plugin", "list"][..], &["plugin", "search", "stripe"][..]] {
+        assert!(parse_args(args).is_err(), "{args:?} still parses");
+    }
+}
+
 #[test]
 fn cli_plugin_search_parses_query() {
     let cli = parse_args(&["plugin", "search", "stripe"]).unwrap();
