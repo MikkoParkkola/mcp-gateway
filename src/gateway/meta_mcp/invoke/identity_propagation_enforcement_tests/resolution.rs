@@ -161,7 +161,7 @@ async fn required_mint_without_transparency_log_fails_closed() {
 fn mint_audit_write_failure_returns_generic_error_no_leak() {
     const ENV_VAR: &str = "IDP_INVOKE_AUDIT_FSIZE_CHILD_PATH";
     const MARK_OK: &str = "MINT_AUDIT_ERROR_WAS_GENERIC";
-    const TEST_PATH: &str = "gateway::meta_mcp::invoke::identity_propagation_enforcement_tests::mint_audit_write_failure_returns_generic_error_no_leak";
+    const TEST_PATH: &str = "gateway::meta_mcp::invoke::identity_propagation_enforcement_tests::resolution::mint_audit_write_failure_returns_generic_error_no_leak";
 
     if std::env::var(ENV_VAR).is_ok() {
         // Child: RLIMIT_FSIZE=0 is already active (parent shell wrapper), so
