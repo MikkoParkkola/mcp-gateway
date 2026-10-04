@@ -184,6 +184,16 @@ class Check(unittest.TestCase):
         self.assertEqual(len(errors), 1)
         self.assertIn("without folding", errors[0])
 
+    def test_retyping_a_fragment_under_its_own_number_passes(self):
+        changes = [("D", "changelog.d/1.fixed.md"), ("A", "changelog.d/1.security.md")]
+        self.assertEqual(cf.check(changes, set()), [])
+
+    def test_a_delete_beside_another_numbers_add_still_fails(self):
+        changes = [("D", "changelog.d/1.fixed.md"), ("A", "changelog.d/2.security.md")]
+        errors = cf.check(changes, set())
+        self.assertEqual(len(errors), 1)
+        self.assertIn("changelog.d/1.fixed.md", errors[0])
+
 
 class CheckAgainstGit(unittest.TestCase):
     """`check` end to end: the git diff, the fragment listing and labels."""
