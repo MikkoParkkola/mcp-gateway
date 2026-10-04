@@ -9,7 +9,7 @@
 //! prove the rule is resolved against the call's own target: the same rule
 //! keyed on another target does not apply.
 
-use super::{CANARY, TOOL, Wired, inspections, listing_state, post};
+use super::{CANARY, TOOL, Wired, assert_refused, inspections, listing_state, post};
 use crate::security::TransparencyLogger;
 use crate::security::firewall::{FirewallAction, FirewallRule};
 use crate::security::transparency_log::TransparencyLogConfig;
@@ -83,6 +83,8 @@ impl Logged {
     /// The answer's delivery record: exactly one, written after `seen`
     /// earlier ones, hashing the body served.
     fn assert_recorded(&self, seen: usize, answer: &Value) {
+        let log = std::fs::read_to_string(&self.path).unwrap_or_default();
+        assert!(!log.contains(CANARY), "the log holds the credential: {log}");
         let all = self.deliveries();
         assert_eq!(all.len(), seen + 1, "one record per answer: {all:#?}");
         let hash = format!("sha256:{}", crate::hashing::canonical_json_sha256(answer));
@@ -99,27 +101,19 @@ fn direct_list(id: u64) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/list"})
 }
 
-/// A refusal: an error, no result, and none of the content it withheld.
-fn assert_withheld(what: &str, answer: &Value) {
-    assert!(answer.get("error").is_some(), "{what}: refused: {answer}");
-    assert!(
-        answer.get("result").is_none_or(Value::is_null),
-        "{what}: no result: {answer}"
-    );
-    assert!(
-        !answer.to_string().contains(CANARY),
-        "{what}: credential leaked: {answer}"
-    );
+/// The firewall's own refusal (the parent's check: code, message, no result,
+/// no credential, nothing redacted), answering the request's id.
+fn assert_withheld(what: &str, answer: &Value, id: u64) {
+    assert_refused(answer);
+    assert_eq!(answer["id"], id, "{what}: {answer}");
 }
 
-/// Served, with the credential redacted out of it.
-fn assert_served_clean(what: &str, answer: &Value) {
+/// Served with its content, the credential redacted out of it.
+fn assert_served_clean(what: &str, answer: &Value, content: &str) {
     assert!(answer.get("error").is_none(), "{what}: served: {answer}");
-    assert!(answer.get("result").is_some(), "{what}: a result: {answer}");
-    assert!(
-        !answer.to_string().contains(CANARY),
-        "{what}: not redacted: {answer}"
-    );
+    let text = answer["result"].to_string();
+    assert!(text.contains(content), "{what}: content kept: {answer}");
+    assert!(!text.contains(CANARY), "{what}: not redacted: {answer}");
 }
 
 /// Negative: with no rule, the default (High) refuses the call whose result
@@ -129,13 +123,13 @@ fn assert_served_clean(what: &str, answer: &Value) {
 async fn direct_refuses_blocked_responses_with_one_inspection() {
     // The call's tool is listed clean: only its result carries the credential.
     let rows = [
-        ("call", "echo".to_string(), direct_call(1)),
-        ("list", leaky(), direct_list(2)),
+        ("call", "echo".to_string(), direct_call(1), 1),
+        ("list", leaky(), direct_list(2), 2),
     ];
-    for (what, description, body) in rows {
+    for (what, description, body, id) in rows {
         let fx = logged(description, Vec::new()).await;
         let (answer, counts) = fx.send(&body).await;
-        assert_withheld(what, &answer);
+        assert_withheld(what, &answer, id);
         assert_eq!(
             counts,
             (1, 0),
@@ -152,40 +146,66 @@ async fn direct_refuses_blocked_responses_with_one_inspection() {
 async fn direct_serves_allowed_responses_with_one_inspection() {
     let fx = logged("echo".to_string(), vec![rule(TOOL, FirewallAction::Allow)]).await;
     let (answer, counts) = fx.send(&direct_call(1)).await;
-    assert_served_clean("allowed call", &answer);
+    assert_served_clean("allowed call", &answer, "fetched");
     assert_eq!(counts, (1, 0), "allowed call: one router inspection");
     fx.assert_recorded(0, &answer);
 
     let fx = logged("echo".to_string(), Vec::new()).await;
     let (answer, counts) = fx.send(&direct_list(2)).await;
-    assert_served_clean("clean list", &answer);
+    assert_served_clean("clean list", &answer, TOOL);
     assert_eq!(counts, (1, 0), "clean list: one router inspection");
     fx.assert_recorded(0, &answer);
 
     let fx = logged(leaky(), vec![rule("tools/list", FirewallAction::Warn)]).await;
     let (answer, counts) = fx.send(&direct_list(3)).await;
-    assert_served_clean("warned list", &answer);
+    assert_served_clean("warned list", &answer, TOOL);
     assert_eq!(counts, (1, 0), "warned list: one router inspection");
     fx.assert_recorded(0, &answer);
 }
 
 /// Policy-target falsifiers: the rules that served the positive rows, keyed on
 /// a target the answer does not have, do not apply, so the default refuses.
-/// A route that resolved its policy on anything but the call's own target
-/// (the method, the server, any rule) would serve these.
+/// Keyed on the method, the server or another tool, each would be served by a
+/// route that resolved its policy on that instead of the answer's target.
 #[tokio::test]
 async fn direct_policy_applies_only_to_the_answer_target() {
-    let fx = logged(
-        "echo".to_string(),
-        vec![rule("zeta_echo", FirewallAction::Allow)],
-    )
-    .await;
-    let (answer, counts) = fx.send(&direct_call(1)).await;
-    assert_withheld("call under another tool's Allow", &answer);
-    assert_eq!(counts, (1, 0));
-
-    let fx = logged(leaky(), vec![rule(TOOL, FirewallAction::Warn)]).await;
-    let (answer, counts) = fx.send(&direct_list(2)).await;
-    assert_withheld("list under a tool's Warn", &answer);
-    assert_eq!(counts, (1, 0));
+    let rows = [
+        (
+            "call, Allow on another tool",
+            "zeta_echo",
+            FirewallAction::Allow,
+            true,
+        ),
+        (
+            "call, Allow on the method",
+            "tools/call",
+            FirewallAction::Allow,
+            true,
+        ),
+        (
+            "call, Allow on the server",
+            "demo",
+            FirewallAction::Allow,
+            true,
+        ),
+        ("list, Warn on a tool", TOOL, FirewallAction::Warn, false),
+        (
+            "list, Warn on the server",
+            "demo",
+            FirewallAction::Warn,
+            false,
+        ),
+    ];
+    for (i, (what, target, action, is_call)) in (1_u64..).zip(rows) {
+        let (description, body) = if is_call {
+            ("echo".to_string(), direct_call(i))
+        } else {
+            (leaky(), direct_list(i))
+        };
+        let fx = logged(description, vec![rule(target, action)]).await;
+        let (answer, counts) = fx.send(&body).await;
+        assert_withheld(what, &answer, i);
+        assert_eq!(counts, (1, 0), "{what}");
+        fx.assert_recorded(0, &answer);
+    }
 }
