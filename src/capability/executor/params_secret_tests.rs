@@ -264,3 +264,67 @@ async fn a_filled_access_token_beside_an_unfilled_placeholder_keeps_its_header()
         Some("Bearer tok {scheme}")
     );
 }
+
+/// MIK-7888B.BODY.1: a body field filled from a caller value or a secret is
+/// sent as written, even when the value looks like a placeholder.
+#[test]
+fn a_filled_body_field_that_looks_like_a_placeholder_is_kept() {
+    let (_dir, executor) = executor_holding("MIK7909_TEST_SECRET={abc}\n");
+    let template = json!({
+        "pure": "{q}",
+        "spliced": "{q}{r}",
+        "secret": "{env.MIK7909_TEST_SECRET}",
+    });
+    let params = json!({ "q": "{x}", "r": "}" });
+    let body = executor.substitute_value(&template, &params).unwrap();
+    assert_eq!(body["pure"], "{x}", "{body}");
+    assert_eq!(body["spliced"], "{x}}", "{body}");
+    assert_eq!(body["secret"], "{abc}", "{body}");
+}
+
+/// MIK-7888B.BODY.2: a field whose placeholder nothing filled is still left
+/// out of the body, beside a filled one.
+#[test]
+fn a_body_field_nothing_fills_is_still_left_out() {
+    let (_dir, executor) = executor_holding("");
+    let template = json!({
+        "kept": "{q}",
+        "missing": "{absent}",
+        "defaulted": "{first|50}",
+        "indexed": "{filter[id]}",
+    });
+    let body = executor
+        .substitute_value(&template, &json!({ "q": "cats" }))
+        .unwrap();
+    assert_eq!(body, json!({ "kept": "cats" }));
+    // The query path omits them the same way.
+    for unfilled in ["{absent}", "{first|50}", "{filter[id]}"] {
+        let template = std::collections::HashMap::from([("k".to_owned(), unfilled.to_owned())]);
+        let pairs = executor.substitute_params(&template, &json!({})).unwrap();
+        assert!(pairs.is_empty(), "{unfilled}: {pairs:?}");
+    }
+}
+
+/// MIK-7888B.BODY.3: a query template whose named placeholders are all filled
+/// is sent, even with literal braces such as `{}` in it.
+#[test]
+fn a_filled_query_template_with_literal_braces_is_sent() {
+    let (_dir, executor) = executor_holding("");
+    for (template, sent) in [
+        (
+            r#"{"filter":"{q}","options":{}}"#,
+            r#"{"filter":"cats","options":{}}"#,
+        ),
+        (
+            r#"{"filter":"{q}","page":{"size":10}}"#,
+            r#"{"filter":"cats","page":{"size":10}}"#,
+        ),
+    ] {
+        let template =
+            std::collections::HashMap::from([("filter".to_owned(), template.to_owned())]);
+        let pairs = executor
+            .substitute_params(&template, &json!({ "q": "cats" }))
+            .unwrap();
+        assert_eq!(pairs, vec![("filter".to_owned(), sent.to_owned())]);
+    }
+}

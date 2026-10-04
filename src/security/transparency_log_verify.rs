@@ -734,28 +734,37 @@ impl Stream<'_> {
         // reads as a fresh log; only an external anchor catches that (#2276).
         // A cut back to the genesis open record alone is the same case: it
         // matches a crash before the first `.hwm`, so it is exempt (#2275).
+        // A loss is located after the tail; a replaced record at the mark is
+        // located at the mark, where the evidence of tampering sits (MIK-7838).
         let gap = match hw {
             None if sealed_present || (self.opened_oldest && !(self.genesis_open && last == 1)) => {
-                Some("high-water mark missing: tail loss cannot be ruled out".to_string())
+                Some((
+                    last + 1,
+                    "high-water mark missing: tail loss cannot be ruled out".to_string(),
+                ))
             }
-            Some(h) if last < h.counter => Some(format!(
-                "counters {}..{} missing at the tail: the active segment was deleted or \
-                 truncated, or the host lost unflushed writes",
+            Some(h) if last < h.counter => Some((
                 last + 1,
-                h.counter
+                format!(
+                    "counters {}..{} missing at the tail: the active segment was deleted or \
+                     truncated, or the host lost unflushed writes",
+                    last + 1,
+                    h.counter
+                ),
             )),
-            Some(h) if self.at_mark.as_ref().is_some_and(|at| *at != h.entry_hash) => {
-                Some(format!(
+            Some(h) if self.at_mark.as_ref().is_some_and(|at| *at != h.entry_hash) => Some((
+                h.counter,
+                format!(
                     "high-water mark hash mismatch at counter {}: the record there is not \
                      the one the mark recorded",
                     h.counter
-                ))
-            }
+                ),
+            )),
             _ => None,
         };
         match (gap, mode) {
-            (Some(msg), VerifyMode::Live) => Err((Some(last + 1), msg)),
-            (Some(msg), VerifyMode::Archive) => {
+            (Some((at, msg)), VerifyMode::Live) => Err((Some(at), msg)),
+            (Some((_, msg)), VerifyMode::Archive) => {
                 self.result.warnings.push(format!(
                     "archive mode: tail completeness not checked ({msg})"
                 ));

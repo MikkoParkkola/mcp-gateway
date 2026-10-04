@@ -287,6 +287,9 @@ impl SubscriptionId {
     /// The listen request's own response, which ends the subscription
     /// gracefully: the specification's signal that the server closed it, as
     /// opposed to a transport drop, which carries no response.
+    ///
+    /// It goes out on the listen stream without passing the response shaper,
+    /// so it names the server itself, as every result must.
     #[must_use]
     pub fn graceful_end(&self) -> Value {
         serde_json::json!({
@@ -294,7 +297,10 @@ impl SubscriptionId {
             "id": self.as_value(),
             "result": {
                 "resultType": "complete",
-                "_meta": { "io.modelcontextprotocol/subscriptionId": self.as_value() },
+                "_meta": {
+                    "io.modelcontextprotocol/subscriptionId": self.as_value(),
+                    crate::protocol::meta::KEY_SERVER_INFO: crate::protocol::meta::server_info(),
+                },
             },
         })
     }
@@ -324,5 +330,30 @@ impl SubscriptionId {
             }
         }
         notification
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SubscriptionId;
+    use crate::protocol::RequestId;
+    use crate::protocol::meta::KEY_SERVER_INFO;
+
+    /// MIK-7878.LISTEN.2: the terminal listen result names the server, as every
+    /// result must (MIK-7215.STATELESS.2). It never passes the response shaper,
+    /// so it has to carry `serverInfo` itself.
+    #[test]
+    fn a_graceful_end_names_the_server() {
+        for id in [RequestId::Number(4), RequestId::String("sub-b".into())] {
+            let subscription = SubscriptionId::of_request(id);
+            let end = subscription.graceful_end();
+            let meta = &end["result"]["_meta"];
+            assert_eq!(meta[KEY_SERVER_INFO]["name"], "mcp-gateway");
+            assert_eq!(meta[KEY_SERVER_INFO]["version"], env!("CARGO_PKG_VERSION"));
+            assert_eq!(
+                meta["io.modelcontextprotocol/subscriptionId"],
+                subscription.as_value()
+            );
+        }
     }
 }

@@ -552,6 +552,7 @@ const RECOVERY_KEY: &str = "recovery-read-attestation-key-32b";
 
 fn recovery_token() -> String {
     crate::attestation::BnautAttestationSigner::new(RECOVERY_KEY.as_bytes().to_vec(), "recovery")
+        .with_audience("test-gateway")
         .issue(
             &crate::attestation::TokenRequest {
                 agent_identity: "alice".to_string(),

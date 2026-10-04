@@ -379,6 +379,7 @@ async fn response_hash_covers_returned_value() {
     let mut meta = meta(Ok(ok_result()), &dir);
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
     );
     let who = api_key_caller();

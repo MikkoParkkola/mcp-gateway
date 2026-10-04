@@ -45,6 +45,9 @@ pub struct TokenRequest {
 pub struct BnautAttestationSigner {
     key: Vec<u8>,
     key_id: String,
+    /// The destination tokens are minted for and accepted from. `None` mints
+    /// an empty audience, which no validator accepts.
+    audience: Option<String>,
 }
 
 impl BnautAttestationSigner {
@@ -60,7 +63,25 @@ impl BnautAttestationSigner {
         } else {
             format!("bnaut/{key_id}")
         };
-        Self { key, key_id }
+        Self {
+            key,
+            key_id,
+            audience: None,
+        }
+    }
+
+    /// Bind this signer to one destination: tokens it issues carry `audience`,
+    /// and a validator built on it accepts only that audience (MIK-7795).
+    #[must_use]
+    pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
+        self.audience = Some(audience.into());
+        self
+    }
+
+    /// The destination this signer is bound to, if any.
+    #[must_use]
+    pub fn audience(&self) -> Option<&str> {
+        self.audience.as_deref()
     }
 
     /// The namespaced identifier of the signing key.
@@ -107,6 +128,7 @@ impl BnautAttestationSigner {
         Self {
             key: subkey.to_vec(),
             key_id: self.key_id.clone(),
+            audience: self.audience.clone(),
         }
     }
 
@@ -118,7 +140,13 @@ impl BnautAttestationSigner {
         now: DateTime<Utc>,
         ttl: TimeDelta,
     ) -> AttestationToken {
-        self.mint(request, now, ttl, None)
+        self.mint(
+            request,
+            now,
+            ttl,
+            None,
+            self.audience.clone().unwrap_or_default(),
+        )
     }
 
     /// Mint a successor for `predecessor` with a fresh expiry and a fresh
@@ -136,7 +164,15 @@ impl BnautAttestationSigner {
             task_uuid: Uuid::parse_str(&predecessor.task_uuid).unwrap_or_else(|_| Uuid::nil()),
             capabilities: predecessor.capabilities.clone(),
         };
-        self.mint(&request, now, ttl, Some(predecessor.token_id.clone()))
+        // A rotation never changes the destination: the successor carries the
+        // predecessor's audience, so rotating a foreign token cannot relabel it.
+        self.mint(
+            &request,
+            now,
+            ttl,
+            Some(predecessor.token_id.clone()),
+            predecessor.audience.clone(),
+        )
     }
 
     fn mint(
@@ -145,12 +181,14 @@ impl BnautAttestationSigner {
         now: DateTime<Utc>,
         ttl: TimeDelta,
         rotation_of: Option<String>,
+        audience: String,
     ) -> AttestationToken {
         let claims = TokenClaims {
             token_id: Uuid::new_v4().to_string(),
             issuer: BNAUT_ISSUER.to_string(),
             algorithm: SIGNING_ALGORITHM.to_string(),
             key_id: self.key_id.clone(),
+            audience,
             agent_identity: request.agent_identity.clone(),
             task_uuid: request.task_uuid.to_string(),
             capabilities: request.capabilities.clone(),
@@ -186,7 +224,7 @@ mod tests {
     use super::*;
 
     fn signer() -> BnautAttestationSigner {
-        BnautAttestationSigner::new(b"unit-test-key".to_vec(), "unit")
+        BnautAttestationSigner::new(b"unit-test-key".to_vec(), "unit").with_audience("test-gateway")
     }
 
     fn request() -> TokenRequest {
@@ -200,7 +238,8 @@ mod tests {
     #[test]
     fn key_id_is_bnaut_namespaced() {
         assert_eq!(signer().key_id(), "bnaut/unit");
-        let pre = BnautAttestationSigner::new(b"k".to_vec(), "bnaut/already");
+        let pre = BnautAttestationSigner::new(b"k".to_vec(), "bnaut/already")
+            .with_audience("test-gateway");
         assert_eq!(pre.key_id(), "bnaut/already");
     }
 
@@ -217,7 +256,8 @@ mod tests {
     #[test]
     fn verify_rejects_wrong_key() {
         let token = signer().issue(&request(), Utc::now(), TimeDelta::minutes(5));
-        let other = BnautAttestationSigner::new(b"different-key".to_vec(), "other");
+        let other = BnautAttestationSigner::new(b"different-key".to_vec(), "other")
+            .with_audience("test-gateway");
         let (payload, sig) = AttestationToken::split_unverified(token.encoded()).unwrap();
         assert!(!other.verify_bytes(&payload, &sig));
     }

@@ -157,6 +157,10 @@ impl EventsHub {
             name: event.name.clone(),
             backend: event.backend.clone(),
             owner_scoped: event.scope == Visibility::Owner,
+            callback_host: url::Url::parse(&sub.url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned))
+                .unwrap_or_default(),
             tenants,
             attribution,
             attribution_keys,
@@ -180,11 +184,14 @@ impl EventsHub {
         if let Some(reason) = refusal {
             let policy = self.dead_policy();
             let buried = record.clone();
-            let evicted = self
+            let settled = self
                 .blocking(move |store| store.dead_letter(record, reason, now, policy))
                 .await;
-            services.audit_evictions(evicted.unwrap_or_default()).await;
-            self.dead_lettered(services, &buried, reason).await;
+            let (evicted, receipt) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
+            services.audit_evictions(evicted).await;
+            if receipt {
+                self.dead_lettered(services, &buried, reason).await;
+            }
             return;
         }
         let caps = self.outbox_caps();

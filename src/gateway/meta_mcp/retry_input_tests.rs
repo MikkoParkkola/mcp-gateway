@@ -152,8 +152,8 @@ fn both_refusal_sites_share_the_rule() {
     // `tasks/update` directly; mrtr.rs is the one place it is defined.
     let sites = [
         (
-            "meta_mcp/invoke.rs",
-            code_lines(include_str!("invoke.rs")),
+            "meta_mcp/invoke/continuation.rs",
+            code_lines(include_str!("invoke/continuation.rs")),
             ".solicited_input_responses()",
         ),
         (

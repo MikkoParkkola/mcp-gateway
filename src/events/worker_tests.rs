@@ -129,6 +129,11 @@ async fn counting_callback() -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
 
 /// One subscription to `port` and one pending record for it.
 fn queued(hub: &EventsHub, port: u16, event_id: &str) {
+    queued_as(hub, port, event_id, "webhook.c.r.received");
+}
+
+/// [`queued`] for the event type `name`.
+fn queued_as(hub: &EventsHub, port: u16, event_id: &str, name: &str) {
     use crate::events::outbox::{Enqueued, OutboxCaps, OutboxState};
     use crate::events::records::Subscription;
     use crate::events::store::{Caps, TailPolicy};
@@ -144,7 +149,7 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
         legacy_api_key_name: None,
         read_key: None,
         url: format!("https://127.0.0.1:{port}/cb"),
-        name: "webhook.c.r.received".into(),
+        name: name.into(),
         arguments: serde_json::json!({}),
         secret: format!("whsec_{}=", "A".repeat(43)),
         previous_secret: None,
@@ -173,9 +178,10 @@ fn queued(hub: &EventsHub, port: u16, event_id: &str) {
         v: 1,
         event_id: event_id.into(),
         subscription_id: "sub_worker".into(),
-        name: "webhook.c.r.received".into(),
+        name: name.into(),
         backend: "b".into(),
         owner_scoped: false,
+        callback_host: String::new(),
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attempt: 0,
@@ -210,6 +216,7 @@ fn queued_event(hub: &EventsHub, event_id: &str) {
         name: "webhook.c.r.received".into(),
         backend: "b".into(),
         owner_scoped: false,
+        callback_host: String::new(),
         body_b64: "e30=".into(),
         tenants: Vec::new(),
         attempt: 0,
@@ -300,6 +307,57 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
     );
 }
 
+/// MIK-7894: a pending record for a backend event type no source offers any
+/// more (a reload made the backend ineligible and its withdrawal failed) is
+/// refused, not sent. The control: the same record under a webhook type, which
+/// no source offers in this harness either, reaches the callback.
+#[tokio::test]
+async fn a_backend_type_no_source_offers_is_not_sent() {
+    use std::sync::atomic::Ordering;
+    for (name, sent) in [
+        ("webhook.c.r.received", true),
+        ("backend.b.resource_updated", false),
+    ] {
+        let dir = tempfile::tempdir().expect("dir");
+        let log = Arc::new(
+            crate::security::TransparencyLogger::open(Arc::new(
+                crate::security::TransparencyLogConfig {
+                    enabled: true,
+                    path: dir
+                        .path()
+                        .join("audit.jsonl")
+                        .to_string_lossy()
+                        .into_owned(),
+                    ..crate::security::TransparencyLogConfig::default()
+                },
+            ))
+            .expect("log"),
+        );
+        let config = crate::config::EventsConfig {
+            callback_allow_private: vec!["127.0.0.0/8".into()],
+            ..crate::config::EventsConfig::default()
+        };
+        let hub = EventsHub::open(&config, dir.path()).expect("hub");
+        let services = Services {
+            live: Arc::new(crate::config_reload::LiveConfig::new(
+                crate::config::Config::default(),
+            )),
+            #[cfg(feature = "firewall")]
+            firewall: None,
+            audit: Some(log),
+            provenance: None,
+            #[cfg(feature = "cost-governance")]
+            budget: None,
+            credentials: crate::events::LiveCredentials::default(),
+        };
+        let (port, accepted) = counting_callback().await;
+        queued_as(&hub, port, "evt", name);
+        hub.attempt(&services, "evt").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(accepted.load(Ordering::SeqCst) >= 1, sent, "{name}");
+    }
+}
+
 /// MIK-7842 AUDIT.3: an ending the audit log refuses (here an overdue record)
 /// is not buried unrecorded; it goes back to retry and is recorded once the
 /// log recovers.
@@ -368,4 +426,108 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
         "{line}"
     );
     assert!(line.contains("\"body_sha256\":\"\""), "{line}");
+}
+
+fn logged_services(dir: &std::path::Path) -> Services {
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::TransparencyLogConfig {
+                enabled: true,
+                path: dir.join("audit.jsonl").to_string_lossy().into_owned(),
+                ..crate::security::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("log"),
+    );
+    Services {
+        live: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: Some(log),
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: crate::events::LiveCredentials::default(),
+    }
+}
+
+fn audit_actions(dir: &std::path::Path, action: &str) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(dir.join("audit.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|r| r["action"] == action)
+        .collect()
+}
+
+/// MIK-7805 AC5: a burial the caps evict in the same instant still leaves its
+/// governance record, because the receipt comes from the burial itself and not
+/// from a later read of the store.
+#[tokio::test]
+async fn a_burial_the_caps_evict_at_once_still_leaves_its_record() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        dead_letter_max_records: 0,
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    queued(&hub, 9, "evt_evicted");
+    let later = Utc::now() + chrono::Duration::minutes(5);
+    let record = hub
+        .store
+        .due(later, &std::collections::HashSet::new())
+        .expect("io")
+        .ready
+        .remove(0);
+    hub.settle(
+        &services,
+        &record,
+        Settle::Dead {
+            reason: DeadReason::Gone,
+            status: None,
+        },
+    )
+    .await;
+    assert!(
+        hub.store.dead_letter_by_id("evt_evicted").is_none(),
+        "the cap evicted the burial at once"
+    );
+    let written = audit_actions(dir.path(), "events.dead_letter");
+    assert_eq!(written.len(), 1, "one record for the burial: {written:?}");
+    assert_eq!(written[0]["event_id"], "evt_evicted");
+}
+
+/// MIK-7805 AC4: the host on a dead-letter record is the one stamped on the
+/// occurrence at fan-out, even when the subscription is gone by then.
+#[tokio::test]
+async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    queued(&hub, 9, "evt_hosted");
+    let later = Utc::now() + chrono::Duration::minutes(5);
+    let mut record = hub
+        .store
+        .due(later, &std::collections::HashSet::new())
+        .expect("io")
+        .ready
+        .remove(0);
+    record.callback_host = "stamped.example".to_owned();
+    // The subscription leaves while the burial is being recorded.
+    let tail = crate::events::tail_policy(&config_default());
+    hub.store
+        .remove("sub_worker", Utc::now(), tail)
+        .expect("removed");
+    hub.dead_lettered(&services, &record, DeadReason::Gone)
+        .await;
+    let written = audit_actions(dir.path(), "events.dead_letter");
+    assert_eq!(written.len(), 1, "{written:?}");
+    assert_eq!(written[0]["callback_host"], "stamped.example");
+}
+
+fn config_default() -> crate::config::EventsConfig {
+    crate::config::EventsConfig::default()
 }

@@ -529,14 +529,19 @@ fn has_profile_check(body: &str) -> bool {
 #[test]
 fn t8_no_control_primitive_runs_outside_the_shared_stages() {
     let invoke = include_str!("../meta_mcp/invoke.rs");
+    let policy = include_str!("../meta_mcp/invoke/policy.rs");
+    let dispatch = include_str!("../meta_mcp/invoke/dispatch.rs");
     let guards = include_str!("direct_guards.rs");
     let sites = [
         ("invoke_tool_traced", fn_body(invoke, "invoke_tool_traced")),
         (
             "check_invocation_policy",
-            fn_body(invoke, "check_invocation_policy"),
+            fn_body(policy, "check_invocation_policy"),
         ),
-        ("accounted_dispatch", fn_body(invoke, "accounted_dispatch")),
+        (
+            "accounted_dispatch",
+            fn_body(dispatch, "accounted_dispatch"),
+        ),
         // The direct route's stages live in whole files, so a primitive moved
         // into any of them is still scanned.
         ("backend_handlers.rs", DIRECT_ROUTE[0]),
@@ -568,7 +573,7 @@ fn t8_no_control_primitive_runs_outside_the_shared_stages() {
 /// not the old inline call.
 #[test]
 fn t3c_the_bridged_round_admits_spend_through_the_shared_stage() {
-    let invoke = include_str!("../meta_mcp/invoke.rs");
+    let invoke = include_str!("../meta_mcp/invoke/bridge_dispatch.rs");
     let at = invoke
         .find("impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher")
         .expect("bridge dispatcher impl");

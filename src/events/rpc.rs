@@ -374,8 +374,8 @@ impl EventsHub {
                 .commit_started(&record, !verified, (caps, grace, tail), now)
                 .await;
             match outcome? {
-                Ok(()) => {
-                    self.subscribed(caller, existing.is_some(), &id, &descriptor.name, &url)
+                Ok(admission) => {
+                    self.subscribed(caller, admission, &id, &descriptor.name, &url)
                         .await;
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
@@ -405,7 +405,7 @@ impl EventsHub {
         fresh: bool,
         (caps, grace, tail): (Caps, chrono::Duration, super::store::TailPolicy),
         now: DateTime<Utc>,
-    ) -> Result<Result<(), CapHit>, RpcError> {
+    ) -> Result<Result<super::store::Admission, CapHit>, RpcError> {
         let attempt = record.clone();
         let mut started = self.lifecycle.lock().await;
         let begun = self
@@ -420,7 +420,7 @@ impl EventsHub {
             store.admit(attempt, fresh, caps, grace, now, tail)
         })
         .await;
-        if !matches!(outcome, Ok(Ok(())))
+        if !matches!(outcome, Ok(Ok(_)))
             && let Some(key) = begun
         {
             self.undo_start(&mut started, key).await;
@@ -454,7 +454,7 @@ impl EventsHub {
                 callback_host: url.host_str().unwrap_or_default(),
                 detail,
                 event_id: None,
-                ok: outcome.is_ok(),
+                failed_with: outcome.as_ref().err().map(|e| e.code),
             },
             Attribution::Caller(caller),
         )
@@ -509,7 +509,7 @@ impl EventsHub {
                 callback_host: url.host_str().unwrap_or_default(),
                 detail: if was_there { "removed" } else { "absent" },
                 event_id: None,
-                ok: true,
+                failed_with: None,
             },
             Attribution::Caller(caller),
         )

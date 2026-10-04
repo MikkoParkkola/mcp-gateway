@@ -13,10 +13,9 @@ use uuid::Uuid;
 const KEY: &[u8] = b"gateway-invoke-wiring-key";
 
 fn validator() -> Arc<AttestationValidator> {
-    Arc::new(AttestationValidator::new(BnautAttestationSigner::new(
-        KEY.to_vec(),
-        "wiring",
-    )))
+    Arc::new(AttestationValidator::new(
+        BnautAttestationSigner::new(KEY.to_vec(), "wiring").with_audience("test-gateway"),
+    ))
 }
 
 fn valid_token() -> String {
@@ -25,6 +24,7 @@ fn valid_token() -> String {
 
 fn token_with(capabilities: Vec<String>) -> String {
     BnautAttestationSigner::new(KEY.to_vec(), "wiring")
+        .with_audience("test-gateway")
         .issue(
             &TokenRequest {
                 agent_identity: "agent-9".to_string(),
@@ -200,7 +200,7 @@ fn resolved_observe_wiring_admits_under_capability_token_and_audits() {
     // An under-capability / invalid token must be ADMITTED (never blocked)
     // while the mismatch is recorded in the audit ring buffer.
     let (validator, mode) =
-        crate::attestation::resolve_attestation_wiring(Some("observe"), Some(KEY), None)
+        crate::attestation::resolve_attestation_wiring(Some("observe"), Some(KEY), None, None)
             .expect("observe must parse")
             .expect("observe must attach a validator");
     assert_eq!(mode, AttestationMode::Observe);
@@ -223,7 +223,7 @@ fn resolved_off_wiring_is_a_pure_no_op() {
     // off → resolver attaches no validator; the gateway behaves exactly as
     // an un-wired one (the gate is a zero-cost no-op even without a token).
     assert!(matches!(
-        crate::attestation::resolve_attestation_wiring(Some("off"), Some(KEY), None),
+        crate::attestation::resolve_attestation_wiring(Some("off"), Some(KEY), None, None),
         Ok(None)
     ));
     let mm = make_meta_mcp(); // no attestation attached, as off would leave it
@@ -339,6 +339,7 @@ async fn provenance_flag_on_stamps_signed_verifiable_receipt() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
     );
     let result = invoke_docs_search(&meta).await;
@@ -361,8 +362,9 @@ async fn provenance_flag_on_stamps_signed_verifiable_receipt() {
     // the raw key internally, mirroring the production
     // `resolve_provenance_signer` wiring in `gateway::server`, which is why
     // the stamping side above must derive the same domain before signing.
-    let validator =
-        AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+    let validator = AttestationValidator::new(
+        BnautAttestationSigner::new(b"prov-key".to_vec(), "unit").with_audience("test-gateway"),
+    );
     assert!(validator.verify_result_provenance(&signed));
 }
 
@@ -376,6 +378,7 @@ async fn provenance_receipt_leaks_no_secret_or_raw_identity() {
     let mut meta = MetaMcp::new(provenance_test_backend());
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
     );
     let result = invoke_docs_search(&meta).await;
@@ -420,6 +423,7 @@ async fn provenance_stamps_cache_hits_with_hit_outcome() {
     );
     meta.enable_provenance_stamping(
         BnautAttestationSigner::new(b"prov-key".to_vec(), "unit")
+            .with_audience("test-gateway")
             .derive_domain(RESULT_PROVENANCE_DOMAIN_INFO),
     );
 
@@ -452,7 +456,8 @@ async fn provenance_stamps_cache_hits_with_hit_outcome() {
     assert_eq!(signed.receipt.backend_ok, Some(true));
 
     // The cache-hit receipt is independently signed and verifies.
-    let validator =
-        AttestationValidator::new(BnautAttestationSigner::new(b"prov-key".to_vec(), "unit"));
+    let validator = AttestationValidator::new(
+        BnautAttestationSigner::new(b"prov-key".to_vec(), "unit").with_audience("test-gateway"),
+    );
     assert!(validator.verify_result_provenance(&signed));
 }

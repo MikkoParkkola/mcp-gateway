@@ -295,3 +295,22 @@ fn one_principals_churn_evicts_its_own_tail_before_anothers() {
         "p's own oldest went"
     );
 }
+
+/// MIK-7805 AC2: the commit itself says whether it inserted or refreshed.
+#[test]
+fn admit_reports_inserted_then_refreshed() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = Store::open(dir.path(), now, TAIL).expect("open");
+    let s = sub("p", "https://h/1", now);
+    assert_eq!(
+        store
+            .admit(s.clone(), true, CAPS, grace(), now, TAIL)
+            .expect("io"),
+        Ok(Admission::Inserted)
+    );
+    assert_eq!(
+        store.admit(s, false, CAPS, grace(), now, TAIL).expect("io"),
+        Ok(Admission::Refreshed)
+    );
+}
