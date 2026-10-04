@@ -719,3 +719,6 @@ async fn a_pairing_inside_the_start_window_stops_the_start_connecting() {
         assert!(!backend.started_unpinned(), "{kind}");
     }
 }
+
+#[path = "destination_race_tests.rs"]
+mod race;

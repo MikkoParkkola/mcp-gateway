@@ -34,7 +34,7 @@ fn rate_limited_dispatch_records_no_budget_sample() {
 /// GH475.RL.7 — an ordinary failure still counts at the meta-MCP recorder,
 /// so the exclusion cannot be mistaken for the budget having stopped
 /// working altogether. `ordinary_dispatch_failure_still_counts` in
-/// `src/backend/tests.rs` asserts the same property at the breaker and the
+/// `src/backend/tests/breaker_and_status.rs` asserts the same property at the breaker and the
 /// transport-health counters; the two call sites decide independently.
 #[test]
 fn ordinary_dispatch_failure_still_counts_against_both_budgets() {

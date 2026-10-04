@@ -480,11 +480,9 @@ pub(crate) fn create_router_with_accounts(
                 .get(handlers::mcp_sse_handler)
                 .delete(handlers::mcp_delete_handler),
         )
+        // No sub-path alias: one with a wildcard tail never served, because
+        // `backend_handler` extracts the name alone and answered 500 (MIK-7650).
         .route("/mcp/{name}", post(backend_handlers::backend_handler))
-        .route(
-            "/mcp/{name}/{*path}",
-            post(backend_handlers::backend_handler),
-        )
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
             "/sse",
