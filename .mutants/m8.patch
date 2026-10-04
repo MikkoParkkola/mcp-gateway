@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay.rs b/src/gateway/meta_mcp/invoke/relay.rs
+index 9c6b9257e..f316e9e9d 100644
+--- a/src/gateway/meta_mcp/invoke/relay.rs
++++ b/src/gateway/meta_mcp/invoke/relay.rs
+@@ -573,7 +573,7 @@ impl MetaMcp {
+                 && let Some(digest) = fw.delivery_digest(
+                     &one.server,
+                     &one.tool,
+-                    &super::audit::delivered_value(delivered),
++                    delivered,
+                 )
+             {
+                 // A redaction can drop the classification marker with the

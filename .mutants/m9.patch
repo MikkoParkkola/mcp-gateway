@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 27fccd40d..6f14bb9d8 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -356,7 +356,7 @@ pub(super) fn delivered_value(delivered: &Value) -> std::borrow::Cow<'_, Value>
+         (Some(decoded), Value::Object(map)) if decoded.is_object() => {
+             let mut both = map.clone();
+             // A short key: only the leaves under it are read.
+-            both.insert("_decoded".to_owned(), decoded);
++            both.clear(); both.insert("_decoded".to_owned(), decoded);
+             std::borrow::Cow::Owned(Value::Object(both))
+         }
+         _ => std::borrow::Cow::Borrowed(delivered),

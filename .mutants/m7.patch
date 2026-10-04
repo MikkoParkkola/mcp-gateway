@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_replay.rs b/src/gateway/meta_mcp/task_replay.rs
+index f283fd81b..ade56c40d 100644
+--- a/src/gateway/meta_mcp/task_replay.rs
++++ b/src/gateway/meta_mcp/task_replay.rs
+@@ -103,7 +103,7 @@ impl MetaMcp {
+         api_key_name: Option<&str>,
+         stored: &CommittedTask,
+     ) {
+-        let [target] = stored.targets.as_slice() else {
++        let [target, ..] = stored.targets.as_slice() else {
+             return;
+         };
+         if !self.relay_active() || !stored.serves_backend_output() {
