@@ -29,6 +29,8 @@ mod stdout_death_admission;
 
 #[cfg(feature = "firewall")]
 mod collusion_stdio;
+#[cfg(feature = "firewall")]
+mod collusion_stdio_delivered;
 mod r2_stdio_keys;
 mod stdio_cache_scope;
 mod stdio_listing_scope;
