@@ -847,3 +847,6 @@ mod http {
         assert!(body.get("error").is_none(), "{body}");
     }
 }
+
+#[path = "mik_7214_acs/encoder_table.rs"]
+mod encoder_table;
