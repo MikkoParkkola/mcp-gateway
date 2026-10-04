@@ -428,6 +428,26 @@ fn the_message_member_of_an_error_is_scanned() {
     assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked));
 }
 
+/// MIK-7883.SCAN.2: `error.data` judged under a wrapper `arg_keys` entry. A
+/// configured key equal to the envelope member `data` matches the error's own
+/// `data`, whether it holds the tenant directly or wraps it, so a refusal that
+/// carries another tenant in its data is withheld like any other frame.
+#[test]
+fn the_data_member_of_an_error_is_scanned() {
+    let fw = firewall_with(CrossTenantReads::Block, &["customer_id", "data"]);
+    let _a = read_a(&fw);
+    for data in [json!(B), json!({ "data": B })] {
+        let refused = JsonRpcResponse::error_with_data(
+            Some(RequestId::Number(2)),
+            -32000,
+            "refused",
+            data.clone(),
+        );
+        let frame = delivered(&fw, Some(KEY), Payload::Response(refused), None, None);
+        assert_eq!(frame.verdict(), Some(ReadVerdict::Blocked), "{data}");
+    }
+}
+
 /// MIK-7883.SCAN.2: the `method` of a notification.
 #[test]
 fn the_method_member_of_a_notification_is_scanned() {
