@@ -1798,7 +1798,7 @@ async fn ac_conformance_minor_11b_elicitation_complete_is_refused_unsent() {
 /// context carries a real channel (`router/handlers.rs`,
 /// `channel: state.proxy_manager.as_ref()`) and nothing yet builds the bridge
 /// over it. This pins the library contract, and the live forward path is pinned
-/// by `gateway::proxy::tests::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths`,
+/// by `gateway::proxy::tests::cancellation::ac_conformance_minor_11a_elicitation_id_is_dropped_on_both_forward_paths`,
 /// which strips the field because it re-serialises from a typed struct.
 ///
 /// Asserted as one object equal to what the backend sent, for the reason
