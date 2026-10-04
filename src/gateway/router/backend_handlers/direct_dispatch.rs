@@ -19,7 +19,7 @@ use super::direct_caller::{Caller, Envelope, Rejection, Route};
 use super::direct_failure::DirectFailure;
 use super::direct_preflight::{Preflight, Propagation};
 use super::{BackendAuthContext, sign_and_record};
-use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
+use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall};
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// What every stage after routing needs to name the request it serves.
@@ -265,8 +265,8 @@ async fn forward_sanitized(
         id,
     } = scope;
     let call = &admitted.call;
-    let warnings = match DirectRouteGuards::before_dispatch(&state.meta_mcp, call) {
-        Ok(warnings) => warnings,
+    let admission = match DirectRouteGuards::before_dispatch(&state.meta_mcp, call) {
+        Ok(admission) => admission,
         Err(e) => {
             return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
         }
@@ -286,7 +286,10 @@ async fn forward_sanitized(
     .await;
     let client = caller.client.as_ref();
     let seen = (&admitted.call, preflight.challenge.as_deref());
-    let forward = DirectRouteGuards::after_dispatch(state, seen, client, &warnings, forward);
+    let forward =
+        DirectRouteGuards::after_dispatch(state, seen, client, &admission.warnings, forward);
+    // The spend is recorded: give the reservation back.
+    drop(admission);
     match forward {
         Ok(mut response) => {
             // Restore the caller's ID over the transport's own.
@@ -352,9 +355,9 @@ async fn forward_plain(
         )
         .await);
     }
-    let warnings = if method == "tools/call" {
+    let admission = if method == "tools/call" {
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
-            Ok(warnings) => warnings,
+            Ok(admission) => admission,
             Err(e) => {
                 return Err(build_http_response(
                     &refusal(Some(id.clone()), &e),
@@ -363,7 +366,7 @@ async fn forward_plain(
             }
         }
     } else {
-        Vec::new()
+        Admission::default()
     };
     let dispatch = super::dispatch_in_scope(
         &route.backend,
@@ -378,12 +381,15 @@ async fn forward_plain(
         dispatch,
     ))
     .await;
-    Ok(if method == "tools/call" {
+    let answered = if method == "tools/call" {
         let seen = (&admitted.call, preflight.challenge.as_deref());
-        DirectRouteGuards::after_dispatch(state, seen, client, &warnings, forward)
+        DirectRouteGuards::after_dispatch(state, seen, client, &admission.warnings, forward)
     } else {
         forward.inspect(|_| super::record_client_success(state, client))
-    })
+    };
+    // The spend is recorded: give the reservation back.
+    drop(admission);
+    Ok(answered)
 }
 
 /// What the caller receives from an answered plain dispatch: the id they

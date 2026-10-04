@@ -76,7 +76,7 @@ terminal B:
 python3 scripts/dev/events8_run.py evidence
 ```
 
-It prints eight PASS lines and `AUTOMATED CHECKS: PASS`; a stale or
+It prints nine PASS lines and `AUTOMATED CHECKS: PASS`; a stale or
 out-of-order log, an error answer, or a delivery for another subscription
 fails. Press Ctrl-C in
 terminal A to close the tunnel. Send back: `~/events8-run/evidence.json`,
@@ -91,11 +91,12 @@ delivery and unsubscribe. The grader reads, in order:
 | Check | Source |
 |---|---|
 | OAuth token issued; `server/discover`; `events/list` | `shim.jsonl` (method names and statuses only) |
-| `events/subscribe` answered with an `id` | `shim.jsonl` |
+| `events/subscribe` answered with an `id`, for this event and filtered to the repo fired at | `shim.jsonl` (event name, `repo`/`ref`/`event_type` filters, result id) |
 | Verification handshake passed (`events.verification`, `detail: verified`) | `audit.jsonl` |
 | Signed inbound webhook accepted (status 200, body hash, delivery id, ref) | `fire.json` |
-| Signed delivery accepted 2xx for that subscription (`events.delivery_outcome`, `delivered: true`) | `audit.jsonl` |
-| `events/unsubscribe` answered | `shim.jsonl` |
+| Signed delivery accepted 2xx for that subscription id (`events.delivery_outcome`, `delivered: true`) | `audit.jsonl` |
+| `events/unsubscribe` sent with the same event and filters | `shim.jsonl` |
+| The gateway removed that subscription id (`events.unsubscribe`, `detail: removed`) | `audit.jsonl` |
 | ChatGPT told you the ref in `fire.json` | your pasted reply |
 
 The files hold no tokens, signing secrets, callback paths or bodies (the audit

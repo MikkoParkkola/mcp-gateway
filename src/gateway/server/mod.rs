@@ -1578,7 +1578,8 @@ impl Gateway {
                 )?
                 .with_env(Arc::clone(&self.env))
                 .with_identity_grant_sink_opt(identity_grant_sink.clone())
-                .with_stop(reload_stop),
+                .with_stop(reload_stop)
+                .with_capabilities(meta_mcp.get_capabilities()),
             );
             meta_mcp.set_reload_context(Arc::clone(&reload_ctx));
         }
@@ -1805,12 +1806,12 @@ impl Gateway {
         let dashboard_bootstrap = Arc::new(crate::gateway::auth::DashboardBootstrap::new());
         // Webhook registry into MetaMcp (gateway_webhook_status), and events,
         // which re-check credentials against the same authorities as requests.
+        let (bearer_principal, bearer_sha256) =
+            crate::events::LiveCredentials::static_bearer(auth_config.bearer_token.as_deref());
         let credentials = crate::events::LiveCredentials {
             key_server: key_server.clone(),
-            bearer_principal: auth_config
-                .bearer_token
-                .as_deref()
-                .map(crate::gateway::auth::principal_of),
+            bearer_principal,
+            bearer_sha256,
             dashboard: Some(Arc::clone(&dashboard_bootstrap)),
         };
         events_wiring::install(
