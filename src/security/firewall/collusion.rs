@@ -274,7 +274,28 @@ impl CollusionDetector {
         if self.params.action == RelayAction::Off {
             return;
         }
-        let mut fps = self.fingerprints(text);
+        self.record_fingerprints_at(
+            source,
+            principal,
+            (sensitive, flows),
+            self.fingerprints(text),
+            now,
+        );
+    }
+
+    /// [`Self::record_delivery_flows_at`] for fingerprints already taken, in
+    /// the order they are kept when over [`MAX_SOURCE_FINGERPRINTS`].
+    pub(crate) fn record_fingerprints_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, flows): (bool, u64),
+        mut fps: Vec<u64>,
+        now: Instant,
+    ) {
+        if self.params.action == RelayAction::Off {
+            return;
+        }
         if fps.len() > MAX_SOURCE_FINGERPRINTS {
             self.source_truncated.fetch_add(
                 count(fps.len() - MAX_SOURCE_FINGERPRINTS),

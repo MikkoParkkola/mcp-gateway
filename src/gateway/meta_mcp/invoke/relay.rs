@@ -231,6 +231,9 @@ struct Receipt {
     /// plan's answer is not this step's text, so it is never rebuilt from it
     /// (MIK-7887.RECEIPT.2).
     in_plan: bool,
+    /// A plan receipt whose answer changed and has not yet been kept to the
+    /// final answer: never committed so (MIK-7887.RECEIPT.2).
+    pending_retain: bool,
 }
 
 tokio::task_local! {
@@ -396,7 +399,7 @@ impl StagedReceipts {
     pub(crate) fn commit(self, delivered: bool) {
         #[cfg(feature = "firewall")]
         if delivered && let Some(fw) = self.fw.as_deref() {
-            for r in self.receipts {
+            for r in self.receipts.into_iter().filter(|r| !r.pending_retain) {
                 let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
                 fw.record_digest(caller, &r.server, &r.tool, &r.digest);
             }
@@ -579,8 +582,10 @@ impl MetaMcp {
     ///
     /// One staged receipt (a single-target call) is rebuilt from what is
     /// delivered, so the text the caller still got keeps its receipt and the
-    /// removed text stops being tracked. Several (a plan) cannot be told apart
-    /// by the changed text and are dropped.
+    /// removed text stops being tracked. A plan's step receipts are kept for
+    /// [`MetaMcp::rebuild_receipt_from_final`], which keeps each to the text
+    /// the final answer still delivers; until then they never commit. Several
+    /// receipts of no plan cannot be told apart and are dropped.
     #[cfg_attr(
         not(feature = "firewall"),
         allow(clippy::unused_self, clippy::needless_pass_by_value)
@@ -591,7 +596,17 @@ impl MetaMcp {
         }
         let _ = RELAY_RECEIPTS.try_with(|receipts| {
             let mut receipts = receipts.borrow_mut();
-            let staged = std::mem::take(&mut *receipts);
+            let mut staged = std::mem::take(&mut *receipts);
+            // A plan's step receipts wait for the final answer, which keeps
+            // each to the text it still delivers (MIK-7887.RECEIPT.2).
+            if staged.iter().any(|r| r.in_plan) {
+                staged.retain(|r| r.in_plan);
+                for r in &mut staged {
+                    r.pending_retain = true;
+                }
+                *receipts = staged;
+                return;
+            }
             #[cfg(feature = "firewall")]
             if let ([one], Some(delivered), Some(fw)) = (staged.as_slice(), result, &self.firewall)
                 && let Some(digest) = fw.delivery_digest(
@@ -609,7 +624,8 @@ impl MetaMcp {
                     server: one.server.clone(),
                     tool: one.tool.clone(),
                     digest,
-                    in_plan: one.in_plan,
+                    in_plan: false,
+                    pending_retain: false,
                 });
             }
             #[cfg(not(feature = "firewall"))]
@@ -702,6 +718,7 @@ fn receipt_with(
         tool: tool.to_owned(),
         digest,
         in_plan: PLAN_STEP.try_with(|()| ()).is_ok(),
+        pending_retain: false,
     })
 }
 
@@ -728,7 +745,7 @@ pub(crate) fn commit_with(fw: &crate::security::firewall::Firewall, delivered: b
     if !delivered {
         return;
     }
-    for r in receipts {
+    for r in receipts.into_iter().filter(|r| !r.pending_retain) {
         let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
         fw.record_digest(caller, &r.server, &r.tool, &r.digest);
     }

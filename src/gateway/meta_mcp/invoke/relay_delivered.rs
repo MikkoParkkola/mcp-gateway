@@ -44,9 +44,11 @@ impl MetaMcp {
     /// is finally delivered, after every late rewrite (the scope clamp, the
     /// chain, the modern `serverInfo` stamp, a redaction), so the receipt holds
     /// the backend text the caller got and nothing else. Members the gateway
-    /// itself wrote on this route are not backend text and are left out. A
-    /// plan's receipts cannot be told apart in one answer and are kept as
-    /// staged.
+    /// itself wrote on this route are not backend text and are left out.
+    ///
+    /// A plan's answer is not any one step's text: each step receipt is kept
+    /// to what the answer still delivers, never rebuilt from it, so text the
+    /// engine wrote is attributed to no backend (MIK-7887.RECEIPT.2).
     #[cfg_attr(
         not(feature = "firewall"),
         allow(clippy::unused_self, clippy::needless_pass_by_value)
@@ -67,10 +69,14 @@ impl MetaMcp {
             }
             let _ = RELAY_RECEIPTS.try_with(|receipts| {
                 let mut receipts = receipts.borrow_mut();
+                let copy = receipt_copy(result, stamps, shape);
+                if receipts.iter().any(|r| r.in_plan) {
+                    keep_plan_receipts(fw, &mut receipts, &plan_answer(copy));
+                    return;
+                }
                 let [one] = receipts.as_mut_slice() else {
                     return;
                 };
-                let copy = receipt_copy(result, stamps, shape);
                 if let Some(digest) = fw.delivery_digest(&one.server, &one.tool, &copy) {
                     one.digest = digest.keeping_sensitivity_of(&one.digest);
                 }
@@ -78,6 +84,45 @@ impl MetaMcp {
         }
         #[cfg(not(feature = "firewall"))]
         let _ = (result, stamps, shape);
+    }
+}
+
+/// A plan's answer as delivered: the steps' JSON a `wrap_tool_success`
+/// envelope carries in its one text block, read decoded whether or not it is
+/// the exact pretty print; anything else as it stands.
+#[cfg(feature = "firewall")]
+fn plan_answer(copy: Value) -> Value {
+    let decoded = match copy
+        .get("content")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+    {
+        Some([block]) => block
+            .get("text")
+            .and_then(Value::as_str)
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .filter(|v| v.is_object() || v.is_array()),
+        _ => None,
+    };
+    decoded.unwrap_or(copy)
+}
+
+/// Keep each plan step receipt to what `answer` delivers; drop them all when
+/// the answer is over the bound they are kept against.
+#[cfg(feature = "firewall")]
+fn keep_plan_receipts(
+    fw: &crate::security::firewall::Firewall,
+    receipts: &mut Vec<super::Receipt>,
+    answer: &Value,
+) {
+    let Some(delivered) = fw.delivered_for_plan(answer) else {
+        receipts.retain(|r| !r.in_plan);
+        return;
+    };
+    for r in receipts.iter_mut().filter(|r| r.in_plan) {
+        let digest = std::mem::take(&mut r.digest);
+        r.digest = fw.retain_delivered(digest, &delivered);
+        r.pending_retain = false;
     }
 }
 

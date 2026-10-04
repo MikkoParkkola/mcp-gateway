@@ -5,7 +5,8 @@
 use serde_json::json;
 
 use super::{
-    AllowedFlow, CollusionAction, CollusionConfig, RECORD_CAP, RelayCaller, Walk, capped, text_of,
+    AllowedFlow, CollusionAction, CollusionConfig, DeliveryDigest, RECORD_CAP, RelayCaller,
+    delivery_leaves, egress_text,
 };
 use crate::config::Config;
 use crate::security::firewall::{
@@ -135,11 +136,11 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
         "key four": 4,
         long_key.clone(): 5,
     });
-    let delivered = text_of(&value, Walk::Delivery);
+    let delivered = delivery_leaves(&value).join("\n");
     assert!(delivered.starts_with("one\ntwo\nthree\n"), "{delivered:?}");
     assert!(delivered.contains(&long_key), "{delivered:?}");
     assert!(!delivered.contains("key four"), "{delivered:?}");
-    let egress = text_of(&value, Walk::Egress);
+    let egress = egress_text(&value);
     assert!(
         !delivered.contains("five"),
         "the gateway's own slot: {delivered:?}"
@@ -157,14 +158,21 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
 }
 
 /// B3: the adopted cap, pinned apart from the constant; at and below it the
-/// text is kept whole, above it exactly the first and last half, each cut on
-/// a char boundary, joined by one newline.
+/// leaves are kept whole, above it the first and last half, a leaf cut on a
+/// char boundary, with a seam between head and tail (MIK-7887.RECEIPT.2: no
+/// fingerprint joins them).
 #[test]
 fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
     assert_eq!(RECORD_CAP, 6 * 1024, "the documented evasion bound");
     for len in [RECORD_CAP - 1, RECORD_CAP] {
         let text = "x".repeat(len);
-        assert_eq!(capped(text.clone()), (text, false), "{len}");
+        let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
+        assert!(!cut, "{len}");
+        assert_eq!(
+            digest.segment_texts(),
+            vec![(text.as_str(), false)],
+            "{len}"
+        );
     }
     let half = RECORD_CAP / 2;
     let plain: String = (b'a'..=b'z')
@@ -172,11 +180,14 @@ fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
         .take(RECORD_CAP + 1)
         .map(char::from)
         .collect();
-    let (kept, cut) = capped(plain.clone());
+    let (digest, cut) = DeliveryDigest::of_leaves(&[&plain], false);
     assert!(cut);
     assert_eq!(
-        kept,
-        format!("{}\n{}", &plain[..half], &plain[plain.len() - half..])
+        digest.segment_texts(),
+        vec![
+            (&plain[..half], false),
+            (&plain[plain.len() - half..], true)
+        ]
     );
 
     // A 4-byte char straddles both cut points: the head ends before it, the
@@ -187,10 +198,13 @@ fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
         "\u{1D11E}".repeat(RECORD_CAP),
         "z"
     );
-    let (kept, cut) = capped(text.clone());
+    let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
     assert!(cut);
-    let (head, tail) = kept.split_once('\n').expect("one separator");
-    assert_eq!(head, "a".repeat(half - 1));
+    let segments = digest.segment_texts();
+    let [(head, false), (tail, true)] = segments.as_slice() else {
+        panic!("head, seam, tail: {}", segments.len());
+    };
+    assert_eq!(*head, "a".repeat(half - 1));
     assert!(tail.len() < half && tail.len() > half - 4, "{}", tail.len());
     assert!(text.ends_with(tail));
 }

@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
+pub(super) use super::collusion_digest::delivery_leaves;
+pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
@@ -168,6 +170,8 @@ pub(super) struct RelayGate {
     flows: Vec<(glob::Pattern, glob::Pattern)>,
     /// Delivered results whose text was cut to the recording cap.
     text_cut: AtomicU64,
+    /// Plans whose answer was over the bound their receipts are kept against.
+    plan_drop: AtomicU64,
 }
 
 impl RelayGate {
@@ -194,6 +198,7 @@ impl RelayGate {
                 })
                 .collect(),
             text_cut: AtomicU64::new(0),
+            plan_drop: AtomicU64::new(0),
         }
     }
 
@@ -235,7 +240,7 @@ fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
 /// excerpt from either end still matches. Sized under the detector's
 /// 1,024-fingerprint keep limit (one fingerprint per ~8.5 chars, kept in
 /// text order): a larger cap would silently drop the tail's fingerprints.
-const RECORD_CAP: usize = 6 * 1024;
+pub(super) const RECORD_CAP: usize = 6 * 1024;
 
 /// A context-integrity data class that makes a delivery sensitive.
 const SENSITIVE_CLASSES: [&str; 3] = ["personal_data", "financial_data", "guarded_material"];
@@ -261,6 +266,12 @@ impl Firewall {
     #[cfg(test)]
     pub(crate) fn relay_text_cuts(&self) -> u64 {
         self.relay.text_cut.load(Ordering::Relaxed)
+    }
+
+    /// Plans whose receipts were dropped because their answer was over the
+    /// bound they are kept against (MIK-7887.RECEIPT.2).
+    pub(crate) fn relay_plan_drops(&self) -> u64 {
+        self.relay.plan_drop.load(Ordering::Relaxed)
     }
 
     /// Relay detection is on: callers skip staging and the receipt
@@ -308,7 +319,7 @@ impl Firewall {
                 .check_egress_flows_at(
                     caller.key(),
                     (&target, self.relay.egress_flows(&target)),
-                    &text_of(params, Walk::Egress),
+                    &egress_text(params),
                     Instant::now(),
                 )
                 .inspect(|_| {
@@ -399,11 +410,36 @@ impl Firewall {
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
             || context_integrity_sensitive(result);
-        let (text, cut) = capped(text_of(result, Walk::Delivery));
+        let (digest, cut) = DeliveryDigest::of_leaves(&delivery_leaves(result), sensitive);
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
         }
-        Some(DeliveryDigest { text, sensitive })
+        Some(digest)
+    }
+
+    /// The leaves of a plan's final answer that its step receipts are kept
+    /// against (MIK-7887.RECEIPT.2). `None` with relay detection off, or over
+    /// the bound, where the plan's receipts are dropped and counted.
+    pub(crate) fn delivered_for_plan<'v>(&self, answer: &'v Value) -> Option<Delivered<'v>> {
+        self.relay_detector()?;
+        let delivered = Delivered::of_leaves(delivery_leaves(answer));
+        if delivered.is_none() {
+            self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
+        }
+        delivered
+    }
+
+    /// `digest` kept to what `delivered` carries; unchanged with relay
+    /// detection off.
+    pub(crate) fn retain_delivered(
+        &self,
+        digest: DeliveryDigest,
+        delivered: &Delivered<'_>,
+    ) -> DeliveryDigest {
+        match self.relay_detector() {
+            Some(detector) => digest.retaining(detector, delivered),
+            None => digest,
+        }
     }
 
     /// Record `digest` as delivered to `caller` from `server:tool`.
@@ -419,29 +455,13 @@ impl Firewall {
         };
         let source = format!("{server}:{tool}");
         let flows = self.relay.source_flows(&source);
-        detector.record_delivery_flows_at(
+        detector.record_fingerprints_at(
             &source,
             caller.key(),
             (digest.sensitive, flows),
-            &digest.text,
+            digest.fingerprints(detector),
             Instant::now(),
         );
-    }
-}
-
-/// A delivery reduced to what recording it needs, so a staged receipt holds
-/// at most [`RECORD_CAP`] of text rather than the whole result.
-pub(crate) struct DeliveryDigest {
-    text: String,
-    sensitive: bool,
-}
-
-impl DeliveryDigest {
-    /// This digest, as sensitive as `earlier` was: a rebuild from a redacted
-    /// copy must not lose the verdict the original delivery carried.
-    pub(crate) fn keeping_sensitivity_of(mut self, earlier: &Self) -> Self {
-        self.sensitive |= earlier.sensitive;
-        self
     }
 }
 
@@ -455,33 +475,13 @@ fn relay_finding(description: String, matched: String) -> Finding {
     }
 }
 
-/// Which side of a call [`text_of`] reads.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Walk {
-    /// What a backend receives: every object key too, since a key reaches
-    /// the backend like a value, and the leaves once more run together.
-    Egress,
-    /// What a caller is delivered: only keys long enough to fingerprint
-    /// alone, so short schema keys never make unrelated payloads alike.
-    Delivery,
-}
-
-/// The text of `value` read as `walk`: every string leaf, newline-joined
-/// (content split over short fields at word boundaries still matches); on
-/// egress the leaves once more run together, since a copy split mid-word
-/// over fields shorter than a fingerprint is still one the backend can
-/// join; then the keys `walk` reads. A delivery leaves out the top-level
-/// `_context_integrity`: that slot is the gateway's verdict about the
-/// result, whose fixed wording would make unrelated results look alike; a
-/// backend writing its own content there is backend collusion (§9). A
-/// nested one, and any one on egress, is content.
-pub(super) fn text_of(value: &Value, walk: Walk) -> String {
-    fn push(out: &mut String, s: &str) {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(s);
-    }
+/// The text a backend receives in `value`: every string leaf, newline-joined
+/// (content split over short fields at word boundaries still matches), the
+/// leaves once more run together, since a copy split mid-word over fields
+/// shorter than a fingerprint is still one the backend can join, then every
+/// object key, since a key reaches the backend like a value. What a caller
+/// is delivered is read by [`delivery_leaves`].
+pub(super) fn egress_text(value: &Value) -> String {
     fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
         match value {
             Value::String(s) => leaves.push(s),
@@ -494,40 +494,12 @@ pub(super) fn text_of(value: &Value, walk: Walk) -> String {
         }
     }
     let (mut leaves, mut keys): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
-    match value {
-        Value::Object(map) if walk == Walk::Delivery => map
-            .iter()
-            .filter(|(k, _)| k.as_str() != "_context_integrity")
-            .for_each(|(k, v)| {
-                keys.push(k);
-                visit(v, &mut leaves, &mut keys);
-            }),
-        _ => visit(value, &mut leaves, &mut keys),
-    }
-    let mut out = leaves.join("\n");
-    if walk == Walk::Egress && leaves.len() > 1 {
-        push(&mut out, &leaves.concat());
-    }
-    for key in keys {
-        if walk == Walk::Egress || key.chars().count() >= super::collusion::K {
-            push(&mut out, key);
-        }
-    }
-    out
-}
-
-/// `text` within [`RECORD_CAP`]: head and tail halves, each cut on a char
-/// boundary, and whether anything was cut.
-// ponytail: the full text is built before the cut; bound the walk itself if
-// huge results show up in memory profiles.
-pub(super) fn capped(text: String) -> (String, bool) {
-    if text.len() <= RECORD_CAP {
-        return (text, false);
-    }
-    let half = RECORD_CAP / 2;
-    let head = text.floor_char_boundary(half);
-    let tail = text.ceil_char_boundary(text.len() - half);
-    (format!("{}\n{}", &text[..head], &text[tail..]), true)
+    visit(value, &mut leaves, &mut keys);
+    let joined = (leaves.len() > 1).then(|| leaves.concat());
+    let mut parts = leaves;
+    parts.extend(joined.as_deref());
+    parts.extend(keys);
+    parts.join("\n")
 }
 
 /// The gateway-attached context-integrity verdict names a sensitive class.
