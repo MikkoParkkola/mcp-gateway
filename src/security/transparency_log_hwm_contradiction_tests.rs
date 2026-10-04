@@ -124,7 +124,10 @@ fn a_tail_ahead_of_the_mark_is_checked_against_the_record_at_the_mark() {
                 "signed {signed}, tampered {tamper}"
             );
             if !tamper {
-                assert!(verify(&path, signed).ok, "honest lagging mark, signed {signed}");
+                assert!(
+                    verify(&path, signed).ok,
+                    "honest lagging mark, signed {signed}"
+                );
             }
         }
     }
@@ -269,7 +272,10 @@ fn write_lines(path: &std::path::Path, records: &[serde_json::Value]) {
 
 /// Restart a log whose mark lags its tail by one record, after `edit` has
 /// changed the active file, and report whether the restart recorded a finding.
-fn lagging_mark_restart_finds(signed: bool, edit: impl FnOnce(&mut Vec<serde_json::Value>)) -> bool {
+fn lagging_mark_restart_finds(
+    signed: bool,
+    edit: impl FnOnce(&mut Vec<serde_json::Value>),
+) -> bool {
     use super::rotation_tests::SECRET;
     use super::segments::{HighWater, encode_hwm, write_hwm};
     let dir = tempfile::tempdir().unwrap();
@@ -299,7 +305,10 @@ fn lagging_mark_restart_finds(signed: bool, edit: impl FnOnce(&mut Vec<serde_jso
 #[test]
 fn a_record_at_the_mark_edited_under_its_stored_hash_is_a_finding() {
     for signed in [false, true] {
-        assert!(!lagging_mark_restart_finds(signed, |_| {}), "control, signed {signed}");
+        assert!(
+            !lagging_mark_restart_finds(signed, |_| {}),
+            "control, signed {signed}"
+        );
         let found = lagging_mark_restart_finds(signed, |records| {
             records[3]["tampered"] = serde_json::Value::Bool(true);
         });

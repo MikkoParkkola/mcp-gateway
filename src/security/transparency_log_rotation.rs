@@ -323,7 +323,8 @@ fn reopen_tail(
                 Ok((state, behind))
             } else {
                 let resumed = resume_active(path, counter, hash, sealed, hw, now)?;
-                let below_mark = contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
+                let below_mark =
+                    contradicted(path, sealed, hw, counter, &resumed.last_entry_hash, config)?;
                 Ok((resumed, below_mark))
             }
         }
